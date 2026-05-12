@@ -227,6 +227,7 @@ async fn build_dynamic_sources_assembles_views_boards_perspectives_headless() {
         &ui_arc,
         false,
         Some(&dynamic),
+        None,
     );
     let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
 
@@ -386,6 +387,7 @@ async fn build_dynamic_sources_emits_every_open_board_and_window() {
         &ui_arc,
         false,
         Some(&dynamic),
+        None,
     );
     let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
     assert!(

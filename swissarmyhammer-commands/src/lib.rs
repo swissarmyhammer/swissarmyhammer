@@ -14,6 +14,7 @@ pub mod command;
 pub mod context;
 pub mod error;
 pub mod macros;
+pub mod options_resolver;
 pub mod registry;
 pub mod types;
 pub mod ui_state;
@@ -21,8 +22,12 @@ pub mod ui_state;
 pub use command::Command;
 pub use context::{parse_moniker, CommandContext};
 pub use error::{CommandError, Result};
+pub use options_resolver::{OptionsContext, OptionsRegistry, OptionsResolver};
 pub use registry::{builtin_yaml_sources, load_yaml_dir, CommandsRegistry};
-pub use types::{CommandDef, CommandInvocation, KeysDef, MenuPlacement, ParamDef, ParamSource};
+pub use types::{
+    CommandDef, CommandInvocation, KeysDef, MenuPlacement, ParamDef, ParamOption, ParamShape,
+    ParamSource, TabButtonDef,
+};
 pub use ui_state::{
     DragDestination, DragSession, DragSource, RecentBoard, UIState, UIStateChange, WindowState,
 };

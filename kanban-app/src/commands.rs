@@ -2102,6 +2102,7 @@ pub async fn list_commands_for_scope(
         &state.ui_state,
         context_menu == Some(true),
         Some(&dynamic),
+        None,
     );
 
     log_scope_result(&result);

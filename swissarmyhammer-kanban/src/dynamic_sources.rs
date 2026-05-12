@@ -34,7 +34,9 @@ use swissarmyhammer_commands::UIState;
 
 use crate::commands::perspective_commands::perspective_belongs_to_active_view;
 use crate::context::KanbanContext;
-use crate::scope_commands::{BoardInfo, DynamicSources, PerspectiveInfo, ViewInfo, WindowInfo};
+use crate::scope_commands::{
+    BoardInfo, DynamicSources, PerspectiveFieldInfo, PerspectiveInfo, ViewInfo, WindowInfo,
+};
 
 /// Raw inputs [`build_dynamic_sources`] consumes. See the module docs for
 /// how each field is produced in the live app vs. a headless test.
@@ -270,6 +272,7 @@ async fn gather_perspectives(
         }
     }
 
+    let fields_ctx = ctx.fields();
     pc.all()
         .iter()
         .filter(|p| match active_view_kind {
@@ -280,6 +283,38 @@ async fn gather_perspectives(
             id: p.id.clone(),
             name: p.name.clone(),
             view: p.view.clone(),
+            fields: denormalize_perspective_fields(p, fields_ctx),
+        })
+        .collect()
+}
+
+/// Denormalise a perspective's field-id list into [`PerspectiveFieldInfo`]
+/// records carrying the resolved display name.
+///
+/// For each [`swissarmyhammer_perspectives::PerspectiveFieldEntry`] we
+/// prefer the per-entry `caption` override (matches the column header the
+/// user sees in the grid). When no caption is set, we fall back to the
+/// field definition's `name` from [`FieldsContext`]. Entries whose field
+/// id is not present in the registry are dropped (the picker should never
+/// surface a ghost field).
+fn denormalize_perspective_fields(
+    perspective: &swissarmyhammer_perspectives::Perspective,
+    fields_ctx: Option<&swissarmyhammer_fields::FieldsContext>,
+) -> Vec<PerspectiveFieldInfo> {
+    perspective
+        .fields
+        .iter()
+        .filter_map(|entry| {
+            let display_name = match &entry.caption {
+                Some(caption) => caption.clone(),
+                None => fields_ctx
+                    .and_then(|fc| fc.get_field_by_id(&entry.field))
+                    .map(|fd| fd.name.as_str().to_string())?,
+            };
+            Some(PerspectiveFieldInfo {
+                id: entry.field.clone(),
+                display_name,
+            })
         })
         .collect()
 }

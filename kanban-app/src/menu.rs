@@ -546,6 +546,7 @@ fn resolve_command_availability(state: &AppState) -> Option<HashMap<String, (Str
         &state.ui_state,
         false,
         None,
+        None,
     );
     drop(registry);
     drop(boards);
@@ -858,6 +859,7 @@ mod tests {
             context_menu_order: None,
             menu: None,
             view_kinds: None,
+            tab_button: None,
         }
     }
 
