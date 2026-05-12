@@ -128,6 +128,7 @@ impl SnapshotHarness {
             &self.ui_state,
             context_menu_only,
             None,
+            None,
         );
 
         let mut rendered: Vec<Value> = cmds

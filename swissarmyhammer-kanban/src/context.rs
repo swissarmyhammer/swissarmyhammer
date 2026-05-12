@@ -12,6 +12,7 @@ use crate::types::{ActorId, ColumnId, LogEntry, TagId, TaskId};
 use fs2::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
+use swissarmyhammer_commands::OptionsRegistry;
 use swissarmyhammer_entity::changelog::ChangeEntry;
 use swissarmyhammer_entity::{Entity, EntityCache, EntityContext, EntityWatcher};
 use swissarmyhammer_fields::{load_yaml_dir, DeriveRegistry, FieldsContext, ValidationEngine};
@@ -56,6 +57,16 @@ pub struct KanbanContext {
     perspectives: OnceCell<RwLock<PerspectiveContext>>,
     /// Derive handlers for computed field read/write
     derive_registry: Arc<DeriveRegistry>,
+    /// Resolver registry for `ParamDef.options_from` enrichment.
+    ///
+    /// Default-constructed with the kanban built-ins
+    /// (`perspective.fields`, `view.kinds`, `sort.directions`) via
+    /// [`crate::commands::options_resolvers::default_options_registry`].
+    /// Stored as an `Arc` so callers can clone cheaply and so the
+    /// registry can be threaded into
+    /// [`crate::scope_commands::commands_for_scope`] without
+    /// borrowing through the context.
+    options_registry: Arc<OptionsRegistry>,
 }
 
 impl KanbanContext {
@@ -90,6 +101,9 @@ impl KanbanContext {
             views_changelog: None,
             perspectives: OnceCell::new(),
             derive_registry: Arc::new(crate::derive_handlers::kanban_derive_registry()),
+            options_registry: Arc::new(
+                crate::commands::options_resolvers::default_options_registry(),
+            ),
         }
     }
 
@@ -139,6 +153,9 @@ impl KanbanContext {
             views_changelog: Some(views_changelog),
             perspectives: persp_cell,
             derive_registry: Arc::new(crate::derive_handlers::kanban_derive_registry()),
+            options_registry: Arc::new(
+                crate::commands::options_resolvers::default_options_registry(),
+            ),
         })
     }
 
@@ -168,6 +185,19 @@ impl KanbanContext {
     /// Access the derive handler registry.
     pub fn derive_registry(&self) -> &DeriveRegistry {
         &self.derive_registry
+    }
+
+    /// Access the options-resolver registry.
+    ///
+    /// Default-constructed at context-init time with the kanban
+    /// built-in resolvers (`perspective.fields`, `view.kinds`,
+    /// `sort.directions`) pre-registered. Threaded into
+    /// [`crate::scope_commands::commands_for_scope`] by callers
+    /// (e.g. the kanban-app GUI's `list_commands_for_scope`) so
+    /// emitted commands carry concrete picker options for every
+    /// `options_from`-tagged param.
+    pub fn options_registry(&self) -> &OptionsRegistry {
+        &self.options_registry
     }
 
     /// Access the view registry lock, if initialized.

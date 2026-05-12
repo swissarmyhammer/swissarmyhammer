@@ -166,6 +166,7 @@ impl MatrixHarness {
             &self.ui_state,
             false,
             None,
+            None,
         )
     }
 

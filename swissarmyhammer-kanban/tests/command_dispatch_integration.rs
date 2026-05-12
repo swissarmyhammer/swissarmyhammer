@@ -2047,6 +2047,7 @@ async fn list_commands_for_scope_emits_entity_add_for_every_grid_view() {
             &engine.ui_state,
             false,
             Some(&dynamic),
+            None,
         );
         let palette_add = palette.iter().find(|c| c.id == expected_id);
         assert!(
@@ -2067,6 +2068,7 @@ async fn list_commands_for_scope_emits_entity_add_for_every_grid_view() {
             &engine.ui_state,
             true,
             Some(&dynamic),
+            None,
         );
         let ctx_add = ctx_menu.iter().find(|c| c.id == expected_id);
         assert!(
