@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: a280
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffd580
 title: Add param shape and tab_button metadata to CommandDef
 ---
 ## What
@@ -105,21 +105,21 @@ Foundation for the command-driven tab-button refactor. Two new metadata fields o
 
 ## Acceptance Criteria
 
-- [ ] `CommandDef` carries `tab_button: Option<TabButtonDef>` with the documented semantics.
-- [ ] `ParamDef` carries `shape: Option<ParamShape>`, `options_from: Option<String>`, and `options: Option<Vec<ParamOption>>`.
-- [ ] A `CommandDef` YAML with no new fields round-trips through `serde_yaml_ng` unchanged.
-- [ ] A `CommandDef` YAML with `tab_button: { icon: "filter" }` and a param `{ name: "field", shape: "enum", options_from: "perspective.fields" }` round-trips correctly.
-- [ ] TS types mirror the Rust shape; a TS literal omitting all new fields type-checks as `CommandDef`.
-- [ ] `cargo test -p swissarmyhammer-commands` and `pnpm -C kanban-app/ui test` both pass.
+- [x] `CommandDef` carries `tab_button: Option<TabButtonDef>` with the documented semantics.
+- [x] `ParamDef` carries `shape: Option<ParamShape>`, `options_from: Option<String>`, and `options: Option<Vec<ParamOption>>`.
+- [x] A `CommandDef` YAML with no new fields round-trips through `serde_yaml_ng` unchanged.
+- [x] A `CommandDef` YAML with `tab_button: { icon: "filter" }` and a param `{ name: "field", shape: "enum", options_from: "perspective.fields" }` round-trips correctly.
+- [x] TS types mirror the Rust shape; a TS literal omitting all new fields type-checks as `CommandDef`.
+- [x] `cargo test -p swissarmyhammer-commands` and `pnpm -C kanban-app/ui test` both pass.
 
 ## Tests
 
-- [ ] Unit test in `swissarmyhammer-commands/src/types.rs` mirroring `command_def_yaml_round_trip` style: `command_def_with_tab_button_round_trips` — construct a `CommandDef` with `tab_button: Some(TabButtonDef { icon: "filter".into() })`, serialize to YAML, parse back, assert equality.
-- [ ] Unit test: `command_def_with_param_shape_and_options_round_trips` — param with `shape: Some(Enum), options_from: Some("perspective.fields"), options: Some(vec![ParamOption { value: "status".into(), label: "Status".into() }])` survives a YAML round-trip.
-- [ ] Unit test: `command_def_without_new_fields_omits_them_from_yaml` — a minimal `CommandDef` does NOT emit `tab_button:`, `shape:`, `options_from:`, or `options:` lines.
-- [ ] TS type test in `kanban-app/ui/src/types/kanban.test.ts`: a literal `{ id, name, scope, params: [{ name: "field", shape: "enum", options_from: "perspective.fields" }] }` satisfies `CommandDef` without errors.
-- [ ] Run: `cargo test -p swissarmyhammer-commands` — green.
-- [ ] Run: `pnpm -C kanban-app/ui test` — green.
+- [x] Unit test in `swissarmyhammer-commands/src/types.rs` mirroring `command_def_yaml_round_trip` style: `command_def_with_tab_button_round_trips` — construct a `CommandDef` with `tab_button: Some(TabButtonDef { icon: "filter".into() })`, serialize to YAML, parse back, assert equality.
+- [x] Unit test: `command_def_with_param_shape_and_options_round_trips` — param with `shape: Some(Enum), options_from: Some("perspective.fields"), options: Some(vec![ParamOption { value: "status".into(), label: "Status".into() }])` survives a YAML round-trip.
+- [x] Unit test: `command_def_without_new_fields_omits_them_from_yaml` — a minimal `CommandDef` does NOT emit `tab_button:`, `shape:`, `options_from:`, or `options:` lines.
+- [x] TS type test in `kanban-app/ui/src/types/kanban.test.ts`: a literal `{ id, name, scope, params: [{ name: "field", shape: "enum", options_from: "perspective.fields" }] }` satisfies `CommandDef` without errors.
+- [x] Run: `cargo test -p swissarmyhammer-commands` — green (187 passed).
+- [x] Run: `pnpm -C kanban-app/ui test` — green (2110 passed; the project is npm-configured so the command run was `npm test`).
 
 ## Workflow
 

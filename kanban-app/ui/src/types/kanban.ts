@@ -78,6 +78,138 @@ export interface PerspectiveDef {
 }
 
 // ---------------------------------------------------------------------------
+// Command schema (YAML-shape mirror)
+//
+// Mirrors `swissarmyhammer_commands::CommandDef` and its supporting types
+// from `swissarmyhammer-commands/src/types.rs`. This is the *YAML-shape*
+// CommandDef — the JSON wire format the backend emits from
+// `commands_for_scope` — NOT the *runtime* CommandDef from
+// `lib/command-scope.tsx`, which carries an `execute` closure and is
+// resolved through the frontend scope tree.
+//
+// All new fields (`tab_button`, `params[].shape`, `params[].options_from`,
+// `params[].options`) are optional so existing payloads parse unchanged.
+// ---------------------------------------------------------------------------
+
+/**
+ * Tab-button affordance metadata mirrored from Rust's `TabButtonDef`.
+ *
+ * Present means the command renders as a tab-button on surfaces that
+ * consume `tab_button`-tagged commands (today: the perspective tab bar);
+ * absent means no tab-button affordance — the command still surfaces in
+ * palettes / menus per its other metadata.
+ */
+export interface TabButtonDef {
+  /**
+   * Lucide-react icon component name (e.g. `"filter"`, `"group"`,
+   * `"arrow-up-down"`). Resolved by the frontend's icon registry at
+   * render time; an unknown name renders a fallback glyph.
+   */
+  readonly icon: string;
+}
+
+/**
+ * Shape of a parameter for runtime collection — mirrors Rust's
+ * `ParamShape` enum (kebab-cased on the wire).
+ *
+ * `shape` answers "how should the UI ask the user for this value?". When
+ * absent on a `ParamDef`, the param's `from` field already supplies the
+ * value and the frontend does not render a picker for it.
+ */
+export type ParamShape =
+  | "enum"
+  | "text"
+  | "expression"
+  | "number"
+  | "date"
+  | "boolean";
+
+/**
+ * Source of a parameter value — mirrors Rust's `ParamSource` enum
+ * (snake_cased on the wire). Distinct from `shape` (the picker UX): a
+ * param can come `from: "args"` and still carry a `shape` so the UI
+ * knows how to collect it before dispatch.
+ */
+export type ParamSource = "scope_chain" | "target" | "args" | "default";
+
+/**
+ * A single option value for an enum-shaped param — mirrors Rust's
+ * `ParamOption`. Used as an inline alternative to a backend resolver
+ * when the option list is static and known at YAML write time.
+ */
+export interface ParamOption {
+  /** Machine-readable value that flows into the command's args bag. */
+  readonly value: string;
+  /** Human-readable label shown in the picker UI. */
+  readonly label: string;
+}
+
+/** A parameter definition for a command — mirrors Rust's `ParamDef`. */
+export interface ParamDef {
+  readonly name: string;
+  readonly from?: ParamSource;
+  readonly entity_type?: string;
+  /** Default value when nothing else supplies it (`serde_json::Value`). */
+  readonly default?: unknown;
+  /**
+   * Shape of this param for runtime collection. When absent, the param's
+   * `from` field already supplies the value — the runtime never asks the
+   * user for it.
+   */
+  readonly shape?: ParamShape;
+  /**
+   * For enum-shaped params, names the backend resolver that supplies
+   * the concrete option list at `commands_for_scope` emission time.
+   * Resolver names are stringly-typed and looked up in a backend
+   * resolver registry.
+   */
+  readonly options_from?: string;
+  /**
+   * Inline option list for enum-shaped params whose values are static
+   * and known at YAML write time. When both `options_from` and
+   * `options` are present, the resolver wins; treat inline `options`
+   * as a fallback. Also populated by the backend on emit when
+   * `options_from` resolved successfully.
+   */
+  readonly options?: readonly ParamOption[];
+}
+
+/**
+ * YAML-loaded command metadata — mirrors Rust's `CommandDef` from
+ * `swissarmyhammer-commands`.
+ *
+ * Carries the command's identity, scope requirements, optional UI-surface
+ * metadata (menu placement, tab-button affordance), and parameter
+ * declarations. Emitted to the frontend by `commands_for_scope`; consumed
+ * by `<CommandButton>`, `<CommandPopover>`, palettes, and native menus.
+ *
+ * This is distinct from the runtime `CommandDef` in
+ * `lib/command-scope.tsx`, which is the scope-tree node that carries an
+ * `execute` closure. The frontend converts wire-format `CommandDef` ->
+ * runtime `CommandDef` at the dispatcher boundary.
+ */
+export interface CommandDef {
+  readonly id: string;
+  readonly name: string;
+  readonly menu_name?: string;
+  readonly scope?: string;
+  readonly visible?: boolean;
+  readonly keys?: ViewCommandKeys;
+  readonly params?: readonly ParamDef[];
+  readonly undoable?: boolean;
+  readonly context_menu?: boolean;
+  readonly context_menu_group?: number;
+  readonly context_menu_order?: number;
+  readonly view_kinds?: readonly string[];
+  /**
+   * When set, this command renders as a tab-button affordance on
+   * surfaces that consume `tab_button`-tagged commands (today: the
+   * perspective tab bar). Absent means no tab-button affordance.
+   */
+  readonly tab_button?: TabButtonDef;
+}
+
+// ---------------------------------------------------------------------------
 // Board types
 // ---------------------------------------------------------------------------
 

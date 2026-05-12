@@ -23,6 +23,46 @@ pub enum ParamSource {
     Default,
 }
 
+/// Shape of a parameter for runtime collection.
+///
+/// `shape` answers "how should the UI ask the user for this value?" It is
+/// distinct from [`ParamSource`] (`from`), which answers "where does the
+/// value come from when the command runs?". A param with `from: Args` and
+/// `shape: Some(Enum)` says: the value lives in the args bag at dispatch
+/// time, AND when the UI needs to collect it from the user it should
+/// render an enum picker. A param with `from: ScopeChain` and `shape:
+/// None` says: the value already comes from the resolved scope chain —
+/// the runtime never asks the user for it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ParamShape {
+    /// User picks from a list of options. Options come from
+    /// [`ParamDef::options_from`] resolver OR an inline
+    /// [`ParamDef::options`].
+    Enum,
+    /// Single-line free text.
+    Text,
+    /// Multiline expression (e.g. filter DSL). Frontend hosts a
+    /// rich editor (CodeMirror) for this shape.
+    Expression,
+    Number,
+    Date,
+    Boolean,
+}
+
+/// A single option value for an enum-shaped param.
+///
+/// Used as an inline alternative to a backend resolver: when the option
+/// list is static and known at YAML write time, write it directly on the
+/// `ParamDef` rather than wiring up an `options_from` resolver.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ParamOption {
+    /// Machine-readable value that flows into the command's args bag.
+    pub value: String,
+    /// Human-readable label shown in the picker UI.
+    pub label: String,
+}
+
 /// A parameter definition for a command.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ParamDef {
@@ -32,6 +72,40 @@ pub struct ParamDef {
     pub entity_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<Value>,
+    /// Shape of this param for runtime collection. When `None`, the
+    /// param's [`Self::from`] field (args / scope chain / target /
+    /// default) already supplies the value — the runtime never asks the
+    /// user for it and the frontend does not render a picker for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<ParamShape>,
+    /// For enum-shaped params, names the backend resolver that supplies
+    /// the concrete option list at `commands_for_scope` emission time.
+    /// Resolver names are stringly-typed and looked up in a backend
+    /// resolver registry (separate task in the command-driven-ui epic).
+    /// When both `options_from` and [`Self::options`] are set, the
+    /// resolver wins and inline `options` are treated as a fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options_from: Option<String>,
+    /// Inline option list for enum-shaped params whose values are static
+    /// and known at YAML write time. Prefer this over `options_from`
+    /// when the list is fixed (e.g. sort direction = asc / desc).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<ParamOption>>,
+}
+
+/// Tab-button affordance metadata for a command.
+///
+/// When set on a [`CommandDef`], the command renders as a tab-button on
+/// surfaces that consume `tab_button`-tagged commands (today: the
+/// perspective tab bar). Absent means no tab-button affordance — the
+/// command still surfaces in palettes / menus per its other metadata.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TabButtonDef {
+    /// Lucide-react icon component name (e.g. `"filter"`, `"group"`,
+    /// `"arrow-up-down"`). Resolved by the frontend's icon registry at
+    /// render time; an unknown name renders a fallback glyph rather
+    /// than failing the surface.
+    pub icon: String,
 }
 
 /// Where a command should appear in the native OS menu bar.
@@ -121,6 +195,17 @@ pub struct CommandDef {
     /// no meaningful behavior in the active view kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub view_kinds: Option<Vec<String>>,
+    /// When set, this command renders as a tab-button affordance on
+    /// surfaces that consume `tab_button`-tagged commands (today: the
+    /// perspective tab bar). Absent means no tab-button affordance.
+    ///
+    /// The frontend `<CommandButton>` component is the consumer; the
+    /// resolver registry pre-populates each tab-button command's params
+    /// (e.g. enum options for a filter-field picker) at
+    /// `commands_for_scope` emission time so the button can render
+    /// without an extra round-trip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_button: Option<TabButtonDef>,
 }
 
 fn default_true() -> bool {
@@ -165,6 +250,9 @@ mod tests {
                 from: ParamSource::ScopeChain,
                 entity_type: Some("widget".into()),
                 default: None,
+                shape: None,
+                options_from: None,
+                options: None,
             }],
             undoable: true,
             context_menu: true,
@@ -172,6 +260,7 @@ mod tests {
             context_menu_order: Some(2),
             menu: None,
             view_kinds: None,
+            tab_button: None,
         };
         let yaml = serde_yaml_ng::to_string(&def).unwrap();
         let parsed: CommandDef = serde_yaml_ng::from_str(&yaml).unwrap();
@@ -202,6 +291,7 @@ mod tests {
             context_menu_order: None,
             menu: None,
             view_kinds: Some(vec!["grid".into()]),
+            tab_button: None,
         };
         let yaml = serde_yaml_ng::to_string(&def).unwrap();
         let parsed: CommandDef = serde_yaml_ng::from_str(&yaml).unwrap();
@@ -342,6 +432,115 @@ menu:
         let parsed: CommandInvocation = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.cmd, "app.quit");
         assert!(parsed.scope_chain.is_none());
+    }
+
+    /// A `CommandDef` carrying a `tab_button` survives a YAML round-trip so
+    /// downstream surfaces (the perspective tab bar today, other tab-button
+    /// surfaces in the future) can opt into tab-button rendering by writing
+    /// the metadata directly in YAML.
+    #[test]
+    fn command_def_with_tab_button_round_trips() {
+        let def = CommandDef {
+            id: "perspective.filter.set".into(),
+            name: "Filter".into(),
+            menu_name: None,
+            scope: Some("entity:perspective".into()),
+            visible: true,
+            keys: None,
+            params: vec![],
+            undoable: false,
+            context_menu: false,
+            context_menu_group: None,
+            context_menu_order: None,
+            menu: None,
+            view_kinds: None,
+            tab_button: Some(TabButtonDef {
+                icon: "filter".into(),
+            }),
+        };
+        let yaml = serde_yaml_ng::to_string(&def).unwrap();
+        let parsed: CommandDef = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(def, parsed);
+        assert_eq!(parsed.tab_button.as_ref().unwrap().icon, "filter");
+    }
+
+    /// A `ParamDef` carrying `shape`, `options_from`, and inline `options`
+    /// must round-trip through YAML — the resolver registry, the frontend
+    /// `<CommandPopover>`, and the per-command migrations all rely on these
+    /// fields being preserved end-to-end.
+    #[test]
+    fn command_def_with_param_shape_and_options_round_trips() {
+        let def = CommandDef {
+            id: "perspective.sort.set".into(),
+            name: "Sort".into(),
+            menu_name: None,
+            scope: Some("entity:perspective".into()),
+            visible: true,
+            keys: None,
+            params: vec![ParamDef {
+                name: "field".into(),
+                from: ParamSource::Args,
+                entity_type: None,
+                default: None,
+                shape: Some(ParamShape::Enum),
+                options_from: Some("perspective.fields".into()),
+                options: Some(vec![ParamOption {
+                    value: "status".into(),
+                    label: "Status".into(),
+                }]),
+            }],
+            undoable: false,
+            context_menu: false,
+            context_menu_group: None,
+            context_menu_order: None,
+            menu: None,
+            view_kinds: None,
+            tab_button: None,
+        };
+        let yaml = serde_yaml_ng::to_string(&def).unwrap();
+        let parsed: CommandDef = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(def, parsed);
+        let param = &parsed.params[0];
+        assert_eq!(param.shape, Some(ParamShape::Enum));
+        assert_eq!(param.options_from.as_deref(), Some("perspective.fields"));
+        let opts = param.options.as_ref().unwrap();
+        assert_eq!(opts.len(), 1);
+        assert_eq!(opts[0].value, "status");
+        assert_eq!(opts[0].label, "Status");
+    }
+
+    /// A minimal `CommandDef` must not emit any of the new fields when
+    /// serialized — existing YAML files round-trip unchanged after the
+    /// schema is extended, and `commands_for_scope` payloads stay small
+    /// for commands that don't opt into tab-button / param-picker UX.
+    #[test]
+    fn command_def_without_new_fields_omits_them_from_yaml() {
+        let yaml = r#"
+id: app.quit
+name: Quit
+"#;
+        let def: CommandDef = serde_yaml_ng::from_str(yaml).unwrap();
+        let serialized = serde_yaml_ng::to_string(&def).unwrap();
+        assert!(
+            !serialized.contains("tab_button"),
+            "tab_button must be omitted when None: {serialized}"
+        );
+        assert!(
+            !serialized.contains("shape"),
+            "shape must be omitted when None: {serialized}"
+        );
+        assert!(
+            !serialized.contains("options_from"),
+            "options_from must be omitted when None: {serialized}"
+        );
+        assert!(
+            !serialized.contains("options"),
+            "options must be omitted when None: {serialized}"
+        );
+        // Sanity: the round-trip still produces an equivalent CommandDef.
+        let parsed: CommandDef = serde_yaml_ng::from_str(&serialized).unwrap();
+        assert!(parsed.tab_button.is_none());
+        assert!(parsed.params.is_empty());
     }
 
     #[test]
