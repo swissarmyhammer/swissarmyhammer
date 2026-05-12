@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KRE1SSN9AX8R67XC58HHQKKB
-position_column: doing
-position_ordinal: '8180'
+position_column: review
+position_ordinal: '80'
 title: Relocate DynamicSources and friends out of swissarmyhammer-kanban
 ---
 ## Status (2026-05-12)
