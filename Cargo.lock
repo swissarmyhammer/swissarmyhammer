@@ -8308,6 +8308,7 @@ dependencies = [
  "serde",
  "serde_yaml_ng",
  "serial_test",
+ "swissarmyhammer-common",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
