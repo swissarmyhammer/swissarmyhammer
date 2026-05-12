@@ -516,3 +516,89 @@ export const FilterEditor = forwardRef<FilterEditorHandle, FilterEditorProps>(
     );
   },
 );
+
+// ---------------------------------------------------------------------------
+// FilterExpressionEditor — pure, dispatch-agnostic CM6 filter editor
+// ---------------------------------------------------------------------------
+
+/** Props for the pure {@link FilterExpressionEditor} component. */
+export interface FilterExpressionEditorProps {
+  /** Current expression text — used as the initial buffer value at mount. */
+  value: string;
+  /** Called on every doc change with the new text. */
+  onChange?: (text: string) => void;
+  /** Called when the user presses Enter — signals submit. */
+  onSubmit?: () => void;
+  /** Called when the user presses Escape — signals cancel. */
+  onCancel?: () => void;
+  /** Placeholder text shown when the buffer is empty. */
+  placeholder?: string;
+  /** Whether to auto-focus the editor on mount. Defaults to true. */
+  autoFocus?: boolean;
+}
+
+/**
+ * Dispatch-agnostic CM6 editor for filter DSL expressions.
+ *
+ * Wraps {@link TextEditor} with the filter DSL language extension, mention
+ * autocomplete (tags / users / projects / virtual tags), and submit/cancel
+ * keymaps. Unlike {@link FilterEditor} this component does NOT dispatch any
+ * command on its own — it surfaces every state change through `onChange` and
+ * leaves dispatch policy to the parent (the popover form, today). That makes
+ * it safe to mount in a context with no `perspective:` moniker on the
+ * scope chain.
+ */
+export const FilterExpressionEditor = forwardRef<
+  FilterEditorHandle,
+  FilterExpressionEditorProps
+>(function FilterExpressionEditor(
+  {
+    value,
+    onChange,
+    onSubmit,
+    onCancel,
+    placeholder = "Filter… e.g. #bug @alice $spatial-nav",
+    autoFocus = true,
+  },
+  ref,
+) {
+  const innerRef = useRef<TextEditorHandle>(null);
+  useImperativeHandle(
+    ref,
+    () => ({
+      focus() {
+        innerRef.current?.focus();
+      },
+      setValue(text: string) {
+        innerRef.current?.setValue(text);
+      },
+      getValue() {
+        return innerRef.current?.getValue() ?? "";
+      },
+    }),
+    [],
+  );
+
+  // Stable refs so the submit/cancel keymap extensions don't churn the
+  // EditorView's extension array across renders.
+  const submitRef = useRef<(() => void) | null>(null);
+  submitRef.current = onSubmit ?? null;
+  const cancelRef = useRef<(() => void) | null>(null);
+  cancelRef.current = onCancel ?? null;
+
+  const extensions = useFilterEditorExtensions(submitRef, cancelRef);
+  const languageExtension = useMemo(() => filterLanguage(), []);
+
+  return (
+    <TextEditor
+      ref={innerRef}
+      value={value}
+      onChange={onChange}
+      extensions={extensions}
+      languageExtension={languageExtension}
+      placeholder={placeholder}
+      singleLine
+      autoFocus={autoFocus}
+    />
+  );
+});
