@@ -45,7 +45,7 @@ use swissarmyhammer_commands::{
     OptionsRegistry, ParamDef, ParamSource, TabButtonDef, UIState, WindowInfo,
 };
 use swissarmyhammer_fields::FieldsContext;
-use swissarmyhammer_perspectives::PerspectiveFieldInfo;
+use swissarmyhammer_perspectives::PerspectiveInfo;
 use swissarmyhammer_views::ViewInfo;
 
 /// Lightweight open-board descriptor for dynamic command generation.
@@ -61,29 +61,6 @@ pub struct BoardInfo {
     pub entity_name: String,
     /// Context display name (from `KanbanContext::name()`, the path stem).
     pub context_name: String,
-}
-
-/// Lightweight perspective descriptor for dynamic command generation.
-///
-/// Only carries the fields needed to produce a palette row that dispatches
-/// `perspective.set` with a pre-filled `perspective_id`. Intentionally
-/// decoupled from `Perspective` so the scope_commands module does not
-/// depend on the perspectives crate directly.
-#[derive(Debug, Clone)]
-pub struct PerspectiveInfo {
-    /// Perspective identifier (ULID).
-    pub id: String,
-    /// Human-readable name (e.g. "Active Sprint").
-    pub name: String,
-    /// View type (e.g. "board", "grid").
-    pub view: String,
-    /// Denormalised field list for this perspective's columns.
-    ///
-    /// Populated by `gather_perspectives` by joining the perspective's
-    /// `fields[].field` ULID list against the active board's
-    /// `FieldsContext`. Empty when the perspective has no fields or
-    /// when the join failed for every entry.
-    pub fields: Vec<PerspectiveFieldInfo>,
 }
 
 /// Runtime data that feeds dynamic command generation beyond the static

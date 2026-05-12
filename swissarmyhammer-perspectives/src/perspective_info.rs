@@ -3,13 +3,10 @@
 //! Lives here (in the perspectives crate) rather than
 //! `swissarmyhammer-kanban` because the descriptors are pure
 //! perspective-domain data. `PerspectiveFieldInfo` is the denormalised
-//! shape consumed by the `perspective.fields` options resolver — every
-//! consumer that emits perspective-aware commands needs to assemble
-//! this list.
-//!
-//! The companion lightweight `PerspectiveInfo` descriptor moves with
-//! `PerspectiveFieldInfo` in a follow-up commit so the migration stays
-//! one-type-per-commit.
+//! shape consumed by the `perspective.fields` options resolver, and
+//! `PerspectiveInfo` is the lightweight perspective descriptor every
+//! consumer that drives the command registry off a set of perspectives
+//! produces.
 
 /// Denormalised field descriptor carried alongside a perspective's
 /// runtime metadata.
@@ -26,6 +23,30 @@ pub struct PerspectiveFieldInfo {
     /// (caption override on the perspective field entry wins; the
     /// field definition's name is the fallback).
     pub display_name: String,
+}
+
+/// Lightweight perspective descriptor for dynamic command generation.
+///
+/// Only carries the fields needed to produce a palette row that
+/// dispatches `perspective.set` with a pre-filled `perspective_id`.
+/// Intentionally decoupled from the heavyweight
+/// [`crate::types::Perspective`] so the dispatch path does not need
+/// to load the entire perspective for every emit.
+#[derive(Debug, Clone)]
+pub struct PerspectiveInfo {
+    /// Perspective identifier (ULID).
+    pub id: String,
+    /// Human-readable name (e.g. `"Active Sprint"`).
+    pub name: String,
+    /// View kind (e.g. `"board"`, `"grid"`).
+    pub view: String,
+    /// Denormalised field list for this perspective's columns.
+    ///
+    /// Populated at gather-time by joining the perspective's
+    /// `fields[].field` ULID list against the active board's field
+    /// registry. Empty when the perspective has no fields or when
+    /// the join failed for every entry.
+    pub fields: Vec<PerspectiveFieldInfo>,
 }
 
 #[cfg(test)]
@@ -57,5 +78,47 @@ mod tests {
         let f2 = f.clone();
         assert_eq!(f.id, f2.id);
         assert_eq!(f.display_name, f2.display_name);
+    }
+
+    /// `PerspectiveInfo` aggregates a perspective's runtime
+    /// descriptor with its denormalised field list. Pins both the
+    /// shape and the contained-field-list relationship so a future
+    /// rename surfaces here.
+    #[test]
+    fn perspective_info_with_fields() {
+        let p = PerspectiveInfo {
+            id: "01P".into(),
+            name: "Active Sprint".into(),
+            view: "grid".into(),
+            fields: vec![
+                PerspectiveFieldInfo {
+                    id: "01F1".into(),
+                    display_name: "Title".into(),
+                },
+                PerspectiveFieldInfo {
+                    id: "01F2".into(),
+                    display_name: "Status".into(),
+                },
+            ],
+        };
+        assert_eq!(p.id, "01P");
+        assert_eq!(p.name, "Active Sprint");
+        assert_eq!(p.view, "grid");
+        assert_eq!(p.fields.len(), 2);
+        assert_eq!(p.fields[0].id, "01F1");
+    }
+
+    /// An empty field list is valid (the perspective is selectable
+    /// but its column-picker yields no options). Pins the contract
+    /// so the default-shaped `PerspectiveInfo` keeps compiling.
+    #[test]
+    fn perspective_info_with_empty_fields() {
+        let p = PerspectiveInfo {
+            id: "01P".into(),
+            name: "Default".into(),
+            view: "board".into(),
+            fields: vec![],
+        };
+        assert!(p.fields.is_empty());
     }
 }

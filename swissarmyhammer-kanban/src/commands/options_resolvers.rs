@@ -201,8 +201,7 @@ impl OptionsResolver for SortDirectionsResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scope_commands::PerspectiveInfo;
-    use swissarmyhammer_perspectives::PerspectiveFieldInfo;
+    use swissarmyhammer_perspectives::{PerspectiveFieldInfo, PerspectiveInfo};
 
     /// Build a [`DynamicSources`] carrying one perspective with three
     /// fields. The three field ids are stable test ULIDs so the
