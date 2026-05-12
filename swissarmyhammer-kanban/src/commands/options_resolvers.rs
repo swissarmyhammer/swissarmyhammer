@@ -1,31 +1,32 @@
-//! Built-in [`OptionsResolver`]s for kanban-specific picker options.
+//! Kanban-side composition of every domain crate's built-in
+//! [`OptionsResolver`]s into a single [`OptionsRegistry`].
 //!
-//! This module hosts the three resolvers that ship with
-//! `swissarmyhammer-kanban`:
+//! [`swissarmyhammer_perspectives::PerspectiveFieldsResolver`] now
+//! lives in the perspectives crate and is registered here via
+//! [`swissarmyhammer_perspectives::register_perspective_resolvers`].
+//! The two remaining built-ins are still defined in this module:
 //!
-//! - [`PerspectiveFieldsResolver`] — `"perspective.fields"`
-//! - [`ViewKindsResolver`] — `"view.kinds"`
-//! - [`SortDirectionsResolver`] — `"sort.directions"`
+//! - [`ViewKindsResolver`] — `"view.kinds"` (will move to
+//!   `swissarmyhammer-views` in a follow-up commit)
+//! - [`SortDirectionsResolver`] — `"sort.directions"` (will move to
+//!   `swissarmyhammer-commands` in a follow-up commit)
 //!
 //! [`default_options_registry`] returns a fresh [`OptionsRegistry`]
-//! with all three pre-registered. Consumers (the kanban-app GUI, the
-//! kanban-cli, headless tests) call this exactly once at startup and
-//! thread the registry into every [`crate::scope_commands::commands_for_scope`]
-//! invocation.
-//!
-//! Adding a new built-in resolver: implement [`OptionsResolver`] in
-//! this module and register it inside [`default_options_registry`].
+//! with every built-in pre-registered. Consumers (the kanban-app GUI,
+//! the kanban-cli, headless tests) call this exactly once at startup
+//! and thread the registry into every
+//! [`crate::scope_commands::commands_for_scope`] invocation.
 
 use swissarmyhammer_commands::{OptionsContext, OptionsRegistry, OptionsResolver, ParamOption};
+use swissarmyhammer_perspectives::register_perspective_resolvers;
 
-use crate::scope_commands::DynamicSources;
-
-/// Construct an [`OptionsRegistry`] with all kanban-specific built-in
-/// resolvers pre-registered.
+/// Construct an [`OptionsRegistry`] with every built-in resolver
+/// pre-registered.
 ///
 /// Built-ins registered, in registration order:
 ///
-/// 1. [`PerspectiveFieldsResolver`] (key `"perspective.fields"`)
+/// 1. `perspective.fields` — from `swissarmyhammer-perspectives` via
+///    [`register_perspective_resolvers`]
 /// 2. [`ViewKindsResolver`] (key `"view.kinds"`)
 /// 3. [`SortDirectionsResolver`] (key `"sort.directions"`)
 ///
@@ -33,81 +34,10 @@ use crate::scope_commands::DynamicSources;
 /// additional resolvers on top of the returned registry.
 pub fn default_options_registry() -> OptionsRegistry {
     let mut registry = OptionsRegistry::new();
-    registry.register(Box::new(PerspectiveFieldsResolver));
+    register_perspective_resolvers(&mut registry);
     registry.register(Box::new(ViewKindsResolver));
     registry.register(Box::new(SortDirectionsResolver));
     registry
-}
-
-/// Downcast `OptionsContext::data` to `&DynamicSources`.
-///
-/// Every kanban resolver expects the consumer to thread a
-/// [`DynamicSources`] through the context. A wrong-type downcast is
-/// programmer error (a non-kanban consumer reusing kanban resolvers);
-/// we return `None` and let the resolver fall back to an empty list
-/// rather than panic in production.
-fn dynamic_from<'a>(ctx: &OptionsContext<'a>) -> Option<&'a DynamicSources> {
-    ctx.data.downcast_ref::<DynamicSources>()
-}
-
-/// Resolve `"perspective.fields"` against the innermost
-/// `perspective:{id}` moniker in the scope chain.
-///
-/// Walks the scope chain innermost-first (the documented order from
-/// [`crate::scope_commands::commands_for_scope`], e.g.
-/// `["perspective:01P", "view:01V", "board:my-board"]`) and returns
-/// the first `perspective:{id}` it encounters — that is the
-/// perspective the user has open. We look that perspective up in
-/// [`DynamicSources::perspectives`] and project its denormalised
-/// [`swissarmyhammer_perspectives::PerspectiveFieldInfo`] list onto one
-/// [`ParamOption`] per field.
-///
-/// Returns an empty `Vec` when:
-///
-/// - the scope chain has no `perspective:{id}` moniker,
-/// - the moniker's id is unknown to `DynamicSources.perspectives`, or
-/// - the matching perspective has an empty field list.
-///
-/// Never panics — the resolver is read-only and tolerates every
-/// missing-input branch.
-pub struct PerspectiveFieldsResolver;
-
-impl OptionsResolver for PerspectiveFieldsResolver {
-    fn key(&self) -> &'static str {
-        "perspective.fields"
-    }
-
-    fn resolve(&self, ctx: &OptionsContext<'_>) -> Vec<ParamOption> {
-        let Some(dyn_src) = dynamic_from(ctx) else {
-            return Vec::new();
-        };
-        let Some(perspective_id) = innermost_perspective_id(ctx.scope_chain) else {
-            return Vec::new();
-        };
-        let Some(perspective) = dyn_src.perspectives.iter().find(|p| p.id == perspective_id) else {
-            return Vec::new();
-        };
-        perspective
-            .fields
-            .iter()
-            .map(|f| ParamOption {
-                value: f.id.clone(),
-                label: f.display_name.clone(),
-            })
-            .collect()
-    }
-}
-
-/// Find the innermost `perspective:{id}` moniker in the scope chain.
-///
-/// `scope_chain` is documented innermost-first, so the first
-/// `perspective:{id}` we encounter IS the innermost. Returns the
-/// trailing id portion (`{id}`) or `None` if no perspective moniker
-/// is present.
-fn innermost_perspective_id(scope_chain: &[String]) -> Option<&str> {
-    scope_chain
-        .iter()
-        .find_map(|m| m.strip_prefix("perspective:"))
 }
 
 /// Resolve `"view.kinds"` to a static list of every [`ViewKind`]
@@ -201,91 +131,7 @@ impl OptionsResolver for SortDirectionsResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swissarmyhammer_perspectives::{PerspectiveFieldInfo, PerspectiveInfo};
-
-    /// Build a [`DynamicSources`] carrying one perspective with three
-    /// fields. The three field ids are stable test ULIDs so the
-    /// assertion can match on exact value strings.
-    fn fixture_dyn_sources() -> DynamicSources {
-        DynamicSources {
-            perspectives: vec![PerspectiveInfo {
-                id: "01P".into(),
-                name: "Active Sprint".into(),
-                view: "grid".into(),
-                fields: vec![
-                    PerspectiveFieldInfo {
-                        id: "01F1".into(),
-                        display_name: "Title".into(),
-                    },
-                    PerspectiveFieldInfo {
-                        id: "01F2".into(),
-                        display_name: "Status".into(),
-                    },
-                    PerspectiveFieldInfo {
-                        id: "01F3".into(),
-                        display_name: "Priority".into(),
-                    },
-                ],
-            }],
-            ..Default::default()
-        }
-    }
-
-    /// With `perspective:01P` in scope and a fixture perspective that
-    /// carries three fields, the resolver returns three
-    /// `ParamOption`s in field order with `value = field_id` and
-    /// `label = field_display_name`. This pins the wire format the
-    /// frontend `<CommandPopover>` will consume.
-    #[test]
-    fn perspective_fields_resolver_returns_fields_for_in_scope_perspective() {
-        let dyn_src = fixture_dyn_sources();
-        let scope = vec!["perspective:01P".to_string()];
-        let ctx = OptionsContext {
-            scope_chain: &scope,
-            data: &dyn_src as &dyn std::any::Any,
-        };
-        let opts = PerspectiveFieldsResolver.resolve(&ctx);
-        assert_eq!(opts.len(), 3);
-        assert_eq!(opts[0].value, "01F1");
-        assert_eq!(opts[0].label, "Title");
-        assert_eq!(opts[1].value, "01F2");
-        assert_eq!(opts[1].label, "Status");
-        assert_eq!(opts[2].value, "01F3");
-        assert_eq!(opts[2].label, "Priority");
-    }
-
-    /// With an empty scope chain, the resolver returns an empty list
-    /// rather than panicking. This is what lets a perspective field
-    /// picker be safely rendered in a context where no perspective is
-    /// open yet (e.g. a board-level command palette).
-    #[test]
-    fn perspective_fields_resolver_returns_empty_when_no_perspective_in_scope() {
-        let dyn_src = fixture_dyn_sources();
-        let scope: Vec<String> = Vec::new();
-        let ctx = OptionsContext {
-            scope_chain: &scope,
-            data: &dyn_src as &dyn std::any::Any,
-        };
-        let opts = PerspectiveFieldsResolver.resolve(&ctx);
-        assert!(opts.is_empty());
-    }
-
-    /// An in-scope `perspective:{id}` that does NOT match any
-    /// perspective in [`DynamicSources`] also resolves to an empty
-    /// list (not a panic, not a fallback to another perspective).
-    /// This pins the "unknown perspective" behavior the picker
-    /// relies on when the scope chain is stale.
-    #[test]
-    fn perspective_fields_resolver_empty_when_perspective_id_unknown() {
-        let dyn_src = fixture_dyn_sources();
-        let scope = vec!["perspective:nope".to_string()];
-        let ctx = OptionsContext {
-            scope_chain: &scope,
-            data: &dyn_src as &dyn std::any::Any,
-        };
-        let opts = PerspectiveFieldsResolver.resolve(&ctx);
-        assert!(opts.is_empty());
-    }
+    use swissarmyhammer_commands::OptionsSources;
 
     /// The resolver enumerates every [`swissarmyhammer_views::ViewKind`]
     /// variant via its canonical [`as_kebab_str`] helper, so the wire
@@ -296,11 +142,11 @@ mod tests {
     #[test]
     fn view_kinds_resolver_lists_every_variant_via_canonical_helper() {
         use swissarmyhammer_views::ViewKind;
-        let dyn_src = DynamicSources::default();
+        let sources = OptionsSources::new();
         let scope: Vec<String> = Vec::new();
         let ctx = OptionsContext {
             scope_chain: &scope,
-            data: &dyn_src as &dyn std::any::Any,
+            data: &sources as &dyn std::any::Any,
         };
         let opts = ViewKindsResolver.resolve(&ctx);
         let values: Vec<&str> = opts.iter().map(|o| o.value.as_str()).collect();
@@ -338,11 +184,11 @@ mod tests {
     /// break round-trip.
     #[test]
     fn sort_directions_resolver_returns_asc_and_desc_only() {
-        let dyn_src = DynamicSources::default();
+        let sources = OptionsSources::new();
         let scope: Vec<String> = Vec::new();
         let ctx = OptionsContext {
             scope_chain: &scope,
-            data: &dyn_src as &dyn std::any::Any,
+            data: &sources as &dyn std::any::Any,
         };
         let opts = SortDirectionsResolver.resolve(&ctx);
         assert_eq!(opts.len(), 2);
@@ -364,21 +210,5 @@ mod tests {
                 "default_options_registry must register `{key}`",
             );
         }
-    }
-
-    /// If a non-kanban consumer reuses these resolvers with a
-    /// non-`DynamicSources` context, the kanban-specific resolvers
-    /// return an empty list rather than panicking. This pins the
-    /// "graceful misuse" contract the cross-crate downcast relies on.
-    #[test]
-    fn perspective_fields_resolver_returns_empty_for_wrong_context_type() {
-        let data: () = ();
-        let scope = vec!["perspective:01P".to_string()];
-        let ctx = OptionsContext {
-            scope_chain: &scope,
-            data: &data as &dyn std::any::Any,
-        };
-        let opts = PerspectiveFieldsResolver.resolve(&ctx);
-        assert!(opts.is_empty());
     }
 }

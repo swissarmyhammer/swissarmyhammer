@@ -19,10 +19,65 @@
 //! at resolve time, while other consumers can plug in their own concrete
 //! source-data types without this crate growing a dependency on theirs.
 
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::collections::HashMap;
 
 use crate::types::ParamOption;
+
+/// A typed multi-domain container for [`OptionsContext::data`].
+///
+/// The [`OptionsResolver`] trait carries `data: &dyn Any`, which can
+/// only be downcast to one concrete type at a time. That's a problem
+/// for the multi-domain `commands_for_scope` path: a single call wants
+/// to feed perspective-domain resolvers, view-domain resolvers, and
+/// any-other-domain resolvers from the same context.
+///
+/// [`OptionsSources`] is the agreed-upon `data` shape. Each domain
+/// crate defines its own owned data struct (e.g.
+/// `PerspectivesOptionsData`, `ViewsOptionsData`) and inserts an
+/// instance via [`Self::insert`]. Each resolver in that domain
+/// retrieves it via [`Self::get`]. The kanban-app consumer (and any
+/// other consumer of the command registry) constructs an
+/// `OptionsSources`, populates it from its aggregator, and threads
+/// `&sources as &dyn Any` into [`OptionsContext::data`].
+///
+/// This keeps `OptionsResolver` unchanged (the trait surface is
+/// stable as the prior task delivered it) while letting per-domain
+/// resolvers live in their domain crates without any back-reference
+/// to a consumer-side aggregator type.
+#[derive(Default)]
+pub struct OptionsSources {
+    map: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+}
+
+impl OptionsSources {
+    /// Construct an empty container. Use [`Self::insert`] to add
+    /// per-domain data.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Store `value` keyed by its concrete [`TypeId`]. Replaces any
+    /// previously-inserted value of the same type (last-write-wins
+    /// per type, mirroring [`OptionsRegistry::register`]'s
+    /// last-registration-wins semantics for keys).
+    pub fn insert<T>(&mut self, value: T)
+    where
+        T: Any + Send + Sync,
+    {
+        self.map.insert(TypeId::of::<T>(), Box::new(value));
+    }
+
+    /// Retrieve a previously-inserted value of type `T`, or `None`
+    /// when none was inserted. Resolvers call this to fetch their
+    /// domain-specific data slice.
+    pub fn get<T>(&self) -> Option<&T>
+    where
+        T: Any,
+    {
+        self.map.get(&TypeId::of::<T>())?.downcast_ref::<T>()
+    }
+}
 
 /// Per-resolution context handed to every [`OptionsResolver::resolve`] call.
 ///

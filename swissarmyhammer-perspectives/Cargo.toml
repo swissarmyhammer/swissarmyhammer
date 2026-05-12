@@ -17,6 +17,7 @@ tracing = { workspace = true }
 ulid = { workspace = true }
 swissarmyhammer-store = { path = "../swissarmyhammer-store" }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-commands = { path = "../swissarmyhammer-commands" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

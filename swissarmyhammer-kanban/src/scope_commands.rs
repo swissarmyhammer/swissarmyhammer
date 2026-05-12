@@ -640,17 +640,17 @@ fn enrich_options(
     let Some(registry) = options_registry else {
         return;
     };
-    // Construct the opaque source-data pointer once per call. When
-    // `dynamic == None` we hand the registry an empty placeholder so
-    // resolvers that ignore the data field still work; resolvers that
-    // need real data (e.g. PerspectiveFieldsResolver) downcast and
-    // fall back to an empty result list on a miss.
-    let empty = DynamicSources::default();
-    let data: &dyn std::any::Any = match dynamic {
-        Some(d) => d,
-        None => &empty,
+    // Compose a per-domain `OptionsSources` once per call from the
+    // `DynamicSources` aggregator the consumer supplied. Each domain
+    // crate's resolver downcasts the context's `data: &dyn Any` to
+    // `&OptionsSources` and then pulls its own per-domain data via
+    // [`OptionsSources::get`]. Resolvers that don't need any data
+    // (sort.directions, view.kinds) ignore the lookup entirely.
+    let sources = build_options_sources(dynamic);
+    let ctx = OptionsContext {
+        scope_chain,
+        data: &sources as &dyn std::any::Any,
     };
-    let ctx = OptionsContext { scope_chain, data };
     for cmd in result.iter_mut() {
         for param in cmd.params.iter_mut() {
             let Some(key) = param.options_from.as_deref() else {
@@ -667,6 +667,32 @@ fn enrich_options(
             }
         }
     }
+}
+
+/// Compose a fresh [`OptionsSources`] from the optional
+/// [`DynamicSources`] aggregator.
+///
+/// Each per-domain `*OptionsData` is constructed by cloning the
+/// matching slice out of the aggregator. The clone happens once per
+/// `commands_for_scope` call, not per param — fan-out is O(commands
+/// × params), so the per-call cost of one allocation per domain is
+/// negligible compared to the registry walk.
+///
+/// When `dynamic == None`, every per-domain slot is left empty; this
+/// matches the headless / shell path where the consumer doesn't have
+/// any dynamic data to feed the resolvers.
+fn build_options_sources(
+    dynamic: Option<&DynamicSources>,
+) -> swissarmyhammer_commands::OptionsSources {
+    use swissarmyhammer_commands::OptionsSources;
+    use swissarmyhammer_perspectives::PerspectivesOptionsData;
+    let mut sources = OptionsSources::new();
+    sources.insert(PerspectivesOptionsData {
+        perspectives: dynamic
+            .map(|d| d.perspectives.clone())
+            .unwrap_or_default(),
+    });
+    sources
 }
 
 /// Process-wide "warn once per missing resolver key" gate.

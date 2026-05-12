@@ -293,11 +293,8 @@ entries:
 - id: 01KRE25JN68CFG223KBJ7215ZJ
   label: update project task-card-fields
   item_id: task-card-fields
-- id: 01KRE2658HNDXCDHT6N5V0P9J2
-  label: update project task-card-fields
-  item_id: task-card-fields
-- id: 01KREE2EKRXEB8MDAS83VTQ443
-  label: update task 01KRE1YA65MMG29RDQDQ0VPJQG
-  item_id: 01KRE1YA65MMG29RDQDQ0VPJQG
-pointer: 98
+- id: 01KRERBDX682ZY2RTXB43D5KMT
+  label: update perspective 01KPCRANPEWSSD89ZY7VGS5BNQ
+  item_id: 01KPCRANPEWSSD89ZY7VGS5BNQ
+pointer: 99
 max_size: 100

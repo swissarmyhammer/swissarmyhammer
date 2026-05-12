@@ -8546,6 +8546,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "swissarmyhammer-commands",
  "swissarmyhammer-common",
  "swissarmyhammer-store",
  "tempfile",

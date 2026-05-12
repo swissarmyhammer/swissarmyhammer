@@ -23,7 +23,7 @@ pub mod window_info;
 pub use command::Command;
 pub use context::{parse_moniker, CommandContext};
 pub use error::{CommandError, Result};
-pub use options_resolver::{OptionsContext, OptionsRegistry, OptionsResolver};
+pub use options_resolver::{OptionsContext, OptionsRegistry, OptionsResolver, OptionsSources};
 pub use registry::{builtin_yaml_sources, load_yaml_dir, CommandsRegistry};
 pub use types::{
     CommandDef, CommandInvocation, KeysDef, MenuPlacement, ParamDef, ParamOption, ParamShape,
