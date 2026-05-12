@@ -172,8 +172,19 @@ vi.mock("@/components/filter-editor", async () => {
     );
     return <div data-testid="filter-editor-mock" />;
   });
+  // `FilterExpressionEditor` is the pure, dispatch-agnostic sibling
+  // exported alongside `FilterEditor` (task 01KRE1VDTC4MNKN3YPR619NDQK).
+  // The tab bar now transitively imports it via `<CommandPopover>`, so
+  // the mock must provide a stub even though this test does not exercise
+  // a tab-button-tagged command path.
+  const FilterExpressionEditor = React.forwardRef<unknown, unknown>(
+    function FilterExpressionEditor() {
+      return <div data-testid="filter-expression-editor-mock" />;
+    },
+  );
   return {
     FilterEditor,
+    FilterExpressionEditor,
   };
 });
 

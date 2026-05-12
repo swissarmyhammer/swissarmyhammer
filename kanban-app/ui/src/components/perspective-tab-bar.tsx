@@ -10,6 +10,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { Filter, Group, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePerspectives } from "@/lib/perspective-context";
@@ -20,7 +21,13 @@ import {
   type CommandDef,
 } from "@/lib/command-scope";
 import { useContextMenu } from "@/lib/context-menu";
+import { useBoardData } from "@/components/window-container";
 import { moniker } from "@/lib/moniker";
+import { CommandButton } from "@/components/command-button";
+import type {
+  CommandDef as RegistryCommandDef,
+  TabButtonDef,
+} from "@/types/kanban";
 import {
   Popover,
   PopoverTrigger,
@@ -210,6 +217,169 @@ function usePerspectiveTabBar() {
     commitRename,
     cancelRename,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Registry-driven tab buttons — `<CommandButton>` per `tab_button`-tagged command
+// ---------------------------------------------------------------------------
+
+/**
+ * Wire-format shape returned by the backend `list_commands_for_scope`
+ * Tauri command. Mirrors `swissarmyhammer-kanban::scope_commands::ResolvedCommand`
+ * — only the fields the tab bar reads are declared here; the dispatcher and
+ * other consumers see more fields and use their own narrower shapes.
+ *
+ * Two fields drive the tab bar render path:
+ *
+ *   - `tab_button` — when set, the command renders as a `<CommandButton>`
+ *     on the per-perspective tab. When absent, the command surfaces in
+ *     palettes / context menus per its other metadata but contributes
+ *     nothing to the tab bar.
+ *   - `params` — carried through to `<CommandButton>` so the popover knows
+ *     which fields to render. Backend-supplied `options` for enum-shaped
+ *     params are already populated.
+ */
+interface ResolvedTabCommand {
+  readonly id: string;
+  readonly name: string;
+  readonly target?: string;
+  readonly group?: string;
+  readonly context_menu?: boolean;
+  readonly available?: boolean;
+  readonly keys?: RegistryCommandDef["keys"];
+  readonly args?: Record<string, unknown>;
+  readonly params?: RegistryCommandDef["params"];
+  readonly tab_button?: TabButtonDef;
+}
+
+/**
+ * Query the live command registry for every command in scope and return
+ * only those flagged for tab-button rendering.
+ *
+ * # Scope chain shape
+ *
+ * Built innermost → outermost from three monikers that together describe
+ * the perspective + view + board the tab belongs to:
+ *
+ *   `["perspective:${perspectiveId}", "view:${activeView.id}", "board:${activeBoardId}"]`
+ *
+ * The backend's downstream passes consume each segment:
+ *
+ *   - `perspective:` — `PerspectiveFieldsResolver` looks up the perspective
+ *     by id to populate enum picker options.
+ *   - `view:` — `filter_by_view_kind` joins against `DynamicSources.views`
+ *     to drop commands whose `view_kinds` array doesn't admit the active
+ *     view's kind.
+ *   - `board:` — present so cross-cutting board-level commands (e.g.
+ *     archive / delete on the board itself) resolve correctly.
+ *
+ * The chain is built explicitly rather than read from `FocusedScopeContext`
+ * because the tab bar queries commands for EVERY perspective on the
+ * current view — not just the focused one. Walking the focus tree would
+ * only describe whichever tab is currently focused.
+ *
+ * # Filtering
+ *
+ * The frontend filter is a single `tab_button != null` predicate. The
+ * backend already runs `filter_by_view_kind` and availability checks
+ * before emission — the frontend trusts that work and only narrows
+ * further to "render me as a tab-button".
+ *
+ * @param perspectiveId The id of the perspective whose tab this hook
+ *   queries for. Used as the innermost moniker in the scope chain.
+ * @param activeViewId The id of the active view. Becomes the middle
+ *   moniker in the scope chain.
+ * @param activeBoardId The id of the active board. Becomes the
+ *   outermost moniker in the scope chain. May be `undefined` when no
+ *   board is loaded — in that case the hook returns an empty list
+ *   without invoking the backend.
+ * @returns Commands ready to feed to `<CommandButton>`. Empty until the
+ *   first `list_commands_for_scope` response resolves.
+ */
+function useScopedTabCommands(
+  perspectiveId: string,
+  activeViewId: string,
+  activeBoardId: string | undefined,
+): ResolvedTabCommand[] {
+  const [commands, setCommands] = useState<ResolvedTabCommand[]>([]);
+
+  useEffect(() => {
+    if (!activeBoardId) {
+      setCommands([]);
+      return;
+    }
+    let cancelled = false;
+    const scopeChain = [
+      `perspective:${perspectiveId}`,
+      `view:${activeViewId}`,
+      `board:${activeBoardId}`,
+    ];
+    invoke<ResolvedTabCommand[]>("list_commands_for_scope", { scopeChain })
+      .then((resolved) => {
+        if (cancelled) return;
+        setCommands(resolved.filter((c) => c.tab_button != null));
+      })
+      .catch((e) => {
+        console.error("[PerspectiveTabBar] list_commands_for_scope failed:", e);
+        if (!cancelled) setCommands([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [perspectiveId, activeViewId, activeBoardId]);
+
+  return commands;
+}
+
+/**
+ * Render one `<CommandButton>` per tab-button-tagged command for the
+ * given perspective. Sits alongside the existing hardcoded
+ * `<FilterFocusButton>` / `<GroupPopoverButton>` until per-command
+ * migrations remove their hardcoded counterparts.
+ *
+ * The slot renders nothing today — no command in the registry carries
+ * `tab_button` yet. As the per-command migration tasks land, this slot
+ * fills in and the matching hardcoded button is deleted in the same
+ * migration.
+ */
+function RegistryTabButtons({
+  perspectiveId,
+  activeViewId,
+  activeBoardId,
+}: {
+  perspectiveId: string;
+  activeViewId: string;
+  activeBoardId: string | undefined;
+}) {
+  const tabCommands = useScopedTabCommands(
+    perspectiveId,
+    activeViewId,
+    activeBoardId,
+  );
+  // Adapt the wire-format shape to the `CommandDef` `<CommandButton>`
+  // consumes from `@/types/kanban`. Most fields pass through unchanged;
+  // a default `visible: true` keeps the type alignment minimal without
+  // forcing the wire format to mirror every optional UI flag.
+  return (
+    <>
+      {tabCommands.map((cmd) => (
+        <CommandButton
+          key={cmd.id}
+          command={
+            {
+              id: cmd.id,
+              name: cmd.name,
+              keys: cmd.keys,
+              params: cmd.params,
+              tab_button: cmd.tab_button,
+            } as RegistryCommandDef
+          }
+          surface="perspective_tab"
+          surfaceId={perspectiveId}
+        />
+      ))}
+    </>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -766,6 +936,10 @@ function PerspectiveTab({
   // its own inner FocusScope leaf) because they live to the right of the
   // tab name and have distinct rects — they are independently navigable
   // with arrow keys, separate visible focus targets.
+  const boardData = useBoardData();
+  const activeBoardId = boardData?.board?.id;
+  const activeViewId = activeView?.id;
+
   return (
     <div className="inline-flex items-center">
       <TabButton
@@ -792,6 +966,20 @@ function PerspectiveTab({
           fields={schemaFields}
           open={groupOpen}
           onOpenChange={setGroupOpen}
+        />
+      )}
+      {/*
+        Registry-driven tab buttons. Renders nothing today (no command
+        carries `tab_button` yet); each per-command migration task flips
+        on `tab_button` in YAML and deletes the corresponding hardcoded
+        button above in the same migration. Mounted only when the active
+        view is known so the scope chain is well-formed.
+      */}
+      {activeViewId && (
+        <RegistryTabButtons
+          perspectiveId={id}
+          activeViewId={activeViewId}
+          activeBoardId={activeBoardId}
         />
       )}
     </div>
