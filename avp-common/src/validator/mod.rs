@@ -69,10 +69,11 @@ use swissarmyhammer_templating::partials::LibraryPartialAdapter;
 // Re-export main types for convenience
 pub use executor::{
     add_partial_with_aliases, create_executed_ruleset, create_executed_validator,
+    emit_validator_result_log, emit_validator_result_log_with_reason,
     extract_partials_from_builtins, is_partial, is_rate_limit_error, log_ruleset_result,
     log_validator_result, parse_validator_response, render_validator_body, render_validator_prompt,
     render_validator_prompt_with_partials, render_validator_prompt_with_partials_and_changed_files,
-    RulePromptContext, RuleSetSessionContext, ValidatorRenderContext, VALIDATOR_PROMPT_NAME,
+    RulePromptContext, ValidatorRenderContext, VALIDATOR_PROMPT_NAME,
 };
 pub use loader::{DirectoryInfo, ValidatorDiagnostics, ValidatorLoader};
 pub use parser::{parse_rule, parse_ruleset_directory, parse_ruleset_manifest, parse_validator};

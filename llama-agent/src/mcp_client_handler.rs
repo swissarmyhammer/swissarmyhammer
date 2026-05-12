@@ -1,6 +1,6 @@
 //! MCP ClientHandler that converts MCP notifications to ACP SessionNotifications
 
-use agent_client_protocol::{SessionId, SessionNotification, SessionUpdate};
+use agent_client_protocol::schema::{SessionId, SessionNotification, SessionUpdate};
 use rmcp::{
     model::{LoggingMessageNotificationParam, ProgressNotificationParam},
     service::{NotificationContext, RoleClient},
@@ -87,11 +87,12 @@ impl ClientHandler for NotifyingClientHandler {
                     (params.progress / params.total.unwrap_or(100.0)) * 100.0,
                     message
                 );
-                let text_content = agent_client_protocol::TextContent::new(text);
-                let update =
-                    SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
-                        agent_client_protocol::ContentBlock::Text(text_content),
-                    ));
+                let text_content = agent_client_protocol::schema::TextContent::new(text);
+                let update = SessionUpdate::AgentMessageChunk(
+                    agent_client_protocol::schema::ContentChunk::new(
+                        agent_client_protocol::schema::ContentBlock::Text(text_content),
+                    ),
+                );
                 self.broadcast_acp_notification(session_id, update);
             }
         } else {
@@ -131,11 +132,12 @@ impl ClientHandler for NotifyingClientHandler {
                     | rmcp::model::LoggingLevel::Critical
             ) {
                 let text = format!("[MCP] {}", message);
-                let text_content = agent_client_protocol::TextContent::new(text);
-                let update =
-                    SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
-                        agent_client_protocol::ContentBlock::Text(text_content),
-                    ));
+                let text_content = agent_client_protocol::schema::TextContent::new(text);
+                let update = SessionUpdate::AgentMessageChunk(
+                    agent_client_protocol::schema::ContentChunk::new(
+                        agent_client_protocol::schema::ContentBlock::Text(text_content),
+                    ),
+                );
                 self.broadcast_acp_notification(session_id, update);
             }
         } else {

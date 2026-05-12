@@ -429,7 +429,16 @@ impl RequestQueue {
         let (sender, receiver) = mpsc::channel(config.max_queue_size);
         let receiver = Arc::new(tokio::sync::Mutex::new(receiver));
         let metrics = Arc::new(QueueMetrics::new());
-        let chat_template = Arc::new(ChatTemplateEngine::new());
+        // The chat template engine needs the right strategy so it renders
+        // tools and parses tool calls in the format the loaded model was
+        // trained on. We derive the identifier from the model config in the
+        // same way `AgentServer::initialize` does — see
+        // `crate::agent::model_identifier_for_strategy`. Without this the
+        // queue's engine stays strategy-less and silently falls back to the
+        // legacy HashMap parsers.
+        let model_identifier =
+            crate::agent::model_identifier_for_strategy(model_manager.get_config());
+        let chat_template = Arc::new(ChatTemplateEngine::with_model_strategy(&model_identifier));
         let session_state_cache: SessionStateCache = Arc::new(Mutex::new(HashMap::new()));
 
         let worker_handles = Self::spawn_workers(

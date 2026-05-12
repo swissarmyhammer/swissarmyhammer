@@ -6,7 +6,7 @@
 //! required fields (e.g. `transcript_path`, `tool_input`) at compile/test time
 //! rather than at runtime in production.
 
-use agent_client_protocol::{ContentBlock, StopReason, TextContent};
+use agent_client_protocol::schema::{ContentBlock, StopReason, TextContent};
 use agent_client_protocol_extras::{HookEvent, SessionSource};
 use avp_common::HookInput;
 use std::path::PathBuf;
@@ -197,7 +197,9 @@ fn avp_schema_stop() {
 /// Notification JSON deserializes, `notification_type` correct.
 #[test]
 fn avp_schema_notification() {
-    use agent_client_protocol::{ContentChunk, SessionId, SessionNotification, SessionUpdate};
+    use agent_client_protocol::schema::{
+        ContentChunk, SessionId, SessionNotification, SessionUpdate,
+    };
 
     let content = ContentChunk::new(ContentBlock::Text(TextContent::new("hello")));
     let notification = SessionNotification::new(

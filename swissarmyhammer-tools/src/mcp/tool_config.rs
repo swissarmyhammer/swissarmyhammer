@@ -373,7 +373,7 @@ mod tests {
 
         let mut registry = ToolRegistry::new();
         register_shell_tools(&mut registry);
-        register_file_tools(&mut registry).await;
+        register_file_tools(&mut registry);
         register_git_tools(&mut registry);
         register_kanban_tools(&mut registry);
         register_questions_tools(&mut registry);

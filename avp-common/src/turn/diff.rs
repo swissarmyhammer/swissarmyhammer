@@ -93,7 +93,12 @@ const DIFF_TOOLS: &[&str] = &["Edit", "Write", "NotebookEdit"];
 pub const DIFF_TEXT_KEY: &str = "_diff_text";
 
 /// Fields to strip from Edit/Write tool results (bloated content).
+///
+/// `content` is the full post-edit file body — once `_diff_text` is embedded,
+/// this is redundant and would 2-3× the prompt size. `originalFile` is the
+/// pre-edit body, also already represented as `-` lines in the diff.
 const STRIP_TOOL_RESULT_FIELDS: &[&str] = &[
+    "content",
     "originalFile",
     "oldString",
     "newString",
@@ -104,12 +109,25 @@ const STRIP_TOOL_RESULT_FIELDS: &[&str] = &[
 ];
 
 /// Fields to strip from Edit/Write tool input (duplicated content).
-const STRIP_TOOL_INPUT_FIELDS: &[&str] = &["old_string", "new_string", "replace_all"];
+///
+/// `content` is the full file body that Write sends in `tool_input` — once
+/// `_diff_text` is embedded, this is redundant. `old_string`/`new_string` are
+/// already represented as `-`/`+` lines in the diff.
+const STRIP_TOOL_INPUT_FIELDS: &[&str] = &["content", "old_string", "new_string", "replace_all"];
 
 /// Prepare a hook context JSON value for validators.
 ///
-/// For Edit/Write tools with diffs: strips bloated fields (originalFile, etc.)
-/// and embeds the diff text as `_diff_text`. For other tools: passes through as-is.
+/// Whenever the caller supplies non-empty `diffs`, the rendered diff text is
+/// embedded into the input as `_diff_text` so the renderer appends it as a
+/// fenced block after the YAML payload. This is universal — Stop hooks (which
+/// have no `tool_name`), PostToolUse Edit/Write hooks, and any other caller
+/// that prepared diffs upstream all benefit.
+///
+/// In addition, when the input is for an Edit/Write tool (i.e. `tool_name`
+/// is one of [`DIFF_TOOLS`]), the bloated `tool_input` / `tool_result` fields
+/// that duplicate the diff content are stripped. Stripping is conditional on
+/// the edit-tool shape because the field names being stripped are specific
+/// to those tool payloads; embedding the diff itself is not.
 ///
 /// The returned value is still a `serde_json::Value::Object` — the rendering
 /// layer converts it to YAML and appends diff blocks.
@@ -117,24 +135,26 @@ pub fn prepare_validator_context(
     mut input: serde_json::Value,
     diffs: Option<&[FileDiff]>,
 ) -> serde_json::Value {
+    // Caller didn't supply diffs (or supplied an empty slice): nothing to embed.
+    let Some(diffs) = diffs.filter(|d| !d.is_empty()) else {
+        return input;
+    };
+
+    // Edit/Write payloads carry duplicated old/new content alongside the diff;
+    // strip those so the prompt isn't padded with redundant text. Stop-hook
+    // and other inputs don't have those fields and don't need stripping.
     let tool_name = input
         .get("tool_name")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-
-    let has_diffs = diffs.is_some_and(|d| !d.is_empty());
-    let is_diff_tool = DIFF_TOOLS.contains(&tool_name.as_str());
-
-    if !(is_diff_tool && has_diffs) {
-        return input;
+    if DIFF_TOOLS.contains(&tool_name.as_str()) {
+        strip_object_fields(&mut input, "tool_result", STRIP_TOOL_RESULT_FIELDS);
+        strip_object_fields(&mut input, "tool_input", STRIP_TOOL_INPUT_FIELDS);
     }
 
-    strip_object_fields(&mut input, "tool_result", STRIP_TOOL_RESULT_FIELDS);
-    strip_object_fields(&mut input, "tool_input", STRIP_TOOL_INPUT_FIELDS);
-
-    // Embed diff text
-    let diff_text = format_diffs_fenced(diffs.unwrap());
+    // Embed diff text — universal across all callers that prepared diffs.
+    let diff_text = format_diffs_fenced(diffs);
     if let Some(map) = input.as_object_mut() {
         map.insert(
             DIFF_TEXT_KEY.to_string(),
@@ -459,7 +479,10 @@ mod tests {
         assert!(!output.contains("```diff"), "No diff block without diffs");
     }
 
-    /// Stop hook context with filtered diffs: only matching files appear.
+    /// Stop hook context with filtered diffs: diffs are embedded as `_diff_text`
+    /// even though there is no `tool_name` (Stop is a turn-end event, not a tool
+    /// event). The caller already filtered to .rs files; the renderer appends
+    /// only those.
     #[test]
     fn test_stop_hook_filtered_diffs_renders_only_matching() {
         // Simulate a Stop hook with mixed file type diffs (a.rs, b.py, c.rs)
@@ -478,37 +501,30 @@ mod tests {
             },
         ];
 
-        // Stop hook input (no tool_name, so prepare_validator_context passes through)
+        // Stop hook input (no tool_name) — caller-supplied diffs MUST still be
+        // embedded so the validator sees them.
         let input = serde_json::json!({
             "hook_event_name": "Stop",
             "cwd": "/project",
             "session_id": "test-session"
         });
 
-        // prepare_validator_context with filtered diffs (only .rs files)
         let prepared = prepare_validator_context(input, Some(&rs_diffs));
         let output = render_hook_context(&prepared);
 
-        // Stop hook input has no tool_name in DIFF_TOOLS, so diffs don't get
-        // embedded as _diff_text by prepare_validator_context. Instead, they are
-        // rendered separately via format_diffs_fenced and appended.
-        // For Stop hooks without a diff-tool name, prepare passes through as-is.
         assert!(output.contains("```yaml"));
         assert!(output.contains("hook_event_name: Stop"));
 
-        // Verify format_diffs_fenced works correctly with filtered diffs
-        let diff_output = format_diffs_fenced(&rs_diffs);
+        // Diff content must be present in the rendered output.
         assert!(
-            diff_output.contains("old_a"),
-            "Should contain a.rs diff content"
+            output.contains("```diff"),
+            "Stop hook should render a diff block"
         );
+        assert!(output.contains("old_a"), "a.rs diff content should appear");
+        assert!(output.contains("old_c"), "c.rs diff content should appear");
         assert!(
-            diff_output.contains("old_c"),
-            "Should contain c.rs diff content"
-        );
-        assert!(
-            !diff_output.contains("old_b"),
-            "Should NOT contain b.py diff content"
+            !output.contains("old_b"),
+            "b.py was filtered out by the caller"
         );
     }
 
@@ -527,6 +543,52 @@ mod tests {
         assert!(output.contains("```yaml"));
         assert!(output.contains("hook_event_name: Stop"));
         assert!(!output.contains("```diff"), "No diff block without diffs");
+    }
+
+    /// Stop-hook style input (no `tool_name`) plus non-empty diffs MUST embed
+    /// `_diff_text` containing the diff content. This is a regression test for
+    /// the bug where `prepare_validator_context` short-circuited on Stop hooks
+    /// because `tool_name` wasn't in `DIFF_TOOLS`, dropping the caller-supplied
+    /// diffs on the floor.
+    #[test]
+    fn test_prepare_validator_context_stop_hook_embeds_diff_text() {
+        let diffs = vec![FileDiff {
+            path: PathBuf::from("src/lib.rs"),
+            diff_text: "--- src/lib.rs\n+++ src/lib.rs\n@@ -1 +1 @@\n-old_line\n+new_line\n"
+                .to_string(),
+            is_new_file: false,
+            is_binary: false,
+        }];
+
+        // Stop-hook input has no tool_name field at all.
+        let input = serde_json::json!({
+            "hook_event_name": "Stop",
+            "cwd": "/project",
+            "session_id": "abc-123"
+        });
+
+        let prepared = prepare_validator_context(input, Some(&diffs));
+
+        // `_diff_text` must be present and contain the diff content.
+        let diff_text = prepared
+            .get(DIFF_TEXT_KEY)
+            .and_then(|v| v.as_str())
+            .expect("_diff_text should be embedded for Stop-hook inputs with diffs");
+        assert!(
+            diff_text.contains("-old_line"),
+            "_diff_text should contain removed line, got: {}",
+            diff_text
+        );
+        assert!(
+            diff_text.contains("+new_line"),
+            "_diff_text should contain added line, got: {}",
+            diff_text
+        );
+        assert!(
+            diff_text.contains("```diff"),
+            "_diff_text should be a fenced diff block, got: {}",
+            diff_text
+        );
     }
 
     /// All diffs pass through when no file patterns filter them.
@@ -558,5 +620,232 @@ mod tests {
         assert!(diff_output.contains("old_a"), "Should contain a.rs diff");
         assert!(diff_output.contains("old_b"), "Should contain b.py diff");
         assert!(diff_output.contains("old_c"), "Should contain c.rs diff");
+    }
+
+    /// Strip behavior: when an Edit-style PostToolUse input carries a full
+    /// `tool_input.content`, a full `tool_result.content`, and a full
+    /// `tool_result.originalFile`, each duplicating the file body, the
+    /// rendered output must contain exactly one copy of the file body
+    /// (inside the diff block) and zero copies of the bloat fields.
+    ///
+    /// Regression test for kanban 01KQ8CZG7M0S00BV2C77T7QZV2 — PostToolUse
+    /// validator prompts duplicated file content 3× because `content` was
+    /// missing from `STRIP_TOOL_INPUT_FIELDS` / `STRIP_TOOL_RESULT_FIELDS`.
+    #[test]
+    fn test_strip_removes_duplicated_content_fields() {
+        // A unique line that only appears in the file body (and therefore
+        // only legitimately appears once, inside the diff block).
+        let unique_marker = "UNIQUE_FILE_CONTENT_MARKER_42";
+        let body = format!(
+            "use std::time::Duration;\nfn main() {{\n    let _ = \"{}\";\n}}\n",
+            unique_marker
+        );
+
+        // Real diff for an Edit that changed one line of the body.
+        let old_body = body.replace(unique_marker, "OLD_MARKER");
+        let diff = compute_diff(
+            Path::new("/project/src/sample.rs"),
+            Some(old_body.as_bytes()),
+            body.as_bytes(),
+        );
+
+        // PostToolUse Edit hook with all three duplicated content fields.
+        let input = serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "cwd": "/project",
+            "session_id": "test",
+            "tool_name": "Edit",
+            "tool_use_id": "toolu_test",
+            "tool_input": {
+                "file_path": "/project/src/sample.rs",
+                "old_string": "OLD_MARKER",
+                "new_string": unique_marker,
+                "content": body,
+            },
+            "tool_result": {
+                "filePath": "/project/src/sample.rs",
+                "content": body,
+                "originalFile": old_body,
+                "oldString": "OLD_MARKER",
+                "newString": unique_marker,
+                "structuredPatch": [],
+                "replaceAll": false,
+                "userModified": false
+            }
+        });
+
+        let prepared = prepare_validator_context(input, Some(&[diff]));
+        let output = render_hook_context(&prepared);
+
+        // The unique marker must appear exactly once: in the `+` diff line.
+        let marker_count = output.matches(unique_marker).count();
+        assert_eq!(
+            marker_count, 1,
+            "file content marker should appear exactly once (in diff), \
+             found {} occurrences in:\n{}",
+            marker_count, output
+        );
+
+        // None of the bloat field names should appear in the rendered YAML.
+        for field in [
+            "originalFile",
+            "structuredPatch",
+            "oldString",
+            "newString",
+            "replaceAll",
+            "userModified",
+        ] {
+            assert!(
+                !output.contains(field),
+                "bloat field `{}` should be stripped, but appeared in:\n{}",
+                field,
+                output
+            );
+        }
+        // `content:` (YAML key) must not appear — it was stripped from both
+        // tool_input and tool_result. Use the YAML key form so we don't match
+        // `content` as a substring of unrelated words.
+        assert!(
+            !output.contains("content:"),
+            "`content:` key should be stripped from tool_input and tool_result, \
+             got:\n{}",
+            output
+        );
+
+        // The diff itself must still be present.
+        assert!(
+            output.contains("```diff"),
+            "diff fence missing:\n{}",
+            output
+        );
+        assert!(
+            output.contains(&format!("+    let _ = \"{}\";", unique_marker)),
+            "added line missing from diff:\n{}",
+            output
+        );
+    }
+
+    /// Bounded prompt size: a Write of a 70-line file produces a rendered
+    /// prompt no larger than ~1.5× the diff size. Before the fix the prompt
+    /// was ~3× because `tool_input.content` and `tool_result.content` each
+    /// repeated the full file body.
+    ///
+    /// Snapshot-style assertion: not an exact byte count (which would be
+    /// brittle to formatting changes), but a hard upper bound that catches
+    /// the duplication regression.
+    #[test]
+    fn test_rendered_prompt_size_bounded_by_diff_size() {
+        // Realistic ~70-line file body.
+        let mut body = String::from("use std::time::Duration;\n\npub struct RetryClient {\n    timeout: Duration,\n}\n\nimpl RetryClient {\n    pub fn new(timeout: Duration) -> Self {\n        Self { timeout }\n    }\n\n");
+        for i in 0..50 {
+            body.push_str(&format!(
+                "    pub fn method_{}(&self) -> u64 {{ {} }}\n",
+                i, i
+            ));
+        }
+        body.push_str("}\n");
+        assert!(
+            body.lines().count() >= 60,
+            "test fixture should be at least 60 lines"
+        );
+
+        // Write of a brand-new file → diff is `--- /dev/null` + every line
+        // as `+`.
+        let diff = compute_diff(Path::new("/project/src/retry.rs"), None, body.as_bytes());
+        let diff_size = diff.diff_text.len();
+
+        // PostToolUse Write hook as Claude Code sends it: full body in BOTH
+        // tool_input.content AND tool_result.content.
+        let input = serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "cwd": "/project",
+            "session_id": "test",
+            "tool_name": "Write",
+            "tool_use_id": "toolu_test",
+            "tool_input": {
+                "file_path": "/project/src/retry.rs",
+                "content": body,
+            },
+            "tool_result": {
+                "filePath": "/project/src/retry.rs",
+                "content": body,
+                "type": "create"
+            }
+        });
+
+        let prepared = prepare_validator_context(input, Some(&[diff]));
+        let output = render_hook_context(&prepared);
+
+        // Upper bound: prompt should be at most 1.5× the diff size + small
+        // boilerplate (YAML keys, fences, hook metadata). Allow 1KB of slack
+        // for formatting overhead independent of file size.
+        let upper_bound = (diff_size as f64 * 1.5) as usize + 1024;
+        assert!(
+            output.len() <= upper_bound,
+            "rendered prompt size {} exceeds bound {} (diff_size={}); \
+             content may be duplicated:\n{}",
+            output.len(),
+            upper_bound,
+            diff_size,
+            output
+        );
+    }
+
+    /// Token-count style assertion: render the same Write input with the
+    /// strip lists artificially emptied (mimicking pre-fix behavior) and with
+    /// the real strip lists. Assert the real (post-fix) output is at least
+    /// 50% smaller — the duplicated body accounts for ~2/3 of the pre-fix
+    /// prompt, so 50% is a comfortable lower bound that still catches a
+    /// regression where stripping silently stops working.
+    #[test]
+    fn test_strip_reduces_prompt_size_by_at_least_50_percent() {
+        // Build a realistic body large enough that duplication dominates.
+        let mut body = String::new();
+        for i in 0..100 {
+            body.push_str(&format!(
+                "    // line {} of a representative source file body\n",
+                i
+            ));
+        }
+
+        let diff = compute_diff(Path::new("/project/src/big.rs"), None, body.as_bytes());
+
+        let input = serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "cwd": "/project",
+            "session_id": "test",
+            "tool_name": "Write",
+            "tool_use_id": "toolu_test",
+            "tool_input": {
+                "file_path": "/project/src/big.rs",
+                "content": body,
+            },
+            "tool_result": {
+                "filePath": "/project/src/big.rs",
+                "content": body,
+            }
+        });
+
+        // Pre-fix simulation: render the input *without* preparing it.
+        // `render_hook_context` with no `_diff_text` embedded just dumps the
+        // YAML, including both `content` fields verbatim — exactly the
+        // behavior the strip list is meant to prevent.
+        let pre_fix_rendered = render_hook_context(&input);
+        let pre_fix_size = pre_fix_rendered.len();
+
+        // Post-fix: prepare (strips bloat, embeds diff) then render.
+        let prepared = prepare_validator_context(input, Some(&[diff]));
+        let post_fix_rendered = render_hook_context(&prepared);
+        let post_fix_size = post_fix_rendered.len();
+
+        let reduction_ratio = (pre_fix_size - post_fix_size) as f64 / pre_fix_size as f64;
+        assert!(
+            reduction_ratio >= 0.50,
+            "strip should reduce prompt size by at least 50% \
+             (pre={} bytes, post={} bytes, reduction={:.1}%)",
+            pre_fix_size,
+            post_fix_size,
+            reduction_ratio * 100.0
+        );
     }
 }

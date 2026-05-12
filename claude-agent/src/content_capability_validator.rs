@@ -3,7 +3,7 @@
 //! This module provides validation of content blocks against declared prompt capabilities
 //! ensuring ACP compliance and proper error reporting for capability violations.
 
-use agent_client_protocol::{ContentBlock, PromptCapabilities};
+use agent_client_protocol::schema::{ContentBlock, PromptCapabilities};
 use serde_json::{json, Value};
 use thiserror::Error;
 use tracing::{debug, warn};
@@ -233,7 +233,7 @@ impl ContentCapabilityValidator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::EmbeddedResource;
+    use agent_client_protocol::schema::EmbeddedResource;
 
     fn create_test_capabilities(
         image_enabled: bool,
@@ -248,7 +248,7 @@ mod tests {
 
     // Helper functions to create test content blocks
     mod content_blocks {
-        use agent_client_protocol::{
+        use agent_client_protocol::schema::{
             AudioContent, ContentBlock, ImageContent, ResourceLink, TextContent,
         };
 

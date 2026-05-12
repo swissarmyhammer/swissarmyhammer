@@ -41,6 +41,13 @@ pub struct TurnState {
     /// Files that have been confirmed as changed during this turn.
     #[serde(default)]
     pub changed: Vec<PathBuf>,
+
+    /// SHA-256 of each file's content as of the last allowed Stop.
+    /// Used to skip files in the next validator run whose content has not
+    /// changed since the previous allowed Stop. Cleared on SessionStart and
+    /// replaced wholesale on each allowed Stop.
+    #[serde(default)]
+    pub last_stop_shas: HashMap<PathBuf, String>,
 }
 
 impl TurnState {
@@ -212,6 +219,63 @@ impl TurnStateManager {
         }
 
         Ok(())
+    }
+
+    // ── Allowed-Stop baseline methods ────────────────────────────────
+
+    /// Record the SHA-256 of each currently-changed file's on-disk content
+    /// as the new "last allowed Stop" baseline for `session_id`.
+    ///
+    /// Replaces (does not merge) `state.last_stop_shas`. Files in `paths`
+    /// that no longer exist on disk are omitted from the baseline. Also
+    /// empties `pending` and `changed` in the same save so that the YAML
+    /// remains the single source of truth — callers must not separately
+    /// invoke `clear()` on the same allowed-Stop path or the baseline would
+    /// be wiped along with the rest of the state.
+    pub fn record_stop_baseline(
+        &self,
+        session_id: &str,
+        paths: &[PathBuf],
+    ) -> Result<(), AvpError> {
+        let mut state = self.load(session_id)?;
+
+        let mut shas: HashMap<PathBuf, String> = HashMap::new();
+        for path in paths {
+            match crate::turn::hash_file(path) {
+                Some(sha) => {
+                    shas.insert(path.clone(), sha);
+                }
+                None => {
+                    tracing::debug!(
+                        "record_stop_baseline: skipping unreadable path '{}' (deleted or unreadable)",
+                        path.display()
+                    );
+                }
+            }
+        }
+
+        state.pending.clear();
+        state.changed.clear();
+        state.last_stop_shas = shas;
+
+        self.save(session_id, &state)
+    }
+
+    /// Hex-encoded SHA-256 of each file's content recorded at the last
+    /// allowed Stop. Returns an empty map when no baseline has been
+    /// recorded yet (first turn) or the state file is missing.
+    pub fn load_last_stop_shas(&self, session_id: &str) -> HashMap<PathBuf, String> {
+        match self.load(session_id) {
+            Ok(state) => state.last_stop_shas,
+            Err(e) => {
+                tracing::debug!(
+                    "load_last_stop_shas: failed to load state for session '{}': {}",
+                    session_id,
+                    e
+                );
+                HashMap::new()
+            }
+        }
     }
 
     // ── Sidecar diff file methods ─────────────────────────────────────
@@ -1005,5 +1069,183 @@ mod tests {
     #[test]
     fn test_decode_diff_filename_rejects_no_suffix() {
         assert_eq!(TurnStateManager::decode_diff_filename("no_suffix"), None);
+    }
+
+    // ── last_stop_shas baseline tests ────────────────────────────────
+
+    /// `record_stop_baseline` writes a SHA per existing path, omits paths
+    /// that don't exist, and overwrites any prior `last_stop_shas` entries
+    /// (replace-not-merge semantics).
+    #[test]
+    fn test_record_stop_baseline_writes_sha_per_existing_path() {
+        let (manager, temp_dir) = setup_test_manager();
+        let session_id = "baseline-write";
+
+        // Create two real files
+        let path_a = temp_dir.path().join("a.rs");
+        let path_b = temp_dir.path().join("b.rs");
+        std::fs::write(&path_a, b"content of a").unwrap();
+        std::fs::write(&path_b, b"content of b").unwrap();
+
+        // Pre-seed an unrelated old baseline that must be overwritten.
+        let mut prior = TurnState::new();
+        prior
+            .last_stop_shas
+            .insert(PathBuf::from("/old/stale.rs"), "stale".to_string());
+        manager.save(session_id, &prior).unwrap();
+
+        manager
+            .record_stop_baseline(session_id, &[path_a.clone(), path_b.clone()])
+            .unwrap();
+
+        let loaded = manager.load(session_id).unwrap();
+        assert_eq!(loaded.last_stop_shas.len(), 2);
+        assert!(loaded.last_stop_shas.contains_key(&path_a));
+        assert!(loaded.last_stop_shas.contains_key(&path_b));
+        // Replace-not-merge: stale entry must be gone.
+        assert!(!loaded
+            .last_stop_shas
+            .contains_key(&PathBuf::from("/old/stale.rs")));
+        // SHAs reflect the file's actual content via hash_file().
+        assert_eq!(
+            loaded.last_stop_shas.get(&path_a).unwrap(),
+            &crate::turn::hash_file(&path_a).unwrap()
+        );
+    }
+
+    /// Paths in the input list that don't exist on disk are silently
+    /// dropped from the baseline (deletion is legitimate — they will fall
+    /// through to validators next run).
+    #[test]
+    fn test_record_stop_baseline_omits_nonexistent_paths() {
+        let (manager, temp_dir) = setup_test_manager();
+        let session_id = "baseline-missing";
+
+        let real_path = temp_dir.path().join("real.rs");
+        std::fs::write(&real_path, b"hi").unwrap();
+        let missing_path = temp_dir.path().join("does_not_exist.rs");
+
+        manager
+            .record_stop_baseline(session_id, &[real_path.clone(), missing_path.clone()])
+            .unwrap();
+
+        let loaded = manager.load(session_id).unwrap();
+        assert_eq!(loaded.last_stop_shas.len(), 1);
+        assert!(loaded.last_stop_shas.contains_key(&real_path));
+        assert!(!loaded.last_stop_shas.contains_key(&missing_path));
+    }
+
+    /// `record_stop_baseline` empties `pending`/`changed` so the YAML can
+    /// remain the single source of truth without a separate `clear()` call.
+    #[test]
+    fn test_record_stop_baseline_empties_pending_and_changed() {
+        let (manager, temp_dir) = setup_test_manager();
+        let session_id = "baseline-clears";
+
+        let real = temp_dir.path().join("p.rs");
+        std::fs::write(&real, b"x").unwrap();
+
+        // Seed pending + changed
+        let mut state = TurnState::new();
+        state.changed.push(real.clone());
+        let mut hashes = HashMap::new();
+        hashes.insert(real.clone(), Some("sha-x".to_string()));
+        state.pending.insert("tool-1".to_string(), hashes);
+        manager.save(session_id, &state).unwrap();
+
+        manager
+            .record_stop_baseline(session_id, std::slice::from_ref(&real))
+            .unwrap();
+
+        let loaded = manager.load(session_id).unwrap();
+        assert!(loaded.pending.is_empty());
+        assert!(loaded.changed.is_empty());
+        assert_eq!(loaded.last_stop_shas.len(), 1);
+    }
+
+    /// TurnState YAML round-trips with `last_stop_shas` populated.
+    #[test]
+    fn test_turn_state_yaml_roundtrip_with_last_stop_shas() {
+        let (manager, _temp_dir) = setup_test_manager();
+        let session_id = "yaml-rt";
+
+        let mut state = TurnState::new();
+        state
+            .last_stop_shas
+            .insert(PathBuf::from("/x.rs"), "sha256:abc".to_string());
+        state
+            .last_stop_shas
+            .insert(PathBuf::from("/y.rs"), "sha256:def".to_string());
+        manager.save(session_id, &state).unwrap();
+
+        let loaded = manager.load(session_id).unwrap();
+        assert_eq!(loaded.last_stop_shas.len(), 2);
+        assert_eq!(
+            loaded.last_stop_shas.get(&PathBuf::from("/x.rs")).unwrap(),
+            "sha256:abc"
+        );
+    }
+
+    /// Old YAML lacking `last_stop_shas` still loads (serde(default)
+    /// handles the missing field).
+    #[test]
+    fn test_turn_state_yaml_loads_without_last_stop_shas_field() {
+        let (manager, _temp_dir) = setup_test_manager();
+        let session_id = "yaml-old";
+
+        // Hand-write an old-style YAML without the new field.
+        let path = manager.state_path(session_id);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let yaml = "pending: {}\nchanged:\n  - /tmp/foo.rs\n";
+        std::fs::write(&path, yaml).unwrap();
+
+        let loaded = manager.load(session_id).unwrap();
+        assert_eq!(loaded.changed.len(), 1);
+        assert!(loaded.last_stop_shas.is_empty());
+    }
+
+    /// `clear` (the SessionStart cleanup path) wipes `last_stop_shas`
+    /// because it removes the entire YAML file.
+    #[test]
+    fn test_clear_wipes_last_stop_shas() {
+        let (manager, temp_dir) = setup_test_manager();
+        let session_id = "clear-wipes";
+
+        let real = temp_dir.path().join("p.rs");
+        std::fs::write(&real, b"x").unwrap();
+        manager
+            .record_stop_baseline(session_id, std::slice::from_ref(&real))
+            .unwrap();
+        assert_eq!(manager.load(session_id).unwrap().last_stop_shas.len(), 1);
+
+        manager.clear(session_id).unwrap();
+
+        let loaded = manager.load(session_id).unwrap();
+        assert!(loaded.last_stop_shas.is_empty());
+    }
+
+    /// `load_last_stop_shas` returns the whole map in one call.
+    #[test]
+    fn test_load_last_stop_shas_returns_map() {
+        let (manager, temp_dir) = setup_test_manager();
+        let session_id = "load-map";
+
+        let real = temp_dir.path().join("file.rs");
+        std::fs::write(&real, b"hi").unwrap();
+        manager
+            .record_stop_baseline(session_id, std::slice::from_ref(&real))
+            .unwrap();
+
+        let map = manager.load_last_stop_shas(session_id);
+        assert_eq!(map.len(), 1);
+        assert!(map.contains_key(&real));
+    }
+
+    /// `load_last_stop_shas` for a session with no state returns empty.
+    #[test]
+    fn test_load_last_stop_shas_empty_for_missing_session() {
+        let (manager, _temp_dir) = setup_test_manager();
+        let map = manager.load_last_stop_shas("never-existed");
+        assert!(map.is_empty());
     }
 }

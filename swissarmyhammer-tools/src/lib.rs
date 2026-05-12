@@ -47,7 +47,7 @@
 //! let mut registry = ToolRegistry::new();
 //!
 //! // Register individual tool categories
-//! swissarmyhammer_tools::register_file_tools(&mut registry).await;
+//! swissarmyhammer_tools::register_file_tools(&mut registry);
 //! swissarmyhammer_tools::register_shell_tools(&mut registry);
 //!
 //! // Access registered tools

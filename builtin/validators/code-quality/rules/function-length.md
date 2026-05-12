@@ -17,9 +17,11 @@ Examine the file content for functions longer than 50 lines of actual code:
 
 ## Exceptions (Don't Flag)
 
-- Test functions with many assertions
+- Functions explicitly marked as tests (e.g. `#[test]`, `#[tokio::test]`, `it(...)`, `def test_foo`, `func TestFoo(t *testing.T)`) whose length is dominated by sequential setup and assertions
 - Generated code
 - Functions that are mostly configuration/data (e.g., builder patterns with many options)
 - Initialization functions that set many fields
+
+Note: Identify a function as a test from its attribute or framework-specific naming convention at the definition, not from the file name. A long helper function named `build_request` in a file called `foo_test.rs` is still a long function and should be flagged.
 
 

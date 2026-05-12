@@ -139,8 +139,11 @@
 //!     // Create underlying llama-agent server
 //!     let agent_server = Arc::new(AgentServer::new(/* ... */).await?);
 //!
-//!     // Create ACP server
-//!     let acp_server = AcpServer::new(agent_server, config);
+//!     // Create ACP server (the second tuple element is an unused
+//!     // notification receiver; the bridge inside `start_with_streams`
+//!     // subscribes its own receiver from the broadcast channel).
+//!     let (acp_server, _notification_rx) = AcpServer::new(agent_server, config);
+//!     let acp_server = std::sync::Arc::new(acp_server);
 //!
 //!     // Start JSON-RPC server on stdio
 //!     acp_server.start_stdio().await?;

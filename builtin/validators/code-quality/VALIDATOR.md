@@ -12,7 +12,7 @@ tags:
   - maintainability
   - best-practices
 severity: error
-timeout: 30
+timeout: 300
 ---
 
 # Code Quality RuleSet

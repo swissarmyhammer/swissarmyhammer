@@ -2,9 +2,16 @@
 name: code-context
 description: >-
   Code context operations for symbol lookup, search, grep, call graph, and blast
-  radius analysis. Use this skill before modifying code to understand structure,
-  dependencies, and impact. Provides indexed, structural code intelligence that
-  is faster and more precise than raw text search.
+  radius analysis. Use when the user says "blast radius", "who calls this",
+  "find symbol", "find references", "go to definition", "symbol lookup",
+  "callgraph", "find callers", "what calls this function", or "what's affected
+  if I change this". Also use proactively before modifying code to understand
+  structure, dependencies, and impact — list symbols, get callgraph (inbound),
+  and get blastradius before touching any function, type, or file. Provides
+  indexed, structural code intelligence that is faster and more precise than
+  raw text search.
+license: MIT OR Apache-2.0
+compatibility: Requires the `code_context` MCP tool  for indexed symbol lookup, grep, callgraph, and blast-radius operations.
 metadata:
   author: swissarmyhammer
   version: "{{version}}"
@@ -199,3 +206,41 @@ early in a session to understand the project before making changes.
 2. `get symbol` to jump to the relevant function
 3. `get callgraph` (inbound) to trace how execution reaches the bug
 4. `get blastradius` to verify your fix will not break other code
+
+## Troubleshooting
+
+### Error: `search symbol` or `get symbol` returns no results for a symbol you know exists
+
+- **Cause**: The index has not finished populating yet. On a fresh workspace, `CodeContextWorkspace::open()` runs `startup_cleanup()` which discovers files, then spawns a background worker that parses and writes chunks. Until the worker finishes, queries see an empty or partial index.
+- **Solution**: Check progress with:
+  ```json
+  {"op": "get status"}
+  ```
+  The response includes `files_indexed`, `files_pending`, and `chunk_count`. If `files_pending > 0`, wait and poll again. Only report the symbol as missing once `files_pending == 0` and your query still returns nothing.
+
+### Error: `get status` shows `files_indexed: 0` and `files_pending: 0` on a non-empty repo
+
+- **Cause**: Startup cleanup did not run, usually because another process held the leader lock and exited uncleanly, leaving a stale `.code-context/` state. The reader-side workspace never re-scans the filesystem on its own.
+- **Solution**: Force a re-scan by resetting the indexed flags, then let the worker re-process:
+  ```json
+  {"op": "build status", "layer": "both"}
+  ```
+  Follow with `{"op": "get status"}` until `files_pending` reaches 0. If the problem persists, wipe the index and rebuild from scratch:
+  ```json
+  {"op": "clear status"}
+  ```
+  Then restart the MCP server so `open()` runs `startup_cleanup()` as the leader.
+
+### Error: `get callgraph` or `get blastradius` returns `edges: []` for code you can see compiling
+
+- **Cause**: Call edges come from the LSP layer (not tree-sitter). If the LSP server for that language is missing or still warming up, `lsp_call_edges` is empty and graph traversal degrades to a single-node result.
+- **Solution**: Run `{"op": "lsp status"}` to confirm the server is installed and healthy. If it is missing, follow the install hint (or invoke the `lsp` skill) and wait for the initial scan. Re-run the callgraph query after `get status` shows indexing complete.
+
+### Error: `grep code` returns nothing even though `rg` finds matches on disk
+
+- **Cause**: `grep code` searches **stored chunks**, not the filesystem. New or modified files that have not been re-indexed yet are invisible to it. The file-watcher is currently a `FileEvent` enum without an active watcher, so edits made outside the MCP session do not auto-invalidate.
+- **Solution**: Force re-indexing of the tree-sitter layer, then wait for it to settle:
+  ```json
+  {"op": "build status", "layer": "treesitter"}
+  ```
+  For one-off string searches where you need live filesystem results, fall back to Grep/ripgrep directly.

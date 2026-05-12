@@ -25,9 +25,11 @@ Examine the file content for patterns that hard-code values instead of implement
 
 ## Exceptions (Don't Flag)
 
-- Hard-coded values in unit test assertions (expected values in tests)
+- The literal in the *expected-value position* of an assertion (e.g. `assert_eq!(call(input), 42)` — the `42` is what the test asserts on, not a hardcoded production return)
 - Constants that are genuinely constant (configuration, limits)
 - Lookup tables that are correct for all inputs
 - Default values that are appropriate for the domain
+
+Note: Do not exempt code based on the filename containing `test`, `_test`, `test_`, `.spec.`, or `.test.`. The point of this rule is to catch implementations that hard-code a return value to satisfy a test — and that anti-pattern can appear in any file, including tests themselves (e.g. a stub helper in a `tests/` module that returns the expected value directly to make a downstream assertion pass). Flag `return 42`, `if input == "known_value" { return ... }`, and similar shortcuts wherever they appear. The assertion-expected-value carve-out applies only to the literal in the assertion comparison position itself, not to function bodies under test.
 
 

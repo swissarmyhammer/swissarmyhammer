@@ -16,6 +16,8 @@
 //! [`helpers::all_event_kinds`] will cause a compile error. Add the new variant
 //! there and create corresponding test(s).
 
+// `avp_schema_tests` exercises `HookEvent::to_command_input_full` against
+// AVP's strongly-typed `HookInput` schema (see `avp_common::HookInput`).
 mod avp_schema_tests;
 mod cross_cutting_tests;
 mod exit2_tests;

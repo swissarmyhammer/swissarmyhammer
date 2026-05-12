@@ -41,7 +41,7 @@
 //! # async fn example() -> claude_agent::Result<()> {
 //! let manager = ClaudeProcessManager::new();
 //! let session_id = SessionId::new();
-//! let acp_session_id = agent_client_protocol::SessionId::new("test".to_string());
+//! let acp_session_id = agent_client_protocol::schema::SessionId::new("test".to_string());
 //!
 //! // Spawn a new process using SpawnConfig builder
 //! let config = SpawnConfig::builder()
@@ -111,7 +111,7 @@ pub struct SpawnConfig {
     /// Session ID for this Claude process
     pub session_id: SessionId,
     /// ACP protocol session ID (for protocol translation)
-    pub acp_session_id: agent_client_protocol::SessionId,
+    pub acp_session_id: agent_client_protocol::schema::SessionId,
     /// Working directory for the process
     pub cwd: PathBuf,
     /// Optional Claude agent mode (e.g., "code")

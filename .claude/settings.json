@@ -1,8 +1,6 @@
 {
   "permissions": {
-    "deny": [
-      "Bash"
-    ]
+    "deny": ["Bash"]
   },
   "statusLine": {
     "command": "sah statusline",

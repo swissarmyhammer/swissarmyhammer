@@ -3,7 +3,7 @@
 //! This module manages the discovery and notification of available commands
 //! for sessions, including integration with MCP servers and tool handlers.
 
-use agent_client_protocol::{SessionId, SessionNotification, SessionUpdate};
+use agent_client_protocol::schema::{SessionId, SessionNotification, SessionUpdate};
 
 impl crate::agent::ClaudeAgent {
     /// Send available commands update notification
@@ -13,10 +13,10 @@ impl crate::agent::ClaudeAgent {
     pub async fn send_available_commands_update(
         &self,
         session_id: &SessionId,
-        commands: Vec<agent_client_protocol::AvailableCommand>,
+        commands: Vec<agent_client_protocol::schema::AvailableCommand>,
     ) -> crate::Result<()> {
         let update = SessionUpdate::AvailableCommandsUpdate(
-            agent_client_protocol::AvailableCommandsUpdate::new(commands),
+            agent_client_protocol::schema::AvailableCommandsUpdate::new(commands),
         );
 
         // Store in session context for history replay
@@ -69,7 +69,7 @@ impl crate::agent::ClaudeAgent {
     pub async fn update_session_available_commands(
         &self,
         session_id: &SessionId,
-        commands: Vec<agent_client_protocol::AvailableCommand>,
+        commands: Vec<agent_client_protocol::schema::AvailableCommand>,
     ) -> crate::Result<bool> {
         // Parse SessionId from ACP format (raw ULID)
         let parsed_session_id = crate::session::SessionId::parse(&session_id.0)
@@ -167,7 +167,7 @@ impl crate::agent::ClaudeAgent {
     pub(crate) async fn get_available_commands_for_session(
         &self,
         session_id: &SessionId,
-    ) -> Vec<agent_client_protocol::AvailableCommand> {
+    ) -> Vec<agent_client_protocol::schema::AvailableCommand> {
         let mut commands = Vec::new();
 
         // Always available core commands
@@ -176,7 +176,7 @@ impl crate::agent::ClaudeAgent {
         meta1.insert("source".to_string(), serde_json::json!("core"));
 
         commands.push(
-            agent_client_protocol::AvailableCommand::new(
+            agent_client_protocol::schema::AvailableCommand::new(
                 "create_plan".to_string(),
                 "Create an execution plan for complex tasks".to_string(),
             )
@@ -188,7 +188,7 @@ impl crate::agent::ClaudeAgent {
         meta2.insert("source".to_string(), serde_json::json!("core"));
 
         commands.push(
-            agent_client_protocol::AvailableCommand::new(
+            agent_client_protocol::schema::AvailableCommand::new(
                 "research_codebase".to_string(),
                 "Research and analyze the codebase structure".to_string(),
             )
@@ -265,9 +265,12 @@ impl crate::agent::ClaudeAgent {
                         serde_json::Value::Array(parameters_schema.clone()),
                     );
 
-                    Some(agent_client_protocol::AvailableCommandInput::Unstructured(
-                        agent_client_protocol::UnstructuredCommandInput::new(hint).meta(input_meta),
-                    ))
+                    Some(
+                        agent_client_protocol::schema::AvailableCommandInput::Unstructured(
+                            agent_client_protocol::schema::UnstructuredCommandInput::new(hint)
+                                .meta(input_meta),
+                        ),
+                    )
                 } else {
                     None
                 };
@@ -280,7 +283,7 @@ impl crate::agent::ClaudeAgent {
                     serde_json::json!(parameters_schema),
                 );
 
-                let mut cmd = agent_client_protocol::AvailableCommand::new(
+                let mut cmd = agent_client_protocol::schema::AvailableCommand::new(
                     prompt.name.clone(),
                     description_with_hint,
                 )
@@ -334,7 +337,7 @@ impl crate::agent::ClaudeAgent {
                 meta.insert("source".to_string(), serde_json::json!("tool_handler"));
 
                 commands.push(
-                    agent_client_protocol::AvailableCommand::new(
+                    agent_client_protocol::schema::AvailableCommand::new(
                         tool_name.clone(),
                         description.to_string(),
                     )

@@ -1,0 +1,11 @@
+---
+description: "GLM 5.1"
+---
+quiet: false
+executor:
+  type: llama-agent
+  config:
+    model:
+      source: !HuggingFace
+        repo: "unsloth/GLM-5.1-GGUF"
+        folder: "MXFP4_MOE"

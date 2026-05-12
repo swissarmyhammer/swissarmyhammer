@@ -6,7 +6,7 @@
 //! # Usage
 //!
 //! ```bash
-//! cargo run --example acp_stdio --features acp
+//! cargo run --example acp_stdio -p llama-agent
 //! ```
 //!
 //! The server will:
@@ -106,8 +106,16 @@ async fn main() -> Result<()> {
 
     tracing::info!("Agent server initialized successfully");
 
-    // Create the ACP server
-    let acp_server = Arc::new(AcpServer::new(agent_server, acp_config).0);
+    // Create the ACP server.
+    //
+    // `AcpServer::new` returns the server plus an unused
+    // `broadcast::Receiver<SessionNotification>`. The notification bridge
+    // inside `start_with_streams` calls `notification_tx.subscribe()` to get
+    // its own receiver, so the one returned here is intentionally dropped —
+    // the channel stays alive because `notification_tx` is owned by the
+    // server itself.
+    let (acp_server, _notification_rx) = AcpServer::new(agent_server, acp_config);
+    let acp_server = Arc::new(acp_server);
 
     tracing::info!("Starting ACP protocol server on stdio...");
 

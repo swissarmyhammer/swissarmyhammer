@@ -6,7 +6,7 @@
 
 use crate::session_errors::{SessionSetupError, SessionSetupResult};
 use crate::size_validator::SizeValidator;
-use agent_client_protocol::{LoadSessionRequest, NewSessionRequest, SessionId};
+use agent_client_protocol::schema::{LoadSessionRequest, NewSessionRequest, SessionId};
 use serde_json::Value;
 
 /// Comprehensive request validator for ACP session operations

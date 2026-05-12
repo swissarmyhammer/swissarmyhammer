@@ -1,6 +1,8 @@
 ---
 name: plan
-description: Plan Mode workflow. Use this skill whenever you are in Plan Mode. Drives all planning activity — research, task decomposition, and creating kanban tasks as the plan artifact.
+description: Plan Mode workflow. Use this skill when the user says "/plan", "help me plan", "break this into tasks", "design the approach", or otherwise wants to plan work, and also whenever you are in Plan Mode. Drives all planning activity — research, task decomposition, and creating kanban tasks as the plan artifact.
+license: MIT OR Apache-2.0
+compatibility: Requires the `code_context` MCP tool for pre-plan research (symbol search, callgraph, blast-radius) and the `kanban` MCP tool for persisting the plan as kanban tasks. 
 metadata:
   author: swissarmyhammer
   version: "{{version}}"
@@ -19,6 +21,24 @@ Use this skill whenever you enter Plan Mode or the user asks you to plan work.
 3. **Right-size the tasks** — each task is a single focused unit of work that can be independently implemented and verified.
 4. **Collaborate with the user** — present tasks, discuss, iterate, and refine until the user is satisfied with the plan.
 5. **Hand off cleanly** — when planning is complete, remind the user they can execute with `/finish` (autonomous) or `/implement` (one task at a time).
+
+## Examples
+
+### Example 1: a feature request turns into a decomposed kanban board
+
+User says: "I want to add authentication to the app"
+
+Actions:
+1. Research with `code_context`: `{"op": "search symbol", "query": "user"}`, `{"op": "search symbol", "query": "session"}`, and `{"op": "get blastradius", "file_path": "src/server.rs", "max_hops": 3}` to find existing boundaries and callers that will need to participate.
+2. As the design crystallizes in conversation, create tasks on the kanban board one at a time — not as a batch at the end:
+   - `{"op": "add task", "title": "Design auth architecture", "description": "What: Decide JWT vs session, storage strategy. Acceptance Criteria: strategy documented in task comments; token format and expiry policy decided. Tests: no code tests — design task."}`
+   - `{"op": "add task", "title": "Add User model and migration", "description": "What: Add users table and User struct in src/models/user.rs..."}`
+   - `{"op": "add task", "title": "Implement POST /api/login", "description": "What: ...", "depends_on": ["<user-model-task-id>"]}`
+3. Encode ordering with `depends_on` so foundational tasks (model, migration) come before integration (login endpoint).
+4. Present the resulting board to the user, iterate on titles/descriptions/ordering.
+5. When the user approves the plan, remind them: use `/finish` to drive the batch autonomously, or `/implement` for one task at a time. Do NOT call `ExitPlanMode` or start implementing.
+
+Result: A kanban board with foundational → integration → test tasks, each independently implementable. The board IS the plan — no markdown plan file was created.
 
 ## Constraints
 
@@ -46,7 +66,7 @@ Foundational changes come first (data models, types, configuration), then core l
 
 ## Autonomous Agent Mode
 
-When operating as an autonomous agent (no Plan Mode UI), follow the `PLANNING_GUIDE.md` resource file bundled with this skill.
+When operating as an autonomous agent (no Plan Mode UI), follow the `references/PLANNING_GUIDE.md` resource file bundled with this skill.
 
 ## Updating an Existing Plan
 

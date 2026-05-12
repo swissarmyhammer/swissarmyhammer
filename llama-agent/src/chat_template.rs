@@ -15,6 +15,116 @@ use tracing::{debug, warn};
 /// while keeping test execution time reasonable.
 const STRESS_TEST_REPEAT_SIZE: usize = 10000;
 
+/// Wrap a `ToolDefinition` in the OpenAI-style envelope expected by the
+/// canonical Qwen3 chat template (`{"type": "function", "function": {...}}`).
+///
+/// The Qwen3 chat template iterates `tools` and renders each as
+/// `tool | tojson`. When a chat tokenizer is invoked through HuggingFace's
+/// `apply_chat_template` Python helper, callers conventionally pass the
+/// OpenAI envelope, so the model is most reliably triggered when we mirror
+/// that shape. `server_name` is intentionally dropped — it is internal
+/// routing metadata that the model has no use for and that is not present
+/// in the OpenAI / HuggingFace canonical example.
+fn qwen3_tool_envelope(tool: &ToolDefinition) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": tool.parameters,
+        }
+    })
+}
+
+/// Serialize a JSON value byte-for-byte compatible with Jinja2's `tojson`
+/// filter as the Qwen3 chat template uses it.
+///
+/// Two non-default behaviours are required to match what HuggingFace's
+/// `apply_chat_template` ends up emitting from the canonical Qwen3
+/// chat_template:
+///
+/// 1. **Spacing.** `,` and `:` are followed by a single space, matching
+///    Python's default `separators=(", ", ": ")` (`serde_json::to_string`
+///    produces compact JSON with no spaces).
+/// 2. **Sorted object keys.** Jinja2's `tojson` defaults to
+///    `json.dumps(..., sort_keys=True)`. `serde_json::Value::Object` is
+///    backed by a `Map` that preserves insertion order, so we sort keys
+///    explicitly before serialising.
+///
+/// Together these two rules reproduce the Jinja `tojson` output the model
+/// saw during training. Anything less precise risks emitting tokens the
+/// model never learned to associate with tool schemas.
+fn serialize_python_json(value: &Value) -> Result<String, serde_json::Error> {
+    let sorted = sort_keys_recursive(value);
+    let mut writer = Vec::new();
+    let formatter = PythonJsonFormatter;
+    let mut serializer = serde_json::Serializer::with_formatter(&mut writer, formatter);
+    serde::Serialize::serialize(&sorted, &mut serializer)?;
+    // SAFETY: serde_json only emits valid UTF-8.
+    Ok(String::from_utf8(writer).expect("serde_json wrote valid UTF-8"))
+}
+
+/// Return a copy of `value` with every nested object's keys sorted
+/// alphabetically (lexicographic by Unicode code point — same order as
+/// Python's `sorted()`).
+///
+/// `serde_json::Map` preserves insertion order by default; this helper
+/// produces the deterministic order Jinja's `tojson` uses. Arrays are
+/// recursed but their order is preserved.
+fn sort_keys_recursive(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut entries: Vec<(&String, &Value)> = map.iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(b.0));
+            let mut sorted = serde_json::Map::with_capacity(entries.len());
+            for (k, v) in entries {
+                sorted.insert(k.clone(), sort_keys_recursive(v));
+            }
+            Value::Object(sorted)
+        }
+        Value::Array(items) => Value::Array(items.iter().map(sort_keys_recursive).collect()),
+        other => other.clone(),
+    }
+}
+
+/// Custom `serde_json::ser::Formatter` that matches Python `json.dumps`
+/// default spacing — a single space after every `,` and `:`.
+///
+/// All other behaviour is inherited from the default `Formatter` impl:
+/// no indentation, no trailing newlines, single-line output.
+struct PythonJsonFormatter;
+
+impl serde_json::ser::Formatter for PythonJsonFormatter {
+    fn begin_array_value<W>(&mut self, writer: &mut W, first: bool) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        if first {
+            Ok(())
+        } else {
+            writer.write_all(b", ")
+        }
+    }
+
+    fn begin_object_key<W>(&mut self, writer: &mut W, first: bool) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        if first {
+            Ok(())
+        } else {
+            writer.write_all(b", ")
+        }
+    }
+
+    fn begin_object_value<W>(&mut self, writer: &mut W) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        writer.write_all(b": ")
+    }
+}
+
 /// Strategy for parsing tool calls from model output
 ///
 /// This enum defines different approaches for parsing tool calls from language model
@@ -34,6 +144,18 @@ pub enum ToolParsingStrategy {
     /// custom XML format. This strategy focuses on the specific patterns and
     /// structures used by these models for optimal parsing accuracy.
     Qwen3Coder,
+
+    /// Qwen3 (non-Coder) tool-call format
+    ///
+    /// Targets the canonical chat template baked into `Qwen/Qwen3-8B`'s
+    /// `tokenizer_config.json` — i.e. plain Qwen3-Instruct variants such as
+    /// `Qwen3-8B-Instruct`, `Qwen3-30B`, `Qwen3.6-*`, and the
+    /// `unsloth/Qwen3-0.6B-GGUF` test model. The model emits tool calls inside
+    /// `<tool_call>...</tool_call>` XML wrappers containing a JSON object with
+    /// `name` and `arguments` keys, optionally preceded by a `<think>...</think>`
+    /// reasoning block. Distinct from `Qwen3Coder`, which uses nested-XML
+    /// (`<tool_call><name><param>value</param></name></tool_call>`).
+    Qwen3,
 
     /// OpenAI-compatible function calling format
     ///
@@ -110,14 +232,32 @@ impl ToolParsingStrategy {
         // Convert to lowercase for case-insensitive matching
         let model_name_lower = model_name.to_lowercase();
 
-        // Qwen3Coder detection: Only Qwen3-Coder models use XML format
-        // Other Qwen models (qwen-next, qwen 2.5, etc.) use JSON format and should use Default parser
+        // Qwen3Coder detection: Only Qwen3-Coder models use the nested XML format.
+        // The "coder" check is intentionally evaluated before the plain Qwen3 branch
+        // so the more specific match wins (e.g. `unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF`
+        // resolves to Qwen3Coder, not Qwen3).
         if model_name_lower.contains("qwen3") && model_name_lower.contains("coder") {
             debug!(
                 "Detected Qwen3Coder strategy (XML-based tool calling) for model: {}",
                 model_name
             );
             return Self::Qwen3Coder;
+        }
+
+        // Plain Qwen3 detection: any model name containing `qwen3` that didn't match
+        // Qwen3Coder above (e.g. `Qwen3-8B-Instruct`, `Qwen3.6-27B`, `unsloth/Qwen3-0.6B-GGUF`).
+        // These models follow the canonical Qwen3 chat template baked into
+        // `Qwen/Qwen3-8B`'s `tokenizer_config.json`: tools are rendered inside
+        // `<tools>...</tools>` system-message XML and tool calls come back wrapped
+        // in `<tool_call>{"name": ..., "arguments": ...}</tool_call>`.
+        // Older Qwen models (Qwen2.5, qwen-next, etc.) intentionally do not match
+        // because they predate this template and use a different tool-calling shape.
+        if model_name_lower.contains("qwen3") {
+            debug!(
+                "Detected Qwen3 strategy (tokenizer-template tool calling) for model: {}",
+                model_name
+            );
+            return Self::Qwen3;
         }
 
         // OpenAI detection: look for "gpt-" prefix or "openai" anywhere
@@ -565,8 +705,33 @@ impl ChatTemplateEngine {
         Ok((system_prompt, tools_json))
     }
 
-    /// Format tools for inclusion in chat template
+    /// Format tools for inclusion in chat template.
+    ///
+    /// Returns the *content* of the system message that carries the tool
+    /// schemas. The wrapper (`<|im_start|>system\n` ... `<|im_end|>\n`) is
+    /// applied later by either the model's native chat template or one of
+    /// our model-specific templates.
+    ///
+    /// When a strategy has been configured on this engine, the tool block
+    /// is rendered to match the format that strategy's chat template was
+    /// trained on. Today this only diverges for `Qwen3`, which produces
+    /// the canonical `# Tools` block dictated by `Qwen/Qwen3-8B`'s
+    /// `tokenizer_config.json`. Every other strategy continues to use the
+    /// long-form generic block (kept verbatim for backwards compatibility
+    /// with existing tests and downstream callers).
     fn format_tools_for_template(&self, tools: &[ToolDefinition]) -> Result<String, TemplateError> {
+        if matches!(self.parsing_strategy, Some(ToolParsingStrategy::Qwen3)) {
+            return Self::format_tools_for_qwen3(tools);
+        }
+
+        Self::format_tools_for_default(tools)
+    }
+
+    /// Render the legacy generic tool-rendering used by every non-Qwen3
+    /// strategy. Kept intact so existing detection tests, golden strings,
+    /// and assistant prompts that depend on this exact wording continue
+    /// to work without modification.
+    fn format_tools_for_default(tools: &[ToolDefinition]) -> Result<String, TemplateError> {
         let tools_json = serde_json::to_value(tools).map_err(|e| {
             TemplateError::RenderingFailed(format!("Failed to serialize tools: {}", e))
         })?;
@@ -579,6 +744,44 @@ impl ChatTemplateEngine {
             "You are an AI assistant with access to the following tools. You have full permission and capability to use these tools to help users with their requests. Do not make security excuses - you are designed to use these tools.\n\nAvailable tools:\n{}\n\nIMPORTANT: When a user asks you to perform an action like listing files, reading files, or any file operations, you MUST use the appropriate tool. Do not give security warnings or suggest alternative methods - use the tools directly.\n\nTo call a tool, respond with a JSON object in this exact format. CRITICAL: Provide ONLY the JSON object, no additional text before or after:\n{{\n  \"function_name\": \"tool_name\",\n  \"arguments\": {{\n    \"parameter\": \"value\"\n  }}\n}}\n\nFor example, when asked to list files in the current directory, respond with ONLY:\n{{\n  \"function_name\": \"list_directory\",\n  \"arguments\": {{\n    \"path\": \".\"\n  }}\n}}\n\nDo not add explanatory text before or after the JSON. Generate well-formed JSON only. Always use the tools when they are needed to fulfill user requests.",
             formatted
         ))
+    }
+
+    /// Render the canonical Qwen3 `# Tools` block.
+    ///
+    /// Mirrors the literal Jinja string in `Qwen/Qwen3-8B`'s
+    /// `tokenizer_config.json` chat_template, byte-for-byte. The Jinja
+    /// template emits this block as part of the first `<|im_start|>system`
+    /// section when `tools` is non-empty:
+    ///
+    /// ```jinja
+    /// {{- "# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>" }}
+    /// {%- for tool in tools %}
+    ///     {{- "\n" }}
+    ///     {{- tool | tojson }}
+    /// {%- endfor %}
+    /// {{- "\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>" }}
+    /// ```
+    ///
+    /// Each tool is wrapped in the OpenAI-compatible
+    /// `{"type": "function", "function": {...}}` envelope and rendered with
+    /// Python-`json.dumps`-style spacing (`", "` and `": "`) so that
+    /// `tool | tojson` byte-matches.
+    fn format_tools_for_qwen3(tools: &[ToolDefinition]) -> Result<String, TemplateError> {
+        let mut out = String::new();
+        out.push_str("# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>");
+        for tool in tools {
+            out.push('\n');
+            let envelope = qwen3_tool_envelope(tool);
+            let rendered = serialize_python_json(&envelope).map_err(|e| {
+                TemplateError::RenderingFailed(format!(
+                    "Failed to render tool '{}' as Qwen3 tojson: {}",
+                    tool.name, e
+                ))
+            })?;
+            out.push_str(&rendered);
+        }
+        out.push_str("\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>");
+        Ok(out)
     }
 
     /// Apply chat template with optional tools context
@@ -1173,6 +1376,7 @@ impl ToolParserFactory {
         match strategy {
             ToolParsingStrategy::Default => Box::new(DefaultToolParser::new()),
             ToolParsingStrategy::Qwen3Coder => Box::new(Qwen3CoderToolParser::new()),
+            ToolParsingStrategy::Qwen3 => Box::new(Qwen3ToolParser::new()),
             ToolParsingStrategy::OpenAI => Box::new(OpenAIToolParser::new()),
             ToolParsingStrategy::Claude => Box::new(ClaudeToolParser::new()),
         }
@@ -1233,6 +1437,7 @@ impl ToolParserFactory {
             ToolParsingStrategy::Qwen3Coder => {
                 Box::new(Qwen3CoderToolParser::new_with_schema(tool_definitions))
             }
+            ToolParsingStrategy::Qwen3 => Box::new(Qwen3ToolParser::new()),
             ToolParsingStrategy::OpenAI => Box::new(OpenAIToolParser::new()),
             ToolParsingStrategy::Claude => Box::new(ClaudeToolParser::new()),
         }
@@ -3486,6 +3691,363 @@ impl ToolCallParser for Qwen3CoderToolParser {
     }
 }
 
+/// Parser for the canonical Qwen3 (non-Coder) tool-call wrapper format.
+///
+/// The format is dictated by `Qwen/Qwen3-8B`'s `tokenizer_config.json`
+/// (`chat_template`), which produces the system-prompt block:
+///
+/// ```text
+/// For each function call, return a json object with function name and arguments
+/// within <tool_call></tool_call> XML tags:
+/// <tool_call>
+/// {"name": <function-name>, "arguments": <args-json-object>}
+/// </tool_call>
+/// ```
+///
+/// Models trained against that template emit tool calls as:
+///
+/// ```text
+/// <tool_call>
+/// {"name": "read_file", "arguments": {"path": "/tmp/example.rs"}}
+/// </tool_call>
+/// ```
+///
+/// possibly preceded by a `<think>...</think>` reasoning block. Real-world
+/// Qwen3 outputs occasionally drift to other shapes (markdown-fenced JSON,
+/// improvised wrappers), so this parser also recognises a small set of
+/// fallback shapes — but only when they are unambiguously tool-call-shaped.
+/// Plain narrative or unrelated JSON returns an empty result.
+pub struct Qwen3ToolParser {
+    /// Match `<tool_call>` blocks (with `(?s)` so `.` spans newlines).
+    /// The capture group is the inner body — typically a JSON object.
+    tool_call_regex: Regex,
+    /// Match `<think>...</think>` reasoning blocks for stripping.
+    think_regex: Regex,
+    /// Match markdown code fences for stripping. We accept a leading
+    /// language hint (e.g. ` ```json`) and the closing ` ``` `.
+    fenced_block_regex: Regex,
+}
+
+impl Qwen3ToolParser {
+    /// Create a new parser with all regexes pre-compiled.
+    pub fn new() -> Self {
+        // (?s) lets `.` match newlines; non-greedy so multiple <tool_call>
+        // blocks in one response are each captured independently.
+        let tool_call_regex = Regex::new(r"(?s)<tool_call>(.*?)</tool_call>").unwrap();
+        let think_regex = Regex::new(r"(?s)<think>.*?</think>").unwrap();
+        // Match a markdown-fenced JSON block. The opening fence may carry
+        // an optional language tag (`json`, `JSON`, etc.) and is followed
+        // by a newline. The closing fence is on its own line.
+        let fenced_block_regex = Regex::new(r"(?s)```[A-Za-z]*\s*\n?(.*?)\n?```").unwrap();
+        Self {
+            tool_call_regex,
+            think_regex,
+            fenced_block_regex,
+        }
+    }
+
+    /// Strip `<think>...</think>` reasoning blocks from the text.
+    ///
+    /// Qwen3 emits these whenever its thinking-mode is active. They are
+    /// internal monologue and never contain tool-call wrappers — but if
+    /// they did contain JSON-shaped bait it would confuse the parser, so
+    /// we remove them up front.
+    fn strip_reasoning_blocks(&self, text: &str) -> String {
+        self.think_regex.replace_all(text, "").to_string()
+    }
+
+    /// Convert one parsed JSON value into a `ToolCall` if it matches any
+    /// recognised tool-call wrapper shape, otherwise `None`.
+    ///
+    /// Recognised shapes (each independently sufficient):
+    ///
+    /// * Canonical Qwen3: `{"name": "<n>", "arguments": <obj-or-string>}`
+    /// * OpenAI legacy:   `{"function_call": {"name": "<n>", "arguments": <...>}}`
+    /// * OpenAI array:    `{"tool_calls": [{"function": {"name": "<n>", "arguments": <...>}}, ...]}`
+    /// * Anthropic:       `{"type": "tool_use", "name": "<n>", "input": <obj>}`
+    /// * Improvised:      `{"call_tool": {"name": "<n>", "arguments": <stringified-or-obj>}}`
+    /// * Fallback:        `{"function_name": "<n>", "arguments": <...>}` —
+    ///   the shape Qwen3-0.6B improvises when given a tools schema and no
+    ///   explicit format guidance (see `tests/integration/tool_call_round_trip.rs`).
+    ///
+    /// In each case `arguments` may be an object (returned as-is) OR a
+    /// stringified JSON object (re-parsed). Anything that doesn't match
+    /// is rejected — `{"status": "passed"}` returns `None`, not a fake
+    /// tool call.
+    fn json_to_tool_call(json: &Value) -> Option<ToolCall> {
+        // Canonical: {"name": ..., "arguments": ...}
+        if let Some(name) = json.get("name").and_then(Value::as_str) {
+            if let Some(args) = json.get("arguments") {
+                return Some(ToolCall {
+                    id: ToolCallId::new(),
+                    name: name.to_string(),
+                    arguments: Self::normalise_arguments(args),
+                });
+            }
+        }
+
+        // Anthropic tool_use: {"type": "tool_use", "name": ..., "input": ...}
+        if json.get("type").and_then(Value::as_str) == Some("tool_use") {
+            if let (Some(name), Some(input)) =
+                (json.get("name").and_then(Value::as_str), json.get("input"))
+            {
+                return Some(ToolCall {
+                    id: ToolCallId::new(),
+                    name: name.to_string(),
+                    arguments: Self::normalise_arguments(input),
+                });
+            }
+        }
+
+        // OpenAI legacy: {"function_call": {"name": ..., "arguments": ...}}
+        if let Some(fc) = json.get("function_call") {
+            if let Some(name) = fc.get("name").and_then(Value::as_str) {
+                let args = fc.get("arguments").cloned().unwrap_or(json!({}));
+                return Some(ToolCall {
+                    id: ToolCallId::new(),
+                    name: name.to_string(),
+                    arguments: Self::normalise_arguments(&args),
+                });
+            }
+        }
+
+        // Improvised qwen-without-schemas:
+        // {"call_tool": {"name": ..., "arguments": "<stringified or obj>"}}
+        if let Some(ct) = json.get("call_tool") {
+            if let Some(name) = ct.get("name").and_then(Value::as_str) {
+                let args = ct.get("arguments").cloned().unwrap_or(json!({}));
+                return Some(ToolCall {
+                    id: ToolCallId::new(),
+                    name: name.to_string(),
+                    arguments: Self::normalise_arguments(&args),
+                });
+            }
+        }
+
+        // OpenAI direct: {"function_name": ..., "arguments": ...}
+        if let Some(name) = json.get("function_name").and_then(Value::as_str) {
+            if let Some(args) = json.get("arguments") {
+                return Some(ToolCall {
+                    id: ToolCallId::new(),
+                    name: name.to_string(),
+                    arguments: Self::normalise_arguments(args),
+                });
+            }
+        }
+
+        None
+    }
+
+    /// Convert one OpenAI `tool_calls` array entry into a `ToolCall`.
+    fn array_entry_to_tool_call(entry: &Value) -> Option<ToolCall> {
+        // Modern shape: {"id": "...", "type": "function", "function": {"name": ..., "arguments": ...}}
+        if let Some(function) = entry.get("function") {
+            if let Some(name) = function.get("name").and_then(Value::as_str) {
+                let args = function.get("arguments").cloned().unwrap_or(json!({}));
+                return Some(ToolCall {
+                    id: ToolCallId::new(),
+                    name: name.to_string(),
+                    arguments: Self::normalise_arguments(&args),
+                });
+            }
+        }
+        // Compact shape: {"name": ..., "arguments": ...}
+        Self::json_to_tool_call(entry)
+    }
+
+    /// Normalise an `arguments` payload to a JSON object.
+    ///
+    /// Qwen-flavoured outputs occasionally render `arguments` as a JSON
+    /// **string** containing JSON (e.g. `"arguments": "{\"path\": \"/x\"}"`)
+    /// rather than as a nested object. We re-parse that into a real object
+    /// when possible. If parsing fails, the caller still gets a `Value` —
+    /// just the original — so downstream code can reject it explicitly.
+    fn normalise_arguments(value: &Value) -> Value {
+        if let Some(s) = value.as_str() {
+            if let Ok(parsed) = serde_json::from_str::<Value>(s) {
+                return parsed;
+            }
+        }
+        value.clone()
+    }
+
+    /// Try to parse the body of a `<tool_call>` block as JSON and extract a
+    /// tool call. Returns `None` if the body isn't valid JSON or doesn't
+    /// match any recognised wrapper shape.
+    fn parse_wrapper_body(&self, body: &str) -> Option<ToolCall> {
+        let trimmed = body.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        // Strip an inner markdown fence if present (some Qwen3 fine-tunes
+        // wrap the JSON inside ```json ... ``` even inside <tool_call>).
+        let inner = self
+            .strip_markdown_fence(trimmed)
+            .unwrap_or_else(|| trimmed.to_string());
+        let parsed: Value = serde_json::from_str(&inner).ok()?;
+        Self::json_to_tool_call(&parsed)
+    }
+
+    /// Strip a markdown fence around a block, returning the inner content
+    /// if the input is wrapped, or `None` otherwise.
+    fn strip_markdown_fence(&self, text: &str) -> Option<String> {
+        let captures = self.fenced_block_regex.captures(text)?;
+        Some(captures.get(1)?.as_str().to_string())
+    }
+
+    /// Parse fallback shapes outside `<tool_call>` wrappers.
+    ///
+    /// Used when a model has drifted from the canonical wrapper format —
+    /// commonly a markdown-fenced JSON block, an improvised `call_tool`
+    /// wrapper, or an OpenAI-style `tool_calls` array. We only recognise
+    /// JSON shapes that are unambiguously tool-call-shaped (see
+    /// `json_to_tool_call`); plain narrative or unrelated JSON yields no
+    /// calls.
+    fn parse_fallback_shapes(&self, text: &str) -> Vec<ToolCall> {
+        let mut out = Vec::new();
+
+        // 1. Markdown-fenced JSON blocks. Iterate every fence — there can
+        //    be more than one in a single response.
+        for capture in self.fenced_block_regex.captures_iter(text) {
+            let Some(body) = capture.get(1) else { continue };
+            let body = body.as_str().trim();
+            if let Ok(parsed) = serde_json::from_str::<Value>(body) {
+                self.collect_tool_calls_from_value(&parsed, &mut out);
+            }
+        }
+
+        // 2. Bare JSON objects. Find balanced JSON spans anywhere in the
+        //    text and try them. We use the same balanced-brace extractor
+        //    as JsonToolCallParser so we handle multi-line JSON correctly.
+        if out.is_empty() {
+            self.scan_bare_json(text, &mut out);
+        }
+
+        out
+    }
+
+    /// Scan text for top-level balanced JSON objects and try each as a
+    /// tool-call shape. Honours one level of nesting via brace counting.
+    fn scan_bare_json(&self, text: &str, out: &mut Vec<ToolCall>) {
+        let bytes = text.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'{' {
+                if let Some(end) = find_matching_brace(text, i) {
+                    let span = &text[i..=end];
+                    if let Ok(parsed) = serde_json::from_str::<Value>(span) {
+                        self.collect_tool_calls_from_value(&parsed, out);
+                    }
+                    i = end + 1;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+    }
+
+    /// Append any tool calls extractable from a single JSON value.
+    ///
+    /// Handles the OpenAI `tool_calls: [...]` array shape by iterating
+    /// the array; otherwise tries the value itself as one of the
+    /// recognised wrapper shapes.
+    fn collect_tool_calls_from_value(&self, json: &Value, out: &mut Vec<ToolCall>) {
+        if let Some(arr) = json.get("tool_calls").and_then(Value::as_array) {
+            for entry in arr {
+                if let Some(tc) = Self::array_entry_to_tool_call(entry) {
+                    out.push(tc);
+                }
+            }
+            return;
+        }
+        if let Some(tc) = Self::json_to_tool_call(json) {
+            out.push(tc);
+        }
+    }
+}
+
+impl Default for Qwen3ToolParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ToolCallParser for Qwen3ToolParser {
+    /// Extract tool calls from a Qwen3 model response.
+    ///
+    /// Pipeline:
+    /// 1. Strip `<think>...</think>` reasoning blocks.
+    /// 2. Pull every `<tool_call>...</tool_call>` region and try to parse
+    ///    each as JSON in any recognised wrapper shape.
+    /// 3. If nothing canonical was found, sweep markdown-fenced and bare
+    ///    JSON looking for fallback wrapper shapes.
+    /// 4. Return whatever survived. An empty `Vec` is a valid answer for
+    ///    plain narrative or non-tool-call JSON.
+    fn parse_tool_calls(&self, text: &str) -> Result<Vec<ToolCall>, TemplateError> {
+        debug!(
+            "Qwen3ToolParser: parsing {} bytes of generated text",
+            text.len()
+        );
+
+        let cleaned = self.strip_reasoning_blocks(text);
+
+        let mut tool_calls = Vec::new();
+
+        // 1. Canonical wrapper: <tool_call>...</tool_call>
+        for capture in self.tool_call_regex.captures_iter(&cleaned) {
+            let Some(body) = capture.get(1) else { continue };
+            if let Some(call) = self.parse_wrapper_body(body.as_str()) {
+                tool_calls.push(call);
+            }
+        }
+
+        // 2. Fallback: markdown-fenced or bare JSON in alternative shapes.
+        if tool_calls.is_empty() {
+            tool_calls = self.parse_fallback_shapes(&cleaned);
+        }
+
+        debug!(
+            "Qwen3ToolParser: extracted {} tool call(s)",
+            tool_calls.len()
+        );
+        Ok(tool_calls)
+    }
+}
+
+/// Find the index of the `}` that closes the `{` at `start`.
+///
+/// Honours JSON string literals (so `}` inside a quoted string doesn't
+/// close the object) and backslash escapes within strings. Returns
+/// `None` if the input is unbalanced.
+fn find_matching_brace(text: &str, start: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    if bytes.get(start) != Some(&b'{') {
+        return None;
+    }
+    let mut depth: i32 = 0;
+    let mut in_string = false;
+    let mut escape = false;
+    for (idx, &b) in bytes.iter().enumerate().skip(start) {
+        if escape {
+            escape = false;
+            continue;
+        }
+        match b {
+            b'\\' if in_string => escape = true,
+            b'"' => in_string = !in_string,
+            b'{' if !in_string => depth += 1,
+            b'}' if !in_string => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(idx);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Trait for parsing tool calls from streaming text input
 pub trait StreamingToolCallParser: Send + Sync {
     /// Process a delta (incremental text update) and return any completed tool calls
@@ -5001,15 +5563,68 @@ I apologize for the confusion. Let me try again with the correct format."#;
             ToolParsingStrategy::Qwen3Coder
         );
 
-        // Test that just qwen3 without coder doesn't match Qwen3Coder
+        // Test that just qwen3 without coder doesn't match Qwen3Coder — it now
+        // resolves to the new plain Qwen3 strategy (more specific match wins).
         assert_eq!(
             ToolParsingStrategy::detect_from_model_name("Qwen3-30B-Instruct"),
-            ToolParsingStrategy::Default
+            ToolParsingStrategy::Qwen3
         );
 
         // Test that just coder without qwen3 doesn't match Qwen3Coder
         assert_eq!(
             ToolParsingStrategy::detect_from_model_name("microsoft/coder-1b"),
+            ToolParsingStrategy::Default
+        );
+    }
+
+    /// Cover the new plain-Qwen3 strategy detection.
+    ///
+    /// Required by the strategy task: Qwen3-Instruct variants must resolve
+    /// to the new `Qwen3` strategy, while the more specific Qwen3Coder
+    /// detection wins for coder builds.
+    #[test]
+    fn test_detect_from_model_name_qwen3() {
+        // Plain Qwen3 instruct / chat models — all should resolve to Qwen3.
+        assert_eq!(
+            ToolParsingStrategy::detect_from_model_name("Qwen/Qwen3-8B-Instruct"),
+            ToolParsingStrategy::Qwen3
+        );
+        assert_eq!(
+            ToolParsingStrategy::detect_from_model_name("Qwen3.6-27B"),
+            ToolParsingStrategy::Qwen3
+        );
+        assert_eq!(
+            ToolParsingStrategy::detect_from_model_name("unsloth/Qwen3-0.6B-GGUF"),
+            ToolParsingStrategy::Qwen3
+        );
+        assert_eq!(
+            ToolParsingStrategy::detect_from_model_name("qwen3-30b-a3b"),
+            ToolParsingStrategy::Qwen3
+        );
+        assert_eq!(
+            ToolParsingStrategy::detect_from_model_name("QWEN3-Chat"),
+            ToolParsingStrategy::Qwen3
+        );
+
+        // Regression: Qwen3-Coder must keep its dedicated strategy. The
+        // detection order is "coder before plain Qwen3", so the more
+        // specific match wins for the canonical coder repo name.
+        assert_eq!(
+            ToolParsingStrategy::detect_from_model_name(
+                "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
+            ),
+            ToolParsingStrategy::Qwen3Coder
+        );
+
+        // Older Qwen families (no `qwen3` substring) must not be hijacked
+        // by the new plain-Qwen3 branch — they keep falling through to
+        // `Default` exactly as before.
+        assert_eq!(
+            ToolParsingStrategy::detect_from_model_name("Qwen/Qwen2.5-7B-Instruct"),
+            ToolParsingStrategy::Default
+        );
+        assert_eq!(
+            ToolParsingStrategy::detect_from_model_name("qwen-next"),
             ToolParsingStrategy::Default
         );
     }
@@ -5173,6 +5788,356 @@ I apologize for the confusion. Let me try again with the correct format."#;
             ToolParsingStrategy::detect_from_model_name("anthropic"),
             ToolParsingStrategy::Claude
         );
+    }
+
+    /// Tests for the plain Qwen3 (non-Coder) strategy.
+    ///
+    /// These cover three concerns the originating task identifies:
+    ///
+    /// 1. **Reference-compare input rendering.** The rendered tool block
+    ///    must match the canonical Qwen3 chat template byte-for-byte. The
+    ///    golden was generated by feeding `Qwen/Qwen3-8B`'s actual chat
+    ///    template through Jinja2; see `tests/fixtures/qwen3/`.
+    /// 2. **Output parsing for every shape we want to recognise** —
+    ///    canonical wrapper, reasoning prefix, markdown-fenced fallback,
+    ///    improvised wrappers, multiple calls, and negatives.
+    /// 3. **Regression coverage** that existing strategies are unaffected.
+    mod qwen3_strategy_tests {
+        use super::*;
+
+        /// The two-tool input fixed by the golden file.
+        ///
+        /// `read_file` and `write_file` cover both the nested-properties
+        /// case and the multiple-required-fields case, which exercise the
+        /// alphabetical key sort across nested objects.
+        fn golden_tool_set() -> Vec<ToolDefinition> {
+            vec![
+                ToolDefinition {
+                    name: "read_file".to_string(),
+                    description: "Read a file from the filesystem".to_string(),
+                    parameters: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "Absolute path to the file to read"
+                            }
+                        },
+                        "required": ["path"]
+                    }),
+                    server_name: "test".to_string(),
+                },
+                ToolDefinition {
+                    name: "write_file".to_string(),
+                    description: "Write text to a file".to_string(),
+                    parameters: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "content": {"type": "string"}
+                        },
+                        "required": ["path", "content"]
+                    }),
+                    server_name: "test".to_string(),
+                },
+            ]
+        }
+
+        /// Read the golden file checked in alongside the tests.
+        ///
+        /// Done at runtime (not via `include_str!`) so a regenerated
+        /// golden picks up without recompilation, and so regenerating the
+        /// fixture from Jinja2 (see `tests/fixtures/qwen3/README.md`)
+        /// always reflects in the next `cargo test` run.
+        fn read_golden_tool_block() -> String {
+            let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/qwen3/tool_block.txt");
+            std::fs::read_to_string(&fixture).unwrap_or_else(|e| {
+                panic!("Failed to read golden fixture {}: {}", fixture.display(), e)
+            })
+        }
+
+        /// The byte-for-byte assertion the task explicitly demands.
+        ///
+        /// "`format_tools_for_template` produces output matching the
+        /// tokenizer chat template's tool rendering byte-for-byte." A
+        /// "contains" assertion would silently mask drift in spacing,
+        /// JSON key ordering, or wrapper boilerplate — all of which
+        /// shift the model out of its training distribution.
+        #[test]
+        fn test_qwen3_format_tools_for_template_matches_golden() {
+            let mut engine = ChatTemplateEngine::new();
+            engine.set_parsing_strategy(ToolParsingStrategy::Qwen3);
+
+            let rendered = engine
+                .format_tools_for_template(&golden_tool_set())
+                .expect("Qwen3 tool rendering must not fail on a well-formed input");
+
+            let golden = read_golden_tool_block();
+            assert_eq!(
+                rendered, golden,
+                "Qwen3 tool rendering drifted from canonical chat template.\n\
+                 Regenerate the golden via tests/fixtures/qwen3/render_tool_block.py if intentional.\n\
+                 \n--- got ---\n{}\n--- want ---\n{}\n",
+                rendered, golden
+            );
+        }
+
+        /// Other strategies must not adopt the Qwen3 rendering. Checking
+        /// `Default` here is enough — `OpenAI`, `Claude`, and `Qwen3Coder`
+        /// all share the same legacy block via `format_tools_for_default`.
+        #[test]
+        fn test_default_strategy_keeps_legacy_tool_rendering() {
+            let engine = ChatTemplateEngine::new(); // no strategy set
+            let rendered = engine
+                .format_tools_for_template(&golden_tool_set())
+                .expect("Default tool rendering must succeed");
+
+            assert!(
+                rendered.contains("Available tools:"),
+                "Default rendering must keep the legacy 'Available tools:' header"
+            );
+            assert!(
+                !rendered.contains("# Tools"),
+                "Default rendering must NOT use the canonical Qwen3 '# Tools' header"
+            );
+        }
+
+        // -----------------------------------------------------------------
+        // Output parsing tests. Each shape is exercised in isolation so a
+        // failure points directly at the wrapper handler that broke.
+        // -----------------------------------------------------------------
+
+        fn parse_with_qwen3(text: &str) -> Vec<ToolCall> {
+            let parser = ToolParserFactory::create_parser(ToolParsingStrategy::Qwen3);
+            parser
+                .parse_tool_calls(text)
+                .expect("Qwen3 parser must not error on well-formed input")
+        }
+
+        /// Canonical wrapper, exactly as the chat template specifies it.
+        #[test]
+        fn test_qwen3_parses_canonical_tool_call_wrapper() {
+            let text = r#"<tool_call>
+{"name": "read_file", "arguments": {"path": "/tmp/example.rs"}}
+</tool_call>"#;
+            let calls = parse_with_qwen3(text);
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].name, "read_file");
+            assert_eq!(
+                calls[0].arguments.get("path").and_then(Value::as_str),
+                Some("/tmp/example.rs")
+            );
+        }
+
+        /// Canonical wrapper preceded by a `<think>...</think>` reasoning
+        /// block — the dominant real-world shape Qwen3 emits in thinking
+        /// mode.
+        #[test]
+        fn test_qwen3_strips_reasoning_block_before_parsing() {
+            let text = r#"<think>
+The user wants me to read a file. I will use the read_file tool.
+</think>
+
+<tool_call>
+{"name": "read_file", "arguments": {"path": "/tmp/example.rs"}}
+</tool_call>"#;
+            let calls = parse_with_qwen3(text);
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].name, "read_file");
+            assert_eq!(
+                calls[0].arguments.get("path").and_then(Value::as_str),
+                Some("/tmp/example.rs")
+            );
+        }
+
+        /// Reasoning blocks that themselves contain JSON-shaped bait must
+        /// not be parsed. Only the wrapper-block payload counts.
+        #[test]
+        fn test_qwen3_ignores_json_inside_reasoning_block() {
+            let text = r#"<think>
+I considered calling {"name": "fake_tool", "arguments": {}} but won't.
+</think>
+<tool_call>
+{"name": "real_tool", "arguments": {"x": 1}}
+</tool_call>"#;
+            let calls = parse_with_qwen3(text);
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].name, "real_tool");
+        }
+
+        /// Markdown-fenced fallback. Some Qwen3 fine-tunes wrap the JSON
+        /// in ```json ... ``` instead of `<tool_call>...</tool_call>`.
+        #[test]
+        fn test_qwen3_parses_markdown_fenced_fallback() {
+            let text =
+                "```json\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"/a.rs\"}}\n```";
+            let calls = parse_with_qwen3(text);
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].name, "read_file");
+            assert_eq!(
+                calls[0].arguments.get("path").and_then(Value::as_str),
+                Some("/a.rs")
+            );
+        }
+
+        /// Improvised `call_tool` wrapper observed in our 2026-04-25 logs:
+        /// `{"call_tool": {"name": ..., "arguments": "<stringified-json>"}}`.
+        /// The stringified `arguments` must be re-parsed to an object.
+        #[test]
+        fn test_qwen3_parses_improvised_call_tool_wrapper() {
+            let text = r#"```json
+{"call_tool":{"arguments":"{\"file_path\": \"/tmp/sample_avp_test.rs\"}","name":"read_file"}}
+```"#;
+            let calls = parse_with_qwen3(text);
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].name, "read_file");
+            assert_eq!(
+                calls[0].arguments.get("file_path").and_then(Value::as_str),
+                Some("/tmp/sample_avp_test.rs"),
+                "stringified `arguments` must be re-parsed to a real object"
+            );
+        }
+
+        /// OpenAI legacy `function_call` wrapper as a fallback shape.
+        #[test]
+        fn test_qwen3_parses_openai_function_call_fallback() {
+            let text =
+                r#"{"function_call": {"name": "read_file", "arguments": {"path": "/a.rs"}}}"#;
+            let calls = parse_with_qwen3(text);
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].name, "read_file");
+        }
+
+        /// OpenAI tool_calls array fallback shape.
+        #[test]
+        fn test_qwen3_parses_openai_tool_calls_array_fallback() {
+            let text = r#"{
+                "tool_calls": [
+                    {"function": {"name": "read_file", "arguments": {"path": "/a.rs"}}},
+                    {"function": {"name": "write_file", "arguments": {"path": "/b.rs", "content": "x"}}}
+                ]
+            }"#;
+            let calls = parse_with_qwen3(text);
+            assert_eq!(calls.len(), 2);
+            assert_eq!(calls[0].name, "read_file");
+            assert_eq!(calls[1].name, "write_file");
+        }
+
+        /// Anthropic `tool_use` fallback shape.
+        #[test]
+        fn test_qwen3_parses_anthropic_tool_use_fallback() {
+            let text = r#"{"type": "tool_use", "name": "read_file", "input": {"path": "/a.rs"}}"#;
+            let calls = parse_with_qwen3(text);
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].name, "read_file");
+            assert_eq!(
+                calls[0].arguments.get("path").and_then(Value::as_str),
+                Some("/a.rs")
+            );
+        }
+
+        /// `function_name` shape — what Qwen3-0.6B improvises today
+        /// (per `tests/integration/tool_call_round_trip.rs`).
+        #[test]
+        fn test_qwen3_parses_function_name_fallback() {
+            let text = r#"{"function_name": "read_file", "arguments": {"path": "/a.rs"}}"#;
+            let calls = parse_with_qwen3(text);
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].name, "read_file");
+        }
+
+        /// Multiple canonical wrapper blocks in one response.
+        #[test]
+        fn test_qwen3_parses_multiple_tool_calls() {
+            let text = r#"<tool_call>
+{"name": "read_file", "arguments": {"path": "/a.rs"}}
+</tool_call>
+<tool_call>
+{"name": "write_file", "arguments": {"path": "/b.rs", "content": "x"}}
+</tool_call>"#;
+            let calls = parse_with_qwen3(text);
+            assert_eq!(calls.len(), 2);
+            assert_eq!(calls[0].name, "read_file");
+            assert_eq!(calls[1].name, "write_file");
+        }
+
+        /// Plain narrative must produce zero tool calls. Refuse the
+        /// temptation to invent one.
+        #[test]
+        fn test_qwen3_returns_no_calls_for_plain_narrative() {
+            let text = "I'll help you with that. Let me think about this carefully.";
+            let calls = parse_with_qwen3(text);
+            assert!(
+                calls.is_empty(),
+                "plain narrative must not yield tool calls"
+            );
+        }
+
+        /// Non-tool-call JSON (e.g. status reports) must not be misread
+        /// as a tool call. This is the canary against false positives.
+        #[test]
+        fn test_qwen3_returns_no_calls_for_status_json() {
+            let text = r#"{"status": "passed", "message": "ok"}"#;
+            let calls = parse_with_qwen3(text);
+            assert!(
+                calls.is_empty(),
+                "non-tool-call JSON must not match any wrapper shape"
+            );
+        }
+
+        /// An empty `<tool_call>` block has nothing to parse — it must
+        /// not crash and must return no calls.
+        #[test]
+        fn test_qwen3_handles_empty_tool_call_block() {
+            let text = "<tool_call></tool_call>";
+            let calls = parse_with_qwen3(text);
+            assert!(calls.is_empty());
+        }
+
+        /// Incomplete wrapper (no closing tag) must not panic and must
+        /// not create a tool call out of an unfinished JSON fragment.
+        #[test]
+        fn test_qwen3_handles_incomplete_tool_call_wrapper() {
+            let text = r#"<tool_call>
+{"name": "read_file", "argume"#;
+            let calls = parse_with_qwen3(text);
+            assert!(
+                calls.is_empty(),
+                "incomplete wrapper must not produce a tool call"
+            );
+        }
+
+        /// Whitespace, newlines, and surrounding narrative must not
+        /// confuse the wrapper extraction.
+        #[test]
+        fn test_qwen3_extracts_wrapper_amid_narrative() {
+            let text = r#"Sure, I'll do that.
+
+<tool_call>
+{"name": "read_file", "arguments": {"path": "/a.rs"}}
+</tool_call>
+
+That should work."#;
+            let calls = parse_with_qwen3(text);
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].name, "read_file");
+        }
+
+        /// `arguments` rendered as a JSON-stringified string (rather than
+        /// nested object) must be re-parsed transparently.
+        #[test]
+        fn test_qwen3_normalises_stringified_arguments() {
+            let text = "<tool_call>\n{\"name\": \"read_file\", \"arguments\": \"{\\\"path\\\": \\\"/a.rs\\\"}\"}\n</tool_call>";
+            let calls = parse_with_qwen3(text);
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].name, "read_file");
+            assert_eq!(
+                calls[0].arguments.get("path").and_then(Value::as_str),
+                Some("/a.rs"),
+                "stringified arguments inside the canonical wrapper must be re-parsed"
+            );
+        }
     }
 
     mod factory_tests {

@@ -26,12 +26,12 @@
 //!    - Required: `uri`, `name`
 //!    - Optional: `mimeType`, `title`, `description`, `size`, `annotations`
 
-use agent_client_protocol::{
-    Agent, AudioContent, ContentBlock, EmbeddedResource, EmbeddedResourceResource, ImageContent,
-    InitializeRequest, PromptRequest, ProtocolVersion, ResourceLink, TextContent,
-    TextResourceContents,
+use agent_client_protocol::schema::{
+    AudioContent, ContentBlock, EmbeddedResource, EmbeddedResourceResource, ImageContent,
+    InitializeRequest, NewSessionRequest, PromptRequest, ProtocolVersion, ResourceLink,
+    TextContent, TextResourceContents,
 };
-use agent_client_protocol_extras::recording::RecordedSession;
+use agent_client_protocol_extras::{recording::RecordedSession, AgentWithFixture};
 use swissarmyhammer_common::Pretty;
 
 /// Statistics from content fixture verification
@@ -45,17 +45,25 @@ pub struct ContentStats {
 /// Test that agents accept text content blocks
 ///
 /// Per spec: "All Agents **MUST** support text content blocks when included in prompts"
-pub async fn test_text_content_support<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_text_content_support(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing text content support");
 
     // Initialize agent
     let init_request = InitializeRequest::new(ProtocolVersion::V1);
-    let _init_response = agent.initialize(init_request).await?;
+    let _init_response = agent
+        .connection()
+        .send_request(init_request)
+        .block_task()
+        .await?;
 
     // Create a new session
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
-    let new_session_request = agent_client_protocol::NewSessionRequest::new(cwd);
-    let new_session_response = agent.new_session(new_session_request).await?;
+    let new_session_request = NewSessionRequest::new(cwd);
+    let new_session_response = agent
+        .connection()
+        .send_request(new_session_request)
+        .block_task()
+        .await?;
     let session_id = new_session_response.session_id;
 
     // Create a prompt with text content
@@ -65,7 +73,11 @@ pub async fn test_text_content_support<A: Agent + ?Sized>(agent: &A) -> crate::R
     let prompt_request = PromptRequest::new(session_id, vec![content_block]);
 
     // Send prompt - should not error for basic text content
-    let result = agent.prompt(prompt_request).await;
+    let result = agent
+        .connection()
+        .send_request(prompt_request)
+        .block_task()
+        .await;
 
     // Agent should accept text content (even if it doesn't generate a response in test mode)
     // We're testing that it doesn't reject the content type
@@ -88,12 +100,16 @@ pub async fn test_text_content_support<A: Agent + ?Sized>(agent: &A) -> crate::R
 }
 
 /// Test that agents properly handle image content with the image capability
-pub async fn test_image_content_with_capability<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_image_content_with_capability(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing image content with capability");
 
     // Initialize agent and check capabilities
     let init_request = InitializeRequest::new(ProtocolVersion::V1);
-    let init_response = agent.initialize(init_request).await?;
+    let init_response = agent
+        .connection()
+        .send_request(init_request)
+        .block_task()
+        .await?;
 
     // Check if agent supports image capability
     let agent_supports_image = init_response.agent_capabilities.prompt_capabilities.image;
@@ -105,8 +121,12 @@ pub async fn test_image_content_with_capability<A: Agent + ?Sized>(agent: &A) ->
 
     // Create a new session
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
-    let new_session_request = agent_client_protocol::NewSessionRequest::new(cwd);
-    let new_session_response = agent.new_session(new_session_request).await?;
+    let new_session_request = NewSessionRequest::new(cwd);
+    let new_session_response = agent
+        .connection()
+        .send_request(new_session_request)
+        .block_task()
+        .await?;
     let session_id = new_session_response.session_id;
 
     // Create a minimal 1x1 PNG image (base64 encoded)
@@ -118,7 +138,11 @@ pub async fn test_image_content_with_capability<A: Agent + ?Sized>(agent: &A) ->
     let prompt_request = PromptRequest::new(session_id, vec![content_block]);
 
     // Send prompt with image
-    let result = agent.prompt(prompt_request).await;
+    let result = agent
+        .connection()
+        .send_request(prompt_request)
+        .block_task()
+        .await;
 
     match result {
         Ok(_) => Ok(()),
@@ -138,12 +162,16 @@ pub async fn test_image_content_with_capability<A: Agent + ?Sized>(agent: &A) ->
 }
 
 /// Test that agents properly handle audio content with the audio capability
-pub async fn test_audio_content_with_capability<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_audio_content_with_capability(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing audio content with capability");
 
     // Initialize agent and check capabilities
     let init_request = InitializeRequest::new(ProtocolVersion::V1);
-    let init_response = agent.initialize(init_request).await?;
+    let init_response = agent
+        .connection()
+        .send_request(init_request)
+        .block_task()
+        .await?;
 
     // Check if agent supports audio capability
     let agent_supports_audio = init_response.agent_capabilities.prompt_capabilities.audio;
@@ -155,8 +183,12 @@ pub async fn test_audio_content_with_capability<A: Agent + ?Sized>(agent: &A) ->
 
     // Create a new session
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
-    let new_session_request = agent_client_protocol::NewSessionRequest::new(cwd);
-    let new_session_response = agent.new_session(new_session_request).await?;
+    let new_session_request = NewSessionRequest::new(cwd);
+    let new_session_response = agent
+        .connection()
+        .send_request(new_session_request)
+        .block_task()
+        .await?;
     let session_id = new_session_response.session_id;
 
     // Create a minimal WAV header (44 bytes) - silent audio
@@ -168,7 +200,11 @@ pub async fn test_audio_content_with_capability<A: Agent + ?Sized>(agent: &A) ->
     let prompt_request = PromptRequest::new(session_id, vec![content_block]);
 
     // Send prompt with audio
-    let result = agent.prompt(prompt_request).await;
+    let result = agent
+        .connection()
+        .send_request(prompt_request)
+        .block_task()
+        .await;
 
     match result {
         Ok(_) => Ok(()),
@@ -188,14 +224,18 @@ pub async fn test_audio_content_with_capability<A: Agent + ?Sized>(agent: &A) ->
 }
 
 /// Test that agents properly handle embedded resource content
-pub async fn test_embedded_resource_with_capability<A: Agent + ?Sized>(
-    agent: &A,
+pub async fn test_embedded_resource_with_capability(
+    agent: &dyn AgentWithFixture,
 ) -> crate::Result<()> {
     tracing::info!("Testing embedded resource with capability");
 
     // Initialize agent and check capabilities
     let init_request = InitializeRequest::new(ProtocolVersion::V1);
-    let init_response = agent.initialize(init_request).await?;
+    let init_response = agent
+        .connection()
+        .send_request(init_request)
+        .block_task()
+        .await?;
 
     // Check if agent supports embedded context capability
     let agent_supports_embedded = init_response
@@ -210,8 +250,12 @@ pub async fn test_embedded_resource_with_capability<A: Agent + ?Sized>(
 
     // Create a new session
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
-    let new_session_request = agent_client_protocol::NewSessionRequest::new(cwd);
-    let new_session_response = agent.new_session(new_session_request).await?;
+    let new_session_request = NewSessionRequest::new(cwd);
+    let new_session_response = agent
+        .connection()
+        .send_request(new_session_request)
+        .block_task()
+        .await?;
     let session_id = new_session_response.session_id;
 
     // Create an embedded text resource
@@ -229,7 +273,11 @@ pub async fn test_embedded_resource_with_capability<A: Agent + ?Sized>(
     let prompt_request = PromptRequest::new(session_id, vec![content_block]);
 
     // Send prompt with embedded resource
-    let result = agent.prompt(prompt_request).await;
+    let result = agent
+        .connection()
+        .send_request(prompt_request)
+        .block_task()
+        .await;
 
     match result {
         Ok(_) => Ok(()),
@@ -252,17 +300,25 @@ pub async fn test_embedded_resource_with_capability<A: Agent + ?Sized>(
 }
 
 /// Test that agents properly handle resource links
-pub async fn test_resource_link_content<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_resource_link_content(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing resource link content");
 
     // Initialize agent
     let init_request = InitializeRequest::new(ProtocolVersion::V1);
-    let _init_response = agent.initialize(init_request).await?;
+    let _init_response = agent
+        .connection()
+        .send_request(init_request)
+        .block_task()
+        .await?;
 
     // Create a new session
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
-    let new_session_request = agent_client_protocol::NewSessionRequest::new(cwd);
-    let new_session_response = agent.new_session(new_session_request).await?;
+    let new_session_request = NewSessionRequest::new(cwd);
+    let new_session_response = agent
+        .connection()
+        .send_request(new_session_request)
+        .block_task()
+        .await?;
     let session_id = new_session_response.session_id;
 
     // Create a resource link
@@ -276,7 +332,11 @@ pub async fn test_resource_link_content<A: Agent + ?Sized>(agent: &A) -> crate::
     let prompt_request = PromptRequest::new(session_id, vec![content_block]);
 
     // Send prompt with resource link
-    let result = agent.prompt(prompt_request).await;
+    let result = agent
+        .connection()
+        .send_request(prompt_request)
+        .block_task()
+        .await;
 
     match result {
         Ok(_) => Ok(()),
@@ -296,23 +356,35 @@ pub async fn test_resource_link_content<A: Agent + ?Sized>(agent: &A) -> crate::
 }
 
 /// Test that agents properly validate content blocks in prompt requests
-pub async fn test_content_validation<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_content_validation(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing content validation");
 
     // Initialize agent
     let init_request = InitializeRequest::new(ProtocolVersion::V1);
-    let _init_response = agent.initialize(init_request).await?;
+    let _init_response = agent
+        .connection()
+        .send_request(init_request)
+        .block_task()
+        .await?;
 
     // Create a new session
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
-    let new_session_request = agent_client_protocol::NewSessionRequest::new(cwd);
-    let new_session_response = agent.new_session(new_session_request).await?;
+    let new_session_request = NewSessionRequest::new(cwd);
+    let new_session_response = agent
+        .connection()
+        .send_request(new_session_request)
+        .block_task()
+        .await?;
     let session_id = new_session_response.session_id;
 
     // Test with empty content array - should be valid (though may not generate response)
     let prompt_request = PromptRequest::new(session_id.clone(), vec![]);
 
-    let result = agent.prompt(prompt_request).await;
+    let result = agent
+        .connection()
+        .send_request(prompt_request)
+        .block_task()
+        .await;
 
     // Empty content is technically valid per spec
     match result {
@@ -336,7 +408,11 @@ pub async fn test_content_validation<A: Agent + ?Sized>(agent: &A) -> crate::Res
 
     let prompt_request = PromptRequest::new(session_id, content_blocks);
 
-    let result = agent.prompt(prompt_request).await;
+    let result = agent
+        .connection()
+        .send_request(prompt_request)
+        .block_task()
+        .await;
 
     match result {
         Ok(_) => Ok(()),
@@ -423,76 +499,43 @@ pub fn verify_content_fixture_with_prompts(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::{
-        AuthenticateRequest, AuthenticateResponse, CancelNotification, ExtNotification, ExtRequest,
-        ExtResponse, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
-        NewSessionResponse, PromptResponse, SetSessionModeRequest, SetSessionModeResponse,
-        StopReason,
+    use crate::test_utils::{run_with_mock_agent_as_fixture, MockAgent};
+    use agent_client_protocol::schema::{
+        InitializeResponse, NewSessionResponse, PromptResponse, StopReason,
     };
+    use futures::future::BoxFuture;
+    use std::sync::Arc;
 
-    /// Mock agent that accepts all content types
+    /// Mock agent that accepts all content types.
+    ///
+    /// `initialize` does not declare any of the optional prompt
+    /// capabilities (image / audio / embedded context), so the
+    /// capability-gated scenarios skip gracefully when run through this
+    /// mock. The non-gated scenarios (text, resource link, multi-block
+    /// validation) drive real `prompt` calls and reach the
+    /// `StopReason::EndTurn` happy path.
     struct ContentMockAgent;
 
-    #[async_trait::async_trait(?Send)]
-    impl Agent for ContentMockAgent {
-        async fn initialize(
-            &self,
+    impl MockAgent for ContentMockAgent {
+        fn initialize<'a>(
+            &'a self,
             _request: InitializeRequest,
-        ) -> agent_client_protocol::Result<InitializeResponse> {
-            Ok(InitializeResponse::new(ProtocolVersion::V1))
+        ) -> BoxFuture<'a, agent_client_protocol::Result<InitializeResponse>> {
+            Box::pin(async move { Ok(InitializeResponse::new(ProtocolVersion::V1)) })
         }
 
-        async fn authenticate(
-            &self,
-            _request: AuthenticateRequest,
-        ) -> agent_client_protocol::Result<AuthenticateResponse> {
-            Ok(AuthenticateResponse::new())
+        fn new_session<'a>(
+            &'a self,
+            _request: NewSessionRequest,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<NewSessionResponse>> {
+            Box::pin(async move { Ok(NewSessionResponse::new("content-test-session")) })
         }
 
-        async fn new_session(
-            &self,
-            _request: agent_client_protocol::NewSessionRequest,
-        ) -> agent_client_protocol::Result<NewSessionResponse> {
-            Ok(NewSessionResponse::new("content-test-session"))
-        }
-
-        async fn prompt(
-            &self,
+        fn prompt<'a>(
+            &'a self,
             _request: PromptRequest,
-        ) -> agent_client_protocol::Result<PromptResponse> {
-            Ok(PromptResponse::new(StopReason::EndTurn))
-        }
-
-        async fn cancel(&self, _request: CancelNotification) -> agent_client_protocol::Result<()> {
-            Ok(())
-        }
-
-        async fn load_session(
-            &self,
-            _request: LoadSessionRequest,
-        ) -> agent_client_protocol::Result<LoadSessionResponse> {
-            Ok(LoadSessionResponse::new())
-        }
-
-        async fn set_session_mode(
-            &self,
-            _request: SetSessionModeRequest,
-        ) -> agent_client_protocol::Result<SetSessionModeResponse> {
-            Ok(SetSessionModeResponse::new())
-        }
-
-        async fn ext_method(
-            &self,
-            _request: ExtRequest,
-        ) -> agent_client_protocol::Result<ExtResponse> {
-            Err(agent_client_protocol::Error::method_not_found())
-        }
-
-        async fn ext_notification(
-            &self,
-            _notification: ExtNotification,
-        ) -> agent_client_protocol::Result<()> {
-            Ok(())
+        ) -> BoxFuture<'a, agent_client_protocol::Result<PromptResponse>> {
+            Box::pin(async move { Ok(PromptResponse::new(StopReason::EndTurn)) })
         }
     }
 
@@ -525,47 +568,67 @@ mod tests {
 
     #[tokio::test]
     async fn test_text_content_support_mock() {
-        let agent = ContentMockAgent;
-        let result = test_text_content_support(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(ContentMockAgent);
+        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
+            test_text_content_support(&fx).await
+        })
+        .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[tokio::test]
     async fn test_image_content_with_capability_mock() {
-        let agent = ContentMockAgent;
+        let mock = Arc::new(ContentMockAgent);
         // Agent doesn't advertise image capability, so test should skip gracefully
-        let result = test_image_content_with_capability(&agent).await;
-        assert!(result.is_ok());
+        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
+            test_image_content_with_capability(&fx).await
+        })
+        .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[tokio::test]
     async fn test_audio_content_with_capability_mock() {
-        let agent = ContentMockAgent;
+        let mock = Arc::new(ContentMockAgent);
         // Agent doesn't advertise audio capability, so test should skip gracefully
-        let result = test_audio_content_with_capability(&agent).await;
-        assert!(result.is_ok());
+        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
+            test_audio_content_with_capability(&fx).await
+        })
+        .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[tokio::test]
     async fn test_embedded_resource_with_capability_mock() {
-        let agent = ContentMockAgent;
+        let mock = Arc::new(ContentMockAgent);
         // Agent doesn't advertise embedded context capability, so test should skip
-        let result = test_embedded_resource_with_capability(&agent).await;
-        assert!(result.is_ok());
+        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
+            test_embedded_resource_with_capability(&fx).await
+        })
+        .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[tokio::test]
     async fn test_resource_link_content_mock() {
-        let agent = ContentMockAgent;
-        let result = test_resource_link_content(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(ContentMockAgent);
+        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
+            test_resource_link_content(&fx).await
+        })
+        .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[tokio::test]
     async fn test_content_validation_mock() {
-        let agent = ContentMockAgent;
-        let result = test_content_validation(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(ContentMockAgent);
+        let result =
+            run_with_mock_agent_as_fixture(
+                mock,
+                |fx| async move { test_content_validation(&fx).await },
+            )
+            .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[test]

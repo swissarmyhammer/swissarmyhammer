@@ -24,7 +24,7 @@ use tempfile::TempDir;
 fn create_test_environment() -> (
     Arc<SessionManager>,
     ToolCallHandler,
-    agent_client_protocol::SessionId,
+    agent_client_protocol::schema::SessionId,
     TempDir,
     Arc<PermissionPolicyEngine>,
 ) {
@@ -51,8 +51,8 @@ fn create_test_environment() -> (
     );
 
     // Set client capabilities
-    let capabilities = agent_client_protocol::ClientCapabilities::new()
-        .fs(agent_client_protocol::FileSystemCapabilities::new()
+    let capabilities = agent_client_protocol::schema::ClientCapabilities::new()
+        .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(true))
         .terminal(true);
@@ -63,7 +63,7 @@ fn create_test_environment() -> (
     let internal_session_id = session_manager
         .create_session(test_dir.path().to_path_buf(), None)
         .unwrap();
-    let session_id = agent_client_protocol::SessionId::new(internal_session_id.to_string());
+    let session_id = agent_client_protocol::schema::SessionId::new(internal_session_id.to_string());
 
     (
         session_manager,
@@ -82,7 +82,7 @@ fn create_test_environment_with_capabilities(
 ) -> (
     Arc<SessionManager>,
     ToolCallHandler,
-    agent_client_protocol::SessionId,
+    agent_client_protocol::schema::SessionId,
     TempDir,
     Arc<PermissionPolicyEngine>,
 ) {
@@ -109,8 +109,8 @@ fn create_test_environment_with_capabilities(
     );
 
     // Set client capabilities with specific settings
-    let capabilities = agent_client_protocol::ClientCapabilities::new()
-        .fs(agent_client_protocol::FileSystemCapabilities::new()
+    let capabilities = agent_client_protocol::schema::ClientCapabilities::new()
+        .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
             .read_text_file(read_capability)
             .write_text_file(write_capability))
         .terminal(terminal_capability);
@@ -121,7 +121,7 @@ fn create_test_environment_with_capabilities(
     let internal_session_id = session_manager
         .create_session(test_dir.path().to_path_buf(), None)
         .unwrap();
-    let session_id = agent_client_protocol::SessionId::new(internal_session_id.to_string());
+    let session_id = agent_client_protocol::schema::SessionId::new(internal_session_id.to_string());
 
     (
         session_manager,

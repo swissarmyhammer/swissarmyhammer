@@ -22,9 +22,11 @@ Examine the file content for magic numbers that should be named constants:
 
 - 0, 1, -1 (common initialization and increment values)
 - Loop indices in simple for loops
-- Test assertions with expected values
+- The literal in the *expected-value position* of an assertion (e.g. `assert_eq!(actual, 42)`, `expect(x).toBe(42)`) — i.e. the value is being compared to, not configuring behaviour
 - Mathematical constants in context (e.g., 360 for degrees, 100 for percentage)
 - Array index access with small literal indices
 - Bit shifts and masks where the number is conventional (e.g., << 8)
+
+Note: Do not exempt code based on the filename containing `test`, `_test`, `test_`, `.spec.`, or `.test.`. Magic numbers used to *configure* behaviour (timeouts, retry counts, port numbers, sizes) are still magic numbers when they appear inside a test, fixture, or test helper. The assertion-expected-value carve-out applies only to the literal in the assertion comparison position itself.
 
 

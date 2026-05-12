@@ -161,7 +161,7 @@ pub async fn collect_all_health_checks() -> Vec<HealthCheck> {
     let mut tool_registry = ToolRegistry::new();
 
     // Register all MCP tools (same as server does)
-    register_file_tools(&mut tool_registry).await;
+    register_file_tools(&mut tool_registry);
     register_git_tools(&mut tool_registry);
     register_shell_tools(&mut tool_registry);
     register_kanban_tools(&mut tool_registry);

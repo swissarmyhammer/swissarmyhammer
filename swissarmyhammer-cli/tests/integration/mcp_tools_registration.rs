@@ -13,7 +13,7 @@ async fn test_mcp_tools_are_registered() {
     let mut registry = ToolRegistry::new();
 
     // This mirrors exactly what McpServer does in its constructor
-    register_file_tools(&mut registry).await;
+    register_file_tools(&mut registry);
     register_shell_tools(&mut registry);
     register_kanban_tools(&mut registry);
     register_web_tools(&mut registry);
@@ -107,7 +107,7 @@ async fn test_cli_categories_are_available() {
     let mut registry = ToolRegistry::new();
 
     // Register all tools
-    register_file_tools(&mut registry).await;
+    register_file_tools(&mut registry);
     register_shell_tools(&mut registry);
     register_kanban_tools(&mut registry);
     register_web_tools(&mut registry);
@@ -159,7 +159,7 @@ async fn test_tool_schemas_are_claude_api_compatible() {
     let mut registry = ToolRegistry::new();
 
     // Register all tools
-    register_file_tools(&mut registry).await;
+    register_file_tools(&mut registry);
     register_shell_tools(&mut registry);
     register_kanban_tools(&mut registry);
     register_web_tools(&mut registry);
