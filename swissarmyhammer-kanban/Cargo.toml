@@ -58,6 +58,8 @@ swissarmyhammer-kanban = { path = ".", features = ["test-support"] }
 # Serialize tests that mutate process-wide env vars (e.g. XDG_CONFIG_HOME).
 serial_test = { workspace = true }
 criterion = { workspace = true, features = ["async_tokio"] }
+# Log capture for migration tests (see tests/perspective_migration.rs).
+tracing-test = { workspace = true }
 
 [[bench]]
 name = "move_task_bench"

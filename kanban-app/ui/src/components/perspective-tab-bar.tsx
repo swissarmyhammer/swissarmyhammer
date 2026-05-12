@@ -161,10 +161,20 @@ function usePerspectiveTabBar() {
   const handleFilterFocus = useCallback(() => {
     filterEditorRef.current?.focus();
   }, []);
+  const activeViewId = activeView?.id;
   const viewKind = activeView?.kind ?? "board";
+  // view_id-first / kind-fallback rule (see `PerspectiveDef` JSDoc in
+  // `kanban-app/ui/src/types/kanban.ts`): a perspective with `view_id` is
+  // pinned to that specific view instance; a perspective without `view_id`
+  // is the legacy shared-by-kind shape and appears in every view whose
+  // kind matches.
   const filteredPerspectives = useMemo(
-    () => perspectives.filter((p) => p.view === viewKind),
-    [perspectives, viewKind],
+    () =>
+      perspectives.filter((p) => {
+        if (p.view_id != null) return p.view_id === activeViewId;
+        return p.view === viewKind;
+      }),
+    [perspectives, activeViewId, viewKind],
   );
 
   // Subscribe to the module-level start-rename signal so the command palette
@@ -257,6 +267,7 @@ export function PerspectiveTabBar() {
         <AddPerspectiveButton
           filteredPerspectives={filteredPerspectives}
           viewKind={viewKind}
+          viewId={activeView.id}
         />
       </div>
       {/* Right: filter formula bar — always visible when a perspective is active */}
@@ -633,13 +644,23 @@ const FilterEditorEscapeContext = createContext<(() => void) | null>(null);
 // Add-perspective button
 // ---------------------------------------------------------------------------
 
-/** "+" button that creates a new perspective for the current view kind. */
+/**
+ * "+" button that creates a new perspective for the current view.
+ *
+ * Passes both `view` (kind) and `view_id` (instance) so the new perspective
+ * is pinned to the specific view it was created from — see the
+ * view_id-first / kind-fallback rule on `PerspectiveDef` in
+ * `kanban-app/ui/src/types/kanban.ts`. Without `view_id` a "+" on one
+ * grid view would leak the new perspective to every sibling grid.
+ */
 function AddPerspectiveButton({
   filteredPerspectives,
   viewKind,
+  viewId,
 }: {
   filteredPerspectives: Array<{ name: string }>;
   viewKind: string;
+  viewId: string;
 }) {
   const dispatchPerspectiveSave = useDispatchCommand("perspective.save");
 
@@ -649,10 +670,10 @@ function AddPerspectiveButton({
     ).length;
     const name =
       untitledCount === 0 ? "Untitled" : `Untitled ${untitledCount + 1}`;
-    dispatchPerspectiveSave({ args: { name, view: viewKind } }).catch(
-      console.error,
-    );
-  }, [filteredPerspectives, viewKind, dispatchPerspectiveSave]);
+    dispatchPerspectiveSave({
+      args: { name, view: viewKind, view_id: viewId },
+    }).catch(console.error);
+  }, [filteredPerspectives, viewKind, viewId, dispatchPerspectiveSave]);
 
   return (
     <Tooltip>

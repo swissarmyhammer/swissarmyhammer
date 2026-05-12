@@ -8423,6 +8423,7 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tracing",
+ "tracing-test",
  "ulid",
 ]
 

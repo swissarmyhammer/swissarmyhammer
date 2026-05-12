@@ -58,12 +58,39 @@ async fn open_board(name: &str) -> (TempDir, Arc<KanbanContext>, PathBuf) {
 /// Add a perspective via the standard dispatch path so the change is
 /// persisted on disk exactly as the live app would persist it.
 async fn add_perspective(ctx: &KanbanContext, name: &str, view: &str) -> String {
-    let ops = parse_input(json!({
+    add_perspective_inner(ctx, name, view, None).await
+}
+
+/// Add a perspective pinned to a specific view instance (`view_id`).
+async fn add_perspective_scoped(
+    ctx: &KanbanContext,
+    name: &str,
+    view: &str,
+    view_id: &str,
+) -> String {
+    add_perspective_inner(ctx, name, view, Some(view_id)).await
+}
+
+/// Underlying helper shared by [`add_perspective`] and
+/// [`add_perspective_scoped`].
+async fn add_perspective_inner(
+    ctx: &KanbanContext,
+    name: &str,
+    view: &str,
+    view_id: Option<&str>,
+) -> String {
+    let mut payload = json!({
         "op": "add perspective",
         "name": name,
         "view": view,
-    }))
-    .expect("parse_input should succeed");
+    });
+    if let Some(vid) = view_id {
+        payload
+            .as_object_mut()
+            .expect("payload is an object")
+            .insert("view_id".into(), json!(vid));
+    }
+    let ops = parse_input(payload).expect("parse_input should succeed");
     let out = execute_operation(ctx, &ops[0])
         .await
         .expect("execute_operation should succeed");
@@ -71,6 +98,31 @@ async fn add_perspective(ctx: &KanbanContext, name: &str, view: &str) -> String 
         .as_str()
         .expect("add perspective must return an id")
         .to_string()
+}
+
+/// Register a grid-kind view with the supplied id+name against the active
+/// board's views registry. Returns nothing — the id is the caller's input.
+///
+/// Used by the per-`view_id` perspective scoping tests, which need to flip
+/// `UIState`'s active view between two grid views sharing the same kind
+/// to prove `view_id` resolves to different perspectives.
+async fn register_grid_view(ctx: &KanbanContext, id: &str, name: &str) {
+    use swissarmyhammer_views::{ViewDef, ViewKind};
+    let views_lock = ctx.views().expect("KanbanContext must have a views ctx");
+    let mut views = views_lock.write().await;
+    let def = ViewDef {
+        id: id.to_string(),
+        name: name.to_string(),
+        icon: None,
+        kind: ViewKind::Grid,
+        entity_type: Some("task".into()),
+        card_fields: Vec::new(),
+        commands: Vec::new(),
+    };
+    views
+        .write_view(&def)
+        .await
+        .expect("write_view must succeed");
 }
 
 /// End-to-end headless assembly: seed a board + a perspective, point UIState
@@ -86,7 +138,7 @@ async fn build_dynamic_sources_assembles_views_boards_perspectives_headless() {
     let persp_id = add_perspective(&ctx, "Active Sprint", "board").await;
 
     // Bare UIState: marks the board as open and selects a real view id so
-    // `resolve_active_view_kind` has something to return.
+    // `resolve_active_view` has something to return.
     let ui = UIState::new();
     let board_path_str = board_path.display().to_string();
     ui.add_open_board(&board_path_str);
@@ -467,5 +519,148 @@ async fn build_dynamic_sources_filters_perspectives_by_active_view_kind() {
     assert!(
         dynamic.perspectives.iter().all(|p| p.view != "grid"),
         "no 'grid'-view perspective may pass the filter"
+    );
+}
+
+// View ids picked for the per-`view_id` scoping tests. Both are grid-kind
+// views so the test can prove they are differentiated by id alone — kind
+// is identical between them, only id differs.
+const GRID_VIEW_A_ID: &str = "01JMVIEW0000000000TGRID0";
+const GRID_VIEW_B_ID: &str = "01JMVIEW0000000000PGRID0";
+
+/// Per-`view_id` scoping: a perspective pinned to view A's id must appear
+/// only when view A is active and must NOT appear when view B (a sibling
+/// of the same kind) is active.
+///
+/// Regression test for the bug where two grid views sharing the `"grid"`
+/// kind would both surface every grid-kind perspective, even those tied
+/// to a different view instance.
+#[tokio::test]
+async fn perspectives_are_scoped_by_view_id_when_set() {
+    let (_tmp, ctx, board_path) = open_board("Sample").await;
+
+    // Register two grid-kind views with distinct ids.
+    register_grid_view(&ctx, GRID_VIEW_A_ID, "Grid A").await;
+    register_grid_view(&ctx, GRID_VIEW_B_ID, "Grid B").await;
+
+    // Perspective pinned to view A.
+    let scoped_persp = add_perspective_scoped(&ctx, "Pinned to A", "grid", GRID_VIEW_A_ID).await;
+
+    let board_path_str = board_path.display().to_string();
+    let mut open_boards: HashMap<PathBuf, Arc<KanbanContext>> = HashMap::new();
+    open_boards.insert(board_path.clone(), Arc::clone(&ctx));
+
+    // With view B active, the scoped perspective must be filtered out.
+    let ui_b = UIState::new();
+    ui_b.add_open_board(&board_path_str);
+    ui_b.set_active_view("main", GRID_VIEW_B_ID);
+    let dynamic_b = build_dynamic_sources(DynamicSourcesInputs {
+        ui_state: &ui_b,
+        active_ctx: Some(&ctx),
+        open_board_ctxs: &open_boards,
+        active_window_label: Some("main"),
+        windows: vec![],
+    })
+    .await;
+    assert!(
+        !dynamic_b.perspectives.iter().any(|p| p.id == scoped_persp),
+        "scoped perspective must NOT appear when sibling view B is active; got {:?}",
+        dynamic_b
+            .perspectives
+            .iter()
+            .map(|p| (&p.id, &p.view))
+            .collect::<Vec<_>>()
+    );
+
+    // With view A active, the scoped perspective must be present.
+    let ui_a = UIState::new();
+    ui_a.add_open_board(&board_path_str);
+    ui_a.set_active_view("main", GRID_VIEW_A_ID);
+    let dynamic_a = build_dynamic_sources(DynamicSourcesInputs {
+        ui_state: &ui_a,
+        active_ctx: Some(&ctx),
+        open_board_ctxs: &open_boards,
+        active_window_label: Some("main"),
+        windows: vec![],
+    })
+    .await;
+    assert!(
+        dynamic_a.perspectives.iter().any(|p| p.id == scoped_persp),
+        "scoped perspective MUST appear when its pinned view is active; got {:?}",
+        dynamic_a
+            .perspectives
+            .iter()
+            .map(|p| (&p.id, &p.view))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// Legacy compatibility: a perspective written with `view_id == None` keeps
+/// its pre-existing "shared by kind" behavior — every grid-kind view surfaces
+/// it, but a board-kind view does not.
+///
+/// Guards the legacy-perspective fallback branch of
+/// `perspective_belongs_to_active_view`.
+#[tokio::test]
+async fn legacy_kind_perspectives_remain_shared_by_kind() {
+    let (_tmp, ctx, board_path) = open_board("Sample").await;
+    register_grid_view(&ctx, GRID_VIEW_A_ID, "Grid A").await;
+    register_grid_view(&ctx, GRID_VIEW_B_ID, "Grid B").await;
+
+    // Legacy perspective — `view_id` deliberately omitted (None).
+    let legacy_persp = add_perspective(&ctx, "Legacy Grid", "grid").await;
+
+    let board_path_str = board_path.display().to_string();
+    let mut open_boards: HashMap<PathBuf, Arc<KanbanContext>> = HashMap::new();
+    open_boards.insert(board_path.clone(), Arc::clone(&ctx));
+
+    for view_id in [GRID_VIEW_A_ID, GRID_VIEW_B_ID] {
+        let ui = UIState::new();
+        ui.add_open_board(&board_path_str);
+        ui.set_active_view("main", view_id);
+        let dynamic = build_dynamic_sources(DynamicSourcesInputs {
+            ui_state: &ui,
+            active_ctx: Some(&ctx),
+            open_board_ctxs: &open_boards,
+            active_window_label: Some("main"),
+            windows: vec![],
+        })
+        .await;
+        assert!(
+            dynamic.perspectives.iter().any(|p| p.id == legacy_persp),
+            "legacy view-id-less grid perspective must appear in every grid view; \
+             missing when active_view_id={view_id}; got {:?}",
+            dynamic
+                .perspectives
+                .iter()
+                .map(|p| (&p.id, &p.view))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    // Board-kind view: legacy grid perspective must NOT appear.
+    let ui_board = UIState::new();
+    ui_board.add_open_board(&board_path_str);
+    const BUILTIN_BOARD_VIEW_ID: &str = "01JMVIEW0000000000BOARD0";
+    ui_board.set_active_view("main", BUILTIN_BOARD_VIEW_ID);
+    let dynamic_board = build_dynamic_sources(DynamicSourcesInputs {
+        ui_state: &ui_board,
+        active_ctx: Some(&ctx),
+        open_board_ctxs: &open_boards,
+        active_window_label: Some("main"),
+        windows: vec![],
+    })
+    .await;
+    assert!(
+        !dynamic_board
+            .perspectives
+            .iter()
+            .any(|p| p.id == legacy_persp),
+        "legacy grid perspective must NOT appear when active view is board-kind; got {:?}",
+        dynamic_board
+            .perspectives
+            .iter()
+            .map(|p| (&p.id, &p.view))
+            .collect::<Vec<_>>()
     );
 }

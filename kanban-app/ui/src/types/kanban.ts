@@ -48,11 +48,28 @@ export interface PerspectiveSortEntry {
   readonly direction: "asc" | "desc";
 }
 
-/** A saved perspective defining view, filter, sort, group, and field layout. */
+/**
+ * A saved perspective defining view, filter, sort, group, and field layout.
+ *
+ * `view` (kind) vs `view_id` (instance) compatibility rule:
+ *
+ * When `view_id` is set, the perspective belongs to exactly that view
+ * instance. When `view_id` is absent (legacy-shared), the perspective
+ * appears in every view whose kind matches `view`. Newly created
+ * perspectives always set `view_id`; legacy `view_id`-less perspectives
+ * keep working unchanged until re-saved.
+ */
 export interface PerspectiveDef {
   readonly id: string;
   readonly name: string;
+  /** Legacy: view kind ("board", "grid"). Retained for backwards compat. */
   readonly view: string;
+  /**
+   * Id of the specific view instance this perspective is scoped to.
+   * Optional — when absent, the perspective is shared across all views
+   * whose kind matches `view`. See the type-level compatibility rule above.
+   */
+  readonly view_id?: string;
   readonly fields?: readonly PerspectiveFieldEntry[];
   /** Filter DSL expression (e.g. `#bug && @will`). Evaluated server-side. */
   readonly filter?: string;

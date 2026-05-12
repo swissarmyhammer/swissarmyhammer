@@ -641,6 +641,9 @@ async fn dispatch_add_perspective(
     op: &KanbanOperation,
 ) -> Result<Value, KanbanError> {
     let mut cmd = AddPerspective::new(req(op, "name")?, req(op, "view")?);
+    if let Some(v) = op.get_string("view_id") {
+        cmd = cmd.with_view_id(v);
+    }
     if let Some(f) = parse_json_array(op, "fields")? {
         cmd = cmd.with_fields(f);
     }
@@ -667,6 +670,9 @@ async fn dispatch_update_perspective(
     }
     if let Some(v) = op.get_string("view") {
         cmd = cmd.with_view(v);
+    }
+    if op.params.contains_key("view_id") {
+        cmd = cmd.with_view_id(op.get_string("view_id").map(|s| s.to_string()));
     }
     if let Some(f) = parse_json_array(op, "fields")? {
         cmd = cmd.with_fields(f);

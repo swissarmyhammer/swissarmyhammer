@@ -46,7 +46,24 @@ impl Execute<KanbanContext, KanbanError> for RenamePerspective {
             let pctx = ctx.perspective_context().await?;
             let mut pctx = pctx.write().await;
 
-            let updated = pctx.rename(&self.id, &self.new_name).await?;
+            // Read, mutate, and persist through `write` (instead of the
+            // bare `rename` helper) so the legacy-view-id migration helper
+            // gets a chance to pin `view_id` on the same save.
+            let mut updated = pctx
+                .get_by_id(&self.id)
+                .ok_or_else(|| KanbanError::NotFound {
+                    resource: "perspective".to_string(),
+                    id: self.id.clone(),
+                })?
+                .clone();
+            updated.name = self.new_name.clone();
+
+            if let Some(views_lock) = ctx.views() {
+                let views = views_lock.read().await;
+                crate::perspective::migrate::maybe_pin_view_id_on_save(&mut updated, &views);
+            }
+
+            pctx.write(&updated).await?;
             Ok(perspective_to_json(&updated))
         }
         .await;

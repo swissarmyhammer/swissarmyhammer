@@ -91,6 +91,7 @@ mod tests {
             id: id.to_string(),
             name: name.to_string(),
             view: "board".to_string(),
+            view_id: None,
             fields: vec![],
             filter: None,
             group: None,
@@ -128,6 +129,7 @@ mod tests {
             id: "01JPERSP000000000000000000".to_string(),
             name: "Active Sprint".to_string(),
             view: "board".to_string(),
+            view_id: None,
             fields: vec![PerspectiveFieldEntry {
                 field: "01JMTASK0000000000TITLE00".to_string(),
                 caption: Some("Title".to_string()),

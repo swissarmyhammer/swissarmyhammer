@@ -6,13 +6,41 @@
 use super::run_op;
 use crate::context::KanbanContext;
 use crate::perspective::{
-    AddPerspective, DeletePerspective, GetPerspective, ListPerspectives, RenamePerspective,
-    SortDirection, SortEntry, UpdatePerspective,
+    AddPerspective, DeletePerspective, GetPerspective, ListPerspectives, Perspective,
+    RenamePerspective, SortDirection, SortEntry, UpdatePerspective,
 };
 use async_trait::async_trait;
 use serde_json::Value;
 use swissarmyhammer_commands::{Command, CommandContext, CommandError};
 use swissarmyhammer_filter_expr;
+
+/// Decide whether a perspective belongs to the currently active view.
+///
+/// New, view-id-scoped perspectives match strictly by id; legacy perspectives
+/// (those without `view_id`) keep their pre-existing "shared-by-kind" behavior
+/// so existing YAML files do not lose visibility when this scoping rule lands.
+///
+/// The three cases:
+///
+/// 1. Perspective has `view_id: Some(pid)` and caller knows the active view id
+///    (`active_view_id: Some(active)`) — match strictly: `pid == active`.
+/// 2. Perspective has `view_id: None` — legacy shared-by-kind: match by
+///    `p.view == active_view_kind`. Holds regardless of whether the caller
+///    supplied `active_view_id`.
+/// 3. Perspective has `view_id: Some(_)` but the caller cannot resolve an
+///    active view id (`active_view_id: None`) — scoped perspectives must not
+///    leak out of their view, so this returns `false`.
+pub(crate) fn perspective_belongs_to_active_view(
+    p: &Perspective,
+    active_view_id: Option<&str>,
+    active_view_kind: &str,
+) -> bool {
+    match (&p.view_id, active_view_id) {
+        (Some(pid), Some(active)) => pid == active,
+        (None, _) => p.view == active_view_kind,
+        (Some(_), None) => false,
+    }
+}
 
 /// Validate a filter expression string, returning a `CommandError` if invalid.
 ///
@@ -112,7 +140,7 @@ async fn resolve_perspective_id_inner(
             return Ok((active, ResolvedFrom::UiState));
         }
     }
-    let view_kind = resolve_view_kind(ctx, kanban).await;
+    let (view_kind, view_id) = resolve_active_view(ctx, kanban).await;
     let pctx = kanban
         .perspective_context()
         .await
@@ -120,7 +148,7 @@ async fn resolve_perspective_id_inner(
     let pctx = pctx.read().await;
     pctx.all()
         .iter()
-        .find(|p| p.view == view_kind)
+        .find(|p| perspective_belongs_to_active_view(p, view_id.as_deref(), &view_kind))
         .map(|p| (p.id.clone(), ResolvedFrom::FirstForViewKind))
         .ok_or_else(|| CommandError::MissingArg("perspective_id".into()))
 }
@@ -214,6 +242,10 @@ impl Command for SavePerspectiveCmd {
             .ok_or_else(|| CommandError::MissingArg("name".into()))?;
 
         let view = ctx.arg("view").and_then(|v| v.as_str()).unwrap_or("board");
+        let view_id = ctx
+            .arg("view_id")
+            .and_then(|v| v.as_str())
+            .map(String::from);
 
         let filter = ctx.arg("filter").and_then(|v| v.as_str()).map(String::from);
         let group = ctx.arg("group").and_then(|v| v.as_str()).map(String::from);
@@ -223,6 +255,7 @@ impl Command for SavePerspectiveCmd {
         }
 
         let mut add_op = AddPerspective::new(name, view);
+        add_op.view_id = view_id;
         add_op.filter = filter;
         add_op.group = group;
 
@@ -594,24 +627,48 @@ impl Command for PrevPerspectiveCmd {
     }
 }
 
-/// Resolve the view kind for perspective cycling.
+/// Resolve the active view kind plus the active view id (when knowable).
 ///
-/// Resolution order: explicit `view_kind` arg > scope chain `view:{id}` moniker
-/// looked up against the views registry > `"board"` default. When invoked via
-/// keybinding or command palette no args are passed, so the scope chain fallback
-/// is the primary path.
-async fn resolve_view_kind(ctx: &CommandContext, kanban: &KanbanContext) -> String {
-    if let Some(explicit) = ctx.arg("view_kind").and_then(|v| v.as_str()) {
-        return explicit.to_string();
-    }
+/// Returns `(kind, view_id)`:
+///
+/// - `kind` is the active view kind as a lower-case string (e.g. `"board"`,
+///   `"grid"`). Resolution order matches the legacy `resolve_view_kind`:
+///   explicit `view_kind` arg > scope chain `view:{id}` looked up against the
+///   views registry > `"board"` default.
+/// - `view_id` is the active view *instance* id when one can be resolved.
+///   Resolution order: explicit `view_id` arg > scope chain `view:{id}`
+///   moniker. Returns `None` when neither source supplies one — callers
+///   should treat that as "no scoped perspective leaks" (see
+///   [`perspective_belongs_to_active_view`]).
+///
+/// Splitting kind and id is necessary because perspectives now scope by id
+/// when present, and by kind otherwise. See task 01KRC1DRWA3PFC7NFX4WVF3DD8.
+async fn resolve_active_view(
+    ctx: &CommandContext,
+    kanban: &KanbanContext,
+) -> (String, Option<String>) {
+    let explicit_kind = ctx.arg("view_kind").and_then(|v| v.as_str());
+    let explicit_id = ctx
+        .arg("view_id")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let scope_view_id = ctx
+        .scope_chain
+        .iter()
+        .find_map(|m| m.strip_prefix("view:"))
+        .map(str::to_string);
 
-    let view_id = ctx.scope_chain.iter().find_map(|m| m.strip_prefix("view:"));
+    let view_id = explicit_id.or(scope_view_id);
 
-    if let Some(kind) = resolve_kind_from_view_id(view_id, kanban).await {
-        return kind;
-    }
+    let kind = if let Some(explicit) = explicit_kind {
+        explicit.to_string()
+    } else if let Some(kind) = resolve_kind_from_view_id(view_id.as_deref(), kanban).await {
+        kind
+    } else {
+        "board".to_string()
+    };
 
-    "board".to_string()
+    (kind, view_id)
 }
 
 /// Look up a view ID in the views registry and return its kind as a string.
@@ -650,11 +707,11 @@ async fn cycle_perspective(
         .as_ref()
         .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
-    let view_kind = resolve_view_kind(ctx, &kanban).await;
+    let (view_kind, view_id) = resolve_active_view(ctx, &kanban).await;
     let window_label = ctx.window_label_from_scope().unwrap_or("main");
     let current_id = ui.active_perspective_id(window_label);
 
-    // Get perspectives matching the requested view kind
+    // Get perspectives matching the requested view (by id when set, else kind).
     let matching: Vec<String> = {
         let pctx = kanban
             .perspective_context()
@@ -663,7 +720,7 @@ async fn cycle_perspective(
         let pctx = pctx.read().await;
         pctx.all()
             .iter()
-            .filter(|p| p.view == view_kind)
+            .filter(|p| perspective_belongs_to_active_view(p, view_id.as_deref(), &view_kind))
             .map(|p| p.id.clone())
             .collect()
     };
@@ -711,6 +768,7 @@ impl Command for GotoPerspectiveCmd {
 
         let id = ctx.require_arg_str("id")?;
         let view_kind = ctx.arg("view_kind").and_then(|v| v.as_str());
+        let view_id = ctx.arg("view_id").and_then(|v| v.as_str());
         let window_label = ctx.window_label_from_scope().unwrap_or("main");
 
         // Validate the perspective exists.
@@ -724,12 +782,15 @@ impl Command for GotoPerspectiveCmd {
             .get_by_id(id)
             .ok_or_else(|| CommandError::ExecutionFailed(format!("perspective not found: {id}")))?;
 
-        // If view_kind is specified, validate it matches.
-        if let Some(expected) = view_kind {
-            if perspective.view != expected {
+        // If view_kind is specified, validate the perspective belongs to the
+        // active view — id-scoped perspectives match strictly by id, legacy
+        // ones fall back to kind. See `perspective_belongs_to_active_view`.
+        if let Some(expected_kind) = view_kind {
+            if !perspective_belongs_to_active_view(perspective, view_id, expected_kind) {
                 return Err(CommandError::ExecutionFailed(format!(
-                    "perspective '{}' has view '{}', expected '{expected}'",
-                    perspective.name, perspective.view
+                    "perspective '{}' (view='{}', view_id={:?}) does not belong to active view \
+                     (view_kind='{expected_kind}', view_id={view_id:?})",
+                    perspective.name, perspective.view, perspective.view_id
                 )));
             }
         }
@@ -811,6 +872,22 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("name".into(), Value::String(name.into()));
         args.insert("view".into(), Value::String(view.into()));
+        let cmd_ctx = make_ctx(Arc::clone(kanban), args);
+        let result = SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+        result["id"].as_str().unwrap().to_string()
+    }
+
+    /// Helper: create a perspective pinned to a specific view instance (`view_id`).
+    async fn create_perspective_scoped(
+        kanban: &Arc<KanbanContext>,
+        name: &str,
+        view: &str,
+        view_id: &str,
+    ) -> String {
+        let mut args = HashMap::new();
+        args.insert("name".into(), Value::String(name.into()));
+        args.insert("view".into(), Value::String(view.into()));
+        args.insert("view_id".into(), Value::String(view_id.into()));
         let cmd_ctx = make_ctx(Arc::clone(kanban), args);
         let result = SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
         result["id"].as_str().unwrap().to_string()
@@ -1841,5 +1918,226 @@ mod tests {
         assert_eq!(sort.len(), 1);
         assert_eq!(sort[0]["field"], "priority");
         assert_eq!(sort[0]["direction"], "asc");
+    }
+
+    // =========================================================================
+    // perspective_belongs_to_active_view — id-scoped vs legacy fallback
+    // =========================================================================
+
+    /// Build a [`Perspective`] in-memory for helper-rule unit tests. Bypasses
+    /// the dispatch/YAML round-trip so the test focuses purely on the
+    /// kind-vs-id matching rule.
+    fn make_perspective(id: &str, view: &str, view_id: Option<&str>) -> Perspective {
+        let mut p = Perspective::new(id.to_string(), id.to_string(), view.to_string());
+        p.view_id = view_id.map(str::to_string);
+        p
+    }
+
+    #[test]
+    fn helper_matches_strictly_by_view_id_when_set() {
+        let p = make_perspective("p", "grid", Some("view-a"));
+        assert!(
+            perspective_belongs_to_active_view(&p, Some("view-a"), "grid"),
+            "id-scoped perspective matches when active id == its view_id"
+        );
+        assert!(
+            !perspective_belongs_to_active_view(&p, Some("view-b"), "grid"),
+            "id-scoped perspective must NOT match sibling view of same kind"
+        );
+    }
+
+    #[test]
+    fn helper_falls_back_to_kind_when_view_id_is_none() {
+        let p = make_perspective("p", "grid", None);
+        assert!(
+            perspective_belongs_to_active_view(&p, Some("view-a"), "grid"),
+            "legacy perspective shares by kind — grid matches grid"
+        );
+        assert!(
+            perspective_belongs_to_active_view(&p, None, "grid"),
+            "legacy perspective shares by kind even when active view id is unknown"
+        );
+        assert!(
+            !perspective_belongs_to_active_view(&p, Some("view-a"), "board"),
+            "legacy perspective with view=grid must NOT match a board-kind active view"
+        );
+    }
+
+    #[test]
+    fn helper_blocks_scoped_perspective_when_active_view_id_is_unknown() {
+        // The headless dynamic-sources path may have a kind but no resolved
+        // active view id (splash / pre-focus). Scoped perspectives must not
+        // leak into that path.
+        let p = make_perspective("p", "grid", Some("view-a"));
+        assert!(
+            !perspective_belongs_to_active_view(&p, None, "grid"),
+            "scoped perspective must NOT leak when active view id is None"
+        );
+    }
+
+    // =========================================================================
+    // next_perspective / resolve_perspective_id — view_id scoping
+    // =========================================================================
+
+    /// View ids used by the per-id resolver tests. Both are grid-kind so the
+    /// test can prove the resolver differentiates by id alone — kind is
+    /// identical between them.
+    const GRID_VIEW_A_ID: &str = "01JMVIEW0000000000TGRID0";
+    const GRID_VIEW_B_ID: &str = "01JMVIEW0000000000PGRID0";
+
+    #[tokio::test]
+    async fn next_perspective_filters_by_view_id_when_arg_provided() {
+        // Two grid-kind perspectives, each pinned to a different view_id.
+        // With `view_id` arg pointing at GRID_VIEW_A_ID, only the matching
+        // perspective should be selectable by the resolver — proving the
+        // fallback walks the view_id-aware filter rather than kind-only.
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+
+        let pid_a = create_perspective_scoped(&kanban, "GridA", "grid", GRID_VIEW_A_ID).await;
+        let pid_b = create_perspective_scoped(&kanban, "GridB", "grid", GRID_VIEW_B_ID).await;
+
+        // Resolver fallback path: no arg, no scope, empty UIState; `view_kind`
+        // + `view_id` args steer the first-for-view-kind branch. The matching
+        // perspective MUST be the one pinned to GRID_VIEW_A_ID.
+        let mut args = HashMap::new();
+        args.insert("view_kind".into(), Value::String("grid".into()));
+        args.insert("view_id".into(), Value::String(GRID_VIEW_A_ID.into()));
+        let cmd_ctx = make_full_ctx(
+            Arc::clone(&kanban),
+            args,
+            vec!["window:main".into()],
+            Arc::clone(&ui),
+        );
+
+        let (id, source) = resolve_perspective_id(&cmd_ctx, &kanban).await.unwrap();
+        assert_eq!(
+            source,
+            ResolvedFrom::FirstForViewKind,
+            "expected fallback to first-for-view-kind branch"
+        );
+        assert_eq!(id, pid_a, "resolver must pick the view_id-A perspective");
+        assert_ne!(
+            id, pid_b,
+            "resolver must NOT pick the sibling view_id-B perspective"
+        );
+    }
+
+    #[tokio::test]
+    async fn next_perspective_falls_back_to_legacy_perspectives_when_view_id_absent() {
+        // Mixed roster: one legacy (view_id=None) grid perspective + one
+        // id-scoped grid perspective. Caller provides only `view_kind` —
+        // no `view_id` — so the resolver must NOT pick the scoped one,
+        // it must fall back to the legacy perspective.
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+
+        let pid_legacy = create_perspective_with_view(&kanban, "Legacy", "grid").await;
+        let pid_scoped = create_perspective_scoped(&kanban, "Scoped", "grid", GRID_VIEW_A_ID).await;
+
+        let mut args = HashMap::new();
+        args.insert("view_kind".into(), Value::String("grid".into()));
+        // Intentionally NO view_id arg.
+        let cmd_ctx = make_full_ctx(
+            Arc::clone(&kanban),
+            args,
+            vec!["window:main".into()],
+            Arc::clone(&ui),
+        );
+
+        let (id, source) = resolve_perspective_id(&cmd_ctx, &kanban).await.unwrap();
+        assert_eq!(source, ResolvedFrom::FirstForViewKind);
+        assert_eq!(
+            id, pid_legacy,
+            "resolver must pick the legacy view_id=None perspective when view_id arg is absent"
+        );
+        assert_ne!(
+            id, pid_scoped,
+            "scoped perspective must NOT be picked when active view_id is unknown"
+        );
+    }
+
+    #[tokio::test]
+    async fn cycle_perspective_filters_by_view_id_when_arg_provided() {
+        // End-to-end cycle test: two scoped grid perspectives on view A, one on
+        // view B. With `view_id=A`, NextPerspective must cycle within A only.
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+
+        let pid_a1 = create_perspective_scoped(&kanban, "A1", "grid", GRID_VIEW_A_ID).await;
+        let pid_a2 = create_perspective_scoped(&kanban, "A2", "grid", GRID_VIEW_A_ID).await;
+        let _pid_b = create_perspective_scoped(&kanban, "B1", "grid", GRID_VIEW_B_ID).await;
+
+        ui.set_active_perspective("main", &pid_a1);
+
+        let mut args = HashMap::new();
+        args.insert("view_kind".into(), Value::String("grid".into()));
+        args.insert("view_id".into(), Value::String(GRID_VIEW_A_ID.into()));
+        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        NextPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(
+            ui.active_perspective_id("main"),
+            pid_a2,
+            "cycle within view A must land on the sibling pinned to view A"
+        );
+
+        // Wrap: A2 -> A1, not into view B's perspective.
+        let mut args = HashMap::new();
+        args.insert("view_kind".into(), Value::String("grid".into()));
+        args.insert("view_id".into(), Value::String(GRID_VIEW_A_ID.into()));
+        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        NextPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(
+            ui.active_perspective_id("main"),
+            pid_a1,
+            "cycle must wrap within view A and NOT cross into view B"
+        );
+    }
+
+    #[tokio::test]
+    async fn goto_perspective_view_id_match_succeeds() {
+        // Validation path: goto with view_kind + view_id where the
+        // perspective is scoped to that view must succeed.
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+
+        let pid = create_perspective_scoped(&kanban, "Pinned", "grid", GRID_VIEW_A_ID).await;
+
+        let mut args = HashMap::new();
+        args.insert("id".into(), Value::String(pid.clone()));
+        args.insert("view_kind".into(), Value::String("grid".into()));
+        args.insert("view_id".into(), Value::String(GRID_VIEW_A_ID.into()));
+        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let result = GotoPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+        assert!(result != Value::Null);
+        assert_eq!(ui.active_perspective_id("main"), pid);
+    }
+
+    #[tokio::test]
+    async fn goto_perspective_view_id_mismatch_returns_error() {
+        // Validation path: goto with view_kind + view_id where the
+        // perspective is pinned to a DIFFERENT view_id (same kind!) must
+        // return an error — this is the regression guard for the bug
+        // where two grid views shared every scoped perspective.
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+
+        let pid = create_perspective_scoped(&kanban, "Pinned to A", "grid", GRID_VIEW_A_ID).await;
+
+        let mut args = HashMap::new();
+        args.insert("id".into(), Value::String(pid));
+        args.insert("view_kind".into(), Value::String("grid".into()));
+        args.insert("view_id".into(), Value::String(GRID_VIEW_B_ID.into()));
+        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let result = GotoPerspectiveCmd.execute(&cmd_ctx).await;
+        assert!(
+            result.is_err(),
+            "goto with mismatched view_id must error even when kinds match"
+        );
     }
 }

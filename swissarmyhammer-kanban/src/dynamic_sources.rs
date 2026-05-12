@@ -32,6 +32,7 @@ use std::sync::Arc;
 
 use swissarmyhammer_commands::UIState;
 
+use crate::commands::perspective_commands::perspective_belongs_to_active_view;
 use crate::context::KanbanContext;
 use crate::scope_commands::{BoardInfo, DynamicSources, PerspectiveInfo, ViewInfo, WindowInfo};
 
@@ -60,9 +61,10 @@ pub struct DynamicSourcesInputs<'a> {
     pub open_board_ctxs: &'a HashMap<PathBuf, Arc<KanbanContext>>,
     /// Window label to query `ui_state.active_view_id` against (e.g.
     /// `Some("main")` in the kanban-app). `None` means "no window is
-    /// focused" — [`resolve_active_view_kind`] short-circuits to `None`,
-    /// which matches the splash/welcome path. Different consumers
-    /// (multi-window CLIs, tests) can address a different active window.
+    /// focused" — [`resolve_active_view`] short-circuits to
+    /// `(None, None)`, which matches the splash/welcome path. Different
+    /// consumers (multi-window CLIs, tests) can address a different
+    /// active window.
     pub active_window_label: Option<&'a str>,
     /// Pre-gathered live windows — caller-supplied because live window
     /// state only exists in the GUI runtime (see module docs).
@@ -97,7 +99,9 @@ impl fmt::Debug for DynamicSourcesInputs<'_> {
 ///    parent directory basename on miss).
 /// 3. **Windows** pass through from the caller.
 /// 4. **Perspectives** come from `active_ctx.perspective_context()`,
-///    filtered to the active view kind when one can be resolved.
+///    filtered to the active view when one can be resolved. Id-scoped
+///    perspectives match strictly by id; legacy `view_id`-less
+///    perspectives fall back to kind-equality.
 ///
 /// Every "cannot lock / read" branch in the old helper is preserved so
 /// any downstream test comparing the live path to the headless path
@@ -105,12 +109,13 @@ impl fmt::Debug for DynamicSourcesInputs<'_> {
 pub async fn build_dynamic_sources(inputs: DynamicSourcesInputs<'_>) -> DynamicSources {
     let views = gather_views(inputs.active_ctx);
     let boards = gather_boards(inputs.ui_state, inputs.open_board_ctxs).await;
-    let view_kind = resolve_active_view_kind(
+    let (view_kind, view_id) = resolve_active_view(
         inputs.active_ctx,
         inputs.ui_state,
         inputs.active_window_label,
     );
-    let perspectives = gather_perspectives(inputs.active_ctx, view_kind.as_deref()).await;
+    let perspectives =
+        gather_perspectives(inputs.active_ctx, view_id.as_deref(), view_kind.as_deref()).await;
     DynamicSources {
         views,
         boards,
@@ -186,38 +191,67 @@ async fn gather_boards(
     result
 }
 
-/// Resolve the active view kind (e.g. `"board"`, `"grid"`) from UIState
-/// + the active board's views registry.
+/// Resolve the active view id + kind from UIState + the active board's
+/// views registry.
 ///
-/// Returns `None` when there is no active context, no active window
-/// focused, no active view id for that window, or the views lock is
-/// contended. This is consumed by [`gather_perspectives`] to filter
-/// perspectives down to the kind currently rendered.
-fn resolve_active_view_kind(
+/// Returns `(None, None)` when there is no active context, no active window
+/// focused, no active view id for that window, the active view id does not
+/// match any registered view, or the views lock is contended.
+///
+/// Both fields come from the same lookup pass: the id is read straight from
+/// `ui_state.active_view_id(label)`, and the kind is the matching
+/// `ViewDef.kind` serialized as a lower-case string. The pair drives
+/// per-perspective scoping in [`gather_perspectives`] — perspectives with
+/// `view_id == Some(active_id)` match strictly; legacy perspectives with
+/// `view_id == None` fall back to kind-equality.
+fn resolve_active_view(
     ctx: Option<&KanbanContext>,
     ui_state: &UIState,
     active_window_label: Option<&str>,
-) -> Option<String> {
-    let ctx = ctx?;
-    let label = active_window_label?;
+) -> (Option<String>, Option<String>) {
+    let Some(ctx) = ctx else {
+        return (None, None);
+    };
+    let Some(label) = active_window_label else {
+        return (None, None);
+    };
     let active_id = ui_state.active_view_id(label);
     if active_id.is_empty() {
-        return None;
+        return (None, None);
     }
-    let views_lock = ctx.views()?;
-    let vc = views_lock.try_read().ok()?;
-    let view = vc.all_views().iter().find(|v| v.id == active_id)?;
-    Some(serde_json::to_value(&view.kind).ok()?.as_str()?.to_string())
+    let Some(views_lock) = ctx.views() else {
+        return (None, None);
+    };
+    let Ok(vc) = views_lock.try_read() else {
+        return (None, None);
+    };
+    let Some(view) = vc.all_views().iter().find(|v| v.id == active_id) else {
+        return (None, None);
+    };
+    let kind = serde_json::to_value(&view.kind)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string));
+    (kind, Some(active_id))
 }
 
 /// Gather perspective info from the active board's perspective registry.
 ///
-/// When `view_kind` is `Some`, only perspectives whose `view` field
-/// matches are returned. This prevents the same "Default" perspective
-/// from emitting once per view kind.
+/// Filtering rules (delegated to [`perspective_belongs_to_active_view`]):
+///
+/// - When `active_view_kind` is `None` the active view could not be
+///   resolved at all — return every perspective (the splash/welcome path).
+/// - When `active_view_kind` is `Some`, each perspective is kept only if it
+///   "belongs" to the active view: id-scoped perspectives match strictly
+///   against `active_view_id`; legacy `view_id == None` perspectives fall
+///   back to kind-equality.
+///
+/// This prevents the same "Default" perspective from emitting once per
+/// view kind, and prevents id-scoped perspectives from leaking across
+/// sibling views that share a kind.
 async fn gather_perspectives(
     ctx: Option<&KanbanContext>,
-    view_kind: Option<&str>,
+    active_view_id: Option<&str>,
+    active_view_kind: Option<&str>,
 ) -> Vec<PerspectiveInfo> {
     let Some(ctx) = ctx else { return Vec::new() };
     let Ok(pctx) = ctx.perspective_context().await else {
@@ -226,9 +260,23 @@ async fn gather_perspectives(
     let Ok(pc) = pctx.try_read() else {
         return Vec::new();
     };
+
+    // One-time discovery log for legacy view-id-less perspectives. The
+    // helper guards against repeated emissions, so calling it on every
+    // `list_commands_for_scope` invocation is cheap. See
+    // `perspective::migrate` for the placement rationale.
+    if let Some(views_lock) = ctx.views() {
+        if let Ok(views) = views_lock.try_read() {
+            crate::perspective::migrate::log_legacy_perspectives_once(pc.all(), &views);
+        }
+    }
+
     pc.all()
         .iter()
-        .filter(|p| view_kind.is_none_or(|vk| p.view == vk))
+        .filter(|p| match active_view_kind {
+            None => true,
+            Some(kind) => perspective_belongs_to_active_view(p, active_view_id, kind),
+        })
         .map(|p| PerspectiveInfo {
             id: p.id.clone(),
             name: p.name.clone(),

@@ -59,6 +59,21 @@ pub struct PerspectiveFieldEntry {
 /// Stores an ordered list of fields (column order), optional filter/group
 /// functions as opaque JS strings, and sort entries. The backend stores
 /// filter/group strings verbatim; it never evaluates them.
+///
+/// # `view` (kind) vs `view_id` (instance) compatibility
+///
+/// `view` is the view *kind* (e.g. `"board"`, `"grid"`). It is retained for
+/// backwards compatibility with perspectives written before per-view-id
+/// scoping was introduced.
+///
+/// `view_id` is the new, optional id of the specific view instance the
+/// perspective is scoped to. The compatibility rule is:
+///
+/// > When `view_id` is `Some(id)`, the perspective belongs to exactly that
+/// > view instance. When `view_id` is `None`, the perspective is
+/// > **legacy-shared**: it appears in every view whose kind matches `view`.
+/// > Newly created perspectives always set `view_id`; legacy `view_id`-less
+/// > perspectives keep working unchanged until re-saved.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Perspective {
@@ -66,8 +81,17 @@ pub struct Perspective {
     pub id: String,
     /// Human-readable name (e.g. "Active Sprint").
     pub name: String,
-    /// View type (e.g. "board", "grid").
+    /// View kind (e.g. "board", "grid"). Retained for backwards compat with
+    /// perspectives saved before `view_id` existed. See struct docs for the
+    /// kind/instance compatibility rule.
     pub view: String,
+    /// Id of the view instance this perspective is scoped to.
+    ///
+    /// `None` means legacy shared-by-kind: the perspective applies to every
+    /// view whose kind matches `view`. `Some(id)` pins the perspective to
+    /// exactly that view instance. See struct docs for the full rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_id: Option<String>,
     /// Ordered list of field entries (defines column order).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<PerspectiveFieldEntry>,
@@ -141,17 +165,30 @@ impl PerspectiveFieldEntry {
 impl Perspective {
     /// Create a new perspective with the required fields.
     ///
-    /// Optional fields (fields list, filter, group, sort) default to empty/None.
+    /// Optional fields (`view_id`, fields list, filter, group, sort) default
+    /// to empty/`None`. The resulting perspective is therefore *legacy-shared*
+    /// by kind -- use [`with_view_id`](Self::with_view_id) to pin it to a
+    /// specific view instance.
     pub fn new(id: impl Into<String>, name: impl Into<String>, view: impl Into<String>) -> Self {
         Self {
             id: id.into(),
             name: name.into(),
             view: view.into(),
+            view_id: None,
             fields: Vec::new(),
             filter: None,
             group: None,
             sort: Vec::new(),
         }
+    }
+
+    /// Pin this perspective to a specific view instance.
+    ///
+    /// Sets `view_id` to `Some(id)`. Once set, the perspective is no longer
+    /// shared by kind; it belongs to exactly that view instance.
+    pub fn with_view_id(mut self, view_id: impl Into<String>) -> Self {
+        self.view_id = Some(view_id.into());
+        self
     }
 
     /// Set the fields list.
@@ -189,6 +226,7 @@ mod tests {
             id: "01JPERSP000000000000000000".to_string(),
             name: "Active Sprint".to_string(),
             view: "board".to_string(),
+            view_id: None,
             fields: vec![
                 PerspectiveFieldEntry {
                     field: "01JMTASK0000000000TITLE00".to_string(),
@@ -256,6 +294,7 @@ mod tests {
             id: "01JPERSP000000000000000001".to_string(),
             name: "Default".to_string(),
             view: "grid".to_string(),
+            view_id: None,
             fields: vec![],
             filter: None,
             group: None,
@@ -338,11 +377,78 @@ mod tests {
     }
 
     #[test]
+    fn legacy_perspective_yaml_without_view_id_loads_with_view_id_none() {
+        // An existing perspective YAML predates the `view_id` field --
+        // shape: `id`, `name`, `view`. Loading it must succeed and the
+        // resulting struct's `view_id` must be `None` (legacy shared-by-kind).
+        let yaml = "id: 01JPERSP000000000000LEGACY\n\
+                    name: Legacy\n\
+                    view: board\n";
+
+        let parsed: Perspective = serde_yaml_ng::from_str(yaml).unwrap();
+
+        assert_eq!(parsed.id, "01JPERSP000000000000LEGACY");
+        assert_eq!(parsed.name, "Legacy");
+        assert_eq!(parsed.view, "board");
+        assert_eq!(
+            parsed.view_id, None,
+            "legacy perspectives without view_id must load with view_id: None"
+        );
+    }
+
+    #[test]
+    fn perspective_with_view_id_round_trips() {
+        let perspective = Perspective {
+            id: "01JPERSP00000000000WITHVID".to_string(),
+            name: "Scoped".to_string(),
+            view: "grid".to_string(),
+            view_id: Some("01JMVIEW0000000000TGRID0".to_string()),
+            fields: vec![],
+            filter: None,
+            group: None,
+            sort: vec![],
+        };
+
+        let yaml = serde_yaml_ng::to_string(&perspective).unwrap();
+        let parsed: Perspective = serde_yaml_ng::from_str(&yaml).unwrap();
+
+        assert_eq!(perspective, parsed);
+        assert!(
+            yaml.contains("view_id: 01JMVIEW0000000000TGRID0"),
+            "YAML must include the view_id field when set; got:\n{}",
+            yaml
+        );
+    }
+
+    #[test]
+    fn perspective_without_view_id_serializes_without_field() {
+        let perspective = Perspective {
+            id: "01JPERSP00000000000NOVIEW0".to_string(),
+            name: "Legacy".to_string(),
+            view: "board".to_string(),
+            view_id: None,
+            fields: vec![],
+            filter: None,
+            group: None,
+            sort: vec![],
+        };
+
+        let yaml = serde_yaml_ng::to_string(&perspective).unwrap();
+
+        assert!(
+            !yaml.contains("view_id"),
+            "YAML must omit view_id entirely when None (skip_serializing_if); got:\n{}",
+            yaml
+        );
+    }
+
+    #[test]
     fn filter_group_as_strings() {
         let perspective = Perspective {
             id: "01JPERSP000000000000000002".to_string(),
             name: "Filtered".to_string(),
             view: "list".to_string(),
+            view_id: None,
             fields: vec![],
             filter: Some("(entity) => entity.Status !== \"Done\"".to_string()),
             group: Some("(entity) => entity.Assignee".to_string()),

@@ -24,8 +24,16 @@ use swissarmyhammer_operations::{
 pub struct AddPerspective {
     /// Human-readable name (e.g. "Active Sprint")
     pub name: String,
-    /// View type (e.g. "board", "grid")
+    /// View kind (e.g. "board", "grid"). Retained alongside `view_id` for
+    /// backwards compat with legacy shared-by-kind perspectives.
     pub view: String,
+    /// Id of the view instance this perspective is scoped to.
+    ///
+    /// `None` means legacy shared-by-kind: the perspective applies to every
+    /// view whose kind matches `view`. `Some(id)` pins the perspective to
+    /// exactly that view instance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_id: Option<String>,
     /// Ordered list of field entries (defines column order)
     #[serde(default)]
     pub fields: Vec<PerspectiveFieldEntry>,
@@ -44,11 +52,18 @@ impl AddPerspective {
         Self {
             name: name.into(),
             view: view.into(),
+            view_id: None,
             fields: Vec::new(),
             filter: None,
             group: None,
             sort: Vec::new(),
         }
+    }
+
+    /// Pin the new perspective to a specific view instance.
+    pub fn with_view_id(mut self, view_id: impl Into<String>) -> Self {
+        self.view_id = Some(view_id.into());
+        self
     }
 
     /// Set the fields list.
@@ -90,8 +105,18 @@ impl Execute<KanbanContext, KanbanError> for AddPerspective {
             let mut perspective = Perspective::new(id, self.name.clone(), self.view.clone())
                 .with_fields(self.fields.clone())
                 .with_sort(self.sort.clone());
+            perspective.view_id = self.view_id.clone();
             perspective.filter = self.filter.clone();
             perspective.group = self.group.clone();
+
+            // Opt-in legacy migration: when the perspective lands without a
+            // `view_id` and the workspace has exactly one matching view, pin
+            // it before persisting. See `perspective::migrate` for the
+            // save-vs-load placement rationale.
+            if let Some(views_lock) = ctx.views() {
+                let views = views_lock.read().await;
+                crate::perspective::migrate::maybe_pin_view_id_on_save(&mut perspective, &views);
+            }
 
             pctx.write(&perspective).await?;
 
