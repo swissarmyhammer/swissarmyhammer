@@ -4,6 +4,7 @@ assignees:
 depends_on:
 - 01KRE1WT72MJWNGQBVAD4V5VKM
 - 01KRE1SSN9AX8R67XC58HHQKKB
+- 01KRE7VDF7RXHV39VPEVH23NN4
 position_column: todo
 position_ordinal: a880
 title: Migrate Add Perspective and Sort tab buttons to command-driven rendering
@@ -16,6 +17,15 @@ Final migration in the epic. Two affordances move from hardcoded UI to registry-
 2. **Sort** (tab affordance on grid views): annotates `perspective.sort.set` with `tab_button: { icon: "arrow-up-down" }`. The picker has two enum params (`field` from `perspective.fields`, `direction` from `sort.directions`). Because `perspective.sort.set` already carries `view_kinds: [grid]`, the button is automatically hidden on board views — the original bug, finally fixed by the same mechanism that handles every other view-restricted button.
 
 This task closes out the epic: the tab bar has zero hardcoded button JSX after it lands.
+
+### Post-refactor crate homes
+
+This task depends on `01KRE7VDF7RXHV39VPEVH23NN4` (relocate DynamicSources and friends). After that refactor, file paths in this task that reference `swissarmyhammer-kanban/...` refer to the post-refactor homes:
+
+- `perspective.save` and `perspective.sort.set` `execute` impls live in `swissarmyhammer-perspectives`.
+- `commands_for_scope` and the emission infrastructure live in `swissarmyhammer-commands`.
+- `PerspectiveFieldsResolver` and `SortDirectionsResolver` are registered from `swissarmyhammer-perspectives` and `swissarmyhammer-commands` respectively.
+- The YAML stays in `swissarmyhammer-kanban/builtin/commands/perspective.yaml`.
 
 ### Files to modify
 
@@ -80,7 +90,7 @@ This task closes out the epic: the tab bar has zero hardcoded button JSX after i
 - [ ] On a grid view, a Sort `<CommandButton>` appears in the tab bar. On a board view, it does NOT appear — verified by a regression test.
 - [ ] Submitting the Sort popover dispatches `perspective.sort.set` with the picked `field` + `direction` + scope-resolved `perspective_id`.
 - [ ] `perspective-tab-bar.tsx` no longer contains any hardcoded affordance JSX (`<FilterFocusButton>`, `<GroupPopoverButton>`, `<AddPerspectiveButton>` are all deleted; the tab bar's button surface is 100% registry-rendered).
-- [ ] `cargo test -p swissarmyhammer-kanban` and `pnpm -C kanban-app/ui test perspective-tab-bar` both pass.
+- [ ] `cargo test --workspace` and `pnpm -C kanban-app/ui test perspective-tab-bar` both pass.
 
 ## Tests
 
@@ -90,9 +100,9 @@ This task closes out the epic: the tab bar has zero hardcoded button JSX after i
   - `sort_button_appears_on_grid_view_and_disappears_on_board_view` — fixture with active view kind toggled grid/board; assert the Sort `<CommandButton>` mounts/unmounts. This is the regression test the user's original bug report needed and didn't get.
   - `submitting_sort_popover_dispatches_perspective_sort_set_with_field_and_direction`.
   - `tab_bar_has_no_hardcoded_button_jsx` — search the rendered DOM for any of `<FilterFocusButton>`, `<GroupPopoverButton>`, `<AddPerspectiveButton>` (by data-test attribute or by their unique classnames) — assert absent.
-- [ ] Backend integration test in `swissarmyhammer-kanban/tests/options_enrichment.rs` (extending the one added in the resolver task): `perspective_sort_set_command_carries_field_and_direction_options` — emit through `commands_for_scope` with a perspective + a grid view in scope, assert `field.options.len() > 0` (matches perspective fields) AND `direction.options == [{asc, Ascending}, {desc, Descending}]`.
+- [ ] Backend integration test (in whichever crate owns `commands_for_scope` post-refactor): `perspective_sort_set_command_carries_field_and_direction_options` — emit through `commands_for_scope` with a perspective + a grid view in scope, assert `field.options.len() > 0` (matches perspective fields) AND `direction.options == [{asc, Ascending}, {desc, Descending}]`.
 - [ ] Update / delete `add-perspective-button.test.tsx` and any `perspective-tab-bar.test.tsx` cases that asserted on the deleted hardcoded components — they're replaced by the new test file.
-- [ ] Run: `cargo test -p swissarmyhammer-kanban` and `pnpm -C kanban-app/ui test perspective-tab-bar` — both green.
+- [ ] Run: `cargo test --workspace` and `pnpm -C kanban-app/ui test perspective-tab-bar` — both green.
 
 ## Workflow
 

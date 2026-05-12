@@ -3,15 +3,25 @@ assignees:
 - claude-code
 depends_on:
 - 01KRE1WT72MJWNGQBVAD4V5VKM
+- 01KRE7VDF7RXHV39VPEVH23NN4
 position_column: todo
 position_ordinal: a780
 title: Migrate Group tab button to command-driven rendering with field picker
 ---
 ## What
 
-Replace the hardcoded `<GroupPopoverButton>` + `<GroupSelector>` with a registry-rendered `<CommandButton>` that opens a `<CommandPopover>` containing a single enum-shaped field picker. The picker options come from the backend `PerspectiveFieldsResolver` (registered in the resolver task).
+Replace the hardcoded `<GroupPopoverButton>` + `<GroupSelector>` with a registry-rendered `<CommandButton>` that opens a `<CommandPopover>` containing a single enum-shaped field picker. The picker options come from the `PerspectiveFieldsResolver` (registered post-refactor in `swissarmyhammer-perspectives`).
 
 This is the first migration that exercises the picker pipeline end-to-end: enum param → backend-supplied options → frontend dropdown → dispatch with picked value.
+
+### Post-refactor crate homes
+
+This task depends on `01KRE7VDF7RXHV39VPEVH23NN4` (relocate DynamicSources and friends). After that refactor, file paths in this task that reference `swissarmyhammer-kanban/src/commands/perspective_commands.rs` etc. refer to the post-refactor homes:
+
+- `perspective.group`'s `execute` impl lives in `swissarmyhammer-perspectives`.
+- `commands_for_scope` and the emission infrastructure live in `swissarmyhammer-commands`.
+- `PerspectiveFieldsResolver` is registered from `swissarmyhammer-perspectives`.
+- The YAML stays in `swissarmyhammer-kanban/builtin/commands/perspective.yaml`.
 
 ### Files to modify
 
@@ -64,7 +74,7 @@ This is the first migration that exercises the picker pipeline end-to-end: enum 
 - [ ] Clicking the button → popover → picking a field dispatches `perspective.group` with the picked field and the scope-resolved perspective id.
 - [ ] `isActive` highlight matches today's behavior (`Boolean(perspective.group)`).
 - [ ] Existing palette/right-click tests for `perspective.group` and `perspective.clearGroup` continue to pass — this task changes the rendering, not the dispatch contract.
-- [ ] `cargo test -p swissarmyhammer-kanban` and `pnpm -C kanban-app/ui test perspective-tab-bar group` both pass.
+- [ ] `cargo test --workspace` and `pnpm -C kanban-app/ui test perspective-tab-bar group` both pass.
 
 ## Tests
 
@@ -73,9 +83,9 @@ This is the first migration that exercises the picker pipeline end-to-end: enum 
   - `group_popover_renders_field_options_from_command_emission` — fixture `commands_for_scope` returns `perspective.group` with `params[0].options = [{value:"status",label:"Status"},{value:"assignee",label:"Assignee"}]`; click the button, assert the popover has both options as `<select>` entries.
   - `picking_a_group_field_dispatches_perspective_group_with_field_arg` — click button, pick "status", assert dispatcher receives `perspective.group` with `{ group: "status", perspective_id: ... }`.
   - `group_button_is_active_when_perspective_has_a_group_set` — fixture perspective with `group: "status"`, assert the rendered `<CommandButton>` has the highlighted state.
-- [ ] Backend integration test in `swissarmyhammer-kanban/tests/options_enrichment.rs`: `perspective_group_command_carries_field_options_when_perspective_in_scope` — emit through `commands_for_scope` with a perspective that has 3 fields, assert the emitted `perspective.group` command's `params[0].options.len() == 3`.
+- [ ] Backend integration test (in whichever crate owns `commands_for_scope` post-refactor): `perspective_group_command_carries_field_options_when_perspective_in_scope` — emit through `commands_for_scope` with a perspective that has 3 fields, assert the emitted `perspective.group` command's `params[0].options.len() == 3`.
 - [ ] Update / remove the existing `group-popover-button.test.tsx` and `perspective-tab-bar.group-enter.spatial.test.tsx` to either reflect the new moniker / component shape OR be replaced by the new test file.
-- [ ] Run: `cargo test -p swissarmyhammer-kanban` and `pnpm -C kanban-app/ui test perspective-tab-bar` — both green.
+- [ ] Run: `cargo test --workspace` and `pnpm -C kanban-app/ui test perspective-tab-bar` — both green.
 
 ## Workflow
 
