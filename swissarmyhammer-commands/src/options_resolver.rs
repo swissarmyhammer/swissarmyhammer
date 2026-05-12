@@ -177,6 +177,46 @@ impl OptionsRegistry {
     }
 }
 
+/// Resolve `"sort.directions"` to the canonical `[asc, desc]` pair.
+///
+/// Static — does not consult the context. Mirrors the
+/// `swissarmyhammer-perspectives` `SortDirection`'s lowercase serde
+/// representation so the picker `value` is what the perspective
+/// loader expects to deserialize.
+///
+/// Lives in the consumer-agnostic commands crate (rather than in
+/// any domain crate) because the value list is a wire-format
+/// constant — no domain-specific logic involved.
+pub struct SortDirectionsResolver;
+
+impl OptionsResolver for SortDirectionsResolver {
+    fn key(&self) -> &'static str {
+        "sort.directions"
+    }
+
+    fn resolve(&self, _ctx: &OptionsContext<'_>) -> Vec<ParamOption> {
+        vec![
+            ParamOption {
+                value: "asc".into(),
+                label: "Ascending".into(),
+            },
+            ParamOption {
+                value: "desc".into(),
+                label: "Descending".into(),
+            },
+        ]
+    }
+}
+
+/// Register every commands-defined resolver onto the given registry.
+///
+/// Mirror this from the consumer that builds the registry; the
+/// kanban-app's `default_options_registry()` calls it alongside the
+/// perspective and view registrations.
+pub fn register_command_resolvers(registry: &mut OptionsRegistry) {
+    registry.register(Box::new(SortDirectionsResolver));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,5 +310,71 @@ mod tests {
         };
         let opts = registry.resolve("shared", &ctx).unwrap();
         assert_eq!(opts[0].value, "b");
+    }
+
+    /// The static `sort.directions` resolver returns exactly the
+    /// `asc` and `desc` rows, in that order. Exact-match test —
+    /// the perspective loader expects these specific lowercase
+    /// values via `swissarmyhammer-perspectives`'s `SortDirection`
+    /// `#[serde(rename_all = "lowercase")]`, so drift here would
+    /// break round-trip.
+    #[test]
+    fn sort_directions_resolver_returns_asc_and_desc_only() {
+        let scope: Vec<String> = Vec::new();
+        let data: () = ();
+        let ctx = OptionsContext {
+            scope_chain: &scope,
+            data: &data,
+        };
+        let opts = SortDirectionsResolver.resolve(&ctx);
+        assert_eq!(opts.len(), 2);
+        assert_eq!(opts[0].value, "asc");
+        assert_eq!(opts[0].label, "Ascending");
+        assert_eq!(opts[1].value, "desc");
+        assert_eq!(opts[1].label, "Descending");
+    }
+
+    /// `register_command_resolvers` adds [`SortDirectionsResolver`]
+    /// under the canonical key.
+    #[test]
+    fn register_command_resolvers_adds_sort_directions_resolver() {
+        let mut registry = OptionsRegistry::new();
+        register_command_resolvers(&mut registry);
+        assert!(registry.has("sort.directions"));
+    }
+
+    /// `OptionsSources::insert` stores by concrete TypeId and
+    /// `OptionsSources::get` retrieves the same instance back. Pins
+    /// the typed-multimap contract every per-domain resolver relies
+    /// on.
+    #[test]
+    fn options_sources_round_trip_by_type() {
+        #[derive(Debug, PartialEq)]
+        struct Marker(u32);
+        let mut sources = OptionsSources::new();
+        sources.insert(Marker(42));
+        let got = sources.get::<Marker>().unwrap();
+        assert_eq!(got.0, 42);
+    }
+
+    /// Inserting two values of the same type replaces the earlier
+    /// one (last-write-wins per type).
+    #[test]
+    fn options_sources_insert_replaces_same_type() {
+        #[derive(Debug, PartialEq)]
+        struct Marker(u32);
+        let mut sources = OptionsSources::new();
+        sources.insert(Marker(1));
+        sources.insert(Marker(2));
+        assert_eq!(sources.get::<Marker>().unwrap().0, 2);
+    }
+
+    /// `OptionsSources::get` returns `None` for a type that was
+    /// never inserted.
+    #[test]
+    fn options_sources_get_missing_returns_none() {
+        struct Marker;
+        let sources = OptionsSources::new();
+        assert!(sources.get::<Marker>().is_none());
     }
 }
