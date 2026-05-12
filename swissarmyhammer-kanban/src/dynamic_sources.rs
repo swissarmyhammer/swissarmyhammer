@@ -30,12 +30,12 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use swissarmyhammer_commands::UIState;
+use swissarmyhammer_commands::{UIState, WindowInfo};
 
 use crate::commands::perspective_commands::perspective_belongs_to_active_view;
 use crate::context::KanbanContext;
 use crate::scope_commands::{
-    BoardInfo, DynamicSources, PerspectiveFieldInfo, PerspectiveInfo, ViewInfo, WindowInfo,
+    BoardInfo, DynamicSources, PerspectiveFieldInfo, PerspectiveInfo, ViewInfo,
 };
 
 /// Raw inputs [`build_dynamic_sources`] consumes. See the module docs for

@@ -42,7 +42,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use swissarmyhammer_commands::{
     Command, CommandContext, CommandDef, CommandsRegistry, KeysDef, OptionsContext,
-    OptionsRegistry, ParamDef, ParamSource, TabButtonDef, UIState,
+    OptionsRegistry, ParamDef, ParamSource, TabButtonDef, UIState, WindowInfo,
 };
 use swissarmyhammer_fields::FieldsContext;
 
@@ -74,21 +74,6 @@ pub struct ViewInfo {
     /// kind. The same kebab-case representation is produced by
     /// `ViewKind`'s `#[serde(rename_all = "kebab-case")]`.
     pub kind: String,
-}
-
-/// Lightweight open-window descriptor for dynamic command generation.
-///
-/// Only carries the fields needed to produce a `window.focus:{label}` command.
-/// Intentionally decoupled from Tauri's WebviewWindow so the scope_commands
-/// module does not depend on Tauri directly.
-#[derive(Debug, Clone)]
-pub struct WindowInfo {
-    /// Tauri window label (e.g. "main", "board-01jxyz").
-    pub label: String,
-    /// Human-readable window title (e.g. "SwissArmyHammer").
-    pub title: String,
-    /// Whether this window currently has focus.
-    pub focused: bool,
 }
 
 /// Lightweight open-board descriptor for dynamic command generation.

@@ -3,8 +3,7 @@
 use crate::state::{resolve_kanban_path, AppState, MenuItemHandle};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use swissarmyhammer_commands::{CommandDef, CommandsRegistry, RecentBoard, UIState};
-use swissarmyhammer_kanban::scope_commands::WindowInfo;
+use swissarmyhammer_commands::{CommandDef, CommandsRegistry, RecentBoard, UIState, WindowInfo};
 use swissarmyhammer_kanban::{
     board::InitBoard, KanbanContext, KanbanOperationProcessor, OperationProcessor,
 };
