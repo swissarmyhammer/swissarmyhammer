@@ -7,7 +7,7 @@ title: Collapse duplicate board_display_name between kanban-app and swissarmyham
 ---
 ## What
 
-Follow-up to PR #40 review on task 01KPZMYFYQ0ZFS00GG0DY7JGQJ (Move build_dynamic_sources out of kanban-app). After that refactor, an identical 6-line `board_display_name` implementation exists in two places:
+Follow-up to PR review on task 01KPZMYFYQ0ZFS00GG0DY7JGQJ (Move build_dynamic_sources out of kanban-app). After that refactor, an identical 6-line `board_display_name` implementation exists in two places:
 
 - `kanban-app/src/commands.rs::board_display_name(&BoardHandle)` — takes a `BoardHandle` from the Tauri side, used by ~4 remaining call sites in the GUI crate.
 - `swissarmyhammer-kanban/src/dynamic_sources.rs::board_display_name(&KanbanContext)` — takes a plain context, used only by the headless `gather_boards` helper.

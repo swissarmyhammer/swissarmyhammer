@@ -63,6 +63,16 @@ pub struct ViewInfo {
     /// `entity.add:{entity_type}` command so every view type gets a
     /// generic "New {Type}" creation action without per-type Rust code.
     pub entity_type: Option<String>,
+    /// View kind serialized as a kebab-case string (e.g. `"board"`,
+    /// `"grid"`, `"list"`, `"calendar"`, `"timeline"`, `"unknown"`).
+    ///
+    /// Drives the `CommandDef.view_kinds` UI-surface filter:
+    /// `commands_for_scope` resolves the innermost `view:{id}` moniker in
+    /// the scope chain to this string, and skips any command whose
+    /// `view_kinds` list is non-empty and does not contain the resolved
+    /// kind. The same kebab-case representation is produced by
+    /// `ViewKind`'s `#[serde(rename_all = "kebab-case")]`.
+    pub kind: String,
 }
 
 /// Lightweight open-window descriptor for dynamic command generation.
@@ -616,8 +626,86 @@ pub fn commands_for_scope(
         result.retain(|c| c.context_menu);
     }
     result.retain(|c| c.available);
+    filter_by_view_kind(&mut result, scope_chain, &all_registry_cmds, dynamic);
 
     result
+}
+
+/// Drop every emitted command whose YAML `view_kinds` filter does not
+/// admit the currently-active view kind.
+///
+/// Resolution rules:
+///
+/// 1. Find the innermost `view:{id}` moniker in `scope_chain`.
+/// 2. Look it up in `DynamicSources.views` to get the view's `kind`.
+/// 3. For each resolved command in `result`, look up its `CommandDef` via
+///    `id`. Commands with `view_kinds: None` are unconstrained (kept). A
+///    command with `view_kinds: Some(list)` is kept iff the resolved kind
+///    is present in the list.
+/// 4. When no `view:{id}` is in scope or it does not match any known
+///    [`ViewInfo`], the resolved kind is `None` — every command with a
+///    non-empty `view_kinds` list is filtered out. This is the safe
+///    default for headless / shell contexts: a grid-only command cannot
+///    surface in a palette that has no view to anchor against.
+///
+/// Dynamic / synthetic command rows whose `id` does not appear in the
+/// registry (e.g. the prefix-id `board.switch:{path}`, `entity.add:{type}`
+/// rows) are never filtered — they are not user-authored commands and
+/// have no `view_kinds` metadata to honor.
+fn filter_by_view_kind(
+    result: &mut Vec<ResolvedCommand>,
+    scope_chain: &[String],
+    all_registry_cmds: &[&CommandDef],
+    dynamic: Option<&DynamicSources>,
+) {
+    // Build the id → CommandDef lookup once; the filter pass below otherwise
+    // re-scans every CommandDef for every resolved row.
+    let def_by_id: HashMap<&str, &CommandDef> = all_registry_cmds
+        .iter()
+        .map(|c| (c.id.as_str(), *c))
+        .collect();
+    let active_view_kind = resolve_active_view_kind(scope_chain, dynamic);
+    result.retain(|cmd| {
+        let Some(def) = def_by_id.get(cmd.id.as_str()) else {
+            // Dynamic / prefix-id rows have no CommandDef — they are not
+            // user-authored and carry no view_kinds metadata to honor.
+            return true;
+        };
+        let Some(allowed) = def.view_kinds.as_deref() else {
+            // No view_kinds filter on this command — keep unconditionally.
+            return true;
+        };
+        // view_kinds is set: keep iff the active kind is in the allow-list.
+        // Empty allow-list is treated the same as a list that does not
+        // contain the resolved kind (i.e. always filter out) — an empty
+        // allow-list is a YAML authoring mistake, not a wildcard.
+        match active_view_kind.as_deref() {
+            Some(kind) => allowed.iter().any(|k| k == kind),
+            None => false,
+        }
+    });
+}
+
+/// Resolve the innermost `view:{id}` moniker in `scope_chain` to its view
+/// kind by consulting `DynamicSources.views`.
+///
+/// Returns `None` when there is no `view:{id}` moniker in the chain, no
+/// `DynamicSources` was provided, or the moniker's id is not registered
+/// in `DynamicSources.views`. The `view_kinds` filter treats `None` as a
+/// hard no-match for any command that declares the filter, so headless
+/// / shell contexts (which never carry a `view:{id}`) cannot surface
+/// view-scoped commands.
+fn resolve_active_view_kind(
+    scope_chain: &[String],
+    dynamic: Option<&DynamicSources>,
+) -> Option<String> {
+    let dyn_src = dynamic?;
+    let view_id = scope_chain.iter().find_map(|m| m.strip_prefix("view:"))?;
+    dyn_src
+        .views
+        .iter()
+        .find(|v| v.id == view_id)
+        .map(|v| v.kind.clone())
 }
 
 /// Emit cross-cutting and scoped-registry commands for each moniker in the
@@ -1770,16 +1858,19 @@ mod tests {
                     id: "board-view".into(),
                     name: "Board View".into(),
                     entity_type: None,
+                    kind: "board".into(),
                 },
                 ViewInfo {
                     id: "tasks-grid".into(),
                     name: "Task Grid".into(),
                     entity_type: None,
+                    kind: "grid".into(),
                 },
                 ViewInfo {
                     id: "tags-grid".into(),
                     name: "Tag Grid".into(),
                     entity_type: None,
+                    kind: "grid".into(),
                 },
             ],
             boards: vec![],
@@ -1847,11 +1938,13 @@ mod tests {
                     id: "board-view".into(),
                     name: "Board View".into(),
                     entity_type: None,
+                    kind: "board".into(),
                 },
                 ViewInfo {
                     id: "tasks-grid".into(),
                     name: "Task Grid".into(),
                     entity_type: None,
+                    kind: "grid".into(),
                 },
             ],
             boards: vec![],
@@ -1909,16 +2002,19 @@ mod tests {
                     id: "board-view".into(),
                     name: "Board View".into(),
                     entity_type: None,
+                    kind: "board".into(),
                 },
                 ViewInfo {
                     id: "tasks-grid".into(),
                     name: "Task Grid".into(),
                     entity_type: None,
+                    kind: "grid".into(),
                 },
                 ViewInfo {
                     id: "tags-grid".into(),
                     name: "Tag Grid".into(),
                     entity_type: None,
+                    kind: "grid".into(),
                 },
             ],
             boards: vec![],
@@ -1966,16 +2062,19 @@ mod tests {
                     id: "board-view".into(),
                     name: "Board View".into(),
                     entity_type: None,
+                    kind: "board".into(),
                 },
                 ViewInfo {
                     id: "tasks-grid".into(),
                     name: "Task Grid".into(),
                     entity_type: None,
+                    kind: "grid".into(),
                 },
                 ViewInfo {
                     id: "tags-grid".into(),
                     name: "Tag Grid".into(),
                     entity_type: None,
+                    kind: "grid".into(),
                 },
             ],
             boards: vec![],
@@ -2115,6 +2214,7 @@ mod tests {
                 id: "board-view".into(),
                 name: "Board View".into(),
                 entity_type: None,
+                kind: "board".into(),
             }],
             boards: vec![BoardInfo {
                 path: "/tmp/board".into(),
@@ -2190,6 +2290,7 @@ mod tests {
                 id: "tasks-grid".into(),
                 name: "Task Grid".into(),
                 entity_type: Some("task".into()),
+                kind: "grid".into(),
             }],
             ..Default::default()
         };
@@ -2227,6 +2328,7 @@ mod tests {
                 id: "tasks-grid".into(),
                 name: "Task Grid".into(),
                 entity_type: Some("task".into()),
+                kind: "grid".into(),
             }],
             ..Default::default()
         };
@@ -2259,6 +2361,7 @@ mod tests {
                 id: "tags-grid".into(),
                 name: "Tag Grid".into(),
                 entity_type: Some("tag".into()),
+                kind: "grid".into(),
             }],
             ..Default::default()
         };
@@ -2298,6 +2401,7 @@ mod tests {
                 id: "01JMVIEW0000000000BOARD0".into(),
                 name: "Board".into(),
                 entity_type: Some("task".into()),
+                kind: "board".into(),
             }],
             ..Default::default()
         };
@@ -2337,6 +2441,7 @@ mod tests {
                 id: "01JMVIEW0000000000PGRID0".into(),
                 name: "Projects".into(),
                 entity_type: Some("project".into()),
+                kind: "grid".into(),
             }],
             ..Default::default()
         };
@@ -2368,6 +2473,7 @@ mod tests {
                 id: "dashboard".into(),
                 name: "Dashboard".into(),
                 entity_type: None,
+                kind: "unknown".into(),
             }],
             ..Default::default()
         };
@@ -2810,6 +2916,13 @@ mod tests {
         // view-kind, so the command works whether or not the id was
         // supplied explicitly; this test only guards the static
         // registry-level scope filter.
+        //
+        // Sort commands are NOT asserted here — they additionally carry
+        // `view_kinds: [grid]` and are therefore filtered out of scopes
+        // whose innermost `view:{id}` does not resolve to a grid (or that
+        // have no `view:{id}` at all, as in this test). The grid-scoped
+        // counterpart lives in
+        // `perspective_sort_commands_available_from_grid_palette_scope`.
         let (registry, impls, fields, ui) = setup();
         let scope = vec![
             "perspective:01P".into(),
@@ -2825,9 +2938,6 @@ mod tests {
             "perspective.clearFilter",
             "perspective.group",
             "perspective.clearGroup",
-            "perspective.sort.set",
-            "perspective.sort.clear",
-            "perspective.sort.toggle",
         ] {
             assert!(
                 ids.contains(&id),
@@ -2865,6 +2975,244 @@ mod tests {
             assert!(
                 !ids.contains(&id),
                 "{id} must NOT appear in scopes without a perspective moniker: {ids:?}",
+            );
+        }
+    }
+
+    /// Sort commands declare `view_kinds: [grid]` so a scope chain whose
+    /// innermost `view:{id}` resolves to a `kind: board` view (per
+    /// `DynamicSources.views`) must NOT surface them in palettes or context
+    /// menus. The board view organises by column grouping, not by sort
+    /// order, so "Sort Field" / "Clear Sort" / "Toggle Sort" would offer
+    /// behavior the user cannot see.
+    #[test]
+    fn sort_commands_absent_from_board_view_scope() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "view:board-view".into(),
+            "perspective:01P".into(),
+            "board:my-board".into(),
+        ];
+        let dynamic = DynamicSources {
+            views: vec![ViewInfo {
+                id: "board-view".into(),
+                name: "Board View".into(),
+                entity_type: Some("task".into()),
+                kind: "board".into(),
+            }],
+            ..Default::default()
+        };
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            false,
+            Some(&dynamic),
+        );
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        for id in [
+            "perspective.sort.set",
+            "perspective.sort.clear",
+            "perspective.sort.toggle",
+        ] {
+            assert!(
+                !ids.contains(&id),
+                "{id} must NOT appear in a board-kind view scope (view_kinds: [grid]): {ids:?}",
+            );
+        }
+    }
+
+    /// Symmetric guard for `sort_commands_absent_from_board_view_scope`:
+    /// when the innermost `view:{id}` resolves to a `kind: grid` view, the
+    /// three sort commands must surface in the palette. This pins the "sort
+    /// is the primary ordering mechanism on grids" half of the
+    /// `view_kinds: [grid]` filter so a regression that always-filters them
+    /// fails this test, not just the negative one above.
+    #[test]
+    fn sort_commands_present_in_grid_view_scope() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "view:tasks-grid".into(),
+            "perspective:01P".into(),
+            "board:my-board".into(),
+        ];
+        let dynamic = DynamicSources {
+            views: vec![ViewInfo {
+                id: "tasks-grid".into(),
+                name: "Tasks Grid".into(),
+                entity_type: Some("task".into()),
+                kind: "grid".into(),
+            }],
+            ..Default::default()
+        };
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            false,
+            Some(&dynamic),
+        );
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        for id in [
+            "perspective.sort.set",
+            "perspective.sort.clear",
+            "perspective.sort.toggle",
+        ] {
+            assert!(
+                ids.contains(&id),
+                "{id} must appear on a grid-kind view scope (view_kinds: [grid]): {ids:?}",
+            );
+        }
+    }
+
+    /// Filter and group commands have no `view_kinds` filter — they remain
+    /// available on every view kind, including the board view. Regression
+    /// guard against over-filtering: a sloppy implementation that suppresses
+    /// every `perspective.*` command on board views would pass
+    /// `sort_commands_absent_from_board_view_scope` while breaking real
+    /// users who set filters from the board's tab bar.
+    #[test]
+    fn view_kind_filter_leaves_filter_and_group_commands_alone() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "view:board-view".into(),
+            "perspective:01P".into(),
+            "board:my-board".into(),
+        ];
+        let dynamic = DynamicSources {
+            views: vec![ViewInfo {
+                id: "board-view".into(),
+                name: "Board View".into(),
+                entity_type: Some("task".into()),
+                kind: "board".into(),
+            }],
+            ..Default::default()
+        };
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            false,
+            Some(&dynamic),
+        );
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        for id in [
+            "perspective.filter",
+            "perspective.clearFilter",
+            "perspective.group",
+            "perspective.clearGroup",
+        ] {
+            assert!(
+                ids.contains(&id),
+                "{id} must still appear on a board view scope — the view_kinds \
+                 filter only scopes the three sort commands, not filter/group: {ids:?}",
+            );
+        }
+    }
+
+    /// Grid-scoped counterpart to
+    /// `perspective_mutation_commands_available_when_perspective_in_scope`.
+    /// Asserts that on a scope whose innermost `view:{id}` resolves to a
+    /// `kind: grid` view, every perspective-mutation command (filter,
+    /// group, AND sort) is available in the palette.
+    #[test]
+    fn perspective_sort_commands_available_from_grid_palette_scope() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "view:tasks-grid".into(),
+            "perspective:01P".into(),
+            "board:my-board".into(),
+        ];
+        let dynamic = DynamicSources {
+            views: vec![ViewInfo {
+                id: "tasks-grid".into(),
+                name: "Tasks Grid".into(),
+                entity_type: Some("task".into()),
+                kind: "grid".into(),
+            }],
+            ..Default::default()
+        };
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            false,
+            Some(&dynamic),
+        );
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        for id in [
+            "perspective.filter",
+            "perspective.clearFilter",
+            "perspective.group",
+            "perspective.clearGroup",
+            "perspective.sort.set",
+            "perspective.sort.clear",
+            "perspective.sort.toggle",
+        ] {
+            assert!(
+                ids.contains(&id),
+                "{id} must appear on a grid-view palette scope with a perspective \
+                 moniker — this is the grid-scoped counterpart to the board-only \
+                 test that drops sort: {ids:?}",
+            );
+        }
+    }
+
+    /// Pin the documented "no view in scope -> hard no-match" branch of the
+    /// view-kind filter. The other three view-kind tests all build scope
+    /// chains containing a `view:{id}` moniker, which only exercises the
+    /// "view found and kind compared" path. This test deliberately omits any
+    /// `view:` moniker — the scope is just `["perspective:01P"]` — and
+    /// supplies an empty `DynamicSources.views` list, so the filter cannot
+    /// resolve any active view kind.
+    ///
+    /// The contract in the task spec is explicit: with no `view:{id}` in
+    /// scope, commands carrying a `view_kinds` allow-list MUST be dropped.
+    /// That branch is the safe default for tests / shell-only invocations
+    /// where the UI surface is not bound to a particular view. Without this
+    /// test, a regression that flipped `None => false` to `None => true`
+    /// would silently re-enable sort commands in palette-only contexts and
+    /// every existing test would still pass (they all have a view in scope).
+    #[test]
+    fn view_kinds_constrained_commands_dropped_when_no_view_in_scope() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["perspective:01P".into()];
+        let dynamic = DynamicSources {
+            views: vec![],
+            ..Default::default()
+        };
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            false,
+            Some(&dynamic),
+        );
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        for id in [
+            "perspective.sort.set",
+            "perspective.sort.clear",
+            "perspective.sort.toggle",
+        ] {
+            assert!(
+                !ids.contains(&id),
+                "{id} declares view_kinds: [grid] and the scope chain has no \
+                 view:{{id}} moniker — the safe-default branch must drop it: {ids:?}",
             );
         }
     }
@@ -3352,6 +3700,7 @@ mod tests {
                 id: v.id.clone(),
                 name: v.name.clone(),
                 entity_type: v.entity_type.clone(),
+                kind: v.kind.as_kebab_str().to_string(),
             })
             .collect()
     }

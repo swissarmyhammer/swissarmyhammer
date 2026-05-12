@@ -22,6 +22,40 @@ pub enum ViewKind {
     Unknown,
 }
 
+impl ViewKind {
+    /// Return the canonical kebab-case token for this view kind.
+    ///
+    /// This is the single source of truth for the string form of `ViewKind`
+    /// consumed by the view-kind filter in `scope_commands` and by every
+    /// `ViewInfo.kind` producer. The mapping matches the `#[serde(rename_all
+    /// = "kebab-case")]` derive on the enum, so YAML round-trip and this
+    /// helper stay in lockstep.
+    ///
+    /// Returns a static string so callers can compare without allocation;
+    /// use `.to_string()` if owned `String` is needed.
+    pub fn as_kebab_str(&self) -> &'static str {
+        match self {
+            ViewKind::Board => "board",
+            ViewKind::Grid => "grid",
+            ViewKind::List => "list",
+            ViewKind::Calendar => "calendar",
+            ViewKind::Timeline => "timeline",
+            ViewKind::Unknown => "unknown",
+        }
+    }
+}
+
+impl From<&ViewKind> for String {
+    /// Convert a borrowed [`ViewKind`] to its owned kebab-case string.
+    ///
+    /// Delegates to [`ViewKind::as_kebab_str`] so there is exactly one
+    /// canonical mapping; adding a new variant requires touching only that
+    /// method.
+    fn from(kind: &ViewKind) -> Self {
+        kind.as_kebab_str().to_string()
+    }
+}
+
 /// A command declared in a view definition.
 ///
 /// Commands are metadata only -- the frontend attaches `execute` implementations
@@ -236,6 +270,35 @@ commands:
         assert_eq!(parsed.entity_type.as_deref(), Some("task"));
         assert_eq!(parsed.card_fields, vec!["title", "status"]);
         assert_eq!(parsed.icon.as_deref(), Some("icon"));
+    }
+
+    #[test]
+    fn as_kebab_str_matches_serde_representation() {
+        // The canonical kebab-case mapping returned by `as_kebab_str` MUST
+        // stay in lockstep with the `#[serde(rename_all = "kebab-case")]`
+        // derive, otherwise scope-commands view-kind filtering would silently
+        // diverge from YAML round-trip. Pin both forms together.
+        for kind in [
+            ViewKind::Board,
+            ViewKind::Grid,
+            ViewKind::List,
+            ViewKind::Calendar,
+            ViewKind::Timeline,
+            ViewKind::Unknown,
+        ] {
+            let via_serde = serde_json::to_value(&kind)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .expect("ViewKind must serialize to a JSON string");
+            assert_eq!(
+                kind.as_kebab_str(),
+                via_serde,
+                "as_kebab_str must match serde kebab-case for {:?}",
+                kind
+            );
+            // `From<&ViewKind> for String` delegates to as_kebab_str.
+            assert_eq!(String::from(&kind), via_serde);
+        }
     }
 
     #[test]

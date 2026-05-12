@@ -76,13 +76,7 @@ fn matching_views_by_kind<'a>(views: &'a ViewsContext, view_kind: &str) -> Vec<&
     views
         .all_views()
         .iter()
-        .filter(|v| {
-            serde_json::to_value(&v.kind)
-                .ok()
-                .and_then(|val| val.as_str().map(str::to_string))
-                .as_deref()
-                == Some(view_kind)
-        })
+        .filter(|v| v.kind.as_kebab_str() == view_kind)
         .map(|v| v.id.as_str())
         .collect()
 }

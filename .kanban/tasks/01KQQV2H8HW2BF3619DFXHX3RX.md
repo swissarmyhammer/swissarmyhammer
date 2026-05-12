@@ -97,7 +97,7 @@ The original wiring captured `sampledAtMs` at the validator boundary, on the sam
 
 ## Workflow
 
-- Can run **in parallel with #1** — this task is observability and validation, not algorithm change.
+- Can run **in parallel with — this task is observability and validation, not algorithm change.
 - Start with the read-only audit. If it surfaces a bug, fix it as part of this task and document the bug in the PR description.
 - Use `/tdd` for the validators: write the failing-input tests first, then implement.
 #spatial-nav-redesign

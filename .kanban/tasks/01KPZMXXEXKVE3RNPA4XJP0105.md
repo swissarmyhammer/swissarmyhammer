@@ -7,7 +7,7 @@ title: Replace perspective.goto / view.switch indirection with direct .set comma
 ---
 ## What
 
-PR #40 review comment from @wballard on `kanban-app/src/commands.rs:1320`:
+PR review comment from @wballard on `kanban-app/src/commands.rs:1320`:
 
 > seems like trash, why not just make the correct perspective.set command to begin with?
 

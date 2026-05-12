@@ -7,7 +7,7 @@ title: UIState must be self-loading without the GUI crate
 ---
 ## What
 
-PR #40 review comment from @wballard on `kanban-app/src/state.rs:460`:
+PR review comment from @wballard on `kanban-app/src/state.rs:460`:
 
 > I do not expect to see this here -- the UIState should be self loading without any specific UI at all
 

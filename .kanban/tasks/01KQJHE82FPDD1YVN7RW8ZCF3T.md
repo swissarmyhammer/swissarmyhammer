@@ -40,8 +40,8 @@ Radix Tooltip is the project's tooltip primitive (used in `nav-bar.tsx`, `entity
 
 ## Tests
 - [x] Update `kanban-app/ui/src/components/focus-debug-overlay.browser.test.tsx`:
-  - Existing "label mentions primitive's name / moniker" assertion (#1): change to fire a hover on the handle and assert the tooltip content text matches `kind:moniker`. Use `@testing-library/user-event`'s `hover()` against `[data-debug=…] [data-tooltip-trigger]` (or whatever stable selector the handle exposes).
-  - Existing "(x,y) coordinates" assertion (#3): hover the handle and assert tooltip text contains the `"x,y"` substring.
+  - Existing "label mentions primitive's name / moniker" assertion (change to fire a hover on the handle and assert the tooltip content text matches `kind:moniker`. Use `@testing-library/user-event`'s `hover()` against `[data-debug=…] [data-tooltip-trigger]` (or whatever stable selector the handle exposes).
+  - Existing "(x,y) coordinates" assertion (hover the handle and assert tooltip text contains the `"x,y"` substring.
   - Existing "no overlay when provider disabled" assertion (#2): unchanged — still verifies no `[data-debug=…]` mounts.
   - Existing "click passthrough" assertion (#4): unchanged — clicks on host content still reach the host. Add a sub-assertion: clicking on the *handle itself* must NOT reach the host (the handle is the only `pointer-events: auto` region; this is the explicit affordance for hover).
 - [x] Update `kanban-app/ui/src/components/focus-debug-overlay.layer-z.browser.test.tsx` only if the z-tier read needs to move — preserve the existing layer-z assertions.

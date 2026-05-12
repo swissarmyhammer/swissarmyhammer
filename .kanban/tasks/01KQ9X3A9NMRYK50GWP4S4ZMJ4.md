@@ -143,7 +143,7 @@ Verified the six reviewer-checklist points from the user's request:
 
 1. `field.edit` registration is correctly conditional — `useMemo` returns `EMPTY_COMMANDS` when `editing || !onEdit`, otherwise registers the command. Both branches confirmed.
 2. Scope-shadowing is precise — `extractScopeBindings` walks inside-out with first-key-wins; field zone's `field.edit Enter` wins over global `nav.drillIn Enter` only when a field zone holds spatial focus. Confirmed against `keybindings.ts` lines 386-392.
-3. Five `board-view.enter-drill-in.browser.test.tsx` tests each drive vim/cua Enter on focused cards/columns and assert zero `ui.inspect` invocations. Test #5 includes belt-and-suspenders DOM check on `data-focused`.
+3. Five `board-view.enter-drill-in.browser.test.tsx` tests each drive vim/cua Enter on focused cards/columns and assert zero `ui.inspect` invocations. Test includes belt-and-suspenders DOM check on `data-focused`.
 4. Four `field.enter-edit.browser.test.tsx` tests cover all AC branches: editable→Enter→edit, focus→editor, already-editing→noop on `onEdit`, non-editable→noop and zero `ui.inspect` dispatch.
 5. `inspectors-container.enter-drill-in.browser.test.tsx` pins panel zone → drill_in IPC → `ui.setFocus` fanout for the resolved field moniker.
 6. `perspective-tab-bar.enter-rename.spatial.test.tsx` regression guard confirms vim Enter on the active perspective tab still mounts the rename editor and dispatches no `ui.inspect`.

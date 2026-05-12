@@ -62,7 +62,7 @@ Part of the spatial-nav redesign. Full design: **`01KQQSXM2PEYR1WAQ7QXW3B8ME`** 
 
 **RowStart / RowEnd decision: kept as aliases for First / Last.**
 - The user model has no separate "first in row" concept (the focused scope IS the row), so the variants collapse into the children-of-focused-scope pick.
-- Kept (rather than removed) so the wire shape and the TypeScript-side `Direction` union (`kanban-app/ui/src/types/spatial.ts`) and `kanban-app/ui/src/lib/scroll-on-edge.ts` references do not have to migrate. Task #5 is in flight on those files; preserving the variants avoids stepping on #5.
+- Kept (rather than removed) so the wire shape and the TypeScript-side `Direction` union (`kanban-app/ui/src/types/spatial.ts`) and `kanban-app/ui/src/lib/scroll-on-edge.ts` references do not have to migrate. Task is in flight on those files; preserving the variants avoids stepping on
 - The pre-redesign vertical-overlap filter is dropped — `RowStart` now resolves to the same child pick as `First`, `RowEnd` to the same as `Last`.
 
 **Tests swept (rewritten in place with rationale comments):**
@@ -101,7 +101,7 @@ Part of the spatial-nav redesign. Full design: **`01KQQSXM2PEYR1WAQ7QXW3B8ME`** 
 
 ### Nits
 - [x] `swissarmyhammer-focus/src/navigate.rs:468` — The local binding `let focused_fq_owned = focused.fq().clone();` exists only because the closure inside `filter_map` cannot capture `focused.fq()` by reference across the `entries_in_layer` borrow. If the warning above is addressed (switch to `child_entries_of_zone`), this clone disappears with the inline filter. Otherwise it's a small unnecessary allocation per First/Last keypress.
-- [x] `swissarmyhammer-focus/src/types.rs:130-135` and `src/types.rs:167-172` — The `RowStart`/`RowEnd` doc paragraph correctly explains they are aliases, but neither variant carries a `#[deprecated(note = "use Direction::First / Direction::Last")]` attribute. The implementer's rationale (TS side still references them, task #5 in flight) means a `#[deprecated]` attribute now would surface noise on every callsite — this is the right call for now. Recommend filing a follow-up task: "After spatial-nav #5 lands, add `#[deprecated]` to `Direction::RowStart` / `Direction::RowEnd` and migrate any remaining callsites to `First` / `Last`." Soft prose deprecation in the docstring is the bridge until the formal attribute can land.
+- [x] `swissarmyhammer-focus/src/types.rs:130-135` and `src/types.rs:167-172` — The `RowStart`/`RowEnd` doc paragraph correctly explains they are aliases, but neither variant carries a `#[deprecated(note = "use Direction::First / Direction::Last")]` attribute. The implementer's rationale (TS side still references them, task in flight) means a `#[deprecated]` attribute now would surface noise on every callsite — this is the right call for now. Recommend filing a follow-up task: "After spatial-nav lands, add `#[deprecated]` to `Direction::RowStart` / `Direction::RowEnd` and migrate any remaining callsites to `First` / `Last`." Soft prose deprecation in the docstring is the bridge until the formal attribute can land.
 
 ## Resolution (2026-05-04)
 
@@ -113,4 +113,4 @@ Part of the spatial-nav redesign. Full design: **`01KQQSXM2PEYR1WAQ7QXW3B8ME`** 
 
 Both `SpatialRegistry::drill_in`'s cold-start fallback and `navigate::edge_command`'s `Direction::First / Last / RowStart / RowEnd` arms now call these helpers. The duplicate `min_by` / `max_by` comparators are gone; divergence between drill-in and `nav.first` is structurally impossible. The `first_matches_drill_in_first_child_fallback` test stays as a behavioural backstop (still passes); its comment now explains that the structural sharing is what guarantees the invariant.
 
-**Nit 2 (follow-up filed):** Created task `01KQR7N8E5ZAPY4KK4MN8NXY77` — "Spatial-nav: mark Direction::RowStart / RowEnd #[deprecated] after #5 lands" — depending on the design root so it surfaces once #5 is done.
+**Nit 2 (follow-up filed):** Created task `01KQR7N8E5ZAPY4KK4MN8NXY77` — "Spatial-nav: mark Direction::RowStart / RowEnd after lands" — depending on the design root so it surfaces once is done.

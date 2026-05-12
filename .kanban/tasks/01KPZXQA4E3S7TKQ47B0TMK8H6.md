@@ -122,14 +122,14 @@ Confirmed via `Grep "useEntityFocus|useFocusedScope" kanban-app/ui/src` (excludi
 ## Files
 
 - `kanban-app/ui/src/lib/entity-focus-context.tsx` — add `FocusStore`, new hooks, migrate provider. Keep `useEntityFocus` as deprecated compat shim. Keep `useFocusedScope` signature; rewrite its internals.
-- `kanban-app/ui/src/components/focus-scope.tsx` — migrate `FocusScope` and `FocusScopeInner` (#1, #2).
+- `kanban-app/ui/src/components/focus-scope.tsx` — migrate `FocusScope` and `FocusScopeInner` (#1,
 - `kanban-app/ui/src/components/data-table.tsx` — migrate `EntityRow` (#3).
-- `kanban-app/ui/src/components/grid-view.tsx` — migrate `useGridNavigation` (#4).
+- `kanban-app/ui/src/components/grid-view.tsx` — migrate `useGridNavigation` (
 - `kanban-app/ui/src/components/board-view.tsx` — migrate `BoardView`/`useBoardCommandRefs` (#5).
 - `kanban-app/ui/src/components/entity-inspector.tsx` — migrate `useFirstFieldFocus` (#6).
 - `kanban-app/ui/src/components/cursor-focus-bridge.tsx` — migrate (#7).
 - `kanban-app/ui/src/components/inspector-focus-bridge.tsx` — migrate (#8).
-- `kanban-app/ui/src/components/column-view.tsx` — migrate (#9).
+- `kanban-app/ui/src/components/column-view.tsx` — migrate (
 - `kanban-app/ui/src/components/app-shell.tsx` — migrate (#10).
 - `kanban-app/ui/src/lib/entity-focus-context.test.tsx` — new tests for the store + selector hooks.
 

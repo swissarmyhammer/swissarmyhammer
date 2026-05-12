@@ -680,9 +680,7 @@ async fn resolve_kind_from_view_id(
     let views_lock = kanban.views()?;
     let views = views_lock.read().await;
     let view_def = views.get_by_id(view_id)?;
-    serde_json::to_value(&view_def.kind)
-        .ok()
-        .and_then(|v| v.as_str().map(String::from))
+    Some(view_def.kind.as_kebab_str().to_string())
 }
 
 /// Direction for perspective cycling.

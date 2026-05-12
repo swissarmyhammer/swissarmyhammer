@@ -127,11 +127,11 @@ Coverage map (against the card's enumerated 1–8 + per-leaf cases):
 
 - **#1 Registration**: registers the card body as a FocusZone with moniker `task:task-1`, rect, layerKey, null parentZone. Plus a companion test asserting the card root does NOT register as a leaf.
 - **#2 Click → focus**: clicking the card body dispatches exactly one `spatial_focus` call for the card key — no extra call for an ancestor zone (validates `e.stopPropagation()`).
-- **#3 Focus claim → visible bar**: `fireFocusChanged({ next_key: cardKey })` flips `data-focused` on the card's outer div AND mounts `[data-testid="focus-indicator"]` as a descendant of the card body.
+- **Focus claim → visible bar**: `fireFocusChanged({ next_key: cardKey })` flips `data-focused` on the card's outer div AND mounts `[data-testid="focus-indicator"]` as a descendant of the card body.
 - **#4 Keystrokes → navigate (deferred)**: arrow keys / vim keys are bound at `<AppShell>`, not on the card. The card's contract is "no own keydown listener". Verified by asserting `cardBody.onkeydown === null` on both the card body and the card's `<FocusZone>` div. The app-shell side of the contract is covered separately by `app-shell.test.tsx` (drill-in tests pin the global handler reading `focusedKey()`).
-- **#5 Space → inspect (deferred)**: bound at the AppShell scope-binding pipeline. The card-side contract — "Space does not dispatch `spatial_navigate`" — is verified by firing a Space keystroke on the card body and asserting zero `spatial_navigate` calls.
+- **Space → inspect (deferred)**: bound at the AppShell scope-binding pipeline. The card-side contract — "Space does not dispatch `spatial_navigate`" — is verified by firing a Space keystroke on the card body and asserting zero `spatial_navigate` calls.
 - **#6 Enter → drill-in (deferred)**: same shape as #4. Verified by asserting Enter on the card body produces zero `spatial_drill_in` calls (the global handler isn't mounted; the card itself owns nothing).
-- **#7 Unmount**: unmounting the card dispatches `spatial_unregister_scope` for the card's spatial key.
+- **Unmount**: unmounting the card dispatches `spatial_unregister_scope` for the card's spatial key.
 - **#8 Legacy nav stripped**: clicking the card emits no IPC matching `^(entity_focus_|claim_when_|broadcast_nav_)`. Source-level audit (the card description's "scan for `useGlobalKeydown` and `useEntityFocus`" requirement) is satisfied by `entity-card.tsx` not importing either symbol — verified via grep before this implementation.
 - **Per-leaf clicks** — eight further cases:
   - title field: nested zone with moniker `field:task:task-1.title`, parent_zone = card key.

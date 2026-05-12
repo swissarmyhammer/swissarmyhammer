@@ -7,7 +7,7 @@ title: Move build_dynamic_sources out of kanban-app into UIState (headless-testa
 ---
 ## What
 
-PR #40 review comment from @wballard on `kanban-app/src/commands.rs:2002`:
+PR review comment from @wballard on `kanban-app/src/commands.rs:2002`:
 
 > I do not expect to see this here - I expect this to be in UIState -- fully testable without the GUI crate at all
 

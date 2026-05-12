@@ -125,7 +125,7 @@ User reports the fix doesn't work in production in vim keymap mode: Space still 
 - [x] `kanban-app/ui/src/lib/keybindings.ts` — block comment at the cua Space entry (lines ~67-80) says "Space → `entity.inspect`. The per-`<Inspectable>` scope command shadows this entry…" — extend the same prose to the vim entry (or refactor the comment to cover all three modes uniformly).
 
 ### Warnings
-- [x] `kanban-app/ui/src/components/inspectable.space.browser.test.tsx` — every Space test renders with the default cua keymap. None of the scenarios exercise vim. Add a parametrized variant (or a vim-specific test set) that runs scenarios #6 (app open, no focus), #7 (focus on non-Inspectable chrome), #9 (focused card) under `keymap_mode: "vim"` and asserts the same `defaultPrevented` / dispatch behavior. The `defaultInvokeImpl` for `get_ui_state` returns `keymap_mode: "cua"` — accept a parameter or split into a per-mode loop.
+- [x] `kanban-app/ui/src/components/inspectable.space.browser.test.tsx` — every Space test renders with the default cua keymap. None of the scenarios exercise vim. Add a parametrized variant (or a vim-specific test set) that runs scenarios #6 (app open, no focus), (focus on non-Inspectable chrome), (focused card) under `keymap_mode: "vim"` and asserts the same `defaultPrevented` / dispatch behavior. The `defaultInvokeImpl` for `get_ui_state` returns `keymap_mode: "cua"` — accept a parameter or split into a per-mode loop.
 - [x] `kanban-app/ui/src/spatial-nav-end-to-end.spatial.test.tsx` Family 4 — same coverage gap; the no-focus / focused-card / non-Inspectable-chrome cases test only cua. Add at least one vim-mode pin.
 
 ### Workflow

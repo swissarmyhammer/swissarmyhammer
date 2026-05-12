@@ -146,6 +146,7 @@ fn gather_views(ctx: Option<&KanbanContext>) -> Vec<ViewInfo> {
             id: v.id.clone(),
             name: v.name.clone(),
             entity_type: v.entity_type.clone(),
+            kind: v.kind.as_kebab_str().to_string(),
         })
         .collect()
 }
@@ -228,9 +229,7 @@ fn resolve_active_view(
     let Some(view) = vc.all_views().iter().find(|v| v.id == active_id) else {
         return (None, None);
     };
-    let kind = serde_json::to_value(&view.kind)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string));
+    let kind = Some(view.kind.as_kebab_str().to_string());
     (kind, Some(active_id))
 }
 

@@ -117,7 +117,7 @@ The previous enforcement scanned `parent_zone` only. The Field zone's `parent_zo
 - `kanban-app/ui/src/components/sortable-task-card.test.tsx` — updated card-as-zone assertions.
 - `kanban-app/ui/src/components/column-view.spatial-nav.test.tsx` — updated "task card registers as zone parented at column" test.
 - `kanban-app/ui/src/components/column-view.scroll-rects.browser.test.tsx` — updated `taskMonikerToKey` and rect-tracking helpers to accept both `spatial_register_zone` and `spatial_register_scope`.
-- `kanban-app/ui/src/components/board-view.cross-column-nav.spatial.test.tsx` — updated test #5 assertion to expect tasks-as-zones.
+- `kanban-app/ui/src/components/board-view.cross-column-nav.spatial.test.tsx` — updated test assertion to expect tasks-as-zones.
 - `kanban-app/ui/src/components/board-view.spatial.test.tsx` — updated drill-out chain test to use `registerZoneArgs()` for card lookup.
 - `kanban-app/ui/src/components/board-view.spatial-nav.test.tsx` — updated `ui:board.parentZone` assertion to point at the outer `board:<id>` entity zone (was `null`).
 - `kanban-app/ui/src/components/board-view.enter-drill-in.browser.test.tsx` — updated comments and `keyForMoniker` doc-comment.

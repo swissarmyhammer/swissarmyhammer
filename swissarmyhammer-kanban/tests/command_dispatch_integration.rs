@@ -1964,6 +1964,7 @@ fn load_builtin_view_infos() -> Vec<ViewInfo> {
             id: v.id.clone(),
             name: v.name.clone(),
             entity_type: v.entity_type.clone(),
+            kind: v.kind.as_kebab_str().to_string(),
         })
         .collect()
 }
@@ -1983,6 +1984,7 @@ fn load_builtin_views_with_kind() -> Vec<(ViewInfo, ViewKind)> {
                     id: v.id.clone(),
                     name: v.name.clone(),
                     entity_type: v.entity_type.clone(),
+                    kind: v.kind.as_kebab_str().to_string(),
                 },
                 v.kind.clone(),
             )

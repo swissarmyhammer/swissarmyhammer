@@ -15,7 +15,7 @@ Part of the spatial-nav redesign. Full design: **`01KQQSXM2PEYR1WAQ7QXW3B8ME`** 
 
 **This component owns:** the scroll-on-edge fall-through that lets cardinal nav cross the boundary of a virtualized scroll container.
 
-**Why it's needed:** the app uses *essential* virtualization. Off-viewport rows do not register `<FocusScope>`, so the kernel cannot find them via `geometric_pick` (component #1). When the user is on the last visible row of a virtualized list and presses Down, the kernel returns stay-put. Without this component, the user is stuck.
+**Why it's needed:** the app uses *essential* virtualization. Off-viewport rows do not register `<FocusScope>`, so the kernel cannot find them via `geometric_pick` (component When the user is on the last visible row of a virtualized list and presses Down, the kernel returns stay-put. Without this component, the user is stuck.
 
 **Contract (restated from design):**
 

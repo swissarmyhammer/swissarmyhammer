@@ -101,7 +101,13 @@
   # Palette-only: requires `field` and `direction` args. Sort-set is driven
   # by column-header clicks in the grid view, which dispatch with explicit
   # args; exposing it in the bare right-click menu would silently fail.
+  #
+  # `view_kinds: [grid]` keeps Sort Field / Clear Sort / Toggle Sort out of
+  # palettes and context menus on the board view (where they would have no
+  # visible effect — boards organise by column, not by sort order). On grid
+  # views sort is the primary ordering mechanism and these stay surfaced.
   scope: "entity:perspective"
+  view_kinds: [grid]
   undoable: true
   params:
     - name: field
@@ -118,7 +124,10 @@
   # Per-field removal is covered by `perspective.sort.toggle`'s asc → desc →
   # none state cycle; this command is the palette / context-menu entry point
   # for "reset the whole sort list" and never takes a `field` arg.
+  #
+  # See `perspective.sort.set` above for the `view_kinds: [grid]` rationale.
   scope: "entity:perspective"
+  view_kinds: [grid]
   undoable: true
   context_menu: true
   params:
@@ -130,7 +139,10 @@
   name: Toggle Sort
   # Palette-only: requires a `field` arg. Toggle is invoked from column
   # headers with the field already known; see `perspective.sort.set` above.
+  #
+  # See `perspective.sort.set` above for the `view_kinds: [grid]` rationale.
   scope: "entity:perspective"
+  view_kinds: [grid]
   undoable: true
   params:
     - name: field

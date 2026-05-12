@@ -102,6 +102,25 @@ pub struct CommandDef {
     /// Optional native menu bar placement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub menu: Option<MenuPlacement>,
+    /// Declarative view-kind UI-surface filter.
+    ///
+    /// `None` (the default) means the command surfaces in every view kind —
+    /// the common case. `Some(list)` restricts emission to scopes whose
+    /// resolved view kind matches one of the listed values (e.g.
+    /// `["grid"]` for grid-only sort commands).
+    ///
+    /// View kinds are encoded as the kebab-case strings produced by
+    /// `ViewKind`'s `#[serde(rename_all = "kebab-case")]`. Storing them as
+    /// `String` keeps `swissarmyhammer-commands` independent of the
+    /// `swissarmyhammer-views` crate.
+    ///
+    /// This is a UI-surface gate only — the dispatcher still routes the
+    /// command at runtime if it is somehow invoked from a non-matching
+    /// view (e.g. via MCP or shell). The filter exists to keep palettes,
+    /// context menus, and native menus from offering commands that have
+    /// no meaningful behavior in the active view kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_kinds: Option<Vec<String>>,
 }
 
 fn default_true() -> bool {
@@ -152,6 +171,7 @@ mod tests {
             context_menu_group: Some(1),
             context_menu_order: Some(2),
             menu: None,
+            view_kinds: None,
         };
         let yaml = serde_yaml_ng::to_string(&def).unwrap();
         let parsed: CommandDef = serde_yaml_ng::from_str(&yaml).unwrap();
@@ -160,6 +180,36 @@ mod tests {
         // downstream `commands/` overrides can opt into them.
         assert_eq!(parsed.context_menu_group, Some(1));
         assert_eq!(parsed.context_menu_order, Some(2));
+    }
+
+    /// `view_kinds` round-trips through YAML so command YAML files can opt
+    /// into the declarative view-kind UI-surface filter without bespoke
+    /// Rust support. Mirrors the shape of `command_def_yaml_round_trip` but
+    /// with a non-`None` `view_kinds` so the field is exercised end-to-end.
+    #[test]
+    fn command_def_view_kinds_yaml_round_trip() {
+        let def = CommandDef {
+            id: "perspective.sort.set".into(),
+            name: "Sort Field".into(),
+            menu_name: None,
+            scope: Some("entity:perspective".into()),
+            visible: true,
+            keys: None,
+            params: vec![],
+            undoable: true,
+            context_menu: false,
+            context_menu_group: None,
+            context_menu_order: None,
+            menu: None,
+            view_kinds: Some(vec!["grid".into()]),
+        };
+        let yaml = serde_yaml_ng::to_string(&def).unwrap();
+        let parsed: CommandDef = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(def, parsed);
+        assert_eq!(
+            parsed.view_kinds.as_deref(),
+            Some(&["grid".to_string()][..])
+        );
     }
 
     #[test]
@@ -180,6 +230,25 @@ name: Quit
         assert!(def.context_menu_group.is_none());
         assert!(def.context_menu_order.is_none());
         assert!(def.menu.is_none());
+        assert!(def.view_kinds.is_none());
+    }
+
+    /// Minimal YAML without a `view_kinds:` key must parse with
+    /// `view_kinds == None` — i.e. the command surfaces in every view kind
+    /// by default. This is the regression guard against accidentally
+    /// requiring every YAML entry to declare the field after the schema is
+    /// extended.
+    #[test]
+    fn command_def_view_kinds_defaults_to_none() {
+        let yaml = r#"
+id: app.quit
+name: Quit
+"#;
+        let def: CommandDef = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(
+            def.view_kinds.is_none(),
+            "view_kinds must default to None when omitted from YAML"
+        );
     }
 
     #[test]

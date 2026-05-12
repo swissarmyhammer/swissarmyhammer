@@ -857,6 +857,7 @@ mod tests {
             context_menu_group: None,
             context_menu_order: None,
             menu: None,
+            view_kinds: None,
         }
     }
 

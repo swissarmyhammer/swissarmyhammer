@@ -36,7 +36,7 @@ When the half-plane is empty (focused at the visual edge of the layer), return `
   - Keep the "## Overrides" section (rule 0 unchanged).
   - Update "## No-silent-dropout" to mention "stay-put when half-plane is empty."
   - Strengthen "## Kind is not a filter" — the geometric algorithm is even more committed to this principle.
-  - **Note:** components #2, #3, #4, #5, #6 each own their own README sections — do not pre-empt them; they will land in their own PRs.
+  - **Note:** components #2, #3, #4, #6 each own their own README sections — do not pre-empt them; they will land in their own PRs.
 
 - `swissarmyhammer-focus/tests/fixtures/mod.rs`:
   - Extend `RealisticApp` to include a `ui:left-nav` zone (vertical sidebar to the left of `ui:perspective-bar`) with at least two `view:{id}` leaves inside, AND `column:{id}` zones inside `ui:board` with cards. Geometry must mirror production (left-nav is tall, perspective-bar is thin, columns sit inside the board area).
