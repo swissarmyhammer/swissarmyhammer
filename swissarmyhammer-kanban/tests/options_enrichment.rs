@@ -26,8 +26,8 @@ use swissarmyhammer_commands::{Command, CommandsRegistry, UIState};
 use swissarmyhammer_kanban::commands::options_resolvers::default_options_registry;
 use swissarmyhammer_kanban::scope_commands::{
     commands_for_scope, DynamicSources, PerspectiveFieldInfo, PerspectiveInfo, ResolvedCommand,
-    ViewInfo,
 };
+use swissarmyhammer_views::ViewInfo;
 
 /// Build a [`CommandsRegistry`] with a single synthetic command
 /// matching the given YAML — keeps test fixtures small and explicit.

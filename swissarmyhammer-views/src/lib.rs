@@ -16,8 +16,10 @@ pub mod changelog;
 pub mod context;
 pub mod error;
 pub mod types;
+pub mod view_info;
 
 pub use changelog::{ViewChangeEntry, ViewChangeOp, ViewsChangelog};
 pub use context::{load_yaml_dir, ViewsContext};
 pub use error::{Result, ViewsError};
 pub use types::{ViewCommand, ViewCommandKeys, ViewDef, ViewId, ViewKind};
+pub use view_info::ViewInfo;

@@ -14,13 +14,13 @@ use swissarmyhammer_kanban::clipboard::{
 };
 use swissarmyhammer_kanban::commands::register_commands;
 use swissarmyhammer_kanban::defaults::builtin_view_definitions;
-use swissarmyhammer_kanban::scope_commands::{commands_for_scope, DynamicSources, ViewInfo};
+use swissarmyhammer_kanban::scope_commands::{commands_for_scope, DynamicSources};
 use swissarmyhammer_kanban::test_support::composed_builtin_yaml_sources;
 use swissarmyhammer_kanban::{
     board::InitBoard, KanbanContext, KanbanOperationProcessor, OperationProcessor,
 };
 use swissarmyhammer_store::{StoreContext, StoreHandle};
-use swissarmyhammer_views::{ViewKind, ViewsContext};
+use swissarmyhammer_views::{ViewInfo, ViewKind, ViewsContext};
 use tempfile::TempDir;
 
 // ===========================================================================

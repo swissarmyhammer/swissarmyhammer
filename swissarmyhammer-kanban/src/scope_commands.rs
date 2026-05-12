@@ -45,36 +45,7 @@ use swissarmyhammer_commands::{
     OptionsRegistry, ParamDef, ParamSource, TabButtonDef, UIState, WindowInfo,
 };
 use swissarmyhammer_fields::FieldsContext;
-
-/// Lightweight view descriptor for dynamic command generation.
-///
-/// Only carries the fields needed to produce a palette row that dispatches
-/// `view.set` with a pre-filled `view_id`. Intentionally decoupled from
-/// `ViewDef` so the scope_commands module does not depend on the views
-/// crate directly.
-#[derive(Debug, Clone)]
-pub struct ViewInfo {
-    /// View identifier (e.g. "board-view", "tasks-grid").
-    pub id: String,
-    /// Human-readable name (e.g. "Board View", "Task Grid").
-    pub name: String,
-    /// Entity type this view renders (e.g. "task", "tag", "project").
-    ///
-    /// When present, the scope dispatcher emits a dynamic
-    /// `entity.add:{entity_type}` command so every view type gets a
-    /// generic "New {Type}" creation action without per-type Rust code.
-    pub entity_type: Option<String>,
-    /// View kind serialized as a kebab-case string (e.g. `"board"`,
-    /// `"grid"`, `"list"`, `"calendar"`, `"timeline"`, `"unknown"`).
-    ///
-    /// Drives the `CommandDef.view_kinds` UI-surface filter:
-    /// `commands_for_scope` resolves the innermost `view:{id}` moniker in
-    /// the scope chain to this string, and skips any command whose
-    /// `view_kinds` list is non-empty and does not contain the resolved
-    /// kind. The same kebab-case representation is produced by
-    /// `ViewKind`'s `#[serde(rename_all = "kebab-case")]`.
-    pub kind: String,
-}
+use swissarmyhammer_views::ViewInfo;
 
 /// Lightweight open-board descriptor for dynamic command generation.
 ///
