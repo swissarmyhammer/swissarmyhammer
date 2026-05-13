@@ -94,7 +94,7 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-h[Print help]' \
 '--help[Print help]' \
-":: :_avp__subcmd__model_commands" \
+":: :_avp__model_commands" \
 "*::: :->model" \
 && ret=0
 
@@ -131,7 +131,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_avp__subcmd__model__subcmd__help_commands" \
+":: :_avp__model__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -167,7 +167,7 @@ esac
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_avp__subcmd__help_commands" \
+":: :_avp__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -199,7 +199,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (model)
 _arguments "${_arguments_options[@]}" : \
-":: :_avp__subcmd__help__subcmd__model_commands" \
+":: :_avp__help__model_commands" \
 "*::: :->model" \
 && ret=0
 
@@ -251,23 +251,23 @@ _avp_commands() {
     )
     _describe -t commands 'avp commands' commands "$@"
 }
-(( $+functions[_avp__subcmd__deinit_commands] )) ||
-_avp__subcmd__deinit_commands() {
+(( $+functions[_avp__deinit_commands] )) ||
+_avp__deinit_commands() {
     local commands; commands=()
     _describe -t commands 'avp deinit commands' commands "$@"
 }
-(( $+functions[_avp__subcmd__doctor_commands] )) ||
-_avp__subcmd__doctor_commands() {
+(( $+functions[_avp__doctor_commands] )) ||
+_avp__doctor_commands() {
     local commands; commands=()
     _describe -t commands 'avp doctor commands' commands "$@"
 }
-(( $+functions[_avp__subcmd__edit_commands] )) ||
-_avp__subcmd__edit_commands() {
+(( $+functions[_avp__edit_commands] )) ||
+_avp__edit_commands() {
     local commands; commands=()
     _describe -t commands 'avp edit commands' commands "$@"
 }
-(( $+functions[_avp__subcmd__help_commands] )) ||
-_avp__subcmd__help_commands() {
+(( $+functions[_avp__help_commands] )) ||
+_avp__help_commands() {
     local commands; commands=(
 'init:Install AVP hooks into Claude Code settings' \
 'deinit:Remove AVP hooks from Claude Code settings and delete .avp directory' \
@@ -279,33 +279,33 @@ _avp__subcmd__help_commands() {
     )
     _describe -t commands 'avp help commands' commands "$@"
 }
-(( $+functions[_avp__subcmd__help__subcmd__deinit_commands] )) ||
-_avp__subcmd__help__subcmd__deinit_commands() {
+(( $+functions[_avp__help__deinit_commands] )) ||
+_avp__help__deinit_commands() {
     local commands; commands=()
     _describe -t commands 'avp help deinit commands' commands "$@"
 }
-(( $+functions[_avp__subcmd__help__subcmd__doctor_commands] )) ||
-_avp__subcmd__help__subcmd__doctor_commands() {
+(( $+functions[_avp__help__doctor_commands] )) ||
+_avp__help__doctor_commands() {
     local commands; commands=()
     _describe -t commands 'avp help doctor commands' commands "$@"
 }
-(( $+functions[_avp__subcmd__help__subcmd__edit_commands] )) ||
-_avp__subcmd__help__subcmd__edit_commands() {
+(( $+functions[_avp__help__edit_commands] )) ||
+_avp__help__edit_commands() {
     local commands; commands=()
     _describe -t commands 'avp help edit commands' commands "$@"
 }
-(( $+functions[_avp__subcmd__help__subcmd__help_commands] )) ||
-_avp__subcmd__help__subcmd__help_commands() {
+(( $+functions[_avp__help__help_commands] )) ||
+_avp__help__help_commands() {
     local commands; commands=()
     _describe -t commands 'avp help help commands' commands "$@"
 }
-(( $+functions[_avp__subcmd__help__subcmd__init_commands] )) ||
-_avp__subcmd__help__subcmd__init_commands() {
+(( $+functions[_avp__help__init_commands] )) ||
+_avp__help__init_commands() {
     local commands; commands=()
     _describe -t commands 'avp help init commands' commands "$@"
 }
-(( $+functions[_avp__subcmd__help__subcmd__model_commands] )) ||
-_avp__subcmd__help__subcmd__model_commands() {
+(( $+functions[_avp__help__model_commands] )) ||
+_avp__help__model_commands() {
     local commands; commands=(
 'list:List all available models' \
 'show:Show the current model configuration' \
@@ -313,33 +313,33 @@ _avp__subcmd__help__subcmd__model_commands() {
     )
     _describe -t commands 'avp help model commands' commands "$@"
 }
-(( $+functions[_avp__subcmd__help__subcmd__model__subcmd__list_commands] )) ||
-_avp__subcmd__help__subcmd__model__subcmd__list_commands() {
+(( $+functions[_avp__help__model__list_commands] )) ||
+_avp__help__model__list_commands() {
     local commands; commands=()
     _describe -t commands 'avp help model list commands' commands "$@"
 }
-(( $+functions[_avp__subcmd__help__subcmd__model__subcmd__show_commands] )) ||
-_avp__subcmd__help__subcmd__model__subcmd__show_commands() {
+(( $+functions[_avp__help__model__show_commands] )) ||
+_avp__help__model__show_commands() {
     local commands; commands=()
     _describe -t commands 'avp help model show commands' commands "$@"
 }
-(( $+functions[_avp__subcmd__help__subcmd__model__subcmd__use_commands] )) ||
-_avp__subcmd__help__subcmd__model__subcmd__use_commands() {
+(( $+functions[_avp__help__model__use_commands] )) ||
+_avp__help__model__use_commands() {
     local commands; commands=()
     _describe -t commands 'avp help model use commands' commands "$@"
 }
-(( $+functions[_avp__subcmd__help__subcmd__new_commands] )) ||
-_avp__subcmd__help__subcmd__new_commands() {
+(( $+functions[_avp__help__new_commands] )) ||
+_avp__help__new_commands() {
     local commands; commands=()
     _describe -t commands 'avp help new commands' commands "$@"
 }
-(( $+functions[_avp__subcmd__init_commands] )) ||
-_avp__subcmd__init_commands() {
+(( $+functions[_avp__init_commands] )) ||
+_avp__init_commands() {
     local commands; commands=()
     _describe -t commands 'avp init commands' commands "$@"
 }
-(( $+functions[_avp__subcmd__model_commands] )) ||
-_avp__subcmd__model_commands() {
+(( $+functions[_avp__model_commands] )) ||
+_avp__model_commands() {
     local commands; commands=(
 'list:List all available models' \
 'show:Show the current model configuration' \
@@ -348,8 +348,8 @@ _avp__subcmd__model_commands() {
     )
     _describe -t commands 'avp model commands' commands "$@"
 }
-(( $+functions[_avp__subcmd__model__subcmd__help_commands] )) ||
-_avp__subcmd__model__subcmd__help_commands() {
+(( $+functions[_avp__model__help_commands] )) ||
+_avp__model__help_commands() {
     local commands; commands=(
 'list:List all available models' \
 'show:Show the current model configuration' \
@@ -358,43 +358,43 @@ _avp__subcmd__model__subcmd__help_commands() {
     )
     _describe -t commands 'avp model help commands' commands "$@"
 }
-(( $+functions[_avp__subcmd__model__subcmd__help__subcmd__help_commands] )) ||
-_avp__subcmd__model__subcmd__help__subcmd__help_commands() {
+(( $+functions[_avp__model__help__help_commands] )) ||
+_avp__model__help__help_commands() {
     local commands; commands=()
     _describe -t commands 'avp model help help commands' commands "$@"
 }
-(( $+functions[_avp__subcmd__model__subcmd__help__subcmd__list_commands] )) ||
-_avp__subcmd__model__subcmd__help__subcmd__list_commands() {
+(( $+functions[_avp__model__help__list_commands] )) ||
+_avp__model__help__list_commands() {
     local commands; commands=()
     _describe -t commands 'avp model help list commands' commands "$@"
 }
-(( $+functions[_avp__subcmd__model__subcmd__help__subcmd__show_commands] )) ||
-_avp__subcmd__model__subcmd__help__subcmd__show_commands() {
+(( $+functions[_avp__model__help__show_commands] )) ||
+_avp__model__help__show_commands() {
     local commands; commands=()
     _describe -t commands 'avp model help show commands' commands "$@"
 }
-(( $+functions[_avp__subcmd__model__subcmd__help__subcmd__use_commands] )) ||
-_avp__subcmd__model__subcmd__help__subcmd__use_commands() {
+(( $+functions[_avp__model__help__use_commands] )) ||
+_avp__model__help__use_commands() {
     local commands; commands=()
     _describe -t commands 'avp model help use commands' commands "$@"
 }
-(( $+functions[_avp__subcmd__model__subcmd__list_commands] )) ||
-_avp__subcmd__model__subcmd__list_commands() {
+(( $+functions[_avp__model__list_commands] )) ||
+_avp__model__list_commands() {
     local commands; commands=()
     _describe -t commands 'avp model list commands' commands "$@"
 }
-(( $+functions[_avp__subcmd__model__subcmd__show_commands] )) ||
-_avp__subcmd__model__subcmd__show_commands() {
+(( $+functions[_avp__model__show_commands] )) ||
+_avp__model__show_commands() {
     local commands; commands=()
     _describe -t commands 'avp model show commands' commands "$@"
 }
-(( $+functions[_avp__subcmd__model__subcmd__use_commands] )) ||
-_avp__subcmd__model__subcmd__use_commands() {
+(( $+functions[_avp__model__use_commands] )) ||
+_avp__model__use_commands() {
     local commands; commands=()
     _describe -t commands 'avp model use commands' commands "$@"
 }
-(( $+functions[_avp__subcmd__new_commands] )) ||
-_avp__subcmd__new_commands() {
+(( $+functions[_avp__new_commands] )) ||
+_avp__new_commands() {
     local commands; commands=()
     _describe -t commands 'avp new commands' commands "$@"
 }

@@ -16,7 +16,7 @@ This guide describes how to create a high-quality implementation plan when opera
 
 Use `code_context` as the primary research tool:
 
-- **Check index health** — `op: "get status"`. If incomplete, trigger with `op: "build status"`.
+- **Check index health** — `op: "get status"`. If incomplete, trigger with `op: "rebuild index"`.
 - **Detect projects** — `op: "detect projects"` for build commands and language guidelines.
 - **Find symbols** — `op: "search symbol"` with domain keywords, `op: "get symbol"` for implementations, `op: "list symbols"` for file structure.
 - **Map blast radius** — `op: "get blastradius"` on every file you expect to change. This is the most important research step — it reveals callers, downstream consumers, tests, and transitive dependencies. If blast radius is large, consider scoping the change more narrowly.

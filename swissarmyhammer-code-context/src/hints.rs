@@ -19,13 +19,13 @@
 pub fn hint_for_operation(operation: &str) -> &'static str {
     match operation {
         "get_status" => {
-            "If indexing is incomplete, run 'build_status' to trigger re-indexing of stale layers."
+            "If indexing is incomplete, run 'rebuild_index' to trigger re-indexing of stale layers."
         }
-        "build_status" => {
+        "rebuild_index" => {
             "Files have been marked for re-indexing. The leader process will pick them up on its next cycle. Run 'get_status' to monitor progress."
         }
         "clear_status" => {
-            "Index has been wiped. Run 'build_status' to trigger a full re-index, or wait for the leader to re-index automatically."
+            "Index has been wiped. Run 'rebuild_index' to trigger a full re-index, or wait for the leader to re-index automatically."
         }
         "get_symbol" => {
             "Use 'get_callgraph' to explore call relationships, or 'get_blastradius' to see downstream impact."
@@ -61,7 +61,7 @@ mod tests {
     fn test_hints_are_non_empty_for_known_operations() {
         let ops = [
             "get_status",
-            "build_status",
+            "rebuild_index",
             "clear_status",
             "get_symbol",
             "get_callgraph",
@@ -87,14 +87,14 @@ mod tests {
     fn test_hint_content_is_relevant() {
         let hint = hint_for_operation("get_status");
         assert!(
-            hint.contains("build_status"),
-            "get_status hint should mention build_status"
+            hint.contains("rebuild_index"),
+            "get_status hint should mention rebuild_index"
         );
 
-        let hint = hint_for_operation("build_status");
+        let hint = hint_for_operation("rebuild_index");
         assert!(
             hint.contains("get_status"),
-            "build_status hint should mention get_status"
+            "rebuild_index hint should mention get_status"
         );
     }
 }

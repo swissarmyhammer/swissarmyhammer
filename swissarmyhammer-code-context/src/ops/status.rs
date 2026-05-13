@@ -2,7 +2,7 @@
 //!
 //! - `get_status` -- health report with file counts, indexed percentages,
 //!   chunk/edge counts. Always returns immediately, even mid-index.
-//! - `build_status` -- marks files for re-indexing by resetting indexed flags.
+//! - `rebuild_index` -- marks files for re-indexing by resetting indexed flags.
 //! - `clear_status` -- wipes all index data and returns stats about what was cleared.
 
 use std::collections::HashSet;
@@ -141,18 +141,59 @@ fn percent_of(numerator: i64, denominator: i64) -> f64 {
 }
 
 // ---------------------------------------------------------------------------
-// build_status
+// rebuild_index
 // ---------------------------------------------------------------------------
 
-/// Result of a `build_status` operation.
+/// Result of a `rebuild_index` operation.
+///
+/// `files_marked` is the number of rows whose `ts_indexed` / `lsp_indexed`
+/// flags were reset to 0 by the marking step. The remaining counters reflect
+/// what the synchronous indexer actually did against those dirty rows:
+///
+/// * `files_indexed` — files the indexer flipped back to `ts_indexed = 1`.
+///   May be lower than `files_marked` when a file is unreadable or the
+///   language is unknown, in which case the file is still marked indexed
+///   to avoid an infinite retry loop, so this stays in sync with
+///   `files_marked` in practice.
+/// * `chunks_written` — number of `ts_chunks` rows produced by this run
+///   (across all files).
+/// * `elapsed_ms` — wall-clock duration of the indexing run, in milliseconds.
+///   Marking the rows dirty is not included.
+///
+/// ## Scope of the synchronous contract
+///
+/// The MCP `rebuild index` op runs the **tree-sitter** indexer to completion
+/// before it returns. The **LSP** indexer is a long-running background
+/// worker driven by the leader process; flipping `lsp_indexed=0` queues
+/// files for that worker but the rebuild call does not wait for the LSP
+/// worker to drain. Callers that need to verify LSP coverage should poll
+/// `get status` and watch `lsp_indexed_percent` rise.
+///
+/// `files_indexed` / `chunks_written` / `elapsed_ms` therefore describe
+/// only the tree-sitter portion of the run. `note` carries a
+/// human-readable disclaimer about the LSP portion when relevant.
 #[derive(Debug, Clone, serde::Serialize)]
-pub struct BuildStatusResult {
+pub struct RebuildIndexResult {
     /// Number of files marked for re-indexing.
     pub files_marked: u64,
+    /// Number of files the synchronous (tree-sitter) indexer processed
+    /// in this run.
+    pub files_indexed: u64,
+    /// Number of `ts_chunks` rows the indexer wrote in this run.
+    pub chunks_written: u64,
+    /// Wall-clock duration of the synchronous (tree-sitter) indexing
+    /// run, in milliseconds.
+    pub elapsed_ms: u64,
     /// Which layer was reset.
     pub layer: String,
     /// Suggested next step.
     pub hint: &'static str,
+    /// Human-readable note about the contract for this layer. For layers
+    /// that include LSP, this calls out that the LSP rebuild remains a
+    /// background activity and the synchronous counters describe only
+    /// the tree-sitter portion of the run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<&'static str>,
 }
 
 /// The indexing layer to reset for re-indexing.
@@ -169,8 +210,14 @@ pub enum BuildLayer {
 /// Marks files for re-indexing by resetting the indexed flag for the
 /// specified layer.
 ///
-/// This does not actually perform indexing -- it marks files so the
-/// leader process will re-index them on its next cycle.
+/// This only flips the dirty bits in `indexed_files` — it does not run the
+/// indexer itself. The MCP `rebuild index` handler calls this and then
+/// drives the synchronous indexer over the resulting dirty set, filling in
+/// `files_indexed` / `chunks_written` / `elapsed_ms` on the returned
+/// [`RebuildIndexResult`].
+///
+/// The indexer-side counters returned here are placeholders (zero); callers
+/// that perform the rebuild must overwrite them with the real run stats.
 ///
 /// # Arguments
 ///
@@ -180,10 +227,10 @@ pub enum BuildLayer {
 /// # Errors
 ///
 /// Returns [`CodeContextError::Database`] on SQLite failures.
-pub fn build_status(
+pub fn rebuild_index(
     conn: &Connection,
     layer: BuildLayer,
-) -> Result<BuildStatusResult, CodeContextError> {
+) -> Result<RebuildIndexResult, CodeContextError> {
     let (sql, layer_name) = match layer {
         BuildLayer::TreeSitter => ("UPDATE indexed_files SET ts_indexed = 0", "treesitter"),
         BuildLayer::Lsp => ("UPDATE indexed_files SET lsp_indexed = 0", "lsp"),
@@ -195,10 +242,30 @@ pub fn build_status(
 
     let files_marked = conn.execute(sql, [])? as u64;
 
-    Ok(BuildStatusResult {
+    // For layers that include the LSP side, flag the response so callers
+    // know the synchronous counters describe only the tree-sitter portion
+    // — LSP files were marked dirty but their re-indexing is driven by
+    // the long-running LSP worker, not by this call. Tree-sitter-only
+    // rebuilds need no note: the synchronous contract covers them in full.
+    let note = match layer {
+        BuildLayer::TreeSitter => None,
+        BuildLayer::Lsp | BuildLayer::Both => Some(
+            "LSP rebuild is asynchronous: files were marked dirty but \
+             the LSP worker drains them in the background. The synchronous \
+             counters (files_indexed, chunks_written, elapsed_ms) describe \
+             only the tree-sitter portion of the run; poll `get status` and \
+             watch `lsp_indexed_percent` for LSP progress.",
+        ),
+    };
+
+    Ok(RebuildIndexResult {
         files_marked,
+        files_indexed: 0,
+        chunks_written: 0,
+        elapsed_ms: 0,
         layer: layer_name.to_string(),
-        hint: crate::hints::hint_for_operation("build_status"),
+        hint: crate::hints::hint_for_operation("rebuild_index"),
+        note,
     })
 }
 
@@ -442,15 +509,15 @@ mod tests {
         assert_eq!(report.chunks_with_embedding_percent, 0.0);
     }
 
-    // -- build_status tests --
+    // -- rebuild_index tests --
 
     #[test]
-    fn test_build_status_resets_ts_layer() {
+    fn test_rebuild_index_resets_ts_layer() {
         let conn = test_db();
         insert_file(&conn, "a.rs", 1, 1);
         insert_file(&conn, "b.rs", 1, 0);
 
-        let result = build_status(&conn, BuildLayer::TreeSitter).unwrap();
+        let result = rebuild_index(&conn, BuildLayer::TreeSitter).unwrap();
 
         assert_eq!(result.files_marked, 2);
         assert_eq!(result.layer, "treesitter");
@@ -478,12 +545,12 @@ mod tests {
     }
 
     #[test]
-    fn test_build_status_resets_both_layers() {
+    fn test_rebuild_index_resets_both_layers() {
         let conn = test_db();
         insert_file(&conn, "a.rs", 1, 1);
         insert_file(&conn, "b.rs", 1, 1);
 
-        let result = build_status(&conn, BuildLayer::Both).unwrap();
+        let result = rebuild_index(&conn, BuildLayer::Both).unwrap();
 
         assert_eq!(result.files_marked, 2);
         assert_eq!(result.layer, "both");

@@ -2,7 +2,7 @@
 name: lsp
 description: 'Diagnose and install missing LSP servers for your project. Use when the user says "lsp", "language servers", "check lsp", or wants to ensure code intelligence is fully working. Also use when live code intelligence ops (get_hover, get_completions, go to definition) return degraded results from the tree-sitter layer instead of LSP, or when you see "no code intelligence", "can''t go to definition", "no type info available", or "source_layer: TreeSitter" on ops that should have full LSP data.'
 license: MIT OR Apache-2.0
-compatibility: Requires the `code_context` MCP tool  for `lsp status` and `detect projects`. Also needs locally installed LSP servers (e.g. rust-analyzer, pyright, gopls, typescript-language-server) on the system PATH for the languages present in the workspace.
+compatibility: Requires the `code_context` MCP tool for `lsp status` and `detect projects`. Also needs locally installed LSP servers (e.g. rust-analyzer, pyright, gopls, typescript-language-server) on the system PATH for the languages present in the workspace.
 metadata:
   author: swissarmyhammer
   version: 0.12.11

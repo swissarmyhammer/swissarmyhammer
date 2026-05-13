@@ -17,34 +17,34 @@ _shelltool() {
                 cmd="shelltool"
                 ;;
             shelltool,deinit)
-                cmd="shelltool__subcmd__deinit"
+                cmd="shelltool__deinit"
                 ;;
             shelltool,doctor)
-                cmd="shelltool__subcmd__doctor"
+                cmd="shelltool__doctor"
                 ;;
             shelltool,help)
-                cmd="shelltool__subcmd__help"
+                cmd="shelltool__help"
                 ;;
             shelltool,init)
-                cmd="shelltool__subcmd__init"
+                cmd="shelltool__init"
                 ;;
             shelltool,serve)
-                cmd="shelltool__subcmd__serve"
+                cmd="shelltool__serve"
                 ;;
-            shelltool__subcmd__help,deinit)
-                cmd="shelltool__subcmd__help__subcmd__deinit"
+            shelltool__help,deinit)
+                cmd="shelltool__help__deinit"
                 ;;
-            shelltool__subcmd__help,doctor)
-                cmd="shelltool__subcmd__help__subcmd__doctor"
+            shelltool__help,doctor)
+                cmd="shelltool__help__doctor"
                 ;;
-            shelltool__subcmd__help,help)
-                cmd="shelltool__subcmd__help__subcmd__help"
+            shelltool__help,help)
+                cmd="shelltool__help__help"
                 ;;
-            shelltool__subcmd__help,init)
-                cmd="shelltool__subcmd__help__subcmd__init"
+            shelltool__help,init)
+                cmd="shelltool__help__init"
                 ;;
-            shelltool__subcmd__help,serve)
-                cmd="shelltool__subcmd__help__subcmd__serve"
+            shelltool__help,serve)
+                cmd="shelltool__help__serve"
                 ;;
             *)
                 ;;
@@ -66,7 +66,7 @@ _shelltool() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        shelltool__subcmd__deinit)
+        shelltool__deinit)
             opts="-d -h --debug --help project local user"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -80,7 +80,7 @@ _shelltool() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        shelltool__subcmd__doctor)
+        shelltool__doctor)
             opts="-v -d -h --verbose --debug --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -94,7 +94,7 @@ _shelltool() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        shelltool__subcmd__help)
+        shelltool__help)
             opts="serve init deinit doctor help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -108,7 +108,7 @@ _shelltool() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        shelltool__subcmd__help__subcmd__deinit)
+        shelltool__help__deinit)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -122,7 +122,7 @@ _shelltool() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        shelltool__subcmd__help__subcmd__doctor)
+        shelltool__help__doctor)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -136,7 +136,7 @@ _shelltool() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        shelltool__subcmd__help__subcmd__help)
+        shelltool__help__help)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -150,7 +150,7 @@ _shelltool() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        shelltool__subcmd__help__subcmd__init)
+        shelltool__help__init)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -164,7 +164,7 @@ _shelltool() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        shelltool__subcmd__help__subcmd__serve)
+        shelltool__help__serve)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -178,7 +178,7 @@ _shelltool() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        shelltool__subcmd__init)
+        shelltool__init)
             opts="-d -h --debug --help project local user"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -192,7 +192,7 @@ _shelltool() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        shelltool__subcmd__serve)
+        shelltool__serve)
             opts="-d -h --debug --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )

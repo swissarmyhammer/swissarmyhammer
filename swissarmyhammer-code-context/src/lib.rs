@@ -29,6 +29,7 @@ pub mod lsp_indexer;
 pub mod lsp_server;
 pub mod lsp_worker;
 pub mod ops;
+pub mod progress;
 pub mod ts_callgraph;
 pub mod watcher;
 pub mod workspace;
@@ -116,13 +117,17 @@ pub use ops::search_code::{
 };
 pub use ops::search_symbol::{search_symbol, SearchSymbolMatch, SearchSymbolOptions};
 pub use ops::status::{
-    build_status, clear_status, distinct_extensions, get_status, BuildLayer, BuildStatusResult,
-    ClearStatusResult, StatusReport,
+    clear_status, distinct_extensions, get_status, rebuild_index, BuildLayer, ClearStatusResult,
+    RebuildIndexResult, StatusReport,
 };
 pub use ops::workspace_symbol_live::{
     parse_workspace_symbols, workspace_symbol_live, WorkspaceSymbolLiveOptions,
     WorkspaceSymbolLiveResult, WorkspaceSymbolResult,
 };
+// NOTE: `IndexProgress` (event enum, emitted by the indexer) is distinct from
+// `IndexingProgress` (snapshot status returned by `search_code`, re-exported
+// above). Don't confuse them at call sites.
+pub use progress::{noop_reporter, IndexProgress, IndexRunStats, NoopReporter, ProgressReporter};
 pub use ts_callgraph::{
     ensure_ts_symbols, extract_call_names, generate_ts_call_edges, resolve_callees, write_ts_edges,
     CallSite, ResolvedCallee,

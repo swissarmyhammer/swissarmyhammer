@@ -15,8 +15,8 @@ use swissarmyhammer_tools::mcp::tools::code_context::CodeContextTool;
 use tokio::sync::Mutex;
 
 use crate::cli::{
-    BuildCommands, ClearCommands, Commands, DetectCommands, FindCommands, GetCommands,
-    GrepCommands, ListCommands, LspCommands, QueryCommands, SearchCommands,
+    ClearCommands, Commands, DetectCommands, FindCommands, GetCommands, GrepCommands, ListCommands,
+    LspCommands, QueryCommands, RebuildCommands, SearchCommands,
 };
 
 /// Convenience: insert an optional value into args if present.
@@ -302,7 +302,7 @@ fn build_find_args(cmd: &FindCommands) -> Map<String, Value> {
     args
 }
 
-/// Build args for simple single-variant command groups (list, build, clear, lsp, detect).
+/// Build args for simple single-variant command groups (list, rebuild, clear, lsp, detect).
 fn build_simple_args(command: &Commands) -> Map<String, Value> {
     let mut args = Map::new();
     match command {
@@ -312,9 +312,9 @@ fn build_simple_args(command: &Commands) -> Map<String, Value> {
                 args.insert("file_path".into(), json!(file_path));
             }
         },
-        Commands::Build { command } => match command {
-            BuildCommands::Status { layer } => {
-                args.insert("op".into(), json!("build status"));
+        Commands::Rebuild { command } => match command {
+            RebuildCommands::Index { layer } => {
+                args.insert("op".into(), json!("rebuild index"));
                 insert_opt(&mut args, "layer", layer);
             }
         },
@@ -366,7 +366,7 @@ pub fn build_args(command: &Commands) -> Option<Map<String, Value>> {
         Commands::Query { command } => Some(build_query_args(command)),
         Commands::Find { command } => Some(build_find_args(command)),
         Commands::List { .. }
-        | Commands::Build { .. }
+        | Commands::Rebuild { .. }
         | Commands::Clear { .. }
         | Commands::Lsp { .. }
         | Commands::Detect { .. } => Some(build_simple_args(command)),
@@ -376,7 +376,19 @@ pub fn build_args(command: &Commands) -> Option<Map<String, Value>> {
 /// Execute a CLI operation command against the `CodeContextTool`.
 ///
 /// Creates a minimal `ToolContext`, builds the MCP argument map from the parsed
-/// CLI command, executes the tool, and prints the result.
+/// CLI command, executes the tool, and prints the result. Long-running ops
+/// (those that emit MCP `notifications/progress`) drive a CLI-side renderer
+/// through an in-process notification sink wired into the `ToolContext`.
+///
+/// # Arguments
+///
+/// * `command` - The parsed CLI operation command
+/// * `json_output` - When true, print the full `CallToolResult` as JSON;
+///   when false, extract text content and print one item per line.
+/// * `no_progress` - When true, install a [`NullRenderer`] so the tool emits
+///   no progress chrome (intended for CI / piped scripts). When false the
+///   default [`IndicatifRenderer`] is used — `indicatif` auto-degrades to
+///   plain output on non-TTY stdout, so this is safe to leave on by default.
 ///
 /// # Output modes
 ///
@@ -387,7 +399,7 @@ pub fn build_args(command: &Commands) -> Option<Map<String, Value>> {
 /// # Returns
 ///
 /// Exit code: 0 on success, 1 on error.
-pub async fn run_operation(command: &Commands, json_output: bool) -> i32 {
+pub async fn run_operation(command: &Commands, json_output: bool, no_progress: bool) -> i32 {
     let args = match build_args(command) {
         Some(a) => a,
         None => {
@@ -399,17 +411,45 @@ pub async fn run_operation(command: &Commands, json_output: bool) -> i32 {
 
     let tool = CodeContextTool::new();
 
+    // Build the progress wiring up front so the renderer task is alive the
+    // moment the tool starts emitting. We always wire a renderer — even for
+    // ops that never emit progress — because the channel is cheap and the
+    // renderer task exits cleanly the moment the sink drops at the end of
+    // the call. `--no-progress` swaps the indicatif renderer for the null
+    // renderer; the rest of the path is identical.
+    let wiring = if no_progress {
+        crate::progress::build_progress_wiring(crate::progress::NullRenderer)
+    } else {
+        crate::progress::build_progress_wiring(crate::progress::IndicatifRenderer::new())
+    };
+
     let context = {
         let tool_handlers = Arc::new(ToolHandlers::new());
         let git_ops = Arc::new(Mutex::new(None));
         let agent_config = Arc::new(ModelConfig::default());
-        let mut ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
+        let mut ctx = ToolContext::new(tool_handlers, git_ops, agent_config)
+            .with_progress_token(wiring.token.clone())
+            .with_progress_sink(wiring.sink.clone());
         // Use cwd so the tool discovers the index in the current project
         ctx.working_dir = std::env::current_dir().ok();
         ctx
     };
 
-    let result = match tool.execute(args, &context).await {
+    let result = tool.execute(args, &context).await;
+
+    // Close the sink and wait for the renderer to flush before printing any
+    // tool output. Without this the bar's final tick can race the result
+    // line and corrupt terminal state. Dropping `wiring.sink` (the original
+    // sender) is necessary because `with_progress_sink` cloned it into the
+    // context — both senders must drop before the receiver returns `None`
+    // and the renderer task can finish.
+    drop(context);
+    drop(wiring.sink);
+    if let Err(err) = wiring.renderer_handle.await {
+        tracing::debug!(error = ?err, "progress renderer task did not join cleanly");
+    }
+
+    let result = match result {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Error: {e}");
@@ -736,10 +776,10 @@ mod tests {
     }
 
     #[test]
-    fn test_build_status_builds_correct_args() {
-        let cmd = parse_command(&["build", "status", "--layer", "treesitter"]);
+    fn test_rebuild_index_builds_correct_args() {
+        let cmd = parse_command(&["rebuild", "index", "--layer", "treesitter"]);
         let args = build_args(&cmd).expect("should produce args");
-        assert_eq!(args.get("op").unwrap(), "build status");
+        assert_eq!(args.get("op").unwrap(), "rebuild index");
         assert_eq!(args.get("layer").unwrap(), "treesitter");
     }
 
@@ -889,7 +929,7 @@ mod tests {
         let _guard = swissarmyhammer_common::test_utils::CurrentDirGuard::new(tmp.path()).unwrap();
 
         let cmd = parse_command(&["get", "status"]);
-        let exit_code = run_operation(&cmd, false).await;
+        let exit_code = run_operation(&cmd, false, true).await;
         assert_eq!(
             exit_code, 0,
             "get status should succeed even with an empty index"
@@ -908,7 +948,7 @@ mod tests {
         let _guard = swissarmyhammer_common::test_utils::CurrentDirGuard::new(tmp.path()).unwrap();
 
         let cmd = parse_command(&["get", "status"]);
-        let exit_code = run_operation(&cmd, true).await;
+        let exit_code = run_operation(&cmd, true, true).await;
         assert_eq!(
             exit_code, 0,
             "get status with json output should succeed even with an empty index"
@@ -919,7 +959,7 @@ mod tests {
     /// run_operation (they should be handled elsewhere).
     #[tokio::test]
     async fn test_run_operation_rejects_lifecycle_commands() {
-        let exit_code = run_operation(&Commands::Serve, false).await;
+        let exit_code = run_operation(&Commands::Serve, false, true).await;
         assert_eq!(
             exit_code, 1,
             "lifecycle commands should return exit code 1 from run_operation"

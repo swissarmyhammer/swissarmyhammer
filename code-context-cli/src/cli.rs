@@ -45,6 +45,15 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub json: bool,
 
+    /// Disable interactive progress bars for long-running operations.
+    ///
+    /// `indicatif` auto-degrades to plain output on non-TTY stdout, but
+    /// some environments (CI runners, recording wrappers) still benefit
+    /// from a hard switch. With this flag set the dispatcher installs
+    /// a no-op renderer and the tool emits no progress chrome.
+    #[arg(long, global = true)]
+    pub no_progress: bool,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -107,9 +116,9 @@ pub enum Commands {
         command: FindCommands,
     },
     /// Trigger re-indexing
-    Build {
+    Rebuild {
         #[command(subcommand)]
-        command: BuildCommands,
+        command: RebuildCommands,
     },
     /// Wipe index data
     Clear {
@@ -437,14 +446,14 @@ pub enum FindCommands {
 }
 
 // ---------------------------------------------------------------------------
-// Build subcommands
+// Rebuild subcommands
 // ---------------------------------------------------------------------------
 
-/// Subcommands for `code-context build`.
+/// Subcommands for `code-context rebuild`.
 #[derive(Subcommand, Debug)]
-pub enum BuildCommands {
+pub enum RebuildCommands {
     /// Mark files for re-indexing by resetting indexed flags
-    Status {
+    Index {
         /// Which indexing layer to reset: treesitter, lsp, or both
         #[arg(long)]
         layer: Option<String>,
@@ -530,7 +539,7 @@ mod tests {
         // Every top-level command must appear
         for cmd in [
             "serve", "init", "deinit", "doctor", "skill", "get", "search", "list", "grep", "query",
-            "find", "build", "clear", "lsp", "detect",
+            "find", "rebuild", "clear", "lsp", "detect",
         ] {
             assert!(help.contains(cmd), "help missing command: {cmd}");
         }
@@ -1027,14 +1036,14 @@ mod tests {
         }
     }
 
-    // -- Build subcommands --
+    // -- Rebuild subcommands --
 
     #[test]
-    fn build_status() {
-        let cli = parse(&["build", "status", "--layer", "treesitter"]);
+    fn rebuild_index() {
+        let cli = parse(&["rebuild", "index", "--layer", "treesitter"]);
         match cli.command {
-            Commands::Build {
-                command: BuildCommands::Status { layer },
+            Commands::Rebuild {
+                command: RebuildCommands::Index { layer },
             } => assert_eq!(layer.as_deref(), Some("treesitter")),
             other => panic!("unexpected: {other:?}"),
         }

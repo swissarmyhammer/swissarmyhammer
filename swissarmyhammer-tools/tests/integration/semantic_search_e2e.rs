@@ -238,7 +238,12 @@ async fn qwen_embedding_semantic_search_e2e() {
 
     // 3. Drive the REAL production indexer end-to-end. This loads
     //    `Embedder::default()` (qwen-embedding) and embeds every chunk.
-    index_discovered_files_async(&root, Arc::clone(&shared_db)).await;
+    index_discovered_files_async(
+        &root,
+        Arc::clone(&shared_db),
+        swissarmyhammer_code_context::noop_reporter(),
+    )
+    .await;
 
     // 4. The whole point: embeddings exist in the DB. Card 2 makes this true;
     //    on trunk before card 2 landed, this was always 0.

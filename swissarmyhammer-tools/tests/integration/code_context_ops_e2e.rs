@@ -246,7 +246,12 @@ async fn index_real_workspace() -> (IsolatedTestEnvironment, tempfile::TempDir, 
 
     // Drive the REAL production indexer — loads `Embedder::default()` and
     // writes real embedding blobs into `ts_chunks`.
-    index_discovered_files_async(&root, Arc::clone(&shared_db)).await;
+    index_discovered_files_async(
+        &root,
+        Arc::clone(&shared_db),
+        swissarmyhammer_code_context::noop_reporter(),
+    )
+    .await;
 
     // Sanity: at least one embedding must exist, otherwise the embedder
     // silently no-op'd and the duplicate test below would falsely pass
@@ -679,7 +684,12 @@ async fn qwen_embedding_lsp_layered_e2e() {
     // -- Drive the production TS indexer so check_ts_readiness passes -------
     // Every LSP-layered op gates on this — without ts_indexed=1 the ops
     // short-circuit to the "Index not ready" placeholder.
-    index_discovered_files_async(root, Arc::clone(&shared_db)).await;
+    index_discovered_files_async(
+        root,
+        Arc::clone(&shared_db),
+        swissarmyhammer_code_context::noop_reporter(),
+    )
+    .await;
 
     // -- Drive the real rust-analyzer LSP pipeline --------------------------
     let edge_count = drive_lsp_persistence(root, &shared_db);

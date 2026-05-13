@@ -304,7 +304,7 @@ pub async fn check_semantic_search(root: &Path) -> Check {
             "Semantic search index is empty — no chunks have embeddings yet.",
             Some(
                 "Wait for the indexing worker to embed chunks, or run \
-                 `code-context build status` to trigger re-indexing",
+                 `code-context rebuild index` to trigger re-indexing",
             ),
         );
     }
@@ -421,7 +421,7 @@ fn classify_canary_matches(match_count: usize, embedded_count: i64) -> Check {
             ),
             Some(
                 "Re-index the workspace with the current embedding model: \
-                 run `code-context clear status` then `code-context build status`",
+                 run `code-context clear status` then `code-context rebuild index`",
             ),
         );
     }

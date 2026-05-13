@@ -57,7 +57,7 @@ fn generate_code_context_examples() -> Vec<Value> {
         }),
         json!({
             "description": "Trigger re-indexing",
-            "value": {"op": "build status", "layer": "both"}
+            "value": {"op": "rebuild index", "layer": "both"}
         }),
         json!({
             "description": "Clear all index data",
@@ -78,8 +78,8 @@ fn generate_code_context_examples() -> Vec<Value> {
 mod tests {
     use super::*;
     use crate::mcp::tools::code_context::{
-        BuildStatus, ClearStatus, DetectProjects, FindDuplicates, GetBlastradius, GetCallgraph,
-        GetCodeStatus, GetSymbol, GrepCode, ListSymbols, LspStatus, QueryAst, SearchCode,
+        ClearStatus, DetectProjects, FindDuplicates, GetBlastradius, GetCallgraph, GetCodeStatus,
+        GetSymbol, GrepCode, ListSymbols, LspStatus, QueryAst, RebuildIndex, SearchCode,
         SearchSymbol,
     };
 
@@ -95,7 +95,7 @@ mod tests {
             &GetCallgraph as &dyn Operation,
             &GetBlastradius as &dyn Operation,
             &GetCodeStatus as &dyn Operation,
-            &BuildStatus as &dyn Operation,
+            &RebuildIndex as &dyn Operation,
             &ClearStatus as &dyn Operation,
             &LspStatus as &dyn Operation,
             &DetectProjects as &dyn Operation,
@@ -131,7 +131,7 @@ mod tests {
         assert!(op_enum.contains(&json!("get callgraph")));
         assert!(op_enum.contains(&json!("get blastradius")));
         assert!(op_enum.contains(&json!("get status")));
-        assert!(op_enum.contains(&json!("build status")));
+        assert!(op_enum.contains(&json!("rebuild index")));
         assert!(op_enum.contains(&json!("search code")));
         assert!(op_enum.contains(&json!("find duplicates")));
         assert!(op_enum.contains(&json!("query ast")));

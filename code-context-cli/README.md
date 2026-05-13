@@ -117,11 +117,11 @@ All operations follow a verb-noun pattern and can be run directly from the CLI o
 |-----------|-------------|
 | `find duplicates` | Find code in a file that is duplicated elsewhere in the codebase |
 
-### build -- index management
+### rebuild -- index management
 
 | Operation | Description |
 |-----------|-------------|
-| `build status` | Mark files for re-indexing by resetting indexed flags |
+| `rebuild index` | Mark files for re-indexing by resetting indexed flags |
 
 ### clear -- cleanup
 

@@ -62,6 +62,9 @@ pub struct CodeContextWorkspace {
     workspace_root: PathBuf,
     /// Cached path to the `.code-context/` directory
     context_dir: PathBuf,
+    /// Path to the leader-election lock file (used by followers to identify
+    /// the leader PID for diagnostic messages).
+    lock_path: PathBuf,
 }
 
 impl fmt::Debug for CodeContextWorkspace {
@@ -96,15 +99,16 @@ impl CodeContextWorkspace {
         // Leader election
         let election_config = ElectionConfig::new().with_prefix("code-context");
         let election = LeaderElection::with_config(workspace_root, election_config);
+        let lock_path = election.lock_path().to_path_buf();
 
         let db_path = context_dir.join(DB_NAME);
 
         match election.elect().map_err(CodeContextError::Election)? {
             ElectionOutcome::Leader(guard) => {
-                Self::open_as_leader(workspace_root, context_dir, &db_path, guard)
+                Self::open_as_leader(workspace_root, context_dir, lock_path, &db_path, guard)
             }
             ElectionOutcome::Follower(follower) => {
-                Self::open_as_follower(workspace_root, context_dir, &db_path, follower)
+                Self::open_as_follower(workspace_root, context_dir, lock_path, &db_path, follower)
             }
         }
     }
@@ -114,6 +118,7 @@ impl CodeContextWorkspace {
     fn open_as_leader(
         workspace_root: &Path,
         context_dir: PathBuf,
+        lock_path: PathBuf,
         db_path: &Path,
         guard: LeaderGuard,
     ) -> Result<Self, CodeContextError> {
@@ -136,6 +141,7 @@ impl CodeContextWorkspace {
             mode: WorkspaceMode::Leader { db, _guard: guard },
             workspace_root: workspace_root.to_path_buf(),
             context_dir,
+            lock_path,
         })
     }
 
@@ -159,6 +165,7 @@ impl CodeContextWorkspace {
     fn open_as_follower(
         workspace_root: &Path,
         context_dir: PathBuf,
+        lock_path: PathBuf,
         db_path: &Path,
         follower: FollowerGuard,
     ) -> Result<Self, CodeContextError> {
@@ -180,6 +187,7 @@ impl CodeContextWorkspace {
             mode: WorkspaceMode::Follower { db, follower },
             workspace_root: workspace_root.to_path_buf(),
             context_dir,
+            lock_path,
         })
     }
 
@@ -199,6 +207,30 @@ impl CodeContextWorkspace {
                 DbRef::Shared(db.lock().expect("workspace db mutex poisoned"))
             }
             WorkspaceMode::Follower { db, .. } => DbRef::Owned(db),
+        }
+    }
+
+    /// Get a reference to the database connection for *write* operations.
+    ///
+    /// For leaders this behaves identically to [`Self::db`] — the returned
+    /// `DbRef::Shared` wraps the leader's read-write connection. For
+    /// followers this returns [`CodeContextError::ReadOnlyFollower`] with a
+    /// diagnostic identifying the workspace, DB path, and (best-effort) the
+    /// leader's PID, so the caller can surface a user-facing explanation
+    /// instead of an opaque SQLite "attempt to write a readonly database".
+    ///
+    /// Write-side ops (currently `rebuild_index`, `clear_status`) should
+    /// call this; read-side ops continue to use [`Self::db`].
+    pub fn write_db(&self) -> Result<DbRef<'_>, CodeContextError> {
+        match &self.mode {
+            WorkspaceMode::Leader { db, .. } => Ok(DbRef::Shared(
+                db.lock().expect("workspace db mutex poisoned"),
+            )),
+            WorkspaceMode::Follower { .. } => Err(CodeContextError::ReadOnlyFollower {
+                leader_pid: swissarmyhammer_leader_election::peek_leader_pid(&self.lock_path),
+                workspace_root: self.workspace_root.clone(),
+                db_path: self.context_dir.join(DB_NAME),
+            }),
         }
     }
 
@@ -866,5 +898,123 @@ mod tests {
         let cols = read_indexed_files_columns(&db_path);
         let n = cols.iter().filter(|c| *c == "embedded").count();
         assert_eq!(n, 1, "`embedded` column should appear exactly once");
+    }
+
+    // --- write_db tests ---
+
+    /// On a leader workspace, `write_db()` returns a usable DbRef that can
+    /// execute writes. This mirrors `db()`'s leader behaviour exactly.
+    #[test]
+    fn test_write_db_leader_returns_ok_and_can_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(ws.is_leader());
+
+        let db = ws.write_db().expect("leader's write_db must succeed");
+        db.execute(
+            "INSERT INTO indexed_files (file_path, content_hash, file_size, last_seen_at)
+             VALUES ('write_db.rs', X'1234', 1, 1)",
+            [],
+        )
+        .unwrap();
+    }
+
+    /// On a follower workspace, `write_db()` returns
+    /// `CodeContextError::ReadOnlyFollower` *before* any SQL runs. The
+    /// payload identifies the workspace, the DB path, and (best-effort) the
+    /// leader's PID — the leader is this same process in the test, so the
+    /// PID should match.
+    #[test]
+    fn test_write_db_follower_returns_typed_error() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Hold the leader on this process so the follower's lock attempt
+        // loses the election deterministically.
+        let _leader = CodeContextWorkspace::open(dir.path()).unwrap();
+
+        let follower = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(!follower.is_leader());
+
+        let err = follower
+            .write_db()
+            .expect_err("follower's write_db must reject the write");
+
+        match err {
+            CodeContextError::ReadOnlyFollower {
+                leader_pid,
+                workspace_root,
+                db_path,
+            } => {
+                assert_eq!(
+                    leader_pid,
+                    Some(std::process::id()),
+                    "expected the leader's PID (same process in this test)"
+                );
+                assert_eq!(workspace_root, dir.path());
+                assert_eq!(db_path, dir.path().join(CONTEXT_DIR).join(DB_NAME));
+            }
+            other => panic!("expected ReadOnlyFollower, got: {:?}", other),
+        }
+    }
+
+    /// The `ReadOnlyFollower` Display message names the workspace and DB
+    /// paths so the user can identify the offending leader session. This
+    /// is what surfaces in the MCP error payload.
+    #[test]
+    fn test_write_db_follower_error_message_mentions_workspace_and_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let _leader = CodeContextWorkspace::open(dir.path()).unwrap();
+        let follower = CodeContextWorkspace::open(dir.path()).unwrap();
+
+        let err = follower.write_db().expect_err("follower rejects write_db");
+        let msg = err.to_string();
+
+        let ws_display = dir.path().display().to_string();
+        let db_display = dir
+            .path()
+            .join(CONTEXT_DIR)
+            .join(DB_NAME)
+            .display()
+            .to_string();
+        assert!(
+            msg.contains(&ws_display),
+            "message should mention workspace root, got: {msg}"
+        );
+        assert!(
+            msg.contains(&db_display),
+            "message should mention DB path, got: {msg}"
+        );
+        let pid_str = format!("pid {}", std::process::id());
+        assert!(
+            msg.contains(&pid_str),
+            "message should mention leader pid, got: {msg}"
+        );
+    }
+
+    /// After promoting a follower to leader, `write_db()` succeeds — the
+    /// workspace transitions to the leader branch.
+    #[test]
+    fn test_write_db_after_promotion_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let leader = CodeContextWorkspace::open(dir.path()).unwrap();
+        let mut follower = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(!follower.is_leader());
+
+        // Follower rejects writes
+        assert!(follower.write_db().is_err());
+
+        drop(leader);
+        let _shared = follower.try_promote().unwrap().expect("promotion succeeds");
+
+        // Now write_db works
+        let db = follower
+            .write_db()
+            .expect("promoted workspace must accept writes");
+        db.execute(
+            "INSERT INTO indexed_files (file_path, content_hash, file_size, last_seen_at)
+             VALUES ('post_promote.rs', X'AB', 1, 1)",
+            [],
+        )
+        .unwrap();
     }
 }
