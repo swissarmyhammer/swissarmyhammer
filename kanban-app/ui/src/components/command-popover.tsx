@@ -1,13 +1,23 @@
 /**
- * `<CommandPopover>` — the picker form rendered inside the Radix Popover
+ * `<CommandPopover>` — the picker rendered inside the Radix Popover
  * anchored to a `<CommandButton>`.
  *
- * Iterates the command's `params` and renders one input per `shape`-bearing
- * entry. Submitting collects the picked values into a `{ [name]: value }`
- * bag and calls `onCommit` — the parent `<CommandButton>` then dispatches
- * the command with those args plus the resolved scope params.
+ * Two render shapes, picked by `params`:
  *
- * # Shape -> input mapping
+ *   - **Single-enum-param commands** — when the only pickable param is
+ *     `shape: enum`, the popover body is a vertical list of clickable
+ *     option buttons. Clicking an option commits immediately (`onCommit`
+ *     is called with `{ [paramName]: pickedValue }`) — picking IS the
+ *     action. No Submit button is rendered. This is the common case for
+ *     Group By, single-arg pickers, and the clear-command sentinel.
+ *
+ *   - **Multi-param / mixed-shape commands** — when the command exposes
+ *     two or more pickable params, or a single non-enum pickable param,
+ *     the popover renders the legacy form (one input per param + Submit).
+ *     Multi-param submission requires gathering N values before dispatch,
+ *     so single-click-IS-submit doesn't apply.
+ *
+ * # Shape -> input mapping (form branch)
  *
  *   - `enum`       → `<select>` populated from `param.options`. When the
  *                    list is empty or absent the select is rendered as
@@ -24,6 +34,14 @@
  * backend from `from: scope_chain | target | args | default`. A command
  * whose every param has no `shape` doesn't reach this popover at all
  * (the button dispatches immediately).
+ *
+ * # Clear sentinel ("(none)")
+ *
+ * When a param declares `clear_command`, the popover prepends a "(none)"
+ * entry — in the one-click menu it's the first button; in the form
+ * branch it's the first `<option>` of the select. Picking it commits the
+ * empty-string sentinel for that param; `<CommandButton>`'s commit
+ * handler then redirects the dispatch to `clear_command`.
  */
 
 import { useCallback, useMemo, useState } from "react";
@@ -64,24 +82,6 @@ function initialValueFor(param: ParamDef): unknown {
     default:
       return "";
   }
-}
-
-/**
- * Build the initial values bag for a command's pickable params at mount.
- *
- * Only `shape`-bearing params contribute slots — params with no `shape`
- * are resolved by the backend and never appear in the picker bag.
- */
-function buildInitialValues(
-  params: readonly ParamDef[] | undefined,
-): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  if (!params) return out;
-  for (const p of params) {
-    if (p.shape === undefined) continue;
-    out[p.name] = initialValueFor(p);
-  }
-  return out;
 }
 
 /**
@@ -217,27 +217,158 @@ function EnumField({
 }
 
 /**
- * Picker form for one command. See file-level doc for the shape→input
- * mapping and the empty-options disable rule.
+ * One-click menu body for a single-enum-param command.
+ *
+ * Renders the param's options (plus the "(none)" clear sentinel when
+ * `clear_command` is declared) as a vertical list of buttons. Clicking
+ * any button commits the picker bag — `{ [param.name]: option.value }`
+ * for a real option, `{ [param.name]: "" }` for the clear sentinel —
+ * with no intermediate Submit step.
+ *
+ * Empty / undefined `param.options` renders the empty-state placeholder
+ * — the backend resolver did not have enough information to supply
+ * choices, and forcing the user to click an absent option would be
+ * meaningless. The "(none)" sentinel still renders when `clear_command`
+ * is set, because clearing state is still a valid action even when the
+ * resolver supplied no real options.
+ */
+function EnumMenu({
+  param,
+  onPick,
+}: {
+  param: ParamDef;
+  onPick: (value: string) => void;
+}) {
+  const options = param.options ?? [];
+  const hasClear = param.clear_command !== undefined;
+  const isEmpty = options.length === 0 && !hasClear;
+
+  if (isEmpty) {
+    // No real options AND no clear sentinel — render the disabled
+    // placeholder so the user can see the popover opened but knows
+    // nothing is pickable. Mirrors the legacy "disabled <select>"
+    // affordance from the form branch.
+    return (
+      <div
+        aria-label={param.name}
+        className="text-xs text-muted-foreground italic px-2 py-1"
+      >
+        No options available
+      </div>
+    );
+  }
+
+  // Use native `<ul><li><button>` markup rather than Radix Menu / explicit
+  // ARIA `menu` roles. The plain-button shape keeps each option focusable
+  // and clickable (one click = commit) without dragging in the Radix Menu
+  // primitives' roving-tabindex / arrow-key navigation, which would
+  // conflict with the spatial-nav graph that already governs focus order
+  // for the surrounding tab bar.
+  return (
+    <ul
+      aria-label={param.name}
+      className="flex flex-col gap-0.5 min-w-[12rem] list-none p-0 m-0"
+    >
+      {hasClear && (
+        <li>
+          <button
+            type="button"
+            onClick={() => onPick("")}
+            className="w-full text-left px-2 py-1 text-sm rounded-md hover:bg-muted/60 transition-colors italic text-muted-foreground"
+          >
+            (none)
+          </button>
+        </li>
+      )}
+      {options.map((o) => (
+        <li key={o.value}>
+          <button
+            type="button"
+            onClick={() => onPick(o.value)}
+            className="w-full text-left px-2 py-1 text-sm rounded-md hover:bg-muted/60 transition-colors"
+          >
+            {o.label}
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * True when the command's pickable params reduce to exactly one
+ * enum-shaped entry — the trigger for the one-click menu render.
+ *
+ * Mixed-shape commands (e.g. one enum + one text) and multi-enum
+ * commands stay in the form branch because picking a single value is
+ * not enough to commit.
+ */
+function isSingleEnumMenuCommand(pickableParams: readonly ParamDef[]): boolean {
+  return pickableParams.length === 1 && pickableParams[0].shape === "enum";
+}
+
+/**
+ * Picker for one command. Renders either the one-click menu (single
+ * enum param) or the multi-field form (everything else). See file-level
+ * doc for the branching rule and shape→input mapping.
  */
 export function CommandPopover({
   command,
   onCommit,
   onCancel,
 }: CommandPopoverProps) {
+  // Capture the pickable subset once per command instance for stable iteration.
+  const pickableParams = useMemo(
+    () => (command.params ?? []).filter((p) => p.shape !== undefined),
+    [command.params],
+  );
+
+  if (isSingleEnumMenuCommand(pickableParams)) {
+    const param = pickableParams[0];
+    return (
+      <div
+        className="flex flex-col gap-2 min-w-[12rem]"
+        data-testid="command-popover"
+      >
+        <EnumMenu
+          param={param}
+          onPick={(value) => onCommit({ [param.name]: value })}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <CommandPopoverForm
+      pickableParams={pickableParams}
+      onCommit={onCommit}
+      onCancel={onCancel}
+    />
+  );
+}
+
+/**
+ * Multi-param form body — one input per pickable param plus a Submit
+ * button. Used for commands with two or more pickable params, or a
+ * single non-enum pickable param. Single-enum commands take the
+ * one-click `EnumMenu` branch instead.
+ */
+function CommandPopoverForm({
+  pickableParams,
+  onCommit,
+  onCancel,
+}: {
+  pickableParams: readonly ParamDef[];
+  onCommit: (args: Record<string, unknown>) => void;
+  onCancel?: () => void;
+}) {
   // Slot the picker bag once at mount; subsequent param edits update the
   // bag in place. We deliberately do not reset on command identity change
   // — the popover is mounted fresh from the parent on each open, and the
   // <CommandButton> re-keys via mount-on-open so a stale bag cannot
   // survive across activations.
   const [values, setValues] = useState<Record<string, unknown>>(() =>
-    buildInitialValues(command.params),
-  );
-
-  // Capture the pickable subset once per command instance for stable iteration.
-  const pickableParams = useMemo(
-    () => (command.params ?? []).filter((p) => p.shape !== undefined),
-    [command.params],
+    buildInitialValuesFor(pickableParams),
   );
 
   // Submit is disabled when any enum param's slot is still the empty
@@ -311,4 +442,21 @@ export function CommandPopover({
       </div>
     </form>
   );
+}
+
+/**
+ * Build the initial values bag for the form branch's pickable params at
+ * mount. One slot per param, seeded by {@link initialValueFor}. The form
+ * branch's caller pre-filters the param list (drops the no-`shape`
+ * entries the backend resolves), so this helper iterates the input as
+ * given without re-filtering.
+ */
+function buildInitialValuesFor(
+  params: readonly ParamDef[],
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const p of params) {
+    out[p.name] = initialValueFor(p);
+  }
+  return out;
 }

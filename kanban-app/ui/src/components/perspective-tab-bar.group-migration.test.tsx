@@ -281,8 +281,10 @@ describe("perspective-tab-bar — Group command migration", () => {
   });
 
   // -------------------------------------------------------------------------
-  // 2. Clicking the button opens a popover whose `<select>` is populated
-  //    from the backend-supplied `params[0].options`.
+  // 2. Clicking the button opens a popover whose menu items are populated
+  //    from the backend-supplied `params[0].options`. The single-enum-
+  //    param `perspective.group` command takes the one-click menu branch
+  //    of `<CommandPopover>` — options render as buttons, not a `<select>`.
   // -------------------------------------------------------------------------
 
   it("group_popover_renders_field_options_from_command_emission", async () => {
@@ -303,26 +305,27 @@ describe("perspective-tab-bar — Group command migration", () => {
     });
 
     // The popover content mounts when the button is clicked. The
-    // `<CommandPopover>` form carries `data-testid="command-popover"`.
+    // `<CommandPopover>` body carries `data-testid="command-popover"`.
     const popover = await screen.findByTestId("command-popover");
     expect(popover).toBeTruthy();
 
-    // The enum-shaped param renders as a `<select>` with one
-    // `<option>` per backend-supplied entry plus the placeholder
-    // "Pick…" option. We assert by label text.
-    const select = popover.querySelector("select");
-    expect(select).not.toBeNull();
-    const optionLabels = Array.from(select!.querySelectorAll("option")).map(
-      (o) => o.textContent,
+    // The single-enum-param case renders one `<button>` per backend
+    // option — picking IS the action, there is no native `<select>`.
+    expect(popover.querySelector("select")).toBeNull();
+    expect(popover.querySelector("button[type='submit']")).toBeNull();
+
+    const optionLabels = Array.from(popover.querySelectorAll("button")).map(
+      (b) => b.textContent,
     );
     expect(optionLabels).toContain("Status");
     expect(optionLabels).toContain("Assignee");
   });
 
   // -------------------------------------------------------------------------
-  // 3. Picking a field in the popover and submitting dispatches
-  //    `perspective.group` with the picked value plus the resolved
-  //    perspective id.
+  // 3. Picking a field in the popover dispatches `perspective.group` with
+  //    the picked value plus the resolved perspective id. With the
+  //    one-click menu pattern this is a single click on the option button
+  //    — no Submit step.
   // -------------------------------------------------------------------------
 
   it("picking_a_group_field_dispatches_perspective_group_with_field_arg", async () => {
@@ -343,22 +346,16 @@ describe("perspective-tab-bar — Group command migration", () => {
     });
 
     const popover = await screen.findByTestId("command-popover");
-    const select = popover.querySelector("select") as HTMLSelectElement;
 
-    await act(async () => {
-      fireEvent.change(select, { target: { value: "status" } });
-      await Promise.resolve();
-    });
-
-    // The form's Submit button (text "Submit") commits the picked
-    // values. `<CommandButton>`'s `handleCommit` then dispatches the
-    // command with the args bag.
-    const submit = popover.querySelector(
-      "button[type='submit']",
+    // One click on the option button commits and dispatches. The
+    // `<CommandButton>`'s `handleCommit` then dispatches the command
+    // with the args bag.
+    const statusButton = Array.from(popover.querySelectorAll("button")).find(
+      (b) => b.textContent === "Status",
     ) as HTMLButtonElement;
-    expect(submit).not.toBeNull();
+    expect(statusButton).toBeTruthy();
     await act(async () => {
-      fireEvent.click(submit);
+      fireEvent.click(statusButton);
       await Promise.resolve();
     });
 
@@ -418,25 +415,18 @@ describe("perspective-tab-bar — Group command migration", () => {
     });
 
     const popover = await screen.findByTestId("command-popover");
-    const select = popover.querySelector("select") as HTMLSelectElement;
-    expect(select).not.toBeNull();
 
-    // First option must be the clear-sentinel (value="") with the "(none)"
-    // label. The label change is what tells the user "this is a real
-    // pick that clears the state", not the disabled "no selection yet"
-    // stub the no-clear path uses.
-    const firstOption = select.querySelector("option") as HTMLOptionElement;
-    expect(firstOption.value).toBe("");
-    expect(firstOption.textContent).toBe("(none)");
+    // The clear sentinel renders as the first menu item (button labelled
+    // "(none)") when `clear_command` is set. The label tells the user
+    // "this is a real pick that clears the state" — picking it is a
+    // legitimate one-click action, not a "no selection yet" stub.
+    const optionButtons = Array.from(popover.querySelectorAll("button"));
+    expect(optionButtons.length).toBeGreaterThan(0);
+    expect(optionButtons[0].textContent).toBe("(none)");
 
-    // Submit must NOT be disabled when the slot holds the empty-string
-    // sentinel and `clear_command` is present — picking "(none)" is a
-    // legitimate submission.
-    const submit = popover.querySelector(
-      "button[type='submit']",
-    ) as HTMLButtonElement;
-    expect(submit).not.toBeNull();
-    expect(submit.disabled).toBe(false);
+    // The single-enum-param menu branch renders no Submit affordance —
+    // picking IS the action.
+    expect(popover.querySelector("button[type='submit']")).toBeNull();
   });
 
   // -------------------------------------------------------------------------
@@ -482,20 +472,15 @@ describe("perspective-tab-bar — Group command migration", () => {
     });
 
     const popover = await screen.findByTestId("command-popover");
-    const select = popover.querySelector("select") as HTMLSelectElement;
-    expect(select).not.toBeNull();
 
     // The full option set must be: (none) sentinel + every backend
     // option. Pre-iter-2 the regression would have rendered ONLY the
-    // (none) sentinel (a 1-entry select) when `clear_command` was set.
-    const optionLabels = Array.from(select.querySelectorAll("option")).map(
-      (o) => o.textContent,
+    // (none) sentinel when `clear_command` was set. With the one-click
+    // menu pattern each entry is a button instead of an <option>.
+    const optionLabels = Array.from(popover.querySelectorAll("button")).map(
+      (b) => b.textContent,
     );
     expect(optionLabels).toEqual(["(none)", "Status", "Assignees"]);
-
-    // And the select must NOT be disabled — `disabled` is computed from
-    // `options.length === 0`, which here is false.
-    expect(select.disabled).toBe(false);
   });
 
   // -------------------------------------------------------------------------
@@ -532,16 +517,17 @@ describe("perspective-tab-bar — Group command migration", () => {
     });
 
     const popover = await screen.findByTestId("command-popover");
-    const submit = popover.querySelector(
-      "button[type='submit']",
-    ) as HTMLButtonElement;
 
-    // The initial slot value for the `group` enum is the empty string
-    // (see `initialValueFor` in command-popover.tsx). Clicking Submit
-    // without changing anything is the "(none)" path — the simplest
-    // possible "clear" gesture.
+    // With the one-click menu pattern, clicking the "(none)" button
+    // commits `{ group: "" }` directly — `<CommandButton>`'s
+    // `handleCommit` redirects the empty-string sentinel to
+    // `clear_command`.
+    const noneButton = Array.from(popover.querySelectorAll("button")).find(
+      (b) => b.textContent === "(none)",
+    ) as HTMLButtonElement;
+    expect(noneButton).toBeTruthy();
     await act(async () => {
-      fireEvent.click(submit);
+      fireEvent.click(noneButton);
       await Promise.resolve();
     });
 
@@ -573,14 +559,13 @@ describe("perspective-tab-bar — Group command migration", () => {
   });
 
   // -------------------------------------------------------------------------
-  // 7. The placeholder stays "Pick…" (not "(none)") and submit stays
-  //    disabled at the empty-string slot when the `group` param does NOT
-  //    carry `clear_command`. Guards against a future change that
-  //    accidentally treats the placeholder as the clear sentinel for
-  //    every enum param.
+  // 7. With no `clear_command`, the popover renders ONLY the real
+  //    options — no "(none)" sentinel button. Guards against a future
+  //    change that accidentally treats every single-enum popover as
+  //    clearable.
   // -------------------------------------------------------------------------
 
-  it("group_popover_keeps_pick_placeholder_when_no_clear_command", async () => {
+  it("group_popover_omits_none_entry_when_no_clear_command", async () => {
     mockResolvedCommands([
       groupRegistryEntry([{ value: "status", label: "Status" }]),
     ]);
@@ -595,16 +580,13 @@ describe("perspective-tab-bar — Group command migration", () => {
     });
 
     const popover = await screen.findByTestId("command-popover");
-    const select = popover.querySelector("select") as HTMLSelectElement;
-    const firstOption = select.querySelector("option") as HTMLOptionElement;
-    expect(firstOption.textContent).toBe("Pick…");
-
-    // Submit stays disabled — without `clear_command` the empty-string
-    // slot is the "no selection yet" stub, not a submittable value.
-    const submit = popover.querySelector(
-      "button[type='submit']",
-    ) as HTMLButtonElement;
-    expect(submit.disabled).toBe(true);
+    const optionLabels = Array.from(popover.querySelectorAll("button")).map(
+      (b) => b.textContent,
+    );
+    // Only the real option — no clear sentinel because `clear_command`
+    // is not declared on the `group` param.
+    expect(optionLabels).toEqual(["Status"]);
+    expect(optionLabels).not.toContain("(none)");
   });
 
   it("group_button_is_active_when_perspective_has_a_group_set", async () => {
