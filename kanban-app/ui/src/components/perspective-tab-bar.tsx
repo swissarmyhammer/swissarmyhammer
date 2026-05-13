@@ -54,7 +54,45 @@ import { Pressable } from "@/components/pressable";
 import { useFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
 import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
 import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
-import { asSegment } from "@/types/spatial";
+import { asSegment, type FullyQualifiedMoniker } from "@/types/spatial";
+import { commandIconFor } from "@/components/command-icon-registry";
+
+// ---------------------------------------------------------------------------
+// Filter-editor FQM context — carries the spatial-nav FQM of the active
+// perspective's filter editor scope up from the formula bar (which sits
+// inside the `filter_editor:${id}` `<FocusScope>` and can compose the
+// FQM via `useFullyQualifiedMoniker()`) to the Filter tab button (which
+// sits OUTSIDE that scope and needs the FQM to dispatch `nav.focus`).
+//
+// The context value is a mutable ref so the writer (the formula bar
+// wiring) can update it without re-rendering every consumer; the reader
+// (the Filter tab button's click handler) snapshots it at click time.
+// A null current means no active perspective has mounted its formula
+// bar yet — the click handler no-ops in that case.
+//
+// Refactor history: card `01KRGZY33P99J7CGG0XRQGZ352` rewired the
+// Filter tab-button click from a parallel `FocusFilter` → Tauri-event
+// channel to the canonical `nav.focus` command. The FQM the click
+// needs is composed inside `<FilterFormulaBarFocusable>`'s
+// `<FocusScope>`, which is mounted alongside (not above) the
+// `<RegistryTabButtons>` slot — so the writer and reader live as
+// sibling subtrees and exchange the FQM through this shared ref.
+// ---------------------------------------------------------------------------
+
+/** Ref carrier shape — `.current` is the latest captured FQM (or null). */
+type FilterEditorFqRef = React.MutableRefObject<FullyQualifiedMoniker | null>;
+
+/**
+ * Context holding the mutable ref. `null` outside the tab bar
+ * (defensive — every render path that mounts the tab buttons also
+ * provides this).
+ */
+const FilterEditorFqContext = createContext<FilterEditorFqRef | null>(null);
+
+/** Read the FQM-ref context, or `null` outside the provider. */
+function useOptionalFilterEditorFqRef(): FilterEditorFqRef | null {
+  return useContext(FilterEditorFqContext);
+}
 
 // ---------------------------------------------------------------------------
 // Start-rename callback registry — bridges AppShell command dispatch to the
@@ -168,15 +206,16 @@ function usePerspectiveTabBar() {
   const filterEditorRef = useRef<FilterEditorHandle>(null);
   // The per-tab Filter button used to take a `handleFilterFocus`
   // callback wired through `<FilterFocusButton>`. After the
-  // command-driven migration (01KRE1YA65MMG29RDQDQ0VPJQG) the new
-  // `<CommandButton>` dispatches `perspective.filter.focus`, the
-  // backend emits `ui.focus.filter`, and `<FilterEditorBody>` reacts
-  // to that event — the local callback was deleted in the same
-  // migration. The `filterEditorRef` is still held here so the
-  // formula-bar wrapper's click-to-focus path (`onClick` on the bar
-  // div in `FilterFormulaBar`) and the `nav.drillIn` Enter command
-  // on `<FilterFormulaBarFocusable>` can still imperatively focus
-  // the editor without going through the broadcast.
+  // command-driven migration (01KRE1YA65MMG29RDQDQ0VPJQG) the
+  // affordance became a registry-rendered tab button; card
+  // `01KRGZY33P99J7CGG0XRQGZ352` rewired the click to dispatch the
+  // frontend `nav.focus` against the `filter_editor:${id}` spatial-nav
+  // scope (see `FilterFocusCommandButton` and
+  // `FilterEditorDrillOutWiring`). The `filterEditorRef` is still held
+  // here so the formula-bar wrapper's click-to-focus path (`onClick`
+  // on the bar div in `FilterFormulaBar`) and the `nav.drillIn` Enter
+  // command on `<FilterFormulaBarFocusable>` can still imperatively
+  // focus the CM6 editor when the spatial-nav scope drives down.
   const activeViewId = activeView?.id;
   const viewKind = activeView?.kind ?? "board";
   // view_id-first / kind-fallback rule (see `PerspectiveDef` JSDoc in
@@ -328,11 +367,6 @@ function useScopedTabCommands(
       .then((resolved) => {
         if (cancelled) return;
         const tabCommands = resolved.filter((c) => c.tab_button != null);
-        // [group-debug] iter-3 instrumentation — see kanban task 01KRGW1DYD0T05PSTEDPT5D076.
-        console.log("[group-debug] useScopedTabCommands result", {
-          scopeChain,
-          tabCommands,
-        });
         setCommands(tabCommands);
       })
       .catch((e) => {
@@ -408,26 +442,137 @@ function RegistryTabButtons({
   // consumes from `@/types/kanban`. Most fields pass through unchanged;
   // a default `visible: true` keeps the type alignment minimal without
   // forcing the wire format to mirror every optional UI flag.
+  //
+  // `perspective.filter.focus` is special-cased: its click must claim
+  // spatial-nav focus on the formula bar's `filter_editor:${id}` scope
+  // via `nav.focus` (the single auditable focus primitive — see card
+  // `01KR7CDEFWWVF4WH0BCHE8Y21J`). The generic `<CommandButton>`
+  // dispatches the command's own id, which is wrong for this case;
+  // `<FilterFocusCommandButton>` keeps the registry-driven render
+  // (icon, isActive, moniker) but overrides the dispatch.
   return (
     <>
-      {tabCommands.map((cmd) => (
-        <CommandButton
-          key={cmd.id}
-          command={
-            {
-              id: cmd.id,
-              name: cmd.name,
-              keys: cmd.keys,
-              params: cmd.params,
-              tab_button: cmd.tab_button,
-            } as RegistryCommandDef
-          }
-          surface="perspective_tab"
-          surfaceId={perspective.id}
-          isActive={isCommandActiveForPerspective(cmd.id, perspective)}
-        />
-      ))}
+      {tabCommands.map((cmd) => {
+        const isActive = isCommandActiveForPerspective(cmd.id, perspective);
+        if (cmd.id === "perspective.filter.focus") {
+          return (
+            <FilterFocusCommandButton
+              key={cmd.id}
+              command={
+                {
+                  id: cmd.id,
+                  name: cmd.name,
+                  keys: cmd.keys,
+                  params: cmd.params,
+                  tab_button: cmd.tab_button,
+                } as RegistryCommandDef
+              }
+              perspectiveId={perspective.id}
+              isActive={isActive}
+            />
+          );
+        }
+        return (
+          <CommandButton
+            key={cmd.id}
+            command={
+              {
+                id: cmd.id,
+                name: cmd.name,
+                keys: cmd.keys,
+                params: cmd.params,
+                tab_button: cmd.tab_button,
+              } as RegistryCommandDef
+            }
+            surface="perspective_tab"
+            surfaceId={perspective.id}
+            isActive={isActive}
+          />
+        );
+      })}
     </>
+  );
+}
+
+/**
+ * Tab-button affordance for `perspective.filter.focus` that dispatches
+ * `nav.focus` instead of the command's own id.
+ *
+ * Why a dedicated adapter (not the generic `<CommandButton>`): focus
+ * claims in this app flow through the single `nav.focus` command (card
+ * `01KR7CDEFWWVF4WH0BCHE8Y21J`). The previous wiring invented a
+ * parallel `FocusFilter` → Tauri-event channel that bypassed the
+ * spatial-nav kernel; card `01KRGZY33P99J7CGG0XRQGZ352` deleted that
+ * channel and routed the click through `nav.focus({ args: { fq } })`.
+ *
+ * The FQM is composed inside `<FilterFormulaBarFocusable>`'s
+ * `filter_editor:${id}` scope and stashed into the
+ * `<FilterEditorFqContext>` ref by `<FilterEditorDrillOutWiring>`. This
+ * adapter reads the ref at click time so it always picks up the
+ * currently-active perspective's editor FQM, not a stale snapshot.
+ *
+ * Visual / spatial-nav contract: matches `<CommandButton>` exactly —
+ * same icon, same `text-primary` highlight when `isActive`, same
+ * `${surface}.${command.id}:${surfaceId}` moniker built from the
+ * registry payload. Only the click semantics differ.
+ */
+function FilterFocusCommandButton({
+  command,
+  perspectiveId,
+  isActive,
+}: {
+  command: RegistryCommandDef;
+  perspectiveId: string;
+  isActive: boolean;
+}) {
+  const Icon = commandIconFor(command.tab_button?.icon ?? "");
+  const dispatchNavFocus = useDispatchCommand("nav.focus");
+  const fqRef = useOptionalFilterEditorFqRef();
+
+  const handlePress = useCallback(() => {
+    const fq = fqRef?.current;
+    if (!fq) {
+      // Defensive: the formula bar hasn't mounted its scope yet (e.g.
+      // no active perspective, or this fired in a degraded test
+      // harness without `<SpatialFocusProvider>`). A click with no
+      // target FQM is a no-op — there is nothing to focus.
+      console.warn(
+        "[FilterFocusCommandButton] no filter_editor FQM available; skipping nav.focus",
+      );
+      return;
+    }
+    void dispatchNavFocus({ args: { fq } }).catch((err) =>
+      console.error(
+        "[FilterFocusCommandButton] nav.focus dispatch failed",
+        err,
+      ),
+    );
+  }, [dispatchNavFocus, fqRef]);
+
+  const monikerSegment = asSegment(
+    `perspective_tab.${command.id}:${perspectiveId}`,
+  );
+
+  return (
+    <Pressable
+      asChild
+      moniker={monikerSegment}
+      ariaLabel={command.name}
+      onPress={handlePress}
+    >
+      <button
+        type="button"
+        className={cn(
+          "inline-flex items-center justify-center h-5 w-5 rounded transition-colors -ml-1",
+          isActive
+            ? "text-primary"
+            : "text-muted-foreground/50 hover:text-muted-foreground",
+        )}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <Icon className="h-3 w-3" fill={isActive ? "currentColor" : "none"} />
+      </button>
+    </Pressable>
   );
 }
 
@@ -459,49 +604,59 @@ export function PerspectiveTabBar() {
     cancelRename,
   } = usePerspectiveTabBar();
 
+  // Shared ref carrying the active perspective's filter-editor FQM.
+  // Written by `<FilterEditorDrillOutWiring>` (inside the
+  // `filter_editor:${id}` scope) and read by the Filter tab button's
+  // click handler (`<FilterFocusCommandButton>`), which sits in a
+  // sibling subtree without a `useFullyQualifiedMoniker()` ancestor of
+  // its own. See `FilterEditorFqContext` for the rationale.
+  const filterEditorFqRef = useRef<FullyQualifiedMoniker | null>(null);
+
   if (!activeView) return null;
 
   return (
-    <PerspectiveBarSpatialZone>
-      {/*
-        Left: scrollable perspective tabs + add button. `<FocusIndicator>`
-        paints inside each tab's box, so no special gap or padding is
-        required to make room for it.
-      */}
-      <div className="flex items-center gap-2 overflow-x-auto shrink-0 max-w-[60%] pl-2">
-        {filteredPerspectives.map((p) => (
-          <ScopedPerspectiveTab
-            key={p.id}
-            perspective={p}
-            activePerspectiveId={activePerspective?.id}
-            renamingId={renamingId}
-            onSelect={() => setActivePerspectiveId(p.id)}
-            onDoubleClick={() => startRename(p.id)}
-            onRenameCommit={(text) => commitRename(p.id, p.name, text)}
-            onRenameCancel={cancelRename}
+    <FilterEditorFqContext.Provider value={filterEditorFqRef}>
+      <PerspectiveBarSpatialZone>
+        {/*
+          Left: scrollable perspective tabs + add button. `<FocusIndicator>`
+          paints inside each tab's box, so no special gap or padding is
+          required to make room for it.
+        */}
+        <div className="flex items-center gap-2 overflow-x-auto shrink-0 max-w-[60%] pl-2">
+          {filteredPerspectives.map((p) => (
+            <ScopedPerspectiveTab
+              key={p.id}
+              perspective={p}
+              activePerspectiveId={activePerspective?.id}
+              renamingId={renamingId}
+              onSelect={() => setActivePerspectiveId(p.id)}
+              onDoubleClick={() => startRename(p.id)}
+              onRenameCommit={(text) => commitRename(p.id, p.name, text)}
+              onRenameCancel={cancelRename}
+            />
+          ))}
+          <AddPerspectiveButton
+            filteredPerspectives={filteredPerspectives}
+            viewKind={viewKind}
+            viewId={activeView.id}
           />
-        ))}
-        <AddPerspectiveButton
-          filteredPerspectives={filteredPerspectives}
-          viewKind={viewKind}
-          viewId={activeView.id}
-        />
-      </div>
-      {/* Right: filter formula bar — always visible when a perspective is active */}
-      {activePerspective && (
-        <FilterFormulaBarFocusable
-          key={activePerspective.id}
-          perspectiveId={activePerspective.id}
-          editorRef={filterEditorRef}
-        >
-          <FilterFormulaBar
-            ref={filterEditorRef}
-            filter={activePerspective.filter}
+        </div>
+        {/* Right: filter formula bar — always visible when a perspective is active */}
+        {activePerspective && (
+          <FilterFormulaBarFocusable
+            key={activePerspective.id}
             perspectiveId={activePerspective.id}
-          />
-        </FilterFormulaBarFocusable>
-      )}
-    </PerspectiveBarSpatialZone>
+            editorRef={filterEditorRef}
+          >
+            <FilterFormulaBar
+              ref={filterEditorRef}
+              filter={activePerspective.filter}
+              perspectiveId={activePerspective.id}
+            />
+          </FilterFormulaBarFocusable>
+        )}
+      </PerspectiveBarSpatialZone>
+    </FilterEditorFqContext.Provider>
   );
 }
 
@@ -842,6 +997,31 @@ function FilterEditorDrillOutWiring({ children }: { children: ReactNode }) {
       ),
     );
   }, [filterFq, dispatchNavFocus]);
+
+  // Publish the filter editor's FQM up to the Filter tab button (card
+  // `01KRGZY33P99J7CGG0XRQGZ352`). The button's click site is a sibling
+  // subtree of this wiring — both mount when the active perspective is
+  // known. The shared ref lets the click handler read the most recently
+  // captured FQM at click time without prop-drilling through the
+  // intermediate `<PerspectiveBarSpatialZone>` / `<RegistryTabButtons>`
+  // boundary. Cleared on unmount so a stale FQM from a torn-down
+  // formula bar can't be reused after the active perspective switches.
+  const filterEditorFqRef = useOptionalFilterEditorFqRef();
+  useEffect(() => {
+    if (!filterEditorFqRef) return;
+    filterEditorFqRef.current = filterFq;
+    return () => {
+      // Only clear if our value is still current — another
+      // FilterEditorDrillOutWiring instance for a different active
+      // perspective may have written its own FQM between this effect
+      // running and this cleanup. The strict identity check prevents
+      // clobbering the successor's value.
+      if (filterEditorFqRef.current === filterFq) {
+        filterEditorFqRef.current = null;
+      }
+    };
+  }, [filterEditorFqRef, filterFq]);
+
   return (
     <FilterEditorEscapeContext.Provider value={onEditorEscape}>
       {children}
@@ -944,9 +1124,12 @@ interface PerspectiveTabProps {
 /**
  * Individual perspective tab that uses the backend command system for
  * context menus. The registry-driven `<RegistryTabButtons>` renders any
- * inline affordances (today: the `perspective.filter.focus` `<CommandButton>`
- * that broadcasts `ui.focus.filter`) — there is no more hardcoded inline
- * filter button.
+ * inline affordances; today that's the Filter button (rendered by the
+ * `<FilterFocusCommandButton>` adapter, which dispatches `nav.focus`
+ * against the formula bar's `filter_editor:${id}` spatial-nav scope —
+ * see card `01KRGZY33P99J7CGG0XRQGZ352`) plus the Group `<CommandButton>`
+ * driven by the generic YAML tab-button rendering. There is no more
+ * hardcoded inline filter button.
  *
  * Must be rendered inside a CommandScopeProvider with a perspective
  * moniker so the scope chain is correct.
@@ -1196,17 +1379,22 @@ export function InlineRenameEditor({
 }
 
 // ---------------------------------------------------------------------------
-// Filter focus button — DELETED by 01KRE1YA65MMG29RDQDQ0VPJQG.
+// Filter focus button — DELETED by 01KRE1YA65MMG29RDQDQ0VPJQG, rewired
+// to `nav.focus` by 01KRGZY33P99J7CGG0XRQGZ352.
 //
 // The hardcoded `<FilterFocusButton>` was replaced by a registry-rendered
-// `<CommandButton>` for the new `perspective.filter.focus` command. The
-// `<CommandButton>` lives in `<RegistryTabButtons>` above; clicking it
-// dispatches `perspective.filter.focus`, the dispatcher emits a
-// `ui.focus.filter` Tauri event, and `<FilterEditorBody>` reacts by
-// calling `focus()` on the CM6 editor — same end-state as the deleted
-// callback path, now driven through the unified command pipeline so
-// palette / keybindings / cross-window paths all converge on the same
-// behaviour.
+// tab button in `<RegistryTabButtons>` (above). Today the click site is
+// the `<FilterFocusCommandButton>` adapter — it mirrors `<CommandButton>`
+// for icon / isActive / moniker rendering but overrides the dispatch to
+// issue `nav.focus({ args: { fq: <filter_editor FQM> } })` against the
+// formula bar's `filter_editor:${id}` spatial-nav scope. The kernel then
+// claims focus on the scope and the scope's own `nav.drillIn` (Enter)
+// drives CM6 to take DOM focus — the same path arrow-nav uses when the
+// user lands on the formula bar from a neighbouring leaf. This routes
+// every focus claim through the single auditable `nav.focus` command
+// (card `01KR7CDEFWWVF4WH0BCHE8Y21J`); the previous `FocusFilter` marker
+// envelope + `ui.focus.filter` Tauri event channel was deleted alongside
+// this rewire.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------

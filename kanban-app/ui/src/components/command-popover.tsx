@@ -225,14 +225,6 @@ export function CommandPopover({
   onCommit,
   onCancel,
 }: CommandPopoverProps) {
-  // [group-debug] iter-3 instrumentation — see kanban task 01KRGW1DYD0T05PSTEDPT5D076.
-  // Logged once per render so the user can correlate popover open events
-  // with the params payload (especially `options` length on enum params).
-  console.log("[group-debug] CommandPopover render", {
-    commandId: command.id,
-    params: command.params,
-  });
-
   // Slot the picker bag once at mount; subsequent param edits update the
   // bag in place. We deliberately do not reset on command identity change
   // — the popover is mounted fresh from the parent on each open, and the

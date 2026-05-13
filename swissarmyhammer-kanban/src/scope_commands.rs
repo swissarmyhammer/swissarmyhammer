@@ -608,6 +608,60 @@ pub fn commands_for_scope(
     result
 }
 
+/// Compute all available commands for a given scope chain, threading the
+/// active [`KanbanContext`]'s [`FieldsContext`] and [`OptionsRegistry`]
+/// through to [`commands_for_scope`] in one step.
+///
+/// This is the call shape every GUI / TUI / CLI consumer wants: pickers
+/// must be enriched (so the popover can render real options) and the
+/// entity schema must be available (so `entity.add` / cross-cutting
+/// commands resolve their per-entity names). Both of those live on the
+/// active [`KanbanContext`], so the helper takes the context as the
+/// single source for both — eliminating the foot-gun where a caller
+/// remembers to thread `fields()` but forgets `options_registry()` (or
+/// vice versa), which silently empties every picker downstream.
+///
+/// This regression — caller threading the fields but passing `None` for
+/// the options registry — is exactly what produced the empty Group By
+/// popover the user reported in task `01KRGW1DYD0T05PSTEDPT5D076`
+/// (iteration 4). The wrapper makes that mistake unrepresentable at the
+/// type level: the registry is pulled directly from the context, so a
+/// caller that has a context cannot forget to pass it.
+///
+/// # Arguments
+/// - `scope_chain` — see [`commands_for_scope`].
+/// - `registry` — see [`commands_for_scope`].
+/// - `command_impls` — see [`commands_for_scope`].
+/// - `active_context` — the context whose entity schemas and resolver
+///   registry should be consulted. `None` when no board is focused
+///   (splash / welcome path); in that case no perspectives or entities
+///   exist so the enrichment pass has nothing to do.
+/// - `ui_state` — see [`commands_for_scope`].
+/// - `context_menu_only` — see [`commands_for_scope`].
+/// - `dynamic` — see [`commands_for_scope`].
+pub fn commands_for_scope_with_context(
+    scope_chain: &[String],
+    registry: &CommandsRegistry,
+    command_impls: &HashMap<String, Arc<dyn Command>>,
+    active_context: Option<&crate::context::KanbanContext>,
+    ui_state: &Arc<UIState>,
+    context_menu_only: bool,
+    dynamic: Option<&DynamicSources>,
+) -> Vec<ResolvedCommand> {
+    let fields = active_context.and_then(|c| c.fields());
+    let options_registry = active_context.map(|c| c.options_registry());
+    commands_for_scope(
+        scope_chain,
+        registry,
+        command_impls,
+        fields,
+        ui_state,
+        context_menu_only,
+        dynamic,
+        options_registry,
+    )
+}
+
 /// Walk every emitted [`ResolvedCommand`] and fill in each param's
 /// `options` by consulting the [`OptionsRegistry`] for any param whose
 /// YAML declared `options_from`.

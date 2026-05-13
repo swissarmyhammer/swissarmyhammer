@@ -348,13 +348,15 @@ describe("PerspectiveTabBar — registry-driven CommandButton rendering", () => 
     renderTabBar();
     await flushEffects();
 
-    // The remaining hardcoded "Group" / "Add perspective" buttons stay
-    // — they are owned by per-command migrations that have not landed
-    // yet. The hardcoded "Filter" button (aria-label "Filter") was
-    // deleted by 01KRE1YA65MMG29RDQDQ0VPJQG; its replacement is the
-    // registry-rendered `<CommandButton>` for `perspective.filter.focus`,
-    // which only mounts when the registry response includes that
-    // command — which this test deliberately does not.
+    // The remaining hardcoded "Add perspective" button stays — it is
+    // owned by a per-command migration that has not landed yet. The
+    // hardcoded "Filter" button (aria-label "Filter") was deleted by
+    // 01KRE1YA65MMG29RDQDQ0VPJQG and the hardcoded "Group" button
+    // (aria-label "Group") was deleted by 01KRE1ZTYJ5PPTQ29K72KE88B5;
+    // each replacement is the registry-rendered `<CommandButton>` for
+    // the migrated command, which only mounts when the registry
+    // response includes that command — which this test deliberately
+    // does not.
     //
     // We assert the negative path by checking that none of the
     // registry-supplied command names produced a button. The remaining
@@ -364,18 +366,22 @@ describe("PerspectiveTabBar — registry-driven CommandButton rendering", () => 
     ).toBeNull();
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
 
-    // Sanity: remaining hardcoded buttons are still present, proving
-    // the bar didn't accidentally short-circuit when zero registry
-    // commands matched.
+    // Sanity: the remaining hardcoded "Add perspective" button is
+    // still present, proving the bar didn't accidentally short-circuit
+    // when zero registry commands matched.
     expect(
       screen.getByRole("button", { name: /add perspective/i }),
     ).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Group" })).toBeTruthy();
-    // The legacy hardcoded "Filter" button is gone — its replacement
-    // is the registry-driven `<CommandButton>` rendered only when the
-    // `perspective.filter.focus` command is in scope (covered by
-    // `renders_command_button_for_each_tab_button_tagged_command`).
+    // The legacy hardcoded "Filter" / "Group" / "Group By" buttons are
+    // gone — their replacements are the registry-driven
+    // `<CommandButton>`s rendered only when their respective commands
+    // (`perspective.filter.focus`, `perspective.group`) are in scope
+    // (each covered by
+    // `renders_command_button_for_each_tab_button_tagged_command` and
+    // the per-migration test files).
     expect(screen.queryByRole("button", { name: "Filter" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Group" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Group By" })).toBeNull();
   });
 
   it("respects_view_kinds_filter — a command with view_kinds: [grid] does NOT render under view kind board", async () => {

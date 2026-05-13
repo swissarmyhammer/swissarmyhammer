@@ -172,6 +172,24 @@ export interface ParamDef {
    * `options_from` resolved successfully.
    */
   readonly options?: readonly ParamOption[];
+  /**
+   * Sibling command id to dispatch in place of this command when the
+   * user picks the "clear" sentinel (empty-string value) for an
+   * enum-shaped param.
+   *
+   * Surfaces a "None" affordance inside the popover so the user can
+   * clear state in one click instead of leaving the popover and
+   * hunting through the right-click menu. `<CommandPopover>` auto-
+   * prepends a "(none)" `<option value="">` whenever a param carries
+   * this annotation, and `<CommandButton>` intercepts the empty-string
+   * submission to dispatch `clear_command` (with the same scope-resolved
+   * args) instead of the parent command.
+   *
+   * Mirrors Rust's `ParamDef.clear_command` — see that field's docstring
+   * for the design rationale and the first migration (`perspective.group`
+   * → `perspective.clearGroup`).
+   */
+  readonly clear_command?: string;
 }
 
 /**

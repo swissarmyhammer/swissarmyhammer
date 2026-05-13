@@ -1,39 +1,46 @@
 /**
  * Browser-mode test: Enter on the focused Filter `<CommandButton>` leaf
- * dispatches `perspective.filter.focus` through the unified command pipeline.
+ * claims spatial-nav focus on the formula bar via `nav.focus`.
  *
  * Post-migration to command-driven rendering (task 01KRE1YA65MMG29RDQDQ0VPJQG):
  * the hardcoded `<FilterFocusButton>` (and its
  * `perspective_tab.filter:{id}` leaf + local `onPress → onFocus` callback)
  * is gone. The Filter affordance is now a registry-rendered
- * `<CommandButton>` for the no-arg `perspective.filter.focus` command,
- * registering its leaf as `perspective_tab.perspective.filter.focus:{id}`.
+ * tab-button leaf registered at `perspective_tab.perspective.filter.focus:{id}`.
  *
- * End-to-end keyboard-activation chain mirrors the old behaviour, but
- * the side-effect now flows through dispatch:
+ * Post-rewire to `nav.focus` (task 01KRGZY33P99J7CGG0XRQGZ352): the
+ * click site is a small `<FilterFocusCommandButton>` adapter (in
+ * `perspective-tab-bar.tsx`) that mirrors `<CommandButton>`'s render
+ * (icon, isActive, moniker) but overrides the dispatch — instead of
+ * issuing `perspective.filter.focus` through `dispatch_command`, it
+ * dispatches the frontend-only `nav.focus({ args: { fq } })` against
+ * the formula bar's `filter_editor:${id}` spatial-nav scope. The
+ * `nav.focus` execute closure (registered in `<SpatialFocusProvider>`)
+ * then calls `actions.focus(fq)`, which issues a `spatial_focus` IPC
+ * to the kernel.
  *
- *   1. `<RegistryTabButtons>` mounts a `<CommandButton>` for every
- *      tab-button-tagged command emitted by `list_commands_for_scope`.
- *   2. `<CommandButton>` wraps the icon in `<Pressable asChild>` which
+ * End-to-end keyboard-activation chain:
+ *
+ *   1. `<RegistryTabButtons>` mounts a `<FilterFocusCommandButton>`
+ *      for the `perspective.filter.focus` registry entry.
+ *   2. The adapter wraps the icon in `<Pressable asChild>` which
  *      mounts a `<FocusScope perspective_tab.perspective.filter.focus:{id}>`
  *      leaf with `pressable.activate` Enter/Space CommandDefs.
  *   3. Driving `focus-changed` to that leaf populates the focused-scope
  *      chain.
  *   4. `KeybindingHandler` resolves Enter through `extractScopeBindings`,
- *      dispatches `pressable.activate` → `onPress` runs → the
- *      `<CommandButton>` dispatches `perspective.filter.focus` via
- *      `useDispatchCommand`.
- *
- * The actual editor focus is now driven by the backend's
- * `ui.focus.filter` event — the spatial half is what this test pins.
- * Editor-side focus reactivity is covered by
- * `perspective-tab-bar.filter-migration.test.tsx`.
+ *      dispatches `pressable.activate` → `onPress` runs → the adapter
+ *      dispatches `nav.focus` (frontend execute) → `actions.focus(fq)`
+ *      → `spatial_focus` IPC.
  *
  * Asserts:
- *   - The new leaf registers as a `<FocusScope>` with the
+ *   - The leaf registers as a `<FocusScope>` with the
  *     `perspective_tab.perspective.filter.focus:{id}` moniker.
- *   - Enter on the focused leaf calls `dispatch_command` with
- *     `cmd: "perspective.filter.focus"` exactly once.
+ *   - Enter on the focused leaf produces a `spatial_focus` IPC whose
+ *     `fq` ends with `filter_editor:p1` — the formula bar's scope for
+ *     the active perspective.
+ *   - Enter does NOT route through the deleted
+ *     `dispatch_command(perspective.filter.focus)` backend path.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -312,7 +319,7 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
     .map((c: unknown[]) => c[1] as Record<string, unknown>);
 }
 
-describe("PerspectiveTabBar filter button — Enter dispatches perspective.filter.focus via Pressable", () => {
+describe("PerspectiveTabBar filter button — Enter claims focus on the filter editor via nav.focus", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     monikerToKey.clear();
@@ -322,11 +329,11 @@ describe("PerspectiveTabBar filter button — Enter dispatches perspective.filte
     }
   });
 
-  it("seeds focus on perspective_tab.perspective.filter.focus:p1 → Enter dispatches perspective.filter.focus exactly once", async () => {
+  it("seeds focus on perspective_tab.perspective.filter.focus:p1 → Enter dispatches nav.focus to filter_editor:p1", async () => {
     await renderTabBar();
     await flushSetup();
 
-    // The new spatial-nav moniker, derived by `<CommandButton>` from
+    // The spatial-nav moniker derived from
     // `${surface}.${command.id}:${surfaceId}` — replaces the legacy
     // `perspective_tab.filter:{id}` from the deleted `<FilterFocusButton>`.
     const leaf = registerScopeArgs().find(
@@ -337,7 +344,7 @@ describe("PerspectiveTabBar filter button — Enter dispatches perspective.filte
       "perspective_tab.perspective.filter.focus:p1 must register as a FocusScope leaf via Pressable",
     ).toBeDefined();
 
-    // Drive a focus-changed event for the new leaf so the entity-focus
+    // Drive a focus-changed event for the leaf so the entity-focus
     // bridge populates the focused-scope chain.
     const cb = listenCallbacks["focus-changed"];
     expect(cb).toBeTruthy();
@@ -354,30 +361,51 @@ describe("PerspectiveTabBar filter button — Enter dispatches perspective.filte
       await Promise.resolve();
     });
 
-    // Snapshot the dispatch_command call count BEFORE the Enter press so
-    // we can isolate what Enter triggers from any startup dispatches.
+    // Snapshot the `spatial_focus` IPC call count BEFORE Enter so we
+    // isolate Enter's contribution from any startup focus traffic.
     const mockInvoke = invoke as unknown as ReturnType<typeof vi.fn>;
-    const dispatchCallsBefore = mockInvoke.mock.calls.filter(
-      (c: unknown[]) => c[0] === "dispatch_command",
+    const spatialFocusBefore = mockInvoke.mock.calls.filter(
+      (c: unknown[]) => c[0] === "spatial_focus",
     ).length;
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
       await Promise.resolve();
+      await Promise.resolve();
     });
 
-    const dispatchCallsAfter = mockInvoke.mock.calls.filter(
-      (c: unknown[]) => c[0] === "dispatch_command",
+    const spatialFocusAfter = mockInvoke.mock.calls.filter(
+      (c: unknown[]) => c[0] === "spatial_focus",
     );
     expect(
-      dispatchCallsAfter.length - dispatchCallsBefore,
-      "Enter on the focused filter leaf must dispatch exactly one command",
-    ).toBe(1);
-    // The dispatched command must be the new `perspective.filter.focus` —
-    // a regression that bound Enter to a different command (e.g. a stale
-    // `perspective.filter`) would fail here.
-    expect(dispatchCallsAfter[dispatchCallsAfter.length - 1][1]).toMatchObject({
-      cmd: "perspective.filter.focus",
-    });
+      spatialFocusAfter.length - spatialFocusBefore,
+      "Enter on the focused filter leaf must produce at least one spatial_focus IPC",
+    ).toBeGreaterThan(0);
+
+    // The last spatial_focus call carries the filter editor's FQM as
+    // `fq` — `nav.focus` (the command bound to the Pressable's
+    // `onPress`) resolves to `actions.focus(fq)`, which issues this
+    // IPC. The path-tail must end at `filter_editor:p1` so a
+    // regression that pointed `nav.focus` at the wrong scope (e.g. the
+    // button leaf itself) is caught here.
+    const lastSpatialCall = spatialFocusAfter[spatialFocusAfter.length - 1];
+    const fq = (lastSpatialCall[1] as { fq?: string })?.fq ?? "";
+    expect(
+      fq.endsWith("filter_editor:p1"),
+      `spatial_focus.fq must end with filter_editor:p1 (got ${fq})`,
+    ).toBe(true);
+
+    // Negative: the deleted backend channel must NOT be reached.
+    // A regression that re-binds Enter to `dispatch_command(perspective.filter.focus)`
+    // would fail this assertion.
+    const filterFocusBackend = mockInvoke.mock.calls.filter(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as { cmd?: string })?.cmd === "perspective.filter.focus",
+    );
+    expect(
+      filterFocusBackend,
+      "Enter must not dispatch the deleted perspective.filter.focus backend command",
+    ).toHaveLength(0);
   });
 });

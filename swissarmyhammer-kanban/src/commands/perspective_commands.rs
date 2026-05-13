@@ -820,17 +820,31 @@ impl Command for ListPerspectivesCmd {
     }
 }
 
-/// Focus the perspective's filter editor on the formula bar.
+/// UI-only marker for `perspective.filter.focus`.
 ///
-/// Pure UI-broadcast command. Resolves the target `perspective_id` (explicit
-/// arg → scope-chain moniker → UIState active → first perspective for the
-/// active view kind) and returns a `FocusFilter` marker the Tauri dispatcher
-/// converts into a `ui.focus.filter` event. No state mutation, no undo entry —
-/// the editor lives in React and only receives a focus signal.
+/// The YAML entry declares `tab_button: { icon: filter }` so the
+/// registry-driven `<RegistryTabButtons>` slot renders a Filter icon on
+/// the active perspective's tab, and the `isActive` highlight is read
+/// from the perspective's `filter` field. But the click itself does NOT
+/// route through this backend command — `<FilterFocusCommandButton>`
+/// (in `kanban-app/ui/src/components/perspective-tab-bar.tsx`)
+/// overrides the dispatch to issue `nav.focus({ args: { fq } })`
+/// against the formula bar's `filter_editor:${id}` spatial-nav scope.
 ///
-/// **Pre-refactor home (task 01KRE1YA65MMG29RDQDQ0VPJQG):** this lives in
-/// `swissarmyhammer-kanban` until `01KRES4EHVAPQGM003FVEBDWED` relocates
-/// every perspective `execute` impl into `swissarmyhammer-perspectives`.
+/// This `execute` is therefore a deliberate no-op — it exists only to
+/// satisfy the YAML ↔ Rust completeness invariant enforced by
+/// `test_all_yaml_commands_have_rust_implementations` /
+/// `test_no_orphan_rust_commands_without_yaml` in `commands/mod.rs`.
+/// Reachable today only via palette / keybinding paths that would also
+/// be funneled through `nav.focus` once those surfaces migrate; until
+/// then a no-op is the correct behaviour (silently nothing happens, no
+/// state mutation, no broadcast).
+///
+/// Refactor history: card `01KRGZY33P99J7CGG0XRQGZ352` replaced the
+/// prior `FocusFilter` marker-envelope + `ui.focus.filter` Tauri event
+/// channel with the `nav.focus` flow described above. The marker
+/// envelope and the dispatcher's `handle_focus_filter` were deleted in
+/// the same commit.
 pub struct FocusFilterCmd;
 
 #[async_trait]
@@ -839,21 +853,11 @@ impl Command for FocusFilterCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
-        let kanban = ctx.require_extension::<KanbanContext>()?;
-        // The resolver persists the chosen id back to UIState when the
-        // caller did not supply it, matching the rest of the perspective.*
-        // mutation commands so subsequent palette invocations remain
-        // self-healing. See `resolve_perspective_id` for details.
-        let perspective_id = resolve_and_persist_perspective_id(ctx, &kanban).await?;
-        // Marker envelope — the Tauri dispatcher recognises `FocusFilter`
-        // in `handle_focus_filter` and emits a `ui.focus.filter` event the
-        // formula bar's `<FilterEditorBody>` subscribes to.
-        Ok(serde_json::json!({
-            "FocusFilter": {
-                "perspective_id": perspective_id,
-            }
-        }))
+    async fn execute(&self, _ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        // UI-only command — focus claims flow through frontend
+        // `nav.focus` (see this struct's doc comment). Returning `null`
+        // signals "nothing for the dispatcher to do".
+        Ok(Value::Null)
     }
 }
 
@@ -2177,20 +2181,24 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // FocusFilterCmd — pure UI-broadcast command (no mutation, no undo).
-    // The execute result is a `FocusFilter` marker the Tauri dispatcher
-    // converts into a `ui.focus.filter` event; the tests below pin the
-    // marker shape and the resolver path that drives it.
+    // FocusFilterCmd — UI-only marker (see struct doc).
+    //
+    // The pre-refactor tests pinned the `FocusFilter` marker envelope
+    // and the resolver path that drove it. Card
+    // `01KRGZY33P99J7CGG0XRQGZ352` deleted that channel; the command
+    // is now a deliberate no-op kept only to satisfy the YAML ↔ Rust
+    // completeness invariant. A single test pins the no-op contract so
+    // a regression that re-introduces the old marker envelope (or any
+    // other side-effect) is caught.
     // -----------------------------------------------------------------
 
-    /// `focus_filter_command_dispatches_focus_event` (task acceptance
-    /// criterion): executing `FocusFilterCmd` with a perspective id in
-    /// scope returns the `FocusFilter` envelope carrying that id. The
-    /// dispatcher reads this envelope and emits `ui.focus.filter` — the
-    /// formula bar's `<FilterEditorBody>` subscribes and moves focus
-    /// into the CM6 editor.
+    /// The command must execute to `Value::Null` — no marker envelope,
+    /// no state mutation. The Filter tab button's click claims focus
+    /// via the frontend `nav.focus` command instead (see
+    /// `FilterFocusCommandButton`); this command exists only to keep
+    /// the YAML registration valid for the `tab_button` icon emission.
     #[tokio::test]
-    async fn focus_filter_command_dispatches_focus_event() {
+    async fn focus_filter_command_is_a_noop() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
         let pid = create_perspective(&kanban, "Focus Test").await;
@@ -2202,47 +2210,17 @@ mod tests {
         );
 
         let result = FocusFilterCmd.execute(&cmd_ctx).await.unwrap();
-        let focus = result
-            .get("FocusFilter")
-            .expect("execute must return a FocusFilter marker envelope");
-        assert_eq!(
-            focus
-                .get("perspective_id")
-                .and_then(Value::as_str)
-                .expect("FocusFilter must carry a perspective_id string"),
-            pid,
-            "FocusFilter.perspective_id must reflect the scope-resolved perspective"
+        assert!(
+            result.is_null(),
+            "perspective.filter.focus must be a UI-only no-op (returned {result:?}) — \
+             focus claims flow through the frontend nav.focus command",
         );
     }
 
-    /// Explicit `perspective_id` arg wins over the scope chain. Pinned
-    /// separately so the dispatcher's no-arg click path (scope only)
-    /// and the palette path (arg supplied) both resolve cleanly.
-    #[tokio::test]
-    async fn focus_filter_command_prefers_explicit_perspective_id_arg() {
-        let (_temp, ctx) = setup().await;
-        let kanban = Arc::new(ctx);
-        let scope_pid = create_perspective(&kanban, "Scope Persp").await;
-        let arg_pid = create_perspective(&kanban, "Arg Persp").await;
-
-        let mut args = HashMap::new();
-        args.insert("perspective_id".into(), Value::String(arg_pid.clone()));
-        let cmd_ctx = make_ctx_with_scope(
-            Arc::clone(&kanban),
-            args,
-            vec![format!("perspective:{scope_pid}")],
-        );
-
-        let result = FocusFilterCmd.execute(&cmd_ctx).await.unwrap();
-        let focus = result.get("FocusFilter").unwrap();
-        assert_eq!(focus["perspective_id"].as_str().unwrap(), arg_pid);
-    }
-
-    /// The command is always available — no scope/arg checks at gate time
-    /// because the resolver chain (arg → scope → UIState → first-for-view)
-    /// covers every reachable case. Unavailability would just suppress
-    /// the tab button in registry emission, which is wrong for a focus
-    /// shortcut that is meaningful whenever any perspective exists.
+    /// The command is always available — the tab-button slot needs to
+    /// emit on every active perspective. Pinned so a future
+    /// availability change doesn't silently drop the Filter icon from
+    /// the tab bar.
     #[test]
     fn focus_filter_command_is_always_available() {
         let ctx = CommandContext::new("perspective.filter.focus", vec![], None, HashMap::new());

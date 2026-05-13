@@ -119,14 +119,14 @@ export function CommandButton({
   const [open, setOpen] = useState(false);
 
   const dispatchWith = useCallback(
-    (args: Record<string, unknown>) => {
+    (commandId: string, args: Record<string, unknown>) => {
       // Errors surface to console — there is no user-visible toast for
       // command failures yet (the wider error-surface story is a separate
       // concern), so swallow rejection here to match the rest of the
       // codebase's dispatch sites (see e.g. AddPerspectiveButton).
-      dispatch(command.id, { args }).catch(console.error);
+      dispatch(commandId, { args }).catch(console.error);
     },
-    [dispatch, command.id],
+    [dispatch],
   );
 
   const handlePress = useCallback(() => {
@@ -134,15 +134,39 @@ export function CommandButton({
       setOpen(true);
       return;
     }
-    dispatchWith({});
-  }, [needsPicker, dispatchWith]);
+    dispatchWith(command.id, {});
+  }, [needsPicker, dispatchWith, command.id]);
 
+  // On commit, look for a `clear_command` redirection: when any param
+  // declares `clear_command` AND the user picked the empty-string
+  // sentinel for that param, dispatch the redirection target instead
+  // of the parent command. The redirected dispatch carries the args
+  // bag with the empty-string entry stripped — the clear command's
+  // contract is that it takes no value (just scope-resolved
+  // `perspective_id` etc.). This restores the legacy single-popover
+  // "None to clear" affordance for the Group migration without
+  // pushing the redirection into the YAML.
+  //
+  // Only the FIRST param with a matching clear submission redirects.
+  // Multi-param commit-and-clear is not a shape we expect to see (the
+  // YAML pattern is one enum param per popover), so we keep the
+  // resolution rule simple and deterministic.
   const handleCommit = useCallback(
     (args: Record<string, unknown>) => {
       setOpen(false);
-      dispatchWith(args);
+      const params = command.params ?? [];
+      for (const p of params) {
+        if (p.clear_command !== undefined && args[p.name] === "") {
+          // Strip the sentinel from the args so the clear command sees
+          // an empty bag for the redirected param.
+          const { [p.name]: _omitted, ...rest } = args;
+          dispatchWith(p.clear_command, rest);
+          return;
+        }
+      }
+      dispatchWith(command.id, args);
     },
-    [dispatchWith],
+    [dispatchWith, command.id, command.params],
   );
 
   const moniker = asSegment(`${surface}.${command.id}:${surfaceId}`);

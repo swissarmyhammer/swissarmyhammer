@@ -1660,7 +1660,6 @@ async fn handle_ui_trigger_results(app: &AppHandle, state: &AppState, result: &V
     handle_open_board_dialog(app, result);
     handle_create_window(app, state, result).await;
     handle_quit(app, result);
-    handle_focus_filter(app, result);
 }
 
 /// Trigger the native "new board" file dialog when the command emitted a
@@ -1694,31 +1693,6 @@ async fn handle_create_window(app: &AppHandle, state: &AppState, result: &Value)
 fn handle_quit(app: &AppHandle, result: &Value) {
     if result.get("quit").is_some() {
         app.exit(0);
-    }
-}
-
-/// Forward a `FocusFilter` envelope to the frontend on the
-/// `ui.focus.filter` channel.
-///
-/// `FocusFilterCmd` (the no-arg `perspective.filter.focus` command bound to
-/// the registry-driven Filter tab button) returns `{"FocusFilter": {
-/// "perspective_id": "..." }}` as a pure UI-broadcast — no state mutation,
-/// no undo entry. The formula bar's `<FilterEditorBody>` listens for
-/// `ui.focus.filter`, compares the payload's perspective id against its own,
-/// and calls `focus()` on the CM6 editor when they match.
-///
-/// Why a global `app.emit` and not `emit_to(window_label)`: the formula bar
-/// already mounts one editor per perspective (keyed on the active
-/// perspective id), and every editor instance filters by id on receipt.
-/// Broadcasting to every window keeps the wiring simple and matches the
-/// other domain events (`drag-session-active`, `board-changed`, …) which
-/// also emit globally; window-targeting can be added later if a use case
-/// for it appears.
-fn handle_focus_filter(app: &AppHandle, result: &Value) {
-    if let Some(focus_filter) = result.get("FocusFilter") {
-        // Fire-and-forget — a missing listener (e.g. no active perspective
-        // when the user dispatches via palette) is a UI no-op, not an error.
-        let _ = app.emit("ui.focus.filter", focus_filter);
     }
 }
 
@@ -2113,42 +2087,27 @@ pub async fn list_commands_for_scope(
     context_menu: Option<bool>,
 ) -> Result<Value, String> {
     let active_handle = state.active_handle().await;
-    let fields = active_handle.as_ref().and_then(|h| h.ctx.fields());
     let registry = state.commands_registry.read().await;
     let dynamic = build_dynamic_sources(&app, &state, active_handle.as_deref()).await;
     log_scope_inputs(&scope_chain, context_menu, &dynamic);
 
-    let result = swissarmyhammer_kanban::scope_commands::commands_for_scope(
+    // Thread the active context through `commands_for_scope_with_context`
+    // so the call carries BOTH the entity schemas (via `fields`) AND the
+    // options resolver registry (via `options_registry`) — sourced from the
+    // same context object. The earlier direct call to `commands_for_scope`
+    // passed `None` for the options registry, which silently disabled the
+    // enrichment pass and left every picker (Group By, View, Sort, etc.)
+    // with `options: None` — the empty-popover bug tracked in kanban task
+    // 01KRGW1DYD0T05PSTEDPT5D076 (iteration 4).
+    let result = swissarmyhammer_kanban::scope_commands::commands_for_scope_with_context(
         &scope_chain,
         &registry,
         &state.command_impls,
-        fields,
+        active_handle.as_ref().map(|h| h.ctx.as_ref()),
         &state.ui_state,
         context_menu == Some(true),
         Some(&dynamic),
-        None,
     );
-
-    // [group-debug] iter-3 instrumentation — see kanban task 01KRGW1DYD0T05PSTEDPT5D076.
-    tracing::info!(
-        target: "group_debug",
-        "[group-debug] list_commands_for_scope: scope_chain={:?}, returned_count={}",
-        scope_chain,
-        result.len(),
-    );
-    for cmd in &result {
-        for param in &cmd.params {
-            if param.options_from.as_deref() == Some("perspective.fields") {
-                tracing::info!(
-                    target: "group_debug",
-                    "[group-debug] list_commands_for_scope: cmd_id={:?}, param.name={:?}, options_from=perspective.fields, options.len={}",
-                    cmd.id,
-                    param.name,
-                    param.options.as_ref().map(|v| v.len()).unwrap_or(0),
-                );
-            }
-        }
-    }
 
     log_scope_result(&result);
     serde_json::to_value(&result).map_err(|e| e.to_string())

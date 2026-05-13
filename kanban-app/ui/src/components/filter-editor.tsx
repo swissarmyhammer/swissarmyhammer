@@ -27,7 +27,6 @@ import { filterLanguage } from "@/lang-filter";
 import { X } from "lucide-react";
 import { EditorView } from "@codemirror/view";
 import { pickedCompletion } from "@codemirror/autocomplete";
-import { listen } from "@tauri-apps/api/event";
 import { CommandScopeProvider, useDispatchCommand } from "@/lib/command-scope";
 import { useUIState } from "@/lib/ui-state-context";
 import { useMentionExtensions } from "@/hooks/use-mention-extensions";
@@ -400,55 +399,20 @@ const FilterEditorBody = forwardRef<FilterEditorHandle, FilterEditorProps>(
     );
 
     // ---------------------------------------------------------------------
-    // ui.focus.filter — subscribe to the backend's focus-broadcast event
-    // ---------------------------------------------------------------------
+    // (focus-routing note)
     //
-    // The new `perspective.filter.focus` command (no-arg, dispatched from
-    // the registry-rendered Filter tab button in `<PerspectiveTabBar>`)
-    // returns a `FocusFilter` marker the Tauri dispatcher converts into a
-    // `ui.focus.filter` event carrying `{ perspective_id }`. Every active
-    // `<FilterEditorBody>` subscribes; the one whose perspective id matches
-    // calls `focus()` on its inner CM6 editor, producing the same user-
-    // visible behaviour the deleted `<FilterFocusButton>` triggered locally.
-    //
-    // Why a broadcast (not a callback prop): the backend command needs to
-    // work from the palette and keybindings too — the prop-callback path
-    // only fires from the tab-button click. The broadcast also keeps
-    // multi-window setups consistent: every window with a matching active
-    // perspective focuses its editor in lockstep.
-    useEffect(() => {
-      let unlisten: (() => void) | undefined;
-      let cancelled = false;
-      listen<{ perspective_id?: string }>("ui.focus.filter", (event) => {
-        const targetId = event.payload?.perspective_id;
-        // The payload carries the dispatcher's resolved perspective id.
-        // Compare against this editor's own id so a broadcast to a
-        // sibling perspective's editor (or to a different window) is
-        // ignored. Missing id is defensive: don't grab focus on a
-        // malformed payload.
-        if (targetId && targetId === perspectiveId) {
-          innerRef.current?.focus();
-        }
-      })
-        .then((dispose) => {
-          if (cancelled) {
-            dispose();
-            return;
-          }
-          unlisten = dispose;
-        })
-        .catch((err) =>
-          console.error(
-            "[FilterEditorBody] ui.focus.filter listen failed",
-            err,
-          ),
-        );
-      return () => {
-        cancelled = true;
-        unlisten?.();
-      };
-    }, [perspectiveId]);
-
+    // The Filter tab button's click no longer reaches this editor through
+    // a Tauri-event broadcast. Card `01KRGZY33P99J7CGG0XRQGZ352` deleted
+    // the parallel `FocusFilter` → `ui.focus.filter` channel and rewired
+    // the click to dispatch `nav.focus({ args: { fq } })` against the
+    // formula bar's `filter_editor:${id}` spatial-nav scope. The kernel
+    // then claims focus on the scope, and the scope's own
+    // `nav.drillIn` (Enter) drives the CM6 editor into editing focus —
+    // the same path arrow-nav uses when the user lands on the formula bar
+    // from a neighbouring leaf. There is therefore no event subscription
+    // here: the focus flow is "click → nav.focus → scope claim → user
+    // presses Enter (or the click handler chains nav.drillIn) → CM6
+    // takes DOM focus".
     // ---------------------------------------------------------------------
     // External-change reconciliation
     // ---------------------------------------------------------------------

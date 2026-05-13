@@ -631,22 +631,27 @@ describe("PerspectiveTabBar", () => {
     // `<FilterFocusButton>` (aria-label "Filter", click → local
     // `onFilterFocus` callback → `filterEditorRef.current?.focus()`)
     // were removed by task 01KRE1YA65MMG29RDQDQ0VPJQG when the button
-    // migrated to a registry-rendered `<CommandButton>` for the
-    // `perspective.filter.focus` command. The equivalent contracts now
-    // live in `perspective-tab-bar.filter-migration.test.tsx`:
+    // migrated to a registry-rendered tab button. The current click
+    // path is the `<FilterFocusCommandButton>` adapter introduced by
+    // 01KRGZY33P99J7CGG0XRQGZ352 — it dispatches `nav.focus` against
+    // the formula bar's `filter_editor:${id}` spatial-nav scope. The
+    // equivalent contracts now live in
+    // `perspective-tab-bar.filter-migration.test.tsx`:
     //
     //   - `filter_button_is_active_when_perspective_has_a_filter`
     //     (aria-label "Focus Filter", `text-primary` highlight).
-    //   - `filter_command_button_dispatches_perspective_filter_focus_on_click`
-    //     (click dispatches; no popover opens).
-    //   - `filter_editor_focuses_on_ui_focus_filter_event_for_matching_perspective`
-    //     (the `ui.focus.filter` Tauri event drives CM6 focus).
+    //   - `filter_button_click_dispatches_nav_focus_with_filter_editor_fq`
+    //     (click → `spatial_focus` IPC with `fq` ending in
+    //     `filter_editor:<perspective-id>`).
+    //   - `filter_button_click_targets_the_currently_active_perspective`
+    //     (sibling-perspective targeting).
     //
     // The local-callback path the deleted tests exercised does not
     // exist anymore — the click no longer focuses the editor directly;
-    // it dispatches the command, the backend emits the event, and the
-    // editor reacts. Holding onto rewritten "click → focus" tests here
-    // would test the mock plumbing rather than the production wire.
+    // it dispatches `nav.focus`, the kernel claims focus on the scope,
+    // and `nav.drillIn` drives CM6 to take DOM focus. Holding onto
+    // rewritten "click → focus" tests here would test the mock
+    // plumbing rather than the production wire.
 
     it("clicking the formula bar container area focuses the CM6 editor", () => {
       mockPerspectivesValue = {
@@ -692,8 +697,9 @@ describe("PerspectiveTabBar", () => {
   // Source-of-truth assertion for kanban card `01KQ9Z56M556DQHYMA502B9FKB`'s
   // rect-regression criterion: none of the perspective tabs' kernel-stored
   // rects may be zero-sized at first paint, including the active tab whose
-  // box is wider due to `<GroupPopoverButton>` + registry-rendered
-  // `<CommandButton>` chrome.
+  // box is wider due to registry-rendered `<CommandButton>` chrome
+  // (the migrated `perspective.filter.focus` and `perspective.group`
+  // entries each contribute an inline affordance on the active tab).
   //
   // Beam search picks candidates by their rect center / left-edge ordering;
   // a zero-sized rect from a tab leaf would either tie with siblings (making
@@ -719,10 +725,10 @@ describe("PerspectiveTabBar", () => {
           { id: "p2", name: "Backlog", view: "board" },
           { id: "p3", name: "Archive", view: "board" },
         ],
-        // p2 is active — its leaf is widened by the `<GroupPopoverButton>`
-        // + registry-rendered `<CommandButton>` chrome that only the
-        // active tab renders. The regression guard must hold for the
-        // wider leaf as well as the flanking ones.
+        // p2 is active — its leaf is widened by the registry-rendered
+        // `<CommandButton>` chrome that only the active tab renders.
+        // The regression guard must hold for the wider leaf as well
+        // as the flanking ones.
         activePerspective: { id: "p2", name: "Backlog", view: "board" },
       };
 
@@ -759,7 +765,7 @@ describe("PerspectiveTabBar", () => {
       // `spatial_register_scope` invocation argument bag. After the
       // iteration-2 reshape the per-tab wrapper is a `<FocusScope>`, not
       // a `<FocusScope>` leaf — the rect lives on the zone now and the
-      // inner name / filter / group leaves are smaller children inside
+      // inner name / filter focus / group leaves are smaller children inside
       // it.
       type RectArg = {
         x: number;

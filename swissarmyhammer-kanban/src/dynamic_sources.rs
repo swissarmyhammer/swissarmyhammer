@@ -116,16 +116,6 @@ pub async fn build_dynamic_sources(inputs: DynamicSourcesInputs<'_>) -> DynamicS
         inputs.ui_state,
         inputs.active_window_label,
     );
-    // [group-debug] iter-3 instrumentation — see kanban task 01KRGW1DYD0T05PSTEDPT5D076.
-    // Logged here so we can correlate `active_window_label` (only available in this
-    // scope) with the per-perspective trace emitted inside `gather_perspectives`.
-    tracing::info!(
-        target: "group_debug",
-        "[group-debug] build_dynamic_sources: active_window_label={:?}, resolved_view_id={:?}, resolved_view_kind={:?}",
-        inputs.active_window_label,
-        view_id,
-        view_kind,
-    );
     let perspectives =
         gather_perspectives(inputs.active_ctx, view_id.as_deref(), view_kind.as_deref()).await;
     DynamicSources {
@@ -265,13 +255,6 @@ async fn gather_perspectives(
     active_view_kind: Option<&str>,
 ) -> Vec<PerspectiveInfo> {
     let Some(ctx) = ctx else {
-        // [group-debug] iter-3 instrumentation — see kanban task 01KRGW1DYD0T05PSTEDPT5D076.
-        tracing::info!(
-            target: "group_debug",
-            "[group-debug] gather_perspectives: active_view_id={:?}, active_view_kind={:?}, views_count=0 (no active ctx — bailing)",
-            active_view_id,
-            active_view_kind,
-        );
         return Vec::new();
     };
     let Ok(pctx) = ctx.perspective_context().await else {
@@ -304,16 +287,6 @@ async fn gather_perspectives(
     }
 
     let fields_ctx = ctx.fields();
-    // [group-debug] iter-3 instrumentation — see kanban task 01KRGW1DYD0T05PSTEDPT5D076.
-    tracing::info!(
-        target: "group_debug",
-        "[group-debug] gather_perspectives: active_view_id={:?}, active_view_kind={:?}, views_count={}, perspectives_total={}, fields_ctx_present={}",
-        active_view_id,
-        active_view_kind,
-        views_slice.len(),
-        pc.all().len(),
-        fields_ctx.is_some(),
-    );
     pc.all()
         .iter()
         .filter(|p| match active_view_kind {
@@ -363,19 +336,10 @@ fn entity_type_for_perspective<'a>(
 ) -> Option<&'a str> {
     // Strict path: view_id pinpoints exactly one view.
     if let Some(view_id) = perspective.view_id.as_deref() {
-        let result = views
+        return views
             .iter()
             .find(|v| v.id.as_str() == view_id)
             .and_then(|v| v.entity_type.as_deref());
-        // [group-debug] iter-3 instrumentation — see kanban task 01KRGW1DYD0T05PSTEDPT5D076.
-        tracing::info!(
-            target: "group_debug",
-            "[group-debug] entity_type_for_perspective: tier=strict, persp.id={:?}, persp.view_id={:?}, result={:?}",
-            perspective.id,
-            view_id,
-            result,
-        );
-        return result;
     }
 
     // Active-view tiebreaker: if the caller passed an active view id and
@@ -391,16 +355,6 @@ fn entity_type_for_perspective<'a>(
         if let Some(active_view) = views.iter().find(|v| v.id.as_str() == active_id) {
             if active_view.kind.as_kebab_str() == perspective.view {
                 if let Some(et) = active_view.entity_type.as_deref() {
-                    // [group-debug] iter-3 instrumentation — see kanban task 01KRGW1DYD0T05PSTEDPT5D076.
-                    tracing::info!(
-                        target: "group_debug",
-                        "[group-debug] entity_type_for_perspective: tier=tiebreaker, persp.id={:?}, persp.view={:?}, active_view_id={:?}, active_view.kind={:?}, result={:?}",
-                        perspective.id,
-                        perspective.view,
-                        active_id,
-                        active_view.kind.as_kebab_str(),
-                        et,
-                    );
                     return Some(et);
                 }
             }
@@ -422,27 +376,10 @@ fn entity_type_for_perspective<'a>(
             Some(prior) if prior == et => {}
             Some(_) => {
                 // conflicting entity types — bail out
-                // [group-debug] iter-3 instrumentation — see kanban task 01KRGW1DYD0T05PSTEDPT5D076.
-                tracing::info!(
-                    target: "group_debug",
-                    "[group-debug] entity_type_for_perspective: tier=by-kind, persp.id={:?}, persp.view={:?}, active_view_id={:?}, result=None (ambiguous — conflicting entity types)",
-                    perspective.id,
-                    perspective.view,
-                    active_view_id,
-                );
                 return None;
             }
         }
     }
-    // [group-debug] iter-3 instrumentation — see kanban task 01KRGW1DYD0T05PSTEDPT5D076.
-    tracing::info!(
-        target: "group_debug",
-        "[group-debug] entity_type_for_perspective: tier=by-kind, persp.id={:?}, persp.view={:?}, active_view_id={:?}, result={:?}",
-        perspective.id,
-        perspective.view,
-        active_view_id,
-        matched_entity,
-    );
     matched_entity
 }
 
@@ -495,56 +432,19 @@ fn denormalize_perspective_fields(
     active_view_id: Option<&str>,
 ) -> Vec<PerspectiveFieldInfo> {
     let Some(fc) = fields_ctx else {
-        // [group-debug] iter-3 instrumentation — see kanban task 01KRGW1DYD0T05PSTEDPT5D076.
-        tracing::info!(
-            target: "group_debug",
-            "[group-debug] denormalize: persp.id={:?}, persp.view={:?}, persp.view_id={:?}, active_view_id={:?}, entity_type=NONE (no fields_ctx), fields_returned=0",
-            perspective.id,
-            perspective.view,
-            perspective.view_id,
-            active_view_id,
-        );
         return Vec::new();
     };
-    let entity_type_opt = entity_type_for_perspective(perspective, views, active_view_id);
-    let Some(entity_type) = entity_type_opt else {
-        // [group-debug] iter-3 instrumentation — see kanban task 01KRGW1DYD0T05PSTEDPT5D076.
-        tracing::info!(
-            target: "group_debug",
-            "[group-debug] denormalize: persp.id={:?}, persp.view={:?}, persp.view_id={:?}, active_view_id={:?}, entity_type=NONE (resolver returned None), fields_returned=0",
-            perspective.id,
-            perspective.view,
-            perspective.view_id,
-            active_view_id,
-        );
+    let Some(entity_type) = entity_type_for_perspective(perspective, views, active_view_id) else {
         return Vec::new();
     };
-    let all_fields_for_entity: Vec<_> = fc.fields_for_entity(entity_type);
-    let groupable_count = all_fields_for_entity
-        .iter()
-        .filter(|fd| fd.groupable == Some(true))
-        .count();
-    let result: Vec<PerspectiveFieldInfo> = all_fields_for_entity
+    fc.fields_for_entity(entity_type)
         .into_iter()
         .filter(|fd| fd.groupable == Some(true))
         .map(|fd| PerspectiveFieldInfo {
             id: fd.id.as_str().to_string(),
             display_name: fd.name.as_str().to_string(),
         })
-        .collect();
-    // [group-debug] iter-3 instrumentation — see kanban task 01KRGW1DYD0T05PSTEDPT5D076.
-    tracing::info!(
-        target: "group_debug",
-        "[group-debug] denormalize: persp.id={:?}, persp.view={:?}, persp.view_id={:?}, active_view_id={:?}, entity_type={:?}, groupable_fields={}, fields_returned={}",
-        perspective.id,
-        perspective.view,
-        perspective.view_id,
-        active_view_id,
-        entity_type,
-        groupable_count,
-        result.len(),
-    );
-    result
+        .collect()
 }
 
 /// Read the board entity's `name` field from the entity store.

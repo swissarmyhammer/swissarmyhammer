@@ -91,6 +91,32 @@ pub struct ParamDef {
     /// when the list is fixed (e.g. sort direction = asc / desc).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options: Option<Vec<ParamOption>>,
+    /// Sibling command id to dispatch in place of this command when the
+    /// user picks the "clear" sentinel (empty-string value) for an
+    /// enum-shaped param.
+    ///
+    /// Surfaces a "None" affordance inside the picker popover so the user
+    /// can clear state in one click instead of leaving the popover and
+    /// hunting through the right-click menu. The frontend
+    /// [`CommandPopover`] auto-prepends a "(none)" `<option>` with
+    /// `value=""` whenever a param carries this annotation, and the
+    /// [`CommandButton`] commit handler intercepts the empty-string
+    /// submission to dispatch `clear_command` (instead of the parent
+    /// command) with the same scope-resolved args.
+    ///
+    /// Set on the YAML param of any "set X" command whose paired
+    /// "clear X" command is reachable from the same scope chain. The
+    /// first user is `perspective.group`'s `group` param, which
+    /// redirects to `perspective.clearGroup` — restoring the legacy
+    /// `<GroupSelector>` "None" entry that the command-driven-ui
+    /// migration would otherwise drop. The Sort migration is expected
+    /// to reuse the same annotation when it lands.
+    ///
+    /// The id is stringly-typed; the runtime does not validate it
+    /// against the registry at YAML-load time. A typo surfaces as a
+    /// "command not found" dispatch error in the live app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clear_command: Option<String>,
 }
 
 /// Tab-button affordance metadata for a command.
@@ -253,6 +279,7 @@ mod tests {
                 shape: None,
                 options_from: None,
                 options: None,
+                clear_command: None,
             }],
             undoable: true,
             context_menu: true,
@@ -488,6 +515,7 @@ menu:
                     value: "status".into(),
                     label: "Status".into(),
                 }]),
+                clear_command: None,
             }],
             undoable: false,
             context_menu: false,
@@ -507,6 +535,54 @@ menu:
         assert_eq!(opts.len(), 1);
         assert_eq!(opts[0].value, "status");
         assert_eq!(opts[0].label, "Status");
+    }
+
+    /// A `ParamDef` carrying `clear_command: Some(...)` must round-trip
+    /// through YAML — the annotation drives the frontend
+    /// `<CommandPopover>`'s "(none)" affordance and the
+    /// `<CommandButton>` commit-handler's clear-sentinel redirection, so
+    /// a regression that silently drops it during (de)serialization
+    /// would re-introduce the legacy "no way to clear" UX bug. The
+    /// existing
+    /// [`command_def_with_param_shape_and_options_round_trips`] test
+    /// covers the `clear_command: None` path; this test pins the
+    /// `Some(...)` half of the contract.
+    #[test]
+    fn command_def_with_param_clear_command_round_trips() {
+        let def = CommandDef {
+            id: "perspective.group".into(),
+            name: "Group By".into(),
+            menu_name: None,
+            scope: Some("entity:perspective".into()),
+            visible: true,
+            keys: None,
+            params: vec![ParamDef {
+                name: "group".into(),
+                from: ParamSource::Args,
+                entity_type: None,
+                default: None,
+                shape: Some(ParamShape::Enum),
+                options_from: Some("perspective.fields".into()),
+                options: None,
+                clear_command: Some("perspective.clearGroup".into()),
+            }],
+            undoable: false,
+            context_menu: false,
+            context_menu_group: None,
+            context_menu_order: None,
+            menu: None,
+            view_kinds: None,
+            tab_button: None,
+        };
+        let yaml = serde_yaml_ng::to_string(&def).unwrap();
+        let parsed: CommandDef = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(def, parsed);
+        let param = &parsed.params[0];
+        assert_eq!(
+            param.clear_command.as_deref(),
+            Some("perspective.clearGroup"),
+            "clear_command: Some(...) must survive a full YAML round trip"
+        );
     }
 
     /// A minimal `CommandDef` must not emit any of the new fields when

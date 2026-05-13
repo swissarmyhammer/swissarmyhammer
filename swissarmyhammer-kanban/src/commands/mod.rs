@@ -204,9 +204,15 @@ fn register_perspective(map: &mut CmdMap) {
         "perspective.filter".into(),
         Arc::new(perspective_commands::SetFilterCmd),
     );
-    // `perspective.filter.focus` — pure UI-broadcast: returns a `FocusFilter`
-    // marker envelope the Tauri dispatcher converts into a `ui.focus.filter`
-    // event the formula bar subscribes to. No state mutation, no undo entry.
+    // `perspective.filter.focus` — UI-only marker. Renders the Filter tab
+    // button via the YAML `tab_button: { icon: filter }` annotation; the
+    // click site dispatches the frontend-only `nav.focus` command against
+    // the formula bar's `filter_editor:${id}` spatial-nav scope (see
+    // `FilterFocusCommandButton` in
+    // `kanban-app/ui/src/components/perspective-tab-bar.tsx`). The backend
+    // `execute` is a deliberate no-op kept only to satisfy the YAML ↔ Rust
+    // completeness invariant. Card `01KRGZY33P99J7CGG0XRQGZ352` deleted
+    // the prior `FocusFilter` marker-envelope + `ui.focus.filter` channel.
     map.insert(
         "perspective.filter.focus".into(),
         Arc::new(perspective_commands::FocusFilterCmd),

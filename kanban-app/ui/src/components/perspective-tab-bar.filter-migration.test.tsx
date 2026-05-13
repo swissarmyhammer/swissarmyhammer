@@ -1,38 +1,44 @@
 /**
  * Regression tests for the Filter tab-button migration to command-driven
- * rendering (task 01KRE1YA65MMG29RDQDQ0VPJQG).
+ * rendering.
  *
- * Before the migration the active perspective tab rendered a hardcoded
- * `<FilterFocusButton>` whose click called a local `onFocus` callback to
- * focus the formula bar. After the migration the same affordance is a
- * registry-rendered `<CommandButton>` driven by the new no-arg
- * `perspective.filter.focus` command:
+ * **History:**
  *
- *   - Click dispatches `perspective.filter.focus` (no popover; every
- *     param resolves from scope) with the active perspective id.
- *   - The backend's `FocusFilterCmd` returns a `FocusFilter` marker
- *     envelope the dispatcher converts into a `ui.focus.filter` Tauri
- *     event the formula bar subscribes to. (The backend side is exercised
- *     by `swissarmyhammer-kanban`'s `focus_filter_command_*` Rust tests;
- *     this file pins only the React side of the wire.)
+ *   - Initial migration (task `01KRE1YA65MMG29RDQDQ0VPJQG`) replaced the
+ *     hardcoded `<FilterFocusButton>` with a registry-rendered
+ *     `<CommandButton>` driven by the `perspective.filter.focus` YAML
+ *     entry. That migration invented a parallel focus channel: the
+ *     click dispatched `perspective.filter.focus`, the backend
+ *     `FocusFilterCmd` returned a `FocusFilter` marker envelope, the
+ *     Tauri dispatcher emitted a `ui.focus.filter` event, and
+ *     `<FilterEditorBody>` listened for it and imperatively focused
+ *     the CM6 editor.
  *
- * Five contracts locked here:
+ *   - Rewire to `nav.focus` (task `01KRGZY33P99J7CGG0XRQGZ352`):
+ *     deleted the parallel channel and routed the click through the
+ *     spatial-nav focus primitive. Now the click dispatches
+ *     `nav.focus({ args: { fq: <filter_editor FQM> } })`, which is the
+ *     same path that every other focus claim in the app goes through
+ *     (jump-to, arrow nav, palette focus, etc.). The kernel emits
+ *     `focus-changed` back to React; the `filter_editor:${id}` scope's
+ *     `nav.drillIn` (Enter) drives the CM6 editor to take editing focus.
  *
- *   1. Clicking the Filter `<CommandButton>` dispatches
- *      `perspective.filter.focus` with the host perspective's id.
- *   2. The button carries the `text-primary` highlight when
+ * Contracts pinned by this file:
+ *
+ *   1. Clicking the Filter `<CommandButton>` dispatches `nav.focus` with
+ *      `args.fq` ending in `filter_editor:<active-perspective-id>`.
+ *   2. Switching the active perspective and then clicking Filter lands
+ *      focus on the NEW active perspective's `filter_editor` moniker —
+ *      not on the previously active one.
+ *   3. The button carries the `text-primary` highlight when
  *      `perspective.filter` is set.
- *   3. The button does NOT carry the highlight when
+ *   4. The button does NOT carry the highlight when
  *      `perspective.filter` is unset/empty.
- *   4. The button registers the new spatial-nav moniker
+ *   5. The button registers the spatial-nav moniker
  *      `perspective_tab.perspective.filter.focus:{id}` — the legacy
  *      `perspective_tab.filter:{id}` is gone.
- *   5. `<FilterEditorBody>` calls `focus()` on its CM6 editor when a
- *      `ui.focus.filter` event arrives carrying its perspective id, and
- *      ignores events targeted at a sibling perspective.
  */
 
-import type React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -175,12 +181,10 @@ vi.mock("@/lib/ui-state-context", () => ({
 // ---------------------------------------------------------------------------
 
 import { PerspectiveTabBar } from "./perspective-tab-bar";
-import { FilterEditor } from "./filter-editor";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { FocusLayer } from "./focus-layer";
 import { asSegment } from "@/types/spatial";
-import { CommandScopeProvider } from "@/lib/command-scope";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -277,39 +281,109 @@ describe("perspective-tab-bar — Filter command migration", () => {
   });
 
   // -------------------------------------------------------------------------
-  // 1. Clicking the registry-rendered Filter button dispatches
-  //    `perspective.filter.focus` with the host perspective id.
+  // 1. Clicking the Filter `<CommandButton>` routes through `nav.focus` with
+  //    `args.fq` ending in `filter_editor:<active-perspective-id>`.
+  //
+  // `nav.focus` is registered as a frontend-execute handler in
+  // `<SpatialFocusProvider>` (see `buildSpatialNavFocusCommand`). Its
+  // execute closure invokes `actions.focus(fq)`, which calls
+  // `invoke("spatial_focus", { fq, snapshot })`. So the assertion target
+  // is the `spatial_focus` IPC call's `fq` payload.
   // -------------------------------------------------------------------------
 
-  it("filter_command_button_dispatches_perspective_filter_focus_on_click", async () => {
+  it("filter_button_click_dispatches_nav_focus_with_filter_editor_fq", async () => {
     mockResolvedCommands([focusFilterRegistryEntry()]);
 
     renderTabBar();
     await flushEffects();
 
-    // The registry-rendered button carries `aria-label="Focus Filter"`
-    // (derived from `command.name`). The hardcoded `<FilterFocusButton>`
-    // (aria-label "Filter") is deleted, so name disambiguation is
-    // unambiguous — `getByRole` won't collide.
+    const button = screen.getByRole("button", { name: "Focus Filter" });
+
+    await act(async () => {
+      fireEvent.click(button);
+      // The click handler dispatches nav.focus, which is a frontend
+      // execute (synchronous). The `actions.focus` call then issues
+      // `invoke("spatial_focus", ...)` asynchronously. One microtask
+      // turn is enough for the synchronous portion to flush.
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Expect at least one `spatial_focus` IPC call whose `fq` ends with
+    // the filter editor's segment for the active perspective.
+    const spatialFocusCalls = mockInvoke.mock.calls.filter(
+      (c) => c[0] === "spatial_focus",
+    );
+    expect(
+      spatialFocusCalls.length,
+      "nav.focus must result in at least one spatial_focus IPC",
+    ).toBeGreaterThan(0);
+
+    const lastCall = spatialFocusCalls[spatialFocusCalls.length - 1];
+    const fq = (lastCall[1] as { fq?: string })?.fq ?? "";
+    expect(
+      fq.endsWith("filter_editor:p1"),
+      `spatial_focus.fq must end with filter_editor:p1 (got ${fq})`,
+    ).toBe(true);
+
+    // Negative: there must be NO backend dispatch_command call for
+    // `perspective.filter.focus` (the old parallel-channel path) — the
+    // click goes through `nav.focus` only.
+    const filterFocusBackendCalls = mockInvoke.mock.calls.filter(
+      (c) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as { cmd?: string })?.cmd === "perspective.filter.focus",
+    );
+    expect(
+      filterFocusBackendCalls,
+      "click must not dispatch the deleted perspective.filter.focus backend command",
+    ).toHaveLength(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // 2. Switching the active perspective after render and clicking Filter
+  //    lands focus on the new active perspective's filter_editor moniker.
+  //
+  // Catches an id-resolution regression: a stale captured perspective id
+  // would route focus to the wrong scope.
+  // -------------------------------------------------------------------------
+
+  it("filter_button_click_targets_the_currently_active_perspective", async () => {
+    mockPerspectivesValue = {
+      ...mockPerspectivesValue,
+      perspectives: [
+        { id: "p1", name: "Sprint", view: "board" },
+        { id: "p2", name: "Triage", view: "board" },
+      ],
+      activePerspective: { id: "p2", name: "Triage", view: "board" },
+    };
+    mockResolvedCommands([focusFilterRegistryEntry()]);
+
+    renderTabBar();
+    await flushEffects();
+
     const button = screen.getByRole("button", { name: "Focus Filter" });
 
     await act(async () => {
       fireEvent.click(button);
       await Promise.resolve();
+      await Promise.resolve();
     });
 
-    // Expect exactly one `dispatch_command` call for the focus command.
-    const dispatchCalls = mockInvoke.mock.calls.filter(
-      (c) => c[0] === "dispatch_command",
+    const spatialFocusCalls = mockInvoke.mock.calls.filter(
+      (c) => c[0] === "spatial_focus",
     );
-    expect(dispatchCalls).toHaveLength(1);
-    expect(dispatchCalls[0][1]).toMatchObject({
-      cmd: "perspective.filter.focus",
-    });
+    expect(spatialFocusCalls.length).toBeGreaterThan(0);
+    const lastCall = spatialFocusCalls[spatialFocusCalls.length - 1];
+    const fq = (lastCall[1] as { fq?: string })?.fq ?? "";
+    expect(
+      fq.endsWith("filter_editor:p2"),
+      `spatial_focus.fq must end with filter_editor:p2 when p2 is active (got ${fq})`,
+    ).toBe(true);
   });
 
   // -------------------------------------------------------------------------
-  // 2. The Filter `<CommandButton>` is highlighted (`text-primary`) when
+  // 3. The Filter `<CommandButton>` is highlighted (`text-primary`) when
   //    the active perspective has a non-empty filter.
   // -------------------------------------------------------------------------
 
@@ -342,7 +416,7 @@ describe("perspective-tab-bar — Filter command migration", () => {
   });
 
   // -------------------------------------------------------------------------
-  // 3. The Filter `<CommandButton>` is NOT highlighted when the active
+  // 4. The Filter `<CommandButton>` is NOT highlighted when the active
   //    perspective has no filter.
   // -------------------------------------------------------------------------
 
@@ -365,7 +439,7 @@ describe("perspective-tab-bar — Filter command migration", () => {
   });
 
   // -------------------------------------------------------------------------
-  // 4. The new button uses the registry-derived moniker, NOT the legacy
+  // 5. The new button uses the registry-derived moniker, NOT the legacy
   //    `perspective_tab.filter:{id}`.
   // -------------------------------------------------------------------------
 
@@ -398,93 +472,5 @@ describe("perspective-tab-bar — Filter command migration", () => {
       legacyLeaf,
       "the legacy perspective_tab.filter:{id} moniker must be deleted with <FilterFocusButton>",
     ).toBeNull();
-  });
-
-  // -------------------------------------------------------------------------
-  // 5. `<FilterEditorBody>` reacts to `ui.focus.filter` events targeted
-  //    at its perspective id, and ignores broadcasts for siblings.
-  //
-  // Mounted as a standalone `<FilterEditor>` (instead of through the
-  // tab bar) so the test can intercept the inner CM6 editor's focus
-  // call directly — the formula bar's own click-to-focus path is not
-  // exercised here. The contract pinned: subscribe → match id →
-  // imperative focus.
-  // -------------------------------------------------------------------------
-
-  it("filter_editor_focuses_on_ui_focus_filter_event_for_matching_perspective", async () => {
-    const ref = { current: null as HTMLElement | null };
-    function Capture({ children }: { children: React.ReactNode }) {
-      return (
-        <div ref={(el) => (ref.current = el)} data-testid="capture">
-          {children}
-        </div>
-      );
-    }
-
-    render(
-      <SpatialFocusProvider>
-        <FocusLayer name={asSegment("window")}>
-          <EntityFocusProvider>
-            <Capture>
-              <CommandScopeProvider moniker="perspective:p1">
-                <FilterEditor filter="" perspectiveId="p1" />
-              </CommandScopeProvider>
-            </Capture>
-          </EntityFocusProvider>
-        </FocusLayer>
-      </SpatialFocusProvider>,
-    );
-
-    // Wait for `listen("ui.focus.filter", …)` inside the editor to
-    // resolve so the listener is actually wired up before we fire.
-    await act(async () => {
-      for (let i = 0; i < 3; i += 1) {
-        // eslint-disable-next-line no-await-in-loop
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      }
-    });
-
-    // Confirm the subscription registered against the expected channel.
-    const registered = listeners.get("ui.focus.filter") ?? [];
-    expect(
-      registered.length,
-      "FilterEditorBody must subscribe to ui.focus.filter",
-    ).toBeGreaterThan(0);
-
-    // Spy on the inner CM6 contenteditable's `focus()` so we can assert
-    // the event triggered an imperative focus. The contenteditable is
-    // the actual DOM target the editor's `innerRef.current?.focus()`
-    // resolves to.
-    const cmContent = ref.current?.querySelector(
-      ".cm-content",
-    ) as HTMLElement | null;
-    expect(cmContent, ".cm-content must be present").not.toBeNull();
-    const focusSpy = vi.spyOn(cmContent!, "focus");
-
-    // Sibling-perspective broadcast — must NOT focus this editor.
-    await act(async () => {
-      for (const cb of registered) {
-        cb({ payload: { perspective_id: "p2" } });
-      }
-      await Promise.resolve();
-    });
-    expect(
-      focusSpy,
-      "broadcast for a sibling perspective must not steal focus",
-    ).not.toHaveBeenCalled();
-
-    // Matching broadcast — must focus this editor.
-    await act(async () => {
-      for (const cb of registered) {
-        cb({ payload: { perspective_id: "p1" } });
-      }
-      await Promise.resolve();
-    });
-    expect(
-      focusSpy,
-      "broadcast for this editor's perspective must call focus() on the CM6 content",
-    ).toHaveBeenCalled();
-
-    focusSpy.mockRestore();
   });
 });

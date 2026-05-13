@@ -43,10 +43,33 @@
 
 - id: perspective.filter.focus
   name: Focus Filter
-  # Tab-button-only command: clicking the filter icon on a perspective tab
-  # dispatches this to focus the formula bar's CM6 editor. The dispatcher
-  # converts the command's `FocusFilter` marker result into a `ui.focus.filter`
-  # Tauri event that the editor subscribes to.
+  # UI-only marker for the Filter tab button. Renders as a `<CommandButton>`
+  # in `<RegistryTabButtons>` via `tab_button: { icon: filter }`, and the
+  # `isActive` highlight is read from the perspective's `filter` field
+  # (see `isCommandActiveForPerspective` in
+  # `kanban-app/ui/src/components/perspective-tab-bar.tsx`).
+  #
+  # The click does NOT route through this command's backend `execute` —
+  # `<FilterFocusCommandButton>` (same file) overrides the dispatch and
+  # issues `nav.focus({ args: { fq } })` against the formula bar's
+  # `filter_editor:${id}` spatial-nav scope. That is the single auditable
+  # focus primitive (card `01KR7CDEFWWVF4WH0BCHE8Y21J`); cross-cutting
+  # concerns (telemetry, animations, scroll-on-focus) live on `nav.focus`,
+  # not on a per-command parallel channel.
+  #
+  # The backend `FocusFilterCmd` exists as a deliberate no-op solely to
+  # satisfy the YAML ↔ Rust completeness invariant
+  # (`test_all_yaml_commands_have_rust_implementations` in
+  # `swissarmyhammer-kanban/src/commands/mod.rs`). See `FocusFilterCmd`
+  # in `swissarmyhammer-kanban/src/commands/perspective_commands.rs` for
+  # the rationale and the post-refactor contract.
+  #
+  # Refactor history: card `01KRGZY33P99J7CGG0XRQGZ352` deleted the prior
+  # `FocusFilter` marker-envelope + `ui.focus.filter` Tauri event channel.
+  # See `nav.yaml` (where `nav.focus` is declared) and
+  # `kanban-app/ui/src/lib/spatial-focus-context.tsx` (where the kernel-
+  # facing `nav.focus` execute closure is registered) for the focus
+  # primitive itself.
   #
   # No `view_kinds` — filter is meaningful on every view kind.
   # No `context_menu: true` — the right-click already has Clear Filter;
@@ -92,17 +115,44 @@
   keys: {}
 
 - id: perspective.group
-  name: Set Group
-  # Palette-only: requires a `group` field name arg. The group-by UI is the
-  # popover on the tab bar; see the `perspective.filter` comment above for
-  # the full rationale.
+  name: Group By
+  # Tab-button + picker command: the group icon on the active perspective
+  # tab renders this command as a `<CommandButton>`; clicking opens a
+  # `<CommandPopover>` whose enum-shaped `group` param is populated by
+  # the backend `PerspectiveFieldsResolver` (registered in
+  # `swissarmyhammer-perspectives`). Picking a field dispatches this
+  # command with the picked value plus a scope-chain-resolved
+  # `perspective_id`.
+  #
+  # The `clear_command: perspective.clearGroup` annotation on the `group`
+  # param surfaces a "(none)" entry as the first option in the popover;
+  # picking it dispatches `perspective.clearGroup` (instead of this
+  # command) with the same scope-resolved `perspective_id`. This restores
+  # the legacy `<GroupSelector>` "None" affordance without forcing the
+  # user to leave the popover and right-click. The Sort migration can
+  # reuse the same annotation when it lands.
+  #
+  # Migrated to command-driven rendering by 01KRE1ZTYJ5PPTQ29K72KE88B5
+  # (the second migration of the command-driven-ui epic; pattern
+  # established by `perspective.filter.focus`). The `name` was changed
+  # from "Set Group" to "Group By" to match the user-facing button
+  # label. The dispatcher's `SetGroupCmd::execute` still accepts `group`
+  # from any source (args bag → scope chain → UIState → first-for-view-
+  # kind), so palette / right-click paths that pre-fill `group` continue
+  # to work unchanged.
   scope: "entity:perspective"
+  tab_button:
+    icon: group
   undoable: true
   params:
     - name: group
       from: args
+      shape: enum
+      options_from: "perspective.fields"
+      clear_command: "perspective.clearGroup"
     - name: perspective_id
-      from: args
+      from: scope_chain
+      entity_type: perspective
   keys: {}
 
 - id: perspective.clearGroup
