@@ -17,8 +17,16 @@
 /// `FieldsContext`.
 #[derive(Debug, Clone)]
 pub struct PerspectiveFieldInfo {
-    /// Field identifier (ULID) — matches the wire `value` the picker emits.
+    /// Field identifier (ULID). Stable across renames; used by
+    /// consumers that need an identity-preserving handle.
     pub id: String,
+    /// Field name (schema slug, e.g. `"assignees"`, `"tags"`). This is
+    /// the wire `value` the `perspective.fields` picker emits and the
+    /// key tasks use to store the corresponding value in their
+    /// `fields` map. Persisted perspective YAMLs also key `group:` by
+    /// this name, so the round-trip (picker → dispatch → persist →
+    /// `<GroupedBoardView>`) is consistently name-shaped end-to-end.
+    pub name: String,
     /// Human-readable display name resolved from the field registry
     /// (caption override on the perspective field entry wins; the
     /// field definition's name is the fallback).
@@ -60,9 +68,11 @@ mod tests {
     fn perspective_field_info_construction() {
         let f = PerspectiveFieldInfo {
             id: "01F1".into(),
+            name: "title".into(),
             display_name: "Title".into(),
         };
         assert_eq!(f.id, "01F1");
+        assert_eq!(f.name, "title");
         assert_eq!(f.display_name, "Title");
     }
 
@@ -73,10 +83,12 @@ mod tests {
     fn perspective_field_info_clone() {
         let f = PerspectiveFieldInfo {
             id: "01F2".into(),
+            name: "status".into(),
             display_name: "Status".into(),
         };
         let f2 = f.clone();
         assert_eq!(f.id, f2.id);
+        assert_eq!(f.name, f2.name);
         assert_eq!(f.display_name, f2.display_name);
     }
 
@@ -93,10 +105,12 @@ mod tests {
             fields: vec![
                 PerspectiveFieldInfo {
                     id: "01F1".into(),
+                    name: "title".into(),
                     display_name: "Title".into(),
                 },
                 PerspectiveFieldInfo {
                     id: "01F2".into(),
+                    name: "status".into(),
                     display_name: "Status".into(),
                 },
             ],
@@ -106,6 +120,7 @@ mod tests {
         assert_eq!(p.view, "grid");
         assert_eq!(p.fields.len(), 2);
         assert_eq!(p.fields[0].id, "01F1");
+        assert_eq!(p.fields[0].name, "title");
     }
 
     /// An empty field list is valid (the perspective is selectable

@@ -87,7 +87,18 @@ impl OptionsResolver for PerspectiveFieldsResolver {
             .fields
             .iter()
             .map(|f| ParamOption {
-                value: f.id.clone(),
+                // `value` carries the field NAME (schema slug), not the
+                // field ID. The dispatched `perspective.group` arg lands
+                // on `PerspectiveDef.group`, which the frontend
+                // `<GroupedBoardView>` reads via `task.fields[<group>]`
+                // — and tasks key their values by field name. Persisted
+                // perspective YAMLs at `.kanban/perspectives/*.yaml`
+                // also store `group:` by name (`group: project`,
+                // `group: tags`), so the end-to-end contract is "name
+                // in, name out". Emitting field IDs here would land
+                // every task in the `(ungrouped)` bucket. See task
+                // `01KRH2EX1N1CA2HA3B4NMWZH67` for the regression.
+                value: f.name.clone(),
                 label: f.display_name.clone(),
             })
             .collect()
@@ -121,8 +132,11 @@ mod tests {
     use crate::perspective_info::PerspectiveFieldInfo;
 
     /// Build an [`OptionsSources`] carrying one perspective with three
-    /// fields. The three field ids are stable test ULIDs so the
-    /// assertion can match on exact value strings.
+    /// fields. The three field names are the schema-slug shape (e.g.
+    /// `"title"`, `"assignees"`) — that is what the dispatched
+    /// `perspective.group` arg must carry end-to-end, because the
+    /// persisted YAML's `group:` key and the frontend's
+    /// `task.fields[<name>]` lookup both key by field name.
     fn fixture_sources() -> OptionsSources {
         let mut sources = OptionsSources::new();
         sources.insert(PerspectivesOptionsData {
@@ -133,14 +147,17 @@ mod tests {
                 fields: vec![
                     PerspectiveFieldInfo {
                         id: "01F1".into(),
+                        name: "title".into(),
                         display_name: "Title".into(),
                     },
                     PerspectiveFieldInfo {
                         id: "01F2".into(),
+                        name: "status".into(),
                         display_name: "Status".into(),
                     },
                     PerspectiveFieldInfo {
                         id: "01F3".into(),
+                        name: "priority".into(),
                         display_name: "Priority".into(),
                     },
                 ],
@@ -151,9 +168,21 @@ mod tests {
 
     /// With `perspective:01P` in scope and a fixture perspective that
     /// carries three fields, the resolver returns three
-    /// [`ParamOption`]s in field order with `value = field_id` and
+    /// [`ParamOption`]s in field order with `value = field_name` and
     /// `label = field_display_name`. Pins the wire format the
     /// frontend `<CommandPopover>` will consume.
+    ///
+    /// **`value` must be the field NAME, not the field ID.** The
+    /// dispatched `perspective.group` arg flows through to
+    /// `<GroupedBoardView>` / `computeGroups`, which reads
+    /// `task.fields[<arg>]`. Tasks key their values by field name
+    /// (`task.fields["assignees"]`, `task.fields["tags"]`), so the
+    /// picker option `value` must match. Persisted perspective YAMLs
+    /// at `.kanban/perspectives/*.yaml` also store `group:` by name
+    /// (`group: project`, `group: tags`), so the wire contract is
+    /// "name in, name out" — emitting field IDs here lands every task
+    /// in the `(ungrouped)` bucket. Regression for task
+    /// `01KRH2EX1N1CA2HA3B4NMWZH67`.
     #[test]
     fn perspective_fields_resolver_returns_fields_for_in_scope_perspective() {
         let sources = fixture_sources();
@@ -164,11 +193,11 @@ mod tests {
         };
         let opts = PerspectiveFieldsResolver.resolve(&ctx);
         assert_eq!(opts.len(), 3);
-        assert_eq!(opts[0].value, "01F1");
+        assert_eq!(opts[0].value, "title");
         assert_eq!(opts[0].label, "Title");
-        assert_eq!(opts[1].value, "01F2");
+        assert_eq!(opts[1].value, "status");
         assert_eq!(opts[1].label, "Status");
-        assert_eq!(opts[2].value, "01F3");
+        assert_eq!(opts[2].value, "priority");
         assert_eq!(opts[2].label, "Priority");
     }
 

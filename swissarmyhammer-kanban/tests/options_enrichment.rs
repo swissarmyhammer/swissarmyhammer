@@ -40,6 +40,11 @@ fn registry_with(yaml: &str) -> CommandsRegistry {
 
 /// Build a [`DynamicSources`] with one perspective carrying three
 /// fields so the `perspective.fields` resolver has data to project.
+///
+/// The fixture uses schema-slug names (`"title"`, `"status"`) on the
+/// `name` field because that is the wire `value` the resolver emits
+/// and the key downstream consumers (`<GroupedBoardView>`,
+/// `computeGroups`, persisted perspective YAMLs) expect.
 fn dynamic_with_perspective() -> DynamicSources {
     DynamicSources {
         perspectives: vec![PerspectiveInfo {
@@ -49,10 +54,12 @@ fn dynamic_with_perspective() -> DynamicSources {
             fields: vec![
                 PerspectiveFieldInfo {
                     id: "01F1".into(),
+                    name: "title".into(),
                     display_name: "Title".into(),
                 },
                 PerspectiveFieldInfo {
                     id: "01F2".into(),
+                    name: "status".into(),
                     display_name: "Status".into(),
                 },
             ],
@@ -119,9 +126,13 @@ fn commands_for_scope_populates_enum_options() {
         2,
         "perspective.fields resolver projects every PerspectiveFieldInfo"
     );
-    assert_eq!(options[0].value, "01F1");
+    // `value` carries the field NAME (slug), not the field ID, so the
+    // dispatched `perspective.group` arg lines up with `task.fields[<name>]`
+    // in the frontend's `computeGroups`. See task
+    // `01KRH2EX1N1CA2HA3B4NMWZH67`.
+    assert_eq!(options[0].value, "title");
     assert_eq!(options[0].label, "Title");
-    assert_eq!(options[1].value, "01F2");
+    assert_eq!(options[1].value, "status");
     assert_eq!(options[1].label, "Status");
 }
 
@@ -346,6 +357,7 @@ fn commands_for_scope_skips_options_resolution_for_view_kind_filtered_commands()
             view: "board".into(),
             fields: vec![PerspectiveFieldInfo {
                 id: "01F1".into(),
+                name: "title".into(),
                 display_name: "Title".into(),
             }],
         }],
@@ -429,14 +441,17 @@ fn perspective_group_command_carries_field_options_when_perspective_in_scope() {
             fields: vec![
                 PerspectiveFieldInfo {
                     id: "01F1".into(),
+                    name: "title".into(),
                     display_name: "Title".into(),
                 },
                 PerspectiveFieldInfo {
                     id: "01F2".into(),
+                    name: "status".into(),
                     display_name: "Status".into(),
                 },
                 PerspectiveFieldInfo {
                     id: "01F3".into(),
+                    name: "priority".into(),
                     display_name: "Priority".into(),
                 },
             ],
@@ -519,11 +534,14 @@ fn perspective_group_command_carries_field_options_when_perspective_in_scope() {
         "three-field perspective must project to three ParamOption entries; \
          got: {options:?}"
     );
-    assert_eq!(options[0].value, "01F1");
+    // `value` carries the field NAME (slug), the wire format the
+    // frontend's `computeGroups` and the persisted perspective YAML's
+    // `group:` key both consume. See task `01KRH2EX1N1CA2HA3B4NMWZH67`.
+    assert_eq!(options[0].value, "title");
     assert_eq!(options[0].label, "Title");
-    assert_eq!(options[1].value, "01F2");
+    assert_eq!(options[1].value, "status");
     assert_eq!(options[1].label, "Status");
-    assert_eq!(options[2].value, "01F3");
+    assert_eq!(options[2].value, "priority");
     assert_eq!(options[2].label, "Priority");
 }
 
@@ -563,8 +581,15 @@ async fn perspective_group_command_drops_non_groupable_fields_end_to_end() {
     // `title` (00...001) has no `groupable` annotation on the entity
     // schema → must be dropped. `assignees` (00...005) is annotated
     // `groupable: true` → must survive.
+    //
+    // The `*_NAME` constants are the schema-slug shape — the wire value
+    // the resolver emits on `ParamOption.value` after task
+    // `01KRH2EX1N1CA2HA3B4NMWZH67`. The `*_ID` constants are still used
+    // for the intermediate denormalisation assertions (`f.id`).
     const FIELD_TITLE: &str = "00000000000000000000000001";
     const FIELD_ASSIGNEES: &str = "00000000000000000000000005";
+    const FIELD_TITLE_NAME: &str = "title";
+    const FIELD_ASSIGNEES_NAME: &str = "assignees";
     const BUILTIN_BOARD_VIEW_ID: &str = "01JMVIEW0000000000BOARD0";
 
     let temp = TempDir::new().expect("TempDir must allocate");
@@ -678,13 +703,18 @@ async fn perspective_group_command_drops_non_groupable_fields_end_to_end() {
         .options
         .as_ref()
         .expect("perspective.fields resolved → options must be Some");
+    // `value` carries the field NAME (slug). See task
+    // `01KRH2EX1N1CA2HA3B4NMWZH67` — the wire format is name-shaped end
+    // to end so the dispatched `perspective.group` arg lines up with
+    // `task.fields[<name>]` in `<GroupedBoardView>` and the persisted
+    // `group:` key in `.kanban/perspectives/*.yaml`.
     let option_values: Vec<&str> = options.iter().map(|o| o.value.as_str()).collect();
     assert!(
-        option_values.contains(&FIELD_ASSIGNEES),
+        option_values.contains(&FIELD_ASSIGNEES_NAME),
         "groupable field must appear in Group By options; got {option_values:?}"
     );
     assert!(
-        !option_values.contains(&FIELD_TITLE),
+        !option_values.contains(&FIELD_TITLE_NAME),
         "non-groupable field MUST NOT appear in Group By options \
          (this is the legacy <GroupSelector>'s `f.groupable === true` filter, \
          now moved to denormalize_perspective_fields); got {option_values:?}"
@@ -722,11 +752,15 @@ async fn perspective_group_command_drops_non_groupable_fields_end_to_end() {
 async fn perspective_group_command_emits_groupable_fields_from_live_field_loader() {
     use swissarmyhammer_kanban::perspective::AddPerspective;
 
-    // Builtin field IDs — both belong to the `task` entity schema.
+    // Builtin field IDs / names. The picker emits `value = field_name`
+    // (slug) after task `01KRH2EX1N1CA2HA3B4NMWZH67`; the IDs are kept
+    // here for documentation continuity but unused below.
     // `assignees` (00...005) has `groupable: true` → must appear.
     // `title` (00...001) has no `groupable` annotation → must NOT.
-    const FIELD_TITLE: &str = "00000000000000000000000001";
-    const FIELD_ASSIGNEES: &str = "00000000000000000000000005";
+    const _FIELD_TITLE: &str = "00000000000000000000000001";
+    const _FIELD_ASSIGNEES: &str = "00000000000000000000000005";
+    const FIELD_TITLE_NAME: &str = "title";
+    const FIELD_ASSIGNEES_NAME: &str = "assignees";
     const BUILTIN_BOARD_VIEW_ID: &str = "01JMVIEW0000000000BOARD0";
 
     let temp = TempDir::new().expect("TempDir must allocate");
@@ -826,12 +860,12 @@ async fn perspective_group_command_emits_groupable_fields_from_live_field_loader
          to the entity schema's groupable fields. Got: {option_values:?}"
     );
     assert!(
-        option_values.contains(&FIELD_ASSIGNEES),
+        option_values.contains(&FIELD_ASSIGNEES_NAME),
         "groupable task field `assignees` must appear in Group By options \
          even when `perspective.fields[]` is empty; got {option_values:?}"
     );
     assert!(
-        !option_values.contains(&FIELD_TITLE),
+        !option_values.contains(&FIELD_TITLE_NAME),
         "non-groupable task field `title` must NOT appear in Group By options; \
          got {option_values:?}"
     );
@@ -877,11 +911,19 @@ async fn perspective_group_command_emits_groupable_fields_from_live_field_loader
 async fn perspective_group_options_include_assignees_and_tags_for_board_task_perspective() {
     use swissarmyhammer_perspectives::Perspective;
 
-    // Builtin field IDs — all three are groupable on the `task` entity
-    // per the builtin YAMLs at swissarmyhammer-kanban/builtin/definitions/.
+    // Builtin field IDs and names — all three fields are groupable on
+    // the `task` entity per the builtin YAMLs at
+    // swissarmyhammer-kanban/builtin/definitions/. The `*_NAME`
+    // constants are the schema-slug shape — the wire `value` the
+    // resolver emits after task `01KRH2EX1N1CA2HA3B4NMWZH67`. The
+    // `*_ID` constants are kept for the intermediate denormalisation
+    // assertions that read `f.id`.
     const FIELD_ASSIGNEES: &str = "00000000000000000000000005";
     const FIELD_TAGS: &str = "00000000000000000000000004";
     const FIELD_PROJECT: &str = "00000000000000000000000010";
+    const FIELD_ASSIGNEES_NAME: &str = "assignees";
+    const FIELD_TAGS_NAME: &str = "tags";
+    const FIELD_PROJECT_NAME: &str = "project";
     const BUILTIN_BOARD_VIEW_ID: &str = "01JMVIEW0000000000BOARD0";
 
     let temp = TempDir::new().expect("TempDir must allocate");
@@ -1026,17 +1068,17 @@ async fn perspective_group_options_include_assignees_and_tags_for_board_task_per
          got: {option_values:?}"
     );
     assert!(
-        option_values.contains(&FIELD_ASSIGNEES),
+        option_values.contains(&FIELD_ASSIGNEES_NAME),
         "groupable task field `assignees` must appear in Group By options \
          when viewing on the board; got {option_values:?}"
     );
     assert!(
-        option_values.contains(&FIELD_TAGS),
+        option_values.contains(&FIELD_TAGS_NAME),
         "groupable task field `tags` must appear in Group By options \
          when viewing on the board; got {option_values:?}"
     );
     assert!(
-        option_values.contains(&FIELD_PROJECT),
+        option_values.contains(&FIELD_PROJECT_NAME),
         "groupable task field `project` must appear in Group By options \
          when viewing on the board; got {option_values:?}"
     );
@@ -1085,15 +1127,21 @@ async fn perspective_group_options_use_active_view_when_perspective_view_id_is_n
     // Re-imported locally to keep this fixture's deps obvious and to
     // avoid touching the file-level imports used by older tests.
 
-    // Builtin field IDs.
+    // Builtin field IDs and names.
     // `assignees` (00...005) is groupable on the `task` entity schema
     // → must appear when the active view's entity_type is task.
     // `tag_name` (00...020) is groupable on the `tag` entity schema —
     // a sibling `grid`-kind view points at it; this field must NOT
     // surface because the active view is the Tasks Grid, not the
     // Tags Grid.
+    //
+    // After task `01KRH2EX1N1CA2HA3B4NMWZH67` the resolver emits
+    // `value = field_name` (slug). The `*_ID` constants are kept for
+    // the intermediate denormalisation assertions on `f.id`.
     const FIELD_ASSIGNEES: &str = "00000000000000000000000005";
     const FIELD_TAG_NAME: &str = "00000000000000000000000009";
+    const FIELD_ASSIGNEES_NAME: &str = "assignees";
+    const FIELD_TAG_NAME_NAME: &str = "tag_name";
     const BUILTIN_TASKS_GRID_VIEW_ID: &str = "01JMVIEW0000000000TGRID0";
 
     let temp = TempDir::new().expect("TempDir must allocate");
@@ -1234,12 +1282,12 @@ async fn perspective_group_options_use_active_view_when_perspective_view_id_is_n
          got: {option_values:?}"
     );
     assert!(
-        option_values.contains(&FIELD_ASSIGNEES),
+        option_values.contains(&FIELD_ASSIGNEES_NAME),
         "groupable task field `assignees` must appear when the active \
          view is the Tasks Grid; got {option_values:?}"
     );
     assert!(
-        !option_values.contains(&FIELD_TAG_NAME),
+        !option_values.contains(&FIELD_TAG_NAME_NAME),
         "tag entity's `tag_name` must NOT appear when the active view \
          is the Tasks Grid — the tiebreaker must prefer the active \
          view's entity_type over wrong-sibling entries; got {option_values:?}"

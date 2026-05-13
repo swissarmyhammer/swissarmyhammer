@@ -442,6 +442,13 @@ fn denormalize_perspective_fields(
         .filter(|fd| fd.groupable == Some(true))
         .map(|fd| PerspectiveFieldInfo {
             id: fd.id.as_str().to_string(),
+            // Field name (schema slug) — the wire value the
+            // `perspective.fields` picker emits and the key tasks use
+            // in their `fields` map. Without a separate display caption
+            // on `FieldDef`, the slug is also the fallback for
+            // `display_name`. See `PerspectiveFieldInfo` for the full
+            // round-trip contract.
+            name: fd.name.as_str().to_string(),
             display_name: fd.name.as_str().to_string(),
         })
         .collect()

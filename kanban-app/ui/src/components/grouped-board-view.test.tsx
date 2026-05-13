@@ -83,6 +83,33 @@ function makeTask(id: string, column: string, groupValue?: string): Entity {
   return { id, entity_type: "task", moniker: `task:${id}`, fields };
 }
 
+/**
+ * Build a task whose `assignees` field carries a single-value list.
+ *
+ * `assignees` is a real groupable field on the task entity schema
+ * (`groupable: true`, slug `assignees`). Mirrors the production wire
+ * shape so the regression test for task 01KRH2EX1N1CA2HA3B4NMWZH67
+ * exercises the same lookup path `<GroupedBoardView>` uses on the
+ * user's board.
+ */
+function makeTaskWithAssignee(
+  id: string,
+  column: string,
+  assignee: string,
+): Entity {
+  return {
+    id,
+    entity_type: "task",
+    moniker: `task:${id}`,
+    fields: {
+      title: `Task ${id}`,
+      position_column: column,
+      position_ordinal: "a0",
+      assignees: [assignee],
+    },
+  };
+}
+
 const board: BoardData = {
   board: {
     id: "b1",
@@ -359,6 +386,89 @@ describe("GroupedBoardView", () => {
     expect(BoardViewMock).toHaveBeenCalledTimes(0);
     // Container should exist but be empty
     expect(container.querySelector("[class*=flex]")).toBeTruthy();
+  });
+
+  // ---------------------------------------------------------------------
+  // Regression for task 01KRH2EX1N1CA2HA3B4NMWZH67.
+  //
+  // The end-to-end Group By contract: the `perspective.fields` resolver
+  // emits `ParamOption.value = field_name` (slug), the user picks one,
+  // `<CommandButton>` dispatches `perspective.group` with `group: <name>`,
+  // the backend persists `group:` by name, the frontend `groupField`
+  // surfaces the name, and `<GroupedBoardView>` reads
+  // `task.fields[<name>]`.
+  //
+  // Pre-fix the resolver emitted `value = field_id` (ULID) and every
+  // task landed in `(ungrouped)` because `task.fields[<ULID>]` is
+  // `undefined`. This test pins the post-fix wire shape by using the
+  // schema-slug name the resolver now emits (`"assignees"`) and
+  // asserting the rendered board produces one group per distinct value,
+  // NOT one `(ungrouped)` bucket with every task.
+  //
+  // If a regression flipped the resolver back to emitting field IDs (a
+  // ULID), `groupField` here would be the ULID, `task.fields["01..."]`
+  // would be `undefined`, every task would land in `(ungrouped)`, and
+  // the `groups must NOT be a single ungrouped bucket` assertion would
+  // fail. This test plus its sibling Rust unit test
+  // `perspective_fields_resolver_returns_fields_for_in_scope_perspective`
+  // pin the wire format on both sides.
+  // ---------------------------------------------------------------------
+  it("groups by the picker-dispatched field name (regression for 01KRH2EX1N1CA2HA3B4NMWZH67)", () => {
+    // `groupField` carries the wire value the picker dispatches:
+    // the schema slug (`"assignees"`), NOT the field ULID. Anything
+    // else and `task.fields[groupField]` returns undefined and every
+    // task drops into `(ungrouped)`.
+    mockGroupField = "assignees";
+    mockFieldDefs = [
+      {
+        id: "00000000000000000000000005",
+        name: "assignees",
+        type: { kind: "reference", entity: "actor", multiple: true },
+        groupable: true,
+      } as import("@/types/kanban").FieldDef,
+    ];
+    BoardViewMock.mockClear();
+
+    // Six tasks split across three distinct assignee values — pins the
+    // "one column per distinct value" claim in the task description's
+    // acceptance criteria.
+    const tasks: Entity[] = [
+      makeTaskWithAssignee("t1", "todo", "alice"),
+      makeTaskWithAssignee("t2", "doing", "alice"),
+      makeTaskWithAssignee("t3", "todo", "bob"),
+      makeTaskWithAssignee("t4", "doing", "bob"),
+      makeTaskWithAssignee("t5", "todo", "carol"),
+      makeTaskWithAssignee("t6", "doing", "carol"),
+    ];
+
+    const { container, queryByText } = render(
+      <GroupedBoardView board={board} tasks={tasks} />,
+    );
+
+    // Three groups — one per distinct assignee value. NOT a single
+    // `(ungrouped)` bucket with all six tasks.
+    expect(BoardViewMock).toHaveBeenCalledTimes(3);
+
+    // Group headers must exist for each distinct value and the
+    // `(ungrouped)` bucket must NOT appear (every task has a value).
+    expect(queryByText("alice")).toBeTruthy();
+    expect(queryByText("bob")).toBeTruthy();
+    expect(queryByText("carol")).toBeTruthy();
+    expect(queryByText("(ungrouped)")).toBeNull();
+
+    // Each section gets exactly its two tasks — never six.
+    const sectionTaskCounts = BoardViewMock.mock.calls
+      .map((c: [{ tasks: Entity[] }]) => c[0].tasks.length)
+      .sort();
+    expect(sectionTaskCounts).toEqual([2, 2, 2]);
+
+    // No section header has six entries — that would be the bug
+    // (every task collapsed into a single bucket).
+    const buttons = container.querySelectorAll("button");
+    const labelsWithSix = Array.from(buttons).filter((b) =>
+      b.textContent?.includes("6"),
+    );
+    expect(labelsWithSix).toHaveLength(0);
   });
 
   it("handles many groups without errors", () => {
