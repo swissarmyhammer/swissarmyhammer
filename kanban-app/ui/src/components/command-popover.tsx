@@ -168,6 +168,20 @@ function ParamField({
 /**
  * `<select>` for an enum-shaped param. Disabled when the option list is
  * empty or undefined (backend resolver did not supply choices).
+ *
+ * # Clear sentinel ("None" affordance)
+ *
+ * When the param declares `clear_command`, the placeholder option
+ * (`value=""`) is relabelled from "Pick…" to "(none)" and is treated as
+ * a real, submittable choice rather than the "no selection yet" stub.
+ * Picking it dispatches the param's `clear_command` instead of the
+ * parent command (the redirection lives in `<CommandButton>`'s commit
+ * handler) — this restores the legacy `<GroupSelector>` "None" entry
+ * the command-driven-ui migration would otherwise drop.
+ *
+ * Surfaces without `clear_command` keep the original behavior: the
+ * empty-string placeholder is a "must pick something" stub and the
+ * submit button stays disabled until the user picks a real option.
  */
 function EnumField({
   param,
@@ -180,6 +194,7 @@ function EnumField({
 }) {
   const options = param.options ?? [];
   const disabled = options.length === 0;
+  const hasClear = param.clear_command !== undefined;
   return (
     <select
       aria-label={param.name}
@@ -191,7 +206,7 @@ function EnumField({
         disabled && "opacity-50 cursor-not-allowed",
       )}
     >
-      <option value="">Pick…</option>
+      <option value="">{hasClear ? "(none)" : "Pick…"}</option>
       {options.map((o) => (
         <option key={o.value} value={o.value}>
           {o.label}
@@ -210,6 +225,14 @@ export function CommandPopover({
   onCommit,
   onCancel,
 }: CommandPopoverProps) {
+  // [group-debug] iter-3 instrumentation — see kanban task 01KRGW1DYD0T05PSTEDPT5D076.
+  // Logged once per render so the user can correlate popover open events
+  // with the params payload (especially `options` length on enum params).
+  console.log("[group-debug] CommandPopover render", {
+    commandId: command.id,
+    params: command.params,
+  });
+
   // Slot the picker bag once at mount; subsequent param edits update the
   // bag in place. We deliberately do not reset on command identity change
   // — the popover is mounted fresh from the parent on each open, and the
@@ -226,15 +249,21 @@ export function CommandPopover({
   );
 
   // Submit is disabled when any enum param's slot is still the empty
-  // placeholder. The backend would reject `{ field: "" }` anyway; gating
-  // here gives a better UX than dispatching garbage and surfacing the
-  // failure to console. Other shapes (text, number, etc.) accept any
-  // value the user can type, so we don't gate on them.
+  // placeholder AND that param does NOT carry `clear_command`. The
+  // backend would reject `{ field: "" }` against a no-clear param
+  // anyway; gating here gives a better UX than dispatching garbage and
+  // surfacing the failure to console.
+  //
+  // When `clear_command` is set, the empty-string value is a legitimate
+  // "clear" submission (handled in <CommandButton>'s commit handler),
+  // so it must NOT disable submit. Other shapes (text, number, etc.)
+  // accept any value the user can type, so we don't gate on them.
   const submitDisabled = useMemo(
     () =>
       pickableParams.some(
         (p) =>
           p.shape === "enum" &&
+          p.clear_command === undefined &&
           (values[p.name] === "" || values[p.name] === undefined),
       ),
     [pickableParams, values],

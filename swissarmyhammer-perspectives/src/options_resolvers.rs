@@ -72,25 +72,57 @@ impl OptionsResolver for PerspectiveFieldsResolver {
 
     fn resolve(&self, ctx: &OptionsContext<'_>) -> Vec<ParamOption> {
         let Some(sources) = ctx.data.downcast_ref::<OptionsSources>() else {
+            // [group-debug] iter-3 instrumentation — see kanban task 01KRGW1DYD0T05PSTEDPT5D076.
+            tracing::info!(
+                target: "group_debug",
+                "[group-debug] resolver: persp_id_from_scope=NONE (ctx.data not OptionsSources), options_count=0",
+            );
             return Vec::new();
         };
         let Some(data) = sources.get::<PerspectivesOptionsData>() else {
+            // [group-debug] iter-3 instrumentation — see kanban task 01KRGW1DYD0T05PSTEDPT5D076.
+            tracing::info!(
+                target: "group_debug",
+                "[group-debug] resolver: persp_id_from_scope=NONE (no PerspectivesOptionsData in sources), options_count=0",
+            );
             return Vec::new();
         };
         let Some(perspective_id) = innermost_perspective_id(ctx.scope_chain) else {
+            // [group-debug] iter-3 instrumentation — see kanban task 01KRGW1DYD0T05PSTEDPT5D076.
+            tracing::info!(
+                target: "group_debug",
+                "[group-debug] resolver: persp_id_from_scope=NONE (no perspective: moniker in scope_chain={:?}), options_count=0",
+                ctx.scope_chain,
+            );
             return Vec::new();
         };
         let Some(perspective) = data.perspectives.iter().find(|p| p.id == perspective_id) else {
+            // [group-debug] iter-3 instrumentation — see kanban task 01KRGW1DYD0T05PSTEDPT5D076.
+            tracing::info!(
+                target: "group_debug",
+                "[group-debug] resolver: persp_id_from_scope={:?}, options_count=0 (perspective id NOT FOUND in data.perspectives — known ids={:?})",
+                perspective_id,
+                data.perspectives.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            );
             return Vec::new();
         };
-        perspective
+        let result: Vec<ParamOption> = perspective
             .fields
             .iter()
             .map(|f| ParamOption {
                 value: f.id.clone(),
                 label: f.display_name.clone(),
             })
-            .collect()
+            .collect();
+        // [group-debug] iter-3 instrumentation — see kanban task 01KRGW1DYD0T05PSTEDPT5D076.
+        tracing::info!(
+            target: "group_debug",
+            "[group-debug] resolver: persp_id_from_scope={:?}, perspective.fields.len()={}, options_count={}",
+            perspective_id,
+            perspective.fields.len(),
+            result.len(),
+        );
+        result
     }
 }
 

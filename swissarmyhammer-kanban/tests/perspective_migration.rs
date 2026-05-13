@@ -271,16 +271,25 @@ async fn legacy_perspective_ambiguous_emits_one_time_log() {
         logs_contain("remains shared across all grid views"),
         "log body must explain why the perspective did not migrate"
     );
-    // Exact-count assertion via `logs_assert`: count lines mentioning the
-    // perspective id directly out of `tracing-test`'s captured buffer.
+    // Exact-count assertion via `logs_assert`: count lines that mention
+    // BOTH the perspective id and the canonical migration log body. This
+    // tightens the predicate so unrelated diagnostic tracing that mentions
+    // the perspective id (e.g. iter-3 `[group-debug]` lines in
+    // `dynamic_sources`) does not bleed into this assertion. The intent is
+    // still "the migration log fires exactly once per process", which is
+    // what the canonical body identifies.
     let needle = persp_id.to_string();
+    let body_marker = "remains shared across all grid views";
     logs_assert(|lines: &[&str]| {
-        let n = lines.iter().filter(|line| line.contains(&needle)).count();
+        let n = lines
+            .iter()
+            .filter(|line| line.contains(&needle) && line.contains(body_marker))
+            .count();
         if n == 1 {
             Ok(())
         } else {
             Err(format!(
-                "expected exactly one log line mentioning {needle}, got {n}"
+                "expected exactly one migration log line mentioning {needle}, got {n}"
             ))
         }
     });

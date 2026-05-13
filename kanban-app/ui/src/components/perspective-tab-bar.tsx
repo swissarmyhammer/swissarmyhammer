@@ -11,11 +11,16 @@ import {
   type ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Filter, Group, Plus } from "lucide-react";
+import { Filter, Plus } from "lucide-react";
 // `Filter` is retained for the formula-bar's static prefix glyph;
 // the per-tab `<FilterFocusButton>` was deleted by the migration in
 // 01KRE1YA65MMG29RDQDQ0VPJQG (the registry-rendered `<CommandButton>`
-// now owns that affordance).
+// now owns that affordance). The `<GroupPopoverButton>` was deleted
+// in 01KRE1ZTYJ5PPTQ29K72KE88B5 — its replacement is the
+// registry-rendered `<CommandButton>` driven by the
+// `perspective.group` YAML entry's `tab_button.icon: group`
+// annotation; the `Group` lucide icon is resolved at render time by
+// `commandIconFor` in `command-icon-registry.ts`.
 import { cn } from "@/lib/utils";
 import { usePerspectives } from "@/lib/perspective-context";
 import { useViews } from "@/lib/views-context";
@@ -33,11 +38,6 @@ import type {
   TabButtonDef,
 } from "@/types/kanban";
 import {
-  Popover,
-  PopoverTrigger,
-  PopoverContent,
-} from "@/components/ui/popover";
-import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
@@ -46,18 +46,15 @@ import {
   FilterEditor,
   type FilterEditorHandle,
 } from "@/components/filter-editor";
-import { GroupSelector } from "@/components/group-selector";
 import { TextEditor } from "@/components/fields/text-editor";
 import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
 import { useUIState } from "@/lib/ui-state-context";
-import { useSchema } from "@/lib/schema-context";
 import { FocusScope } from "@/components/focus-scope";
 import { Pressable } from "@/components/pressable";
 import { useFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
 import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
 import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
 import { asSegment } from "@/types/spatial";
-import type { FieldDef } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
 // Start-rename callback registry — bridges AppShell command dispatch to the
@@ -330,7 +327,13 @@ function useScopedTabCommands(
     invoke<ResolvedTabCommand[]>("list_commands_for_scope", { scopeChain })
       .then((resolved) => {
         if (cancelled) return;
-        setCommands(resolved.filter((c) => c.tab_button != null));
+        const tabCommands = resolved.filter((c) => c.tab_button != null);
+        // [group-debug] iter-3 instrumentation — see kanban task 01KRGW1DYD0T05PSTEDPT5D076.
+        console.log("[group-debug] useScopedTabCommands result", {
+          scopeChain,
+          tabCommands,
+        });
+        setCommands(tabCommands);
       })
       .catch((e) => {
         console.error("[PerspectiveTabBar] list_commands_for_scope failed:", e);
@@ -367,6 +370,8 @@ function isCommandActiveForPerspective(
   switch (commandId) {
     case "perspective.filter.focus":
       return Boolean(perspective.filter);
+    case "perspective.group":
+      return Boolean(perspective.group);
     default:
       return false;
   }
@@ -589,13 +594,12 @@ interface ScopedPerspectiveTabProps {
  * Enter` on the perspective scope.
  *
  * The filter icon and group icon to the right of the name remain as
- * inner focus leaves with distinct monikers — the filter affordance is
- * now a `<CommandButton>` leaf
- * (`perspective_tab.perspective.filter.focus:{id}`, built by
+ * inner focus leaves with distinct monikers — both affordances are now
+ * `<CommandButton>` leaves (`perspective_tab.perspective.filter.focus:{id}`
+ * and `perspective_tab.perspective.group:{id}`, built by
  * `<CommandButton>` from `${surface}.${command.id}:${surfaceId}`) rather
- * than a Pressable, while the group icon remains a Pressable leaf
- * (`perspective_tab.group:{id}`). Both have distinct rects from the tab
- * name and are independently navigable.
+ * than Pressables. Both have distinct rects from the tab name and are
+ * independently navigable.
  *
  * Per-tab rename binding: every perspective tab — active or inactive —
  * registers a `ui.entity.startRename` `CommandDef` whose `keys` block
@@ -680,18 +684,19 @@ function ScopedPerspectiveTab({
  * at the same rect as this wrapper and trigger the kernel's
  * needless-nesting warning.
  *
- * The icon affordances on an active tab are Pressables, so each mounts
- * its own inner FocusScope leaf with a distinct moniker:
+ * The icon affordances on an active tab are registry-rendered
+ * `<CommandButton>`s, so each mounts its own inner FocusScope leaf
+ * with a distinct moniker built by `<CommandButton>` from
+ * `${surface}.${command.id}:${surfaceId}`:
  *
- *   - `<GroupPopoverButton>` → `perspective_tab.group:${id}`
- *   - Registry-rendered `<CommandButton>` for `perspective.filter.focus`
- *     → `perspective_tab.perspective.filter.focus:${id}` (built by
- *     `<CommandButton>` from `${surface}.${command.id}:${surfaceId}`).
+ *   - `perspective.filter.focus` → `perspective_tab.perspective.filter.focus:${id}`
+ *   - `perspective.group` → `perspective_tab.perspective.group:${id}`
  *
- * Both have distinct rects from the tab name and are independently
- * navigable. The legacy `perspective_tab.filter:${id}` moniker (from
- * the deleted `<FilterFocusButton>`) is gone — the registry-driven
- * moniker is the new spatial-nav target for the filter affordance.
+ * All have distinct rects from the tab name and are independently
+ * navigable. The legacy `perspective_tab.filter:${id}` (from the
+ * deleted `<FilterFocusButton>`) and `perspective_tab.group:${id}`
+ * (from the deleted `<GroupPopoverButton>`) monikers are gone — the
+ * registry-driven monikers are the new spatial-nav targets.
  *
  * The wrapper inherits `<FocusScope>`'s default `showFocus={true}` so
  * the dashed focus indicator paints on the focused tab — the visible
@@ -955,17 +960,8 @@ function PerspectiveTab({
   onRenameCommit,
   onRenameCancel,
 }: PerspectiveTabProps) {
-  const { id, name, group } = perspective;
+  const { name } = perspective;
   const handleContextMenu = useContextMenu();
-  const [groupOpen, setGroupOpen] = useState(false);
-
-  const { getSchema } = useSchema();
-  const { activeView } = useViews();
-  const entityType = activeView?.entity_type ?? "";
-  const schemaFields = useMemo(
-    () => getSchema(entityType)?.fields ?? [],
-    [getSchema, entityType],
-  );
 
   // The TabButton is rendered as a plain `<button>` — NOT wrapped in its
   // own FocusScope. The outer `<FocusScope moniker={`perspective_tab:${id}`}>`
@@ -978,11 +974,11 @@ function PerspectiveTab({
   // Enter`, so the focused-component-knows-it's-focused contract holds via
   // command-scope chain resolution, not a separate inner scope.
   //
-  // GroupPopoverButton (and the registry-rendered `perspective.filter.focus`
-  // `<CommandButton>` inside `<RegistryTabButtons>` below) remain Pressables
-  // — each owns its own inner FocusScope leaf — because they live to the
-  // right of the tab name and have distinct rects. They are independently
-  // navigable with arrow keys, separate visible focus targets.
+  // The registry-rendered `<CommandButton>`s inside `<RegistryTabButtons>`
+  // below each own their own inner FocusScope leaf — they live to the
+  // right of the tab name and have distinct rects, so they are
+  // independently navigable with arrow keys.
+  const { activeView } = useViews();
   const boardData = useBoardData();
   const activeBoardId = boardData?.board?.id;
   const activeViewId = activeView?.id;
@@ -999,26 +995,18 @@ function PerspectiveTab({
         onRenameCommit={onRenameCommit}
         onRenameCancel={onRenameCancel}
       />
-      {isActive && (
-        <GroupPopoverButton
-          group={group}
-          perspectiveId={id}
-          fields={schemaFields}
-          open={groupOpen}
-          onOpenChange={setGroupOpen}
-        />
-      )}
       {/*
         Registry-driven tab buttons — renders the migrated
-        `perspective.filter.focus` `<CommandButton>` (plus any future
-        per-command migrations: group, sort, …) for the active tab.
-        Gated on `isActive` to match the visual layout the legacy
-        `<FilterFocusButton>` / `<GroupPopoverButton>` produced: inline
-        affordances only appear on the active perspective's tab, where
-        their state is meaningful and where their spatial-nav leaves
-        live next to the formula bar. Mounted only when the active view
-        is known so the scope chain (`perspective:` + `view:` + `board:`)
-        is well-formed for `list_commands_for_scope`.
+        `perspective.filter.focus` and `perspective.group`
+        `<CommandButton>`s (plus any future per-command migrations:
+        sort, add, …) for the active tab. Gated on `isActive` to match
+        the visual layout the legacy `<FilterFocusButton>` /
+        `<GroupPopoverButton>` produced: inline affordances only
+        appear on the active perspective's tab, where their state is
+        meaningful and where their spatial-nav leaves live next to the
+        formula bar. Mounted only when the active view is known so the
+        scope chain (`perspective:` + `view:` + `board:`) is
+        well-formed for `list_commands_for_scope`.
       */}
       {isActive && activeViewId && (
         <RegistryTabButtons
@@ -1296,83 +1284,23 @@ const FilterFormulaBar = forwardRef<FilterEditorHandle, FilterFormulaBarProps>(
   },
 );
 
-/**
- * Group-by icon button with popover for the active perspective.
- *
- * Opens a `GroupSelector` in a Radix Popover anchored below the button.
- * Highlighted in primary color when a group is active on the perspective.
- *
- * Migrates to `<Pressable asChild>` (inside the existing
- * `<PopoverTrigger asChild>` slot) so the icon gains both keyboard
- * reachability (the inner `<FocusScope>` provided by Pressable) AND
- * scope-level CommandDefs that bind Enter (vim/cua) and Space (cua) to
- * `onOpenChange(true)` — the same effect as a pointer click that opens
- * the popover. The leaf moniker is `perspective_tab.group:{id}` — its
- * parent zone is the surrounding `perspective_tab:{id}` `<FocusZone>`
- * so the kernel sees it as a sibling leaf of the name and filter
- * leaves.
- *
- * Trigger composition is `<PopoverTrigger asChild><Pressable
- * asChild><button>`. Radix Slot's `mergeProps` composes the chain so
- * exactly one `<button>` lands in the DOM, the trigger's onClick fires
- * (toggling open state), Pressable's `handleClick` fires `onPress`
- * (which calls `onOpenChange(true)`), and the inner button's
- * `e.stopPropagation()` keeps the click from bubbling to the tab's
- * activate handler.
- */
-function GroupPopoverButton({
-  group,
-  perspectiveId,
-  fields,
-  open,
-  onOpenChange,
-}: {
-  group?: string;
-  perspectiveId: string;
-  fields: FieldDef[];
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const hasGroup = Boolean(group);
-  return (
-    <Popover open={open} onOpenChange={onOpenChange}>
-      <PopoverTrigger asChild>
-        <Pressable
-          asChild
-          moniker={asSegment(`perspective_tab.group:${perspectiveId}`)}
-          ariaLabel="Group"
-          onPress={() => onOpenChange(true)}
-        >
-          <button
-            type="button"
-            className={cn(
-              "inline-flex items-center justify-center h-5 w-5 rounded transition-colors -ml-0.5",
-              hasGroup
-                ? "text-primary"
-                : "text-muted-foreground/50 hover:text-muted-foreground",
-            )}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <Group
-              className="h-3 w-3"
-              fill={hasGroup ? "currentColor" : "none"}
-            />
-          </button>
-        </Pressable>
-      </PopoverTrigger>
-      <PopoverContent
-        align="start"
-        sideOffset={4}
-        className="p-3 w-auto"
-        onOpenAutoFocus={(e) => e.preventDefault()}
-      >
-        <GroupSelector
-          group={group}
-          perspectiveId={perspectiveId}
-          fields={fields}
-          onClose={() => onOpenChange(false)}
-        />
-      </PopoverContent>
-    </Popover>
-  );
-}
+// ---------------------------------------------------------------------------
+// Group popover button — DELETED by 01KRE1ZTYJ5PPTQ29K72KE88B5.
+//
+// The hardcoded `<GroupPopoverButton>` + `<GroupSelector>` chain was
+// replaced by a registry-rendered `<CommandButton>` for the
+// command-driven `perspective.group` entry. The YAML now carries
+// `tab_button: { icon: "group" }` and an enum-shaped `group` param
+// with `options_from: "perspective.fields"`; the generic
+// `<CommandPopover>` renders the picker `<select>` populated by the
+// backend `PerspectiveFieldsResolver`. Picking a field dispatches
+// `perspective.group` with the picked value plus a scope-chain-
+// resolved `perspective_id` — same dispatcher path as before, now
+// driven through the unified command pipeline so palette /
+// keybindings / cross-window paths all converge on the same
+// behaviour.
+//
+// The spatial-nav moniker for this affordance changed shape too:
+// `perspective_tab.group:{id}` → `perspective_tab.perspective.group:{id}`
+// (built by `<CommandButton>` from `${surface}.${command.id}:${surfaceId}`).
+// ---------------------------------------------------------------------------

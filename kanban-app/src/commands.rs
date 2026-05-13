@@ -2129,6 +2129,27 @@ pub async fn list_commands_for_scope(
         None,
     );
 
+    // [group-debug] iter-3 instrumentation — see kanban task 01KRGW1DYD0T05PSTEDPT5D076.
+    tracing::info!(
+        target: "group_debug",
+        "[group-debug] list_commands_for_scope: scope_chain={:?}, returned_count={}",
+        scope_chain,
+        result.len(),
+    );
+    for cmd in &result {
+        for param in &cmd.params {
+            if param.options_from.as_deref() == Some("perspective.fields") {
+                tracing::info!(
+                    target: "group_debug",
+                    "[group-debug] list_commands_for_scope: cmd_id={:?}, param.name={:?}, options_from=perspective.fields, options.len={}",
+                    cmd.id,
+                    param.name,
+                    param.options.as_ref().map(|v| v.len()).unwrap_or(0),
+                );
+            }
+        }
+    }
+
     log_scope_result(&result);
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
