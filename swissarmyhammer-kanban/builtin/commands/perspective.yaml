@@ -41,6 +41,25 @@
       from: args
   keys: {}
 
+- id: perspective.filter.focus
+  name: Focus Filter
+  # Tab-button-only command: clicking the filter icon on a perspective tab
+  # dispatches this to focus the formula bar's CM6 editor. The dispatcher
+  # converts the command's `FocusFilter` marker result into a `ui.focus.filter`
+  # Tauri event that the editor subscribes to.
+  #
+  # No `view_kinds` — filter is meaningful on every view kind.
+  # No `context_menu: true` — the right-click already has Clear Filter;
+  # "Focus the filter editor" doesn't add value there.
+  scope: "entity:perspective"
+  tab_button:
+    icon: filter
+  params:
+    - name: perspective_id
+      from: scope_chain
+      entity_type: perspective
+  keys: {}
+
 - id: perspective.filter
   name: Set Filter
   # Palette-only: requires a `filter` expression arg that the bare context

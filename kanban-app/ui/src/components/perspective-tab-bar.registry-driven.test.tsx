@@ -320,10 +320,12 @@ describe("PerspectiveTabBar — registry-driven CommandButton rendering", () => 
   });
 
   it("renders_zero_command_buttons_when_no_commands_have_tab_button — empty registry list leaves the bar visually identical", async () => {
-    // The bridge returns commands that do NOT carry `tab_button` —
-    // exactly the state of the world today, before any per-command
-    // migration lands. The tab bar's registry-rendered slot is empty
-    // and the hardcoded buttons render as before.
+    // The bridge returns commands that do NOT carry `tab_button` — the
+    // tab bar's registry-rendered slot is empty. Today (after the
+    // 01KRE1YA65MMG29RDQDQ0VPJQG migration), `perspective.filter.focus`
+    // is the first command that DOES carry `tab_button`; this test
+    // deliberately omits it from the response so the slot stays empty
+    // and the remaining hardcoded affordances render as before.
     mockResolvedCommands([
       {
         id: "perspective.rename",
@@ -346,26 +348,34 @@ describe("PerspectiveTabBar — registry-driven CommandButton rendering", () => 
     renderTabBar();
     await flushEffects();
 
-    // The hardcoded "Filter" / "Group" / "Add perspective" buttons stay
+    // The remaining hardcoded "Group" / "Add perspective" buttons stay
     // — they are owned by per-command migrations that have not landed
-    // yet. The registry-rendered slot contributes nothing.
+    // yet. The hardcoded "Filter" button (aria-label "Filter") was
+    // deleted by 01KRE1YA65MMG29RDQDQ0VPJQG; its replacement is the
+    // registry-rendered `<CommandButton>` for `perspective.filter.focus`,
+    // which only mounts when the registry response includes that
+    // command — which this test deliberately does not.
     //
     // We assert the negative path by checking that none of the
-    // registry-supplied command names produced a button. The hardcoded
-    // affordances continue to render under their own labels.
+    // registry-supplied command names produced a button. The remaining
+    // hardcoded affordances continue to render under their own labels.
     expect(
       screen.queryByRole("button", { name: "Rename perspective" }),
     ).toBeNull();
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
 
-    // Sanity: hardcoded buttons are still present, proving the bar
-    // didn't accidentally short-circuit when zero registry commands
-    // matched.
+    // Sanity: remaining hardcoded buttons are still present, proving
+    // the bar didn't accidentally short-circuit when zero registry
+    // commands matched.
     expect(
       screen.getByRole("button", { name: /add perspective/i }),
     ).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Filter" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Group" })).toBeTruthy();
+    // The legacy hardcoded "Filter" button is gone — its replacement
+    // is the registry-driven `<CommandButton>` rendered only when the
+    // `perspective.filter.focus` command is in scope (covered by
+    // `renders_command_button_for_each_tab_button_tagged_command`).
+    expect(screen.queryByRole("button", { name: "Filter" })).toBeNull();
   });
 
   it("respects_view_kinds_filter — a command with view_kinds: [grid] does NOT render under view kind board", async () => {

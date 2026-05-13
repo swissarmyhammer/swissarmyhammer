@@ -4,7 +4,8 @@
 //!
 //! 1. `swissarmyhammer_kanban::builtin_yaml_sources()` embeds every kanban-
 //!    specific command YAML and parses into a registry with the expected
-//!    28 command IDs.
+//!    29 command IDs (was 28; +1 for `perspective.filter.focus` added by
+//!    01KRE1YA65MMG29RDQDQ0VPJQG as the first command-driven tab button).
 //! 2. When the app composes both the generic
 //!    (`swissarmyhammer_commands::builtin_yaml_sources`) and kanban
 //!    (`swissarmyhammer_kanban::builtin_yaml_sources`) sources — the pattern
@@ -16,7 +17,7 @@
 
 use swissarmyhammer_commands::CommandsRegistry;
 
-/// The 28 kanban-specific command IDs shipped under
+/// The 29 kanban-specific command IDs shipped under
 /// `swissarmyhammer-kanban/builtin/commands/`.
 ///
 /// Grouped by source file for quick auditing against the YAMLs on disk.
@@ -41,14 +42,16 @@ const KANBAN_COMMAND_IDS: &[&str] = &[
     // 01KPY02X405QTP5ACH67THHSN8. "View" is a kanban concept, not a generic
     // UI primitive, so the declaration lives in the kanban domain.
     "view.set",
-    // perspective.yaml (16) — `perspective.set` relocated from
+    // perspective.yaml (17) — `perspective.set` relocated from
     // `ui.perspective.set` in 01KPY02X405QTP5ACH67THHSN8 for the same
-    // reason as `view.set`.
+    // reason as `view.set`; `perspective.filter.focus` added by
+    // 01KRE1YA65MMG29RDQDQ0VPJQG as the first command-driven tab button.
     "perspective.load",
     "perspective.save",
     "perspective.delete",
     "perspective.rename",
     "perspective.filter",
+    "perspective.filter.focus",
     "perspective.clearFilter",
     "perspective.group",
     "perspective.clearGroup",
@@ -166,7 +169,7 @@ fn kanban_yaml_preserves_command_metadata() {
 /// Proves that the file moves and the focus-crate addition lost no
 /// commands.
 ///
-/// Count: 32 (commands-crate) + 9 (focus-crate nav.*) + 28 (kanban-crate) = 69.
+/// Count: 32 (commands-crate) + 9 (focus-crate nav.*) + 29 (kanban-crate) = 70.
 ///
 /// The 34/26 → 32/28 shift came from relocating `ui.view.set` and
 /// `ui.perspective.set` into the kanban domain (new ids `view.set` and
@@ -176,9 +179,11 @@ fn kanban_yaml_preserves_command_metadata() {
 /// came from adding `nav.jump` (AceJump-style overlay) in
 /// 01KQYWV9DC866DGRPBRFR17ZEY. The +1 to 70 came from adding
 /// `ui.inspector.set_width` for the resizable inspector
-/// (01KQSE8TT79XC3KJGEHX6DW99G).
+/// (01KQSE8TT79XC3KJGEHX6DW99G). The +1 to 71 came from adding
+/// `perspective.filter.focus` as the first command-driven tab button
+/// (01KRE1YA65MMG29RDQDQ0VPJQG).
 #[test]
-fn composed_builtins_register_all_seventy_commands() {
+fn composed_builtins_register_all_seventy_one_commands() {
     let commands_sources = swissarmyhammer_commands::builtin_yaml_sources();
     let focus_sources = swissarmyhammer_focus::builtin_yaml_sources();
     let kanban_sources = swissarmyhammer_kanban::builtin_yaml_sources();
@@ -193,7 +198,7 @@ fn composed_builtins_register_all_seventy_commands() {
 
     assert_eq!(
         registry.all_commands().len(),
-        70,
+        71,
         "composed registry must match the post-focus command count",
     );
 

@@ -627,60 +627,26 @@ describe("PerspectiveTabBar", () => {
       expect(placeholder).toBeTruthy();
     });
 
-    it("filter icon button is highlighted (text-primary) when active perspective has a filter", () => {
-      mockPerspectivesValue = {
-        ...mockPerspectivesValue,
-        perspectives: [
-          { id: "p1", name: "Sprint View", view: "board", filter: "#bug" },
-        ],
-        activePerspective: {
-          id: "p1",
-          name: "Sprint View",
-          view: "board",
-          filter: "#bug",
-        },
-      };
-
-      renderTabBar();
-
-      // Use exact match to distinguish "Filter" (tab icon) from "Clear filter" (formula bar)
-      const filterButton = screen.getByRole("button", { name: "Filter" });
-      expect(filterButton.className).toContain("text-primary");
-    });
-
-    it("filter button click does not open a popover", () => {
-      mockPerspectivesValue = {
-        ...mockPerspectivesValue,
-        perspectives: [{ id: "p1", name: "Sprint View", view: "board" }],
-        activePerspective: { id: "p1", name: "Sprint View", view: "board" },
-      };
-
-      renderTabBar();
-
-      const filterButton = screen.getByRole("button", { name: /filter/i });
-      fireEvent.click(filterButton);
-
-      // No Radix popover/dialog should appear in the DOM
-      expect(screen.queryByRole("dialog")).toBeNull();
-    });
-
-    it("clicking the filter button on the active tab focuses the formula bar CM6 editor", () => {
-      mockPerspectivesValue = {
-        ...mockPerspectivesValue,
-        perspectives: [{ id: "p1", name: "Sprint View", view: "board" }],
-        activePerspective: { id: "p1", name: "Sprint View", view: "board" },
-      };
-
-      const { container } = renderTabBar();
-
-      const filterButton = screen.getByRole("button", { name: "Filter" });
-      fireEvent.click(filterButton);
-
-      // After clicking filter button, the CM6 content area should have focus
-      const cmContent = container.querySelector(".cm-content") as HTMLElement;
-      expect(cmContent).toBeTruthy();
-      expect(document.activeElement).toBe(cmContent);
-    });
+    // The three legacy tests that exercised the hardcoded
+    // `<FilterFocusButton>` (aria-label "Filter", click → local
+    // `onFilterFocus` callback → `filterEditorRef.current?.focus()`)
+    // were removed by task 01KRE1YA65MMG29RDQDQ0VPJQG when the button
+    // migrated to a registry-rendered `<CommandButton>` for the
+    // `perspective.filter.focus` command. The equivalent contracts now
+    // live in `perspective-tab-bar.filter-migration.test.tsx`:
+    //
+    //   - `filter_button_is_active_when_perspective_has_a_filter`
+    //     (aria-label "Focus Filter", `text-primary` highlight).
+    //   - `filter_command_button_dispatches_perspective_filter_focus_on_click`
+    //     (click dispatches; no popover opens).
+    //   - `filter_editor_focuses_on_ui_focus_filter_event_for_matching_perspective`
+    //     (the `ui.focus.filter` Tauri event drives CM6 focus).
+    //
+    // The local-callback path the deleted tests exercised does not
+    // exist anymore — the click no longer focuses the editor directly;
+    // it dispatches the command, the backend emits the event, and the
+    // editor reacts. Holding onto rewritten "click → focus" tests here
+    // would test the mock plumbing rather than the production wire.
 
     it("clicking the formula bar container area focuses the CM6 editor", () => {
       mockPerspectivesValue = {
@@ -726,8 +692,8 @@ describe("PerspectiveTabBar", () => {
   // Source-of-truth assertion for kanban card `01KQ9Z56M556DQHYMA502B9FKB`'s
   // rect-regression criterion: none of the perspective tabs' kernel-stored
   // rects may be zero-sized at first paint, including the active tab whose
-  // box is wider due to inline `<FilterFocusButton>` + `<GroupPopoverButton>`
-  // chrome.
+  // box is wider due to `<GroupPopoverButton>` + registry-rendered
+  // `<CommandButton>` chrome.
   //
   // Beam search picks candidates by their rect center / left-edge ordering;
   // a zero-sized rect from a tab leaf would either tie with siblings (making
@@ -753,9 +719,9 @@ describe("PerspectiveTabBar", () => {
           { id: "p2", name: "Backlog", view: "board" },
           { id: "p3", name: "Archive", view: "board" },
         ],
-        // p2 is active — its leaf is widened by the inline
-        // `<FilterFocusButton>` + `<GroupPopoverButton>` chrome that only
-        // the active tab renders. The regression guard must hold for the
+        // p2 is active — its leaf is widened by the `<GroupPopoverButton>`
+        // + registry-rendered `<CommandButton>` chrome that only the
+        // active tab renders. The regression guard must hold for the
         // wider leaf as well as the flanking ones.
         activePerspective: { id: "p2", name: "Backlog", view: "board" },
       };

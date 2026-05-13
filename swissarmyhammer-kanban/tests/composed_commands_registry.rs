@@ -12,7 +12,10 @@ use swissarmyhammer_commands::{compose_registry, CommandsRegistry};
 /// The macro must return a `CommandsRegistry` containing every id from
 /// the composed source stacks. 60 was the pre-focus total
 /// (`commands` + `kanban`); composing in the focus crate's 8 `nav.*`
-/// stubs lifted it to 68; adding `nav.jump` lifts it to 69.
+/// stubs lifted it to 68; adding `nav.jump` lifts it to 69; adding
+/// `ui.inspector.set_width` lifts it to 70; adding
+/// `perspective.filter.focus` (the first command-driven tab button, task
+/// 01KRE1YA65MMG29RDQDQ0VPJQG) lifts it to 71.
 #[test]
 fn composed_registry_matches_manual_composition() {
     let registry: CommandsRegistry = compose_registry![
@@ -23,7 +26,7 @@ fn composed_registry_matches_manual_composition() {
 
     assert_eq!(
         registry.all_commands().len(),
-        70,
+        71,
         "composed registry must contain the full generic + focus + kanban command set",
     );
 
@@ -119,9 +122,11 @@ fn composed_registry_command_id_set_snapshot() {
     // `nav.jump` (the AceJump-style overlay) joined the focus crate's
     // YAML (task `01KQYWV9DC866DGRPBRFR17ZEY`). Bumped to 70 when
     // `ui.inspector.set_width` joined for the resizable inspector
-    // (task `01KQSE8TT79XC3KJGEHX6DW99G`). If you intentionally add
-    // or remove a command, update this list and explain why in the
-    // commit message.
+    // (task `01KQSE8TT79XC3KJGEHX6DW99G`). Bumped to 71 when
+    // `perspective.filter.focus` joined as the first command-driven
+    // tab button (task `01KRE1YA65MMG29RDQDQ0VPJQG`). If you
+    // intentionally add or remove a command, update this list and
+    // explain why in the commit message.
     let expected: Vec<&str> = vec![
         "app.about",
         "app.command",
@@ -163,6 +168,7 @@ fn composed_registry_command_id_set_snapshot() {
         "perspective.clearGroup",
         "perspective.delete",
         "perspective.filter",
+        "perspective.filter.focus",
         "perspective.goto",
         "perspective.group",
         "perspective.list",
@@ -196,5 +202,5 @@ fn composed_registry_command_id_set_snapshot() {
     ];
 
     assert_eq!(ids, expected, "command id set drifted; ids = {ids:?}",);
-    assert_eq!(ids.len(), 70);
+    assert_eq!(ids.len(), 71);
 }

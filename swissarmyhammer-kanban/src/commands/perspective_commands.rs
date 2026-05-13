@@ -820,6 +820,43 @@ impl Command for ListPerspectivesCmd {
     }
 }
 
+/// Focus the perspective's filter editor on the formula bar.
+///
+/// Pure UI-broadcast command. Resolves the target `perspective_id` (explicit
+/// arg → scope-chain moniker → UIState active → first perspective for the
+/// active view kind) and returns a `FocusFilter` marker the Tauri dispatcher
+/// converts into a `ui.focus.filter` event. No state mutation, no undo entry —
+/// the editor lives in React and only receives a focus signal.
+///
+/// **Pre-refactor home (task 01KRE1YA65MMG29RDQDQ0VPJQG):** this lives in
+/// `swissarmyhammer-kanban` until `01KRES4EHVAPQGM003FVEBDWED` relocates
+/// every perspective `execute` impl into `swissarmyhammer-perspectives`.
+pub struct FocusFilterCmd;
+
+#[async_trait]
+impl Command for FocusFilterCmd {
+    fn available(&self, _ctx: &CommandContext) -> bool {
+        true
+    }
+
+    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        let kanban = ctx.require_extension::<KanbanContext>()?;
+        // The resolver persists the chosen id back to UIState when the
+        // caller did not supply it, matching the rest of the perspective.*
+        // mutation commands so subsequent palette invocations remain
+        // self-healing. See `resolve_perspective_id` for details.
+        let perspective_id = resolve_and_persist_perspective_id(ctx, &kanban).await?;
+        // Marker envelope — the Tauri dispatcher recognises `FocusFilter`
+        // in `handle_focus_filter` and emits a `ui.focus.filter` event the
+        // formula bar's `<FilterEditorBody>` subscribes to.
+        Ok(serde_json::json!({
+            "FocusFilter": {
+                "perspective_id": perspective_id,
+            }
+        }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2137,5 +2174,78 @@ mod tests {
             result.is_err(),
             "goto with mismatched view_id must error even when kinds match"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // FocusFilterCmd — pure UI-broadcast command (no mutation, no undo).
+    // The execute result is a `FocusFilter` marker the Tauri dispatcher
+    // converts into a `ui.focus.filter` event; the tests below pin the
+    // marker shape and the resolver path that drives it.
+    // -----------------------------------------------------------------
+
+    /// `focus_filter_command_dispatches_focus_event` (task acceptance
+    /// criterion): executing `FocusFilterCmd` with a perspective id in
+    /// scope returns the `FocusFilter` envelope carrying that id. The
+    /// dispatcher reads this envelope and emits `ui.focus.filter` — the
+    /// formula bar's `<FilterEditorBody>` subscribes and moves focus
+    /// into the CM6 editor.
+    #[tokio::test]
+    async fn focus_filter_command_dispatches_focus_event() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let pid = create_perspective(&kanban, "Focus Test").await;
+
+        let cmd_ctx = make_ctx_with_scope(
+            Arc::clone(&kanban),
+            HashMap::new(),
+            vec![format!("perspective:{pid}")],
+        );
+
+        let result = FocusFilterCmd.execute(&cmd_ctx).await.unwrap();
+        let focus = result
+            .get("FocusFilter")
+            .expect("execute must return a FocusFilter marker envelope");
+        assert_eq!(
+            focus
+                .get("perspective_id")
+                .and_then(Value::as_str)
+                .expect("FocusFilter must carry a perspective_id string"),
+            pid,
+            "FocusFilter.perspective_id must reflect the scope-resolved perspective"
+        );
+    }
+
+    /// Explicit `perspective_id` arg wins over the scope chain. Pinned
+    /// separately so the dispatcher's no-arg click path (scope only)
+    /// and the palette path (arg supplied) both resolve cleanly.
+    #[tokio::test]
+    async fn focus_filter_command_prefers_explicit_perspective_id_arg() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let scope_pid = create_perspective(&kanban, "Scope Persp").await;
+        let arg_pid = create_perspective(&kanban, "Arg Persp").await;
+
+        let mut args = HashMap::new();
+        args.insert("perspective_id".into(), Value::String(arg_pid.clone()));
+        let cmd_ctx = make_ctx_with_scope(
+            Arc::clone(&kanban),
+            args,
+            vec![format!("perspective:{scope_pid}")],
+        );
+
+        let result = FocusFilterCmd.execute(&cmd_ctx).await.unwrap();
+        let focus = result.get("FocusFilter").unwrap();
+        assert_eq!(focus["perspective_id"].as_str().unwrap(), arg_pid);
+    }
+
+    /// The command is always available — no scope/arg checks at gate time
+    /// because the resolver chain (arg → scope → UIState → first-for-view)
+    /// covers every reachable case. Unavailability would just suppress
+    /// the tab button in registry emission, which is wrong for a focus
+    /// shortcut that is meaningful whenever any perspective exists.
+    #[test]
+    fn focus_filter_command_is_always_available() {
+        let ctx = CommandContext::new("perspective.filter.focus", vec![], None, HashMap::new());
+        assert!(FocusFilterCmd.available(&ctx));
     }
 }

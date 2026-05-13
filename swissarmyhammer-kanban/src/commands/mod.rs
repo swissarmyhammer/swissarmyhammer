@@ -204,6 +204,13 @@ fn register_perspective(map: &mut CmdMap) {
         "perspective.filter".into(),
         Arc::new(perspective_commands::SetFilterCmd),
     );
+    // `perspective.filter.focus` — pure UI-broadcast: returns a `FocusFilter`
+    // marker envelope the Tauri dispatcher converts into a `ui.focus.filter`
+    // event the formula bar subscribes to. No state mutation, no undo entry.
+    map.insert(
+        "perspective.filter.focus".into(),
+        Arc::new(perspective_commands::FocusFilterCmd),
+    );
     map.insert(
         "perspective.clearFilter".into(),
         Arc::new(perspective_commands::ClearFilterCmd),
@@ -363,19 +370,21 @@ mod tests {
         //          dismiss, undo, redo, keymap.vim, keymap.cua, keymap.emacs)
         // + 5 file (switchBoard, closeBoard, newBoard, openBoard, window.new)
         // + 3 drag
-        // + 16 perspective (load, save, delete, rename, filter, clearFilter,
-        //                   group, clearGroup, sort.set, sort.clear,
-        //                   sort.toggle, next, prev, goto, list, set —
-        //                   perspective.set relocated from ui.perspective.set)
+        // + 17 perspective (load, save, delete, rename, filter, filter.focus,
+        //                   clearFilter, group, clearGroup, sort.set,
+        //                   sort.clear, sort.toggle, next, prev, goto, list,
+        //                   set — perspective.set relocated from ui.perspective.set;
+        //                   perspective.filter.focus added by 01KRE1YA65MMG29RDQDQ0VPJQG
+        //                   as the first tab-button-driven command).
         // + 2 attachment (open, reveal) — attachment.delete retired, folded
         //   into the cross-cutting `entity.delete` auto-emit with an
         //   `"attachment"` match arm in `DeleteEntityCmd::execute`.
         // + 0 project — project.add retired in favour of dynamic
         // `entity.add:project`; project.delete retired in favour of the
         // cross-cutting `entity.delete` auto-emit.
-        // = 61 (60 prior, +1 for `ui.inspector.set_width` from
-        //       01KQSE8TT79XC3KJGEHX6DW99G — resizable inspector).
-        assert_eq!(cmds.len(), 61);
+        // = 62 (61 prior, +1 for `perspective.filter.focus` from
+        //       01KRE1YA65MMG29RDQDQ0VPJQG — first command-driven tab button).
+        assert_eq!(cmds.len(), 62);
     }
 
     // =========================================================================

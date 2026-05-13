@@ -10,8 +10,11 @@
  *   - `perspective-tab-bar.tsx` — registers as `ui:perspective-bar`
  *     scope-with-children; each tab is a `perspective_tab:{id}`
  *     FocusScope wrapper containing `perspective_tab.name:{id}` (and,
- *     when rendered, the `perspective_tab.filter:{id}` /
- *     `perspective_tab.group:{id}` icon button) FocusScope leaves.
+ *     when rendered, the `perspective_tab.perspective.filter.focus:{id}`
+ *     `<CommandButton>` leaf — built by `<CommandButton>` from
+ *     `${surface}.${command.id}:${surfaceId}` — and the
+ *     `perspective_tab.group:{id}` Pressable icon button) FocusScope
+ *     leaves.
  *   - `perspective-container.tsx` — registers as `ui:perspective`
  *     scope-with-children with the canonical
  *     `flex flex-col flex-1 min-h-0 min-w-0` layout.

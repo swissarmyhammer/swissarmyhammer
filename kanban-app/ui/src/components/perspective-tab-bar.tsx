@@ -12,6 +12,10 @@ import {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Filter, Group, Plus } from "lucide-react";
+// `Filter` is retained for the formula-bar's static prefix glyph;
+// the per-tab `<FilterFocusButton>` was deleted by the migration in
+// 01KRE1YA65MMG29RDQDQ0VPJQG (the registry-rendered `<CommandButton>`
+// now owns that affordance).
 import { cn } from "@/lib/utils";
 import { usePerspectives } from "@/lib/perspective-context";
 import { useViews } from "@/lib/views-context";
@@ -165,9 +169,17 @@ function usePerspectiveTabBar() {
   const { renamingId, startRename, commitRename, cancelRename } =
     usePerspectiveRename();
   const filterEditorRef = useRef<FilterEditorHandle>(null);
-  const handleFilterFocus = useCallback(() => {
-    filterEditorRef.current?.focus();
-  }, []);
+  // The per-tab Filter button used to take a `handleFilterFocus`
+  // callback wired through `<FilterFocusButton>`. After the
+  // command-driven migration (01KRE1YA65MMG29RDQDQ0VPJQG) the new
+  // `<CommandButton>` dispatches `perspective.filter.focus`, the
+  // backend emits `ui.focus.filter`, and `<FilterEditorBody>` reacts
+  // to that event — the local callback was deleted in the same
+  // migration. The `filterEditorRef` is still held here so the
+  // formula-bar wrapper's click-to-focus path (`onClick` on the bar
+  // div in `FilterFormulaBar`) and the `nav.drillIn` Enter command
+  // on `<FilterFormulaBarFocusable>` can still imperatively focus
+  // the editor without going through the broadcast.
   const activeViewId = activeView?.id;
   const viewKind = activeView?.kind ?? "board";
   // view_id-first / kind-fallback rule (see `PerspectiveDef` JSDoc in
@@ -211,7 +223,6 @@ function usePerspectiveTabBar() {
     filteredPerspectives,
     viewKind,
     filterEditorRef,
-    handleFilterFocus,
     renamingId,
     startRename,
     commitRename,
@@ -274,9 +285,11 @@ interface ResolvedTabCommand {
  *     archive / delete on the board itself) resolve correctly.
  *
  * The chain is built explicitly rather than read from `FocusedScopeContext`
- * because the tab bar queries commands for EVERY perspective on the
- * current view — not just the focused one. Walking the focus tree would
- * only describe whichever tab is currently focused.
+ * because the tab bar's per-perspective queries are decoupled from
+ * spatial focus — the active perspective hosts the inline tab-button
+ * affordances regardless of which leaf the user has navigated to.
+ * Walking the focus tree would only describe whichever tab is currently
+ * focused.
  *
  * # Filtering
  *
@@ -332,27 +345,57 @@ function useScopedTabCommands(
 }
 
 /**
- * Render one `<CommandButton>` per tab-button-tagged command for the
- * given perspective. Sits alongside the existing hardcoded
- * `<FilterFocusButton>` / `<GroupPopoverButton>` until per-command
- * migrations remove their hardcoded counterparts.
+ * Decide whether a registry-rendered tab-button should paint its
+ * `isActive` highlight given the host perspective's current state.
  *
- * The slot renders nothing today — no command in the registry carries
- * `tab_button` yet. As the per-command migration tasks land, this slot
- * fills in and the matching hardcoded button is deleted in the same
- * migration.
+ * Keeping the per-command logic in one switch lets the YAML stay
+ * declarative — adding a new tab-button command without a state-driven
+ * highlight is a no-op here. Today only `perspective.filter.focus`
+ * needs the highlight (mirrors the legacy `<FilterFocusButton>`'s
+ * `hasFilter` indicator); Group / Sort migrations will land their own
+ * cases as they migrate.
+ *
+ * @param commandId The command id from the registry payload.
+ * @param perspective The perspective hosting the tab; reads `filter`,
+ *   `group`, and (later) `sort` directly so per-command checks live
+ *   inside the switch without per-call prop plumbing.
+ */
+function isCommandActiveForPerspective(
+  commandId: string,
+  perspective: Perspective,
+): boolean {
+  switch (commandId) {
+    case "perspective.filter.focus":
+      return Boolean(perspective.filter);
+    default:
+      return false;
+  }
+}
+
+/**
+ * Render one `<CommandButton>` per tab-button-tagged command for the
+ * given perspective. Sits alongside any remaining hardcoded inline
+ * affordances on the active tab until per-command migrations remove
+ * their hardcoded counterparts.
+ *
+ * The slot grows as each per-command migration flips a YAML
+ * `tab_button` on; the first migration is
+ * `perspective.filter.focus` (task 01KRE1YA65MMG29RDQDQ0VPJQG) which
+ * also wires the `isActive` highlight from the perspective's filter
+ * state. Subsequent migrations (group, sort) extend
+ * `isCommandActiveForPerspective` to read their own per-command state.
  */
 function RegistryTabButtons({
-  perspectiveId,
+  perspective,
   activeViewId,
   activeBoardId,
 }: {
-  perspectiveId: string;
+  perspective: Perspective;
   activeViewId: string;
   activeBoardId: string | undefined;
 }) {
   const tabCommands = useScopedTabCommands(
-    perspectiveId,
+    perspective.id,
     activeViewId,
     activeBoardId,
   );
@@ -375,7 +418,8 @@ function RegistryTabButtons({
             } as RegistryCommandDef
           }
           surface="perspective_tab"
-          surfaceId={perspectiveId}
+          surfaceId={perspective.id}
+          isActive={isCommandActiveForPerspective(cmd.id, perspective)}
         />
       ))}
     </>
@@ -404,7 +448,6 @@ export function PerspectiveTabBar() {
     filteredPerspectives,
     viewKind,
     filterEditorRef,
-    handleFilterFocus,
     renamingId,
     startRename,
     commitRename,
@@ -431,7 +474,6 @@ export function PerspectiveTabBar() {
             onDoubleClick={() => startRename(p.id)}
             onRenameCommit={(text) => commitRename(p.id, p.name, text)}
             onRenameCancel={cancelRename}
-            onFilterFocus={handleFilterFocus}
           />
         ))}
         <AddPerspectiveButton
@@ -527,8 +569,6 @@ interface ScopedPerspectiveTabProps {
   onDoubleClick: () => void;
   onRenameCommit: (newName: string) => void;
   onRenameCancel: () => void;
-  /** Called when the filter icon button is clicked — focuses the formula bar. */
-  onFilterFocus: () => void;
 }
 
 /**
@@ -549,9 +589,13 @@ interface ScopedPerspectiveTabProps {
  * Enter` on the perspective scope.
  *
  * The filter icon and group icon to the right of the name remain as
- * Pressable leaves (`perspective_tab.filter:{id}`,
- * `perspective_tab.group:{id}`) because they have distinct rects from
- * the tab name and are independently navigable.
+ * inner focus leaves with distinct monikers — the filter affordance is
+ * now a `<CommandButton>` leaf
+ * (`perspective_tab.perspective.filter.focus:{id}`, built by
+ * `<CommandButton>` from `${surface}.${command.id}:${surfaceId}`) rather
+ * than a Pressable, while the group icon remains a Pressable leaf
+ * (`perspective_tab.group:{id}`). Both have distinct rects from the tab
+ * name and are independently navigable.
  *
  * Per-tab rename binding: every perspective tab — active or inactive —
  * registers a `ui.entity.startRename` `CommandDef` whose `keys` block
@@ -576,7 +620,6 @@ function ScopedPerspectiveTab({
   onDoubleClick,
   onRenameCommit,
   onRenameCancel,
-  onFilterFocus,
 }: ScopedPerspectiveTabProps) {
   const isActive = activePerspectiveId === perspective.id;
   const dispatchPerspectiveSet = useDispatchCommand("perspective.set");
@@ -610,17 +653,13 @@ function ScopedPerspectiveTab({
     >
       <PerspectiveTabFocusable id={perspective.id}>
         <PerspectiveTab
-          id={perspective.id}
-          name={perspective.name}
-          filter={perspective.filter}
-          group={perspective.group}
+          perspective={perspective}
           isActive={isActive}
           isRenaming={renamingId === perspective.id}
           onSelect={onSelect}
           onDoubleClick={onDoubleClick}
           onRenameCommit={onRenameCommit}
           onRenameCancel={onRenameCancel}
-          onFilterFocus={onFilterFocus}
         />
       </PerspectiveTabFocusable>
     </CommandScopeProvider>
@@ -641,11 +680,18 @@ function ScopedPerspectiveTab({
  * at the same rect as this wrapper and trigger the kernel's
  * needless-nesting warning.
  *
- * The two icon affordances on an active tab — `<FilterFocusButton>` and
- * `<GroupPopoverButton>` — are Pressables, so they mount their own
- * inner FocusScope leaves (`perspective_tab.filter:${id}`,
- * `perspective_tab.group:${id}`). These have distinct rects from the
- * tab name and are independently navigable.
+ * The icon affordances on an active tab are Pressables, so each mounts
+ * its own inner FocusScope leaf with a distinct moniker:
+ *
+ *   - `<GroupPopoverButton>` → `perspective_tab.group:${id}`
+ *   - Registry-rendered `<CommandButton>` for `perspective.filter.focus`
+ *     → `perspective_tab.perspective.filter.focus:${id}` (built by
+ *     `<CommandButton>` from `${surface}.${command.id}:${surfaceId}`).
+ *
+ * Both have distinct rects from the tab name and are independently
+ * navigable. The legacy `perspective_tab.filter:${id}` moniker (from
+ * the deleted `<FilterFocusButton>`) is gone — the registry-driven
+ * moniker is the new spatial-nav target for the filter affordance.
  *
  * The wrapper inherits `<FocusScope>`'s default `showFocus={true}` so
  * the dashed focus indicator paints on the focused tab — the visible
@@ -874,10 +920,13 @@ function AddPerspectiveButton({
 
 /** Props for an individual perspective tab button and its inline action buttons. */
 interface PerspectiveTabProps {
-  id: string;
-  name: string;
-  filter?: string;
-  group?: string;
+  /**
+   * The perspective hosting this tab. Passed whole (rather than as
+   * individual fields) so `<RegistryTabButtons>` can hand `perspective`
+   * to `isCommandActiveForPerspective` without prop-drilling each
+   * state field separately as new command migrations land.
+   */
+  perspective: Perspective;
   isActive: boolean;
   isRenaming: boolean;
   onSelect: () => void;
@@ -885,31 +934,28 @@ interface PerspectiveTabProps {
   /** Called with the new name text when the rename editor commits. */
   onRenameCommit: (newName: string) => void;
   onRenameCancel: () => void;
-  /** Called when the filter icon button is clicked — focuses the formula bar. */
-  onFilterFocus: () => void;
 }
 
 /**
  * Individual perspective tab that uses the backend command system for
- * context menus. Renders an inline filter focus button for the active tab
- * that moves keyboard focus into the formula bar (no popover).
+ * context menus. The registry-driven `<RegistryTabButtons>` renders any
+ * inline affordances (today: the `perspective.filter.focus` `<CommandButton>`
+ * that broadcasts `ui.focus.filter`) — there is no more hardcoded inline
+ * filter button.
  *
  * Must be rendered inside a CommandScopeProvider with a perspective
  * moniker so the scope chain is correct.
  */
 function PerspectiveTab({
-  id,
-  name,
-  filter,
-  group,
+  perspective,
   isActive,
   isRenaming,
   onSelect,
   onDoubleClick,
   onRenameCommit,
   onRenameCancel,
-  onFilterFocus,
 }: PerspectiveTabProps) {
+  const { id, name, group } = perspective;
   const handleContextMenu = useContextMenu();
   const [groupOpen, setGroupOpen] = useState(false);
 
@@ -932,10 +978,11 @@ function PerspectiveTab({
   // Enter`, so the focused-component-knows-it's-focused contract holds via
   // command-scope chain resolution, not a separate inner scope.
   //
-  // FilterFocusButton and GroupPopoverButton remain Pressables (each owns
-  // its own inner FocusScope leaf) because they live to the right of the
-  // tab name and have distinct rects — they are independently navigable
-  // with arrow keys, separate visible focus targets.
+  // GroupPopoverButton (and the registry-rendered `perspective.filter.focus`
+  // `<CommandButton>` inside `<RegistryTabButtons>` below) remain Pressables
+  // — each owns its own inner FocusScope leaf — because they live to the
+  // right of the tab name and have distinct rects. They are independently
+  // navigable with arrow keys, separate visible focus targets.
   const boardData = useBoardData();
   const activeBoardId = boardData?.board?.id;
   const activeViewId = activeView?.id;
@@ -953,13 +1000,6 @@ function PerspectiveTab({
         onRenameCancel={onRenameCancel}
       />
       {isActive && (
-        <FilterFocusButton
-          perspectiveId={id}
-          filter={filter}
-          onFocus={onFilterFocus}
-        />
-      )}
-      {isActive && (
         <GroupPopoverButton
           group={group}
           perspectiveId={id}
@@ -969,15 +1009,20 @@ function PerspectiveTab({
         />
       )}
       {/*
-        Registry-driven tab buttons. Renders nothing today (no command
-        carries `tab_button` yet); each per-command migration task flips
-        on `tab_button` in YAML and deletes the corresponding hardcoded
-        button above in the same migration. Mounted only when the active
-        view is known so the scope chain is well-formed.
+        Registry-driven tab buttons — renders the migrated
+        `perspective.filter.focus` `<CommandButton>` (plus any future
+        per-command migrations: group, sort, …) for the active tab.
+        Gated on `isActive` to match the visual layout the legacy
+        `<FilterFocusButton>` / `<GroupPopoverButton>` produced: inline
+        affordances only appear on the active perspective's tab, where
+        their state is meaningful and where their spatial-nav leaves
+        live next to the formula bar. Mounted only when the active view
+        is known so the scope chain (`perspective:` + `view:` + `board:`)
+        is well-formed for `list_commands_for_scope`.
       */}
-      {activeViewId && (
+      {isActive && activeViewId && (
         <RegistryTabButtons
-          perspectiveId={id}
+          perspective={perspective}
           activeViewId={activeViewId}
           activeBoardId={activeBoardId}
         />
@@ -1163,64 +1208,18 @@ export function InlineRenameEditor({
 }
 
 // ---------------------------------------------------------------------------
-// Filter focus button — clicking moves focus into the formula bar (no popover)
+// Filter focus button — DELETED by 01KRE1YA65MMG29RDQDQ0VPJQG.
+//
+// The hardcoded `<FilterFocusButton>` was replaced by a registry-rendered
+// `<CommandButton>` for the new `perspective.filter.focus` command. The
+// `<CommandButton>` lives in `<RegistryTabButtons>` above; clicking it
+// dispatches `perspective.filter.focus`, the dispatcher emits a
+// `ui.focus.filter` Tauri event, and `<FilterEditorBody>` reacts by
+// calling `focus()` on the CM6 editor — same end-state as the deleted
+// callback path, now driven through the unified command pipeline so
+// palette / keybindings / cross-window paths all converge on the same
+// behaviour.
 // ---------------------------------------------------------------------------
-
-/**
- * Filter icon button on the active tab.
- *
- * Does NOT open a popover. Instead, clicking calls `onFocus` which focuses
- * the formula bar CM6 editor to the right of the tabs.
- *
- * Migrates to `<Pressable asChild>` so the icon gains both keyboard
- * reachability (the inner `<FocusScope>` provided by Pressable) AND
- * scope-level CommandDefs that bind Enter (vim/cua) and Space (cua) to
- * the same `onFocus` callback as a pointer click. The leaf moniker is
- * `perspective_tab.filter:{id}` — its parent zone is the surrounding
- * `perspective_tab:{id}` `<FocusZone>` so the kernel sees it as a
- * sibling leaf of the name and group leaves.
- *
- * The inner `<button>`'s `onClick={(e) => e.stopPropagation()}` is
- * preserved: a click on the filter icon must NOT bubble to the tab's
- * own click-to-activate handler. Radix Slot's `mergeProps` runs the
- * child's `onClick` first, then the slot's — so `e.stopPropagation()`
- * lands BEFORE Pressable's `handleClick` triggers `onPress`.
- */
-function FilterFocusButton({
-  perspectiveId,
-  filter,
-  onFocus,
-}: {
-  perspectiveId: string;
-  filter?: string;
-  onFocus: () => void;
-}) {
-  const hasFilter = Boolean(filter);
-  return (
-    <Pressable
-      asChild
-      moniker={asSegment(`perspective_tab.filter:${perspectiveId}`)}
-      ariaLabel="Filter"
-      onPress={onFocus}
-    >
-      <button
-        type="button"
-        className={cn(
-          "inline-flex items-center justify-center h-5 w-5 rounded transition-colors -ml-1",
-          hasFilter
-            ? "text-primary"
-            : "text-muted-foreground/50 hover:text-muted-foreground",
-        )}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <Filter
-          className="h-3 w-3"
-          fill={hasFilter ? "currentColor" : "none"}
-        />
-      </button>
-    </Pressable>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Filter formula bar — always-visible CM6 filter editor in the right region

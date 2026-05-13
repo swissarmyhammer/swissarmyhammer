@@ -1652,14 +1652,15 @@ fn close_or_retitle_window(app: &AppHandle, requesting_label: &str) {
 }
 
 /// Apply UI-triggering command results: file dialogs, new-window creation,
-/// and app quit. Each result variant is dispatched to a dedicated handler so
-/// the side-effect for each shape lives in one place and can be tested or
-/// changed in isolation.
+/// app quit, and UI-broadcast envelopes (e.g. focus signals). Each result
+/// variant is dispatched to a dedicated handler so the side-effect for each
+/// shape lives in one place and can be tested or changed in isolation.
 async fn handle_ui_trigger_results(app: &AppHandle, state: &AppState, result: &Value) {
     handle_new_board_dialog(app, result);
     handle_open_board_dialog(app, result);
     handle_create_window(app, state, result).await;
     handle_quit(app, result);
+    handle_focus_filter(app, result);
 }
 
 /// Trigger the native "new board" file dialog when the command emitted a
@@ -1693,6 +1694,31 @@ async fn handle_create_window(app: &AppHandle, state: &AppState, result: &Value)
 fn handle_quit(app: &AppHandle, result: &Value) {
     if result.get("quit").is_some() {
         app.exit(0);
+    }
+}
+
+/// Forward a `FocusFilter` envelope to the frontend on the
+/// `ui.focus.filter` channel.
+///
+/// `FocusFilterCmd` (the no-arg `perspective.filter.focus` command bound to
+/// the registry-driven Filter tab button) returns `{"FocusFilter": {
+/// "perspective_id": "..." }}` as a pure UI-broadcast — no state mutation,
+/// no undo entry. The formula bar's `<FilterEditorBody>` listens for
+/// `ui.focus.filter`, compares the payload's perspective id against its own,
+/// and calls `focus()` on the CM6 editor when they match.
+///
+/// Why a global `app.emit` and not `emit_to(window_label)`: the formula bar
+/// already mounts one editor per perspective (keyed on the active
+/// perspective id), and every editor instance filters by id on receipt.
+/// Broadcasting to every window keeps the wiring simple and matches the
+/// other domain events (`drag-session-active`, `board-changed`, …) which
+/// also emit globally; window-targeting can be added later if a use case
+/// for it appears.
+fn handle_focus_filter(app: &AppHandle, result: &Value) {
+    if let Some(focus_filter) = result.get("FocusFilter") {
+        // Fire-and-forget — a missing listener (e.g. no active perspective
+        // when the user dispatches via palette) is a UI no-op, not an error.
+        let _ = app.emit("ui.focus.filter", focus_filter);
     }
 }
 

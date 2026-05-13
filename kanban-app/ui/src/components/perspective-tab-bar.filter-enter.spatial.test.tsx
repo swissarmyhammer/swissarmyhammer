@@ -1,45 +1,39 @@
 /**
- * Browser-mode test: Enter on the focused `perspective_tab.filter:{id}`
- * leaf moves keyboard focus into the formula bar by firing the
- * `onFilterFocus` callback.
+ * Browser-mode test: Enter on the focused Filter `<CommandButton>` leaf
+ * dispatches `perspective.filter.focus` through the unified command pipeline.
  *
- * Source of truth for the FilterButton half of card
- * `01KQQSVS4EBKKFN5SS7MW5P8CN` (Migrate remaining icon-button sites part
- * 2). Pre-migration the FilterButton was a bare `<button>` rendered
- * inside the per-tab `<FocusScope perspective_tab:{id}>` leaf — there
- * was no separate spatial leaf for the icon, and Enter on the tab leaf
- * fired no `onPress` because the tab leaf carried no
- * `pressable.activate` CommandDef.
+ * Post-migration to command-driven rendering (task 01KRE1YA65MMG29RDQDQ0VPJQG):
+ * the hardcoded `<FilterFocusButton>` (and its
+ * `perspective_tab.filter:{id}` leaf + local `onPress → onFocus` callback)
+ * is gone. The Filter affordance is now a registry-rendered
+ * `<CommandButton>` for the no-arg `perspective.filter.focus` command,
+ * registering its leaf as `perspective_tab.perspective.filter.focus:{id}`.
  *
- * The migration:
- *   1. Promotes `PerspectiveTabFocusable` from `<FocusScope>` to
- *      `<FocusScope>` with `showFocus={false}` (entity-card
- *      iteration-2 reshape precedent).
- *   2. Wraps the existing `<TabButton>` in an inner
- *      `<FocusScope perspective_tab.name:{id}>` leaf so the name button
- *      stays focusable.
- *   3. Replaces the FilterButton bare `<button>` with
- *      `<Pressable asChild moniker="perspective_tab.filter:{id}">` which
- *      mounts its own leaf with `pressable.activate` Enter/Space
- *      CommandDefs.
+ * End-to-end keyboard-activation chain mirrors the old behaviour, but
+ * the side-effect now flows through dispatch:
  *
- * End-to-end keyboard-activation chain mirrors
- * `nav-bar.inspect-enter.spatial.test.tsx`:
- *
- *   1. PerspectiveTabBar renders FilterButton via `<Pressable asChild>`.
- *   2. Pressable mounts a `<FocusScope perspective_tab.filter:{id}>`
- *      leaf with two scope-level CommandDefs (Enter + Space) calling
- *      `onPress` (which calls `onFocus` → `filterEditorRef.current?.focus()`).
- *   3. Driving `focus-changed` to the leaf populates the focused-scope
+ *   1. `<RegistryTabButtons>` mounts a `<CommandButton>` for every
+ *      tab-button-tagged command emitted by `list_commands_for_scope`.
+ *   2. `<CommandButton>` wraps the icon in `<Pressable asChild>` which
+ *      mounts a `<FocusScope perspective_tab.perspective.filter.focus:{id}>`
+ *      leaf with `pressable.activate` Enter/Space CommandDefs.
+ *   3. Driving `focus-changed` to that leaf populates the focused-scope
  *      chain.
  *   4. `KeybindingHandler` resolves Enter through `extractScopeBindings`,
- *      dispatches `pressable.activate` → `onPress` runs → the formula
- *      bar's `FilterEditor` ref's `.focus()` is called.
+ *      dispatches `pressable.activate` → `onPress` runs → the
+ *      `<CommandButton>` dispatches `perspective.filter.focus` via
+ *      `useDispatchCommand`.
+ *
+ * The actual editor focus is now driven by the backend's
+ * `ui.focus.filter` event — the spatial half is what this test pins.
+ * Editor-side focus reactivity is covered by
+ * `perspective-tab-bar.filter-migration.test.tsx`.
  *
  * Asserts:
- *   - The leaf registers as a `<FocusScope>` with the correct moniker.
- *   - Enter on the focused leaf invokes `FilterEditorHandle.focus()`
- *     exactly once.
+ *   - The new leaf registers as a `<FocusScope>` with the
+ *     `perspective_tab.perspective.filter.focus:{id}` moniker.
+ *   - Enter on the focused leaf calls `dispatch_command` with
+ *     `cmd: "perspective.filter.focus"` exactly once.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -64,7 +58,22 @@ function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
       windows: {},
       recent_boards: [],
     });
-  if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
+  // The tab bar queries this on mount/effect. Returning the new
+  // command exactly mirrors what the YAML produces — the
+  // `<CommandButton>` only renders when this list contains a
+  // `tab_button`-tagged command.
+  if (cmd === "list_commands_for_scope") {
+    return Promise.resolve([
+      {
+        id: "perspective.filter.focus",
+        name: "Focus Filter",
+        tab_button: { icon: "filter" },
+        params: [{ name: "perspective_id", from: "scope_chain" }],
+        keys: {},
+      },
+    ]);
+  }
+  if (cmd === "spatial_register_scope") {
     const a = (args ?? {}) as { fq?: string; segment?: string };
     if (a.fq && a.segment) monikerToKey.set(a.segment, a.fq);
     return Promise.resolve(null);
@@ -139,12 +148,11 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// Filter-editor mock — captures `.focus()` calls so the test can assert
-// that Enter on the focused filter leaf moves keyboard focus into the
-// formula bar via the `onFilterFocus` callback.
+// Filter-editor mock — the tab bar transitively pulls in `<FilterEditor>`
+// through the formula bar. Stub it so this test does not need to set up
+// the editor's full provider stack; the dispatch contract is what we
+// assert here.
 // ---------------------------------------------------------------------------
-
-const filterEditorFocusSpy = vi.fn();
 
 vi.mock("@/components/filter-editor", async () => {
   const React = await import("react");
@@ -160,9 +168,7 @@ vi.mock("@/components/filter-editor", async () => {
     React.useImperativeHandle(
       ref,
       () => ({
-        focus() {
-          filterEditorFocusSpy();
-        },
+        focus() {},
         setValue() {},
         getValue() {
           return "";
@@ -172,11 +178,6 @@ vi.mock("@/components/filter-editor", async () => {
     );
     return <div data-testid="filter-editor-mock" />;
   });
-  // `FilterExpressionEditor` is the pure, dispatch-agnostic sibling
-  // exported alongside `FilterEditor` (task 01KRE1VDTC4MNKN3YPR619NDQK).
-  // The tab bar now transitively imports it via `<CommandPopover>`, so
-  // the mock must provide a stub even though this test does not exercise
-  // a tab-button-tagged command path.
   const FilterExpressionEditor = React.forwardRef<unknown, unknown>(
     function FilterExpressionEditor() {
       return <div data-testid="filter-expression-editor-mock" />;
@@ -226,7 +227,15 @@ vi.mock("@/lib/entity-store-context", () => ({
 }));
 
 vi.mock("@/components/window-container", () => ({
-  useBoardData: () => ({ virtualTagMeta: [] }),
+  useBoardData: () => ({
+    board: {
+      entity_type: "board",
+      id: "test-board",
+      moniker: "board:test-board",
+      fields: {},
+    },
+    virtualTagMeta: [],
+  }),
   useOpenBoards: () => [],
   useActiveBoardPath: () => undefined,
   useHandleSwitchBoard: () => vi.fn(),
@@ -257,9 +266,16 @@ import { invoke } from "@tauri-apps/api/core";
 const WINDOW_LAYER_NAME = asSegment("window");
 
 async function flushSetup() {
-  await act(async () => {
-    await Promise.resolve();
-  });
+  // The registry-driven button mounts inside a `useEffect` that awaits
+  // `list_commands_for_scope`. Yield multiple times so the Promise
+  // resolution, `setCommands`, and the inner Pressable's register
+  // effects all settle before the test queries the registry.
+  for (let i = 0; i < 4; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+  }
 }
 
 async function renderTabBar() {
@@ -296,30 +312,32 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
     .map((c: unknown[]) => c[1] as Record<string, unknown>);
 }
 
-describe("PerspectiveTabBar filter button — Enter focuses formula bar via Pressable", () => {
+describe("PerspectiveTabBar filter button — Enter dispatches perspective.filter.focus via Pressable", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     monikerToKey.clear();
     currentFocusKey.key = null;
-    filterEditorFocusSpy.mockClear();
     for (const key of Object.keys(listenCallbacks)) {
       delete listenCallbacks[key];
     }
   });
 
-  it("seeds focus on perspective_tab.filter:p1 → Enter calls FilterEditorHandle.focus() once", async () => {
+  it("seeds focus on perspective_tab.perspective.filter.focus:p1 → Enter dispatches perspective.filter.focus exactly once", async () => {
     await renderTabBar();
     await flushSetup();
 
+    // The new spatial-nav moniker, derived by `<CommandButton>` from
+    // `${surface}.${command.id}:${surfaceId}` — replaces the legacy
+    // `perspective_tab.filter:{id}` from the deleted `<FilterFocusButton>`.
     const leaf = registerScopeArgs().find(
-      (a) => a.segment === "perspective_tab.filter:p1",
+      (a) => a.segment === "perspective_tab.perspective.filter.focus:p1",
     );
     expect(
       leaf,
-      "perspective_tab.filter:p1 must register as a FocusScope leaf via Pressable",
+      "perspective_tab.perspective.filter.focus:p1 must register as a FocusScope leaf via Pressable",
     ).toBeDefined();
 
-    // Drive a focus-changed event for the filter leaf so the entity-focus
+    // Drive a focus-changed event for the new leaf so the entity-focus
     // bridge populates the focused-scope chain.
     const cb = listenCallbacks["focus-changed"];
     expect(cb).toBeTruthy();
@@ -329,24 +347,37 @@ describe("PerspectiveTabBar filter button — Enter focuses formula bar via Pres
           window_label: "main",
           prev_fq: null,
           next_fq: leaf!.fq,
-          next_segment: "perspective_tab.filter:p1",
+          next_segment: "perspective_tab.perspective.filter.focus:p1",
         },
       });
       currentFocusKey.key = leaf!.fq as string;
       await Promise.resolve();
     });
 
-    // Reset the spy so we measure only what Enter triggers.
-    filterEditorFocusSpy.mockClear();
+    // Snapshot the dispatch_command call count BEFORE the Enter press so
+    // we can isolate what Enter triggers from any startup dispatches.
+    const mockInvoke = invoke as unknown as ReturnType<typeof vi.fn>;
+    const dispatchCallsBefore = mockInvoke.mock.calls.filter(
+      (c: unknown[]) => c[0] === "dispatch_command",
+    ).length;
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
       await Promise.resolve();
     });
 
+    const dispatchCallsAfter = mockInvoke.mock.calls.filter(
+      (c: unknown[]) => c[0] === "dispatch_command",
+    );
     expect(
-      filterEditorFocusSpy.mock.calls.length,
-      "Enter on the focused filter leaf must call FilterEditor.focus() exactly once",
+      dispatchCallsAfter.length - dispatchCallsBefore,
+      "Enter on the focused filter leaf must dispatch exactly one command",
     ).toBe(1);
+    // The dispatched command must be the new `perspective.filter.focus` —
+    // a regression that bound Enter to a different command (e.g. a stale
+    // `perspective.filter`) would fail here.
+    expect(dispatchCallsAfter[dispatchCallsAfter.length - 1][1]).toMatchObject({
+      cmd: "perspective.filter.focus",
+    });
   });
 });
