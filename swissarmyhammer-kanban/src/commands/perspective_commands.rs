@@ -224,28 +224,69 @@ impl Command for LoadPerspectiveCmd {
 /// Creates a new perspective with the given name.
 ///
 /// Multiple perspectives may share the same name.
-/// Requires `name` arg. Optional args: `view`, `filter`, `group`.
+/// Optional args: `name` (falls back to `"Untitled"` when missing or empty),
+/// `view` (falls back to the active view's kind, or `"board"`), `view_id`
+/// (falls back to the scope-chain `view:` moniker), `filter`, `group`.
+///
+/// `view_id` and `view` are both auto-resolved from the scope chain when
+/// the args bag does not supply them — mirroring the `from: scope_chain`
+/// YAML annotation on the `view_id` param. The registry-rendered
+/// `<CommandButton>` popover only collects `name`; the scope chain that
+/// `<BarRegistryTabButtons>` builds (`view:<id>`, `board:<id>`, …) carries
+/// the active view-instance id, and the views registry maps that id to
+/// the view's kind. Without this fallback the dispatcher would lose the
+/// per-view-id scoping the prior epic introduced (card
+/// `01KRE21GJMPP289N1HSTMJG5HE` review finding).
+///
+/// `available()` is always `true` so the registry-rendered tab-button
+/// (`tab_button: { icon: plus }` on the YAML entry) emits regardless of
+/// whether `name` is pre-supplied — the popover collects it before
+/// dispatch. The dispatcher's empty-name fallback mirrors the legacy
+/// `<AddPerspectiveButton>`'s `"Untitled"` / `"Untitled N+1"` inference
+/// so the user-visible behavior survives the command-driven migration.
 pub struct SavePerspectiveCmd;
 
 #[async_trait]
 impl Command for SavePerspectiveCmd {
-    fn available(&self, ctx: &CommandContext) -> bool {
-        ctx.arg("name").and_then(|v| v.as_str()).is_some()
+    fn available(&self, _ctx: &CommandContext) -> bool {
+        true
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
-        let name = ctx
+        // Empty / missing `name` falls back to a generated "Untitled" /
+        // "Untitled N+1" name so the registry-rendered tab-button popover
+        // can submit with an empty text input and still produce a
+        // sensibly-named perspective. The legacy `<AddPerspectiveButton>`
+        // computed this on the frontend; moving the fallback into the
+        // dispatcher means every entry point (palette, keybind, tab
+        // button, etc.) gets the same defaulting behavior.
+        let supplied_name = ctx
             .arg("name")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| CommandError::MissingArg("name".into()))?;
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
 
-        let view = ctx.arg("view").and_then(|v| v.as_str()).unwrap_or("board");
+        // Resolve `view_id` and `view` (kind) from args first, then fall
+        // back to the scope chain's `view:` moniker — looked up against
+        // the views registry for the kind. The YAML declares the
+        // `view_id` param with `from: scope_chain, entity_type: view`,
+        // but the dispatcher has no automatic scope-chain-to-args
+        // injection pass, so the fallback lives here. See
+        // `resolve_active_view` for the shared resolver (same pattern
+        // used by `cycle_perspective`).
+        let explicit_view_arg = ctx
+            .arg("view")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let (resolved_view_kind, resolved_view_id) = resolve_active_view(ctx, &kanban).await;
         let view_id = ctx
             .arg("view_id")
             .and_then(|v| v.as_str())
-            .map(String::from);
+            .map(String::from)
+            .or(resolved_view_id);
+        let view = explicit_view_arg.unwrap_or(resolved_view_kind);
 
         let filter = ctx.arg("filter").and_then(|v| v.as_str()).map(String::from);
         let group = ctx.arg("group").and_then(|v| v.as_str()).map(String::from);
@@ -254,13 +295,59 @@ impl Command for SavePerspectiveCmd {
             validate_filter(f)?;
         }
 
-        let mut add_op = AddPerspective::new(name, view);
+        let name = match supplied_name {
+            Some(n) => n.to_string(),
+            None => generate_untitled_name(&kanban, &view, view_id.as_deref()).await?,
+        };
+
+        let mut add_op = AddPerspective::new(name, &view);
         add_op.view_id = view_id;
         add_op.filter = filter;
         add_op.group = group;
 
         run_op(&add_op, &kanban).await
     }
+}
+
+/// Generate a unique "Untitled" / "Untitled N+1" name for a perspective
+/// missing an explicit `name` arg.
+///
+/// Mirrors the legacy `<AddPerspectiveButton>` frontend logic: count how
+/// many `Untitled`-prefixed perspectives already share this view (matched
+/// by `view_id` when present, else by view kind — the same
+/// view_id-first / kind-fallback rule on `PerspectiveDef`). Returns
+/// `"Untitled"` when none exist, or `"Untitled N"` where N is the
+/// running count + 1.
+///
+/// Reads the perspective list once under the perspective context's read
+/// lock; the caller drops the lock before the eventual write through
+/// `AddPerspective` so the two operations don't deadlock.
+async fn generate_untitled_name(
+    kanban: &KanbanContext,
+    view: &str,
+    view_id: Option<&str>,
+) -> swissarmyhammer_commands::Result<String> {
+    let pctx = kanban
+        .perspective_context()
+        .await
+        .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+    let pctx = pctx.read().await;
+    let untitled_count = pctx
+        .all()
+        .iter()
+        .filter(|p| match (view_id, p.view_id.as_deref()) {
+            (Some(vid), Some(pvid)) => vid == pvid,
+            // Either side without a view_id falls back to view-kind
+            // match — same rule as the frontend's perspective filter.
+            _ => p.view == view,
+        })
+        .filter(|p| p.name.starts_with("Untitled"))
+        .count();
+    Ok(if untitled_count == 0 {
+        "Untitled".to_string()
+    } else {
+        format!("Untitled {}", untitled_count + 1)
+    })
 }
 
 /// Delete a perspective by name or scope chain.
@@ -1266,7 +1353,12 @@ mod tests {
         // Commands that resolve `perspective_id` at execute time are always
         // available from the palette — scope-chain membership is no longer a
         // gate. See `resolve_perspective_id` for the resolution order.
+        // After 01KRE21GJMPP289N1HSTMJG5HE, `SavePerspectiveCmd` is also
+        // unconditionally available — the registry-rendered tab-button
+        // popover collects the `name` arg at click time, so blocking
+        // availability on `name` presence would hide the affordance.
         let ctx = CommandContext::new("test", vec![], None, HashMap::new());
+        assert!(SavePerspectiveCmd.available(&ctx));
         assert!(SetFilterCmd.available(&ctx));
         assert!(ClearFilterCmd.available(&ctx));
         assert!(SetGroupCmd.available(&ctx));
@@ -1274,6 +1366,182 @@ mod tests {
         assert!(SetSortCmd.available(&ctx));
         assert!(ClearSortCmd.available(&ctx));
         assert!(ToggleSortCmd.available(&ctx));
+    }
+
+    /// `SavePerspectiveCmd::execute` with an empty / missing `name` arg
+    /// falls back to generating a `"Untitled"` (or `"Untitled N+1"`) name.
+    ///
+    /// Pre-migration this fallback lived in the frontend
+    /// `<AddPerspectiveButton>`, which inferred the name before
+    /// dispatching. The registry-driven tab-button popover collects
+    /// `name` from a text input that can be empty; moving the fallback
+    /// into the dispatcher means every entry point (palette, keybind,
+    /// tab button, etc.) gets the same defaulting behavior.
+    ///
+    /// Three submissions in this test:
+    ///   1. Empty string → first call gets `"Untitled"`.
+    ///   2. Missing name arg → second call gets `"Untitled 2"`.
+    ///   3. Whitespace-only string → third call gets `"Untitled 3"`.
+    #[tokio::test]
+    async fn test_save_perspective_cmd_generates_untitled_name_when_empty() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+
+        // 1. Empty string for `name` — fallback fires.
+        let mut args = HashMap::new();
+        args.insert("name".into(), Value::String("".into()));
+        args.insert("view".into(), Value::String("board".into()));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
+        let result = SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(
+            result["name"], "Untitled",
+            "empty name must fall back to 'Untitled' on a fresh board"
+        );
+
+        // 2. No `name` arg at all — fallback fires AND increments because
+        // the previous Untitled is already in the perspective list.
+        let mut args = HashMap::new();
+        args.insert("view".into(), Value::String("board".into()));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
+        let result = SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(
+            result["name"], "Untitled 2",
+            "missing name with one existing Untitled must increment to 'Untitled 2'"
+        );
+
+        // 3. Whitespace-only `name` — the dispatcher trims before
+        // checking emptiness, so this also takes the fallback path.
+        let mut args = HashMap::new();
+        args.insert("name".into(), Value::String("   ".into()));
+        args.insert("view".into(), Value::String("board".into()));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
+        let result = SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(
+            result["name"], "Untitled 3",
+            "whitespace-only name must be treated as empty and increment to 'Untitled 3'"
+        );
+    }
+
+    /// `SavePerspectiveCmd::execute` with a non-empty `name` arg uses
+    /// it verbatim — the fallback only fires on empty / missing names.
+    /// Guards against a regression that would silently swap user-typed
+    /// names for "Untitled".
+    #[tokio::test]
+    async fn test_save_perspective_cmd_uses_supplied_name_when_non_empty() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+
+        let mut args = HashMap::new();
+        args.insert("name".into(), Value::String("My Sprint".into()));
+        args.insert("view".into(), Value::String("board".into()));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
+        let result = SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(
+            result["name"], "My Sprint",
+            "non-empty name must be used verbatim"
+        );
+    }
+
+    /// `SavePerspectiveCmd::execute` resolves `view_id` from the scope
+    /// chain when the args bag does not supply one — mirroring the
+    /// `from: scope_chain, entity_type: view` YAML annotation.
+    ///
+    /// Pre-fix: `SavePerspectiveCmd::execute` read `view_id` from
+    /// `ctx.arg("view_id")` only and there is no automatic
+    /// scope-chain-to-args injection in `build_dispatch_context`, so
+    /// the `<BarRegistryTabButtons>` popover (which submits only
+    /// `{ name }`) silently dropped `view_id`. Card
+    /// `01KRE21GJMPP289N1HSTMJG5HE` review-finding blocker.
+    ///
+    /// The fixture uses `setup_with_views` so the views registry
+    /// carries the builtin board view, and a scope chain with
+    /// `view:01JMVIEW0000000000BOARD0` so `resolve_active_view` picks
+    /// it up. The asserted invariant is `view_id: Some("01JMVIEW...")`
+    /// on the persisted perspective.
+    #[tokio::test]
+    async fn test_save_perspective_cmd_resolves_view_id_from_scope_chain() {
+        let (_temp, ctx) = setup_with_views().await;
+        let kanban = Arc::new(ctx);
+
+        // Args carry only `name` — same shape as the popover submission.
+        let mut args = HashMap::new();
+        args.insert("name".into(), Value::String("Pinned".into()));
+        let scope = vec!["view:01JMVIEW0000000000BOARD0".to_string()];
+        let cmd_ctx = make_ctx_with_scope(Arc::clone(&kanban), args, scope);
+
+        let result = SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(
+            result["view_id"], "01JMVIEW0000000000BOARD0",
+            "view_id must be resolved from the scope chain's `view:` moniker \
+             when no `view_id` arg is supplied; got: {result}"
+        );
+    }
+
+    /// `SavePerspectiveCmd::execute` resolves the perspective's `view`
+    /// kind from the scope chain when the args bag does not supply
+    /// `view` — looks up the kind via the views registry.
+    ///
+    /// Pre-fix the dispatcher fell back to `"board"` regardless of the
+    /// active view's kind, so clicking `+` on a grid view created a
+    /// `view: "board"` perspective that did not appear in the grid
+    /// view's `filteredPerspectives` (the bar filters by `p.view ===
+    /// viewKind`). Card `01KRE21GJMPP289N1HSTMJG5HE` review-finding
+    /// blocker.
+    ///
+    /// Uses the builtin grid view `01JMVIEW0000000000TGRID0` so the
+    /// view registry resolves `kind: grid`.
+    #[tokio::test]
+    async fn test_save_perspective_cmd_resolves_view_kind_from_scope_chain() {
+        let (_temp, ctx) = setup_with_views().await;
+        let kanban = Arc::new(ctx);
+
+        // Args carry only `name` — same shape as the popover submission.
+        let mut args = HashMap::new();
+        args.insert("name".into(), Value::String("From Grid".into()));
+        let scope = vec!["view:01JMVIEW0000000000TGRID0".to_string()];
+        let cmd_ctx = make_ctx_with_scope(Arc::clone(&kanban), args, scope);
+
+        let result = SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(
+            result["view"], "grid",
+            "view kind must be resolved from the scope chain's `view:` \
+             moniker (looked up against the views registry) when no `view` \
+             arg is supplied; got: {result}"
+        );
+        assert_eq!(
+            result["view_id"], "01JMVIEW0000000000TGRID0",
+            "view_id from the same scope-chain moniker must round-trip too"
+        );
+    }
+
+    /// Explicit `view_id` and `view` args still win over the scope-chain
+    /// fallback — guards against a regression that would silently
+    /// override caller-supplied values with scope-resolved ones.
+    #[tokio::test]
+    async fn test_save_perspective_cmd_explicit_view_args_override_scope_chain() {
+        let (_temp, ctx) = setup_with_views().await;
+        let kanban = Arc::new(ctx);
+
+        // Scope chain says grid; args say board. Args win.
+        let mut args = HashMap::new();
+        args.insert("name".into(), Value::String("Pinned".into()));
+        args.insert("view".into(), Value::String("board".into()));
+        args.insert(
+            "view_id".into(),
+            Value::String("01JMVIEW0000000000BOARD0".into()),
+        );
+        let scope = vec!["view:01JMVIEW0000000000TGRID0".to_string()];
+        let cmd_ctx = make_ctx_with_scope(Arc::clone(&kanban), args, scope);
+
+        let result = SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(
+            result["view"], "board",
+            "explicit `view` arg must override the scope-chain fallback"
+        );
+        assert_eq!(
+            result["view_id"], "01JMVIEW0000000000BOARD0",
+            "explicit `view_id` arg must override the scope-chain fallback"
+        );
     }
 
     #[tokio::test]

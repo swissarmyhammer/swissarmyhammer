@@ -217,36 +217,15 @@ describe("PerspectiveTabBar", () => {
     expect(mockSetActivePerspectiveId).toHaveBeenCalledWith("p2");
   });
 
-  it("creates a new perspective via '+' button", () => {
-    mockPerspectivesValue = {
-      ...mockPerspectivesValue,
-      perspectives: [{ id: "p1", name: "Default", view: "board" }],
-      activePerspective: { id: "p1", name: "Default", view: "board" },
-    };
-
-    renderTabBar();
-
-    const addButton = screen.getByRole("button", { name: /add perspective/i });
-    fireEvent.click(addButton);
-
-    expect(mockInvoke).toHaveBeenCalledWith(
-      "dispatch_command",
-      expect.objectContaining({
-        cmd: "perspective.save",
-        args: expect.objectContaining({
-          name: expect.any(String),
-          view: "board",
-        }),
-      }),
-    );
-  });
-
-  it("renders the '+' button", () => {
-    renderTabBar();
-
-    const addButton = screen.getByRole("button", { name: /add perspective/i });
-    expect(addButton).toBeDefined();
-  });
+  // The hardcoded `<AddPerspectiveButton>` + its direct
+  // `perspective.save` dispatch + "renders the '+' button" + the tooltip
+  // tests were removed by 01KRE21GJMPP289N1HSTMJG5HE — the `+` affordance
+  // is now a registry-rendered `<CommandButton>` whose mount, icon,
+  // popover-driven dispatch, and absence-of-hardcoded-JSX contracts live
+  // in `perspective-tab-bar.add-and-sort-migration.test.tsx`. Asserting
+  // the post-migration contracts here would duplicate that file and
+  // require the registry-driven render harness (board id mock + flushed
+  // `list_commands_for_scope` effect) the sibling file already maintains.
 
   it("renders nothing when no active view", () => {
     mockViewsValue = {
@@ -390,31 +369,14 @@ describe("PerspectiveTabBar", () => {
     expect(cmContent?.textContent).toContain("My View");
   });
 
-  it("shows a tooltip on hover of the add-perspective button", async () => {
-    renderTabBar(0);
-
-    const addButton = screen.getByRole("button", { name: /add perspective/i });
-
-    // Hover the button to trigger the Radix tooltip.
-    await act(async () => {
-      fireEvent.pointerMove(addButton, { clientX: 10, clientY: 10 });
-      fireEvent.mouseEnter(addButton);
-      // Allow Radix tooltip to open (even with 0 delay it schedules async).
-      await new Promise((r) => setTimeout(r, 100));
-    });
-
-    // The tooltip content should be visible.
-    const tooltip = screen.getByRole("tooltip");
-    expect(tooltip).toBeDefined();
-    expect(tooltip.textContent).toBe("New perspective");
-  });
-
-  it("does not have an HTML title attribute on the add-perspective button", () => {
-    renderTabBar();
-
-    const addButton = screen.getByRole("button", { name: /add perspective/i });
-    expect(addButton.getAttribute("title")).toBeNull();
-  });
+  // The Radix tooltip + missing-`title` tests on the legacy
+  // `<AddPerspectiveButton>` were removed by 01KRE21GJMPP289N1HSTMJG5HE.
+  // The registry-rendered `<CommandButton>` doesn't surface a Radix
+  // tooltip and uses `aria-label` (forwarded from `command.name`) as the
+  // accessible name. The "no `title` attribute" guard is now an implicit
+  // contract of `<CommandButton>` (which never sets `title=...`); if a
+  // regression surfaces, it should be pinned in `command-button.test.tsx`
+  // alongside the other CommandButton-level invariants.
 
   // =========================================================================
   // Rename integration — Enter/Escape across keymap modes

@@ -7,12 +7,46 @@
 
 - id: perspective.save
   name: Save Perspective
+  # Tab-button + picker command: the `+` icon on the perspective tab bar
+  # renders this command as a `<CommandButton>`; clicking opens a
+  # `<CommandPopover>` whose `name` text input collects the new
+  # perspective's name. Submitting dispatches this command with the typed
+  # name plus the scope-chain-resolved `view_id` (so the new perspective
+  # pins to the active view instance per the view_id-first / kind-fallback
+  # rule on `PerspectiveDef`).
+  #
+  # `name` carries `shape: text` so the popover renders a text input. An
+  # empty submission is legal: the dispatcher (`SavePerspectiveCmd::execute`)
+  # falls back to `"Untitled"` so the user-visible behavior matches the
+  # legacy `<AddPerspectiveButton>` which inferred a name when the user
+  # just clicked the `+` glyph. `view_id` resolves from the scope chain's
+  # `view:` moniker, matching how `<RegistryTabButtons>` builds its scope
+  # (perspective:, view:, board:) — no per-call prop-drilling needed.
+  #
+  # Migrated to command-driven rendering by 01KRE21GJMPP289N1HSTMJG5HE
+  # (the final migration of the command-driven-ui epic). The legacy
+  # `<AddPerspectiveButton>` (which dispatched this command with a
+  # pre-computed "Untitled" name and the view kind) is deleted; the
+  # registry-driven path renders the same affordance with the popover
+  # collecting the name explicitly.
+  tab_button:
+    icon: plus
   undoable: true
   params:
+    # `from: args, shape: text` is the real wire format for a popover-
+    # collected text input: the popover writes the typed string into the
+    # args bag at submit time, and the dispatcher reads it via
+    # `ctx.arg("name")`. Task 01KRE21GJMPP289N1HSTMJG5HE's pseudo-YAML
+    # showed `from: picker` for the same shape, but `picker` is not a
+    # real `ParamSource` value — the translation `from: picker` →
+    # `from: args, shape: text` happens here in the YAML. Same
+    # convention applies to every other popover-collected param.
     - name: name
       from: args
+      shape: text
     - name: view_id
-      from: args
+      from: scope_chain
+      entity_type: view
   keys: {}
 
 - id: perspective.delete
@@ -167,24 +201,54 @@
 
 - id: perspective.sort.set
   name: Sort Field
-  # Palette-only: requires `field` and `direction` args. Sort-set is driven
-  # by column-header clicks in the grid view, which dispatch with explicit
-  # args; exposing it in the bare right-click menu would silently fail.
+  # Tab-button + picker command: the sort icon (arrow-up-down) on the
+  # active perspective tab renders this command as a `<CommandButton>`;
+  # clicking opens a `<CommandPopover>` whose two enum params (`field` +
+  # `direction`) drive the form-branch popover with Submit. Picking a
+  # field + direction dispatches this command with the picked values
+  # plus a scope-chain-resolved `perspective_id`.
   #
-  # `view_kinds: [grid]` keeps Sort Field / Clear Sort / Toggle Sort out of
-  # palettes and context menus on the board view (where they would have no
-  # visible effect — boards organise by column, not by sort order). On grid
-  # views sort is the primary ordering mechanism and these stay surfaced.
+  # `field`'s `options_from` is `perspective.fields` — same backend
+  # resolver as Group By (in `swissarmyhammer-perspectives`), projecting
+  # the active perspective's groupable/sortable fields onto the picker.
+  # `direction`'s `options_from` is `sort.directions` — the static
+  # `[Ascending, Descending]` list emitted by `SortDirectionsResolver`
+  # (in `swissarmyhammer-commands`); the values match
+  # `swissarmyhammer-perspectives::SortDirection`'s serde representation
+  # (`asc` / `desc`) so the dispatcher's `match` arm round-trips cleanly.
+  #
+  # `view_kinds: [grid]` keeps Sort Field out of palettes, context
+  # menus, AND the tab bar on the board view — boards organise by
+  # column, not by sort order. This is the long-standing user-visible
+  # bug: pre-migration the Sort affordance was a hardcoded column-
+  # header click in the grid view's tanstack-table, with no surfaced
+  # tab-bar entry point and no view-kind gating; the migration both
+  # surfaces the affordance properly AND fixes the gating via the
+  # same `view_kinds` mechanism every other view-restricted command
+  # uses.
+  #
+  # Migrated to command-driven rendering by 01KRE21GJMPP289N1HSTMJG5HE
+  # (the final migration of the command-driven-ui epic). See
+  # `perspective.group` above for the picker-pipeline pattern this
+  # command follows — multi-param popovers fall through to the form
+  # branch automatically.
   scope: "entity:perspective"
   view_kinds: [grid]
+  tab_button:
+    icon: arrow-up-down
   undoable: true
   params:
     - name: field
       from: args
+      shape: enum
+      options_from: "perspective.fields"
     - name: direction
       from: args
+      shape: enum
+      options_from: "sort.directions"
     - name: perspective_id
-      from: args
+      from: scope_chain
+      entity_type: perspective
   keys: {}
 
 - id: perspective.sort.clear

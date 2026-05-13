@@ -1293,3 +1293,171 @@ async fn perspective_group_options_use_active_view_when_perspective_view_id_is_n
          view's entity_type over wrong-sibling entries; got {option_values:?}"
     );
 }
+
+/// End-to-end pin for the Sort tab-button migration (task
+/// 01KRE21GJMPP289N1HSTMJG5HE): emit the REAL `perspective.sort.set`
+/// command (from the kanban-app builtin YAMLs) through
+/// `commands_for_scope` with a perspective in scope that carries two
+/// fields and an active grid view, and assert:
+///
+///   * The emitted command carries `tab_button` after the migration
+///     (the icon survives the YAML → wire-format round trip).
+///   * The `field` enum param carries `options_from: "perspective.fields"`
+///     and is populated by the backend `PerspectiveFieldsResolver`.
+///   * The `direction` enum param carries `options_from: "sort.directions"`
+///     and is populated by the backend `SortDirectionsResolver` —
+///     EXACTLY two entries, `[asc, desc]`, in that order, with labels
+///     `Ascending` / `Descending`. The `SortDirection` serde
+///     representation in `swissarmyhammer-perspectives` is
+///     `#[serde(rename_all = "lowercase")]`, so drift on the resolver's
+///     `value` would break round-trip when the dispatcher re-reads the
+///     persisted perspective.
+///
+/// This is the picker-pipeline contract the frontend
+/// `<CommandPopover>` consumes for the multi-param form branch — Sort
+/// is the first command in the epic to have TWO pickable enum params
+/// in one popover.
+#[test]
+fn perspective_sort_set_command_carries_field_and_direction_options() {
+    let sources = swissarmyhammer_kanban::builtin_yaml_sources();
+    let sources_ref: Vec<(&str, &str)> = sources.iter().map(|(n, c)| (*n, *c)).collect();
+    let registry = CommandsRegistry::from_yaml_sources(&sources_ref);
+
+    let impls: HashMap<String, Arc<dyn Command>> = HashMap::new();
+    let ui_state = Arc::new(UIState::new());
+
+    // Grid-kind view in the dynamic source so `filter_by_view_kind`
+    // keeps `perspective.sort.set` (which carries `view_kinds: [grid]`)
+    // — the same gate that hides the Sort tab button on board views in
+    // the frontend. Without a grid view in scope the command would be
+    // dropped and the assertions below would never run.
+    let dynamic = DynamicSources {
+        perspectives: vec![PerspectiveInfo {
+            id: "01P".into(),
+            name: "Active Sprint".into(),
+            view: "grid".into(),
+            fields: vec![
+                PerspectiveFieldInfo {
+                    id: "01F1".into(),
+                    name: "title".into(),
+                    display_name: "Title".into(),
+                },
+                PerspectiveFieldInfo {
+                    id: "01F2".into(),
+                    name: "status".into(),
+                    display_name: "Status".into(),
+                },
+            ],
+        }],
+        views: vec![ViewInfo {
+            id: "V1".into(),
+            name: "Tasks Grid".into(),
+            entity_type: Some("task".into()),
+            kind: "grid".into(),
+        }],
+        ..Default::default()
+    };
+
+    let scope = vec!["perspective:01P".to_string(), "view:V1".to_string()];
+    let opts_registry = default_options_registry();
+    let cmds = commands_for_scope(
+        &scope,
+        &registry,
+        &impls,
+        None,
+        &ui_state,
+        false,
+        Some(&dynamic),
+        Some(&opts_registry),
+    );
+
+    let cmd = find_cmd(&cmds, "perspective.sort.set");
+
+    // Tab-button annotation survives the round-trip — the frontend
+    // tab bar relies on `tab_button != null` to render the icon.
+    assert!(
+        cmd.tab_button.is_some(),
+        "perspective.sort.set must carry `tab_button` after the migration; \
+         got: {cmd:?}"
+    );
+    assert_eq!(
+        cmd.tab_button.as_ref().unwrap().icon,
+        "arrow-up-down",
+        "the `arrow-up-down` lucide icon is the YAML annotation; if this \
+         changes, update `command-icon-registry.ts` in lockstep"
+    );
+
+    // Field param — enum-shaped, sourced from the same resolver as
+    // Group By so the picker offers the active perspective's sortable
+    // fields. Find by name so a future YAML reorder doesn't silently
+    // shift the assertion onto `direction` or `perspective_id`.
+    let field_param = cmd
+        .params
+        .iter()
+        .find(|p| p.name == "field")
+        .expect("perspective.sort.set YAML must declare a `field` param");
+    assert_eq!(
+        field_param.shape,
+        Some(swissarmyhammer_commands::ParamShape::Enum),
+        "the `field` param must carry shape: enum for the picker"
+    );
+    assert_eq!(
+        field_param.options_from.as_deref(),
+        Some("perspective.fields"),
+        "the `field` param must wire `options_from: perspective.fields`"
+    );
+    let field_options = field_param
+        .options
+        .as_ref()
+        .expect("perspective.fields resolved → field.options must be Some");
+    assert!(
+        !field_options.is_empty(),
+        "perspective.fields resolved against the two-field perspective \
+         — `field.options` must be non-empty; got: {field_options:?}"
+    );
+    let field_values: Vec<&str> = field_options.iter().map(|o| o.value.as_str()).collect();
+    // The resolver projects every PerspectiveFieldInfo's `name` (slug)
+    // onto `ParamOption.value`. Both seeded fields must appear; the
+    // ordering matches the perspective's `fields[]` order.
+    assert!(
+        field_values.contains(&"title"),
+        "groupable field `title` must appear in Sort options; got {field_values:?}"
+    );
+    assert!(
+        field_values.contains(&"status"),
+        "groupable field `status` must appear in Sort options; got {field_values:?}"
+    );
+
+    // Direction param — enum-shaped, sourced from the static
+    // `SortDirectionsResolver`. Exact-match list so drift on the
+    // resolver's serde wire format breaks this test before it breaks
+    // perspective load round-trip.
+    let direction_param = cmd
+        .params
+        .iter()
+        .find(|p| p.name == "direction")
+        .expect("perspective.sort.set YAML must declare a `direction` param");
+    assert_eq!(
+        direction_param.shape,
+        Some(swissarmyhammer_commands::ParamShape::Enum),
+        "the `direction` param must carry shape: enum for the picker"
+    );
+    assert_eq!(
+        direction_param.options_from.as_deref(),
+        Some("sort.directions"),
+        "the `direction` param must wire `options_from: sort.directions`"
+    );
+    let direction_options = direction_param
+        .options
+        .as_ref()
+        .expect("sort.directions resolved → direction.options must be Some");
+    assert_eq!(
+        direction_options.len(),
+        2,
+        "SortDirectionsResolver returns exactly two entries; got: {direction_options:?}"
+    );
+    assert_eq!(direction_options[0].value, "asc");
+    assert_eq!(direction_options[0].label, "Ascending");
+    assert_eq!(direction_options[1].value, "desc");
+    assert_eq!(direction_options[1].label, "Descending");
+}

@@ -1,5 +1,5 @@
 {
-  "command_count": 28,
+  "command_count": 29,
   "commands": [
     {
       "available": true,
@@ -230,6 +230,16 @@
       },
       "menu_name": null,
       "name": "Previous Perspective",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "perspective.save",
+      "keys": {},
+      "menu_name": null,
+      "name": "Save Perspective",
       "target": null
     },
     {

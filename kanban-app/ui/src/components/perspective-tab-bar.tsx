@@ -11,7 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Filter, Plus } from "lucide-react";
+import { Filter } from "lucide-react";
 // `Filter` is retained for the formula-bar's static prefix glyph;
 // the per-tab `<FilterFocusButton>` was deleted by the migration in
 // 01KRE1YA65MMG29RDQDQ0VPJQG (the registry-rendered `<CommandButton>`
@@ -19,7 +19,11 @@ import { Filter, Plus } from "lucide-react";
 // in 01KRE1ZTYJ5PPTQ29K72KE88B5 — its replacement is the
 // registry-rendered `<CommandButton>` driven by the
 // `perspective.group` YAML entry's `tab_button.icon: group`
-// annotation; the `Group` lucide icon is resolved at render time by
+// annotation. The `<AddPerspectiveButton>` (which used a hardcoded
+// `Plus` icon import) was deleted in 01KRE21GJMPP289N1HSTMJG5HE —
+// the `+` affordance is now a registry-rendered `<CommandButton>`
+// for `perspective.save` rendered by `<BarRegistryTabButtons>` at
+// the tab-bar level. All three icons are resolved at render time by
 // `commandIconFor` in `command-icon-registry.ts`.
 import { cn } from "@/lib/utils";
 import { usePerspectives } from "@/lib/perspective-context";
@@ -37,11 +41,6 @@ import type {
   CommandDef as RegistryCommandDef,
   TabButtonDef,
 } from "@/types/kanban";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import {
   FilterEditor,
   type FilterEditorHandle,
@@ -257,7 +256,6 @@ function usePerspectiveTabBar() {
     activePerspective,
     setActivePerspectiveId,
     filteredPerspectives,
-    viewKind,
     filterEditorRef,
     renamingId,
     startRename,
@@ -366,7 +364,18 @@ function useScopedTabCommands(
     invoke<ResolvedTabCommand[]>("list_commands_for_scope", { scopeChain })
       .then((resolved) => {
         if (cancelled) return;
-        const tabCommands = resolved.filter((c) => c.tab_button != null);
+        // Per-tab slot renders ENTITY-scoped tab buttons only.
+        // Unscoped (`group: "global"`) tab-button commands — today only
+        // `perspective.save` — are picked up by `<BarRegistryTabButtons>`
+        // at the bar level so the `+` affordance sits outside any
+        // individual perspective tab (matching the legacy
+        // `<AddPerspectiveButton>` placement and surviving the no-active-
+        // perspective edge case). Filtering here keeps a perspective.save
+        // row that incidentally ships with every scope-chain query from
+        // double-rendering inside the active tab.
+        const tabCommands = resolved.filter(
+          (c) => c.tab_button != null && c.group !== "global",
+        );
         setCommands(tabCommands);
       })
       .catch((e) => {
@@ -596,13 +605,14 @@ export function PerspectiveTabBar() {
     activePerspective,
     setActivePerspectiveId,
     filteredPerspectives,
-    viewKind,
     filterEditorRef,
     renamingId,
     startRename,
     commitRename,
     cancelRename,
   } = usePerspectiveTabBar();
+  const boardData = useBoardData();
+  const activeBoardId = boardData?.board?.id;
 
   // Shared ref carrying the active perspective's filter-editor FQM.
   // Written by `<FilterEditorDrillOutWiring>` (inside the
@@ -635,10 +645,9 @@ export function PerspectiveTabBar() {
               onRenameCancel={cancelRename}
             />
           ))}
-          <AddPerspectiveButton
-            filteredPerspectives={filteredPerspectives}
-            viewKind={viewKind}
-            viewId={activeView.id}
+          <BarRegistryTabButtons
+            activeViewId={activeView.id}
+            activeBoardId={activeBoardId}
           />
         </div>
         {/* Right: filter formula bar — always visible when a perspective is active */}
@@ -1042,59 +1051,116 @@ function FilterEditorDrillOutWiring({ children }: { children: ReactNode }) {
 const FilterEditorEscapeContext = createContext<(() => void) | null>(null);
 
 // ---------------------------------------------------------------------------
-// Add-perspective button
+// Bar-level registry-rendered tab buttons (global, unscoped commands)
 // ---------------------------------------------------------------------------
 
 /**
- * "+" button that creates a new perspective for the current view.
+ * Render `<CommandButton>`s for tab-button-tagged GLOBAL (unscoped)
+ * commands at the perspective tab bar level — outside any individual
+ * perspective tab.
  *
- * Passes both `view` (kind) and `view_id` (instance) so the new perspective
- * is pinned to the specific view it was created from — see the
- * view_id-first / kind-fallback rule on `PerspectiveDef` in
- * `kanban-app/ui/src/types/kanban.ts`. Without `view_id` a "+" on one
- * grid view would leak the new perspective to every sibling grid.
+ * Today this slot owns the `perspective.save` (`+` Add Perspective)
+ * affordance. The legacy hardcoded `<AddPerspectiveButton>` lived at
+ * the same DOM location; this component is its registry-driven
+ * replacement (card `01KRE21GJMPP289N1HSTMJG5HE`).
+ *
+ * # Why a separate component from `<RegistryTabButtons>`
+ *
+ * `<RegistryTabButtons>` is mounted INSIDE the active perspective's
+ * tab and queries the registry with a perspective-bearing scope
+ * chain. That's the right placement for entity-scoped tab buttons
+ * (filter, group, sort — all `scope: "entity:perspective"`) but
+ * wrong for the `+` button: the user needs it even when there is no
+ * active perspective yet, and it would be visually confusing inside
+ * a tab. Splitting the bar-level slot into its own component lets
+ * the `+` survive the empty-perspective edge case and live in the
+ * gap immediately after the perspective tab list, matching the
+ * legacy layout.
+ *
+ * # Scope chain
+ *
+ * Built from `view:` + `board:` only — there is no `perspective:`
+ * moniker because the bar-level slot is not pinned to any one
+ * perspective. The backend's `emit_global_registry_commands` pass
+ * surfaces global tab-button commands for any non-empty scope chain;
+ * the per-tab slot's `group !== "global"` filter keeps the same row
+ * from double-rendering inside the active perspective's tab.
+ *
+ * # Filtering
+ *
+ * `tab_button != null && group === "global"` — only true global
+ * (unscoped) tab-button commands surface here. Entity-scoped tab
+ * buttons (which carry `group: "<entity_type>"`) are picked up by
+ * `<RegistryTabButtons>` inside their owning tab instead.
  */
-function AddPerspectiveButton({
-  filteredPerspectives,
-  viewKind,
-  viewId,
+function BarRegistryTabButtons({
+  activeViewId,
+  activeBoardId,
 }: {
-  filteredPerspectives: Array<{ name: string }>;
-  viewKind: string;
-  viewId: string;
+  activeViewId: string;
+  activeBoardId: string | undefined;
 }) {
-  const dispatchPerspectiveSave = useDispatchCommand("perspective.save");
+  const [commands, setCommands] = useState<ResolvedTabCommand[]>([]);
 
-  const handleAdd = useCallback(() => {
-    const untitledCount = filteredPerspectives.filter((p) =>
-      p.name.startsWith("Untitled"),
-    ).length;
-    const name =
-      untitledCount === 0 ? "Untitled" : `Untitled ${untitledCount + 1}`;
-    dispatchPerspectiveSave({
-      args: { name, view: viewKind, view_id: viewId },
-    }).catch(console.error);
-  }, [filteredPerspectives, viewKind, viewId, dispatchPerspectiveSave]);
+  useEffect(() => {
+    if (!activeBoardId) {
+      setCommands([]);
+      return;
+    }
+    let cancelled = false;
+    const scopeChain = [`view:${activeViewId}`, `board:${activeBoardId}`];
+    invoke<ResolvedTabCommand[]>("list_commands_for_scope", { scopeChain })
+      .then((resolved) => {
+        if (cancelled) return;
+        const tabCommands = resolved.filter(
+          (c) => c.tab_button != null && c.group === "global",
+        );
+        setCommands(tabCommands);
+      })
+      .catch((e) => {
+        console.error(
+          "[PerspectiveTabBar] list_commands_for_scope (bar) failed:",
+          e,
+        );
+        if (!cancelled) setCommands([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeViewId, activeBoardId]);
 
+  // The bar-level surface uses the view id as the per-instance moniker
+  // suffix so the `<CommandButton>`'s spatial-nav leaf is stable across
+  // perspective switches AND distinct between sibling views (e.g. two
+  // grid views in the same window would each get their own
+  // `perspective_bar.perspective.save:<view_id>` leaf).
+  //
+  // Naming: the surface key uses underscore (`perspective_bar`) while
+  // the surrounding spatial-nav zone segment uses hyphen
+  // (`ui:perspective-bar`). The two strings live in different
+  // namespaces — the surface is a `<CommandButton>` registry key, the
+  // zone is a `FocusLayer` segment — and the existing call sites for
+  // both shapes follow this convention, so they are deliberately not
+  // unified here.
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Pressable
-          asChild
-          moniker={asSegment("ui:perspective-bar.add")}
-          ariaLabel="Add perspective"
-          onPress={handleAdd}
-        >
-          <button
-            type="button"
-            className="inline-flex items-center justify-center h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-md transition-colors"
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </button>
-        </Pressable>
-      </TooltipTrigger>
-      <TooltipContent>New perspective</TooltipContent>
-    </Tooltip>
+    <>
+      {commands.map((cmd) => (
+        <CommandButton
+          key={cmd.id}
+          command={
+            {
+              id: cmd.id,
+              name: cmd.name,
+              keys: cmd.keys,
+              params: cmd.params,
+              tab_button: cmd.tab_button,
+            } as RegistryCommandDef
+          }
+          surface="perspective_bar"
+          surfaceId={activeViewId}
+        />
+      ))}
+    </>
   );
 }
 

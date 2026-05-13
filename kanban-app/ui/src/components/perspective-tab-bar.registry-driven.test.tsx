@@ -348,40 +348,39 @@ describe("PerspectiveTabBar — registry-driven CommandButton rendering", () => 
     renderTabBar();
     await flushEffects();
 
-    // The remaining hardcoded "Add perspective" button stays — it is
-    // owned by a per-command migration that has not landed yet. The
+    // Every legacy hardcoded affordance is now registry-rendered: the
     // hardcoded "Filter" button (aria-label "Filter") was deleted by
-    // 01KRE1YA65MMG29RDQDQ0VPJQG and the hardcoded "Group" button
-    // (aria-label "Group") was deleted by 01KRE1ZTYJ5PPTQ29K72KE88B5;
-    // each replacement is the registry-rendered `<CommandButton>` for
+    // 01KRE1YA65MMG29RDQDQ0VPJQG, the hardcoded "Group" button
+    // (aria-label "Group") was deleted by 01KRE1ZTYJ5PPTQ29K72KE88B5,
+    // and the hardcoded `<AddPerspectiveButton>` (aria-label
+    // "Add perspective") was deleted by 01KRE21GJMPP289N1HSTMJG5HE.
+    // Each replacement is the registry-rendered `<CommandButton>` for
     // the migrated command, which only mounts when the registry
     // response includes that command — which this test deliberately
     // does not.
     //
     // We assert the negative path by checking that none of the
-    // registry-supplied command names produced a button. The remaining
-    // hardcoded affordances continue to render under their own labels.
+    // registry-supplied command names produced a button AND that no
+    // hardcoded legacy aria-labels survived the final migration.
     expect(
       screen.queryByRole("button", { name: "Rename perspective" }),
     ).toBeNull();
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
 
-    // Sanity: the remaining hardcoded "Add perspective" button is
-    // still present, proving the bar didn't accidentally short-circuit
-    // when zero registry commands matched.
-    expect(
-      screen.getByRole("button", { name: /add perspective/i }),
-    ).toBeTruthy();
-    // The legacy hardcoded "Filter" / "Group" / "Group By" buttons are
-    // gone — their replacements are the registry-driven
-    // `<CommandButton>`s rendered only when their respective commands
-    // (`perspective.filter.focus`, `perspective.group`) are in scope
-    // (each covered by
+    // The legacy hardcoded "Filter" / "Group" / "Group By" /
+    // "Add perspective" buttons are gone — their replacements are the
+    // registry-driven `<CommandButton>`s rendered only when their
+    // respective commands (`perspective.filter.focus`,
+    // `perspective.group`, `perspective.save`, `perspective.sort.set`)
+    // are in scope (each covered by
     // `renders_command_button_for_each_tab_button_tagged_command` and
     // the per-migration test files).
     expect(screen.queryByRole("button", { name: "Filter" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Group" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Group By" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /add perspective/i }),
+    ).toBeNull();
   });
 
   it("respects_view_kinds_filter — a command with view_kinds: [grid] does NOT render under view kind board", async () => {

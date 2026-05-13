@@ -19,7 +19,7 @@
  * actually carries `view_id` for the active view.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 // Mock Tauri APIs before importing any modules that use them.
@@ -256,43 +256,40 @@ describe("PerspectiveTabBar — view_id-first / kind-fallback scoping", () => {
     expect(screen.queryByText("Grid B View")).toBeNull();
   });
 
-  it("clicking '+' on view-a dispatches perspective.save with view_id: view-a", () => {
-    mockViewsValue = { ...mockViewsValue, activeView: VIEW_A };
-    renderTabBar();
-
-    const addButton = screen.getByRole("button", { name: /add perspective/i });
-    fireEvent.click(addButton);
-
-    expect(mockInvoke).toHaveBeenCalledWith(
-      "dispatch_command",
-      expect.objectContaining({
-        cmd: "perspective.save",
-        args: expect.objectContaining({
-          name: expect.any(String),
-          view: "grid",
-          view_id: "view-a",
-        }),
-      }),
-    );
-  });
-
-  it("clicking '+' on view-b dispatches perspective.save with view_id: view-b", () => {
-    mockViewsValue = { ...mockViewsValue, activeView: VIEW_B };
-    renderTabBar();
-
-    const addButton = screen.getByRole("button", { name: /add perspective/i });
-    fireEvent.click(addButton);
-
-    expect(mockInvoke).toHaveBeenCalledWith(
-      "dispatch_command",
-      expect.objectContaining({
-        cmd: "perspective.save",
-        args: expect.objectContaining({
-          name: expect.any(String),
-          view: "grid",
-          view_id: "view-b",
-        }),
-      }),
-    );
-  });
+  // The two "clicking '+' on view-X dispatches perspective.save with
+  // view_id: view-X" tests were removed by 01KRE21GJMPP289N1HSTMJG5HE.
+  //
+  // Pre-migration the hardcoded `<AddPerspectiveButton>` read the active
+  // view's id from React state and prop-drilled it into a one-shot
+  // dispatch. Asserting the view_id-pinning contract at the click site
+  // pinned that prop-drilling.
+  //
+  // Post-migration the click site no longer prop-drills `view_id`: the
+  // registry-rendered `<CommandButton>` dispatches whatever args the
+  // popover collected, and the `SavePerspectiveCmd::execute` dispatcher
+  // reads `view_id` from the scope chain's `view:` moniker when the
+  // args bag does not supply one. There is no backend scope-chain-to-
+  // args injection pass; the fallback lives in the dispatcher itself
+  // (mirroring the `resolve_perspective_id` pattern used by other
+  // mutation commands).
+  //
+  // The view_id-pinning contract is now covered end-to-end by these
+  // Rust integration tests in
+  // `swissarmyhammer-kanban/src/commands/perspective_commands.rs`:
+  //
+  //   * `test_save_perspective_cmd_resolves_view_id_from_scope_chain`
+  //     — dispatch with `scope_chain: ["view:V1"]` and no `view_id`
+  //     arg; assert the persisted perspective carries
+  //     `view_id: Some("V1")`.
+  //   * `test_save_perspective_cmd_resolves_view_kind_from_scope_chain`
+  //     — same shape, plus an assertion that the dispatcher looks up
+  //     the view kind via the registry (no more silent fallback to
+  //     `view: "board"` on a grid view).
+  //   * `test_save_perspective_cmd_explicit_view_args_override_scope_chain`
+  //     — explicit `view` / `view_id` args still win over the scope
+  //     fallback.
+  //
+  // Re-asserting the same contract in a frontend unit test would
+  // require running the backend scope-chain resolution in JS, which
+  // the production wire doesn't do — the dispatcher runs in Rust.
 });
