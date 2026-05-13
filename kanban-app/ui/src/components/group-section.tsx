@@ -23,6 +23,37 @@ interface GroupSectionProps {
 }
 
 /**
+ * Tailwind class that gives an expanded group section a bounded, viewport-
+ * relative height.
+ *
+ * Load-bearing for virtualization:
+ *
+ * `<ColumnView>` uses TanStack `useVirtualizer` with
+ * `getScrollElement: () => scrollRef.current` where `scrollRef` is the
+ * column's inner `flex-1 overflow-y-auto` div. The virtualizer measures
+ * that element's `clientHeight` to compute how many cards intersect the
+ * viewport. In the ungrouped path that flex chain bottoms out at the
+ * app viewport (`h-screen`), so the column's scroll element ends up
+ * bounded and the virtualizer windows correctly.
+ *
+ * In the grouped path the outer `<GroupedBoardView>` is itself
+ * `overflow-y-auto` (vertical scroll between sections), and each
+ * `<GroupSection>` is a `shrink-0` child of that vertical strip. Without
+ * an explicit height on the section body, the inner `flex-1` chain has
+ * no finite ancestor to flex against — `clientHeight` of the column's
+ * scroll element collapses to the natural height of its content, which
+ * for 2300 cards is several thousand pixels. The virtualizer concludes
+ * "the viewport already shows everything" and mounts every card.
+ *
+ * Pinning the expanded body to a definite viewport-relative height
+ * restores the bounded ancestor the virtualizer needs. 70vh leaves room
+ * for the next section's header to peek into the viewport so the user
+ * keeps the "multiple groups visible at once" affordance the grouped
+ * view exists for.
+ */
+const EXPANDED_BODY_CLASS = "h-[70vh] min-h-0 flex flex-col";
+
+/**
  * Collapsible group section that wraps a BoardView with only the group's tasks.
  *
  * Collapse state is local — each section starts expanded and can be toggled
@@ -59,7 +90,7 @@ export function GroupSection({
         </Badge>
       </button>
       {!collapsed && (
-        <div className="flex-1 min-h-0 overflow-auto">
+        <div className={EXPANDED_BODY_CLASS} data-testid="group-section-body">
           <BoardView
             board={board}
             tasks={bucket.tasks}
