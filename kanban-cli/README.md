@@ -52,6 +52,44 @@ kanban init
 
 This registers the MCP server with your agent, deploys the builtin `kanban` skill that teaches the agent how to use the board, and prepares the project for task tracking.
 
+## Desktop app
+
+<div align="center">
+
+<img src="icon.png" alt="kanban desktop app" width="128" height="128">
+
+</div>
+
+The kanban desktop app is a separate Tauri-based GUI for browsing and editing the same `.kanban/` board the CLI and MCP server use. The CLI's `kanban open .` command launches it. Install it alongside the CLI:
+
+### macOS (Homebrew cask)
+
+```bash
+brew install --cask swissarmyhammer/tap/kanban
+```
+
+### macOS (direct download)
+
+Grab the signed, notarized DMG from the latest GitHub release:
+
+```
+https://github.com/swissarmyhammer/swissarmyhammer/releases/latest/download/Kanban_aarch64.dmg
+```
+
+### From source
+
+Requires the [Tauri prerequisites](https://tauri.app/start/prerequisites/) and Node.js 22+:
+
+```bash
+git clone https://github.com/swissarmyhammer/swissarmyhammer
+cd swissarmyhammer/kanban-app
+cargo tauri build
+```
+
+The built `.app` lands under `target/release/bundle/`.
+
+> macOS (Apple Silicon) is the only platform with prebuilt binaries today. On other platforms, build from source.
+
 ## Commands
 
 | Command | Description |
