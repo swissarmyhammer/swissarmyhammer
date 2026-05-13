@@ -29,8 +29,26 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
-import { waitFor } from "@testing-library/react";
+import { act, fireEvent, waitFor } from "@testing-library/react";
 import { renderInAct } from "@/test/act-render";
+
+/**
+ * Click every group-section header to expand it.
+ *
+ * `<GroupedBoardView>` starts every bucket collapsed by default (see
+ * the production component's file header for the jumpiness rationale).
+ * These tests check the inner card virtualizer + the section body's
+ * bounded-height CSS contract — both of which only exist when a
+ * section is expanded. Expand them all before asserting.
+ */
+async function expandAll(container: HTMLElement): Promise<void> {
+  const headers = container.querySelectorAll("[data-group-section] button");
+  await act(async () => {
+    for (const btn of headers) {
+      fireEvent.click(btn);
+    }
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Tauri API mocks — must come before component imports.
@@ -267,9 +285,19 @@ function stubViewportHeights(container: HTMLElement): void {
 // ---------------------------------------------------------------------------
 
 describe("GroupedBoardView virtualization", () => {
+  // Default 15s timeout is tight when this test runs as part of the full
+  // suite: expanding 5 sections each holding ~460 tasks fires 20 inner
+  // column virtualizers measuring + mounting in parallel, and the
+  // ResizeObserver-driven calibration burns wall time. The test passes
+  // in isolation at ~5s but flaked at the boundary under load — 45s
+  // keeps it stable without changing what's being measured.
   it("mounts only viewport-bounded card windows across all sections (NOT every task)", async () => {
     const tasks = makeFixtureTasks();
     const { container } = await renderGroupedBoard(FIXTURE_BOARD, tasks);
+
+    // Sections start collapsed by default — expand them so the inner
+    // card virtualizer fires.
+    await expandAll(container);
 
     // First confirm the grouped layout actually rendered the expected
     // number of section bodies — if grouping silently fell back to the
@@ -307,7 +335,7 @@ describe("GroupedBoardView virtualization", () => {
     // Hard absolute upper bound — well below TASK_COUNT.
     const cards = container.querySelectorAll("[data-entity-card]");
     expect(cards.length).toBeLessThan(TASK_COUNT / 2);
-  });
+  }, 45_000);
 
   it("each group section body has a bounded height class so the inner virtualizer can window", async () => {
     // Pin the structural contract: expanded section bodies carry a
@@ -321,6 +349,9 @@ describe("GroupedBoardView virtualization", () => {
     // guards the production CSS contract independently.
     const tasks = makeFixtureTasks().slice(0, 50); // small enough to render quickly
     const { container } = await renderGroupedBoard(FIXTURE_BOARD, tasks);
+
+    // Section bodies only render when expanded.
+    await expandAll(container);
 
     const sectionBodies = container.querySelectorAll<HTMLDivElement>(
       "[data-testid='group-section-body']",
