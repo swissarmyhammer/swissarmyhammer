@@ -451,7 +451,7 @@ LSP indexed < 100% during startup is normal — rust-analyzer takes 30–120 sec
 
 ---
 
-### `build status`
+### `rebuild index`
 Trigger a full reindex of both layers. Useful after a large branch switch or bulk file operation that the watcher may have missed.
 
 | Parameter | Type | Required | Default | Notes |
@@ -633,7 +633,7 @@ If any check fails, the server is marked `Failed` and restart is triggered.
 - Exponential backoff: 1s, 2s, 4s, 8s, ... capped at 60s.
 - After 5 consecutive failures, stop retrying and log an error. The `get status` operation surfaces this so the AI agent knows LSP is degraded.
 - A successful `initialized` response resets the failure counter.
-- `build status` with `layer: lsp` force-restarts failed servers (resets backoff).
+- `rebuild index` with `layer: lsp` force-restarts failed servers (resets backoff).
 
 **Shutdown**:
 

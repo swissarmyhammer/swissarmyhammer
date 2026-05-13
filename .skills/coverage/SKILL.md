@@ -2,7 +2,7 @@
 name: coverage
 description: Run tests with coverage instrumentation, identify uncovered code, and produce kanban tasks for coverage gaps. Use when the user says "coverage", "what's untested", "find coverage gaps", or wants to know what needs tests. Automatically delegates to a tester subagent.
 license: MIT OR Apache-2.0
-compatibility: Requires the `code_context` MCP tool for project detection and the `kanban` MCP tool for creating coverage-gap tasks (both provided by the swissarmyhammer `sah` MCP server). Also requires a language-appropriate coverage tool on the system PATH (e.g. cargo-llvm-cov for Rust, pytest-cov for Python, go test -cover for Go).
+compatibility: Requires the `code_context` MCP tool for project detection and the `kanban` MCP tool for creating coverage-gap tasks. Also requires a language-appropriate coverage tool on the system PATH (e.g. cargo-llvm-cov for Rust, pytest-cov for Python, go test -cover for Go).
 metadata:
   author: swissarmyhammer
   version: 0.12.11

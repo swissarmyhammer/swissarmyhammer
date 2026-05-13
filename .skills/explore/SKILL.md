@@ -2,7 +2,7 @@
 name: explore
 description: Use this skill before planning or implementing when you need to understand code — how something works, why it behaves a certain way, or what a change would affect. Exploration is not done until you can articulate the test you would write. Use when the user says "explore", "investigate", "how does X work", "what would it take to change X", or when you need to understand code before acting.
 license: MIT OR Apache-2.0
-compatibility: Requires the `code_context` MCP tool  for symbol search, callgraph traversal, and blast-radius analysis during exploration.
+compatibility: Requires the `code_context` MCP tool for symbol search, callgraph traversal, and blast-radius analysis during exploration.
 metadata:
   author: swissarmyhammer
   version: 0.12.11

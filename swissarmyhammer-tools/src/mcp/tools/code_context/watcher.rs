@@ -180,8 +180,17 @@ async fn run_watcher(
                     );
                 }
 
-                // Re-index dirty files using the shared connection
-                super::index_discovered_files_async(&ws_root, std::sync::Arc::clone(db)).await;
+                // Re-index dirty files using the shared connection. The
+                // watcher path has no progress channel of its own — pass
+                // the no-op reporter. Surfacing watcher progress to MCP
+                // clients is a separate piece of work (see the
+                // rebuild-index roadmap).
+                super::index_discovered_files_async(
+                    &ws_root,
+                    std::sync::Arc::clone(db),
+                    swissarmyhammer_code_context::noop_reporter(),
+                )
+                .await;
             }
             Err(errors) => {
                 for error in errors {

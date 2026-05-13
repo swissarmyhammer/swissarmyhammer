@@ -1,0 +1,3 @@
+color: '5319e7'
+description: Wire chunk embeddings end-to-end in code-context. Currently `search code` returns nothing because (a) indexer never writes the embedding column and (b) a strict readiness gate blocks the op while files are still being discovered. Tests miss this because every search_code test bypasses the indexer and raw-SQL-inserts pre-computed embedding blobs.
+name: Semantic Code Search

@@ -61,6 +61,7 @@ pub mod error_handling;
 pub mod file_watcher;
 pub mod notify_types;
 pub mod plan_notifications;
+pub mod progress;
 pub mod responses;
 pub mod server;
 pub mod shared_utils;

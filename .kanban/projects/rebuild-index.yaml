@@ -1,0 +1,3 @@
+color: '5319e7'
+description: 'Rename `code-context build status` to `rebuild index` (its current name lies — it''s a destructive write, not a status query). Make it actually rebuild and return when done, with structured progress events. Surface a typed follower error when a non-leader tries to write (today it returns opaque `-32603: database error`). Build a general-purpose CLI progress renderer that consumes MCP `notifications/progress`, so any future MCP op that emits progress gets a TUI for free. Deferred: cross-process IPC for followers to dispatch writes to a running leader.'
+name: rebuild index + CLI progress

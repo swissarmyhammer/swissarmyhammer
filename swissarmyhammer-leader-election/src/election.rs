@@ -8,8 +8,8 @@
 //! follower calling `try_promote()` will win the election once the old leader is gone.
 
 use std::fmt;
-use std::fs::{self, File};
-use std::io;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Seek, SeekFrom, Write};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
@@ -149,6 +149,57 @@ fn hash_path(path: &Path) -> String {
     format!("{:x}", digest)
 }
 
+/// Write the current process's PID into the (just-acquired) lock file.
+///
+/// The lock file already participates in `flock`-based leader election; this
+/// helper writes the PID as ASCII through the locked file handle so followers
+/// can call [`peek_leader_pid`] to identify the writing process. Failures
+/// are logged but not propagated — losing the PID record never invalidates
+/// leadership, since the flock itself is the source of truth.
+///
+/// The lock file is opened without truncation (so followers' open() calls
+/// don't wipe the PID), which means this function is responsible for
+/// truncating any prior content and rewriting from offset 0 so a shorter PID
+/// does not leave trailing bytes from a longer one.
+fn write_leader_pid(lock_file: &File, lock_path: &Path) {
+    let pid = std::process::id();
+    if let Err(e) = write_pid_inner(lock_file, pid) {
+        tracing::debug!(
+            path = %lock_path.display(),
+            error = %e,
+            "could not write leader PID to lock file (non-fatal)",
+        );
+    }
+}
+
+/// Inner helper: truncate the lock file and write the PID. Returns the
+/// first IO error encountered. Split out so `write_leader_pid` can route
+/// any error through a single `tracing::debug!` site.
+fn write_pid_inner(lock_file: &File, pid: u32) -> io::Result<()> {
+    // Truncate any pre-existing content (e.g. a previous leader's stale PID)
+    // and rewind so we write from the start.
+    lock_file.set_len(0)?;
+    let mut handle: &File = lock_file;
+    handle.seek(SeekFrom::Start(0))?;
+    writeln!(handle, "{}", pid)
+}
+
+/// Best-effort read of the PID currently recorded in a leader lock file.
+///
+/// Returns `Some(pid)` when the file exists and contains a parseable PID on
+/// its first line. Returns `None` when the file is missing, empty, or its
+/// contents cannot be parsed as a `u32` — none of which prevents callers
+/// from rendering a useful diagnostic, they just omit the PID detail.
+///
+/// This is intended for follower processes that want to attribute a write
+/// failure (e.g. read-only DB) to the actual leader process. It does *not*
+/// participate in election semantics: leadership is determined by the flock,
+/// not by what's written in the file.
+pub fn peek_leader_pid(lock_path: &Path) -> Option<u32> {
+    let content = fs::read_to_string(lock_path).ok()?;
+    content.lines().next()?.trim().parse::<u32>().ok()
+}
+
 impl<M: BusMessage> LeaderElection<M> {
     /// Create a new election coordinator for a workspace with default config
     ///
@@ -229,12 +280,26 @@ impl<M: BusMessage> LeaderElection<M> {
             fs::create_dir_all(parent).map_err(ElectionError::LockFileCreation)?;
         }
 
-        // Create or open lock file
-        let lock_file = File::create(&self.lock_path).map_err(ElectionError::LockFileCreation)?;
+        // Open the lock file *without* truncating. The file may contain a
+        // PID written by the current leader; truncating here would wipe it
+        // out from under followers that read it via `peek_leader_pid`.
+        // The PID is rewritten only after we win the flock.
+        let lock_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&self.lock_path)
+            .map_err(ElectionError::LockFileCreation)?;
 
         // Try to acquire exclusive lock (non-blocking)
         match lock_file.try_lock_exclusive() {
             Ok(()) => {
+                // Record this process's PID inside the lock file so followers
+                // can identify the leader (peek_leader_pid). The flock itself
+                // controls leadership; the PID is purely informational.
+                write_leader_pid(&lock_file, &self.lock_path);
+
                 // Clean up any stale socket file from previous run
                 let _ = fs::remove_file(&self.socket_path);
 
@@ -414,12 +479,23 @@ impl<M: BusMessage> FollowerGuard<M> {
     /// acquires the lock and returns `Ok(Some(LeaderGuard))`.
     /// If another process still holds the lock, returns `Ok(None)`.
     pub fn try_promote(&self) -> Result<Option<LeaderGuard<M>>> {
-        // Create-or-open the lock file. The previous leader's drop may have
-        // deleted it, so we must use create() to ensure it exists for flock.
-        let lock_file = File::create(&self.lock_path).map_err(ElectionError::LockFileCreation)?;
+        // Create-or-open the lock file *without* truncating. The previous
+        // leader's drop may have deleted it, so we use create(true) to
+        // ensure it exists for flock; but if a current leader holds it,
+        // truncating here would wipe out the PID the leader wrote.
+        let lock_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&self.lock_path)
+            .map_err(ElectionError::LockFileCreation)?;
 
         match lock_file.try_lock_exclusive() {
             Ok(()) => {
+                // Record the new leader's PID for follower discovery.
+                write_leader_pid(&lock_file, &self.lock_path);
+
                 // Won the re-election — clean up stale socket from dead leader
                 let _ = fs::remove_file(&self.socket_path);
 
@@ -932,5 +1008,107 @@ mod tests {
         let election2: LeaderElection = LeaderElection::with_config("/ws", config);
         let outcome = election2.elect().unwrap();
         assert!(matches!(outcome, ElectionOutcome::Follower(_)));
+    }
+
+    // --- peek_leader_pid tests ---
+
+    /// After a leader acquires the lock, `peek_leader_pid` on the lock path
+    /// returns the current process's PID. This is the happy path used by
+    /// followers to attribute write-failure messages to a specific process.
+    #[test]
+    fn test_peek_leader_pid_returns_current_pid_for_active_leader() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+        let _guard = election.try_become_leader().unwrap();
+
+        let pid = peek_leader_pid(election.lock_path());
+        assert_eq!(
+            pid,
+            Some(std::process::id()),
+            "leader should have written its own PID into the lock file"
+        );
+    }
+
+    /// `peek_leader_pid` returns `None` when the lock file does not exist.
+    /// Followers must handle this gracefully because the leader may have
+    /// exited and cleaned up the lock between the failure and the diagnostic.
+    #[test]
+    fn test_peek_leader_pid_missing_file_returns_none() {
+        let dir = TempDir::new().unwrap();
+        let nonexistent = dir.path().join("nonexistent.lock");
+        assert_eq!(peek_leader_pid(&nonexistent), None);
+    }
+
+    /// `peek_leader_pid` returns `None` for an empty file. This can happen
+    /// if a leader is mid-rotation or if a future on-disk format changes.
+    #[test]
+    fn test_peek_leader_pid_empty_file_returns_none() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("empty.lock");
+        fs::write(&path, "").unwrap();
+        assert_eq!(peek_leader_pid(&path), None);
+    }
+
+    /// `peek_leader_pid` returns `None` when the file contains non-numeric
+    /// content. The PID record is best-effort; an unparseable value never
+    /// causes a hard error.
+    #[test]
+    fn test_peek_leader_pid_unparseable_returns_none() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("garbage.lock");
+        fs::write(&path, "not-a-pid\n").unwrap();
+        assert_eq!(peek_leader_pid(&path), None);
+    }
+
+    /// `peek_leader_pid` reads only the first line. Any trailing content
+    /// (e.g. future metadata) is ignored, keeping the format forward-compatible.
+    #[test]
+    fn test_peek_leader_pid_reads_first_line_only() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("multi.lock");
+        fs::write(&path, "12345\nextra-line\n").unwrap();
+        assert_eq!(peek_leader_pid(&path), Some(12345));
+    }
+
+    /// After a leader drops its guard, the lock file is removed and
+    /// `peek_leader_pid` returns `None`. Followers will see no PID rather
+    /// than a stale one.
+    #[test]
+    fn test_peek_leader_pid_after_leader_drops_returns_none() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+        let guard = election.try_become_leader().unwrap();
+        // Sanity: PID is recorded
+        assert!(peek_leader_pid(election.lock_path()).is_some());
+        drop(guard);
+        // Leader Drop removes the lock file
+        assert_eq!(peek_leader_pid(election.lock_path()), None);
+    }
+
+    /// After a follower promotes itself to leader, the lock file is
+    /// rewritten with the new leader's PID. This is the same process in
+    /// the test, so the PID stays the same — but the test exercises the
+    /// promotion path that also calls `write_leader_pid`.
+    #[test]
+    fn test_peek_leader_pid_after_promotion() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+
+        // Leader writes PID, then dies
+        let leader = election.try_become_leader().unwrap();
+        let outcome = election.elect().unwrap();
+        let follower = match outcome {
+            ElectionOutcome::Follower(f) => f,
+            _ => panic!("expected follower"),
+        };
+        drop(leader);
+
+        // Follower promotes — the promote path must also write the PID
+        let _promoted = follower.try_promote().unwrap().unwrap();
+        assert_eq!(
+            peek_leader_pid(election.lock_path()),
+            Some(std::process::id()),
+            "promotion path must record the new leader's PID"
+        );
     }
 }

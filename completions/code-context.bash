@@ -16,9 +16,6 @@ _code-context() {
             ",$1")
                 cmd="code__context"
                 ;;
-            code__context,build)
-                cmd="code__context__build"
-                ;;
             code__context,clear)
                 cmd="code__context__clear"
                 ;;
@@ -55,6 +52,9 @@ _code-context() {
             code__context,query)
                 cmd="code__context__query"
                 ;;
+            code__context,rebuild)
+                cmd="code__context__rebuild"
+                ;;
             code__context,search)
                 cmd="code__context__search"
                 ;;
@@ -63,18 +63,6 @@ _code-context() {
                 ;;
             code__context,skill)
                 cmd="code__context__skill"
-                ;;
-            code__context__build,help)
-                cmd="code__context__build__help"
-                ;;
-            code__context__build,status)
-                cmd="code__context__build__status"
-                ;;
-            code__context__build__help,help)
-                cmd="code__context__build__help__help"
-                ;;
-            code__context__build__help,status)
-                cmd="code__context__build__help__status"
                 ;;
             code__context__clear,help)
                 cmd="code__context__clear__help"
@@ -208,9 +196,6 @@ _code-context() {
             code__context__grep__help,help)
                 cmd="code__context__grep__help__help"
                 ;;
-            code__context__help,build)
-                cmd="code__context__help__build"
-                ;;
             code__context__help,clear)
                 cmd="code__context__help__clear"
                 ;;
@@ -247,6 +232,9 @@ _code-context() {
             code__context__help,query)
                 cmd="code__context__help__query"
                 ;;
+            code__context__help,rebuild)
+                cmd="code__context__help__rebuild"
+                ;;
             code__context__help,search)
                 cmd="code__context__help__search"
                 ;;
@@ -255,9 +243,6 @@ _code-context() {
                 ;;
             code__context__help,skill)
                 cmd="code__context__help__skill"
-                ;;
-            code__context__help__build,status)
-                cmd="code__context__help__build__status"
                 ;;
             code__context__help__clear,status)
                 cmd="code__context__help__clear__status"
@@ -319,6 +304,9 @@ _code-context() {
             code__context__help__query,ast)
                 cmd="code__context__help__query__ast"
                 ;;
+            code__context__help__rebuild,index)
+                cmd="code__context__help__rebuild__index"
+                ;;
             code__context__help__search,code)
                 cmd="code__context__help__search__code"
                 ;;
@@ -364,6 +352,18 @@ _code-context() {
             code__context__query__help,help)
                 cmd="code__context__query__help__help"
                 ;;
+            code__context__rebuild,help)
+                cmd="code__context__rebuild__help"
+                ;;
+            code__context__rebuild,index)
+                cmd="code__context__rebuild__index"
+                ;;
+            code__context__rebuild__help,help)
+                cmd="code__context__rebuild__help__help"
+                ;;
+            code__context__rebuild__help,index)
+                cmd="code__context__rebuild__help__index"
+                ;;
             code__context__search,code)
                 cmd="code__context__search__code"
                 ;;
@@ -395,7 +395,7 @@ _code-context() {
 
     case "${cmd}" in
         code__context)
-            opts="-d -j -h -V --debug --json --help --version serve init deinit doctor skill get search list grep query find build clear lsp detect help"
+            opts="-d -j -h -V --debug --json --no-progress --help --version serve init deinit doctor skill get search list grep query find rebuild clear lsp detect help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -408,82 +408,8 @@ _code-context() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        code__context__build)
-            opts="-d -j -h --debug --json --help status help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        code__context__build__help)
-            opts="status help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        code__context__build__help__help)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        code__context__build__help__status)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        code__context__build__status)
-            opts="-d -j -h --layer --debug --json --help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --layer)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
         code__context__clear)
-            opts="-d -j -h --debug --json --help status help"
+            opts="-d -j -h --debug --json --no-progress --help status help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -539,7 +465,7 @@ _code-context() {
             return 0
             ;;
         code__context__clear__status)
-            opts="-d -j -h --debug --json --help"
+            opts="-d -j -h --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -553,7 +479,7 @@ _code-context() {
             return 0
             ;;
         code__context__deinit)
-            opts="-d -j -h --debug --json --help project local user"
+            opts="-d -j -h --debug --json --no-progress --help project local user"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -567,7 +493,7 @@ _code-context() {
             return 0
             ;;
         code__context__detect)
-            opts="-d -j -h --debug --json --help projects help"
+            opts="-d -j -h --debug --json --no-progress --help projects help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -623,7 +549,7 @@ _code-context() {
             return 0
             ;;
         code__context__detect__projects)
-            opts="-d -j -h --path --max-depth --include-guidelines --debug --json --help"
+            opts="-d -j -h --path --max-depth --include-guidelines --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -649,7 +575,7 @@ _code-context() {
             return 0
             ;;
         code__context__doctor)
-            opts="-v -d -j -h --verbose --debug --json --help"
+            opts="-v -d -j -h --verbose --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -663,7 +589,7 @@ _code-context() {
             return 0
             ;;
         code__context__find)
-            opts="-d -j -h --debug --json --help duplicates help"
+            opts="-d -j -h --debug --json --no-progress --help duplicates help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -677,7 +603,7 @@ _code-context() {
             return 0
             ;;
         code__context__find__duplicates)
-            opts="-d -j -h --file-path --min-similarity --max-per-chunk --min-chunk-bytes --debug --json --help"
+            opts="-d -j -h --file-path --min-similarity --max-per-chunk --min-chunk-bytes --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -749,7 +675,7 @@ _code-context() {
             return 0
             ;;
         code__context__get)
-            opts="-d -j -h --debug --json --help symbol callgraph blastradius status definition type-definition hover references implementations code-actions inbound-calls rename-edits diagnostics help"
+            opts="-d -j -h --debug --json --no-progress --help symbol callgraph blastradius status definition type-definition hover references implementations code-actions inbound-calls rename-edits diagnostics help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -763,7 +689,7 @@ _code-context() {
             return 0
             ;;
         code__context__get__blastradius)
-            opts="-d -j -h --file-path --symbol --max-hops --debug --json --help"
+            opts="-d -j -h --file-path --symbol --max-hops --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -789,7 +715,7 @@ _code-context() {
             return 0
             ;;
         code__context__get__callgraph)
-            opts="-d -j -h --symbol --direction --max-depth --debug --json --help"
+            opts="-d -j -h --symbol --direction --max-depth --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -815,7 +741,7 @@ _code-context() {
             return 0
             ;;
         code__context__get__code__actions)
-            opts="-d -j -h --file-path --start-line --start-character --end-line --end-character --filter-kind --debug --json --help"
+            opts="-d -j -h --file-path --start-line --start-character --end-line --end-character --filter-kind --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -853,7 +779,7 @@ _code-context() {
             return 0
             ;;
         code__context__get__definition)
-            opts="-d -j -h --file-path --line --character --debug --json --help"
+            opts="-d -j -h --file-path --line --character --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -879,7 +805,7 @@ _code-context() {
             return 0
             ;;
         code__context__get__diagnostics)
-            opts="-d -j -h --file-path --severity-filter --debug --json --help"
+            opts="-d -j -h --file-path --severity-filter --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1111,7 +1037,7 @@ _code-context() {
             return 0
             ;;
         code__context__get__hover)
-            opts="-d -j -h --file-path --line --character --debug --json --help"
+            opts="-d -j -h --file-path --line --character --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1137,7 +1063,7 @@ _code-context() {
             return 0
             ;;
         code__context__get__implementations)
-            opts="-d -j -h --file-path --line --character --max-results --debug --json --help"
+            opts="-d -j -h --file-path --line --character --max-results --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1167,7 +1093,7 @@ _code-context() {
             return 0
             ;;
         code__context__get__inbound__calls)
-            opts="-d -j -h --file-path --line --character --depth --debug --json --help"
+            opts="-d -j -h --file-path --line --character --depth --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1197,7 +1123,7 @@ _code-context() {
             return 0
             ;;
         code__context__get__references)
-            opts="-d -j -h --file-path --line --character --include-declaration --max-results --debug --json --help"
+            opts="-d -j -h --file-path --line --character --include-declaration --max-results --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1231,7 +1157,7 @@ _code-context() {
             return 0
             ;;
         code__context__get__rename__edits)
-            opts="-d -j -h --file-path --line --character --new-name --debug --json --help"
+            opts="-d -j -h --file-path --line --character --new-name --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1261,7 +1187,7 @@ _code-context() {
             return 0
             ;;
         code__context__get__status)
-            opts="-d -j -h --debug --json --help"
+            opts="-d -j -h --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1275,7 +1201,7 @@ _code-context() {
             return 0
             ;;
         code__context__get__symbol)
-            opts="-d -j -h --query --max-results --debug --json --help"
+            opts="-d -j -h --query --max-results --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1297,7 +1223,7 @@ _code-context() {
             return 0
             ;;
         code__context__get__type__definition)
-            opts="-d -j -h --file-path --line --character --debug --json --help"
+            opts="-d -j -h --file-path --line --character --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1323,7 +1249,7 @@ _code-context() {
             return 0
             ;;
         code__context__grep)
-            opts="-d -j -h --debug --json --help code help"
+            opts="-d -j -h --debug --json --no-progress --help code help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1337,7 +1263,7 @@ _code-context() {
             return 0
             ;;
         code__context__grep__code)
-            opts="-d -j -h --pattern --language --files --max-results --debug --json --help"
+            opts="-d -j -h --pattern --language --files --max-results --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1409,36 +1335,8 @@ _code-context() {
             return 0
             ;;
         code__context__help)
-            opts="serve init deinit doctor skill get search list grep query find build clear lsp detect help"
+            opts="serve init deinit doctor skill get search list grep query find rebuild clear lsp detect help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        code__context__help__build)
-            opts="status"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        code__context__help__build__status)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -1898,6 +1796,34 @@ _code-context() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        code__context__help__rebuild)
+            opts="index"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        code__context__help__rebuild__index)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         code__context__help__search)
             opts="symbol code workspace-symbol"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
@@ -1983,7 +1909,7 @@ _code-context() {
             return 0
             ;;
         code__context__init)
-            opts="-d -j -h --debug --json --help project local user"
+            opts="-d -j -h --debug --json --no-progress --help project local user"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1997,7 +1923,7 @@ _code-context() {
             return 0
             ;;
         code__context__list)
-            opts="-d -j -h --debug --json --help symbols help"
+            opts="-d -j -h --debug --json --no-progress --help symbols help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2053,7 +1979,7 @@ _code-context() {
             return 0
             ;;
         code__context__list__symbols)
-            opts="-d -j -h --file-path --debug --json --help"
+            opts="-d -j -h --file-path --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2071,7 +1997,7 @@ _code-context() {
             return 0
             ;;
         code__context__lsp)
-            opts="-d -j -h --debug --json --help status help"
+            opts="-d -j -h --debug --json --no-progress --help status help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2127,7 +2053,7 @@ _code-context() {
             return 0
             ;;
         code__context__lsp__status)
-            opts="-d -j -h --debug --json --help"
+            opts="-d -j -h --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2141,7 +2067,7 @@ _code-context() {
             return 0
             ;;
         code__context__query)
-            opts="-d -j -h --debug --json --help ast help"
+            opts="-d -j -h --debug --json --no-progress --help ast help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2155,7 +2081,7 @@ _code-context() {
             return 0
             ;;
         code__context__query__ast)
-            opts="-d -j -h --query --language --files --max-results --debug --json --help"
+            opts="-d -j -h --query --language --files --max-results --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2226,8 +2152,82 @@ _code-context() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        code__context__rebuild)
+            opts="-d -j -h --debug --json --no-progress --help index help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        code__context__rebuild__help)
+            opts="index help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        code__context__rebuild__help__help)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        code__context__rebuild__help__index)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        code__context__rebuild__index)
+            opts="-d -j -h --layer --debug --json --no-progress --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --layer)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         code__context__search)
-            opts="-d -j -h --debug --json --help symbol code workspace-symbol help"
+            opts="-d -j -h --debug --json --no-progress --help symbol code workspace-symbol help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2241,7 +2241,7 @@ _code-context() {
             return 0
             ;;
         code__context__search__code)
-            opts="-d -j -h --query --top-k --min-similarity --file-pattern --language --debug --json --help"
+            opts="-d -j -h --query --top-k --min-similarity --file-pattern --language --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2345,7 +2345,7 @@ _code-context() {
             return 0
             ;;
         code__context__search__symbol)
-            opts="-d -j -h --query --kind --max-results --debug --json --help"
+            opts="-d -j -h --query --kind --max-results --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2371,7 +2371,7 @@ _code-context() {
             return 0
             ;;
         code__context__search__workspace__symbol)
-            opts="-d -j -h --query --max-results --debug --json --help"
+            opts="-d -j -h --query --max-results --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2393,7 +2393,7 @@ _code-context() {
             return 0
             ;;
         code__context__serve)
-            opts="-d -j -h --debug --json --help"
+            opts="-d -j -h --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2407,7 +2407,7 @@ _code-context() {
             return 0
             ;;
         code__context__skill)
-            opts="-d -j -h --debug --json --help"
+            opts="-d -j -h --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

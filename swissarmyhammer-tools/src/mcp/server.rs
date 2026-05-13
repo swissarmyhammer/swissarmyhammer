@@ -457,7 +457,15 @@ impl McpServer {
                 ts_root.display(),
                 log_suffix,
             );
-            index_discovered_files_async(&ts_root, ts_db).await;
+            // The MCP bootstrap pass has no JSON-RPC progress channel —
+            // pass the no-op reporter. The follow-on rebuild-index card will
+            // wire a `McpProgressReporter` into `execute_rebuild_index`.
+            index_discovered_files_async(
+                &ts_root,
+                ts_db,
+                swissarmyhammer_code_context::noop_reporter(),
+            )
+            .await;
             tracing::info!(
                 "code-context: tree-sitter indexing complete for {}",
                 ts_root.display()
@@ -1804,7 +1812,28 @@ impl ServerHandler for McpServer {
             let parse_ms = parse_start.elapsed().as_millis() as u64;
 
             let dispatch_start = std::time::Instant::now();
-            let tool_context_with_peer = self.prepare_tool_context(context.peer.clone());
+            // Plumb the JSON-RPC `_meta.progressToken` (when the client
+            // supplied one) into the tool context so long-running tools
+            // like `code_context` `rebuild index` can forward
+            // `IndexProgress` events as `notifications/progress`. Absent
+            // tokens leave the field as `None`, which tools treat as
+            // "use a no-op reporter — don't emit progress notifications".
+            // rmcp's `Request<M, P>` Deserialize impl extracts `_meta`
+            // from the wire-level `params._meta` into the
+            // `RequestContext.meta` field — by the time we see
+            // `CallToolRequestParams` here, `params.meta` is always
+            // `None`. The token lives on `context.meta` instead. We fall
+            // back to `request.meta` as a belt-and-braces second source
+            // for any custom transport that may populate the params-level
+            // meta directly.
+            let progress_token = context
+                .meta
+                .get_progress_token()
+                .or_else(|| request.meta.as_ref().and_then(|m| m.get_progress_token()));
+            let mut tool_context_with_peer = self.prepare_tool_context(context.peer.clone());
+            if let Some(token) = progress_token {
+                tool_context_with_peer = tool_context_with_peer.with_progress_token(token);
+            }
             let arguments = request.arguments.unwrap_or_default();
             let dispatch_ms = dispatch_start.elapsed().as_millis() as u64;
 

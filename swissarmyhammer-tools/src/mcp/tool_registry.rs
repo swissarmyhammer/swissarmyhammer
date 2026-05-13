@@ -223,7 +223,7 @@ use super::tool_handlers::ToolHandlers;
 use owo_colors::OwoColorize;
 use rmcp::model::{
     CallToolResult, Content, LoggingLevel, LoggingMessageNotification,
-    LoggingMessageNotificationParam, Meta, Tool,
+    LoggingMessageNotificationParam, Meta, ProgressNotificationParam, ProgressToken, Tool,
 };
 use rmcp::{ErrorData as McpError, Peer, RoleServer};
 use std::collections::{HashMap, HashSet};
@@ -381,6 +381,36 @@ pub struct ToolContext {
     /// tools like `detect projects` to render project-type guidelines through
     /// the same pipeline used by skills and agents.
     pub prompt_library: Option<Arc<RwLock<PromptLibrary>>>,
+
+    /// Optional MCP progress token for tool calls that report progress.
+    ///
+    /// Set from the incoming request's `_meta.progressToken` field by the
+    /// MCP server before dispatching the tool. When present, long-running
+    /// tools (e.g. `code_context` with `op: "rebuild index"`) build an
+    /// `McpProgressReporter` that forwards `IndexProgress` events as
+    /// `notifications/progress` messages through `peer`. When absent, those
+    /// tools use a `NoopReporter` and emit no progress notifications.
+    pub progress_token: Option<ProgressToken>,
+
+    /// Optional in-process sink for `ProgressNotificationParam` events.
+    ///
+    /// Used by in-process callers (e.g. the `code-context` CLI) that invoke
+    /// `tool.execute(...)` directly without a real MCP stdio server in the
+    /// loop. When set, tools that report progress (`code_context` with
+    /// `op: "rebuild index"`) drive the same `McpProgressReporter` they
+    /// would use for a real peer, but the drain task forwards each
+    /// `ProgressNotificationParam` to this sender instead of calling
+    /// `Peer::send_notification`. The receiver half lives on the caller and
+    /// feeds a renderer (TUI bar, JSON tap, etc.).
+    ///
+    /// Requires `progress_token` to also be set — without a token the tool
+    /// has no identifier to attach to outgoing notifications and will fall
+    /// back to a no-op reporter.
+    ///
+    /// `progress_sink` and `peer` are independent: a context may carry one,
+    /// the other, or both. When both are present the sink takes priority
+    /// because it is the explicit in-process opt-in.
+    pub progress_sink: Option<tokio::sync::mpsc::UnboundedSender<ProgressNotificationParam>>,
 }
 
 impl ToolContext {
@@ -403,6 +433,8 @@ impl ToolContext {
             session_actor: Arc::new(RwLock::new(None)),
             mcp_server: Arc::new(RwLock::new(None)),
             prompt_library: None,
+            progress_token: None,
+            progress_sink: None,
         }
     }
 
@@ -448,6 +480,54 @@ impl ToolContext {
     /// A new `ToolContext` with the peer set
     pub fn with_peer(mut self, peer: Arc<Peer<RoleServer>>) -> Self {
         self.peer = Some(peer);
+        self
+    }
+
+    /// Set the MCP progress token for this context.
+    ///
+    /// Creates a new context carrying the progress token from the incoming
+    /// request's `_meta.progressToken` field. Tools that report progress
+    /// (currently `code_context` with `op: "rebuild index"`) read this to
+    /// decide whether to send `notifications/progress` messages back to
+    /// the MCP client.
+    ///
+    /// # Arguments
+    ///
+    /// * `token` - The MCP progress token supplied by the client
+    ///
+    /// # Returns
+    ///
+    /// A new `ToolContext` with the progress token set
+    pub fn with_progress_token(mut self, token: ProgressToken) -> Self {
+        self.progress_token = Some(token);
+        self
+    }
+
+    /// Set the in-process progress sink for this context.
+    ///
+    /// Creates a new context that routes `ProgressNotificationParam` events to
+    /// the supplied channel sender instead of (or in addition to) the MCP peer.
+    /// This is the entry point used by in-process callers — most notably the
+    /// `code-context` CLI — that invoke `tool.execute(...)` directly and need
+    /// to consume progress without a stdio MCP server in the loop.
+    ///
+    /// Callers that use this **must** also set a `progress_token` via
+    /// [`Self::with_progress_token`] so the emitted notifications carry a
+    /// stable identifier the renderer can key off.
+    ///
+    /// # Arguments
+    ///
+    /// * `sink` - The sender half of an unbounded mpsc channel; the matching
+    ///   receiver should be drained by the caller's renderer task.
+    ///
+    /// # Returns
+    ///
+    /// A new `ToolContext` with the progress sink set.
+    pub fn with_progress_sink(
+        mut self,
+        sink: tokio::sync::mpsc::UnboundedSender<ProgressNotificationParam>,
+    ) -> Self {
+        self.progress_sink = Some(sink);
         self
     }
 

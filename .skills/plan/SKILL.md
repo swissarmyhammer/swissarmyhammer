@@ -2,7 +2,7 @@
 name: plan
 description: Plan Mode workflow. Use this skill when the user says "/plan", "help me plan", "break this into tasks", "design the approach", or otherwise wants to plan work, and also whenever you are in Plan Mode. Drives all planning activity — research, task decomposition, and creating kanban tasks as the plan artifact.
 license: MIT OR Apache-2.0
-compatibility: Requires the `code_context` MCP tool for pre-plan research (symbol search, callgraph, blast-radius) and the `kanban` MCP tool for persisting the plan as kanban tasks. Both are provided by the swissarmyhammer `sah` MCP server; will not function on a harness that does not expose them.
+compatibility: Requires the `code_context` MCP tool for pre-plan research (symbol search, callgraph, blast-radius) and the `kanban` MCP tool for persisting the plan as kanban tasks.
 metadata:
   author: swissarmyhammer
   version: 0.12.11

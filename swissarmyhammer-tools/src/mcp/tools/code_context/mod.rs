@@ -8,7 +8,7 @@
 //! - `get callgraph`: Call graph traversal from a starting symbol
 //! - `get blastradius`: Blast radius analysis for a file or symbol
 //! - `get status`: Health report for the code context index
-//! - `build status`: Mark files for re-indexing
+//! - `rebuild index`: Mark files for re-indexing
 //! - `clear status`: Wipe all index data
 //! - `lsp status`: Show detected languages, LSP servers, and install status
 //! - `detect projects`: Detect project types in the workspace and return guidelines
@@ -366,24 +366,24 @@ impl Operation for GetCodeStatus {
 
 /// Operation metadata for triggering re-indexing.
 #[derive(Debug, Default)]
-pub struct BuildStatus;
+pub struct RebuildIndex;
 
-static BUILD_STATUS_PARAMS: &[ParamMeta] = &[ParamMeta::new("layer")
+static REBUILD_INDEX_PARAMS: &[ParamMeta] = &[ParamMeta::new("layer")
     .description("Which indexing layer to reset: treesitter, lsp, or both (default: both)")
     .param_type(ParamType::String)];
 
-impl Operation for BuildStatus {
+impl Operation for RebuildIndex {
     fn verb(&self) -> &'static str {
-        "build"
+        "rebuild"
     }
     fn noun(&self) -> &'static str {
-        "status"
+        "index"
     }
     fn description(&self) -> &'static str {
         "Mark files for re-indexing by resetting indexed flags"
     }
     fn parameters(&self) -> &'static [ParamMeta] {
-        BUILD_STATUS_PARAMS
+        REBUILD_INDEX_PARAMS
     }
 }
 
@@ -874,7 +874,7 @@ static GREP_CODE_OP: Lazy<GrepCode> = Lazy::new(GrepCode::default);
 static GET_CALLGRAPH_OP: Lazy<GetCallgraph> = Lazy::new(GetCallgraph::default);
 static GET_BLASTRADIUS_OP: Lazy<GetBlastradius> = Lazy::new(GetBlastradius::default);
 static GET_CODE_STATUS_OP: Lazy<GetCodeStatus> = Lazy::new(GetCodeStatus::default);
-static BUILD_STATUS_OP: Lazy<BuildStatus> = Lazy::new(BuildStatus::default);
+static REBUILD_INDEX_OP: Lazy<RebuildIndex> = Lazy::new(RebuildIndex::default);
 static CLEAR_STATUS_OP: Lazy<ClearStatus> = Lazy::new(ClearStatus::default);
 static LSP_STATUS_OP: Lazy<LspStatus> = Lazy::new(LspStatus::default);
 static SEARCH_CODE_OP: Lazy<SearchCode> = Lazy::new(SearchCode::default);
@@ -905,7 +905,7 @@ static CODE_CONTEXT_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(||
         &*GET_CALLGRAPH_OP as &dyn Operation,
         &*GET_BLASTRADIUS_OP as &dyn Operation,
         &*GET_CODE_STATUS_OP as &dyn Operation,
-        &*BUILD_STATUS_OP as &dyn Operation,
+        &*REBUILD_INDEX_OP as &dyn Operation,
         &*CLEAR_STATUS_OP as &dyn Operation,
         &*LSP_STATUS_OP as &dyn Operation,
         &*DETECT_PROJECTS_OP as &dyn Operation,
@@ -1160,7 +1160,7 @@ impl McpTool for CodeContextTool {
             "get callgraph" => execute_get_callgraph(&arguments, context),
             "get blastradius" => execute_get_blastradius(&arguments, context),
             "get status" => execute_get_status(context),
-            "build status" => execute_build_status(&arguments, context),
+            "rebuild index" => execute_rebuild_index(&arguments, context).await,
             "clear status" => execute_clear_status(context),
             "lsp status" => execute_lsp_status(context),
             "detect projects" => detect::execute_detect(&arguments, context).await,
@@ -1177,12 +1177,12 @@ impl McpTool for CodeContextTool {
             "get implementations" => execute_get_implementations(&arguments, context),
             "get code_actions" => execute_get_code_actions(&arguments, context),
             "" => Err(McpError::invalid_params(
-                "Missing 'op' field. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status', 'lsp status', 'detect projects', 'get rename_edits', 'get diagnostics', 'get inbound_calls', 'search workspace_symbol', 'get definition', 'get type_definition', 'get hover', 'get references', 'get implementations', 'get code_actions'.",
+                "Missing 'op' field. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'rebuild index', 'clear status', 'lsp status', 'detect projects', 'get rename_edits', 'get diagnostics', 'get inbound_calls', 'search workspace_symbol', 'get definition', 'get type_definition', 'get hover', 'get references', 'get implementations', 'get code_actions'.",
                 None,
             )),
             other => Err(McpError::invalid_params(
                 format!(
-                    "Unknown operation '{}'. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status', 'lsp status', 'detect projects', 'get rename_edits', 'get diagnostics', 'get inbound_calls', 'search workspace_symbol', 'get definition', 'get type_definition', 'get hover', 'get references', 'get implementations', 'get code_actions'",
+                    "Unknown operation '{}'. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'rebuild index', 'clear status', 'lsp status', 'detect projects', 'get rename_edits', 'get diagnostics', 'get inbound_calls', 'search workspace_symbol', 'get definition', 'get type_definition', 'get hover', 'get references', 'get implementations', 'get code_actions'",
                     other
                 ),
                 None,
@@ -1191,7 +1191,7 @@ impl McpTool for CodeContextTool {
 
         // Append LSP degradation notice to query operations (not status operations)
         match op_str {
-            "get status" | "build status" | "clear status" | "lsp status" | "detect projects"
+            "get status" | "rebuild index" | "clear status" | "lsp status" | "detect projects"
             | "" => result,
             _ => result.map(|r| maybe_append_lsp_notice(r, context)),
         }
@@ -1234,8 +1234,19 @@ fn json_result<T: serde::Serialize>(value: &T) -> Result<CallToolResult, McpErro
 }
 
 /// Convert a CodeContextError into an McpError.
+///
+/// Most errors become generic `internal_error`s. `ReadOnlyFollower` is special:
+/// it's a user-actionable misconfiguration (writes attempted from a non-leader
+/// process), so we surface it as `invalid_request` with the typed diagnostic
+/// message instead of an opaque "-32603: database error".
 fn context_err(e: swissarmyhammer_code_context::CodeContextError) -> McpError {
-    McpError::internal_error(format!("{}", e), None)
+    use swissarmyhammer_code_context::CodeContextError;
+    match e {
+        e @ CodeContextError::ReadOnlyFollower { .. } => {
+            McpError::invalid_request(format!("{}", e), None)
+        }
+        other => McpError::internal_error(format!("{}", other), None),
+    }
 }
 
 /// Check if tree-sitter indexing is complete; if not, return a progress message.
@@ -1470,7 +1481,17 @@ fn execute_grep_code(
 
 /// Execute the "search code" operation.
 ///
-/// Embeds the query text and computes cosine similarity against stored chunk embeddings.
+/// Embeds the query text and computes cosine similarity against stored chunk
+/// embeddings.
+///
+/// Unlike the other code-context ops, `search code` does **not** gate on
+/// tree-sitter readiness. The embedding pass may still be running on a fresh
+/// workspace; rather than refuse to answer, we always run the query against
+/// whatever embeddings exist and surface in-progress state to the caller via
+/// the `progress` field on [`SearchCodeResult`]. Removing the gate was a
+/// deliberate decision — `check_ts_readiness` is still used by the eight other
+/// ops that genuinely cannot produce useful results without a full chunk
+/// index.
 async fn execute_search_code(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
@@ -1480,6 +1501,38 @@ async fn execute_search_code(
         .and_then(|v| v.as_str())
         .ok_or_else(|| McpError::invalid_params("Missing required parameter 'query'", None))?;
 
+    // Embed the query text
+    use swissarmyhammer_embedding::{Embedder, TextEmbedder};
+    let embedder = Embedder::default()
+        .await
+        .map_err(|e| McpError::internal_error(format!("Failed to create embedder: {}", e), None))?;
+    embedder.load().await.map_err(|e| {
+        McpError::internal_error(format!("Failed to load embedding model: {}", e), None)
+    })?;
+    let embed_result = embedder
+        .embed_text(query)
+        .await
+        .map_err(|e| McpError::internal_error(format!("Failed to embed query: {}", e), None))?;
+
+    search_code_with_query_embedding(args, context, embed_result.embedding())
+}
+
+/// Inner half of [`execute_search_code`] after the query has been embedded.
+///
+/// Split out so unit tests can exercise the search path without loading a
+/// real embedding model. The caller-supplied `query_embedding` is treated
+/// as-if it had been produced by the same embedder that wrote the chunk
+/// embeddings — tests that don't care about ranking can pass any non-empty
+/// vector.
+///
+/// This function **never** returns the old "Index not ready" placeholder.
+/// When the embedding pass is still running, the resulting `SearchCodeResult`
+/// carries a populated `progress` field instead.
+fn search_code_with_query_embedding(
+    args: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+    query_embedding: &[f32],
+) -> Result<CallToolResult, McpError> {
     let top_k = args
         .get("top_k")
         .and_then(|v| v.as_u64())
@@ -1505,19 +1558,6 @@ async fn execute_search_code(
         .and_then(|v| v.as_str())
         .map(String::from);
 
-    // Embed the query text
-    use swissarmyhammer_embedding::{Embedder, TextEmbedder};
-    let embedder = Embedder::default()
-        .await
-        .map_err(|e| McpError::internal_error(format!("Failed to create embedder: {}", e), None))?;
-    embedder.load().await.map_err(|e| {
-        McpError::internal_error(format!("Failed to load embedding model: {}", e), None)
-    })?;
-    let embed_result = embedder
-        .embed_text(query)
-        .await
-        .map_err(|e| McpError::internal_error(format!("Failed to embed query: {}", e), None))?;
-
     let options = SearchCodeOptions {
         top_k,
         min_similarity,
@@ -1526,12 +1566,8 @@ async fn execute_search_code(
     };
 
     let ws = open_workspace(context)?;
-    if let Some(progress) = check_ts_readiness(&ws)? {
-        return Ok(progress);
-    }
-    let result =
-        swissarmyhammer_code_context::search_code(&ws.db(), embed_result.embedding(), &options)
-            .map_err(context_err)?;
+    let result = swissarmyhammer_code_context::search_code(&ws.db(), query_embedding, &options)
+        .map_err(context_err)?;
     json_result(&result)
 }
 
@@ -1758,17 +1794,121 @@ fn execute_get_blastradius(
 
 /// Trigger incremental tree-sitter indexing on dirty files.
 ///
+/// Constructs the default embedding model (qwen-embedding) once for the run
+/// and delegates to [`index_discovered_files_with_embedder`]. If the embedder
+/// fails to construct or load, indexing still runs but chunk embeddings are
+/// skipped — files keep `embedded=0` so the next pass can retry them.
+///
 /// Uses the leader's single shared write connection for all DB operations.
 /// The mutex is locked only for each DB call — file I/O and parsing happen
 /// without holding the lock so other writers (LSP worker, watcher) can interleave.
-pub(crate) async fn index_discovered_files_async(
+///
+/// Exposed `pub` so end-to-end integration tests (notably
+/// `tests/integration/semantic_search_e2e.rs`) can drive the real production
+/// indexer over a temp workspace. The function is otherwise only called from
+/// within this crate (the MCP server bootstrap and the file watcher).
+///
+/// Returns an [`IndexRunStats`] summarising the run. Callers that drive the
+/// indexer purely for side effects (the bootstrap pass, the file watcher)
+/// may ignore the value; the synchronous `rebuild index` MCP op uses it to
+/// build its response payload.
+pub async fn index_discovered_files_async(
     workspace_root: &Path,
     db: swissarmyhammer_code_context::SharedDb,
-) {
-    use std::sync::Arc;
-    use swissarmyhammer_treesitter::{
-        chunk::chunk_file, ChunkSource, LanguageRegistry, ParsedFile,
+    reporter: std::sync::Arc<dyn swissarmyhammer_code_context::ProgressReporter>,
+) -> swissarmyhammer_code_context::IndexRunStats {
+    let embedder = build_default_embedder().await;
+    index_discovered_files_with_embedder(workspace_root, db, embedder, reporter).await
+}
+
+/// Construct the default embedder and load it.
+///
+/// Returns `None` and logs a warning on construction or load failure. The
+/// indexer treats this as a soft fallback — it still writes chunks (without
+/// embeddings), leaving `indexed_files.embedded=0` so a future pass can
+/// retry once the model is available.
+///
+/// MODEL NOTE: The default model is `qwen-embedding` (Qwen3-Embedding-0.6B),
+/// a 1024-dim L2-normalized embedder. On macOS-arm64 it runs on the Apple
+/// Neural Engine; elsewhere it falls back to llama.cpp. Max sequence is
+/// 256 (ANE) or 512 (llama). The embedder is `Send + Sync`, and a single
+/// shared `Arc<dyn TextEmbedder>` is reused across all chunks in an
+/// indexing pass — see swissarmyhammer-embedding/src/embedder.rs.
+///
+/// Performance: per-chunk embedding on ANE is ~30-100ms, so a fresh full
+/// index is minutes-to-tens-of-minutes for large workspaces. We embed
+/// sequentially because the backends serialize internally; adding worker
+/// parallelism here invites contention without throughput gains.
+async fn build_default_embedder() -> Option<std::sync::Arc<dyn model_embedding::TextEmbedder>> {
+    use model_embedding::TextEmbedder as _;
+    let embedder = match swissarmyhammer_embedding::Embedder::default().await {
+        Ok(e) => e,
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                "code-context: failed to construct default embedder — chunk embeddings will be skipped this pass"
+            );
+            return None;
+        }
     };
+    if let Err(err) = embedder.load().await {
+        tracing::warn!(
+            error = %err,
+            "code-context: failed to load embedding model — chunk embeddings will be skipped this pass"
+        );
+        return None;
+    }
+    tracing::info!(
+        backend = embedder.backend_name(),
+        model = embedder.model_name(),
+        dimension = ?embedder.embedding_dimension(),
+        max_sequence_length = embedder.max_sequence_length(),
+        "code-context: loaded chunk embedder"
+    );
+    Some(std::sync::Arc::new(embedder) as std::sync::Arc<dyn model_embedding::TextEmbedder>)
+}
+
+/// Trigger incremental tree-sitter indexing on dirty files with a supplied
+/// embedder.
+///
+/// This is the dependency-injectable form of [`index_discovered_files_async`].
+/// Tests pass a mock embedder; production passes the model resolved by
+/// `Embedder::default()`.
+///
+/// When `embedder` is `Some`, every chunk text is embedded and the resulting
+/// little-endian f32 blob is written to the `embedding` column. A file is
+/// flagged `embedded=1` only when every one of its chunks got an embedding
+/// (a file with no chunks is vacuously fully embedded). If any chunk's
+/// embedding failed it is written with a NULL `embedding` blob and the file
+/// keeps `embedded=0`.
+///
+/// Important: the dirty-file selector is `WHERE ts_indexed = 0`, so a file
+/// that exits this function with `ts_indexed=1, embedded=0` is NOT re-driven
+/// on subsequent calls until something else (a file edit picked up by the
+/// watcher, `rebuild_index`, etc.) flips `ts_indexed` back to 0. The
+/// successfully embedded chunks remain searchable in the meantime — the
+/// search path filters by `embedding IS NOT NULL`.
+///
+/// When `embedder` is `None` the indexer behaves as it did before chunk
+/// embeddings existed: chunks are written without an embedding blob and
+/// `embedded` stays at 0.
+pub(crate) async fn index_discovered_files_with_embedder(
+    workspace_root: &Path,
+    db: swissarmyhammer_code_context::SharedDb,
+    embedder: Option<std::sync::Arc<dyn model_embedding::TextEmbedder>>,
+    reporter: std::sync::Arc<dyn swissarmyhammer_code_context::ProgressReporter>,
+) -> swissarmyhammer_code_context::IndexRunStats {
+    use std::sync::Arc;
+    use swissarmyhammer_code_context::{IndexProgress, IndexRunStats};
+    use swissarmyhammer_treesitter::{chunk::chunk_file, LanguageRegistry, ParsedFile};
+
+    let run_start = std::time::Instant::now();
+
+    // Emit a `Discovering { found: 0 }` event before discovery starts so
+    // consumers can show a "discovering files…" indicator immediately. The
+    // dirty-file query below is "discovery" for this incremental indexer —
+    // it pulls the set of files that need indexing from `indexed_files`.
+    reporter.report(IndexProgress::Discovering { found: 0 });
 
     // Query all dirty files from the DB (populated by startup_cleanup)
     let dirty_files: Vec<String> = {
@@ -1783,14 +1923,46 @@ pub(crate) async fn index_discovered_files_async(
             Ok(files) => files,
             Err(e) => {
                 tracing::warn!("code-context: failed to query dirty files: {}", e);
-                return;
+                // Emit the post-discovery `Discovering { found: 0 }` event
+                // even on this error path so the event lifecycle stays
+                // symmetric: every run emits two `Discovering` events
+                // (pre- and post-discovery) before the terminal `Done`.
+                // Consumers that key off "the second Discovering means
+                // discovery completed" need this signal on every path.
+                reporter.report(IndexProgress::Discovering { found: 0 });
+                let elapsed = run_start.elapsed();
+                reporter.report(IndexProgress::Done {
+                    files: 0,
+                    chunks: 0,
+                    elapsed,
+                });
+                return IndexRunStats {
+                    files: 0,
+                    chunks: 0,
+                    elapsed,
+                };
             }
         }
     };
 
+    // Emit the final discovery count now that we know the total file set.
+    reporter.report(IndexProgress::Discovering {
+        found: dirty_files.len() as u64,
+    });
+
     if dirty_files.is_empty() {
         tracing::info!("code-context: no dirty files to index");
-        return;
+        let elapsed = run_start.elapsed();
+        reporter.report(IndexProgress::Done {
+            files: 0,
+            chunks: 0,
+            elapsed,
+        });
+        return IndexRunStats {
+            files: 0,
+            chunks: 0,
+            elapsed,
+        };
     }
 
     tracing::info!(
@@ -1802,6 +1974,12 @@ pub(crate) async fn index_discovered_files_async(
     let total = dirty_files.len();
     let mut indexed = 0u64;
     let mut total_chunks = 0u64;
+    // 1-based batch counter for `Embedding` events. Each file's chunks are
+    // treated as one batch (the indexer embeds chunk-by-chunk inside
+    // `embed_file_chunks`, but from the consumer's point of view the
+    // file-level grouping is the meaningful batch boundary).
+    let mut batch_index: u64 = 0;
+    let total_batches: u64 = total as u64;
 
     for relative_path in &dirty_files {
         let file_path = workspace_root.join(relative_path);
@@ -1869,8 +2047,37 @@ pub(crate) async fn index_discovered_files_async(
 
         // 3. Extract semantic chunks (no DB needed)
         let chunks = chunk_file(parsed_file.clone());
+        // The `done` value here is post-increment so the first file reports
+        // `done: 1`. `indexed` is incremented at the bottom of the loop
+        // body, so it currently holds the count of files completed before
+        // this one — add 1 to get the 1-based "files chunked so far" value
+        // a consumer expects.
+        reporter.report(IndexProgress::Chunking {
+            file: file_path.clone(),
+            done: indexed + 1,
+            total: total as u64,
+        });
 
-        // 4. Lock DB once for the entire write batch for this file
+        // 4. Embed chunks BEFORE acquiring the DB lock. embed_text is async
+        //    and may take 30-100ms per chunk on ANE; holding the connection
+        //    mutex across that wait would starve other workers.
+        let embedded_chunks =
+            embed_file_chunks(&chunks, &parsed_file, embedder.as_deref(), relative_path).await;
+        batch_index += 1;
+        reporter.report(IndexProgress::Embedding {
+            batch: batch_index,
+            batches: total_batches,
+            chunks_in_batch: embedded_chunks.len() as u64,
+        });
+        // A file is "fully embedded" when an embedder was supplied and every
+        // prepared chunk has a Some(embedding). A file with zero chunks (e.g.
+        // an empty file or one chunk_file rejected) is vacuously fully
+        // embedded — there is nothing to embed, so we should not pretend the
+        // file is in a partial-failure state.
+        let all_chunks_embedded =
+            embedder.is_some() && embedded_chunks.iter().all(|c| c.embedding.is_some());
+
+        // 5. Lock DB once for the entire write batch for this file
         {
             let conn = db.lock().unwrap_or_else(|p| p.into_inner());
 
@@ -1882,43 +2089,33 @@ pub(crate) async fn index_discovered_files_async(
 
             // Write new chunks
             let mut chunks_written = 0u64;
-            for chunk in &chunks {
-                if let Some(content) = chunk.source.content() {
-                    let (start_byte, end_byte) = match &chunk.source {
-                        ChunkSource::Parsed {
-                            start_byte,
-                            end_byte,
-                            ..
-                        } => (*start_byte, *end_byte),
-                        _ => continue,
-                    };
-
-                    let start_line = parsed_file.source[..start_byte].matches('\n').count() as i32;
-                    let end_line = parsed_file.source[..end_byte].matches('\n').count() as i32;
-                    let symbol_path = chunk.symbol_path();
-
-                    if conn.execute(
-                        "INSERT INTO ts_chunks (file_path, start_byte, end_byte, start_line, end_line, text, symbol_path)
-                         VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        rusqlite::params![
-                            relative_path,
-                            start_byte as i32,
-                            end_byte as i32,
-                            start_line,
-                            end_line,
-                            content,
-                            &symbol_path,
-                        ],
-                    ).is_ok() {
-                        chunks_written += 1;
-                    }
+            for chunk in &embedded_chunks {
+                let blob = chunk
+                    .embedding
+                    .as_deref()
+                    .map(swissarmyhammer_code_context::serialize_embedding);
+                if conn.execute(
+                    "INSERT INTO ts_chunks (file_path, start_byte, end_byte, start_line, end_line, text, symbol_path, embedding)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    rusqlite::params![
+                        relative_path,
+                        chunk.start_byte,
+                        chunk.end_byte,
+                        chunk.start_line,
+                        chunk.end_line,
+                        chunk.text,
+                        &chunk.symbol_path,
+                        blob,
+                    ],
+                ).is_ok() {
+                    chunks_written += 1;
                 }
             }
 
-            // 5. Extract symbols from chunks
+            // 6. Extract symbols from chunks
             let _ = swissarmyhammer_code_context::ensure_ts_symbols(&conn, relative_path);
 
-            // 6. Generate and write call edges
+            // 7. Generate and write call edges
             let source_text = parsed_file.source.as_str();
             let language = lang_config.language();
             if let Ok(edges) = swissarmyhammer_code_context::generate_ts_call_edges(
@@ -1930,11 +2127,22 @@ pub(crate) async fn index_discovered_files_async(
                 let _ = swissarmyhammer_code_context::write_ts_edges(&conn, relative_path, &edges);
             }
 
-            // 7. Mark file as ts_indexed
-            let _ = conn.execute(
-                "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?",
-                rusqlite::params![relative_path],
-            );
+            // 8. Mark file as ts_indexed. Mark embedded=1 only when every
+            //    chunk for the file got an embedding (or there were no chunks
+            //    to embed); partial failure leaves embedded=0. The file is
+            //    not re-driven by this function until ts_indexed is flipped
+            //    back to 0 by something else — see the function docstring.
+            if all_chunks_embedded {
+                let _ = conn.execute(
+                    "UPDATE indexed_files SET ts_indexed = 1, embedded = 1 WHERE file_path = ?",
+                    rusqlite::params![relative_path],
+                );
+            } else {
+                let _ = conn.execute(
+                    "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?",
+                    rusqlite::params![relative_path],
+                );
+            }
 
             total_chunks += chunks_written;
         }
@@ -1959,6 +2167,13 @@ pub(crate) async fn index_discovered_files_async(
     let chunk_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM ts_chunks", [], |r| r.get(0))
         .unwrap_or(0);
+    let embedded_chunk_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM ts_chunks WHERE embedding IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
     let symbol_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM lsp_symbols", [], |r| r.get(0))
         .unwrap_or(0);
@@ -1966,13 +2181,118 @@ pub(crate) async fn index_discovered_files_async(
         .query_row("SELECT COUNT(*) FROM lsp_call_edges", [], |r| r.get(0))
         .unwrap_or(0);
     tracing::info!(
-        "code-context: indexing complete — {}/{} files, {} chunks, {} symbols, {} call edges",
+        "code-context: indexing complete — {}/{} files, {} chunks ({} embedded), {} symbols, {} call edges",
         indexed,
         total,
         chunk_count,
+        embedded_chunk_count,
         symbol_count,
         edge_count
     );
+    // Drop the DB lock before emitting the final event so consumer
+    // reporters that touch the database (e.g. status snapshots) cannot
+    // deadlock against our own connection guard.
+    drop(conn);
+    let elapsed = run_start.elapsed();
+    reporter.report(IndexProgress::Done {
+        files: indexed,
+        chunks: total_chunks,
+        elapsed,
+    });
+    IndexRunStats {
+        files: indexed,
+        chunks: total_chunks,
+        elapsed,
+    }
+}
+
+/// A chunk row prepared for insertion into `ts_chunks`, with an optional
+/// pre-computed embedding vector.
+struct PreparedChunk {
+    start_byte: i32,
+    end_byte: i32,
+    start_line: i32,
+    end_line: i32,
+    text: String,
+    symbol_path: String,
+    /// `Some` when the chunk text was successfully embedded; `None` when
+    /// embedding was unavailable (no embedder) or returned an error.
+    embedding: Option<Vec<f32>>,
+}
+
+/// Convert a chunk into [`PreparedChunk`] form (no embedding), or return
+/// `None` if the chunk doesn't have parseable byte ranges.
+fn prepare_chunk(
+    chunk: &swissarmyhammer_treesitter::chunk::SemanticChunk,
+    parsed_file: &swissarmyhammer_treesitter::ParsedFile,
+) -> Option<PreparedChunk> {
+    use swissarmyhammer_treesitter::ChunkSource;
+    let text = chunk.source.content()?.to_string();
+    let (start_byte, end_byte) = match &chunk.source {
+        ChunkSource::Parsed {
+            start_byte,
+            end_byte,
+            ..
+        } => (*start_byte, *end_byte),
+        _ => return None,
+    };
+    let start_line = parsed_file.source[..start_byte].matches('\n').count() as i32;
+    let end_line = parsed_file.source[..end_byte].matches('\n').count() as i32;
+    Some(PreparedChunk {
+        start_byte: start_byte as i32,
+        end_byte: end_byte as i32,
+        start_line,
+        end_line,
+        text,
+        symbol_path: chunk.symbol_path(),
+        embedding: None,
+    })
+}
+
+/// Prepare every chunk for insertion, embedding each one if an embedder was
+/// provided. Per-chunk embedding errors leave that chunk's `embedding` as
+/// `None`; the rest of the file continues. At most one summary warning is
+/// emitted per file (with the failure count and an example symbol + error)
+/// so that a model crash mid-run does not produce one log line per chunk
+/// across tens of thousands of chunks.
+async fn embed_file_chunks(
+    chunks: &[swissarmyhammer_treesitter::chunk::SemanticChunk],
+    parsed_file: &swissarmyhammer_treesitter::ParsedFile,
+    embedder: Option<&dyn model_embedding::TextEmbedder>,
+    relative_path: &str,
+) -> Vec<PreparedChunk> {
+    let mut prepared = Vec::with_capacity(chunks.len());
+    let mut failed_count: usize = 0;
+    let mut first_failure: Option<(String, String)> = None;
+    for chunk in chunks {
+        let Some(mut pc) = prepare_chunk(chunk, parsed_file) else {
+            continue;
+        };
+        if let Some(emb) = embedder {
+            match emb.embed_text(&pc.text).await {
+                Ok(result) => pc.embedding = Some(result.embedding().to_vec()),
+                Err(err) => {
+                    failed_count += 1;
+                    if first_failure.is_none() {
+                        first_failure = Some((pc.symbol_path.clone(), err.to_string()));
+                    }
+                }
+            }
+        }
+        prepared.push(pc);
+    }
+    if failed_count > 0 {
+        let (symbol, err) = first_failure.unwrap_or_default();
+        tracing::warn!(
+            file = %relative_path,
+            failed_chunks = failed_count,
+            total_chunks = prepared.len(),
+            first_failed_symbol = %symbol,
+            first_error = %err,
+            "code-context: chunk embedding failed for one or more chunks — those chunks were inserted with NULL embedding"
+        );
+    }
+    prepared
 }
 
 /// Execute the "get status" operation.
@@ -2020,10 +2340,37 @@ fn execute_get_status(context: &ToolContext) -> Result<CallToolResult, McpError>
     json_result(&result)
 }
 
-/// Execute the "build status" operation.
+/// Execute the "rebuild index" operation.
 ///
-/// Marks files for re-indexing by resetting the indexed flag for the specified layer.
-fn execute_build_status(
+/// Resets the indexed flag for the specified layer and then drives the
+/// synchronous tree-sitter indexer over the resulting dirty set. Returns
+/// real run stats (`files_indexed`, `chunks_written`, `elapsed_ms`) rather
+/// than just the marking count, so the MCP caller knows the rebuild
+/// actually completed by the time the response lands.
+///
+/// ## Scope of the synchronous contract
+///
+/// Only the tree-sitter layer is driven to completion here. The LSP
+/// indexer is a long-running background worker owned by the leader, and
+/// this op does not await it — flipping `lsp_indexed=0` queues files for
+/// that worker, but `rebuild index` returns once tree-sitter is done.
+///
+/// As a result:
+/// - `layer=treesitter` — `files_indexed` / `chunks_written` describe
+///   the full rebuild; the dirty set the marker produced (`WHERE
+///   ts_indexed = 0`) is exactly the set the synchronous indexer drains.
+/// - `layer=both` — same counters, same scope; the LSP rows are also
+///   marked dirty for the background worker but those are not in the
+///   tree-sitter dirty set and the counters don't account for them. The
+///   `note` field on the response surfaces this caveat.
+/// - `layer=lsp` — only `lsp_indexed=0` is flipped. The synchronous
+///   indexer below queries `WHERE ts_indexed = 0` and finds nothing, so
+///   the response always reports `files_indexed=0, chunks_written=0,
+///   elapsed_ms~=0`. The dirty bits still take effect for the
+///   background LSP worker; callers monitor progress via `get status`'s
+///   `lsp_indexed_percent`. The `note` field on the response documents
+///   this so callers aren't misled by the zero counters.
+async fn execute_rebuild_index(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
@@ -2043,8 +2390,146 @@ fn execute_build_status(
     };
 
     let ws = open_workspace(context)?;
-    let result =
-        swissarmyhammer_code_context::build_status(&ws.db(), layer).map_err(context_err)?;
+    let workspace_root = ws.workspace_root().to_path_buf();
+
+    // 1. Mark files dirty. Use write_db() so followers get a typed
+    //    ReadOnlyFollower error mapped to invalid_request rather than an
+    //    opaque SQLite "readonly database" failure after the UPDATE runs.
+    //    The DbRef guard is dropped at the end of this block so the
+    //    indexer can acquire the shared mutex on its own (it locks
+    //    per-file, not for the whole run).
+    let mut result = {
+        let db = ws.write_db().map_err(context_err)?;
+        swissarmyhammer_code_context::rebuild_index(&db, layer).map_err(context_err)?
+    };
+
+    // 2. Drive the indexer synchronously over the dirty set we just
+    //    produced. `write_db()` already proved we're the leader, so
+    //    `shared_db()` returning `None` would mean the workspace mode
+    //    changed under us — surface that as an internal error rather
+    //    than panicking.
+    //
+    //    The bootstrap pass and the file watcher run their own indexer
+    //    invocations in the background. They use the same single shared
+    //    `Mutex<Connection>` as we do, so concurrent indexer runs are
+    //    serialised at the per-DB-call granularity rather than
+    //    contending for distinct connections. The worst case is that
+    //    a concurrent run sees an empty dirty set and exits in milliseconds.
+    //    Adding a coarser advisory lock would just trade that benign
+    //    waste for additional state to maintain.
+    //
+    //    Stats note: `files_indexed` and `chunks_written` count what this
+    //    specific run produced, not net-new rows across the workspace.
+    //    Concurrent rebuild/bootstrap/watcher runs each report their own
+    //    non-zero counters for the same logical dirty set — that is the
+    //    price of the lock-free design.
+    //
+    //    When the client supplied a `progressToken` in the request
+    //    `_meta` (plumbed through `ToolContext::progress_token`) and the
+    //    MCP peer is available, we build an `McpProgressReporter` that
+    //    forwards `IndexProgress` events as `notifications/progress`
+    //    messages. A dedicated drain task consumes the synchronous
+    //    reporter channel and ships notifications through the peer.
+    //    Dropping the reporter at the end of indexing closes the
+    //    channel, the drain task exits, and we await its
+    //    `JoinHandle` so any buffered terminal `Done` event is flushed
+    //    before this op returns its `CallToolResult`. Absent a token or
+    //    peer we fall back to the no-op reporter so the tool stays
+    //    silent — progress is strictly opt-in by the client.
+    let shared_db = ws.shared_db().ok_or_else(|| {
+        McpError::internal_error(
+            "workspace lost leader status before rebuild could run",
+            None,
+        )
+    })?;
+    // Pick a progress reporter based on what the caller wired up.
+    //
+    // Three cases, in priority order:
+    //
+    // 1. `progress_token` + `progress_sink` (in-process caller, e.g. CLI):
+    //    build the standard `McpProgressReporter` and forward each
+    //    notification to the caller-provided `UnboundedSender` instead of
+    //    going through a peer. The sink takes priority over `peer` because
+    //    it is the explicit in-process opt-in — when both are set we honor
+    //    the more specific request.
+    //
+    // 2. `progress_token` + `peer` (MCP client over stdio/HTTP): build the
+    //    `McpProgressReporter` and ship notifications via
+    //    `peer.send_notification`. This is the original wiring.
+    //
+    // 3. Neither / token without a transport: fall back to the noop
+    //    reporter. Progress is opt-in by the client; a token without any
+    //    transport is a misconfiguration but progress is advisory so we
+    //    log a warning and proceed silently.
+    let (reporter, drain_handle): (
+        std::sync::Arc<dyn swissarmyhammer_code_context::ProgressReporter>,
+        Option<tokio::task::JoinHandle<()>>,
+    ) = match (
+        context.progress_token.clone(),
+        context.progress_sink.clone(),
+        context.peer.clone(),
+    ) {
+        (Some(token), Some(sink), _) => {
+            tracing::debug!(
+                ?token,
+                "rebuild_index: wiring McpProgressReporter to in-process progress sink"
+            );
+            let crate::mcp::progress::McpProgressReporterBuild { reporter, receiver } =
+                crate::mcp::progress::McpProgressReporter::build(token);
+            let handle = crate::mcp::progress::spawn_in_process_drain_task(sink, receiver);
+            (std::sync::Arc::new(reporter), Some(handle))
+        }
+        (Some(token), None, Some(peer)) => {
+            tracing::debug!(
+                ?token,
+                "rebuild_index: wiring McpProgressReporter for client-supplied progressToken"
+            );
+            let crate::mcp::progress::McpProgressReporterBuild { reporter, receiver } =
+                crate::mcp::progress::McpProgressReporter::build(token);
+            let handle = crate::mcp::progress::spawn_drain_task(peer, receiver);
+            (std::sync::Arc::new(reporter), Some(handle))
+        }
+        (None, _, _) => {
+            tracing::debug!(
+                "rebuild_index: no progressToken in request _meta — using noop reporter"
+            );
+            (swissarmyhammer_code_context::noop_reporter(), None)
+        }
+        (Some(_), None, None) => {
+            tracing::warn!(
+                "rebuild_index: progressToken present but no MCP peer or progress sink — using noop reporter"
+            );
+            (swissarmyhammer_code_context::noop_reporter(), None)
+        }
+    };
+    let stats =
+        index_discovered_files_async(&workspace_root, shared_db, std::sync::Arc::clone(&reporter))
+            .await;
+
+    // Drop the reporter so the mpsc channel closes; then await the
+    // drain task so any buffered notifications (notably the terminal
+    // `Done` event) are flushed before we return to the client.
+    //
+    // A `JoinError` from the drain task means the task panicked or was
+    // cancelled (e.g. a hypothetical future rmcp version that panics on
+    // a closed peer). Progress is advisory so we still return the tool's
+    // result, but log at warn level so the panic isn't silently lost —
+    // the drain task itself logs send errors at debug, so a join failure
+    // deserves at least the same surfacing.
+    drop(reporter);
+    if let Some(handle) = drain_handle {
+        if let Err(err) = handle.await {
+            tracing::warn!(
+                error = ?err,
+                "rebuild_index: progress drain task did not join cleanly"
+            );
+        }
+    }
+
+    result.files_indexed = stats.files;
+    result.chunks_written = stats.chunks;
+    result.elapsed_ms = stats.elapsed.as_millis() as u64;
+
     json_result(&result)
 }
 
@@ -2053,7 +2538,10 @@ fn execute_build_status(
 /// Wipes all index data from all tables and returns stats about what was cleared.
 fn execute_clear_status(context: &ToolContext) -> Result<CallToolResult, McpError> {
     let ws = open_workspace(context)?;
-    let result = swissarmyhammer_code_context::clear_status(&ws.db()).map_err(context_err)?;
+    // Followers get a typed ReadOnlyFollower error here rather than an opaque
+    // SQLite failure once the DELETE runs.
+    let db = ws.write_db().map_err(context_err)?;
+    let result = swissarmyhammer_code_context::clear_status(&db).map_err(context_err)?;
     json_result(&result)
 }
 
@@ -2616,7 +3104,7 @@ mod tests {
         assert!(ops.iter().any(|o| o.op_string() == "get callgraph"));
         assert!(ops.iter().any(|o| o.op_string() == "get blastradius"));
         assert!(ops.iter().any(|o| o.op_string() == "get status"));
-        assert!(ops.iter().any(|o| o.op_string() == "build status"));
+        assert!(ops.iter().any(|o| o.op_string() == "rebuild index"));
         assert!(ops.iter().any(|o| o.op_string() == "clear status"));
         assert!(ops.iter().any(|o| o.op_string() == "lsp status"));
         assert!(ops.iter().any(|o| o.op_string() == "detect projects"));
@@ -2653,7 +3141,7 @@ mod tests {
         assert!(op_enum.contains(&serde_json::json!("get callgraph")));
         assert!(op_enum.contains(&serde_json::json!("get blastradius")));
         assert!(op_enum.contains(&serde_json::json!("get status")));
-        assert!(op_enum.contains(&serde_json::json!("build status")));
+        assert!(op_enum.contains(&serde_json::json!("rebuild index")));
         assert!(op_enum.contains(&serde_json::json!("clear status")));
         assert!(op_enum.contains(&serde_json::json!("lsp status")));
         assert!(op_enum.contains(&serde_json::json!("detect projects")));
@@ -2730,8 +3218,8 @@ mod tests {
     // -----------------------------------------------------------------------
     // Integration tests for operation dispatch and query execution
     //
-    // These tests require access to `index_discovered_files_async` (pub(crate))
-    // and must therefore live in the unit test module rather than the external
+    // These tests require access to `index_discovered_files_async` and must
+    // therefore live in the unit test module rather than the external
     // integration test files.
     // -----------------------------------------------------------------------
 
@@ -2805,7 +3293,12 @@ impl Calculator {
 
         // Run treesitter indexing so query operations have chunks to search.
         if let Some(shared_db) = ws.shared_db() {
-            index_discovered_files_async(root, shared_db).await;
+            index_discovered_files_async(
+                root,
+                shared_db,
+                swissarmyhammer_code_context::noop_reporter(),
+            )
+            .await;
         }
 
         let ctx = make_context_with_dir(root.to_path_buf());
@@ -2876,23 +3369,23 @@ impl Calculator {
     }
 
     // -----------------------------------------------------------------------
-    // build status and clear status
+    // rebuild index and clear status
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn test_build_status_resets_indexed_flags() {
+    async fn test_rebuild_index_resets_indexed_flags() {
         let (_tmp, ctx) = create_indexed_project().await;
         let tool = CodeContextTool::new();
 
         let mut args = serde_json::Map::new();
-        args.insert("op".to_string(), serde_json::json!("build status"));
+        args.insert("op".to_string(), serde_json::json!("rebuild index"));
         args.insert("layer".to_string(), serde_json::json!("treesitter"));
 
-        let result = tool.execute(args, &ctx).await.expect("build status");
+        let result = tool.execute(args, &ctx).await.expect("rebuild index");
         assert_eq!(result.is_error, Some(false));
 
         let json: serde_json::Value = serde_json::from_str(extract_text(&result)).unwrap();
-        // After build status, files_marked should be >= 2 (main.rs and lib.rs)
+        // After rebuild index, files_marked should be >= 2 (main.rs and lib.rs)
         let marked = json["files_marked"].as_u64().unwrap_or(0);
         assert!(
             marked >= 2,
@@ -2902,12 +3395,12 @@ impl Calculator {
     }
 
     #[tokio::test]
-    async fn test_build_status_invalid_layer_returns_error() {
+    async fn test_rebuild_index_invalid_layer_returns_error() {
         let (_tmp, ctx) = create_indexed_project().await;
         let tool = CodeContextTool::new();
 
         let mut args = serde_json::Map::new();
-        args.insert("op".to_string(), serde_json::json!("build status"));
+        args.insert("op".to_string(), serde_json::json!("rebuild index"));
         args.insert("layer".to_string(), serde_json::json!("invalid_layer"));
 
         let result = tool.execute(args, &ctx).await;
@@ -2930,6 +3423,86 @@ impl Calculator {
         assert!(
             json.is_object(),
             "expected object response from clear status"
+        );
+    }
+
+    /// When a write op runs against a workspace whose leader is held by
+    /// another live process, the user must see a typed `invalid_request`
+    /// error that names the workspace path instead of an opaque
+    /// `-32603: database error`. This protects against the most common
+    /// confusion ("why does rebuilding the index fail?"): the leader is
+    /// another agent session.
+    ///
+    /// The test holds the leader in this thread via a `_leader` binding so
+    /// the MCP tool's call to `open_workspace` deterministically lands on
+    /// the follower branch.
+    #[tokio::test]
+    async fn test_rebuild_index_returns_typed_error_on_follower() {
+        let (_tmp, ctx) = create_indexed_project().await;
+
+        // Hold the leader so the MCP op opens as a follower.
+        let workspace_root = ctx
+            .working_dir
+            .clone()
+            .expect("indexed project sets working_dir");
+        let _leader = CodeContextWorkspace::open(&workspace_root).expect("hold leader for test");
+
+        let tool = CodeContextTool::new();
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), serde_json::json!("rebuild index"));
+
+        let err = tool
+            .execute(args, &ctx)
+            .await
+            .expect_err("follower must reject rebuild index");
+        let msg = err.to_string();
+        let ws_display = workspace_root.display().to_string();
+        assert!(
+            msg.contains(&ws_display),
+            "MCP error must mention the workspace root, got: {msg}"
+        );
+        assert!(
+            msg.contains("read-only"),
+            "MCP error must explain the read-only follower condition, got: {msg}"
+        );
+    }
+
+    /// `clear status` follows the same write-rejection path. Validating
+    /// both ops here prevents a future regression that wires only one of
+    /// them through `write_db()`.
+    #[tokio::test]
+    async fn test_clear_status_returns_typed_error_on_follower() {
+        let (_tmp, ctx) = create_indexed_project().await;
+        let workspace_root = ctx
+            .working_dir
+            .clone()
+            .expect("indexed project sets working_dir");
+        let _leader = CodeContextWorkspace::open(&workspace_root).expect("hold leader for test");
+
+        let tool = CodeContextTool::new();
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), serde_json::json!("clear status"));
+
+        let err = tool
+            .execute(args, &ctx)
+            .await
+            .expect_err("follower must reject clear status");
+        let msg = err.to_string();
+        assert!(
+            msg.contains(&workspace_root.display().to_string()),
+            "MCP error must mention the workspace root, got: {msg}"
+        );
+        assert!(
+            msg.contains("read-only"),
+            "MCP error must explain the read-only follower condition, got: {msg}"
+        );
+        // The follower-rejection message must stay op-agnostic. A user who
+        // invoked `clear status` should not see the message naming a
+        // different op (e.g. `rebuild index`), which would steer debugging
+        // in the wrong direction.
+        assert!(
+            !msg.contains("rebuild index"),
+            "MCP error for clear status must not misname the op, got: {msg}"
         );
     }
 
@@ -3284,5 +3857,617 @@ impl Calculator {
         let result = tool.execute(args, &ctx).await;
         // We accept both Ok and Err here — just verify no panic occurs.
         let _ = result;
+    }
+
+    // -----------------------------------------------------------------------
+    // Chunk embedding tests for `index_discovered_files_with_embedder`
+    //
+    // These tests exercise the embedding path via dependency injection — they
+    // pass a `MockEmbedder` rather than constructing a real model, so they run
+    // fast and deterministically. They cover:
+    //   - success path: every chunk gets an embedding blob, `embedded=1`
+    //   - partial failure: failing chunk has NULL embedding, others succeed,
+    //     `embedded=0` (the successful chunks remain searchable; the file is
+    //     not re-driven until `ts_indexed` is flipped back to 0 elsewhere)
+    //   - no embedder: chunks are still written without embeddings, `embedded=0`
+    //     (existing fallback behavior preserved)
+    //   - round-trip: blob written by indexer deserializes to the same vector
+    // -----------------------------------------------------------------------
+
+    use model_embedding::mock::MockEmbedder;
+    use model_embedding::TextEmbedder;
+
+    /// Set up a tiny Rust project on disk and open the workspace.
+    ///
+    /// Returns the tempdir (caller must keep it alive) and the shared DB ref.
+    /// `startup_cleanup` runs as part of `CodeContextWorkspace::open`, so the
+    /// `indexed_files` table is already populated with the two source files
+    /// (marked dirty).
+    async fn make_tiny_indexable_project() -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        swissarmyhammer_code_context::SharedDb,
+    ) {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let root = tmp.path().to_path_buf();
+
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("src/main.rs"),
+            "fn main() {\n    println!(\"hi\");\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/lib.rs"),
+            "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
+        )
+        .unwrap();
+
+        let ws = CodeContextWorkspace::open(&root).expect("workspace open");
+        let shared_db = ws.shared_db().expect("leader has shared db");
+        (tmp, root, shared_db)
+    }
+
+    /// Count chunks in `ts_chunks` that have a non-NULL `embedding` blob.
+    fn count_embedded_chunks(db: &swissarmyhammer_code_context::SharedDb) -> i64 {
+        let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+        conn.query_row(
+            "SELECT COUNT(*) FROM ts_chunks WHERE embedding IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// Count total chunks regardless of embedding state.
+    fn count_total_chunks(db: &swissarmyhammer_code_context::SharedDb) -> i64 {
+        let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+        conn.query_row("SELECT COUNT(*) FROM ts_chunks", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// Read the `embedded` flag for a file row.
+    fn read_embedded_flag(
+        db: &swissarmyhammer_code_context::SharedDb,
+        file_path: &str,
+    ) -> Option<i64> {
+        let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+        conn.query_row(
+            "SELECT embedded FROM indexed_files WHERE file_path = ?",
+            rusqlite::params![file_path],
+            |r| r.get(0),
+        )
+        .ok()
+    }
+
+    /// With a working embedder, every chunk row has a non-NULL embedding blob
+    /// and every fully-embedded file has `embedded=1`.
+    #[tokio::test]
+    async fn test_indexer_writes_embedding_blob_for_every_chunk() {
+        let (_tmp, root, shared_db) = make_tiny_indexable_project().await;
+
+        // Always-succeeding mock embedder with a small fixed dimension.
+        let embedder: std::sync::Arc<dyn TextEmbedder> = std::sync::Arc::new(MockEmbedder::new(8));
+
+        index_discovered_files_with_embedder(
+            &root,
+            shared_db.clone(),
+            Some(embedder),
+            swissarmyhammer_code_context::noop_reporter(),
+        )
+        .await;
+
+        let total = count_total_chunks(&shared_db);
+        let embedded = count_embedded_chunks(&shared_db);
+        assert!(total > 0, "expected >0 chunks after indexing, got {total}");
+        assert_eq!(
+            embedded, total,
+            "every chunk should have a non-NULL embedding blob"
+        );
+
+        // Files should be marked embedded=1.
+        for relative in ["src/main.rs", "src/lib.rs"] {
+            let flag = read_embedded_flag(&shared_db, relative);
+            assert_eq!(
+                flag,
+                Some(1),
+                "expected {relative} to have embedded=1, got {flag:?}"
+            );
+        }
+    }
+
+    /// Embeddings written by the indexer are binary-compatible with the
+    /// `deserialize_embedding` helper used by `search_code`.
+    #[tokio::test]
+    async fn test_indexer_embedding_blob_roundtrips_through_deserialize() {
+        let (_tmp, root, shared_db) = make_tiny_indexable_project().await;
+        let dim = 8;
+        let embedder: std::sync::Arc<dyn TextEmbedder> =
+            std::sync::Arc::new(MockEmbedder::new(dim));
+
+        index_discovered_files_with_embedder(
+            &root,
+            shared_db.clone(),
+            Some(embedder),
+            swissarmyhammer_code_context::noop_reporter(),
+        )
+        .await;
+
+        // Read one row's blob and convert it back to a Vec<f32>.
+        let blob: Vec<u8> = {
+            let conn = shared_db.lock().unwrap_or_else(|p| p.into_inner());
+            conn.query_row(
+                "SELECT embedding FROM ts_chunks WHERE embedding IS NOT NULL LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            blob.len(),
+            dim * 4,
+            "blob length should be dim*4 bytes (little-endian f32)"
+        );
+
+        // Round-trip through the same little-endian f32 layout used by
+        // search_code::deserialize_embedding.
+        let parsed: Vec<f32> = blob
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        assert_eq!(parsed.len(), dim);
+        // MockEmbedder returns vec![0.1; dim]
+        for v in parsed {
+            assert!((v - 0.1).abs() < 1e-6, "expected 0.1 vector, got {v}");
+        }
+    }
+
+    /// When the embedder fails on a specific chunk, that chunk row has NULL
+    /// embedding, other chunks succeed, and the file's `embedded` flag stays
+    /// at 0. The file is not re-driven by this function until something else
+    /// flips `ts_indexed` back to 0; the successfully embedded chunks remain
+    /// searchable in the meantime.
+    #[tokio::test]
+    async fn test_indexer_partial_embedding_failure_leaves_file_unembedded() {
+        let (_tmp, root, shared_db) = make_tiny_indexable_project().await;
+
+        // Fail on the very first embed_text call. With two tiny files, at
+        // least one file will end up with a partially-failed chunk.
+        let mock = std::sync::Arc::new(MockEmbedder::with_failures(8, vec![0]));
+        let embedder: std::sync::Arc<dyn TextEmbedder> = mock.clone();
+
+        index_discovered_files_with_embedder(
+            &root,
+            shared_db.clone(),
+            Some(embedder),
+            swissarmyhammer_code_context::noop_reporter(),
+        )
+        .await;
+
+        let total = count_total_chunks(&shared_db);
+        let embedded = count_embedded_chunks(&shared_db);
+        assert!(total > 0, "expected chunks to be written even on failure");
+        assert!(
+            embedded < total,
+            "expected at least one chunk to have NULL embedding (embedded={embedded}, total={total})"
+        );
+        assert!(
+            embedded > 0,
+            "expected the other chunks to still succeed (embedded={embedded})"
+        );
+
+        // At least one file must be left with embedded=0 because one of its
+        // chunks failed to embed.
+        let conn_flags: Vec<(String, i64)> = {
+            let conn = shared_db.lock().unwrap_or_else(|p| p.into_inner());
+            let mut stmt = conn
+                .prepare("SELECT file_path, embedded FROM indexed_files ORDER BY file_path")
+                .unwrap();
+            stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+        assert!(
+            conn_flags.iter().any(|(_, flag)| *flag == 0),
+            "expected at least one file with embedded=0, got: {conn_flags:?}"
+        );
+
+        // The mock should have been called at least once per chunk.
+        assert!(
+            mock.call_count() >= total as usize,
+            "embedder should have been driven for every chunk (call_count={}, total={total})",
+            mock.call_count()
+        );
+    }
+
+    /// When no embedder is provided (e.g. construction or load failed), chunks
+    /// are still written without embeddings (preserved fallback behavior),
+    /// and `embedded` stays at 0. As with partial failure, the file is not
+    /// re-driven by this function — a future invocation with a working
+    /// embedder is only triggered once `ts_indexed` is flipped back to 0.
+    #[tokio::test]
+    async fn test_indexer_no_embedder_still_writes_chunks_without_embeddings() {
+        let (_tmp, root, shared_db) = make_tiny_indexable_project().await;
+
+        index_discovered_files_with_embedder(
+            &root,
+            shared_db.clone(),
+            None,
+            swissarmyhammer_code_context::noop_reporter(),
+        )
+        .await;
+
+        let total = count_total_chunks(&shared_db);
+        let embedded = count_embedded_chunks(&shared_db);
+        assert!(total > 0, "expected chunks to be written without embedder");
+        assert_eq!(
+            embedded, 0,
+            "no chunks should have embeddings when embedder is absent"
+        );
+
+        for relative in ["src/main.rs", "src/lib.rs"] {
+            let flag = read_embedded_flag(&shared_db, relative);
+            assert_eq!(
+                flag,
+                Some(0),
+                "expected {relative} to have embedded=0 when no embedder, got {flag:?}"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Progress reporter tests for `index_discovered_files_with_embedder`
+    //
+    // These tests use a `VecReporter` that records every `IndexProgress`
+    // event the indexer emits. They run the indexer end-to-end on the same
+    // tiny two-file workspace fixture used by the embedding tests above so
+    // we exercise the real chunk + embed code paths, not a stub.
+    // -----------------------------------------------------------------------
+
+    /// A `ProgressReporter` that records every event into a `Mutex<Vec<_>>`
+    /// so tests can assert on the recorded sequence.
+    struct VecReporter {
+        events: std::sync::Mutex<Vec<swissarmyhammer_code_context::IndexProgress>>,
+    }
+
+    impl VecReporter {
+        fn new() -> Self {
+            Self {
+                events: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn snapshot(&self) -> Vec<swissarmyhammer_code_context::IndexProgress> {
+            self.events.lock().unwrap().clone()
+        }
+    }
+
+    impl swissarmyhammer_code_context::ProgressReporter for VecReporter {
+        fn report(&self, event: swissarmyhammer_code_context::IndexProgress) {
+            self.events.lock().unwrap().push(event);
+        }
+    }
+
+    /// The end-to-end event sequence must:
+    /// - Open with a `Discovering` event (the pre-discovery zero-count signal)
+    /// - Follow with a second `Discovering` carrying the final file count
+    /// - Emit at least one `Chunking` and at least one `Embedding` event per file
+    /// - Close with exactly one `Done` event
+    ///
+    /// We use a tiny two-file Rust workspace so the assertions stay readable.
+    #[tokio::test]
+    async fn test_indexer_emits_progress_event_sequence() {
+        use swissarmyhammer_code_context::IndexProgress;
+
+        let (_tmp, root, shared_db) = make_tiny_indexable_project().await;
+
+        let reporter = std::sync::Arc::new(VecReporter::new());
+        let dyn_reporter: std::sync::Arc<dyn swissarmyhammer_code_context::ProgressReporter> =
+            reporter.clone();
+
+        // Always-succeeding mock embedder so we get a non-empty
+        // `chunks_in_batch` value to assert on.
+        let embedder: std::sync::Arc<dyn TextEmbedder> = std::sync::Arc::new(MockEmbedder::new(8));
+
+        index_discovered_files_with_embedder(
+            &root,
+            shared_db.clone(),
+            Some(embedder),
+            dyn_reporter,
+        )
+        .await;
+
+        let events = reporter.snapshot();
+        assert!(
+            events.len() >= 5,
+            "expected at least 5 events (Discovering x2, Chunking, Embedding, Done) for a \
+             two-file workspace, got {}: {events:?}",
+            events.len()
+        );
+
+        // First event is the pre-discovery `Discovering { found: 0 }` signal.
+        assert!(
+            matches!(events[0], IndexProgress::Discovering { found: 0 }),
+            "first event must be Discovering {{ found: 0 }}, got {:?}",
+            events[0]
+        );
+
+        // Second event is the post-discovery `Discovering { found: N }` signal.
+        let discovered_total = match events[1] {
+            IndexProgress::Discovering { found } => found,
+            ref other => panic!("second event must be a Discovering total, got {other:?}"),
+        };
+        assert_eq!(
+            discovered_total, 2,
+            "two-file workspace should discover 2 files, got {discovered_total}"
+        );
+
+        // Final event is exactly one `Done`. It must report the same number
+        // of files we discovered, and `chunks` must match `count_total_chunks`.
+        let last = events.last().expect("non-empty events");
+        let total_chunks_in_db = count_total_chunks(&shared_db) as u64;
+        match last {
+            IndexProgress::Done {
+                files,
+                chunks,
+                elapsed,
+            } => {
+                assert_eq!(
+                    *files, discovered_total,
+                    "Done.files must match discovered count"
+                );
+                assert_eq!(
+                    *chunks, total_chunks_in_db,
+                    "Done.chunks must match the row count in ts_chunks"
+                );
+                assert!(
+                    elapsed.as_nanos() > 0,
+                    "Done.elapsed should be non-zero for a real indexing pass"
+                );
+            }
+            other => panic!("last event must be Done, got {other:?}"),
+        }
+        // No event after Done.
+        let done_count = events
+            .iter()
+            .filter(|e| matches!(e, IndexProgress::Done { .. }))
+            .count();
+        assert_eq!(
+            done_count, 1,
+            "expected exactly one Done event, got {done_count}"
+        );
+
+        // Middle events: every `Chunking` event's `done` is monotonically
+        // non-decreasing and bounded by `total`. Collect them in order and
+        // check.
+        let chunking: Vec<(u64, u64)> = events
+            .iter()
+            .filter_map(|e| match e {
+                IndexProgress::Chunking { done, total, .. } => Some((*done, *total)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            chunking.len(),
+            discovered_total as usize,
+            "expected one Chunking event per discovered file"
+        );
+        let mut prev_done = 0u64;
+        for (done, total) in &chunking {
+            assert!(
+                *done > prev_done,
+                "Chunking.done must be strictly increasing — got {done} after {prev_done}"
+            );
+            assert_eq!(
+                *total, discovered_total,
+                "Chunking.total must equal the discovered file count"
+            );
+            assert!(
+                *done <= *total,
+                "Chunking.done ({done}) must not exceed total ({total})"
+            );
+            prev_done = *done;
+        }
+        assert_eq!(
+            prev_done, discovered_total,
+            "the last Chunking event must report done == total"
+        );
+
+        // Embedding events: 1-based batch index, monotonically increasing,
+        // each one's chunks_in_batch is the number of chunks for that file.
+        let embedding: Vec<(u64, u64, u64)> = events
+            .iter()
+            .filter_map(|e| match e {
+                IndexProgress::Embedding {
+                    batch,
+                    batches,
+                    chunks_in_batch,
+                } => Some((*batch, *batches, *chunks_in_batch)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            embedding.len(),
+            discovered_total as usize,
+            "expected one Embedding event per discovered file"
+        );
+        for (idx, (batch, batches, _)) in embedding.iter().enumerate() {
+            assert_eq!(
+                *batch,
+                (idx + 1) as u64,
+                "Embedding.batch must be 1-based and sequential"
+            );
+            assert_eq!(
+                *batches, discovered_total,
+                "Embedding.batches must equal the planned batch total (one batch per file)"
+            );
+        }
+    }
+
+    /// When the dirty-file SQL query fails (e.g. the `indexed_files` table is
+    /// missing or the connection is otherwise broken), the indexer must still
+    /// emit a complete lifecycle: pre-discovery `Discovering(0)`, the
+    /// post-discovery `Discovering(0)` symmetry signal, then the terminal
+    /// `Done(0, 0, _)`. Without the second `Discovering`, consumers that key
+    /// off "second Discovering means discovery completed" would never see the
+    /// signal on this path — so we assert exactly three events here, mirroring
+    /// the empty-workspace lifecycle.
+    #[tokio::test]
+    async fn test_indexer_db_query_failure_still_emits_framing_events() {
+        use swissarmyhammer_code_context::{CodeContextWorkspace, IndexProgress};
+
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let root = tmp.path().to_path_buf();
+        let ws = CodeContextWorkspace::open(&root).expect("workspace open");
+        let shared_db = ws.shared_db().expect("leader has shared db");
+
+        // Force the dirty-file query to fail by dropping the table it reads.
+        // Subsequent `SELECT file_path FROM indexed_files WHERE ts_indexed = 0`
+        // returns `Err(rusqlite::Error::SqliteFailure(..))` ("no such table"),
+        // which exercises the early-return error branch in
+        // `index_discovered_files_with_embedder`.
+        {
+            let conn = shared_db.lock().unwrap_or_else(|p| p.into_inner());
+            conn.execute("DROP TABLE indexed_files", [])
+                .expect("drop indexed_files");
+        }
+
+        let reporter = std::sync::Arc::new(VecReporter::new());
+        let dyn_reporter: std::sync::Arc<dyn swissarmyhammer_code_context::ProgressReporter> =
+            reporter.clone();
+        index_discovered_files_with_embedder(&root, shared_db, None, dyn_reporter).await;
+
+        let events = reporter.snapshot();
+        assert_eq!(
+            events.len(),
+            3,
+            "DB-query-failure path must emit exactly Discovering(0), Discovering(0), Done — \
+             got {events:?}"
+        );
+        assert!(
+            matches!(events[0], IndexProgress::Discovering { found: 0 }),
+            "first event must be pre-discovery Discovering(0), got {:?}",
+            events[0]
+        );
+        assert!(
+            matches!(events[1], IndexProgress::Discovering { found: 0 }),
+            "second event must be post-discovery Discovering(0) — without it, consumers \
+             that key off 'second Discovering means discovery completed' will never see \
+             the signal on this error path. Got {:?}",
+            events[1]
+        );
+        match &events[2] {
+            IndexProgress::Done {
+                files: 0,
+                chunks: 0,
+                ..
+            } => {}
+            other => panic!("final event must be Done(0, 0, _), got {other:?}"),
+        }
+    }
+
+    /// When the dirty-file set is empty (no files to index), the indexer
+    /// must still emit the open/close framing events so consumers see a
+    /// clean lifecycle: `Discovering(0)`, `Discovering(0)`, `Done(0, 0, _)`.
+    #[tokio::test]
+    async fn test_indexer_empty_workspace_still_emits_framing_events() {
+        use swissarmyhammer_code_context::{CodeContextWorkspace, IndexProgress};
+
+        // Empty temp dir — no source files, so `indexed_files` will be empty
+        // after `startup_cleanup` and the dirty-file query returns nothing.
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let root = tmp.path().to_path_buf();
+        let ws = CodeContextWorkspace::open(&root).expect("workspace open");
+        let shared_db = ws.shared_db().expect("leader has shared db");
+
+        let reporter = std::sync::Arc::new(VecReporter::new());
+        let dyn_reporter: std::sync::Arc<dyn swissarmyhammer_code_context::ProgressReporter> =
+            reporter.clone();
+        index_discovered_files_with_embedder(&root, shared_db, None, dyn_reporter).await;
+
+        let events = reporter.snapshot();
+        assert_eq!(
+            events.len(),
+            3,
+            "empty workspace must emit exactly Discovering(0), Discovering(0), Done — got {events:?}"
+        );
+        assert!(matches!(events[0], IndexProgress::Discovering { found: 0 }));
+        assert!(matches!(events[1], IndexProgress::Discovering { found: 0 }));
+        match &events[2] {
+            IndexProgress::Done {
+                files: 0,
+                chunks: 0,
+                ..
+            } => {}
+            other => panic!("final event must be Done(0, 0, _), got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // search code: readiness gate removal
+    //
+    // `execute_search_code` used to bail out with an "Index not ready"
+    // placeholder string when the tree-sitter pass wasn't done. The gate is
+    // gone: `search code` now always returns a `SearchCodeResult` and the
+    // caller learns about partial coverage via the `progress` field.
+    //
+    // The dispatch path runs a real embedder, so this unit test exercises
+    // the inner function `search_code_with_query_embedding` directly with a
+    // caller-supplied embedding vector. That keeps the test fast and
+    // deterministic while still proving the gate is gone — the test would
+    // fail with a "not ready" placeholder if it weren't.
+    // -----------------------------------------------------------------------
+
+    /// When files exist in `indexed_files` but none are embedded yet, the
+    /// inner search must return a `SearchCodeResult` (possibly with empty
+    /// matches) carrying a populated `progress` field — never the old
+    /// "Index not ready" placeholder string.
+    #[tokio::test]
+    async fn test_search_code_returns_result_with_progress_when_not_embedded() {
+        let (_tmp, root, _shared_db) = make_tiny_indexable_project().await;
+        let ctx = make_context_with_dir(root.clone());
+
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), serde_json::json!("search code"));
+        args.insert("query".to_string(), serde_json::json!("anything"));
+
+        // Use a tiny dummy embedding — the search returns no matches because
+        // no chunk embeddings exist yet, but it must still succeed and
+        // produce a `SearchCodeResult` JSON, not the readiness placeholder.
+        let dummy_query_embedding = vec![1.0f32, 0.0, 0.0];
+        let result = search_code_with_query_embedding(&args, &ctx, &dummy_query_embedding)
+            .expect("search code should succeed without the readiness gate");
+
+        let text = extract_text(&result);
+        assert!(
+            !text.contains("Index not ready"),
+            "search code must not return the readiness placeholder, got: {text}"
+        );
+
+        // The body must parse as a SearchCodeResult JSON with the progress
+        // field populated (3 files exist, 0 are embedded).
+        let parsed: serde_json::Value =
+            serde_json::from_str(text).expect("result must be JSON-encoded SearchCodeResult");
+        assert!(
+            parsed.get("matches").is_some(),
+            "result must have a `matches` field"
+        );
+        let progress = parsed
+            .get("progress")
+            .expect("result must have a `progress` field");
+        assert!(
+            !progress.is_null(),
+            "progress must be populated when embedded_files < total_files, got null"
+        );
+        assert!(
+            progress.get("embedded_files").and_then(|v| v.as_u64()) == Some(0),
+            "embedded_files should be 0 when no files have been embedded yet"
+        );
+        let total = progress
+            .get("total_files")
+            .and_then(|v| v.as_u64())
+            .expect("total_files must be present and numeric");
+        assert!(total > 0, "total_files should be > 0, got {total}");
     }
 }

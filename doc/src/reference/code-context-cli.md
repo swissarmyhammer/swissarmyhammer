@@ -42,8 +42,8 @@ brew install swissarmyhammer/tap/code-context-cli
 * [`code-context query ast`↴](#code-context-query-ast)
 * [`code-context find`↴](#code-context-find)
 * [`code-context find duplicates`↴](#code-context-find-duplicates)
-* [`code-context build`↴](#code-context-build)
-* [`code-context build status`↴](#code-context-build-status)
+* [`code-context rebuild`↴](#code-context-rebuild)
+* [`code-context rebuild index`↴](#code-context-rebuild-index)
 * [`code-context clear`↴](#code-context-clear)
 * [`code-context clear status`↴](#code-context-clear-status)
 * [`code-context lsp`↴](#code-context-lsp)
@@ -72,7 +72,7 @@ Provides indexed code navigation, symbol lookup, call graph traversal, blast rad
 * `grep` — Regex search across stored code chunks
 * `query` — Execute tree-sitter queries against parsed ASTs
 * `find` — Find duplicated code
-* `build` — Trigger re-indexing
+* `rebuild` — Trigger re-indexing
 * `clear` — Wipe index data
 * `lsp` — LSP server management
 * `detect` — Detect project types and languages
@@ -81,6 +81,9 @@ Provides indexed code navigation, symbol lookup, call graph traversal, blast rad
 
 * `-d`, `--debug` — Enable debug output to stderr
 * `-j`, `--json` — Output results as JSON (for operation commands)
+* `--no-progress` — Disable interactive progress bars for long-running operations.
+
+   `indicatif` auto-degrades to plain output on non-TTY stdout, but some environments (CI runners, recording wrappers) still benefit from a hard switch. With this flag set the dispatcher installs a no-op renderer and the tool emits no progress chrome.
 
 
 
@@ -529,23 +532,23 @@ Find code in a file that is duplicated elsewhere in the codebase
 
 
 
-## `code-context build`
+## `code-context rebuild`
 
 Trigger re-indexing
 
-**Usage:** `code-context build <COMMAND>`
+**Usage:** `code-context rebuild <COMMAND>`
 
 ###### **Subcommands:**
 
-* `status` — Mark files for re-indexing by resetting indexed flags
+* `index` — Mark files for re-indexing by resetting indexed flags
 
 
 
-## `code-context build status`
+## `code-context rebuild index`
 
 Mark files for re-indexing by resetting indexed flags
 
-**Usage:** `code-context build status [OPTIONS]`
+**Usage:** `code-context rebuild index [OPTIONS]`
 
 ###### **Options:**
 

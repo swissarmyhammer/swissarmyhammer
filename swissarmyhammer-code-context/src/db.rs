@@ -6,6 +6,10 @@ use rusqlite::Connection;
 ///
 /// Tables: `indexed_files`, `ts_chunks`, `lsp_symbols`, `lsp_call_edges`.
 /// Safe to call multiple times (uses IF NOT EXISTS).
+///
+/// After `CREATE TABLE`, runs any column-level migrations that bring
+/// pre-existing databases up to the current schema. The migrations are
+/// each individually idempotent.
 pub fn create_schema(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "
@@ -15,7 +19,8 @@ pub fn create_schema(conn: &Connection) -> rusqlite::Result<()> {
             file_size     INTEGER NOT NULL,
             last_seen_at  INTEGER NOT NULL,
             ts_indexed    INTEGER NOT NULL DEFAULT 0,
-            lsp_indexed   INTEGER NOT NULL DEFAULT 0
+            lsp_indexed   INTEGER NOT NULL DEFAULT 0,
+            embedded      INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS ts_chunks (
@@ -54,7 +59,51 @@ pub fn create_schema(conn: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_edges_caller_file ON lsp_call_edges(caller_file);
         CREATE INDEX IF NOT EXISTS idx_edges_callee_file ON lsp_call_edges(callee_file);
         ",
-    )
+    )?;
+
+    migrate_indexed_files_add_embedded(conn)?;
+
+    Ok(())
+}
+
+/// Bring an existing `indexed_files` table up to the current schema.
+///
+/// Runs every additive column migration in order. Each step is independently
+/// idempotent (it checks `PRAGMA table_info` before issuing the ALTER), so it
+/// is safe to invoke this on any database — fresh, partially-migrated, or
+/// already current.
+///
+/// Workspace open paths call this both for leaders (after `create_schema`)
+/// and for followers (through a brief write connection) so that a legacy
+/// on-disk schema is brought current regardless of which process opens the
+/// DB first. The bare `Connection` parameter lets `workspace.rs` migrate
+/// without needing to know the full schema-creation surface.
+pub(crate) fn migrate_indexed_files(conn: &Connection) -> rusqlite::Result<()> {
+    migrate_indexed_files_add_embedded(conn)
+}
+
+/// Add the `embedded` column to `indexed_files` if it is missing.
+///
+/// Databases created before this column existed need to be migrated in
+/// place. SQLite supports `ALTER TABLE ... ADD COLUMN`, so we just check
+/// `PRAGMA table_info` for the column and run the ALTER when absent.
+///
+/// Idempotent: a no-op when the column is already present (the
+/// `CREATE TABLE` above declares it for fresh databases).
+fn migrate_indexed_files_add_embedded(conn: &Connection) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(indexed_files)")?;
+    let columns: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<_, _>>()?;
+    drop(stmt);
+
+    if !columns.iter().any(|c| c == "embedded") {
+        conn.execute(
+            "ALTER TABLE indexed_files ADD COLUMN embedded INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    Ok(())
 }
 
 /// Enable WAL mode and foreign keys on a connection.
@@ -215,5 +264,94 @@ mod tests {
             [],
         );
         assert!(result.is_err());
+    }
+
+    /// `PRAGMA table_info(indexed_files)` returns one row per column.
+    /// Column layout: cid, name, type, notnull, dflt_value, pk.
+    fn indexed_files_column_names(conn: &Connection) -> Vec<String> {
+        let mut stmt = conn.prepare("PRAGMA table_info(indexed_files)").unwrap();
+        let rows: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        rows
+    }
+
+    #[test]
+    fn test_fresh_db_has_embedded_column() {
+        let conn = open_memory_db();
+        let cols = indexed_files_column_names(&conn);
+        assert!(
+            cols.iter().any(|c| c == "embedded"),
+            "expected `embedded` column on fresh db, got: {:?}",
+            cols
+        );
+    }
+
+    #[test]
+    fn test_migration_adds_embedded_column_to_legacy_db() {
+        // Create a DB with the pre-migration schema (no `embedded` column).
+        let conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE indexed_files (
+                file_path     TEXT PRIMARY KEY,
+                content_hash  BLOB NOT NULL,
+                file_size     INTEGER NOT NULL,
+                last_seen_at  INTEGER NOT NULL,
+                ts_indexed    INTEGER NOT NULL DEFAULT 0,
+                lsp_indexed   INTEGER NOT NULL DEFAULT 0
+            );",
+        )
+        .unwrap();
+
+        // Insert a row in the legacy schema.
+        conn.execute(
+            "INSERT INTO indexed_files (file_path, content_hash, file_size, last_seen_at, ts_indexed, lsp_indexed)
+             VALUES ('legacy.rs', X'00', 1, 1, 1, 1)",
+            [],
+        )
+        .unwrap();
+
+        assert!(
+            !indexed_files_column_names(&conn)
+                .iter()
+                .any(|c| c == "embedded"),
+            "precondition: legacy schema should not have `embedded`"
+        );
+
+        // Running create_schema must trigger the migration.
+        create_schema(&conn).unwrap();
+
+        let cols = indexed_files_column_names(&conn);
+        assert!(
+            cols.iter().any(|c| c == "embedded"),
+            "expected migration to add `embedded` column, got: {:?}",
+            cols
+        );
+
+        // Existing rows default to embedded = 0.
+        let embedded: i64 = conn
+            .query_row(
+                "SELECT embedded FROM indexed_files WHERE file_path = 'legacy.rs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(embedded, 0, "legacy rows must default to embedded=0");
+    }
+
+    #[test]
+    fn test_migration_is_idempotent() {
+        // Apply schema twice — second call must not fail even though
+        // the `embedded` column already exists.
+        let conn = open_memory_db();
+        create_schema(&conn).unwrap();
+        create_schema(&conn).unwrap();
+
+        let cols = indexed_files_column_names(&conn);
+        let n = cols.iter().filter(|c| *c == "embedded").count();
+        assert_eq!(n, 1, "`embedded` column should appear exactly once");
     }
 }

@@ -21,8 +21,11 @@ swissarmyhammer-directory = { workspace = true }
 swissarmyhammer-doctor = { workspace = true }
 swissarmyhammer-config = { workspace = true }
 swissarmyhammer-code-context = { workspace = true }
+swissarmyhammer-embedding = { workspace = true }
 swissarmyhammer-skills = { workspace = true }
 swissarmyhammer-templating = { workspace = true }
+model-embedding = { workspace = true }
+rusqlite = { workspace = true }
 mirdan = { workspace = true }
 rmcp = { workspace = true }
 anyhow = { workspace = true }
@@ -34,9 +37,12 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
 tempfile = { workspace = true }
+indicatif = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 serial_test = { workspace = true }
+assert_cmd = { workspace = true }
 
 [build-dependencies]
 clap = { workspace = true }

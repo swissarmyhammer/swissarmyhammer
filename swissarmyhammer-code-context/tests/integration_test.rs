@@ -10,7 +10,7 @@ use rusqlite::Connection;
 use tree_sitter::Language;
 
 use lsp_types::{DocumentSymbol, Position, Range, SymbolKind};
-use swissarmyhammer_code_context::ops::status::build_status;
+use swissarmyhammer_code_context::ops::status::rebuild_index;
 use swissarmyhammer_code_context::{
     check_blocking_status, clear_status, collect_and_persist_symbols, detect_rust_analyzer,
     ensure_ts_symbols, generate_ts_call_edges, get_blastradius, get_callgraph, get_status,
@@ -682,7 +682,7 @@ fn test_get_blastradius() {
 }
 
 #[test]
-fn test_build_status_and_blocking() {
+fn test_rebuild_index_and_blocking() {
     let dir = create_test_project();
     let ws = CodeContextWorkspace::open(dir.path()).unwrap();
     populate_index(&ws.db(), dir.path());
@@ -698,9 +698,9 @@ fn test_build_status_and_blocking() {
     );
 
     // Mark tree-sitter layer for reindex.
-    let build_result = build_status(conn, BuildLayer::TreeSitter).unwrap();
+    let rebuild_result = rebuild_index(conn, BuildLayer::TreeSitter).unwrap();
     assert!(
-        build_result.files_marked > 0,
+        rebuild_result.files_marked > 0,
         "expected files to be marked for reindex"
     );
 
@@ -708,7 +708,7 @@ fn test_build_status_and_blocking() {
     let status = check_blocking_status(conn, IndexLayer::TreeSitter).unwrap();
     assert!(
         matches!(status, BlockingStatus::NotReady { .. }),
-        "expected NotReady after build_status, got {:?}",
+        "expected NotReady after rebuild_index, got {:?}",
         status
     );
 
@@ -716,7 +716,7 @@ fn test_build_status_and_blocking() {
     let report = get_status(conn).unwrap();
     assert_eq!(
         report.ts_indexed_files, 0,
-        "expected 0 ts_indexed_files after build_status"
+        "expected 0 ts_indexed_files after rebuild_index"
     );
 }
 
@@ -752,7 +752,7 @@ fn test_clear_status() {
 fn test_hints_for_all_operations() {
     let operations = [
         "get_status",
-        "build_status",
+        "rebuild_index",
         "clear_status",
         "get_symbol",
         "get_callgraph",
@@ -900,9 +900,9 @@ fn test_end_to_end_full_pipeline() {
     .unwrap();
     assert!(br.total_affected_symbols > 0);
 
-    // 10. Build status (mark for reindex).
-    let build = build_status(conn, BuildLayer::Both).unwrap();
-    assert!(build.files_marked > 0);
+    // 10. Rebuild index (mark for reindex).
+    let rebuild = rebuild_index(conn, BuildLayer::Both).unwrap();
+    assert!(rebuild.files_marked > 0);
 
     // 11. Clear status.
     let clear = clear_status(conn).unwrap();

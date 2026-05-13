@@ -173,7 +173,7 @@ Use these verbs consistently across all tools:
 | `set` | Set a value or state | `set ralph` |
 | `clear` | Remove/reset state | `clear ralph`, `clear status` |
 | `check` | Verify or inspect state | `check ralph` |
-| `build` | Trigger a build/index process | `build status` |
+| `rebuild` | Trigger a rebuild/re-index process | `rebuild index` |
 | `find` | Discover entities by criteria | `find duplicates` |
 | `query` | Structured query | `query ast` |
 | `detect` | Auto-discover | `detect projects` |

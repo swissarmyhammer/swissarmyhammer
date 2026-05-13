@@ -20,6 +20,7 @@ mod banner;
 mod cli;
 mod commands;
 mod logging;
+mod progress;
 
 use cli::{Cli, Commands, InstallTarget};
 
@@ -42,6 +43,7 @@ async fn main() {
 /// Returns an exit code: 0 for success, 1 for error.
 async fn dispatch_command(cli: Cli) -> i32 {
     let json_output = cli.json;
+    let no_progress = cli.no_progress;
 
     match cli.command {
         Commands::Serve => match commands::serve::run_serve().await {
@@ -81,9 +83,9 @@ async fn dispatch_command(cli: Cli) -> i32 {
                 .any(|r| r.status == swissarmyhammer_common::lifecycle::InitStatus::Error);
             i32::from(had_error)
         }
-        Commands::Doctor { verbose } => commands::doctor::run_doctor(verbose),
+        Commands::Doctor { verbose } => commands::doctor::run_doctor(verbose).await,
         Commands::Skill => commands::skill::run_skill(),
         // All other commands are tool operations dispatched via commands::ops::run_operation.
-        ref command => commands::ops::run_operation(command, json_output).await,
+        ref command => commands::ops::run_operation(command, json_output, no_progress).await,
     }
 }

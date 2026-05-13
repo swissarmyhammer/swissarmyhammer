@@ -19,6 +19,7 @@ _code-context() {
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '-V[Print version]' \
@@ -38,8 +39,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (init)
@@ -48,6 +50,7 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '::target -- Where to install the server configuration:((project\:"Project-level settings (.claude/settings.json)"
@@ -61,6 +64,7 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '::target -- Where to remove the server configuration from:((project\:"Project-level settings (.claude/settings.json)"
@@ -76,8 +80,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (skill)
@@ -86,8 +91,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (get)
@@ -96,8 +102,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 ":: :_code-context__get_commands" \
 "*::: :->get" \
 && ret=0
@@ -116,8 +123,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (callgraph)
@@ -129,8 +137,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (blastradius)
@@ -142,8 +151,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (status)
@@ -152,8 +162,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (definition)
@@ -165,8 +176,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (type-definition)
@@ -178,8 +190,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (hover)
@@ -191,8 +204,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (references)
@@ -206,8 +220,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (implementations)
@@ -220,8 +235,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (code-actions)
@@ -236,8 +252,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (inbound-calls)
@@ -250,8 +267,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (rename-edits)
@@ -264,8 +282,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (diagnostics)
@@ -276,8 +295,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (help)
@@ -362,8 +382,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 ":: :_code-context__search_commands" \
 "*::: :->search" \
 && ret=0
@@ -383,8 +404,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (code)
@@ -398,8 +420,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (workspace-symbol)
@@ -410,8 +433,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (help)
@@ -456,8 +480,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 ":: :_code-context__list_commands" \
 "*::: :->list" \
 && ret=0
@@ -475,8 +500,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (help)
@@ -513,8 +539,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 ":: :_code-context__grep_commands" \
 "*::: :->grep" \
 && ret=0
@@ -535,8 +562,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (help)
@@ -573,8 +601,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 ":: :_code-context__query_commands" \
 "*::: :->query" \
 && ret=0
@@ -595,8 +624,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (help)
@@ -633,8 +663,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 ":: :_code-context__find_commands" \
 "*::: :->find" \
 && ret=0
@@ -655,8 +686,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (help)
@@ -687,38 +719,40 @@ esac
     ;;
 esac
 ;;
-(build)
+(rebuild)
 _arguments "${_arguments_options[@]}" : \
 '-d[Enable debug output to stderr]' \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
-":: :_code-context__build_commands" \
-"*::: :->build" \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+":: :_code-context__rebuild_commands" \
+"*::: :->rebuild" \
 && ret=0
 
     case $state in
-    (build)
+    (rebuild)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:code-context-build-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:code-context-rebuild-command-$line[1]:"
         case $line[1] in
-            (status)
+            (index)
 _arguments "${_arguments_options[@]}" : \
 '--layer=[Which indexing layer to reset\: treesitter, lsp, or both]:LAYER:_default' \
 '-d[Enable debug output to stderr]' \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_code-context__build__help_commands" \
+":: :_code-context__rebuild__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -726,9 +760,9 @@ _arguments "${_arguments_options[@]}" : \
     (help)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:code-context-build-help-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:code-context-rebuild-help-command-$line[1]:"
         case $line[1] in
-            (status)
+            (index)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -750,8 +784,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 ":: :_code-context__clear_commands" \
 "*::: :->clear" \
 && ret=0
@@ -768,8 +803,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (help)
@@ -806,8 +842,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 ":: :_code-context__lsp_commands" \
 "*::: :->lsp" \
 && ret=0
@@ -824,8 +861,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (help)
@@ -862,8 +900,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 ":: :_code-context__detect_commands" \
 "*::: :->detect" \
 && ret=0
@@ -883,8 +922,9 @@ _arguments "${_arguments_options[@]}" : \
 '--debug[Enable debug output to stderr]' \
 '-j[Output results as JSON (for operation commands)]' \
 '--json[Output results as JSON (for operation commands)]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--no-progress[Disable interactive progress bars for long-running operations]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (help)
@@ -1123,19 +1163,19 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
-(build)
+(rebuild)
 _arguments "${_arguments_options[@]}" : \
-":: :_code-context__help__build_commands" \
-"*::: :->build" \
+":: :_code-context__help__rebuild_commands" \
+"*::: :->rebuild" \
 && ret=0
 
     case $state in
-    (build)
+    (rebuild)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:code-context-help-build-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:code-context-help-rebuild-command-$line[1]:"
         case $line[1] in
-            (status)
+            (index)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -1230,44 +1270,13 @@ _code-context_commands() {
 'grep:Regex search across stored code chunks' \
 'query:Execute tree-sitter queries against parsed ASTs' \
 'find:Find duplicated code' \
-'build:Trigger re-indexing' \
+'rebuild:Trigger re-indexing' \
 'clear:Wipe index data' \
 'lsp:LSP server management' \
 'detect:Detect project types and languages' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'code-context commands' commands "$@"
-}
-(( $+functions[_code-context__build_commands] )) ||
-_code-context__build_commands() {
-    local commands; commands=(
-'status:Mark files for re-indexing by resetting indexed flags' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'code-context build commands' commands "$@"
-}
-(( $+functions[_code-context__build__help_commands] )) ||
-_code-context__build__help_commands() {
-    local commands; commands=(
-'status:Mark files for re-indexing by resetting indexed flags' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'code-context build help commands' commands "$@"
-}
-(( $+functions[_code-context__build__help__help_commands] )) ||
-_code-context__build__help__help_commands() {
-    local commands; commands=()
-    _describe -t commands 'code-context build help help commands' commands "$@"
-}
-(( $+functions[_code-context__build__help__status_commands] )) ||
-_code-context__build__help__status_commands() {
-    local commands; commands=()
-    _describe -t commands 'code-context build help status commands' commands "$@"
-}
-(( $+functions[_code-context__build__status_commands] )) ||
-_code-context__build__status_commands() {
-    local commands; commands=()
-    _describe -t commands 'code-context build status commands' commands "$@"
 }
 (( $+functions[_code-context__clear_commands] )) ||
 _code-context__clear_commands() {
@@ -1592,25 +1601,13 @@ _code-context__help_commands() {
 'grep:Regex search across stored code chunks' \
 'query:Execute tree-sitter queries against parsed ASTs' \
 'find:Find duplicated code' \
-'build:Trigger re-indexing' \
+'rebuild:Trigger re-indexing' \
 'clear:Wipe index data' \
 'lsp:LSP server management' \
 'detect:Detect project types and languages' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'code-context help commands' commands "$@"
-}
-(( $+functions[_code-context__help__build_commands] )) ||
-_code-context__help__build_commands() {
-    local commands; commands=(
-'status:Mark files for re-indexing by resetting indexed flags' \
-    )
-    _describe -t commands 'code-context help build commands' commands "$@"
-}
-(( $+functions[_code-context__help__build__status_commands] )) ||
-_code-context__help__build__status_commands() {
-    local commands; commands=()
-    _describe -t commands 'code-context help build status commands' commands "$@"
 }
 (( $+functions[_code-context__help__clear_commands] )) ||
 _code-context__help__clear_commands() {
@@ -1800,6 +1797,18 @@ _code-context__help__query__ast_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help query ast commands' commands "$@"
 }
+(( $+functions[_code-context__help__rebuild_commands] )) ||
+_code-context__help__rebuild_commands() {
+    local commands; commands=(
+'index:Mark files for re-indexing by resetting indexed flags' \
+    )
+    _describe -t commands 'code-context help rebuild commands' commands "$@"
+}
+(( $+functions[_code-context__help__rebuild__index_commands] )) ||
+_code-context__help__rebuild__index_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help rebuild index commands' commands "$@"
+}
 (( $+functions[_code-context__help__search_commands] )) ||
 _code-context__help__search_commands() {
     local commands; commands=(
@@ -1931,6 +1940,37 @@ _code-context__query__help__ast_commands() {
 _code-context__query__help__help_commands() {
     local commands; commands=()
     _describe -t commands 'code-context query help help commands' commands "$@"
+}
+(( $+functions[_code-context__rebuild_commands] )) ||
+_code-context__rebuild_commands() {
+    local commands; commands=(
+'index:Mark files for re-indexing by resetting indexed flags' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'code-context rebuild commands' commands "$@"
+}
+(( $+functions[_code-context__rebuild__help_commands] )) ||
+_code-context__rebuild__help_commands() {
+    local commands; commands=(
+'index:Mark files for re-indexing by resetting indexed flags' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'code-context rebuild help commands' commands "$@"
+}
+(( $+functions[_code-context__rebuild__help__help_commands] )) ||
+_code-context__rebuild__help__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context rebuild help help commands' commands "$@"
+}
+(( $+functions[_code-context__rebuild__help__index_commands] )) ||
+_code-context__rebuild__help__index_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context rebuild help index commands' commands "$@"
+}
+(( $+functions[_code-context__rebuild__index_commands] )) ||
+_code-context__rebuild__index_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context rebuild index commands' commands "$@"
 }
 (( $+functions[_code-context__search_commands] )) ||
 _code-context__search_commands() {

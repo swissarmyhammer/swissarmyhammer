@@ -2,7 +2,7 @@
 name: shell
 description: Shell command execution with persistent history, process management, and searchable output. Use when you need to run a shell command, search or grep previous command output, get output lines from a prior command, list running processes, or kill a hung process. Triggers on phrases like "run X", "execute X", "search the last build output", "grep the output", "kill that process", "show me the output of command N".
 license: MIT OR Apache-2.0
-compatibility: Requires the `shell` MCP tool  for persistent command history, process management, and searchable output. A plain built-in Bash tool cannot replace it; this skill will not function as documented without the `shell` MCP tool.
+compatibility: Requires the `shell` MCP tool for persistent command history, process management, and searchable output. A plain built-in Bash tool cannot replace it; this skill will not function as documented without the `shell` MCP tool.
 metadata:
   author: swissarmyhammer
   version: 0.12.11
