@@ -1470,7 +1470,17 @@ fn execute_grep_code(
 
 /// Execute the "search code" operation.
 ///
-/// Embeds the query text and computes cosine similarity against stored chunk embeddings.
+/// Embeds the query text and computes cosine similarity against stored chunk
+/// embeddings.
+///
+/// Unlike the other code-context ops, `search code` does **not** gate on
+/// tree-sitter readiness. The embedding pass may still be running on a fresh
+/// workspace; rather than refuse to answer, we always run the query against
+/// whatever embeddings exist and surface in-progress state to the caller via
+/// the `progress` field on [`SearchCodeResult`]. Removing the gate was a
+/// deliberate decision — `check_ts_readiness` is still used by the eight other
+/// ops that genuinely cannot produce useful results without a full chunk
+/// index.
 async fn execute_search_code(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
@@ -1480,6 +1490,38 @@ async fn execute_search_code(
         .and_then(|v| v.as_str())
         .ok_or_else(|| McpError::invalid_params("Missing required parameter 'query'", None))?;
 
+    // Embed the query text
+    use swissarmyhammer_embedding::{Embedder, TextEmbedder};
+    let embedder = Embedder::default()
+        .await
+        .map_err(|e| McpError::internal_error(format!("Failed to create embedder: {}", e), None))?;
+    embedder.load().await.map_err(|e| {
+        McpError::internal_error(format!("Failed to load embedding model: {}", e), None)
+    })?;
+    let embed_result = embedder
+        .embed_text(query)
+        .await
+        .map_err(|e| McpError::internal_error(format!("Failed to embed query: {}", e), None))?;
+
+    search_code_with_query_embedding(args, context, embed_result.embedding())
+}
+
+/// Inner half of [`execute_search_code`] after the query has been embedded.
+///
+/// Split out so unit tests can exercise the search path without loading a
+/// real embedding model. The caller-supplied `query_embedding` is treated
+/// as-if it had been produced by the same embedder that wrote the chunk
+/// embeddings — tests that don't care about ranking can pass any non-empty
+/// vector.
+///
+/// This function **never** returns the old "Index not ready" placeholder.
+/// When the embedding pass is still running, the resulting `SearchCodeResult`
+/// carries a populated `progress` field instead.
+fn search_code_with_query_embedding(
+    args: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+    query_embedding: &[f32],
+) -> Result<CallToolResult, McpError> {
     let top_k = args
         .get("top_k")
         .and_then(|v| v.as_u64())
@@ -1505,19 +1547,6 @@ async fn execute_search_code(
         .and_then(|v| v.as_str())
         .map(String::from);
 
-    // Embed the query text
-    use swissarmyhammer_embedding::{Embedder, TextEmbedder};
-    let embedder = Embedder::default()
-        .await
-        .map_err(|e| McpError::internal_error(format!("Failed to create embedder: {}", e), None))?;
-    embedder.load().await.map_err(|e| {
-        McpError::internal_error(format!("Failed to load embedding model: {}", e), None)
-    })?;
-    let embed_result = embedder
-        .embed_text(query)
-        .await
-        .map_err(|e| McpError::internal_error(format!("Failed to embed query: {}", e), None))?;
-
     let options = SearchCodeOptions {
         top_k,
         min_similarity,
@@ -1526,12 +1555,8 @@ async fn execute_search_code(
     };
 
     let ws = open_workspace(context)?;
-    if let Some(progress) = check_ts_readiness(&ws)? {
-        return Ok(progress);
-    }
-    let result =
-        swissarmyhammer_code_context::search_code(&ws.db(), embed_result.embedding(), &options)
-            .map_err(context_err)?;
+    let result = swissarmyhammer_code_context::search_code(&ws.db(), query_embedding, &options)
+        .map_err(context_err)?;
     json_result(&result)
 }
 
@@ -1758,17 +1783,104 @@ fn execute_get_blastradius(
 
 /// Trigger incremental tree-sitter indexing on dirty files.
 ///
+/// Constructs the default embedding model (qwen-embedding) once for the run
+/// and delegates to [`index_discovered_files_with_embedder`]. If the embedder
+/// fails to construct or load, indexing still runs but chunk embeddings are
+/// skipped — files keep `embedded=0` so the next pass can retry them.
+///
 /// Uses the leader's single shared write connection for all DB operations.
 /// The mutex is locked only for each DB call — file I/O and parsing happen
 /// without holding the lock so other writers (LSP worker, watcher) can interleave.
-pub(crate) async fn index_discovered_files_async(
+///
+/// Exposed `pub` so end-to-end integration tests (notably
+/// `tests/integration/semantic_search_e2e.rs`) can drive the real production
+/// indexer over a temp workspace. The function is otherwise only called from
+/// within this crate (the MCP server bootstrap and the file watcher).
+pub async fn index_discovered_files_async(
     workspace_root: &Path,
     db: swissarmyhammer_code_context::SharedDb,
 ) {
-    use std::sync::Arc;
-    use swissarmyhammer_treesitter::{
-        chunk::chunk_file, ChunkSource, LanguageRegistry, ParsedFile,
+    // MODEL NOTE: The default model is `qwen-embedding` (Qwen3-Embedding-0.6B),
+    // a 1024-dim L2-normalized embedder. On macOS-arm64 it runs on the Apple
+    // Neural Engine; elsewhere it falls back to llama.cpp. Max sequence is
+    // 256 (ANE) or 512 (llama). The embedder is `Send + Sync`, and a single
+    // shared `Arc<dyn TextEmbedder>` is reused across all chunks in this
+    // indexing pass — see swissarmyhammer-embedding/src/embedder.rs.
+    //
+    // Performance: per-chunk embedding on ANE is ~30-100ms, so a fresh full
+    // index is minutes-to-tens-of-minutes for large workspaces. We embed
+    // sequentially because the backends serialize internally; adding worker
+    // parallelism here invites contention without throughput gains.
+    let embedder = build_default_embedder().await;
+    index_discovered_files_with_embedder(workspace_root, db, embedder).await
+}
+
+/// Construct the default embedder and load it.
+///
+/// Returns `None` and logs a warning on construction or load failure. The
+/// indexer treats this as a soft fallback — it still writes chunks (without
+/// embeddings), leaving `indexed_files.embedded=0` so a future pass can
+/// retry once the model is available.
+async fn build_default_embedder() -> Option<std::sync::Arc<dyn model_embedding::TextEmbedder>> {
+    use model_embedding::TextEmbedder as _;
+    let embedder = match swissarmyhammer_embedding::Embedder::default().await {
+        Ok(e) => e,
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                "code-context: failed to construct default embedder — chunk embeddings will be skipped this pass"
+            );
+            return None;
+        }
     };
+    if let Err(err) = embedder.load().await {
+        tracing::warn!(
+            error = %err,
+            "code-context: failed to load embedding model — chunk embeddings will be skipped this pass"
+        );
+        return None;
+    }
+    tracing::info!(
+        backend = embedder.backend_name(),
+        model = embedder.model_name(),
+        dimension = ?embedder.embedding_dimension(),
+        max_sequence_length = embedder.max_sequence_length(),
+        "code-context: loaded chunk embedder"
+    );
+    Some(std::sync::Arc::new(embedder) as std::sync::Arc<dyn model_embedding::TextEmbedder>)
+}
+
+/// Trigger incremental tree-sitter indexing on dirty files with a supplied
+/// embedder.
+///
+/// This is the dependency-injectable form of [`index_discovered_files_async`].
+/// Tests pass a mock embedder; production passes the model resolved by
+/// `Embedder::default()`.
+///
+/// When `embedder` is `Some`, every chunk text is embedded and the resulting
+/// little-endian f32 blob is written to the `embedding` column. A file is
+/// flagged `embedded=1` only when every one of its chunks got an embedding
+/// (a file with no chunks is vacuously fully embedded). If any chunk's
+/// embedding failed it is written with a NULL `embedding` blob and the file
+/// keeps `embedded=0`.
+///
+/// Important: the dirty-file selector is `WHERE ts_indexed = 0`, so a file
+/// that exits this function with `ts_indexed=1, embedded=0` is NOT re-driven
+/// on subsequent calls until something else (a file edit picked up by the
+/// watcher, `build_status`, etc.) flips `ts_indexed` back to 0. The
+/// successfully embedded chunks remain searchable in the meantime — the
+/// search path filters by `embedding IS NOT NULL`.
+///
+/// When `embedder` is `None` the indexer behaves as it did before chunk
+/// embeddings existed: chunks are written without an embedding blob and
+/// `embedded` stays at 0.
+pub(crate) async fn index_discovered_files_with_embedder(
+    workspace_root: &Path,
+    db: swissarmyhammer_code_context::SharedDb,
+    embedder: Option<std::sync::Arc<dyn model_embedding::TextEmbedder>>,
+) {
+    use std::sync::Arc;
+    use swissarmyhammer_treesitter::{chunk::chunk_file, LanguageRegistry, ParsedFile};
 
     // Query all dirty files from the DB (populated by startup_cleanup)
     let dirty_files: Vec<String> = {
@@ -1870,7 +1982,20 @@ pub(crate) async fn index_discovered_files_async(
         // 3. Extract semantic chunks (no DB needed)
         let chunks = chunk_file(parsed_file.clone());
 
-        // 4. Lock DB once for the entire write batch for this file
+        // 4. Embed chunks BEFORE acquiring the DB lock. embed_text is async
+        //    and may take 30-100ms per chunk on ANE; holding the connection
+        //    mutex across that wait would starve other workers.
+        let embedded_chunks =
+            embed_file_chunks(&chunks, &parsed_file, embedder.as_deref(), relative_path).await;
+        // A file is "fully embedded" when an embedder was supplied and every
+        // prepared chunk has a Some(embedding). A file with zero chunks (e.g.
+        // an empty file or one chunk_file rejected) is vacuously fully
+        // embedded — there is nothing to embed, so we should not pretend the
+        // file is in a partial-failure state.
+        let all_chunks_embedded =
+            embedder.is_some() && embedded_chunks.iter().all(|c| c.embedding.is_some());
+
+        // 5. Lock DB once for the entire write batch for this file
         {
             let conn = db.lock().unwrap_or_else(|p| p.into_inner());
 
@@ -1882,43 +2007,33 @@ pub(crate) async fn index_discovered_files_async(
 
             // Write new chunks
             let mut chunks_written = 0u64;
-            for chunk in &chunks {
-                if let Some(content) = chunk.source.content() {
-                    let (start_byte, end_byte) = match &chunk.source {
-                        ChunkSource::Parsed {
-                            start_byte,
-                            end_byte,
-                            ..
-                        } => (*start_byte, *end_byte),
-                        _ => continue,
-                    };
-
-                    let start_line = parsed_file.source[..start_byte].matches('\n').count() as i32;
-                    let end_line = parsed_file.source[..end_byte].matches('\n').count() as i32;
-                    let symbol_path = chunk.symbol_path();
-
-                    if conn.execute(
-                        "INSERT INTO ts_chunks (file_path, start_byte, end_byte, start_line, end_line, text, symbol_path)
-                         VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        rusqlite::params![
-                            relative_path,
-                            start_byte as i32,
-                            end_byte as i32,
-                            start_line,
-                            end_line,
-                            content,
-                            &symbol_path,
-                        ],
-                    ).is_ok() {
-                        chunks_written += 1;
-                    }
+            for chunk in &embedded_chunks {
+                let blob = chunk
+                    .embedding
+                    .as_deref()
+                    .map(swissarmyhammer_code_context::serialize_embedding);
+                if conn.execute(
+                    "INSERT INTO ts_chunks (file_path, start_byte, end_byte, start_line, end_line, text, symbol_path, embedding)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    rusqlite::params![
+                        relative_path,
+                        chunk.start_byte,
+                        chunk.end_byte,
+                        chunk.start_line,
+                        chunk.end_line,
+                        chunk.text,
+                        &chunk.symbol_path,
+                        blob,
+                    ],
+                ).is_ok() {
+                    chunks_written += 1;
                 }
             }
 
-            // 5. Extract symbols from chunks
+            // 6. Extract symbols from chunks
             let _ = swissarmyhammer_code_context::ensure_ts_symbols(&conn, relative_path);
 
-            // 6. Generate and write call edges
+            // 7. Generate and write call edges
             let source_text = parsed_file.source.as_str();
             let language = lang_config.language();
             if let Ok(edges) = swissarmyhammer_code_context::generate_ts_call_edges(
@@ -1930,11 +2045,22 @@ pub(crate) async fn index_discovered_files_async(
                 let _ = swissarmyhammer_code_context::write_ts_edges(&conn, relative_path, &edges);
             }
 
-            // 7. Mark file as ts_indexed
-            let _ = conn.execute(
-                "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?",
-                rusqlite::params![relative_path],
-            );
+            // 8. Mark file as ts_indexed. Mark embedded=1 only when every
+            //    chunk for the file got an embedding (or there were no chunks
+            //    to embed); partial failure leaves embedded=0. The file is
+            //    not re-driven by this function until ts_indexed is flipped
+            //    back to 0 by something else — see the function docstring.
+            if all_chunks_embedded {
+                let _ = conn.execute(
+                    "UPDATE indexed_files SET ts_indexed = 1, embedded = 1 WHERE file_path = ?",
+                    rusqlite::params![relative_path],
+                );
+            } else {
+                let _ = conn.execute(
+                    "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = ?",
+                    rusqlite::params![relative_path],
+                );
+            }
 
             total_chunks += chunks_written;
         }
@@ -1959,6 +2085,13 @@ pub(crate) async fn index_discovered_files_async(
     let chunk_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM ts_chunks", [], |r| r.get(0))
         .unwrap_or(0);
+    let embedded_chunk_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM ts_chunks WHERE embedding IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
     let symbol_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM lsp_symbols", [], |r| r.get(0))
         .unwrap_or(0);
@@ -1966,13 +2099,103 @@ pub(crate) async fn index_discovered_files_async(
         .query_row("SELECT COUNT(*) FROM lsp_call_edges", [], |r| r.get(0))
         .unwrap_or(0);
     tracing::info!(
-        "code-context: indexing complete — {}/{} files, {} chunks, {} symbols, {} call edges",
+        "code-context: indexing complete — {}/{} files, {} chunks ({} embedded), {} symbols, {} call edges",
         indexed,
         total,
         chunk_count,
+        embedded_chunk_count,
         symbol_count,
         edge_count
     );
+}
+
+/// A chunk row prepared for insertion into `ts_chunks`, with an optional
+/// pre-computed embedding vector.
+struct PreparedChunk {
+    start_byte: i32,
+    end_byte: i32,
+    start_line: i32,
+    end_line: i32,
+    text: String,
+    symbol_path: String,
+    /// `Some` when the chunk text was successfully embedded; `None` when
+    /// embedding was unavailable (no embedder) or returned an error.
+    embedding: Option<Vec<f32>>,
+}
+
+/// Convert a chunk into [`PreparedChunk`] form (no embedding), or return
+/// `None` if the chunk doesn't have parseable byte ranges.
+fn prepare_chunk(
+    chunk: &swissarmyhammer_treesitter::chunk::SemanticChunk,
+    parsed_file: &swissarmyhammer_treesitter::ParsedFile,
+) -> Option<PreparedChunk> {
+    use swissarmyhammer_treesitter::ChunkSource;
+    let text = chunk.source.content()?.to_string();
+    let (start_byte, end_byte) = match &chunk.source {
+        ChunkSource::Parsed {
+            start_byte,
+            end_byte,
+            ..
+        } => (*start_byte, *end_byte),
+        _ => return None,
+    };
+    let start_line = parsed_file.source[..start_byte].matches('\n').count() as i32;
+    let end_line = parsed_file.source[..end_byte].matches('\n').count() as i32;
+    Some(PreparedChunk {
+        start_byte: start_byte as i32,
+        end_byte: end_byte as i32,
+        start_line,
+        end_line,
+        text,
+        symbol_path: chunk.symbol_path(),
+        embedding: None,
+    })
+}
+
+/// Prepare every chunk for insertion, embedding each one if an embedder was
+/// provided. Per-chunk embedding errors leave that chunk's `embedding` as
+/// `None`; the rest of the file continues. At most one summary warning is
+/// emitted per file (with the failure count and an example symbol + error)
+/// so that a model crash mid-run does not produce one log line per chunk
+/// across tens of thousands of chunks.
+async fn embed_file_chunks(
+    chunks: &[swissarmyhammer_treesitter::chunk::SemanticChunk],
+    parsed_file: &swissarmyhammer_treesitter::ParsedFile,
+    embedder: Option<&dyn model_embedding::TextEmbedder>,
+    relative_path: &str,
+) -> Vec<PreparedChunk> {
+    let mut prepared = Vec::with_capacity(chunks.len());
+    let mut failed_count: usize = 0;
+    let mut first_failure: Option<(String, String)> = None;
+    for chunk in chunks {
+        let Some(mut pc) = prepare_chunk(chunk, parsed_file) else {
+            continue;
+        };
+        if let Some(emb) = embedder {
+            match emb.embed_text(&pc.text).await {
+                Ok(result) => pc.embedding = Some(result.embedding().to_vec()),
+                Err(err) => {
+                    failed_count += 1;
+                    if first_failure.is_none() {
+                        first_failure = Some((pc.symbol_path.clone(), err.to_string()));
+                    }
+                }
+            }
+        }
+        prepared.push(pc);
+    }
+    if failed_count > 0 {
+        let (symbol, err) = first_failure.unwrap_or_default();
+        tracing::warn!(
+            file = %relative_path,
+            failed_chunks = failed_count,
+            total_chunks = prepared.len(),
+            first_failed_symbol = %symbol,
+            first_error = %err,
+            "code-context: chunk embedding failed for one or more chunks — those chunks were inserted with NULL embedding"
+        );
+    }
+    prepared
 }
 
 /// Execute the "get status" operation.
@@ -3284,5 +3507,305 @@ impl Calculator {
         let result = tool.execute(args, &ctx).await;
         // We accept both Ok and Err here — just verify no panic occurs.
         let _ = result;
+    }
+
+    // -----------------------------------------------------------------------
+    // Chunk embedding tests for `index_discovered_files_with_embedder`
+    //
+    // These tests exercise the embedding path via dependency injection — they
+    // pass a `MockEmbedder` rather than constructing a real model, so they run
+    // fast and deterministically. They cover:
+    //   - success path: every chunk gets an embedding blob, `embedded=1`
+    //   - partial failure: failing chunk has NULL embedding, others succeed,
+    //     `embedded=0` (the successful chunks remain searchable; the file is
+    //     not re-driven until `ts_indexed` is flipped back to 0 elsewhere)
+    //   - no embedder: chunks are still written without embeddings, `embedded=0`
+    //     (existing fallback behavior preserved)
+    //   - round-trip: blob written by indexer deserializes to the same vector
+    // -----------------------------------------------------------------------
+
+    use model_embedding::mock::MockEmbedder;
+    use model_embedding::TextEmbedder;
+
+    /// Set up a tiny Rust project on disk and open the workspace.
+    ///
+    /// Returns the tempdir (caller must keep it alive) and the shared DB ref.
+    /// `startup_cleanup` runs as part of `CodeContextWorkspace::open`, so the
+    /// `indexed_files` table is already populated with the two source files
+    /// (marked dirty).
+    async fn make_tiny_indexable_project() -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        swissarmyhammer_code_context::SharedDb,
+    ) {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let root = tmp.path().to_path_buf();
+
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("src/main.rs"),
+            "fn main() {\n    println!(\"hi\");\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/lib.rs"),
+            "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
+        )
+        .unwrap();
+
+        let ws = CodeContextWorkspace::open(&root).expect("workspace open");
+        let shared_db = ws.shared_db().expect("leader has shared db");
+        (tmp, root, shared_db)
+    }
+
+    /// Count chunks in `ts_chunks` that have a non-NULL `embedding` blob.
+    fn count_embedded_chunks(db: &swissarmyhammer_code_context::SharedDb) -> i64 {
+        let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+        conn.query_row(
+            "SELECT COUNT(*) FROM ts_chunks WHERE embedding IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// Count total chunks regardless of embedding state.
+    fn count_total_chunks(db: &swissarmyhammer_code_context::SharedDb) -> i64 {
+        let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+        conn.query_row("SELECT COUNT(*) FROM ts_chunks", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// Read the `embedded` flag for a file row.
+    fn read_embedded_flag(
+        db: &swissarmyhammer_code_context::SharedDb,
+        file_path: &str,
+    ) -> Option<i64> {
+        let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+        conn.query_row(
+            "SELECT embedded FROM indexed_files WHERE file_path = ?",
+            rusqlite::params![file_path],
+            |r| r.get(0),
+        )
+        .ok()
+    }
+
+    /// With a working embedder, every chunk row has a non-NULL embedding blob
+    /// and every fully-embedded file has `embedded=1`.
+    #[tokio::test]
+    async fn test_indexer_writes_embedding_blob_for_every_chunk() {
+        let (_tmp, root, shared_db) = make_tiny_indexable_project().await;
+
+        // Always-succeeding mock embedder with a small fixed dimension.
+        let embedder: std::sync::Arc<dyn TextEmbedder> = std::sync::Arc::new(MockEmbedder::new(8));
+
+        index_discovered_files_with_embedder(&root, shared_db.clone(), Some(embedder)).await;
+
+        let total = count_total_chunks(&shared_db);
+        let embedded = count_embedded_chunks(&shared_db);
+        assert!(total > 0, "expected >0 chunks after indexing, got {total}");
+        assert_eq!(
+            embedded, total,
+            "every chunk should have a non-NULL embedding blob"
+        );
+
+        // Files should be marked embedded=1.
+        for relative in ["src/main.rs", "src/lib.rs"] {
+            let flag = read_embedded_flag(&shared_db, relative);
+            assert_eq!(
+                flag,
+                Some(1),
+                "expected {relative} to have embedded=1, got {flag:?}"
+            );
+        }
+    }
+
+    /// Embeddings written by the indexer are binary-compatible with the
+    /// `deserialize_embedding` helper used by `search_code`.
+    #[tokio::test]
+    async fn test_indexer_embedding_blob_roundtrips_through_deserialize() {
+        let (_tmp, root, shared_db) = make_tiny_indexable_project().await;
+        let dim = 8;
+        let embedder: std::sync::Arc<dyn TextEmbedder> =
+            std::sync::Arc::new(MockEmbedder::new(dim));
+
+        index_discovered_files_with_embedder(&root, shared_db.clone(), Some(embedder)).await;
+
+        // Read one row's blob and convert it back to a Vec<f32>.
+        let blob: Vec<u8> = {
+            let conn = shared_db.lock().unwrap_or_else(|p| p.into_inner());
+            conn.query_row(
+                "SELECT embedding FROM ts_chunks WHERE embedding IS NOT NULL LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            blob.len(),
+            dim * 4,
+            "blob length should be dim*4 bytes (little-endian f32)"
+        );
+
+        // Round-trip through the same little-endian f32 layout used by
+        // search_code::deserialize_embedding.
+        let parsed: Vec<f32> = blob
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        assert_eq!(parsed.len(), dim);
+        // MockEmbedder returns vec![0.1; dim]
+        for v in parsed {
+            assert!((v - 0.1).abs() < 1e-6, "expected 0.1 vector, got {v}");
+        }
+    }
+
+    /// When the embedder fails on a specific chunk, that chunk row has NULL
+    /// embedding, other chunks succeed, and the file's `embedded` flag stays
+    /// at 0. The file is not re-driven by this function until something else
+    /// flips `ts_indexed` back to 0; the successfully embedded chunks remain
+    /// searchable in the meantime.
+    #[tokio::test]
+    async fn test_indexer_partial_embedding_failure_leaves_file_unembedded() {
+        let (_tmp, root, shared_db) = make_tiny_indexable_project().await;
+
+        // Fail on the very first embed_text call. With two tiny files, at
+        // least one file will end up with a partially-failed chunk.
+        let mock = std::sync::Arc::new(MockEmbedder::with_failures(8, vec![0]));
+        let embedder: std::sync::Arc<dyn TextEmbedder> = mock.clone();
+
+        index_discovered_files_with_embedder(&root, shared_db.clone(), Some(embedder)).await;
+
+        let total = count_total_chunks(&shared_db);
+        let embedded = count_embedded_chunks(&shared_db);
+        assert!(total > 0, "expected chunks to be written even on failure");
+        assert!(
+            embedded < total,
+            "expected at least one chunk to have NULL embedding (embedded={embedded}, total={total})"
+        );
+        assert!(
+            embedded > 0,
+            "expected the other chunks to still succeed (embedded={embedded})"
+        );
+
+        // At least one file must be left with embedded=0 because one of its
+        // chunks failed to embed.
+        let conn_flags: Vec<(String, i64)> = {
+            let conn = shared_db.lock().unwrap_or_else(|p| p.into_inner());
+            let mut stmt = conn
+                .prepare("SELECT file_path, embedded FROM indexed_files ORDER BY file_path")
+                .unwrap();
+            stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+        assert!(
+            conn_flags.iter().any(|(_, flag)| *flag == 0),
+            "expected at least one file with embedded=0, got: {conn_flags:?}"
+        );
+
+        // The mock should have been called at least once per chunk.
+        assert!(
+            mock.call_count() >= total as usize,
+            "embedder should have been driven for every chunk (call_count={}, total={total})",
+            mock.call_count()
+        );
+    }
+
+    /// When no embedder is provided (e.g. construction or load failed), chunks
+    /// are still written without embeddings (preserved fallback behavior),
+    /// and `embedded` stays at 0. As with partial failure, the file is not
+    /// re-driven by this function — a future invocation with a working
+    /// embedder is only triggered once `ts_indexed` is flipped back to 0.
+    #[tokio::test]
+    async fn test_indexer_no_embedder_still_writes_chunks_without_embeddings() {
+        let (_tmp, root, shared_db) = make_tiny_indexable_project().await;
+
+        index_discovered_files_with_embedder(&root, shared_db.clone(), None).await;
+
+        let total = count_total_chunks(&shared_db);
+        let embedded = count_embedded_chunks(&shared_db);
+        assert!(total > 0, "expected chunks to be written without embedder");
+        assert_eq!(
+            embedded, 0,
+            "no chunks should have embeddings when embedder is absent"
+        );
+
+        for relative in ["src/main.rs", "src/lib.rs"] {
+            let flag = read_embedded_flag(&shared_db, relative);
+            assert_eq!(
+                flag,
+                Some(0),
+                "expected {relative} to have embedded=0 when no embedder, got {flag:?}"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // search code: readiness gate removal
+    //
+    // `execute_search_code` used to bail out with an "Index not ready"
+    // placeholder string when the tree-sitter pass wasn't done. The gate is
+    // gone: `search code` now always returns a `SearchCodeResult` and the
+    // caller learns about partial coverage via the `progress` field.
+    //
+    // The dispatch path runs a real embedder, so this unit test exercises
+    // the inner function `search_code_with_query_embedding` directly with a
+    // caller-supplied embedding vector. That keeps the test fast and
+    // deterministic while still proving the gate is gone — the test would
+    // fail with a "not ready" placeholder if it weren't.
+    // -----------------------------------------------------------------------
+
+    /// When files exist in `indexed_files` but none are embedded yet, the
+    /// inner search must return a `SearchCodeResult` (possibly with empty
+    /// matches) carrying a populated `progress` field — never the old
+    /// "Index not ready" placeholder string.
+    #[tokio::test]
+    async fn test_search_code_returns_result_with_progress_when_not_embedded() {
+        let (_tmp, root, _shared_db) = make_tiny_indexable_project().await;
+        let ctx = make_context_with_dir(root.clone());
+
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), serde_json::json!("search code"));
+        args.insert("query".to_string(), serde_json::json!("anything"));
+
+        // Use a tiny dummy embedding — the search returns no matches because
+        // no chunk embeddings exist yet, but it must still succeed and
+        // produce a `SearchCodeResult` JSON, not the readiness placeholder.
+        let dummy_query_embedding = vec![1.0f32, 0.0, 0.0];
+        let result = search_code_with_query_embedding(&args, &ctx, &dummy_query_embedding)
+            .expect("search code should succeed without the readiness gate");
+
+        let text = extract_text(&result);
+        assert!(
+            !text.contains("Index not ready"),
+            "search code must not return the readiness placeholder, got: {text}"
+        );
+
+        // The body must parse as a SearchCodeResult JSON with the progress
+        // field populated (3 files exist, 0 are embedded).
+        let parsed: serde_json::Value =
+            serde_json::from_str(text).expect("result must be JSON-encoded SearchCodeResult");
+        assert!(
+            parsed.get("matches").is_some(),
+            "result must have a `matches` field"
+        );
+        let progress = parsed
+            .get("progress")
+            .expect("result must have a `progress` field");
+        assert!(
+            !progress.is_null(),
+            "progress must be populated when embedded_files < total_files, got null"
+        );
+        assert!(
+            progress.get("embedded_files").and_then(|v| v.as_u64()) == Some(0),
+            "embedded_files should be 0 when no files have been embedded yet"
+        );
+        let total = progress
+            .get("total_files")
+            .and_then(|v| v.as_u64())
+            .expect("total_files must be present and numeric");
+        assert!(total > 0, "total_files should be > 0, got {total}");
     }
 }

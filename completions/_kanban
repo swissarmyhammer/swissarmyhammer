@@ -72,7 +72,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_kanban__help_commands" \
+":: :_kanban__subcmd__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -122,18 +122,18 @@ _kanban_commands() {
     )
     _describe -t commands 'kanban commands' commands "$@"
 }
-(( $+functions[_kanban__deinit_commands] )) ||
-_kanban__deinit_commands() {
+(( $+functions[_kanban__subcmd__deinit_commands] )) ||
+_kanban__subcmd__deinit_commands() {
     local commands; commands=()
     _describe -t commands 'kanban deinit commands' commands "$@"
 }
-(( $+functions[_kanban__doctor_commands] )) ||
-_kanban__doctor_commands() {
+(( $+functions[_kanban__subcmd__doctor_commands] )) ||
+_kanban__subcmd__doctor_commands() {
     local commands; commands=()
     _describe -t commands 'kanban doctor commands' commands "$@"
 }
-(( $+functions[_kanban__help_commands] )) ||
-_kanban__help_commands() {
+(( $+functions[_kanban__subcmd__help_commands] )) ||
+_kanban__subcmd__help_commands() {
     local commands; commands=(
 'serve:Run MCP server over stdio, exposing kanban tools' \
 'init:Install kanban MCP server into Claude Code settings' \
@@ -143,38 +143,38 @@ _kanban__help_commands() {
     )
     _describe -t commands 'kanban help commands' commands "$@"
 }
-(( $+functions[_kanban__help__deinit_commands] )) ||
-_kanban__help__deinit_commands() {
+(( $+functions[_kanban__subcmd__help__subcmd__deinit_commands] )) ||
+_kanban__subcmd__help__subcmd__deinit_commands() {
     local commands; commands=()
     _describe -t commands 'kanban help deinit commands' commands "$@"
 }
-(( $+functions[_kanban__help__doctor_commands] )) ||
-_kanban__help__doctor_commands() {
+(( $+functions[_kanban__subcmd__help__subcmd__doctor_commands] )) ||
+_kanban__subcmd__help__subcmd__doctor_commands() {
     local commands; commands=()
     _describe -t commands 'kanban help doctor commands' commands "$@"
 }
-(( $+functions[_kanban__help__help_commands] )) ||
-_kanban__help__help_commands() {
+(( $+functions[_kanban__subcmd__help__subcmd__help_commands] )) ||
+_kanban__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'kanban help help commands' commands "$@"
 }
-(( $+functions[_kanban__help__init_commands] )) ||
-_kanban__help__init_commands() {
+(( $+functions[_kanban__subcmd__help__subcmd__init_commands] )) ||
+_kanban__subcmd__help__subcmd__init_commands() {
     local commands; commands=()
     _describe -t commands 'kanban help init commands' commands "$@"
 }
-(( $+functions[_kanban__help__serve_commands] )) ||
-_kanban__help__serve_commands() {
+(( $+functions[_kanban__subcmd__help__subcmd__serve_commands] )) ||
+_kanban__subcmd__help__subcmd__serve_commands() {
     local commands; commands=()
     _describe -t commands 'kanban help serve commands' commands "$@"
 }
-(( $+functions[_kanban__init_commands] )) ||
-_kanban__init_commands() {
+(( $+functions[_kanban__subcmd__init_commands] )) ||
+_kanban__subcmd__init_commands() {
     local commands; commands=()
     _describe -t commands 'kanban init commands' commands "$@"
 }
-(( $+functions[_kanban__serve_commands] )) ||
-_kanban__serve_commands() {
+(( $+functions[_kanban__subcmd__serve_commands] )) ||
+_kanban__subcmd__serve_commands() {
     local commands; commands=()
     _describe -t commands 'kanban serve commands' commands "$@"
 }

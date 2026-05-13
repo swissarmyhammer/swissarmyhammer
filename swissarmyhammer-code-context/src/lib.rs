@@ -22,7 +22,6 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod hints;
-pub mod indexing;
 pub mod invalidation;
 pub mod layered_context;
 pub mod lsp_communication;
@@ -112,7 +111,8 @@ pub use ops::list_symbol::list_symbols;
 pub use ops::lsp_helpers::parse_lsp_range;
 pub use ops::query_ast::{query_ast, AstCapture, AstMatch, QueryAstOptions, QueryAstResult};
 pub use ops::search_code::{
-    search_code, serialize_embedding, SearchCodeMatch, SearchCodeOptions, SearchCodeResult,
+    search_code, serialize_embedding, IndexingProgress, SearchCodeMatch, SearchCodeOptions,
+    SearchCodeResult,
 };
 pub use ops::search_symbol::{search_symbol, SearchSymbolMatch, SearchSymbolOptions};
 pub use ops::status::{

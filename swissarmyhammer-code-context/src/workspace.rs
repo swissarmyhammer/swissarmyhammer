@@ -145,6 +145,17 @@ impl CodeContextWorkspace {
     /// On the very first run the file may not exist yet. SQLite read-only
     /// open does not create the file, so we retry with a short backoff
     /// (up to ~5 seconds) until it appears.
+    ///
+    /// Before opening the long-lived read-only connection, the follower
+    /// attempts to bring any legacy on-disk schema up to the current version
+    /// via a short-lived read-write connection. The migration is idempotent
+    /// (it ALTERs only when a column is missing). This protects readers from
+    /// a leader that ran older code and left a pre-migration schema on disk.
+    /// If the read-write open fails (read-only filesystem, locked, etc.) the
+    /// follower logs the condition and continues — the read-only connection
+    /// can still serve any query that doesn't touch the new column, and
+    /// queries that do hit the missing column will surface a normal SQL
+    /// error to the caller.
     fn open_as_follower(
         workspace_root: &Path,
         context_dir: PathBuf,
@@ -156,8 +167,14 @@ impl CodeContextWorkspace {
             workspace_root.display()
         );
 
+        // Wait for the leader to create the file before doing anything else.
+        // open_readonly_with_retry handles the "file may not exist yet" case.
         let db = open_readonly_with_retry(db_path)?;
         db::configure_connection(&db)?;
+
+        // Best-effort: bring a legacy on-disk schema up to current. This is
+        // a no-op on a fresh DB created by the current leader.
+        migrate_legacy_schema_if_writable(db_path);
 
         Ok(Self {
             mode: WorkspaceMode::Follower { db, follower },
@@ -247,6 +264,49 @@ impl CodeContextWorkspace {
     /// Path to the `.code-context/` directory
     pub fn context_dir(&self) -> &Path {
         &self.context_dir
+    }
+}
+
+/// Best-effort attempt to bring a legacy on-disk schema up to the current
+/// version when this process is a follower.
+///
+/// Opens a short-lived read-write connection to `db_path` and runs the
+/// idempotent additive migrations. Closes the connection before returning.
+/// The migration is the same one a fresh leader runs at the end of
+/// `create_schema`, so leaders and followers converge on identical schemas.
+///
+/// All failures (read-only filesystem, file currently locked exclusively
+/// elsewhere, migration SQL error) are logged at WARN level and swallowed —
+/// the follower's long-lived read-only connection has already been opened,
+/// and any caller query against a still-missing column will surface a normal
+/// SQL error. This keeps follower startup robust in the face of unusual
+/// filesystem permissions while preserving the migration in the common case.
+fn migrate_legacy_schema_if_writable(db_path: &Path) {
+    let rw_conn = match Connection::open(db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(
+                path = %db_path.display(),
+                error = %e,
+                "follower could not open DB read-write for legacy migration; skipping",
+            );
+            return;
+        }
+    };
+    if let Err(e) = db::configure_connection(&rw_conn) {
+        tracing::warn!(
+            path = %db_path.display(),
+            error = %e,
+            "follower could not configure DB for legacy migration; skipping",
+        );
+        return;
+    }
+    if let Err(e) = db::migrate_indexed_files(&rw_conn) {
+        tracing::warn!(
+            path = %db_path.display(),
+            error = %e,
+            "follower legacy-schema migration failed; continuing with possibly stale schema",
+        );
     }
 }
 
@@ -656,5 +716,155 @@ mod tests {
             !result.is_empty(),
             "should get a valid SQLite version string"
         );
+    }
+
+    /// Helper that constructs a `.code-context/index.db` containing the
+    /// pre-`embedded`-column schema. Mirrors the bare CREATE TABLE the
+    /// pre-migration code shipped, without ever invoking `create_schema`.
+    fn create_legacy_db_in(workspace_root: &Path) -> PathBuf {
+        let context_dir = workspace_root.join(CONTEXT_DIR);
+        fs::create_dir_all(&context_dir).unwrap();
+        let db_path = context_dir.join(DB_NAME);
+
+        let conn = Connection::open(&db_path).unwrap();
+        // Use the WAL+foreign keys configuration so the file format matches
+        // what production opens later, but skip create_schema so the
+        // `embedded` column is intentionally absent.
+        db::configure_connection(&conn).unwrap();
+        conn.execute_batch(
+            "
+            CREATE TABLE indexed_files (
+                file_path     TEXT PRIMARY KEY,
+                content_hash  BLOB NOT NULL,
+                file_size     INTEGER NOT NULL,
+                last_seen_at  INTEGER NOT NULL,
+                ts_indexed    INTEGER NOT NULL DEFAULT 0,
+                lsp_indexed   INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE ts_chunks (
+                file_path    TEXT NOT NULL REFERENCES indexed_files(file_path) ON DELETE CASCADE,
+                start_byte   INTEGER NOT NULL,
+                end_byte     INTEGER NOT NULL,
+                start_line   INTEGER NOT NULL,
+                end_line     INTEGER NOT NULL,
+                text         TEXT NOT NULL,
+                symbol_path  TEXT,
+                embedding    BLOB
+            );
+            ",
+        )
+        .unwrap();
+        db_path
+    }
+
+    /// Read column names from `PRAGMA table_info(indexed_files)`.
+    fn read_indexed_files_columns(db_path: &Path) -> Vec<String> {
+        let conn = Connection::open(db_path).unwrap();
+        let mut stmt = conn.prepare("PRAGMA table_info(indexed_files)").unwrap();
+        stmt.query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    /// SQLite `ALTER TABLE ... DROP COLUMN` was added in 3.35.0. Use it to
+    /// roll back the `embedded` column for tests that need to simulate a
+    /// legacy on-disk schema after the leader has already migrated.
+    fn drop_embedded_column(db_path: &Path) {
+        let conn = Connection::open(db_path).unwrap();
+        conn.execute("ALTER TABLE indexed_files DROP COLUMN embedded", [])
+            .unwrap();
+    }
+
+    /// A follower that joins an existing workspace whose on-disk schema is
+    /// missing the `embedded` column must trigger the legacy migration so
+    /// later queries against the new column succeed.
+    ///
+    /// This locks in the fix for the leader-vs-follower migration gap.
+    /// `create_schema` only runs on the leader path; if the running leader
+    /// were OLD code that did not migrate, the follower-side migration is
+    /// the only thing keeping reads against the new column from failing
+    /// with `SQLite Error: no such column: embedded`.
+    ///
+    /// To isolate follower-side migration from leader-side migration, the
+    /// test drops the `embedded` column out from under the leader after it
+    /// has opened — simulating "leader was running pre-migration code" —
+    /// then opens a follower and verifies the column comes back.
+    #[test]
+    fn test_follower_migrates_legacy_schema_on_open() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Stage a legacy schema on disk before any workspace opens.
+        let db_path = create_legacy_db_in(dir.path());
+        let pre_cols = read_indexed_files_columns(&db_path);
+        assert!(
+            !pre_cols.iter().any(|c| c == "embedded"),
+            "precondition: legacy schema should not have `embedded` column, got: {:?}",
+            pre_cols
+        );
+
+        // The first open is leader. Its `create_schema` will migrate, but
+        // we are testing the follower path, so we undo that migration on
+        // disk to simulate a leader that ran older code.
+        let _leader = CodeContextWorkspace::open(dir.path()).unwrap();
+        drop_embedded_column(&db_path);
+        let mid_cols = read_indexed_files_columns(&db_path);
+        assert!(
+            !mid_cols.iter().any(|c| c == "embedded"),
+            "precondition: after dropping the column the legacy state is restored, got: {:?}",
+            mid_cols
+        );
+
+        // The follower opens against a "legacy" DB. Its open_as_follower
+        // path must run the migration through a brief read-write connection.
+        let follower = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(!follower.is_leader(), "second open must be a follower");
+
+        let post_cols = read_indexed_files_columns(&db_path);
+        assert!(
+            post_cols.iter().any(|c| c == "embedded"),
+            "expected follower-side migration to add `embedded` column, got: {:?}",
+            post_cols
+        );
+
+        // And the follower's read-only connection must be able to query it.
+        let count: i64 = follower
+            .db()
+            .query_row(
+                "SELECT COUNT(*) FROM indexed_files WHERE embedded = 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0, "no rows yet, but query against `embedded` works");
+    }
+
+    /// `migrate_legacy_schema_if_writable` is best-effort: if the read-write
+    /// open fails (e.g. the path is bogus) it logs and returns without
+    /// panicking. The follower path can still proceed with its existing
+    /// read-only connection.
+    #[test]
+    fn test_migrate_legacy_schema_swallows_open_failure() {
+        // A path that cannot be opened — directory does not exist, so SQLite
+        // cannot create the file (Connection::open creates the DB file if
+        // missing, but only when the parent exists).
+        let bogus = Path::new("/nonexistent/parent/dir/doesnotexist.db");
+        // Must not panic.
+        migrate_legacy_schema_if_writable(bogus);
+    }
+
+    /// `migrate_legacy_schema_if_writable` is idempotent: running it twice
+    /// against an already-current DB leaves a single `embedded` column.
+    #[test]
+    fn test_migrate_legacy_schema_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = create_legacy_db_in(dir.path());
+
+        migrate_legacy_schema_if_writable(&db_path);
+        migrate_legacy_schema_if_writable(&db_path);
+
+        let cols = read_indexed_files_columns(&db_path);
+        let n = cols.iter().filter(|c| *c == "embedded").count();
+        assert_eq!(n, 1, "`embedded` column should appear exactly once");
     }
 }

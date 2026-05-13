@@ -48,6 +48,27 @@ impl Default for SearchCodeOptions {
     }
 }
 
+/// Index-build progress summary returned with a [`SearchCodeResult`].
+///
+/// Populated when `embedded_files < total_files`, i.e. the embedding pass is
+/// still running. Callers use it to inform the user that results may be
+/// incomplete and that retrying after a moment will yield more coverage.
+///
+/// Field semantics intentionally mirror `BlockingStatus::NotReady` so callers
+/// see a consistent shape across the two paths.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct IndexingProgress {
+    /// Number of files whose every chunk has an embedding (i.e. `embedded=1`).
+    pub embedded_files: u64,
+    /// Total number of tracked files in `indexed_files`.
+    pub total_files: u64,
+    /// `embedded_files / total_files * 100`, in the range 0.0..=100.0.
+    pub embedded_percent: f64,
+    /// Human-readable progress message suitable for surfacing in a CLI/MCP
+    /// response, e.g. "Embedding still in progress: 3/5 files (60%). ...".
+    pub message: String,
+}
+
 /// Result of [`search_code`].
 #[derive(Debug, serde::Serialize)]
 pub struct SearchCodeResult {
@@ -57,6 +78,9 @@ pub struct SearchCodeResult {
     pub total_chunks_searched: usize,
     /// Whether the result set was truncated by `top_k`.
     pub truncated: bool,
+    /// `Some(...)` when the embedding pass is still running, `None` when
+    /// every tracked file is embedded (or there are no tracked files).
+    pub progress: Option<IndexingProgress>,
 }
 
 /// A row loaded from `ts_chunks` with its embedding.
@@ -122,11 +146,53 @@ pub fn search_code(
         })
         .collect();
 
+    let progress = compute_indexing_progress(conn)?;
+
     Ok(SearchCodeResult {
         matches,
         total_chunks_searched,
         truncated,
+        progress,
     })
+}
+
+/// Summarise embedding-pass progress from `indexed_files`.
+///
+/// Returns `Some(...)` when `embedded_files < total_files` (the embedding
+/// pass is still running), `None` when every tracked file is embedded or
+/// when there are no tracked files at all.
+///
+/// # Errors
+///
+/// Returns [`CodeContextError::Database`] on SQLite failures.
+fn compute_indexing_progress(
+    conn: &Connection,
+) -> Result<Option<IndexingProgress>, CodeContextError> {
+    // One round-trip: total file count and embedded file count.
+    let (total_files, embedded_files): (i64, i64) = conn.query_row(
+        "SELECT COUNT(*), COALESCE(SUM(embedded), 0) FROM indexed_files",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+
+    if total_files == 0 || embedded_files >= total_files {
+        return Ok(None);
+    }
+
+    let total = total_files as u64;
+    let embedded = embedded_files as u64;
+    let embedded_percent = (embedded as f64 / total as f64) * 100.0;
+    let message = format!(
+        "Embedding still in progress: {}/{} files ({:.0}%). Results may be incomplete — retry shortly for full coverage.",
+        embedded, total, embedded_percent
+    );
+
+    Ok(Some(IndexingProgress {
+        embedded_files: embedded,
+        total_files: total,
+        embedded_percent,
+        message,
+    }))
 }
 
 /// Load chunk rows that have embeddings from `ts_chunks`.
@@ -401,5 +467,114 @@ mod tests {
         assert!(result.matches.is_empty());
         assert_eq!(result.total_chunks_searched, 0);
         assert!(!result.truncated);
+    }
+
+    /// Set the `embedded` flag for a specific file row.
+    fn set_embedded(conn: &Connection, file_path: &str, embedded: i32) {
+        conn.execute(
+            "UPDATE indexed_files SET embedded = ?1 WHERE file_path = ?2",
+            rusqlite::params![embedded, file_path],
+        )
+        .unwrap();
+    }
+
+    /// When embedded_files < total_files, the result must include a populated
+    /// `IndexingProgress` so the caller knows results may be incomplete.
+    #[test]
+    fn test_search_code_progress_some_when_partially_embedded() {
+        let conn = test_db();
+
+        // 5 tracked files, 3 of them embedded.
+        insert_file(&conn, "src/a.rs");
+        insert_file(&conn, "src/b.rs");
+        insert_file(&conn, "src/c.rs");
+        insert_file(&conn, "src/d.rs");
+        insert_file(&conn, "src/e.rs");
+        set_embedded(&conn, "src/a.rs", 1);
+        set_embedded(&conn, "src/b.rs", 1);
+        set_embedded(&conn, "src/c.rs", 1);
+
+        // Insert one embedded chunk in one of the embedded files so a match
+        // is possible.
+        let query = vec![1.0, 0.0];
+        insert_chunk_with_embedding(
+            &conn,
+            "src/a.rs",
+            1,
+            3,
+            Some("foo"),
+            "fn foo() {}",
+            &[1.0, 0.0],
+        );
+
+        let result = search_code(&conn, &query, &SearchCodeOptions::default()).unwrap();
+
+        assert_eq!(result.matches.len(), 1);
+        let progress = result
+            .progress
+            .expect("progress must be Some when embedded_files < total_files");
+        assert_eq!(progress.embedded_files, 3);
+        assert_eq!(progress.total_files, 5);
+        assert!((progress.embedded_percent - 60.0).abs() < 0.01);
+        assert!(
+            !progress.message.is_empty(),
+            "progress message must be present"
+        );
+    }
+
+    /// When the index is fully embedded, `progress` must be `None`.
+    #[test]
+    fn test_search_code_progress_none_when_fully_embedded() {
+        let conn = test_db();
+
+        insert_file(&conn, "src/a.rs");
+        insert_file(&conn, "src/b.rs");
+        set_embedded(&conn, "src/a.rs", 1);
+        set_embedded(&conn, "src/b.rs", 1);
+
+        let query = vec![1.0, 0.0];
+        insert_chunk_with_embedding(&conn, "src/a.rs", 1, 3, None, "fn foo() {}", &[1.0, 0.0]);
+
+        let result = search_code(&conn, &query, &SearchCodeOptions::default()).unwrap();
+        assert!(
+            result.progress.is_none(),
+            "progress must be None when embedded_files == total_files"
+        );
+    }
+
+    /// When there are zero tracked files, `progress` is `None`: there is
+    /// nothing to be "in progress" against.
+    #[test]
+    fn test_search_code_progress_none_when_no_files() {
+        let conn = test_db();
+        let query = vec![1.0, 0.0, 0.0];
+
+        let result = search_code(&conn, &query, &SearchCodeOptions::default()).unwrap();
+        assert!(result.matches.is_empty());
+        assert!(
+            result.progress.is_none(),
+            "progress must be None when there are no tracked files"
+        );
+    }
+
+    /// When no files have been embedded yet (all `embedded=0`), `progress`
+    /// is still populated with embedded_files=0/total_files=N.
+    #[test]
+    fn test_search_code_progress_some_when_none_embedded() {
+        let conn = test_db();
+
+        insert_file(&conn, "src/a.rs");
+        insert_file(&conn, "src/b.rs");
+
+        let query = vec![1.0, 0.0];
+        let result = search_code(&conn, &query, &SearchCodeOptions::default()).unwrap();
+
+        assert!(result.matches.is_empty());
+        let progress = result
+            .progress
+            .expect("progress must be Some when no files are embedded");
+        assert_eq!(progress.embedded_files, 0);
+        assert_eq!(progress.total_files, 2);
+        assert!(progress.embedded_percent.abs() < 0.01);
     }
 }

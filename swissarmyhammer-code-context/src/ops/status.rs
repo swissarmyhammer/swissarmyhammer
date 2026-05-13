@@ -28,6 +28,10 @@ pub struct StatusReport {
     pub ts_indexed_percent: f64,
     /// LSP indexed percentage (0.0 to 100.0).
     pub lsp_indexed_percent: f64,
+    /// Number of files with `embedded = 1` (file-level embedding completeness).
+    pub embedded_files: u64,
+    /// File-level embedded percentage (0.0 to 100.0).
+    pub embedded_percent: f64,
     /// Total number of tree-sitter chunks.
     pub ts_chunk_count: u64,
     /// Number of files that actually have chunks in ts_chunks (honest metric).
@@ -40,6 +44,19 @@ pub struct StatusReport {
     pub call_edge_count: u64,
     /// Number of files still waiting for indexing (ts_indexed=0).
     pub dirty_files: u64,
+    /// Total number of chunks in `ts_chunks` (mirror of `ts_chunk_count`,
+    /// scoped to the embedding-progress view for symmetry with
+    /// `chunks_with_embedding`).
+    pub total_chunks: u64,
+    /// Number of chunks where `embedding IS NOT NULL`.
+    ///
+    /// This is the chunk-level signal that `search code` actually queries
+    /// against. A regression where some chunks lose their embedding shows
+    /// up here first.
+    pub chunks_with_embedding: u64,
+    /// Chunk-level percentage of chunks that have an embedding blob
+    /// (0.0 to 100.0).
+    pub chunks_with_embedding_percent: f64,
     /// Suggested next step.
     pub hint: &'static str,
 }
@@ -57,74 +74,70 @@ pub struct StatusReport {
 ///
 /// Returns [`CodeContextError::Database`] on SQLite failures.
 pub fn get_status(conn: &Connection) -> Result<StatusReport, CodeContextError> {
-    let total_files: i64 =
-        conn.query_row("SELECT COUNT(*) FROM indexed_files", [], |r| r.get(0))?;
-
-    let ts_indexed_files: i64 = conn.query_row(
+    let total_files = count(conn, "SELECT COUNT(*) FROM indexed_files")?;
+    let ts_indexed_files = count(
+        conn,
         "SELECT COUNT(*) FROM indexed_files WHERE ts_indexed = 1",
-        [],
-        |r| r.get(0),
     )?;
-
-    let lsp_indexed_files: i64 = conn.query_row(
+    let lsp_indexed_files = count(
+        conn,
         "SELECT COUNT(*) FROM indexed_files WHERE lsp_indexed = 1",
-        [],
-        |r| r.get(0),
     )?;
-
-    let ts_indexed_percent = if total_files > 0 {
-        (ts_indexed_files as f64 / total_files as f64) * 100.0
-    } else {
-        0.0
-    };
-
-    let lsp_indexed_percent = if total_files > 0 {
-        (lsp_indexed_files as f64 / total_files as f64) * 100.0
-    } else {
-        0.0
-    };
-
-    let ts_chunk_count: i64 = conn.query_row("SELECT COUNT(*) FROM ts_chunks", [], |r| r.get(0))?;
-
-    let files_with_chunks: i64 =
-        conn.query_row("SELECT COUNT(DISTINCT file_path) FROM ts_chunks", [], |r| {
-            r.get(0)
-        })?;
-
-    let files_with_symbols: i64 = conn.query_row(
-        "SELECT COUNT(DISTINCT file_path) FROM lsp_symbols",
-        [],
-        |r| r.get(0),
+    let embedded_files = count(
+        conn,
+        "SELECT COUNT(*) FROM indexed_files WHERE embedded = 1",
     )?;
-
-    let lsp_symbol_count: i64 =
-        conn.query_row("SELECT COUNT(*) FROM lsp_symbols", [], |r| r.get(0))?;
-
-    let call_edge_count: i64 =
-        conn.query_row("SELECT COUNT(*) FROM lsp_call_edges", [], |r| r.get(0))?;
-
-    let dirty_files: i64 = conn.query_row(
+    let dirty_files = count(
+        conn,
         "SELECT COUNT(*) FROM indexed_files WHERE ts_indexed = 0",
-        [],
-        |r| r.get(0),
     )?;
 
-    let hint = crate::hints::hint_for_operation("get_status");
+    let ts_chunk_count = count(conn, "SELECT COUNT(*) FROM ts_chunks")?;
+    let files_with_chunks = count(conn, "SELECT COUNT(DISTINCT file_path) FROM ts_chunks")?;
+    let chunks_with_embedding = count(
+        conn,
+        "SELECT COUNT(*) FROM ts_chunks WHERE embedding IS NOT NULL",
+    )?;
+
+    let files_with_symbols = count(conn, "SELECT COUNT(DISTINCT file_path) FROM lsp_symbols")?;
+    let lsp_symbol_count = count(conn, "SELECT COUNT(*) FROM lsp_symbols")?;
+    let call_edge_count = count(conn, "SELECT COUNT(*) FROM lsp_call_edges")?;
 
     Ok(StatusReport {
         total_files: total_files as u64,
         ts_indexed_files: ts_indexed_files as u64,
         lsp_indexed_files: lsp_indexed_files as u64,
-        ts_indexed_percent,
-        lsp_indexed_percent,
+        ts_indexed_percent: percent_of(ts_indexed_files, total_files),
+        lsp_indexed_percent: percent_of(lsp_indexed_files, total_files),
+        embedded_files: embedded_files as u64,
+        embedded_percent: percent_of(embedded_files, total_files),
         ts_chunk_count: ts_chunk_count as u64,
         files_with_chunks: files_with_chunks as u64,
         files_with_symbols: files_with_symbols as u64,
         lsp_symbol_count: lsp_symbol_count as u64,
         call_edge_count: call_edge_count as u64,
         dirty_files: dirty_files as u64,
-        hint,
+        total_chunks: ts_chunk_count as u64,
+        chunks_with_embedding: chunks_with_embedding as u64,
+        chunks_with_embedding_percent: percent_of(chunks_with_embedding, ts_chunk_count),
+        hint: crate::hints::hint_for_operation("get_status"),
     })
+}
+
+/// Run a `SELECT COUNT(*) ...` query and return the integer.
+fn count(conn: &Connection, sql: &str) -> Result<i64, CodeContextError> {
+    Ok(conn.query_row(sql, [], |r| r.get(0))?)
+}
+
+/// Compute `(numerator / denominator) * 100.0`, returning 0.0 when the
+/// denominator is zero. Keeps the arithmetic in one place so file-level
+/// and chunk-level percentages share the same divide-by-zero behaviour.
+fn percent_of(numerator: i64, denominator: i64) -> f64 {
+    if denominator > 0 {
+        (numerator as f64 / denominator as f64) * 100.0
+    } else {
+        0.0
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -359,6 +372,74 @@ mod tests {
             "1 file without LSP data (Failed/NotFound)"
         );
         assert!((report.lsp_indexed_percent - 50.0).abs() < 0.01);
+    }
+
+    /// Insert a chunk and optionally populate its embedding blob.
+    fn insert_chunk_with_embedding(conn: &Connection, file_path: &str, embedding: Option<&[u8]>) {
+        conn.execute(
+            "INSERT INTO ts_chunks (file_path, start_byte, end_byte, start_line, end_line, text, embedding)
+             VALUES (?1, 0, 100, 1, 10, 'fn main() {}', ?2)",
+            rusqlite::params![file_path, embedding],
+        )
+        .unwrap();
+    }
+
+    /// Update the `embedded` flag on a file row.
+    fn set_embedded(conn: &Connection, file_path: &str, embedded: i32) {
+        conn.execute(
+            "UPDATE indexed_files SET embedded = ?1 WHERE file_path = ?2",
+            rusqlite::params![embedded, file_path],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_get_status_reports_embedding_progress() {
+        let conn = test_db();
+        // 4 files: 2 fully embedded, 1 partially (chunk present but no
+        // embedding), 1 with no chunks at all.
+        insert_file(&conn, "a.rs", 1, 0);
+        insert_file(&conn, "b.rs", 1, 0);
+        insert_file(&conn, "c.rs", 1, 0);
+        insert_file(&conn, "d.rs", 0, 0);
+
+        // a.rs has one embedded chunk.
+        insert_chunk_with_embedding(&conn, "a.rs", Some(&[0u8, 1, 2, 3]));
+        set_embedded(&conn, "a.rs", 1);
+
+        // b.rs has one embedded chunk.
+        insert_chunk_with_embedding(&conn, "b.rs", Some(&[4u8, 5, 6, 7]));
+        set_embedded(&conn, "b.rs", 1);
+
+        // c.rs has two chunks, one with embedding, one without — file is
+        // therefore NOT embedded (anomaly state).
+        insert_chunk_with_embedding(&conn, "c.rs", Some(&[8u8, 9]));
+        insert_chunk_with_embedding(&conn, "c.rs", None);
+        // embedded flag stays 0 (default)
+
+        // d.rs has no chunks at all.
+
+        let report = get_status(&conn).unwrap();
+
+        // File-level: 2 of 4 files embedded.
+        assert_eq!(report.embedded_files, 2);
+        assert!((report.embedded_percent - 50.0).abs() < 0.01);
+
+        // Chunk-level: 3 of 4 chunks have embeddings.
+        assert_eq!(report.total_chunks, 4);
+        assert_eq!(report.chunks_with_embedding, 3);
+        assert!((report.chunks_with_embedding_percent - 75.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_get_status_embedding_zero_on_empty_db() {
+        let conn = test_db();
+        let report = get_status(&conn).unwrap();
+        assert_eq!(report.embedded_files, 0);
+        assert_eq!(report.embedded_percent, 0.0);
+        assert_eq!(report.total_chunks, 0);
+        assert_eq!(report.chunks_with_embedding, 0);
+        assert_eq!(report.chunks_with_embedding_percent, 0.0);
     }
 
     // -- build_status tests --

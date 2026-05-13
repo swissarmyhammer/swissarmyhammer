@@ -81,7 +81,7 @@ async fn dispatch_command(cli: Cli) -> i32 {
                 .any(|r| r.status == swissarmyhammer_common::lifecycle::InitStatus::Error);
             i32::from(had_error)
         }
-        Commands::Doctor { verbose } => commands::doctor::run_doctor(verbose),
+        Commands::Doctor { verbose } => commands::doctor::run_doctor(verbose).await,
         Commands::Skill => commands::skill::run_skill(),
         // All other commands are tool operations dispatched via commands::ops::run_operation.
         ref command => commands::ops::run_operation(command, json_output).await,
