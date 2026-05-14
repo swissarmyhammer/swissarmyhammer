@@ -2,8 +2,8 @@
 assignees:
 - claude-code
 depends_on: []
-position_column: todo
-position_ordinal: '9880'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffe680
 title: 'Grid empty-state copy: distinguish "no entities yet" from "filter matches nothing"'
 ---
 ## What
@@ -23,9 +23,9 @@ Alternatively a neutral "No {plural} to show" covers both cases without extra br
 
 ## Acceptance Criteria
 
-- [ ] Filter-active empty state shows copy that reflects the filter is the cause, not absence of entities.
-- [ ] Filter-inactive empty state keeps the existing "New {EntityType}" primary CTA.
-- [ ] `grid-empty-state.browser.test.tsx` has a test case for each branch.
+- [x] Filter-active empty state shows copy that reflects the filter is the cause, not absence of entities.
+- [x] Filter-inactive empty state keeps the existing "New {EntityType}" primary CTA.
+- [x] `grid-empty-state.browser.test.tsx` has a test case for each branch.
 
 ## References
 

@@ -769,25 +769,44 @@ function titleCaseEntityType(entityType: string): string {
 /**
  * Prominent empty-state for a grid view with zero rows.
  *
- * Centered block with a large `Plus` icon, "No {EntityType}s yet" text,
- * and a primary-styled "New {EntityType}" button. Clicking the button
- * dispatches `entity.add:{entityType}` to create the first entity.
+ * Centered block with a large `Plus` icon. The copy and call-to-action
+ * branch on `hasFilter`:
+ *
+ *   - `hasFilter === false` — the underlying entity set is empty. Show
+ *     "No {plural} yet" and a primary `New {EntityType}` button. Clicking
+ *     the button dispatches `entity.add:{entityType}` to create the first
+ *     entity.
+ *   - `hasFilter === true` — entities may exist but the active
+ *     perspective's filter is hiding them. Show "No {plural} match this
+ *     filter" with no primary CTA. Creating a new entity in this branch
+ *     would be misleading: it might not match the filter either, leaving
+ *     the user staring at the same empty-state and wondering where their
+ *     new entity went. Filter manipulation lives in the perspective tab
+ *     bar — that's the affordance for this state.
  *
  * Right-clicking anywhere in the empty-state block opens the view-scoped
  * context menu (same pipeline as right-click on a row) — this surfaces
- * "New {EntityType}" and whatever other view-level commands exist.
+ * "New {EntityType}" and whatever other view-level commands exist, in
+ * both branches.
  *
  * Rendered in place of `<DataTable>` + `<AddEntityBar>` when
  * `entities.length === 0`. Do NOT render both — `AddEntityBar` is a
  * secondary affordance for non-empty grids; with no rows, the centered
- * primary button is the single call-to-action.
+ * primary button (when present) is the single call-to-action.
  */
 function GridEmptyState({
   entityType,
+  hasFilter,
   dispatch,
   onContextMenu,
 }: {
   entityType: string;
+  /**
+   * Whether the active perspective has a non-empty filter expression.
+   * Controls whether the empty-state explains the cause as "filter hides
+   * entities" vs "no entities exist yet".
+   */
+  hasFilter: boolean;
   dispatch: (cmd: string, opts?: DispatchOptions) => Promise<unknown>;
   /**
    * View-scoped context-menu handler. Passed in from `GridBody` which owns
@@ -803,6 +822,9 @@ function GridEmptyState({
   // type breaks this (e.g. "person" -> "persons" not "people"), schema
   // metadata can add an explicit plural later.
   const plural = `${entityType}s`;
+  const message = hasFilter
+    ? `No ${plural} match this filter`
+    : `No ${plural} yet`;
   return (
     <div
       data-testid="grid-empty-state"
@@ -810,16 +832,18 @@ function GridEmptyState({
       onContextMenu={onContextMenu}
     >
       <Plus className="h-12 w-12 text-muted-foreground/40" aria-hidden="true" />
-      <p className="text-sm text-muted-foreground">No {plural} yet</p>
-      <Button
-        type="button"
-        variant="default"
-        size="default"
-        onClick={() => addNewEntity(dispatch, entityType)}
-      >
-        <Plus className="h-4 w-4" />
-        {label}
-      </Button>
+      <p className="text-sm text-muted-foreground">{message}</p>
+      {!hasFilter && (
+        <Button
+          type="button"
+          variant="default"
+          size="default"
+          onClick={() => addNewEntity(dispatch, entityType)}
+        >
+          <Plus className="h-4 w-4" />
+          {label}
+        </Button>
+      )}
     </div>
   );
 }
@@ -885,6 +909,11 @@ function GridBody({ data, nav, callbacks, dispatch }: GridBodyProps) {
   const containerContextMenu = useContextMenu();
 
   const isEmpty = data.entities.length === 0;
+  // Treat whitespace-only filters as no filter — the perspective config
+  // can legally hold an empty / whitespace filter string and the server
+  // applies it as a no-op. Surfacing "No tags match this filter" for a
+  // trimmed-empty filter would be a lie.
+  const hasFilter = (data.activePerspective?.filter ?? "").trim().length > 0;
 
   return (
     <main className="flex-1 flex flex-col min-h-0">
@@ -896,6 +925,7 @@ function GridBody({ data, nav, callbacks, dispatch }: GridBodyProps) {
       {isEmpty ? (
         <GridEmptyState
           entityType={data.entityType}
+          hasFilter={hasFilter}
           dispatch={dispatch}
           onContextMenu={containerContextMenu}
         />

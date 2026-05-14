@@ -44,9 +44,16 @@ vi.mock("@tauri-apps/api/window", () => ({
 // Dependency mocks.
 // ---------------------------------------------------------------------------
 
+// Mutable holder so individual tests can override the active perspective
+// (specifically its `filter` field) without re-wiring the whole module mock.
+// Defaults to `null` — no active perspective, matching the prior fixed mock.
+const activePerspectiveHolder: { current: { filter?: string } | null } = {
+  current: null,
+};
+
 vi.mock("@/components/perspective-container", () => ({
   useActivePerspective: () => ({
-    activePerspective: null,
+    activePerspective: activePerspectiveHolder.current,
     applySort: (entities: unknown[]) => entities,
     groupField: undefined,
   }),
@@ -174,6 +181,9 @@ describe("GridEmptyState", () => {
       if (cmd === "list_commands_for_scope") return [];
       return undefined;
     });
+    // Reset the active-perspective mock between tests so the filter-active
+    // case in one test doesn't leak into the no-filter default of the next.
+    activePerspectiveHolder.current = null;
   });
 
   it("renders a prominent 'New Tag' button (not the muted AddEntityBar '+')", async () => {
@@ -204,6 +214,37 @@ describe("GridEmptyState", () => {
     expect(dispatchCall).toBeTruthy();
     const payload = dispatchCall?.[1] as { cmd?: string } | undefined;
     expect(payload?.cmd).toBe("entity.add:tag");
+  });
+
+  it("shows 'No tags yet' and the New Tag CTA when no perspective filter is active", async () => {
+    // Default holder state — no active perspective at all, which is the
+    // strongest form of "no filter". The empty-state must read as
+    // "the entity set is empty, click here to add the first one".
+    activePerspectiveHolder.current = null;
+    await renderTagsEmptyGrid("v-tags");
+
+    const wrapper = screen.getByTestId("grid-empty-state");
+    expect(wrapper.textContent).toContain("No tags yet");
+    expect(wrapper.textContent).not.toMatch(/match this filter/i);
+
+    // The primary CTA is present only on this branch — see the
+    // filter-active test below for the contrasting assertion.
+    expect(screen.getByRole("button", { name: "New Tag" })).toBeTruthy();
+  });
+
+  it("shows filter-aware copy and suppresses the New Tag CTA when a perspective filter is active", async () => {
+    // A non-empty filter string means the empty result is caused by the
+    // filter hiding entities, not by an absent entity set. The copy must
+    // reflect that, and the "New Tag" primary button must not be offered
+    // here — creating a new tag would not change the filter result and
+    // is the wrong call-to-action for this state.
+    activePerspectiveHolder.current = { filter: "#archived" };
+    await renderTagsEmptyGrid("v-tags");
+
+    const wrapper = screen.getByTestId("grid-empty-state");
+    expect(wrapper.textContent).toMatch(/no tags match this filter/i);
+    expect(wrapper.textContent).not.toContain("No tags yet");
+    expect(screen.queryByRole("button", { name: "New Tag" })).toBeNull();
   });
 
   it("fires list_commands_for_scope on context-menu over the empty-state wrapper", async () => {
