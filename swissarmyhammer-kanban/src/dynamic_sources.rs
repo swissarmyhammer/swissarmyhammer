@@ -456,10 +456,15 @@ fn denormalize_perspective_fields(
 
 /// Read the board entity's `name` field from the entity store.
 ///
-/// Mirrors the pre-refactor `board_display_name` in `kanban-app`: returns
-/// `None` if the entity store isn't reachable, the `board/board` entity
-/// doesn't exist yet, or the entity has no non-empty `name` field.
-async fn board_display_name(ctx: &KanbanContext) -> Option<String> {
+/// Returns the `name` field of the board entity (entity type `board`, id
+/// `board`) — the canonical display name set during `init board` and
+/// editable by the user. Returns `None` when the entity store isn't
+/// reachable, the `board/board` entity doesn't exist yet, or the entity
+/// has no non-empty `name` field.
+///
+/// Used by both the headless [`gather_boards`] assembly here and the GUI
+/// crate (window titles, the open-boards list, board-switch handlers).
+pub async fn board_display_name(ctx: &KanbanContext) -> Option<String> {
     let ectx = ctx.entity_context().await.ok()?;
     let entity = ectx.read("board", "board").await.ok()?;
     entity

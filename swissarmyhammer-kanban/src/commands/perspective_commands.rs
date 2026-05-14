@@ -276,10 +276,7 @@ impl Command for SavePerspectiveCmd {
         // injection pass, so the fallback lives here. See
         // `resolve_active_view` for the shared resolver (same pattern
         // used by `cycle_perspective`).
-        let explicit_view_arg = ctx
-            .arg("view")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
+        let explicit_view_arg = ctx.arg("view").and_then(|v| v.as_str()).map(str::to_string);
         let (resolved_view_kind, resolved_view_id) = resolve_active_view(ctx, &kanban).await;
         let view_id = ctx
             .arg("view_id")

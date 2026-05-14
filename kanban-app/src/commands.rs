@@ -125,22 +125,6 @@ fn gather_windows(app: &tauri::AppHandle) -> Vec<swissarmyhammer_commands::Windo
         .collect()
 }
 
-/// Read the board entity's display name from the entity context.
-///
-/// Returns the `name` field of the board entity (entity type "board", id "board").
-/// This is the canonical display name set during `init board` — typically the
-/// directory name, but editable by the user.
-async fn board_display_name(handle: &BoardHandle) -> Option<String> {
-    let ectx = handle.ctx.entity_context().await.ok()?;
-    let entity = ectx.read("board", "board").await.ok()?;
-    entity
-        .fields
-        .get("name")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-}
-
 /// Resolve a board handle — by explicit path or falling back to active board.
 ///
 /// When `board_path` is provided, canonicalizes it to match the key format
@@ -176,7 +160,9 @@ pub async fn list_open_boards(state: State<'_, AppState>) -> Result<Value, Strin
     let mut list: Vec<Value> = Vec::new();
     for (path, handle) in boards.iter() {
         let is_active = most_recent.as_ref() == Some(path);
-        let name = board_display_name(handle).await.unwrap_or_default();
+        let name = swissarmyhammer_kanban::board_display_name(&handle.ctx)
+            .await
+            .unwrap_or_default();
         list.push(json!({
             "path": path.display().to_string(),
             "is_active": is_active,
@@ -1020,7 +1006,7 @@ async fn apply_board_title(app: &AppHandle, state: &AppState, label: &str, board
         .unwrap_or_else(|_| board_path.clone());
     let boards = state.boards.read().await;
     if let Some(handle) = boards.get(&canonical) {
-        let name = board_display_name(handle).await;
+        let name = swissarmyhammer_kanban::board_display_name(&handle.ctx).await;
         update_window_title(app, label, name.as_deref());
     }
 }
@@ -1566,7 +1552,7 @@ async fn handle_board_switch_result(
                 .set_window_board(label, &canonical.display().to_string());
             let boards = state.boards.read().await;
             if let Some(handle) = boards.get(&canonical) {
-                let name = board_display_name(handle).await;
+                let name = swissarmyhammer_kanban::board_display_name(&handle.ctx).await;
                 update_window_title(app, label, name.as_deref());
             }
         }
@@ -1974,7 +1960,7 @@ async fn flush_and_sync_after_command(
 /// match the board entity's display name. Catches board renames, undo/redo
 /// of name changes, etc.
 async fn refresh_board_window_titles(app: &AppHandle, state: &AppState, handle: &BoardHandle) {
-    let display_name = board_display_name(handle).await;
+    let display_name = swissarmyhammer_kanban::board_display_name(&handle.ctx).await;
     let canonical = handle
         .ctx
         .root()

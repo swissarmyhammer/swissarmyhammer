@@ -103,6 +103,7 @@ pub use defaults::{
     builtin_actor_entities, builtin_view_definitions, kanban_compute_engine, KanbanLookup,
 };
 pub use derive_handlers::kanban_derive_registry;
+pub use dynamic_sources::board_display_name;
 pub use error::{KanbanError, Result};
 pub use processor::KanbanOperationProcessor;
 
