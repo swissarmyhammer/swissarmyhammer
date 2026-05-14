@@ -214,7 +214,7 @@ early in a session to understand the project before making changes.
 - **Cause**: Startup cleanup did not run, usually because another process held the leader lock and exited uncleanly, leaving a stale `.code-context/` state. The reader-side workspace never re-scans the filesystem on its own.
 - **Solution**: Force a re-scan by resetting the indexed flags, then let the worker re-process:
   ```json
-  {"op": "build status", "layer": "both"}
+  {"op": "rebuild index", "layer": "both"}
   ```
   Follow with `{"op": "get status"}` until `files_pending` reaches 0. If the problem persists, wipe the index and rebuild from scratch:
   ```json
@@ -232,6 +232,6 @@ early in a session to understand the project before making changes.
 - **Cause**: `grep code` searches **stored chunks**, not the filesystem. New or modified files that have not been re-indexed yet are invisible to it. The file-watcher is currently a `FileEvent` enum without an active watcher, so edits made outside the MCP session do not auto-invalidate.
 - **Solution**: Force re-indexing of the tree-sitter layer, then wait for it to settle:
   ```json
-  {"op": "build status", "layer": "treesitter"}
+  {"op": "rebuild index", "layer": "treesitter"}
   ```
   For one-off string searches where you need live filesystem results, fall back to Grep/ripgrep directly.
