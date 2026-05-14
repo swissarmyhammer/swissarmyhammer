@@ -16,6 +16,9 @@ _kanban() {
             ",$1")
                 cmd="kanban"
                 ;;
+            kanban,completion)
+                cmd="kanban__completion"
+                ;;
             kanban,deinit)
                 cmd="kanban__deinit"
                 ;;
@@ -30,6 +33,9 @@ _kanban() {
                 ;;
             kanban,serve)
                 cmd="kanban__serve"
+                ;;
+            kanban__help,completion)
+                cmd="kanban__help__completion"
                 ;;
             kanban__help,deinit)
                 cmd="kanban__help__deinit"
@@ -53,8 +59,22 @@ _kanban() {
 
     case "${cmd}" in
         kanban)
-            opts="-d -h -V --debug --help --version serve init deinit doctor help"
+            opts="-d -h -V --debug --help --version serve init deinit doctor completion help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        kanban__completion)
+            opts="-d -h --debug --help bash elvish fish powershell zsh"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -95,8 +115,22 @@ _kanban() {
             return 0
             ;;
         kanban__help)
-            opts="serve init deinit doctor help"
+            opts="serve init deinit doctor completion help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        kanban__help__completion)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

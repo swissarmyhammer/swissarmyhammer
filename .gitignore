@@ -79,6 +79,12 @@ doc/book
 # ACP transcript recordings
 .acp/
 
+# AVP runtime state (self-manages its own .gitignore)
+.avp/
+
+# Kanban perspective trash (local cleanup, not source)
+.kanban/perspectives/.trash/
+
 # Stray fixture output at workspace root.
 # `agent-client-protocol-extras::get_fixture_path_for()` resolves to the
 # per-crate `<crate>/.fixtures/` layout (acp-conformance,

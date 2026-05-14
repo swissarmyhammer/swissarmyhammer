@@ -57,24 +57,11 @@ async fn test_prompt_help() -> Result<()> {
     Ok(())
 }
 
-/// Test shell completion generation
-#[tokio::test]
-async fn test_completion_command() -> Result<()> {
-    let shells = vec!["bash", "zsh", "fish"];
-
-    for shell in shells {
-        let result = run_sah_command_in_process(&["completion", shell]).await?;
-
-        assert_eq!(result.exit_code, 0, "{shell} completion should succeed");
-
-        assert!(
-            !result.stdout.trim().is_empty(),
-            "{shell} completion should generate output"
-        );
-    }
-
-    Ok(())
-}
+// Note: end-to-end `sah completion <shell>` verification lives in
+// `tests/completion.rs` and exercises the compiled binary via
+// `swissarmyhammer_cli_completions::test_helpers::assert_compiled_binary_completion_works`.
+// Keeping the rendering contract in one place — the shared helper — avoids
+// duplicating the per-shell assertions across every CLI crate.
 
 /// Test that verbose flag works
 #[tokio::test]

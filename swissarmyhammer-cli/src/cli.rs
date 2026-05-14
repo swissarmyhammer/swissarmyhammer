@@ -229,16 +229,16 @@ Generates shell completion scripts for various shells. Supports:
 
 Examples:
   # Bash (add to ~/.bashrc or ~/.bash_profile)
-  swissarmyhammer completion bash > ~/.local/share/bash-completion/completions/swissarmyhammer
-  
+  sah completion bash > ~/.local/share/bash-completion/completions/sah
+
   # Zsh (add to ~/.zshrc or a file in fpath)
-  swissarmyhammer completion zsh > ~/.zfunc/_swissarmyhammer
-  
+  sah completion zsh > ~/.zfunc/_sah
+
   # Fish
-  swissarmyhammer completion fish > ~/.config/fish/completions/swissarmyhammer.fish
-  
+  sah completion fish > ~/.config/fish/completions/sah.fish
+
   # PowerShell
-  swissarmyhammer completion powershell >> $PROFILE
+  sah completion powershell >> $PROFILE
 ")]
     Completion {
         /// Shell to generate completion for

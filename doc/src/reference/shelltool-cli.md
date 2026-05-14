@@ -15,6 +15,7 @@ brew install swissarmyhammer/tap/shelltool-cli
 * [`shelltool init`↴](#shelltool-init)
 * [`shelltool deinit`↴](#shelltool-deinit)
 * [`shelltool doctor`↴](#shelltool-doctor)
+* [`shelltool completion`↴](#shelltool-completion)
 
 ## `shelltool`
 
@@ -30,6 +31,7 @@ Replaces Bash and exec CLI tools with a persistent, searchable shell. Instead of
 * `init` — Install shelltool MCP server into Claude Code settings
 * `deinit` — Remove shelltool from Claude Code settings
 * `doctor` — Diagnose shelltool configuration and setup
+* `completion` — Generate shell completion scripts
 
 ###### **Options:**
 
@@ -100,6 +102,40 @@ Diagnose shelltool configuration and setup
 ###### **Options:**
 
 * `-v`, `--verbose` — Show detailed output including fix suggestions
+
+
+
+## `shelltool completion`
+
+
+Generates shell completion scripts for various shells. Supports:
+- bash
+- zsh
+- fish
+- powershell
+
+Examples:
+  # Bash (add to ~/.bashrc or ~/.bash_profile)
+  shelltool completion bash > ~/.local/share/bash-completion/completions/shelltool
+
+  # Zsh (add to ~/.zshrc or a file in fpath)
+  shelltool completion zsh > ~/.zfunc/_shelltool
+
+  # Fish
+  shelltool completion fish > ~/.config/fish/completions/shelltool.fish
+
+  # PowerShell
+  shelltool completion powershell >> $PROFILE
+
+
+**Usage:** `shelltool completion <SHELL>`
+
+###### **Arguments:**
+
+* `<SHELL>` — Shell to generate completion for
+
+  Possible values: `bash`, `elvish`, `fish`, `powershell`, `zsh`
+
 
 
 

@@ -68,6 +68,7 @@ members = [
     "heb",
     "shelltool-cli",
     "code-context-cli",
+    "swissarmyhammer-cli-completions",
 ]
 resolver = "2"
 
@@ -250,6 +251,7 @@ model-context-protocol-extras = { path = "model-context-protocol-extras" }
 swissarmyhammer-agent = { path = "swissarmyhammer-agent" }
 swissarmyhammer-agents = { path = "swissarmyhammer-agents" }
 swissarmyhammer-build = { path = "swissarmyhammer-build" }
+swissarmyhammer-cli-completions = { path = "swissarmyhammer-cli-completions" }
 swissarmyhammer-code-context = { path = "swissarmyhammer-code-context" }
 swissarmyhammer-commands = { path = "swissarmyhammer-commands" }
 swissarmyhammer-common = { path = "swissarmyhammer-common" }

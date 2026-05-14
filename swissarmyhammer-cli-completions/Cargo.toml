@@ -1,0 +1,26 @@
+[package]
+name = "swissarmyhammer-cli-completions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Shared shell-completion helpers for SwissArmyHammer CLIs"
+
+[lib]
+name = "swissarmyhammer_cli_completions"
+path = "src/lib.rs"
+
+[features]
+# The `test-helpers` feature exposes the `test_helpers` module to downstream
+# crates so their integration tests can call `assert_compiled_binary_completion_works`
+# and `assert_renders_for_all_shells` without re-implementing them. The module
+# is also unconditionally visible to this crate's own `#[cfg(test)]` builds.
+test-helpers = []
+
+[dependencies]
+clap = { workspace = true }
+clap_complete = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

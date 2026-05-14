@@ -19,6 +19,7 @@ use swissarmyhammer_common::reporter::CliReporter;
 mod banner;
 mod cli;
 mod commands;
+mod completions;
 mod logging;
 mod progress;
 
@@ -85,6 +86,13 @@ async fn dispatch_command(cli: Cli) -> i32 {
         }
         Commands::Doctor { verbose } => commands::doctor::run_doctor(verbose).await,
         Commands::Skill => commands::skill::run_skill(),
+        Commands::Completion { shell } => match completions::print_completion(shell) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("Error: {e}");
+                1
+            }
+        },
         // All other commands are tool operations dispatched via commands::ops::run_operation.
         ref command => commands::ops::run_operation(command, json_output, no_progress).await,
     }

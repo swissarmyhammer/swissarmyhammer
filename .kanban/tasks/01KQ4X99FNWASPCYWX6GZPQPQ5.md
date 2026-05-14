@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: fa80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffc880
 title: Wire up runtime `completion` subcommand for every CLI
 ---
 ## Problem

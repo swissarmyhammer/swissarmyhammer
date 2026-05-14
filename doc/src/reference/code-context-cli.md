@@ -50,6 +50,7 @@ brew install swissarmyhammer/tap/code-context-cli
 * [`code-context lsp status`↴](#code-context-lsp-status)
 * [`code-context detect`↴](#code-context-detect)
 * [`code-context detect projects`↴](#code-context-detect-projects)
+* [`code-context completion`↴](#code-context-completion)
 
 ## `code-context`
 
@@ -76,6 +77,7 @@ Provides indexed code navigation, symbol lookup, call graph traversal, blast rad
 * `clear` — Wipe index data
 * `lsp` — LSP server management
 * `detect` — Detect project types and languages
+* `completion` — Generate shell completion scripts
 
 ###### **Options:**
 
@@ -621,6 +623,40 @@ Detect project types in the workspace and return language-specific guidelines
 * `--include-guidelines <INCLUDE_GUIDELINES>` — Include language-specific guidelines in output
 
   Possible values: `true`, `false`
+
+
+
+
+## `code-context completion`
+
+
+Generates shell completion scripts for various shells. Supports:
+- bash
+- zsh
+- fish
+- powershell
+
+Examples:
+  # Bash (add to ~/.bashrc or ~/.bash_profile)
+  code-context completion bash > ~/.local/share/bash-completion/completions/code-context
+
+  # Zsh (add to ~/.zshrc or a file in fpath)
+  code-context completion zsh > ~/.zfunc/_code-context
+
+  # Fish
+  code-context completion fish > ~/.config/fish/completions/code-context.fish
+
+  # PowerShell
+  code-context completion powershell >> $PROFILE
+
+
+**Usage:** `code-context completion <SHELL>`
+
+###### **Arguments:**
+
+* `<SHELL>` — Shell to generate completion for
+
+  Possible values: `bash`, `elvish`, `fish`, `powershell`, `zsh`
 
 
 

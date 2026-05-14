@@ -27,6 +27,8 @@ mirdan = { workspace = true }
 
 rmcp = { workspace = true }
 clap = { workspace = true }
+clap_complete = { workspace = true }
+swissarmyhammer-cli-completions = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -39,6 +41,7 @@ dirs = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 serial_test = { workspace = true }
+swissarmyhammer-cli-completions = { workspace = true, features = ["test-helpers"] }
 
 [build-dependencies]
 clap = { workspace = true }

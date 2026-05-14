@@ -471,6 +471,7 @@ dependencies = [
  "dirs",
  "serde_json",
  "serial_test",
+ "swissarmyhammer-cli-completions",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-doctor",
@@ -1241,6 +1242,7 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "serial_test",
+ "swissarmyhammer-cli-completions",
  "swissarmyhammer-code-context",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
@@ -4100,6 +4102,7 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "serial_test",
+ "swissarmyhammer-cli-completions",
  "swissarmyhammer-common",
  "swissarmyhammer-doctor",
  "swissarmyhammer-entity",
@@ -4752,6 +4755,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
+ "clap_complete",
  "comfy-table",
  "crossterm",
  "dialoguer",
@@ -4767,6 +4771,7 @@ dependencies = [
  "serde_yaml_ng",
  "serial_test",
  "sha2",
+ "swissarmyhammer-cli-completions",
  "swissarmyhammer-common",
  "swissarmyhammer-directory",
  "swissarmyhammer-doctor",
@@ -4812,6 +4817,7 @@ dependencies = [
  "clap_complete",
  "clap_mangen",
  "mirdan",
+ "swissarmyhammer-cli-completions",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -7711,6 +7717,7 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "serial_test",
+ "swissarmyhammer-cli-completions",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-directory",
@@ -8192,6 +8199,7 @@ dependencies = [
  "swissarmyhammer",
  "swissarmyhammer-agent",
  "swissarmyhammer-agents",
+ "swissarmyhammer-cli-completions",
  "swissarmyhammer-code-context",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
@@ -8212,6 +8220,15 @@ dependencies = [
  "tracing-subscriber",
  "walkdir",
  "which",
+]
+
+[[package]]
+name = "swissarmyhammer-cli-completions"
+version = "0.12.11"
+dependencies = [
+ "clap",
+ "clap_complete",
+ "tempfile",
 ]
 
 [[package]]

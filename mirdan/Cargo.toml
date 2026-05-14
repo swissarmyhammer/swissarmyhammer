@@ -28,6 +28,8 @@ serde_yaml_ng = { workspace = true }
 
 # CLI
 clap = { workspace = true }
+clap_complete = { workspace = true }
+swissarmyhammer-cli-completions = { workspace = true }
 
 # Terminal interaction
 crossterm = { workspace = true }

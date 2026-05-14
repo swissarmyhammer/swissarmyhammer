@@ -30,6 +30,8 @@ serde_json = { workspace = true }
 
 # CLI
 clap = { workspace = true }
+clap_complete = { workspace = true }
+swissarmyhammer-cli-completions = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }
@@ -62,3 +64,4 @@ clap_complete = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 serial_test = { workspace = true }
+swissarmyhammer-cli-completions = { workspace = true, features = ["test-helpers"] }

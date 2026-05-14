@@ -15,6 +15,7 @@ brew install swissarmyhammer/tap/kanban-cli
 * [`kanban init`↴](#kanban-init)
 * [`kanban deinit`↴](#kanban-deinit)
 * [`kanban doctor`↴](#kanban-doctor)
+* [`kanban completion`↴](#kanban-completion)
 
 ## `kanban`
 
@@ -30,6 +31,7 @@ Standalone CLI for SwissArmyHammer Kanban board. Exposes board, task, column, ta
 * `init` — Install kanban MCP server into Claude Code settings
 * `deinit` — Remove kanban from Claude Code settings
 * `doctor` — Diagnose kanban configuration and setup
+* `completion` — Generate shell completion scripts
 
 ###### **Options:**
 
@@ -100,6 +102,40 @@ Diagnose kanban configuration and setup
 ###### **Options:**
 
 * `-v`, `--verbose` — Show detailed output including fix suggestions
+
+
+
+## `kanban completion`
+
+
+Generates shell completion scripts for various shells. Supports:
+- bash
+- zsh
+- fish
+- powershell
+
+Examples:
+  # Bash (add to ~/.bashrc or ~/.bash_profile)
+  kanban completion bash > ~/.local/share/bash-completion/completions/kanban
+
+  # Zsh (add to ~/.zshrc or a file in fpath)
+  kanban completion zsh > ~/.zfunc/_kanban
+
+  # Fish
+  kanban completion fish > ~/.config/fish/completions/kanban.fish
+
+  # PowerShell
+  kanban completion powershell >> $PROFILE
+
+
+**Usage:** `kanban completion <SHELL>`
+
+###### **Arguments:**
+
+* `<SHELL>` — Shell to generate completion for
+
+  Possible values: `bash`, `elvish`, `fish`, `powershell`, `zsh`
+
 
 
 

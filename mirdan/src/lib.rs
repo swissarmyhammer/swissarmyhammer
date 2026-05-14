@@ -14,6 +14,7 @@ pub mod auth;
 pub mod banner;
 mod cli;
 pub use cli::{Cli, Commands, NewKind};
+pub mod completions;
 pub mod deploy_result;
 pub use deploy_result::{DeployAction, DeployResult};
 mod dispatch;

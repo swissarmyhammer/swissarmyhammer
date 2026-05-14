@@ -10,7 +10,9 @@
 //! sit alongside a `[[bin]]` target — no pre-build step is required.
 
 use std::io::Write;
+use std::path::Path;
 use std::process::{Command, Stdio};
+use swissarmyhammer_cli_completions::test_helpers::assert_compiled_binary_completion_works;
 
 /// Absolute path to the compiled `kanban` binary, injected by Cargo.
 const KANBAN_BIN: &str = env!("CARGO_BIN_EXE_kanban");
@@ -230,6 +232,22 @@ fn init_rejects_invalid_target_value() {
         !output.status.success(),
         "kanban init foobar should fail clap validation, got exit 0",
     );
+}
+
+/// `kanban completion <shell>` must exit 0 and emit a non-empty script
+/// to stdout that mentions the binary name `kanban` for every supported
+/// shell.
+///
+/// This pins both the dispatch wiring (clap parses `completion <shell>`
+/// and routes to `completions::print_completion`) and the binary-name
+/// contract (the script is registered under `kanban`, not `kanban-cli`
+/// or any other crate name). The full per-shell rendering contract is
+/// implemented in
+/// [`swissarmyhammer_cli_completions::test_helpers::assert_compiled_binary_completion_works`]
+/// and is exercised uniformly by every CLI's integration test.
+#[test]
+fn completion_succeeds_for_every_supported_shell() {
+    assert_compiled_binary_completion_works(Path::new(KANBAN_BIN), "kanban");
 }
 
 /// `kanban serve` must exit 0 when stdin closes cleanly after a valid

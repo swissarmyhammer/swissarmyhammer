@@ -359,7 +359,8 @@ pub fn build_args(command: &Commands) -> Option<Map<String, Value>> {
         | Commands::Init { .. }
         | Commands::Deinit { .. }
         | Commands::Doctor { .. }
-        | Commands::Skill => None,
+        | Commands::Skill
+        | Commands::Completion { .. } => None,
         Commands::Get { command } => Some(build_get_args(command)),
         Commands::Search { command } => Some(build_search_args(command)),
         Commands::Grep { command } => Some(build_grep_args(command)),

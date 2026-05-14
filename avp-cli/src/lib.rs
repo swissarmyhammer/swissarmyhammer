@@ -41,6 +41,7 @@ use std::fmt;
 
 mod cli;
 pub use cli::{Cli, Commands, ModelAction};
+pub mod completions;
 pub mod doctor;
 pub mod edit;
 pub mod install;

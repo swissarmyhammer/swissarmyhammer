@@ -20,6 +20,7 @@ brew install swissarmyhammer/tap/avp-cli
 * [`avp model list`↴](#avp-model-list)
 * [`avp model show`↴](#avp-model-show)
 * [`avp model use`↴](#avp-model-use)
+* [`avp completion`↴](#avp-completion)
 
 ## `avp`
 
@@ -37,6 +38,7 @@ Claude Code hook processor that validates tool calls, file changes, and more.
 * `edit` — Edit an existing RuleSet in $EDITOR
 * `new` — Create a new RuleSet from template
 * `model` — Manage AI model configurations
+* `completion` — Generate shell completion scripts
 
 ###### **Options:**
 
@@ -175,6 +177,40 @@ Apply a specific model to the project
 ###### **Arguments:**
 
 * `<NAME>` — Model name to apply
+
+
+
+## `avp completion`
+
+
+Generates shell completion scripts for various shells. Supports:
+- bash
+- zsh
+- fish
+- powershell
+
+Examples:
+  # Bash (add to ~/.bashrc or ~/.bash_profile)
+  avp completion bash > ~/.local/share/bash-completion/completions/avp
+
+  # Zsh (add to ~/.zshrc or a file in fpath)
+  avp completion zsh > ~/.zfunc/_avp
+
+  # Fish
+  avp completion fish > ~/.config/fish/completions/avp.fish
+
+  # PowerShell
+  avp completion powershell >> $PROFILE
+
+
+**Usage:** `avp completion <SHELL>`
+
+###### **Arguments:**
+
+* `<SHELL>` — Shell to generate completion for
+
+  Possible values: `bash`, `elvish`, `fish`, `powershell`, `zsh`
+
 
 
 

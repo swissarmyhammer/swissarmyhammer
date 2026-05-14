@@ -8,7 +8,9 @@
 //! Cargo (and nextest) populates automatically for integration tests that
 //! sit alongside a `[[bin]]` target — no pre-build step is required.
 
+use std::path::Path;
 use std::process::Command;
+use swissarmyhammer_cli_completions::test_helpers::assert_compiled_binary_completion_works;
 
 /// Absolute path to the compiled `shelltool` binary, injected by Cargo.
 const SHELLTOOL_BIN: &str = env!("CARGO_BIN_EXE_shelltool");
@@ -102,4 +104,20 @@ fn doctor_verbose_is_accepted() {
         matches!(code, 0..=2),
         "shelltool doctor --verbose exit code should be 0, 1, or 2, got {code} (stderr: {stderr})",
     );
+}
+
+/// `shelltool completion <shell>` must exit 0 and emit a non-empty script
+/// to stdout that mentions the binary name `shelltool` for every supported
+/// shell.
+///
+/// This pins both the dispatch wiring (clap parses `completion <shell>`
+/// and routes to `completions::print_completion`) and the binary-name
+/// contract (the script is registered under `shelltool`, not some other
+/// crate-derived name). The full per-shell rendering contract is
+/// implemented in
+/// [`swissarmyhammer_cli_completions::test_helpers::assert_compiled_binary_completion_works`]
+/// and is exercised uniformly by every CLI's integration test.
+#[test]
+fn completion_succeeds_for_every_supported_shell() {
+    assert_compiled_binary_completion_works(Path::new(SHELLTOOL_BIN), "shelltool");
 }

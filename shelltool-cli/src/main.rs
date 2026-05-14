@@ -17,6 +17,7 @@ use swissarmyhammer_common::reporter::CliReporter;
 mod banner;
 mod cli;
 mod commands;
+mod completions;
 mod logging;
 
 use cli::{Cli, Commands, InstallTarget};
@@ -106,6 +107,13 @@ async fn dispatch_command(cli: Cli) -> i32 {
         Commands::Init { target } => run_init(target),
         Commands::Deinit { target } => run_deinit(target),
         Commands::Doctor { verbose } => commands::doctor::run_doctor(verbose),
+        Commands::Completion { shell } => match completions::print_completion(shell) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                1
+            }
+        },
     }
 }
 

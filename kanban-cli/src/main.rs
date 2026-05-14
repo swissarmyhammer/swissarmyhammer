@@ -7,6 +7,7 @@ mod banner;
 mod cli;
 mod cli_gen;
 mod commands;
+mod completions;
 mod logging;
 mod merge;
 
@@ -59,7 +60,43 @@ fn build_cli(schema: &Value) -> Command {
     cmd = cmd.subcommand(init_subcommand());
     cmd = cmd.subcommand(deinit_subcommand());
     cmd = cmd.subcommand(doctor_subcommand());
+    cmd = cmd.subcommand(completion_subcommand());
     cmd
+}
+
+/// `completion` — emit a shell completion script for `kanban`.
+///
+/// The positional `shell` argument is restricted to the four shells
+/// `clap_complete` knows how to render (bash, zsh, fish, powershell).
+/// Dispatch reconstructs the full runtime command tree before handing it
+/// to [`completions::print_completion`] so the generated script reflects
+/// the schema-driven noun/verb commands too — not just the lifecycle
+/// subcommands declared in `cli.rs`.
+fn completion_subcommand() -> Command {
+    Command::new("completion")
+        .about("Generate shell completion scripts")
+        .long_about(
+            "Generates shell completion scripts for various shells. Supports:\n\
+             - bash\n\
+             - zsh\n\
+             - fish\n\
+             - powershell\n\n\
+             Examples:\n  \
+             # Bash (add to ~/.bashrc or ~/.bash_profile)\n  \
+             kanban completion bash > ~/.local/share/bash-completion/completions/kanban\n\n  \
+             # Zsh (add to ~/.zshrc or a file in fpath)\n  \
+             kanban completion zsh > ~/.zfunc/_kanban\n\n  \
+             # Fish\n  \
+             kanban completion fish > ~/.config/fish/completions/kanban.fish\n\n  \
+             # PowerShell\n  \
+             kanban completion powershell >> $PROFILE",
+        )
+        .arg(
+            clap::Arg::new("shell")
+                .help("Shell to generate completion for")
+                .required(true)
+                .value_parser(clap::builder::EnumValueParser::<clap_complete::Shell>::new()),
+        )
 }
 
 /// `open` — launch the GUI app via deep-link for a project directory.
@@ -144,6 +181,7 @@ fn dispatch(matches: &clap::ArgMatches, schema: &Value) -> ! {
         Some(("doctor", sub_m)) => {
             std::process::exit(commands::doctor::run_doctor(sub_m.get_flag("verbose")))
         }
+        Some(("completion", sub_m)) => std::process::exit(run_completion(sub_m, schema)),
         Some((name, sub_m)) => {
             if sub_m.subcommand().is_some() {
                 handle_kanban_command(matches, schema);
@@ -197,6 +235,29 @@ fn target_to_scope(target: &str) -> InitScope {
 /// to exit 1.
 fn any_init_error(results: &[InitResult]) -> bool {
     results.iter().any(|r| r.status == InitStatus::Error)
+}
+
+/// Generate a shell completion script for `kanban` and return an exit code.
+///
+/// Reconstructs the full runtime command tree from the kanban schema so
+/// the generated script reflects every subcommand — lifecycle commands
+/// (`serve`, `init`, `deinit`, `doctor`, `completion`) plus the
+/// schema-driven noun/verb operations (`task add`, `board init`, ...).
+///
+/// Returns 0 on success, 1 if the completion writer fails.
+fn run_completion(matches: &clap::ArgMatches, schema: &Value) -> i32 {
+    let shell = matches
+        .get_one::<clap_complete::Shell>("shell")
+        .copied()
+        .expect("clap enforces a required shell argument");
+
+    match completions::print_completion(build_cli(schema), shell) {
+        Ok(()) => 0,
+        Err(e) => {
+            error!("Error: {}", e);
+            1
+        }
+    }
 }
 
 /// Run the MCP `serve` loop and return a process exit code.

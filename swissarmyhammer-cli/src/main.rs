@@ -4,6 +4,7 @@ mod banner;
 mod cli;
 mod cli_conversions;
 mod commands;
+mod completions;
 mod context;
 mod dynamic_cli;
 mod error;
@@ -550,6 +551,9 @@ async fn route_subcommand(context: &CliContext, cli_tool_context: Arc<CliToolCon
         Some(("agent", sub_matches)) => handle_agent_command(sub_matches, context).await,
         Some(("statusline", sub_matches)) => handle_statusline_command(sub_matches),
         Some(("tools", sub_matches)) => handle_tools_command(sub_matches),
+        Some(("completion", sub_matches)) => {
+            handle_completion_command(sub_matches, &cli_tool_context)
+        }
         Some((category, sub_matches)) => {
             route_category_command(category, sub_matches, context, cli_tool_context).await
         }
@@ -1144,6 +1148,36 @@ fn parse_install_target(matches: &clap::ArgMatches) -> cli::InstallTarget {
 
 fn handle_init_command(matches: &clap::ArgMatches) -> i32 {
     match commands::install::init::install(parse_install_target(matches)) {
+        Ok(()) => EXIT_SUCCESS,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            EXIT_ERROR
+        }
+    }
+}
+
+/// Handle the `sah completion <shell>` command.
+///
+/// Extracts the requested shell from clap matches, rebuilds the dynamic
+/// CLI tree (so the generated script reflects every registered MCP tool,
+/// not just the clap-derived static commands), and writes the completion
+/// script to stdout via [`completions::print_completion_for`]. Clap
+/// enforces a required `shell` argument, so the value is guaranteed to be
+/// present when this function is reached.
+fn handle_completion_command(
+    matches: &clap::ArgMatches,
+    cli_tool_context: &Arc<CliToolContext>,
+) -> i32 {
+    let shell = matches
+        .get_one::<clap_complete::Shell>("shell")
+        .copied()
+        .expect("clap enforces a required shell argument");
+
+    let tool_registry = cli_tool_context.get_tool_registry_arc();
+    let cli_builder = CliBuilder::new(tool_registry);
+    let cli = cli_builder.build_cli();
+
+    match completions::print_completion_for(cli, shell) {
         Ok(()) => EXIT_SUCCESS,
         Err(e) => {
             eprintln!("Error: {}", e);

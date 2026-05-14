@@ -17,6 +17,7 @@ formula = "mirdan"
 [dependencies]
 mirdan = { workspace = true }
 clap = { workspace = true }
+clap_complete = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -29,3 +30,4 @@ clap_complete = { workspace = true }
 
 [dev-dependencies]
 clap = { workspace = true }
+swissarmyhammer-cli-completions = { workspace = true, features = ["test-helpers"] }

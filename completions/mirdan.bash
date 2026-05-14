@@ -19,6 +19,9 @@ _mirdan() {
             mirdan,agents)
                 cmd="mirdan__agents"
                 ;;
+            mirdan,completion)
+                cmd="mirdan__completion"
+                ;;
             mirdan,doctor)
                 cmd="mirdan__doctor"
                 ;;
@@ -72,6 +75,9 @@ _mirdan() {
                 ;;
             mirdan__help,agents)
                 cmd="mirdan__help__agents"
+                ;;
+            mirdan__help,completion)
+                cmd="mirdan__help__completion"
                 ;;
             mirdan__help,doctor)
                 cmd="mirdan__help__doctor"
@@ -173,7 +179,7 @@ _mirdan() {
 
     case "${cmd}" in
         mirdan)
-            opts="-d -y -h -V --debug --yes --agent --help --version agents new install uninstall list search info login logout whoami publish unpublish outdated update sync doctor start help"
+            opts="-d -y -h -V --debug --yes --agent --help --version agents new install uninstall list search info login logout whoami publish unpublish outdated update sync doctor start completion help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -192,6 +198,24 @@ _mirdan() {
             ;;
         mirdan__agents)
             opts="-d -y -h --all --json --debug --yes --agent --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --agent)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        mirdan__completion)
+            opts="-d -y -h --debug --yes --agent --help bash elvish fish powershell zsh"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -227,7 +251,7 @@ _mirdan() {
             return 0
             ;;
         mirdan__help)
-            opts="agents new install uninstall list search info login logout whoami publish unpublish outdated update sync doctor start help"
+            opts="agents new install uninstall list search info login logout whoami publish unpublish outdated update sync doctor start completion help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -241,6 +265,20 @@ _mirdan() {
             return 0
             ;;
         mirdan__help__agents)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        mirdan__help__completion)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )

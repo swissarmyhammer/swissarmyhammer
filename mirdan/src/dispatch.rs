@@ -2,7 +2,9 @@
 
 use crate::deploy_result::{DeployAction, DeployResult};
 use crate::registry::RegistryError;
-use crate::{agents, auth, doctor, info, install, list, new, outdated, publish, search, sync};
+use crate::{
+    agents, auth, completions, doctor, info, install, list, new, outdated, publish, search, sync,
+};
 use crate::{Cli, Commands, NewKind};
 
 /// Map a registry result to a process exit code (0 = success, 1 = error).
@@ -166,6 +168,14 @@ pub async fn dispatch(cli: &Cli) -> Option<i32> {
         Commands::Sync { global } => handle_registry_result(sync::run_sync(agent_filter, *global)),
 
         Commands::Doctor { verbose } => doctor::run_doctor(*verbose).await,
+
+        Commands::Completion { shell } => match completions::print_completion(*shell) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                1
+            }
+        },
 
         Commands::Start => return None,
     };

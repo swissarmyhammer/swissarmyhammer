@@ -30,7 +30,7 @@ mod banner;
 /// Exit code returned when a hook blocks the action.
 const BLOCKING_ERROR_EXIT_CODE: i32 = 2;
 
-use avp::{doctor, edit, install, model, new};
+use avp::{completions, doctor, edit, install, model, new};
 use avp::{Cli, Commands, ModelAction};
 use avp_common::context::AvpContext;
 use avp_common::strategy::HookDispatcher;
@@ -113,6 +113,13 @@ async fn dispatch_subcommand(cmd: Commands, _debug: bool) -> i32 {
         Commands::Edit { name, global, .. } => result_to_exit(edit::run_edit(&name, global)),
         Commands::New { name, global, .. } => result_to_exit(new::run_new(&name, global)),
         Commands::Model { action } => dispatch_model_action(action),
+        Commands::Completion { shell } => match completions::print_completion(shell) {
+            Ok(()) => 0,
+            Err(e) => {
+                error!("Error: {}", e);
+                1
+            }
+        },
     }
 }
 

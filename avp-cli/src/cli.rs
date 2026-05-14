@@ -90,6 +90,32 @@ pub enum Commands {
         #[command(subcommand)]
         action: Option<ModelAction>,
     },
+    /// Generate shell completion scripts
+    #[command(long_about = "
+Generates shell completion scripts for various shells. Supports:
+- bash
+- zsh
+- fish
+- powershell
+
+Examples:
+  # Bash (add to ~/.bashrc or ~/.bash_profile)
+  avp completion bash > ~/.local/share/bash-completion/completions/avp
+
+  # Zsh (add to ~/.zshrc or a file in fpath)
+  avp completion zsh > ~/.zfunc/_avp
+
+  # Fish
+  avp completion fish > ~/.config/fish/completions/avp.fish
+
+  # PowerShell
+  avp completion powershell >> $PROFILE
+")]
+    Completion {
+        /// Shell to generate completion for
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
 }
 
 /// Model subcommands

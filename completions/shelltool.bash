@@ -16,6 +16,9 @@ _shelltool() {
             ",$1")
                 cmd="shelltool"
                 ;;
+            shelltool,completion)
+                cmd="shelltool__completion"
+                ;;
             shelltool,deinit)
                 cmd="shelltool__deinit"
                 ;;
@@ -30,6 +33,9 @@ _shelltool() {
                 ;;
             shelltool,serve)
                 cmd="shelltool__serve"
+                ;;
+            shelltool__help,completion)
+                cmd="shelltool__help__completion"
                 ;;
             shelltool__help,deinit)
                 cmd="shelltool__help__deinit"
@@ -53,8 +59,22 @@ _shelltool() {
 
     case "${cmd}" in
         shelltool)
-            opts="-d -h -V --debug --help --version serve init deinit doctor help"
+            opts="-d -h -V --debug --help --version serve init deinit doctor completion help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        shelltool__completion)
+            opts="-d -h --debug --help bash elvish fish powershell zsh"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -95,8 +115,22 @@ _shelltool() {
             return 0
             ;;
         shelltool__help)
-            opts="serve init deinit doctor help"
+            opts="serve init deinit doctor completion help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        shelltool__help__completion)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

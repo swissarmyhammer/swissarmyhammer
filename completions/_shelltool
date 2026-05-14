@@ -70,6 +70,15 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help]' \
 && ret=0
 ;;
+(completion)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':shell -- Shell to generate completion for:(bash elvish fish powershell zsh)' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_shelltool__help_commands" \
@@ -98,6 +107,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(completion)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -118,9 +131,15 @@ _shelltool_commands() {
 'init:Install shelltool MCP server into Claude Code settings' \
 'deinit:Remove shelltool from Claude Code settings' \
 'doctor:Diagnose shelltool configuration and setup' \
+'completion:Generate shell completion scripts' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'shelltool commands' commands "$@"
+}
+(( $+functions[_shelltool__completion_commands] )) ||
+_shelltool__completion_commands() {
+    local commands; commands=()
+    _describe -t commands 'shelltool completion commands' commands "$@"
 }
 (( $+functions[_shelltool__deinit_commands] )) ||
 _shelltool__deinit_commands() {
@@ -139,9 +158,15 @@ _shelltool__help_commands() {
 'init:Install shelltool MCP server into Claude Code settings' \
 'deinit:Remove shelltool from Claude Code settings' \
 'doctor:Diagnose shelltool configuration and setup' \
+'completion:Generate shell completion scripts' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'shelltool help commands' commands "$@"
+}
+(( $+functions[_shelltool__help__completion_commands] )) ||
+_shelltool__help__completion_commands() {
+    local commands; commands=()
+    _describe -t commands 'shelltool help completion commands' commands "$@"
 }
 (( $+functions[_shelltool__help__deinit_commands] )) ||
 _shelltool__help__deinit_commands() {

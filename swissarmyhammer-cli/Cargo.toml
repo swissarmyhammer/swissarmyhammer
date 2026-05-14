@@ -44,6 +44,7 @@ avp-common = { workspace = true }
 swissarmyhammer-prompts = { workspace = true }
 mirdan = { workspace = true }
 swissarmyhammer-templating = { workspace = true }
+swissarmyhammer-cli-completions = { workspace = true }
 
 llama-agent = { workspace = true }
 
@@ -115,5 +116,6 @@ predicates = { workspace = true }
 tempfile = { workspace = true }
 serial_test = { workspace = true }
 reqwest = { workspace = true }
+swissarmyhammer-cli-completions = { workspace = true, features = ["test-helpers"] }
 
 nix = { workspace = true }

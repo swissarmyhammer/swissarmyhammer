@@ -16,6 +16,9 @@ _avp() {
             ",$1")
                 cmd="avp"
                 ;;
+            avp,completion)
+                cmd="avp__completion"
+                ;;
             avp,deinit)
                 cmd="avp__deinit"
                 ;;
@@ -36,6 +39,9 @@ _avp() {
                 ;;
             avp,new)
                 cmd="avp__new"
+                ;;
+            avp__help,completion)
+                cmd="avp__help__completion"
                 ;;
             avp__help,deinit)
                 cmd="avp__help__deinit"
@@ -98,8 +104,22 @@ _avp() {
 
     case "${cmd}" in
         avp)
-            opts="-d -h -V --debug --help --version init deinit doctor edit new model help"
+            opts="-d -h -V --debug --help --version init deinit doctor edit new model completion help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        avp__completion)
+            opts="-d -h --debug --help bash elvish fish powershell zsh"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -154,8 +174,22 @@ _avp() {
             return 0
             ;;
         avp__help)
-            opts="init deinit doctor edit new model help"
+            opts="init deinit doctor edit new model completion help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        avp__help__completion)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

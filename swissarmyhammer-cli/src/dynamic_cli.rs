@@ -1760,12 +1760,49 @@ impl CliBuilder {
             .subcommand(Self::build_validate_command())
     }
 
-    /// Add content management commands (prompt, model, agent, statusline)
+    /// Add content management commands (prompt, model, agent, statusline,
+    /// completion).
     fn add_content_commands(cli: Command) -> Command {
         cli.subcommand(Self::build_prompt_command())
             .subcommand(Self::build_model_command())
             .subcommand(Self::build_agent_command())
             .subcommand(Self::build_statusline_command())
+            .subcommand(Self::build_completion_command())
+    }
+
+    /// Build the `completion` subcommand.
+    ///
+    /// Emits a shell completion script for `sah` to stdout for the
+    /// shell selected by the positional `<shell>` argument. The shell
+    /// names accepted here mirror the variants of `clap_complete::Shell`
+    /// (bash, zsh, fish, powershell, elvish). The dispatcher in
+    /// `main.rs::handle_completion_command` consumes the parsed value and
+    /// calls `completions::print_completion_for`.
+    fn build_completion_command() -> Command {
+        Command::new("completion")
+            .about("Generate shell completion scripts")
+            .long_about(
+                "Generates shell completion scripts for various shells. Supports:\n\
+                 - bash\n\
+                 - zsh\n\
+                 - fish\n\
+                 - powershell\n\n\
+                 Examples:\n  \
+                 # Bash (add to ~/.bashrc or ~/.bash_profile)\n  \
+                 sah completion bash > ~/.local/share/bash-completion/completions/sah\n\n  \
+                 # Zsh (add to ~/.zshrc or a file in fpath)\n  \
+                 sah completion zsh > ~/.zfunc/_sah\n\n  \
+                 # Fish\n  \
+                 sah completion fish > ~/.config/fish/completions/sah.fish\n\n  \
+                 # PowerShell\n  \
+                 sah completion powershell >> $PROFILE",
+            )
+            .arg(
+                Arg::new("shell")
+                    .help("Shell to generate completion for")
+                    .required(true)
+                    .value_parser(clap::builder::EnumValueParser::<clap_complete::Shell>::new()),
+            )
     }
 
     /// Build the prompt command with all its subcommands

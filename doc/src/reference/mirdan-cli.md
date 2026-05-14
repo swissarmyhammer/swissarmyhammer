@@ -32,6 +32,7 @@ brew install swissarmyhammer/tap/mirdan-cli
 * [`mirdan sync`↴](#mirdan-sync)
 * [`mirdan doctor`↴](#mirdan-doctor)
 * [`mirdan start`↴](#mirdan-start)
+* [`mirdan completion`↴](#mirdan-completion)
 
 ## `mirdan`
 
@@ -69,6 +70,7 @@ Environment variables:
 * `sync` — Reconcile .skills/ with agent directories and verify lockfile
 * `doctor` — Diagnose Mirdan setup and configuration
 * `start` — Start the Mirdan tray/accessory app
+* `completion` — Generate shell completion scripts
 
 ###### **Options:**
 
@@ -364,6 +366,40 @@ Diagnose Mirdan setup and configuration
 Start the Mirdan tray/accessory app
 
 **Usage:** `mirdan start`
+
+
+
+## `mirdan completion`
+
+
+Generates shell completion scripts for various shells. Supports:
+- bash
+- zsh
+- fish
+- powershell
+
+Examples:
+  # Bash (add to ~/.bashrc or ~/.bash_profile)
+  mirdan completion bash > ~/.local/share/bash-completion/completions/mirdan
+
+  # Zsh (add to ~/.zshrc or a file in fpath)
+  mirdan completion zsh > ~/.zfunc/_mirdan
+
+  # Fish
+  mirdan completion fish > ~/.config/fish/completions/mirdan.fish
+
+  # PowerShell
+  mirdan completion powershell >> $PROFILE
+
+
+**Usage:** `mirdan completion <SHELL>`
+
+###### **Arguments:**
+
+* `<SHELL>` — Shell to generate completion for
+
+  Possible values: `bash`, `elvish`, `fish`, `powershell`, `zsh`
+
 
 
 

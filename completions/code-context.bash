@@ -19,6 +19,9 @@ _code-context() {
             code__context,clear)
                 cmd="code__context__clear"
                 ;;
+            code__context,completion)
+                cmd="code__context__completion"
+                ;;
             code__context,deinit)
                 cmd="code__context__deinit"
                 ;;
@@ -198,6 +201,9 @@ _code-context() {
                 ;;
             code__context__help,clear)
                 cmd="code__context__help__clear"
+                ;;
+            code__context__help,completion)
+                cmd="code__context__help__completion"
                 ;;
             code__context__help,deinit)
                 cmd="code__context__help__deinit"
@@ -395,7 +401,7 @@ _code-context() {
 
     case "${cmd}" in
         code__context)
-            opts="-d -j -h -V --debug --json --no-progress --help --version serve init deinit doctor skill get search list grep query find rebuild clear lsp detect help"
+            opts="-d -j -h -V --debug --json --no-progress --help --version serve init deinit doctor skill get search list grep query find rebuild clear lsp detect completion help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -467,6 +473,20 @@ _code-context() {
         code__context__clear__status)
             opts="-d -j -h --debug --json --no-progress --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        code__context__completion)
+            opts="-d -j -h --debug --json --no-progress --help bash elvish fish powershell zsh"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -1335,7 +1355,7 @@ _code-context() {
             return 0
             ;;
         code__context__help)
-            opts="serve init deinit doctor skill get search list grep query find rebuild clear lsp detect help"
+            opts="serve init deinit doctor skill get search list grep query find rebuild clear lsp detect completion help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1365,6 +1385,20 @@ _code-context() {
         code__context__help__clear__status)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        code__context__help__completion)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
