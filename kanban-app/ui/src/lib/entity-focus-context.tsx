@@ -88,8 +88,43 @@ export class FocusStore {
   private perMoniker = new Map<string, Set<FocusSubscriber>>();
   private anyListeners = new Set<FocusSubscriber>();
 
+  /**
+   * FQM that the `<FocusScope>` scroll effect most recently scrolled
+   * into view, or `null` when no scope has scrolled yet (or the latch
+   * was just invalidated by a focus move).
+   *
+   * The latch survives unmount and remount of any single scope, so the
+   * virtualizer recycling the focused row does NOT re-trigger
+   * `scrollIntoView`. The store invalidates it automatically inside
+   * `set()` whenever focus moves to a different FQM, so callers never
+   * need to clear it manually — they only consume it via
+   * `consumeScrollLatch(fq)`.
+   */
+  private lastScrolledFq: string | null = null;
+
   /** Snapshot getter used by `useSyncExternalStore`. */
   getSnapshot = (): string | null => this.current;
+
+  /**
+   * Atomically check-and-claim the focus-scroll latch for `fq`.
+   *
+   * Returns `true` when the caller should perform `scrollIntoView` —
+   * i.e. focus has genuinely transitioned to `fq` since the last scroll
+   * — and sets the latch to `fq`. Returns `false` when the latch is
+   * already pinned to `fq` (the virtualizer-recycle case: the focused
+   * row remounted, but focus never moved off it).
+   *
+   * The store invalidates the latch in `set()` whenever the focused
+   * FQM changes, so a real focus transition naturally clears the latch
+   * before the new focus target's effect runs. This lets the scroll
+   * effect be a one-liner: `if (focusStore.consumeScrollLatch(fq))
+   * scrollIntoView()`.
+   */
+  consumeScrollLatch(fq: string): boolean {
+    if (this.lastScrolledFq === fq) return false;
+    this.lastScrolledFq = fq;
+    return true;
+  }
 
   /**
    * Subscribe to a single moniker's focus slot.
@@ -148,6 +183,17 @@ export class FocusStore {
     const prev = this.current;
     if (prev === next) return;
     this.current = next;
+    // Invalidate the focus-scroll latch whenever focus moves off the
+    // previously-latched FQM. Doing this inside `set()` (the single
+    // upstream of focus state in production, per the bridge invariant
+    // documented above) means the latch stays in lockstep with the
+    // focused FQM without any per-scope subscription — a `<FocusScope>`
+    // scroll effect only needs to call `consumeScrollLatch(fq)` at
+    // mount/transition time and trust the store to have cleared the
+    // latch already if focus genuinely moved.
+    if (this.lastScrolledFq !== null && this.lastScrolledFq !== next) {
+      this.lastScrolledFq = null;
+    }
     if (prev !== null) this.perMoniker.get(prev)?.forEach((cb) => cb());
     if (next !== null) this.perMoniker.get(next)?.forEach((cb) => cb());
     this.anyListeners.forEach((cb) => cb());
@@ -562,6 +608,17 @@ export function useFocusStore(): FocusStore {
   if (!store)
     throw new Error("useFocusStore must be used within an EntityFocusProvider");
   return store;
+}
+
+/**
+ * Read the optional focus store. Returns `null` outside an
+ * `EntityFocusProvider` instead of throwing — mirrors the
+ * `useOptionalIsDirectFocus` graceful-degradation contract for consumers
+ * (like `<FocusScope>`) that must continue rendering when mounted in
+ * isolation under a non-spatial harness.
+ */
+export function useOptionalFocusStore(): FocusStore | null {
+  return useContext(FocusStoreContext);
 }
 
 /**

@@ -89,6 +89,7 @@ import {
 } from "@/lib/command-scope";
 import {
   useEntityScopeRegistration,
+  useOptionalFocusStore,
   useOptionalIsDirectFocus,
 } from "@/lib/entity-focus-context";
 import { useContextMenu } from "@/lib/context-menu";
@@ -402,11 +403,45 @@ function SpatialFocusScopeBody({
     };
   }, [layerRegistry, fq]);
 
+  // Scroll the focused scope into view exactly once per focus transition.
+  //
+  // The naive `useEffect(() => { if (isDirectFocus) scrollIntoView() },
+  // [isDirectFocus])` fires on every mount-with-focus, including the
+  // virtualizer-driven remount that happens while the user is mid-scroll
+  // inside a column. That fights the user's scroll: every remount yanks
+  // the scroller back to the focused card.
+  //
+  // The fix has two layers:
+  //
+  // 1. A per-instance `prevIsDirectFocusRef` guards against a re-render
+  //    in which `isDirectFocus` stayed `true` (no transition). This is
+  //    the simple in-component re-render case.
+  //
+  // 2. A store-owned "last-scrolled FQM" latch (see
+  //    `FocusStore.consumeScrollLatch`) survives unmount and remount of
+  //    any single scope. The virtualizer recycling the focused row
+  //    remounts a fresh scope whose `prevIsDirectFocusRef` is `false` —
+  //    layer 1 alone would re-scroll. Layer 2 consults the store: the
+  //    latch is still pinned to this FQM (the store only clears it when
+  //    focus moves to a different FQM, in its own `set()` path), so
+  //    `consumeScrollLatch(fq)` returns `false` and the scroll is
+  //    skipped. When focus genuinely transitions to a new FQM the store
+  //    clears the latch atomically inside `set()` before any subscriber
+  //    runs, so the next scope's first effect run consumes the freshly-
+  //    cleared latch and scrolls exactly once.
+  const focusStore = useOptionalFocusStore();
+  const prevIsDirectFocusRef = useRef(false);
   useEffect(() => {
-    if (isDirectFocus && ref.current?.scrollIntoView) {
-      ref.current.scrollIntoView({ block: "nearest" });
-    }
-  }, [isDirectFocus]);
+    const wasFocused = prevIsDirectFocusRef.current;
+    prevIsDirectFocusRef.current = isDirectFocus;
+
+    if (!isDirectFocus) return;
+    if (wasFocused) return;
+    if (!ref.current?.scrollIntoView) return;
+    if (focusStore && !focusStore.consumeScrollLatch(fq)) return;
+
+    ref.current.scrollIntoView({ block: "nearest" });
+  }, [isDirectFocus, fq, focusStore]);
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {

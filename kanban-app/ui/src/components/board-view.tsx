@@ -787,12 +787,27 @@ function useBoardActionCommands(
  * Scroll the focused moniker's element into view within the board strip.
  *
  * Kept as its own hook so the main BoardView body stays short.
+ *
+ * The effect fires only when `focusedFq` *actually changes value* —
+ * comparing against the prior value via a ref. A re-render that
+ * happens to swap `scrollContainerRef` identity (or any other
+ * dep-churn that does not represent a real focus transition) must NOT
+ * re-trigger `scrollIntoView`; otherwise the user's scroll inside a
+ * column gets yanked back to the focused card after every render that
+ * stable-but-different deps would normally re-fire on.
+ *
+ * Exported so the unit test in `board-view.scroll-focused.test.tsx`
+ * can drive the hook against a deterministic container without
+ * spinning up the entire `<BoardView>` body.
  */
-function useScrollFocusedIntoView(
+export function useScrollFocusedIntoView(
   scrollContainerRef: React.RefObject<HTMLDivElement | null>,
   focusedFq: FullyQualifiedMoniker | null,
 ): void {
+  const prevFocusedFqRef = useRef<FullyQualifiedMoniker | null>(null);
   useEffect(() => {
+    if (focusedFq === prevFocusedFqRef.current) return;
+    prevFocusedFqRef.current = focusedFq;
     const container = scrollContainerRef.current;
     if (!container || !focusedFq) return;
     const el = container.querySelector<HTMLElement>(

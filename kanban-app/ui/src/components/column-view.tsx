@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { listen } from "@tauri-apps/api/event";
 import { DropZone } from "@/components/drop-zone";
 import { computeDropZones, type DropZoneDescriptor } from "@/lib/drop-zones";
 import { Field } from "@/components/fields/field";
@@ -81,6 +82,16 @@ const VIRTUALIZE_THRESHOLD = 25;
 interface ColumnDragScroll {
   setContainerRef: (el: HTMLDivElement | null) => void;
   handleDragOver: (e: React.DragEvent) => void;
+  /**
+   * Stops the auto-scroll rAF loop. Wired to the column scroller's
+   * `onDragLeave` so the loop ends when the pointer leaves the column
+   * without a drop. The hook also subscribes to the global `drag-ended`
+   * event (emitted by `useTaskDragHandlers` after every task drag
+   * completes) so a drop near a column edge — where `dragover` stops
+   * firing while `dirRef.current` is still non-zero — does not leave
+   * the loop running and fight the user's scroll.
+   */
+  handleDragLeave: () => void;
 }
 
 /**
@@ -156,7 +167,37 @@ function useColumnDragScroll(
     [start, stop],
   );
 
-  return { setContainerRef, handleDragOver };
+  // The auto-scroll rAF loop is only stopped from inside `handleDragOver`
+  // when the pointer is in the middle of the column. If the user drops a
+  // card with the pointer still in the top or bottom SCROLL_ZONE,
+  // `dragover` stops firing while `dirRef.current` is still non-zero —
+  // the loop keeps calling `scrollBy` every frame and fights the user's
+  // post-drop scroll. `useTaskDragHandlers` already emits a global
+  // `drag-ended` event the moment a task drag completes (success or
+  // cancel); subscribing to it here is the canonical "drag is over"
+  // signal and stops the loop regardless of where the pointer landed.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+    void listen("drag-ended", () => stop()).then((un) => {
+      if (cancelled) un();
+      else unlisten = un;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [stop]);
+
+  // Stop the loop when the pointer leaves the column scroller without a
+  // drop — the user dragged out to a different column or off the board.
+  // Without this, the loop would keep running until `dragend` fires on
+  // the source card, which is observably laggy on long drags.
+  const handleDragLeave = useCallback(() => {
+    stop();
+  }, [stop]);
+
+  return { setContainerRef, handleDragOver, handleDragLeave };
 }
 
 // ---------------------------------------------------------------------------
@@ -260,6 +301,7 @@ function ColumnBody({
         onTaskDragEnd={onTaskDragEnd}
         containerRef={dragScroll.setContainerRef}
         onDragOver={dragScroll.handleDragOver}
+        onDragLeave={dragScroll.handleDragLeave}
       />
     </>
   );
@@ -499,6 +541,7 @@ interface VirtualizedCardListProps {
   onTaskDragEnd?: (entity: Entity, dropEffect: string) => void;
   containerRef: (el: HTMLDivElement | null) => void;
   onDragOver: (e: React.DragEvent) => void;
+  onDragLeave: () => void;
 }
 
 const CONTAINER_CLASS =
@@ -546,10 +589,16 @@ function EmptyColumn({
   dragTaskId,
   onZoneDrop,
   onDragOver,
+  onDragLeave,
   setRef,
 }: VirtualizedCardListProps & { setRef: (el: HTMLDivElement | null) => void }) {
   return (
-    <div ref={setRef} className={CONTAINER_CLASS} onDragOver={onDragOver}>
+    <div
+      ref={setRef}
+      className={CONTAINER_CLASS}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+    >
       <DropZone
         descriptor={zones[0]}
         dragTaskId={dragTaskId}
@@ -569,10 +618,16 @@ function SmallCardList({
   onTaskDragStart,
   onTaskDragEnd,
   onDragOver,
+  onDragLeave,
   setRef,
 }: VirtualizedCardListProps & { setRef: (el: HTMLDivElement | null) => void }) {
   return (
-    <div ref={setRef} className={CONTAINER_CLASS} onDragOver={onDragOver}>
+    <div
+      ref={setRef}
+      className={CONTAINER_CLASS}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+    >
       {tasks.map((entity, i) => (
         <div key={entity.id}>
           <DropZone
@@ -609,6 +664,7 @@ interface VirtualColumnProps {
   setRef: (el: HTMLDivElement | null) => void;
   containerClass: string;
   onDragOver: (e: React.DragEvent) => void;
+  onDragLeave: () => void;
 }
 
 /** Absolute positioning style for a virtual row at `startPx`. */
@@ -677,7 +733,8 @@ function VirtualRow(props: VirtualRowProps): React.ReactElement {
 
 /** Inner component that calls useVirtualizer (hook must be unconditional). */
 function VirtualColumn(props: VirtualColumnProps) {
-  const { tasks, scrollRef, setRef, containerClass, onDragOver } = props;
+  const { tasks, scrollRef, setRef, containerClass, onDragOver, onDragLeave } =
+    props;
   const virtualizer = useVirtualizer({
     count: tasks.length + 1,
     getScrollElement: () => scrollRef.current,
@@ -687,7 +744,12 @@ function VirtualColumn(props: VirtualColumnProps) {
   });
 
   return (
-    <div ref={setRef} className={containerClass} onDragOver={onDragOver}>
+    <div
+      ref={setRef}
+      className={containerClass}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+    >
       <div
         style={{
           height: virtualizer.getTotalSize(),

@@ -107,6 +107,7 @@ vi.mock("@/lib/entity-focus-context", () => {
     useIsFocused: () => false,
     useIsDirectFocus: () => false,
     useOptionalIsDirectFocus: () => false,
+    useOptionalFocusStore: () => null,
   };
 });
 
