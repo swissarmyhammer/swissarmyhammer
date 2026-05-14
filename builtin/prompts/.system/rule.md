@@ -24,6 +24,9 @@ parameters:
   - name: hook_context
     description: The hook event context (pre-formatted as YAML or diff blocks)
     required: false
+  - name: changed_files
+    description: List of file paths changed during the turn (for Stop hooks)
+    required: false
 ---
 
 # Rule: {{ rule_name }}
@@ -37,11 +40,18 @@ parameters:
 {{ hook_context }}
 {% endif %}
 
+{% if changed_files and changed_files != empty %}
+## Files Changed This Turn
+
+The following files were modified during this turn. Focus your analysis on these:
+
+{% for f in changed_files %}- {{ f }}
+{% endfor %}
+{% endif %}
+
 {{ rule_body }}
 
-## Available Tools
-
-You may have access to **files** (read file, glob, grep — read-only) and **code_context** (symbol lookup, call graphs, blast radius, code grep). Use them to inspect actual code before deciding. Do not guess about file contents.
+{% include "_partials/validator-tools" %}
 
 ## Required Response Format
 

@@ -418,22 +418,54 @@ impl ClaudeCodeHookStrategy {
         if hook_type != HookType::Stop {
             return;
         }
-        // Only clean up when the stop was allowed (no block)
         if chain_output.validator_block.is_some() || !chain_output.continue_execution {
             return;
         }
 
+        self.record_allowed_stop_baseline(session_id);
+        self.clear_allowed_stop_sidecars(session_id);
+        tracing::debug!(session_id, "Cleaned turn state after allowed Stop");
+    }
+
+    /// Snapshot the currently-changed paths into `last_stop_shas` for
+    /// `session_id`.
+    ///
+    /// `record_stop_baseline` replaces `last_stop_shas`, empties
+    /// `pending`/`changed`, and saves in one shot — no separate `clear()`
+    /// call (which would delete the YAML and wipe the baseline). The
+    /// baseline lets the next Stop validator run skip files that haven't
+    /// been touched since this allowed Stop, avoiding the cumulative-diff
+    /// re-validation loop.
+    fn record_allowed_stop_baseline(&self, session_id: &str) {
         let turn_state = self.context.turn_state();
-        if let Err(e) = turn_state.clear(session_id) {
-            tracing::warn!("Failed to clear turn state on allowed Stop: {}", e);
+        let changed_paths = match turn_state.load(session_id) {
+            Ok(state) => state.changed,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to load turn state for baseline on allowed Stop: {}",
+                    e
+                );
+                Vec::new()
+            }
+        };
+        if let Err(e) = turn_state.record_stop_baseline(session_id, &changed_paths) {
+            tracing::warn!("Failed to record allowed-Stop SHA baseline: {}", e);
         }
+    }
+
+    /// Clear sidecar diff and pre-content directories for `session_id`.
+    ///
+    /// The baseline write in [`record_allowed_stop_baseline`] is the
+    /// canonical "Stop is over" signal; the sidecars are derived data
+    /// that must not survive into the next turn.
+    fn clear_allowed_stop_sidecars(&self, session_id: &str) {
+        let turn_state = self.context.turn_state();
         if let Err(e) = turn_state.clear_diffs(session_id) {
             tracing::warn!("Failed to clear diffs on allowed Stop: {}", e);
         }
         if let Err(e) = turn_state.clear_pre_content(session_id) {
             tracing::warn!("Failed to clear pre-content on allowed Stop: {}", e);
         }
-        tracing::debug!(session_id, "Cleaned turn state after allowed Stop");
     }
 
     fn block_stop(base: HookOutput, reason: String) -> (HookOutput, i32) {
@@ -891,6 +923,207 @@ mod tests {
             !turn_state.load_all_diffs(session_id).is_empty(),
             "Diffs should survive when Stop is blocked"
         );
+    }
+
+    // ========================================================================
+    // Block-render contract for Stop hooks (kanban 01KQ7M20F27D0Z67H9XX0XQ4QZ).
+    //
+    // When the chain produces a Stop block (validator_block set,
+    // continue_execution=false), the strategy must render it as the JSON
+    // shape claude-code parses on stdout:
+    //   {"continue": true, "decision": "block", "reason": "...", "stopReason": "..."}
+    // with strategy exit code 0 — Stop blocks are surfaced via stdout JSON,
+    // not exit-2 stderr, see `block_stop`.
+    //
+    // This test calls `transform_to_claude_output` directly with a hand-built
+    // `ChainOutput` so the assertion exercises the rendering in isolation —
+    // no `PlaybackAgent`, no fixture timing. The chain-level half (chain
+    // produces validator_block + exit code 2) lives in
+    // `avp-common/tests/validator_block_e2e_integration.rs`.
+    // ========================================================================
+
+    /// A blocked Stop chain output renders as claude-code's stop-block JSON
+    /// (`continue: true`, `decision: "block"`, `reason` and `stopReason` set
+    /// to the same string) with exit code 0.
+    #[test]
+    fn block_stop_renders_claude_parseable_json() {
+        use crate::chain::ValidatorBlockInfo;
+
+        let chain_output = ChainOutput {
+            continue_execution: false,
+            stop_reason: Some(
+                "Found magic number 8675309 on line 12 of src/replay-fixture-target.rs".to_string(),
+            ),
+            validator_block: Some(ValidatorBlockInfo {
+                validator_name: "code-quality:no-magic-numbers".to_string(),
+                message: "Found magic number 8675309 on line 12 of src/replay-fixture-target.rs"
+                    .to_string(),
+                hook_type: HookType::Stop,
+            }),
+            ..Default::default()
+        };
+
+        let (hook_output, exit_code) =
+            ClaudeCodeHookStrategy::transform_to_claude_output(chain_output, HookType::Stop);
+
+        // Stop blocks are surfaced via stdout JSON, not exit-2 stderr.
+        assert_eq!(
+            exit_code, 0,
+            "Stop block strategy exit code is 0 — block is surfaced via stdout JSON",
+        );
+
+        // continue=true (claude cannot stop the assistant), decision=block,
+        // reason and stopReason both carry the formatted message.
+        assert!(
+            hook_output.continue_execution,
+            "Stop block must keep continue=true (claude cannot stop the assistant)"
+        );
+        assert_eq!(
+            hook_output.decision.as_deref(),
+            Some("block"),
+            "Stop block must set decision=\"block\" so claude-code surfaces the failure"
+        );
+
+        let reason = hook_output
+            .reason
+            .as_deref()
+            .expect("Stop block reason must be set");
+        assert!(
+            reason.contains("8675309"),
+            "reason must contain the validator's finding, got: {}",
+            reason
+        );
+        assert!(
+            reason.contains("code-quality:no-magic-numbers"),
+            "reason must include the qualified rule name so the user knows \
+             which rule blocked, got: {}",
+            reason
+        );
+
+        let stop_reason = hook_output
+            .stop_reason
+            .as_deref()
+            .expect("Stop block stopReason must be set");
+        assert_eq!(
+            stop_reason, reason,
+            "block_stop() sets stopReason and reason to the same value"
+        );
+
+        // Round-trip: serialize to JSON the way the CLI does. Claude-code
+        // parses exactly that string from stdout, so the keys must use
+        // camelCase and the values must round-trip without dropping the
+        // validator info.
+        let json = serde_json::to_value(&hook_output).expect("serialize HookOutput");
+        assert_eq!(
+            json.get("continue").and_then(|v| v.as_bool()),
+            Some(true),
+            "JSON `continue` must be true"
+        );
+        assert_eq!(
+            json.get("decision").and_then(|v| v.as_str()),
+            Some("block"),
+            "JSON `decision` must be \"block\""
+        );
+        let json_reason = json
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .expect("JSON must have `reason` string");
+        assert!(
+            json_reason.contains("8675309") && json_reason.contains("no-magic-numbers"),
+            "JSON `reason` must contain both the finding and the rule name, got: {}",
+            json_reason
+        );
+        let json_stop_reason = json
+            .get("stopReason")
+            .and_then(|v| v.as_str())
+            .expect("JSON must have `stopReason` string");
+        assert_eq!(
+            json_stop_reason, json_reason,
+            "JSON `stopReason` mirrors `reason`"
+        );
+    }
+
+    /// On an allowed Stop with two changed files, both files' SHA-256s
+    /// must be written into `last_stop_shas` before the rest of the state
+    /// is cleared. This is the baseline that the next Stop's validator
+    /// run will diff against.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_allowed_stop_records_baseline_for_changed_files() {
+        let (temp, strategy) = create_test_strategy();
+        let session_id = "baseline-records";
+        let turn_state = strategy.context.turn_state();
+
+        // Two real files in the temp dir
+        let path_a = temp.path().join("alpha.rs");
+        let path_b = temp.path().join("beta.rs");
+        std::fs::write(&path_a, b"alpha contents").unwrap();
+        std::fs::write(&path_b, b"beta contents").unwrap();
+
+        // Seed turn state: both files in `changed`
+        let mut state = crate::turn::TurnState::new();
+        state.changed.push(path_a.clone());
+        state.changed.push(path_b.clone());
+        turn_state.save(session_id, &state).unwrap();
+
+        // Simulate allowed Stop
+        let allowed_output = ChainOutput {
+            continue_execution: true,
+            validator_block: None,
+            ..Default::default()
+        };
+
+        strategy.maybe_cleanup_turn_state(HookType::Stop, session_id, &allowed_output);
+
+        // Baseline must be present and contain both files
+        let loaded = turn_state.load(session_id).unwrap();
+        assert_eq!(
+            loaded.last_stop_shas.len(),
+            2,
+            "allowed Stop must record one SHA per changed file"
+        );
+        assert!(loaded.last_stop_shas.contains_key(&path_a));
+        assert!(loaded.last_stop_shas.contains_key(&path_b));
+        // pending/changed must be empty (record_stop_baseline empties them)
+        assert!(loaded.changed.is_empty());
+        assert!(loaded.pending.is_empty());
+    }
+
+    /// On a blocked Stop the cleanup early-returns, so `last_stop_shas`
+    /// must remain untouched (no baseline recorded mid-iteration).
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_blocked_stop_records_no_baseline() {
+        let (temp, strategy) = create_test_strategy();
+        let session_id = "baseline-blocked";
+        let turn_state = strategy.context.turn_state();
+
+        let path_a = temp.path().join("changed.rs");
+        std::fs::write(&path_a, b"x").unwrap();
+
+        let mut state = crate::turn::TurnState::new();
+        state.changed.push(path_a.clone());
+        turn_state.save(session_id, &state).unwrap();
+
+        let blocked_output = ChainOutput {
+            continue_execution: true,
+            validator_block: Some(crate::chain::ValidatorBlockInfo {
+                validator_name: "blocker".to_string(),
+                message: "blocked".to_string(),
+                hook_type: HookType::Stop,
+            }),
+            ..Default::default()
+        };
+
+        strategy.maybe_cleanup_turn_state(HookType::Stop, session_id, &blocked_output);
+
+        let loaded = turn_state.load(session_id).unwrap();
+        assert!(
+            loaded.last_stop_shas.is_empty(),
+            "blocked Stop must not write a baseline"
+        );
+        // changed list survives so the next Stop iteration sees the same files.
+        assert_eq!(loaded.changed.len(), 1);
     }
 
     /// The cleanup helper should clean state when the chain output is allowed.

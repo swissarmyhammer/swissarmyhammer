@@ -7,9 +7,7 @@ use crate::task_helpers::task_tags;
 use crate::types::TaskId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{
-    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
-};
+use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// Remove a tag from a task by removing `#tag` from its description.
 ///
@@ -39,9 +37,6 @@ impl UntagTask {
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for UntagTask {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
-        let start = std::time::Instant::now();
-        let input = serde_json::to_value(self).unwrap();
-
         let result: Result<Value> = async {
             let ectx = ctx.entity_context().await?;
 
@@ -80,34 +75,9 @@ impl Execute<KanbanContext, KanbanError> for UntagTask {
         }
         .await;
 
-        let duration_ms = start.elapsed().as_millis() as u64;
-
         match result {
-            Ok(value) => ExecutionResult::Logged {
-                value: value.clone(),
-                log_entry: LogEntry::new(self.op_string(), input, value, None, duration_ms),
-            },
-            Err(error) => {
-                let error_msg = error.to_string();
-                ExecutionResult::Failed {
-                    error,
-                    log_entry: Some(LogEntry::new(
-                        self.op_string(),
-                        input,
-                        serde_json::json!({"error": error_msg}),
-                        None,
-                        duration_ms,
-                    )),
-                }
-            }
+            Ok(value) => ExecutionResult::Success { value },
+            Err(error) => ExecutionResult::Failed { error },
         }
-    }
-
-    fn affected_resource_ids(&self, result: &Value) -> Vec<String> {
-        result
-            .get("task_id")
-            .and_then(|v| v.as_str())
-            .map(|id| vec![id.to_string()])
-            .unwrap_or_default()
     }
 }

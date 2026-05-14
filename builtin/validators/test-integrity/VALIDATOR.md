@@ -13,7 +13,7 @@ tags:
   - blocking
   - quality
 severity: error
-timeout: 30
+timeout: 300
 ---
 
 # Test Integrity RuleSet

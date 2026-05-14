@@ -9,11 +9,9 @@
 //! Hooks that fire from the notification pipeline (`intercept_notifications`):
 //!   PreToolUse, PostToolUse, PostToolUseFailure, Notification
 
-use agent_client_protocol::Agent;
 use tokio::sync::broadcast;
 
 use crate::helpers;
-use std::sync::Arc;
 
 /// UserPromptSubmit is blockable — exit 2 should Block and reject the prompt.
 #[tokio::test]
@@ -23,12 +21,10 @@ async fn user_prompt_submit_exit2_blocks() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("UserPromptSubmit", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let session_id = helpers::init_session(&agent).await;
-    let result = agent
-        .prompt(helpers::make_prompt_request(session_id, "hello"))
-        .await;
+    let result = helpers::try_run_prompt(&agent, &session_id, "hello").await;
 
     // UserPromptSubmit Block → prompt returns an error
     assert!(result.is_err(), "Expected prompt to be blocked");
@@ -49,7 +45,7 @@ async fn pre_tool_use_exit2_runs_hook() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("PreToolUse", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let _session_id = helpers::init_session(&agent).await;
 
@@ -80,7 +76,7 @@ async fn post_tool_use_exit2_feeds_context() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("PostToolUse", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let _session_id = helpers::init_session(&agent).await;
 
@@ -120,7 +116,7 @@ async fn post_tool_use_failure_exit2_feeds_context() {
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json =
         helpers::hook_config_json("PostToolUseFailure", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let _session_id = helpers::init_session(&agent).await;
 
@@ -159,7 +155,7 @@ async fn session_start_exit2_allows_silently() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("SessionStart", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     // SessionStart fires inside new_session — should NOT error
     let _session_id = helpers::init_session(&agent).await;
@@ -180,7 +176,7 @@ async fn stop_exit2_should_continue() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("Stop", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let session_id = helpers::init_session(&agent).await;
     let response = helpers::run_prompt(&agent, &session_id, "Run a bash command").await;
@@ -206,7 +202,7 @@ async fn notification_exit2_allows_silently() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("Notification", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let _session_id = helpers::init_session(&agent).await;
 

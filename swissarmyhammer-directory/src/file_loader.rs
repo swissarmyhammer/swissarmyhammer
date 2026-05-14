@@ -2030,28 +2030,42 @@ mod tests {
 
     /// get_search_paths in default managed mode exercises the git-root subdir
     /// branch when a valid git repo exists and the subdir is present.
+    ///
+    /// Uses `IsolatedTestEnvironment` for isolated HOME and `CurrentDirGuard`
+    /// for cwd — both hold global mutexes, so this test is safe under
+    /// parallel execution against any other tests that mutate the same
+    /// state. Touching the real project's `.sah/prompts/` (the previous
+    /// implementation) raced on shared filesystem state across concurrent
+    /// test binaries.
     #[test]
-    #[serial]
     fn test_get_search_paths_default_mode_git_root_subdir() {
-        let git_root = crate::directory::find_git_repository_root();
-        if git_root.is_none() {
-            return;
-        }
-        let git_root = git_root.unwrap();
+        let env = swissarmyhammer_common::test_utils::IsolatedTestEnvironment::new()
+            .expect("Failed to create isolated test environment");
 
-        let managed_dir = git_root
+        // Synthesize a git repo: `.git/` marker plus the managed prompts dir.
+        fs::create_dir(env.temp_dir().join(".git")).expect("Failed to create .git marker");
+        let managed_dir = env
+            .temp_dir()
             .join(SwissarmyhammerConfig::DIR_NAME)
             .join("prompts");
-        let created_dir = !managed_dir.exists();
-        if created_dir {
-            fs::create_dir_all(&managed_dir).unwrap();
-        }
+        fs::create_dir_all(&managed_dir).unwrap();
+
+        // Empty XDG so the managed-dir lookup falls through to the git-root
+        // branch we're exercising.
+        let empty_xdg = env.temp_dir().join("empty_xdg");
+        fs::create_dir_all(&empty_xdg).unwrap();
+        let original_xdg = std::env::var("XDG_DATA_HOME").ok();
+        std::env::set_var("XDG_DATA_HOME", &empty_xdg);
+
+        let _dir_guard = swissarmyhammer_common::test_utils::CurrentDirGuard::new(env.temp_dir())
+            .expect("Failed to set current dir");
 
         let vfs = VirtualFileSystem::<SwissarmyhammerConfig>::new("prompts");
         let paths = vfs.get_search_paths();
 
-        if created_dir {
-            let _ = fs::remove_dir(&managed_dir);
+        match original_xdg {
+            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+            None => std::env::remove_var("XDG_DATA_HOME"),
         }
 
         let local_entry = paths

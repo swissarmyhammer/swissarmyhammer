@@ -6,11 +6,9 @@
 //! - PreToolUse `updatedInput` → AllowWithUpdatedInput
 //! - Stop `reason` → ShouldContinue
 
-use agent_client_protocol::Agent;
 use tokio::sync::broadcast;
 
 use crate::helpers;
-use std::sync::Arc;
 
 /// PreToolUse hookSpecificOutput.additionalContext → AllowWithContext via context channel.
 #[tokio::test]
@@ -21,7 +19,7 @@ async fn pre_tool_use_additional_context() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("PreToolUse", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let _session_id = helpers::init_session(&agent).await;
 
@@ -59,14 +57,12 @@ async fn user_prompt_submit_additional_context() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("UserPromptSubmit", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let session_id = helpers::init_session(&agent).await;
 
     // AllowWithContext → prompt succeeds with context injected
-    let result = agent
-        .prompt(helpers::make_prompt_request(session_id, "hello"))
-        .await;
+    let result = helpers::try_run_prompt(&agent, &session_id, "hello").await;
     assert!(
         result.is_ok(),
         "UserPromptSubmit AllowWithContext should allow prompt, got: {:?}",
@@ -88,7 +84,7 @@ async fn post_tool_use_additional_context() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("PostToolUse", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let _session_id = helpers::init_session(&agent).await;
 
@@ -127,7 +123,7 @@ async fn post_tool_use_failure_additional_context() {
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json =
         helpers::hook_config_json("PostToolUseFailure", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let _session_id = helpers::init_session(&agent).await;
 
@@ -165,7 +161,7 @@ async fn session_start_additional_context_ignored() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("SessionStart", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     // SessionStart decisions are discarded — session should still be created
     let _session_id = helpers::init_session(&agent).await;
@@ -186,7 +182,7 @@ async fn notification_additional_context() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("Notification", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let _session_id = helpers::init_session(&agent).await;
 
@@ -225,7 +221,7 @@ async fn stop_specific_reason_should_continue() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("Stop", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let session_id = helpers::init_session(&agent).await;
     let response = helpers::run_prompt(&agent, &session_id, "Run a bash command").await;
@@ -259,7 +255,7 @@ async fn pre_tool_use_permission_decision_deny() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("PreToolUse", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let _session_id = helpers::init_session(&agent).await;
 
@@ -290,7 +286,7 @@ async fn pre_tool_use_updated_input() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("PreToolUse", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let _session_id = helpers::init_session(&agent).await;
 

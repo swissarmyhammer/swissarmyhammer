@@ -1,9 +1,12 @@
 // sah rule ignore acp/capability-enforcement
-//! File reading tool for MCP operations
+//! File reading handler for MCP operations.
 //!
-//! This module provides the `ReadFileTool` for secure, validated file reading operations through
-//! the MCP protocol. The tool supports reading various file types including text files, binary
-//! content (with base64 encoding), and provides partial reading capabilities for large files.
+//! This module provides [`execute_read`] — the read-file handler shared between
+//! the unified [`crate::mcp::tools::files::FilesTool`] (dispatched via
+//! `op: "read file"`) and the validator-facing
+//! [`crate::mcp::tools::files::read_file::ReadFileTool`] (called by name).
+//! It supports reading text files, binary content (with automatic base64
+//! encoding), and partial reads for large files via line-based offset/limit.
 //!
 //! Note: This is an MCP tool, not an ACP operation. ACP capability checking happens at the
 //! agent layer (claude-agent, llama-agent), not at the MCP tool layer.
@@ -30,8 +33,7 @@
 //! ## Examples
 //!
 //! ```rust,ignore
-//! # use swissarmyhammer_tools::mcp::tools::files::read::ReadFileTool;
-//! # use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolContext};
+//! # use swissarmyhammer_tools::mcp::tool_registry::ToolContext;
 //! # use serde_json::json;
 //! # async fn example(context: &ToolContext) -> Result<(), rmcp::ErrorData> {
 //! use swissarmyhammer_tools::mcp::tools::files::read::execute_read;
@@ -90,11 +92,12 @@ impl Operation for ReadFile {
     }
 }
 
-/// Tool for reading file contents from the local filesystem with comprehensive security validation
+/// Execute a file read operation
 ///
-/// `ReadFileTool` provides secure, validated file reading operations through the MCP protocol.
-/// It supports reading various file types, partial reading for large files, and implements
-/// comprehensive security measures including workspace boundary enforcement and path validation.
+/// This is the shared handler that backs both the unified
+/// [`crate::mcp::tools::files::FilesTool`] (dispatched via `op: "read file"`)
+/// and the validator-facing
+/// [`crate::mcp::tools::files::read_file::ReadFileTool`] (called by name).
 ///
 /// ## Security Features
 ///
@@ -116,21 +119,6 @@ impl Operation for ReadFile {
 /// * `path`: Required path to the file to read (absolute or relative to current working directory)
 /// * `offset`: Optional starting line number (1-based, max 1,000,000)
 /// * `limit`: Optional maximum lines to read (1-100,000 lines)
-///
-/// ## Usage
-///
-/// File reading is accessed through the unified `FilesTool` with `op: "read file"`.
-#[derive(Default, Debug, Clone)]
-pub struct ReadFileTool;
-
-impl ReadFileTool {
-    /// Creates a new instance of the ReadFileTool
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-/// Execute a file read operation
 pub async fn execute_read(
     arguments: serde_json::Map<String, serde_json::Value>,
     _context: &ToolContext,

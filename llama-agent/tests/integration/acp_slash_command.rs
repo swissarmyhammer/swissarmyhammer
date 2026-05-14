@@ -58,7 +58,7 @@ mod acp_slash_command_tests {
             Ok(())
         }
 
-        async fn set_session(&self, _session_id: agent_client_protocol::SessionId) {
+        async fn set_session(&self, _session_id: agent_client_protocol::schema::SessionId) {
             // No-op for mock
         }
 
@@ -185,7 +185,9 @@ mod acp_slash_command_tests {
         // Verify parameter metadata is included
         if let Some(input) = &plan_cmd.input {
             match input {
-                agent_client_protocol::AvailableCommandInput::Unstructured(unstructured) => {
+                agent_client_protocol::schema::AvailableCommandInput::Unstructured(
+                    unstructured,
+                ) => {
                     assert!(
                         unstructured.hint.contains("<spec>"),
                         "Required arguments should be shown in angle brackets"
@@ -217,8 +219,9 @@ mod acp_slash_command_tests {
 
         // Verify command with mixed required/optional arguments
         let review_cmd = commands.iter().find(|c| c.name == "/review").unwrap();
-        if let Some(agent_client_protocol::AvailableCommandInput::Unstructured(unstructured)) =
-            &review_cmd.input
+        if let Some(agent_client_protocol::schema::AvailableCommandInput::Unstructured(
+            unstructured,
+        )) = &review_cmd.input
         {
             assert!(
                 unstructured.hint.contains("<files>"),
@@ -266,7 +269,7 @@ mod acp_slash_command_tests {
             .with_max_level(tracing::Level::DEBUG)
             .try_init();
 
-        use agent_client_protocol::AvailableCommand;
+        use agent_client_protocol::schema::AvailableCommand;
         use llama_agent::mcp::NoOpMCPClient;
 
         let mcp_client = Arc::new(NoOpMCPClient::new());

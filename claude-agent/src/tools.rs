@@ -110,7 +110,7 @@ pub struct ToolCallHandler {
     terminal_manager: Arc<TerminalManager>,
     mcp_manager: Option<Arc<crate::mcp::McpServerManager>>,
     /// Client capabilities negotiated during initialization - required for ACP compliance
-    client_capabilities: Option<agent_client_protocol::ClientCapabilities>,
+    client_capabilities: Option<agent_client_protocol::schema::ClientCapabilities>,
     /// Active tool calls tracked by unique ID for session-scoped correlation
     active_tool_calls: Arc<RwLock<HashMap<String, ToolCallReport>>>,
     /// Notification sender for ACP-compliant session updates
@@ -318,7 +318,7 @@ impl ToolCallHandler {
     /// Create and track a new tool call report with ACP-compliant session notification
     pub async fn create_tool_call_report(
         &self,
-        session_id: &agent_client_protocol::SessionId,
+        session_id: &agent_client_protocol::schema::SessionId,
         tool_name: &str,
         arguments: &serde_json::Value,
     ) -> ToolCallReport {
@@ -357,9 +357,9 @@ impl ToolCallHandler {
         // 2. This leaves previous_state as None, which ensures the first update will include all fields
         // 3. This "bootstrap" behavior guarantees clients receive complete state on first update
         if let Some(sender) = &self.notification_sender {
-            let notification = agent_client_protocol::SessionNotification::new(
+            let notification = agent_client_protocol::schema::SessionNotification::new(
                 session_id.clone(),
-                agent_client_protocol::SessionUpdate::ToolCall(report.to_acp_tool_call()),
+                agent_client_protocol::schema::SessionUpdate::ToolCall(report.to_acp_tool_call()),
             );
 
             if let Err(e) = sender.send_update(notification).await {
@@ -378,7 +378,7 @@ impl ToolCallHandler {
     /// Update a tracked tool call report with ACP-compliant session notification
     pub async fn update_tool_call_report(
         &self,
-        session_id: &agent_client_protocol::SessionId,
+        session_id: &agent_client_protocol::schema::SessionId,
         tool_call_id: &str,
         update_fn: impl FnOnce(&mut ToolCallReport),
     ) -> Option<ToolCallReport> {
@@ -389,9 +389,9 @@ impl ToolCallHandler {
 
                 // Send tool_call_update notification for status changes
                 if let Some(sender) = &self.notification_sender {
-                    let notification = agent_client_protocol::SessionNotification::new(
+                    let notification = agent_client_protocol::schema::SessionNotification::new(
                         session_id.clone(),
-                        agent_client_protocol::SessionUpdate::ToolCallUpdate(
+                        agent_client_protocol::schema::SessionUpdate::ToolCallUpdate(
                             report.to_acp_tool_call_update(),
                         ),
                     );
@@ -421,7 +421,7 @@ impl ToolCallHandler {
     /// Complete and remove a tool call from tracking with ACP-compliant session notification
     pub async fn complete_tool_call_report(
         &self,
-        session_id: &agent_client_protocol::SessionId,
+        session_id: &agent_client_protocol::schema::SessionId,
         tool_call_id: &str,
         raw_output: Option<serde_json::Value>,
     ) -> Option<ToolCallReport> {
@@ -436,9 +436,9 @@ impl ToolCallHandler {
                 // Send final tool_call_update notification with completed status and results
                 // Include context fields (content/locations) in final update for full context
                 if let Some(sender) = &self.notification_sender {
-                    let notification = agent_client_protocol::SessionNotification::new(
+                    let notification = agent_client_protocol::schema::SessionNotification::new(
                         session_id.clone(),
-                        agent_client_protocol::SessionUpdate::ToolCallUpdate(
+                        agent_client_protocol::schema::SessionUpdate::ToolCallUpdate(
                             report.to_acp_tool_call_update_with_context(true),
                         ),
                     );
@@ -488,7 +488,7 @@ impl ToolCallHandler {
     /// Returns `Ok(())` if embedding succeeds, or an error if the tool call is not found
     pub async fn embed_terminal_in_tool_call(
         &self,
-        session_id: &agent_client_protocol::SessionId,
+        session_id: &agent_client_protocol::schema::SessionId,
         tool_call_id: &str,
         terminal_id: String,
     ) -> crate::Result<()> {
@@ -535,7 +535,7 @@ impl ToolCallHandler {
     /// terminal creation or embedding fails
     pub async fn execute_with_embedded_terminal(
         &self,
-        session_id: &agent_client_protocol::SessionId,
+        session_id: &agent_client_protocol::schema::SessionId,
         tool_call_id: &str,
         params: TerminalCreateParams,
     ) -> crate::Result<String> {
@@ -562,7 +562,7 @@ impl ToolCallHandler {
     /// Fail and remove a tool call from tracking with ACP-compliant session notification
     pub async fn fail_tool_call_report(
         &self,
-        session_id: &agent_client_protocol::SessionId,
+        session_id: &agent_client_protocol::schema::SessionId,
         tool_call_id: &str,
         error_output: Option<serde_json::Value>,
     ) -> Option<ToolCallReport> {
@@ -577,9 +577,9 @@ impl ToolCallHandler {
                 // Send final tool_call_update notification with failed status and error details
                 // Include context fields (content/locations) in final update for full context
                 if let Some(sender) = &self.notification_sender {
-                    let notification = agent_client_protocol::SessionNotification::new(
+                    let notification = agent_client_protocol::schema::SessionNotification::new(
                         session_id.clone(),
-                        agent_client_protocol::SessionUpdate::ToolCallUpdate(
+                        agent_client_protocol::schema::SessionUpdate::ToolCallUpdate(
                             report.to_acp_tool_call_update_with_context(true),
                         ),
                     );
@@ -606,7 +606,7 @@ impl ToolCallHandler {
     /// Cancel and remove a tool call from tracking with ACP-compliant session notification
     pub async fn cancel_tool_call_report(
         &self,
-        session_id: &agent_client_protocol::SessionId,
+        session_id: &agent_client_protocol::schema::SessionId,
         tool_call_id: &str,
     ) -> Option<ToolCallReport> {
         let cancelled_report = {
@@ -617,9 +617,9 @@ impl ToolCallHandler {
                 // Send final tool_call_update notification with cancelled status
                 // Include context fields (content/locations) in final update for full context
                 if let Some(sender) = &self.notification_sender {
-                    let notification = agent_client_protocol::SessionNotification::new(
+                    let notification = agent_client_protocol::schema::SessionNotification::new(
                         session_id.clone(),
-                        agent_client_protocol::SessionUpdate::ToolCallUpdate(
+                        agent_client_protocol::schema::SessionUpdate::ToolCallUpdate(
                             report.to_acp_tool_call_update_with_context(true),
                         ),
                     );
@@ -687,7 +687,7 @@ impl ToolCallHandler {
     /// Set client capabilities for ACP compliance - must be called after initialization
     pub fn set_client_capabilities(
         &mut self,
-        capabilities: agent_client_protocol::ClientCapabilities,
+        capabilities: agent_client_protocol::schema::ClientCapabilities,
     ) {
         self.client_capabilities = Some(capabilities.clone());
         // Share capabilities with terminal manager
@@ -813,7 +813,7 @@ impl ToolCallHandler {
     /// Handle an incoming tool request, checking permissions and executing if allowed
     pub async fn handle_tool_request(
         &self,
-        session_id: &agent_client_protocol::SessionId,
+        session_id: &agent_client_protocol::schema::SessionId,
         request: InternalToolRequest,
     ) -> crate::Result<ToolCallResult> {
         tracing::info!("Handling tool request: {}", request.name);
@@ -995,7 +995,7 @@ impl ToolCallHandler {
     /// Route and execute a tool request based on its name
     async fn execute_tool_request(
         &self,
-        session_id: &agent_client_protocol::SessionId,
+        session_id: &agent_client_protocol::schema::SessionId,
         request: &InternalToolRequest,
     ) -> crate::Result<String> {
         // Check if this is an MCP tool call
@@ -1061,7 +1061,7 @@ impl ToolCallHandler {
     /// Handle file read operations with security validation
     async fn handle_fs_read(
         &self,
-        session_id: &agent_client_protocol::SessionId,
+        session_id: &agent_client_protocol::schema::SessionId,
         request: &InternalToolRequest,
     ) -> crate::Result<String> {
         // ACP requires that we only use features the client declared support for.
@@ -1162,7 +1162,7 @@ impl ToolCallHandler {
     /// Handle file write operations with security validation
     async fn handle_fs_write(
         &self,
-        session_id: &agent_client_protocol::SessionId,
+        session_id: &agent_client_protocol::schema::SessionId,
         request: &InternalToolRequest,
     ) -> crate::Result<String> {
         // ACP requires that we only use features the client declared support for.
@@ -1288,7 +1288,7 @@ impl ToolCallHandler {
     /// Handle directory listing operations with security validation
     async fn handle_fs_list(
         &self,
-        session_id: &agent_client_protocol::SessionId,
+        session_id: &agent_client_protocol::schema::SessionId,
         request: &InternalToolRequest,
     ) -> crate::Result<String> {
         // ACP requires that we only use features the client declared support for.
@@ -1877,7 +1877,7 @@ mod tests {
     use super::*;
     use crate::permissions::{FilePermissionStorage, PermissionPolicyEngine};
     use crate::session::SessionManager;
-    use agent_client_protocol::SessionId;
+    use agent_client_protocol::schema::SessionId;
     use serde_json::json;
     use std::sync::Arc;
 
@@ -1916,8 +1916,8 @@ mod tests {
         let mut handler = ToolCallHandler::new(permissions, session_manager, permission_engine);
 
         // Set up test client capabilities for ACP compliance
-        let test_capabilities = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapabilities::new()
+        let test_capabilities = agent_client_protocol::schema::ClientCapabilities::new()
+            .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(true);
@@ -1947,8 +1947,8 @@ mod tests {
         let mut handler = ToolCallHandler::new(permissions, session_manager, permission_engine);
 
         // Set test capabilities
-        let test_capabilities = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapabilities::new()
+        let test_capabilities = agent_client_protocol::schema::ClientCapabilities::new()
+            .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(true);
@@ -2805,8 +2805,8 @@ mod tests {
         let permission_engine = create_permission_engine();
         let mut handler = ToolCallHandler::new(permissions, session_manager, permission_engine);
         let session_id = create_test_session_id();
-        let caps_no_read = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapabilities::new()
+        let caps_no_read = agent_client_protocol::schema::ClientCapabilities::new()
+            .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
                 .read_text_file(false)
                 .write_text_file(true))
             .terminal(false);
@@ -2843,8 +2843,8 @@ mod tests {
         let permission_engine = create_permission_engine();
         let mut handler = ToolCallHandler::new(permissions, session_manager, permission_engine);
         let session_id = create_test_session_id();
-        let caps_no_terminal = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapabilities::new()
+        let caps_no_terminal = agent_client_protocol::schema::ClientCapabilities::new()
+            .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(false);
@@ -2880,8 +2880,8 @@ mod tests {
         let permission_engine = create_permission_engine();
         let mut handler = ToolCallHandler::new(permissions, session_manager, permission_engine);
         let session_id = create_test_session_id();
-        let caps_enabled = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapabilities::new()
+        let caps_enabled = agent_client_protocol::schema::ClientCapabilities::new()
+            .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(true);
@@ -2951,8 +2951,8 @@ mod tests {
             permission_engine.clone(),
         );
 
-        let caps_no_terminal = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapabilities::new()
+        let caps_no_terminal = agent_client_protocol::schema::ClientCapabilities::new()
+            .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(false);
@@ -2981,8 +2981,8 @@ mod tests {
             permission_engine.clone(),
         );
 
-        let caps_with_terminal = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapabilities::new()
+        let caps_with_terminal = agent_client_protocol::schema::ClientCapabilities::new()
+            .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(true);
@@ -3352,8 +3352,8 @@ mod tests {
         let session_id = create_test_session_id();
 
         // Test with terminal capability explicitly disabled
-        let caps_disabled = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapabilities::new()
+        let caps_disabled = agent_client_protocol::schema::ClientCapabilities::new()
+            .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(false);
@@ -3680,39 +3680,39 @@ mod tests {
         // Test all ToolKind variants convert correctly to ACP format
         assert_eq!(
             ToolKind::Read.to_acp_kind(),
-            agent_client_protocol::ToolKind::Read
+            agent_client_protocol::schema::ToolKind::Read
         );
         assert_eq!(
             ToolKind::Edit.to_acp_kind(),
-            agent_client_protocol::ToolKind::Edit
+            agent_client_protocol::schema::ToolKind::Edit
         );
         assert_eq!(
             ToolKind::Delete.to_acp_kind(),
-            agent_client_protocol::ToolKind::Delete
+            agent_client_protocol::schema::ToolKind::Delete
         );
         assert_eq!(
             ToolKind::Move.to_acp_kind(),
-            agent_client_protocol::ToolKind::Move
+            agent_client_protocol::schema::ToolKind::Move
         );
         assert_eq!(
             ToolKind::Search.to_acp_kind(),
-            agent_client_protocol::ToolKind::Search
+            agent_client_protocol::schema::ToolKind::Search
         );
         assert_eq!(
             ToolKind::Execute.to_acp_kind(),
-            agent_client_protocol::ToolKind::Execute
+            agent_client_protocol::schema::ToolKind::Execute
         );
         assert_eq!(
             ToolKind::Think.to_acp_kind(),
-            agent_client_protocol::ToolKind::Think
+            agent_client_protocol::schema::ToolKind::Think
         );
         assert_eq!(
             ToolKind::Fetch.to_acp_kind(),
-            agent_client_protocol::ToolKind::Fetch
+            agent_client_protocol::schema::ToolKind::Fetch
         );
         assert_eq!(
             ToolKind::Other.to_acp_kind(),
-            agent_client_protocol::ToolKind::Other
+            agent_client_protocol::schema::ToolKind::Other
         );
     }
 
@@ -3732,13 +3732,16 @@ mod tests {
 
         // Test ACP conversion preserves kind
         let acp_call = report.to_acp_tool_call();
-        assert_eq!(acp_call.kind, agent_client_protocol::ToolKind::Think);
+        assert_eq!(
+            acp_call.kind,
+            agent_client_protocol::schema::ToolKind::Think
+        );
 
         // Test ACP update conversion preserves kind
         let acp_update = report.to_acp_tool_call_update();
         assert_eq!(
             acp_update.fields.kind.unwrap(),
-            agent_client_protocol::ToolKind::Think
+            agent_client_protocol::schema::ToolKind::Think
         );
     }
 
@@ -3782,7 +3785,7 @@ mod tests {
     #[tokio::test]
     async fn test_tool_call_report_lifecycle() {
         let handler = create_test_handler();
-        let session_id = agent_client_protocol::SessionId::new("test_session");
+        let session_id = agent_client_protocol::schema::SessionId::new("test_session");
 
         // Create a tool call report
         let report = handler
@@ -3806,8 +3809,10 @@ mod tests {
             .update_tool_call_report(&session_id, &report.tool_call_id, |r| {
                 r.update_status(ToolCallStatus::InProgress);
                 r.add_content(ToolCallContent::Content {
-                    content: agent_client_protocol::ContentBlock::Text(
-                        agent_client_protocol::TextContent::new("Reading file...".to_string()),
+                    content: agent_client_protocol::schema::ContentBlock::Text(
+                        agent_client_protocol::schema::TextContent::new(
+                            "Reading file...".to_string(),
+                        ),
                     ),
                 });
             })
@@ -3845,7 +3850,7 @@ mod tests {
     #[tokio::test]
     async fn test_tool_call_report_failure() {
         let handler = create_test_handler();
-        let session_id = agent_client_protocol::SessionId::new("test_session");
+        let session_id = agent_client_protocol::schema::SessionId::new("test_session");
 
         // Create a tool call report
         let report = handler
@@ -3904,8 +3909,8 @@ mod tests {
 
         // Add different types of content
         report.add_content(ToolCallContent::Content {
-            content: agent_client_protocol::ContentBlock::Text(
-                agent_client_protocol::TextContent::new("Operation completed".to_string()),
+            content: agent_client_protocol::schema::ContentBlock::Text(
+                agent_client_protocol::schema::TextContent::new("Operation completed".to_string()),
             ),
         });
 
@@ -3927,7 +3932,7 @@ mod tests {
         // Test content types
         match &report.content[0] {
             ToolCallContent::Content { content } => {
-                if let agent_client_protocol::ContentBlock::Text(text) = content {
+                if let agent_client_protocol::schema::ContentBlock::Text(text) = content {
                     assert_eq!(text.text, "Operation completed");
                 } else {
                     panic!("Expected text content");
@@ -3973,8 +3978,8 @@ mod tests {
             ToolCallHandler::new(permissions, session_manager.clone(), permission_engine);
 
         // Set client capabilities for file operations
-        let capabilities = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapabilities::new()
+        let capabilities = agent_client_protocol::schema::ClientCapabilities::new()
+            .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(false);
@@ -3999,8 +4004,8 @@ mod tests {
             }),
         };
 
-        // Convert SessionId to agent_client_protocol::SessionId
-        let acp_session_id = agent_client_protocol::SessionId::new(session_id.to_string());
+        // Convert SessionId to agent_client_protocol::schema::SessionId
+        let acp_session_id = agent_client_protocol::schema::SessionId::new(session_id.to_string());
 
         // This should work with valid session
         let result = handler
@@ -4011,7 +4016,7 @@ mod tests {
 
         // Try with invalid session ID
         let invalid_session_id =
-            agent_client_protocol::SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV");
+            agent_client_protocol::schema::SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV");
 
         // This should fail because session doesn't exist
         let result = handler
@@ -4039,8 +4044,8 @@ mod tests {
             ToolCallHandler::new(permissions, session_manager.clone(), permission_engine);
 
         // Set client capabilities for file operations
-        let capabilities = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapabilities::new()
+        let capabilities = agent_client_protocol::schema::ClientCapabilities::new()
+            .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(false);
@@ -4061,7 +4066,7 @@ mod tests {
             .create_session(session_dir.path().to_path_buf(), None)
             .unwrap();
 
-        let acp_session_id = agent_client_protocol::SessionId::new(session_id.to_string());
+        let acp_session_id = agent_client_protocol::schema::SessionId::new(session_id.to_string());
 
         // Request to read file inside session boundary - should succeed
         let inside_request = InternalToolRequest {
@@ -4120,8 +4125,8 @@ mod tests {
             ToolCallHandler::new(permissions, session_manager.clone(), permission_engine);
 
         // Set client capabilities for file operations
-        let capabilities = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapabilities::new()
+        let capabilities = agent_client_protocol::schema::ClientCapabilities::new()
+            .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(false);
@@ -4139,8 +4144,10 @@ mod tests {
             .create_session(temp_dir.path().to_path_buf(), None)
             .unwrap();
 
-        let acp_session_id1 = agent_client_protocol::SessionId::new(session_id1.to_string());
-        let acp_session_id2 = agent_client_protocol::SessionId::new(session_id2.to_string());
+        let acp_session_id1 =
+            agent_client_protocol::schema::SessionId::new(session_id1.to_string());
+        let acp_session_id2 =
+            agent_client_protocol::schema::SessionId::new(session_id2.to_string());
 
         // Perform file operations in session 1
         let write_request1 = InternalToolRequest {

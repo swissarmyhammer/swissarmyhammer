@@ -30,6 +30,7 @@ use swissarmyhammer_kanban::task_helpers::enrich_task_entity;
 use swissarmyhammer_kanban::virtual_tags::default_virtual_tag_registry;
 use swissarmyhammer_kanban::KanbanContext;
 use swissarmyhammer_perspectives::PerspectiveEvent;
+use swissarmyhammer_views::ViewEvent;
 use tauri::Emitter;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
@@ -673,6 +674,7 @@ pub async fn run_bridge(
     board_path: String,
     search_index: Arc<RwLock<EntitySearchIndex>>,
     perspective_rx: Option<broadcast::Receiver<PerspectiveEvent>>,
+    view_rx: Option<broadcast::Receiver<ViewEvent>>,
 ) {
     // Pre-populate BEFORE subscribing so no event lands between the snapshot
     // and the receiver. A write that lands *before* subscribe will be
@@ -683,15 +685,17 @@ pub async fn run_bridge(
     let state = Arc::new(Mutex::new(BridgeState::new(seen)));
     let mut entity_rx = cache.subscribe();
     let mut perspective_rx = perspective_rx;
+    let mut view_rx = view_rx;
     tracing::info!(
         board_path = %board_path,
         preloaded_entities,
         has_perspective_rx = perspective_rx.is_some(),
+        has_view_rx = view_rx.is_some(),
         "entity-cache bridge started"
     );
 
     loop {
-        let action = recv_next_event(&mut entity_rx, &mut perspective_rx).await;
+        let action = recv_next_event(&mut entity_rx, &mut perspective_rx, &mut view_rx).await;
         match action {
             BridgeAction::Entity(evt) => {
                 process_cache_event(evt, &ctx, &state, &app, &board_path, &search_index).await;
@@ -711,6 +715,17 @@ pub async fn run_bridge(
                 tracing::info!(board_path = %board_path, "perspective event channel closed");
                 perspective_rx = None;
             }
+            BridgeAction::View(evt) => {
+                process_view_event(evt, &app, &board_path);
+            }
+            BridgeAction::ViewLagged(n) => {
+                tracing::warn!(board_path = %board_path, skipped = n,
+                    "view bridge lagged");
+            }
+            BridgeAction::ViewClosed => {
+                tracing::info!(board_path = %board_path, "view event channel closed");
+                view_rx = None;
+            }
             BridgeAction::Shutdown => {
                 tracing::info!(board_path = %board_path, "entity-cache bridge stopped");
                 break;
@@ -726,17 +741,21 @@ enum BridgeAction {
     Perspective(PerspectiveEvent),
     PerspectiveLagged(u64),
     PerspectiveClosed,
+    View(ViewEvent),
+    ViewLagged(u64),
+    ViewClosed,
     Shutdown,
 }
 
-/// Wait for the next event from either the entity or perspective channel.
+/// Wait for the next event from any of the entity, perspective, or view channels.
 ///
-/// Uses `tokio::select!` to multiplex both receivers. The perspective
-/// channel is optional — when `None`, that arm pends forever so only
-/// entity events are processed.
+/// Uses `tokio::select!` to multiplex all receivers. The perspective and view
+/// channels are optional — when `None`, that arm pends forever so only the
+/// remaining streams are processed.
 async fn recv_next_event(
     entity_rx: &mut broadcast::Receiver<EntityEvent>,
     perspective_rx: &mut Option<broadcast::Receiver<PerspectiveEvent>>,
+    view_rx: &mut Option<broadcast::Receiver<ViewEvent>>,
 ) -> BridgeAction {
     tokio::select! {
         entity_result = entity_rx.recv() => {
@@ -756,6 +775,18 @@ async fn recv_next_event(
                 Ok(evt) => BridgeAction::Perspective(evt),
                 Err(RecvError::Lagged(n)) => BridgeAction::PerspectiveLagged(n),
                 Err(RecvError::Closed) => BridgeAction::PerspectiveClosed,
+            }
+        }
+        view_result = async {
+            match view_rx.as_mut() {
+                Some(rx) => rx.recv().await,
+                None => std::future::pending().await,
+            }
+        } => {
+            match view_result {
+                Ok(evt) => BridgeAction::View(evt),
+                Err(RecvError::Lagged(n)) => BridgeAction::ViewLagged(n),
+                Err(RecvError::Closed) => BridgeAction::ViewClosed,
             }
         }
     }
@@ -843,6 +874,75 @@ fn process_perspective_event(evt: PerspectiveEvent, app: &tauri::AppHandle, boar
         },
     };
     emit_watch_event(app, board_path, watch_event);
+}
+
+/// Translate a `ViewEvent` into a Tauri event and emit it.
+///
+/// Views are not entities, but the frontend listens for
+/// `entity-created` / `entity-field-changed` / `entity-removed` with
+/// `entity_type === "view"` to refresh the view list. We map view events
+/// into the same shape so the existing frontend refresh logic fires without
+/// any React changes.
+///
+/// Creates emit `entity-created`, updates emit `entity-field-changed`, and
+/// deletes emit `entity-removed` — matching the entity bridge's contract.
+/// `is_create` on `ViewChanged` selects between the create / update cases;
+/// `reload_from_disk` always emits `is_create: false`, so undo-of-delete
+/// surfaces as `entity-field-changed` and the frontend re-fetches the view list.
+fn process_view_event(evt: ViewEvent, app: &tauri::AppHandle, board_path: &str) {
+    let watch_event = view_event_to_watch_event(evt);
+    emit_watch_event(app, board_path, watch_event);
+}
+
+/// Pure mapping from a `ViewEvent` to the matching `WatchEvent` payload.
+///
+/// Extracted from [`process_view_event`] so unit tests can verify the
+/// `is_create` → `EntityCreated` vs `EntityFieldChanged` branch without
+/// constructing a real Tauri `AppHandle`. The bridge contract is verified
+/// here: undo-of-delete (where `reload_from_disk` emits `is_create: false`)
+/// must map to `EntityFieldChanged`, not `EntityCreated`.
+fn view_event_to_watch_event(evt: ViewEvent) -> WatchEvent {
+    match evt {
+        ViewEvent::ViewChanged {
+            id,
+            changed_fields,
+            is_create,
+        } => {
+            if is_create {
+                // The frontend only needs the event signal to trigger a view
+                // list refresh — field values are re-fetched from the backend.
+                let fields = changed_fields
+                    .into_iter()
+                    .map(|field| (field, serde_json::Value::Null))
+                    .collect();
+                WatchEvent::EntityCreated {
+                    entity_type: "view".to_string(),
+                    id,
+                    fields,
+                }
+            } else {
+                let changes = changed_fields
+                    .into_iter()
+                    .map(|field| FieldChange {
+                        field,
+                        // The frontend only needs to know *which* fields
+                        // changed to trigger a refresh — the actual value is
+                        // re-fetched from the backend.
+                        value: serde_json::Value::Null,
+                    })
+                    .collect();
+                WatchEvent::EntityFieldChanged {
+                    entity_type: "view".to_string(),
+                    id,
+                    changes,
+                }
+            }
+        }
+        ViewEvent::ViewDeleted { id } => WatchEvent::EntityRemoved {
+            entity_type: "view".to_string(),
+            id,
+        },
+    }
 }
 
 #[cfg(test)]
@@ -1156,6 +1256,218 @@ mod tests {
         let map = fields_map_from_enriched(&e);
         assert!(map.contains_key("title"));
         assert!(!map.contains_key("empty_field"));
+    }
+
+    // -----------------------------------------------------------------------
+    // View event → WatchEvent mapping tests (the bridge contract for views).
+    //
+    // These exercise `view_event_to_watch_event` directly so we don't need a
+    // real `tauri::AppHandle`. They pin the contract from the task description:
+    // ViewChanged{is_create=true} → EntityCreated, ViewChanged{is_create=false}
+    // → EntityFieldChanged, ViewDeleted → EntityRemoved. All carry
+    // entity_type="view".
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn view_event_to_watch_event_create_maps_to_entity_created() {
+        let evt = ViewEvent::ViewChanged {
+            id: "01VIEW".into(),
+            changed_fields: vec!["name".into(), "kind".into()],
+            is_create: true,
+        };
+        match view_event_to_watch_event(evt) {
+            WatchEvent::EntityCreated {
+                entity_type,
+                id,
+                fields,
+            } => {
+                assert_eq!(entity_type, "view");
+                assert_eq!(id, "01VIEW");
+                assert!(fields.contains_key("name"));
+                assert!(fields.contains_key("kind"));
+            }
+            other => panic!("expected EntityCreated, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn view_event_to_watch_event_update_maps_to_entity_field_changed() {
+        let evt = ViewEvent::ViewChanged {
+            id: "01VIEW".into(),
+            changed_fields: vec!["kind".into()],
+            is_create: false,
+        };
+        match view_event_to_watch_event(evt) {
+            WatchEvent::EntityFieldChanged {
+                entity_type,
+                id,
+                changes,
+            } => {
+                assert_eq!(entity_type, "view");
+                assert_eq!(id, "01VIEW");
+                assert_eq!(changes.len(), 1);
+                assert_eq!(changes[0].field, "kind");
+            }
+            other => panic!("expected EntityFieldChanged, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn view_event_to_watch_event_delete_maps_to_entity_removed() {
+        let evt = ViewEvent::ViewDeleted {
+            id: "01VIEW".into(),
+        };
+        match view_event_to_watch_event(evt) {
+            WatchEvent::EntityRemoved { entity_type, id } => {
+                assert_eq!(entity_type, "view");
+                assert_eq!(id, "01VIEW");
+            }
+            other => panic!("expected EntityRemoved, got {other:?}"),
+        }
+    }
+
+    /// End-to-end mapping for the full create → delete → undo-of-delete cycle
+    /// the views crate emits. Pins the bridge contract documented in the task:
+    /// the third event (undo-of-delete) is `EntityFieldChanged`, not
+    /// `EntityCreated`, because `reload_from_disk` always emits
+    /// `is_create: false`.
+    #[test]
+    fn bridge_routes_view_undo_of_delete() {
+        // Step 1: create — bridge must emit EntityCreated.
+        let create = view_event_to_watch_event(ViewEvent::ViewChanged {
+            id: "01VIEW".into(),
+            changed_fields: vec!["name".into()],
+            is_create: true,
+        });
+        assert!(matches!(
+            create,
+            WatchEvent::EntityCreated { ref entity_type, .. } if entity_type == "view"
+        ));
+
+        // Step 2: delete — bridge must emit EntityRemoved.
+        let delete = view_event_to_watch_event(ViewEvent::ViewDeleted {
+            id: "01VIEW".into(),
+        });
+        assert!(matches!(
+            delete,
+            WatchEvent::EntityRemoved { ref entity_type, .. } if entity_type == "view"
+        ));
+
+        // Step 3: undo-of-delete — `reload_from_disk` emits
+        // ViewChanged{is_create=false}, which must map to EntityFieldChanged
+        // (NOT EntityCreated). This is the key bridge contract for views.
+        let undo = view_event_to_watch_event(ViewEvent::ViewChanged {
+            id: "01VIEW".into(),
+            changed_fields: vec![],
+            is_create: false,
+        });
+        assert!(
+            matches!(
+                undo,
+                WatchEvent::EntityFieldChanged { ref entity_type, .. } if entity_type == "view"
+            ),
+            "undo-of-delete must surface as EntityFieldChanged, got {undo:?}"
+        );
+    }
+
+    /// End-to-end through the bridge: write → delete → undo-of-delete. The
+    /// bridge must emit `entity-created`, `entity-removed`, `entity-created`
+    /// in order. The third event is `entity-created` (NOT
+    /// `entity-field-changed`) because deletion clears the bridge's `seen`
+    /// set, so when undo restores the file the post-undo `EntityChanged`
+    /// finds the key absent and classifies it as a fresh create. This
+    /// pins the cache-bridge contract that single-changelog (card
+    /// 01KQ5FJ0VXEQZVKHZBN49Q5GFS) relies on for the delete-undo
+    /// round-trip.
+    #[tokio::test]
+    async fn bridge_routes_undo_of_delete_to_entity_created() {
+        use swissarmyhammer_entity::EntityTypeStore;
+        use swissarmyhammer_store::{StoreContext, StoreHandle};
+
+        // Full production-like wiring: kanban context, store handles for
+        // every entity type, shared StoreContext, attached EntityCache.
+        let (_temp, ctx, cache) = setup_kanban_with_board().await;
+        let ectx = ctx.entity_context().await.unwrap();
+
+        let store_context = Arc::new(StoreContext::new(ctx.root().to_path_buf()));
+        ectx.set_store_context(Arc::clone(&store_context));
+
+        let fields_ctx = ectx.fields();
+        for entity_def in fields_ctx.all_entities() {
+            let entity_type = entity_def.name.as_str();
+            let field_defs: Vec<_> = fields_ctx
+                .fields_for_entity(entity_type)
+                .into_iter()
+                .cloned()
+                .collect();
+            let store = EntityTypeStore::new(
+                ectx.entity_dir(entity_type),
+                entity_type,
+                Arc::new(entity_def.clone()),
+                Arc::new(field_defs),
+            );
+            let handle = Arc::new(StoreHandle::new(Arc::new(store)));
+            ectx.register_store(entity_type, Arc::clone(&handle)).await;
+            store_context.register(handle).await;
+        }
+
+        // Pre-populate seen from the board's existing entities (columns,
+        // board) so the bridge has the correct baseline before our write.
+        let seen = pre_populate_seen(&cache).await;
+        let mut rx = cache.subscribe();
+        let mut state = BridgeState::new(seen);
+
+        // Step 1: create a tag. The bridge must classify this as
+        // `entity-created`.
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        cache.write(&tag).await.unwrap();
+
+        let evt = rx.recv().await.expect("write must emit");
+        let resolved = resolve_event(evt, ctx.as_ref(), &mut state).await;
+        let primary = resolved
+            .first()
+            .expect("resolve_event must return at least one event");
+        assert!(
+            matches!(primary, WatchEvent::EntityCreated { id, .. } if id == "bug"),
+            "step 1 (write) must surface as EntityCreated, got {primary:?}"
+        );
+
+        // Step 2: delete the tag. The bridge must classify this as
+        // `entity-removed` and clear `seen`.
+        ectx.delete("tag", "bug").await.unwrap();
+        let evt = rx.recv().await.expect("delete must emit");
+        let resolved = resolve_event(evt, ctx.as_ref(), &mut state).await;
+        let primary = resolved
+            .first()
+            .expect("resolve_event must return at least one event");
+        assert!(
+            matches!(primary, WatchEvent::EntityRemoved { id, .. } if id == "bug"),
+            "step 2 (delete) must surface as EntityRemoved, got {primary:?}"
+        );
+
+        // Step 3: undo the delete. The store layer restores the file and
+        // the command-layer glue (mirrored here) calls
+        // `sync_entity_cache_from_disk`, which fires an `EntityChanged`
+        // broadcast. Because step 2 cleared the bridge's seen-set, this
+        // event must surface as `entity-created` again, NOT as
+        // `entity-field-changed`.
+        let outcome = store_context.undo().await.expect("undo must succeed");
+        ectx.sync_entity_cache_from_disk(&outcome.store_name, outcome.item_id.as_str())
+            .await;
+
+        let evt = rx.recv().await.expect("undo must emit");
+        let resolved = resolve_event(evt, ctx.as_ref(), &mut state).await;
+        let primary = resolved
+            .first()
+            .expect("resolve_event must return at least one event");
+        assert!(
+            matches!(primary, WatchEvent::EntityCreated { id, .. } if id == "bug"),
+            "step 3 (undo of delete) must surface as EntityCreated (not \
+             EntityFieldChanged) — the bridge's seen-set was cleared on \
+             delete and the post-undo EntityChanged finds the key absent; \
+             got {primary:?}"
+        );
     }
 
     #[tokio::test]

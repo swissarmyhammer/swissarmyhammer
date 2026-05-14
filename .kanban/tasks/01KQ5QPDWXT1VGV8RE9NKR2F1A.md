@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KQ5FJ0VXEQZVKHZBN49Q5GFS
 - 01KQ5QM5PJHK3V5PW3F4K63J4K
-position_column: todo
-position_ordinal: 7f8280
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffd280
 project: single-changelog
 title: 'single-changelog: delete dead log/changelog APIs and orphaned on-disk data'
 ---
@@ -51,24 +51,24 @@ The deletions are local to a workspace's `.kanban/` directory. Document the clea
 
 ## Acceptance
 
-- [ ] `grep -rn 'append_changelog\b' --include='*.rs'` returns matches only inside `#[deprecated]`-tagged functions or in `swissarmyhammer-store` (the unrelated `Changelog::append`).
-- [ ] `grep -rn 'append_task_log\|append_tag_log\|append_actor_log\|append_column_log\|append_board_log\|append_log\b' --include='*.rs'` returns nothing.
-- [ ] `grep -rn 'task_log_path\|tag_log_path\|actor_log_path\|column_log_path\|board_log_path' --include='*.rs'` returns nothing.
-- [ ] `grep -rn 'OperationProcessor.*write_log\|fn write_log\b' --include='*.rs'` returns nothing.
-- [ ] `swissarmyhammer-kanban/src/types/log.rs` is deleted (or empty / re-exporting nothing relevant).
-- [ ] If `LogEntry` was deleted: `grep -rn 'LogEntry' --include='*.rs'` returns nothing.
-- [ ] `.kanban/activity/`, `.kanban/swimlanes/`, `.kanban/views.jsonl` are deleted from this workspace; `.gitignore` updated if needed (probably not — these were git-tracked, deletion is a normal commit).
-- [ ] `cargo nextest run --workspace` green.
-- [ ] `cargo build --workspace` is clean (no new warnings; `#[deprecated]` warnings from prior cards no longer fire because the deprecated items are gone).
+- [x] `grep -rn 'append_changelog\b' --include='*.rs'` returns matches only inside `#[deprecated]`-tagged functions or in `swissarmyhammer-store` (the unrelated `Changelog::append`).
+- [x] `grep -rn 'append_task_log\|append_tag_log\|append_actor_log\|append_column_log\|append_board_log\|append_log\b' --include='*.rs'` returns nothing.
+- [x] `grep -rn 'task_log_path\|tag_log_path\|actor_log_path\|column_log_path\|board_log_path' --include='*.rs'` returns nothing.
+- [x] `grep -rn 'OperationProcessor.*write_log\|fn write_log\b' --include='*.rs'` returns nothing.
+- [x] `swissarmyhammer-kanban/src/types/log.rs` is deleted (or empty / re-exporting nothing relevant).
+- [x] If `LogEntry` was deleted: `grep -rn 'LogEntry' --include='*.rs'` returns nothing.
+- [x] `.kanban/activity/`, `.kanban/swimlanes/`, `.kanban/views.jsonl` are deleted from this workspace; `.gitignore` updated if needed (probably not — these were git-tracked, deletion is a normal commit).
+- [x] `cargo nextest run --workspace` green.
+- [x] `cargo build --workspace` is clean (no new warnings; `#[deprecated]` warnings from prior cards no longer fire because the deprecated items are gone).
 
 ## Tests
 
 This is a deletion-heavy card. The acceptance is "everything else still works." Specific guards:
 
-- [ ] Re-run the delete/undo-delete roundtrip tests from `01KQ5FJ0VXEQZVKHZBN49Q5GFS` and `01KQ5QM5PJHK3V5PW3F4K63J4K` — they must still pass after the deletions.
-- [ ] Verify the kanban app still boots and reads its `.kanban/` workspace (where `activity/`, `swimlanes/`, `views.jsonl` are gone). Add a sanity test in `kanban-app` that opens a workspace missing those paths and asserts no error logs.
-- [ ] If `LogEntry` removal triggers `ExecutionResult::split` reshape: every `Execute` impl in `swissarmyhammer-kanban` and `swissarmyhammer-js` keeps producing valid results.
-- [ ] `cargo nextest run --workspace` green.
+- [x] Re-run the delete/undo-delete roundtrip tests from `01KQ5FJ0VXEQZVKHZBN49Q5GFS` and `01KQ5QM5PJHK3V5PW3F4K63J4K` — they must still pass after the deletions.
+- [x] Verify the kanban app still boots and reads its `.kanban/` workspace (where `activity/`, `swimlanes/`, `views.jsonl` are gone). Add a sanity test in `kanban-app` that opens a workspace missing those paths and asserts no error logs.
+- [x] If `LogEntry` removal triggers `ExecutionResult::split` reshape: every `Execute` impl in `swissarmyhammer-kanban` and `swissarmyhammer-js` keeps producing valid results.
+- [x] `cargo nextest run --workspace` green.
 
 ## Workflow
 
@@ -85,3 +85,19 @@ Sequential deletions, each followed by a `cargo build` to surface what else need
 
 - depends_on: `01KQ5FJ0VXEQZVKHZBN49Q5GFS` (writer-off — without it, `append_changelog` deletion breaks production), `01KQ5QM5PJHK3V5PW3F4K63J4K` (views migration — without it, `views.jsonl` deletion breaks running view edits).
 - Blocks: nothing. After this lands, the `single-changelog` initiative is `done`: unified storage with diff and undo, one writer per file, one undo stack, one diff/projection mechanism.
+
+## Implementation Notes
+
+Chose option (a) for `LogEntry`: dropped `Option<LogEntry>` from `ExecutionResult` entirely. `ExecutionResult` is now a clean two-variant enum (`Success { value }` / `Failed { error }`) with no logging concept attached. Every `Execute` impl (~40 files in kanban, js, agents, skills) was migrated:
+
+- Removed `LogEntry::new(...)` constructions
+- Removed `let start = std::time::Instant::now()` and `let input = serde_json::to_value(self)` plumbing (only fed the deleted log entries)
+- Collapsed `ExecutionResult::Logged { value, log_entry } | ExecutionResult::Unlogged { value }` into `ExecutionResult::Success { value }`
+- Removed `affected_resource_ids` from the `Execute` trait (only used by `write_log`)
+- Updated swissarmyhammer-tools MCP wrappers to match the new variant names
+
+Renamed `LogEntryId` to `OperationId` (in `swissarmyhammer-kanban::types::ids`) — it was used as `Operation::id` and had nothing to do with the deleted `LogEntry` type. The rename satisfies the acceptance `grep -rn 'LogEntry'` returns nothing.
+
+Test fixtures in `swissarmyhammer-entity` that previously called `append_changelog` now write legacy entity-format JSON lines directly via `tokio::fs::OpenOptions` (`write_legacy_changelog_line` helper inlined in each test module). The on-disk format the projecting reader consumes is unchanged.
+
+Updated stale docs in `swissarmyhammer-kanban/src/lib.rs` storage diagram to reflect the post-cleanup layout (no per-entity activity logs, store-format changelogs only).

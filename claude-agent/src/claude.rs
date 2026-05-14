@@ -1,6 +1,6 @@
 //! Claude process wrapper providing session-aware interactions
 
-use agent_client_protocol::{ContentBlock, SessionUpdate, TextContent};
+use agent_client_protocol::schema::{ContentBlock, SessionUpdate, TextContent};
 use futures::stream::Stream;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -30,7 +30,7 @@ struct StreamContext {
     /// Handle to the Claude CLI process for reading output lines.
     process: Arc<Mutex<ClaudeProcess>>,
     /// ACP session ID for correlating responses with the protocol translator.
-    acp_session_id: agent_client_protocol::SessionId,
+    acp_session_id: agent_client_protocol::schema::SessionId,
     /// Optional manager for recording raw JSON-RPC messages for debugging.
     raw_message_manager: Option<crate::agent::RawMessageManager>,
     /// Translator for converting Claude CLI output to ACP protocol messages.
@@ -164,7 +164,7 @@ impl ClaudeClient {
             std::result::Result<Option<String>, crate::error::AgentError>,
             tokio::time::error::Elapsed,
         >,
-        acp_session_id: &agent_client_protocol::SessionId,
+        acp_session_id: &agent_client_protocol::schema::SessionId,
         process: &Arc<Mutex<ClaudeProcess>>,
     ) -> (
         Option<Vec<(String, String, Option<String>)>>,
@@ -194,7 +194,7 @@ impl ClaudeClient {
     async fn handle_init_line_received(
         &self,
         line: &str,
-        acp_session_id: &agent_client_protocol::SessionId,
+        acp_session_id: &agent_client_protocol::schema::SessionId,
         process: &Arc<Mutex<ClaudeProcess>>,
     ) -> (
         Option<Vec<(String, String, Option<String>)>>,
@@ -218,7 +218,7 @@ impl ClaudeClient {
     async fn parse_init_notification(
         &self,
         line: &str,
-        acp_session_id: &agent_client_protocol::SessionId,
+        acp_session_id: &agent_client_protocol::schema::SessionId,
     ) -> (
         Option<Vec<(String, String, Option<String>)>>,
         Option<String>,
@@ -250,7 +250,7 @@ impl ClaudeClient {
 
     /// Extract available_agents from notification metadata.
     fn extract_available_agents(
-        notification: &agent_client_protocol::SessionNotification,
+        notification: &agent_client_protocol::schema::SessionNotification,
     ) -> Option<Vec<(String, String, Option<String>)>> {
         notification
             .meta
@@ -278,7 +278,7 @@ impl ClaudeClient {
 
     /// Extract current_agent from notification metadata.
     fn extract_current_agent(
-        notification: &agent_client_protocol::SessionNotification,
+        notification: &agent_client_protocol::schema::SessionNotification,
     ) -> Option<String> {
         notification
             .meta
@@ -291,7 +291,7 @@ impl ClaudeClient {
     /// Forward the init notification to subscribers.
     async fn forward_init_notification(
         &self,
-        notification: agent_client_protocol::SessionNotification,
+        notification: agent_client_protocol::schema::SessionNotification,
     ) {
         if let Some(sender) = &self.notification_sender {
             tracing::info!("Forwarding AvailableCommandsUpdate from Claude init message");
@@ -517,9 +517,9 @@ impl ClaudeClient {
     /// Convert internal session ID to ACP protocol session ID.
     ///
     /// Maps between the internal `SessionId` type and the protocol-level
-    /// `agent_client_protocol::SessionId` for ACP communication.
-    fn to_acp_session_id(session_id: &SessionId) -> agent_client_protocol::SessionId {
-        agent_client_protocol::SessionId::new(session_id.to_string())
+    /// `agent_client_protocol::schema::SessionId` for ACP communication.
+    fn to_acp_session_id(session_id: &SessionId) -> agent_client_protocol::schema::SessionId {
+        agent_client_protocol::schema::SessionId::new(session_id.to_string())
     }
 
     /// Convert ACP ContentBlock to internal MessageChunk format.
@@ -597,7 +597,7 @@ impl ClaudeClient {
     async fn collect_query_response(
         &self,
         process: Arc<Mutex<ClaudeProcess>>,
-        acp_session_id: &agent_client_protocol::SessionId,
+        acp_session_id: &agent_client_protocol::schema::SessionId,
     ) -> Result<String> {
         let mut response_text = String::new();
         let mut saw_stream_events = false;
@@ -642,7 +642,7 @@ impl ClaudeClient {
     async fn extract_text_from_line(
         &self,
         line: &str,
-        acp_session_id: &agent_client_protocol::SessionId,
+        acp_session_id: &agent_client_protocol::schema::SessionId,
     ) -> Option<String> {
         let notification = self
             .protocol_translator
@@ -817,7 +817,7 @@ impl ClaudeClient {
     /// Process notification and send chunks. Returns false if loop should break.
     fn process_notification(
         ctx: &StreamContext,
-        notification: agent_client_protocol::SessionNotification,
+        notification: agent_client_protocol::schema::SessionNotification,
         state: &mut StreamState,
     ) -> bool {
         match notification.update {
@@ -836,7 +836,7 @@ impl ClaudeClient {
     /// Handle agent message chunk. Returns false if channel closed.
     fn handle_message_chunk(
         ctx: &StreamContext,
-        content_chunk: agent_client_protocol::ContentChunk,
+        content_chunk: agent_client_protocol::schema::ContentChunk,
         state: &mut StreamState,
     ) -> bool {
         let chunk = Self::content_block_to_message_chunk(content_chunk.content.clone());
@@ -860,7 +860,7 @@ impl ClaudeClient {
     /// Handle tool call. Returns false if channel closed.
     fn handle_tool_call(
         ctx: &StreamContext,
-        tool_call: agent_client_protocol::ToolCall,
+        tool_call: agent_client_protocol::schema::ToolCall,
         state: &mut StreamState,
     ) -> bool {
         // Deduplicate: --include-partial-messages causes Claude to emit the same

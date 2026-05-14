@@ -157,24 +157,8 @@ pub fn run_doctor(verbose: bool) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{LazyLock, Mutex, MutexGuard};
+    use serial_test::serial;
     use tempfile::TempDir;
-
-    /// Serializes tests that mutate process-global environment state
-    /// (`env::current_dir`, `env::set_var("PATH", ..)`). Tests that only
-    /// read these values are not protected — they accept both Ok and
-    /// Warning outcomes and so are robust to races with the mutating tests.
-    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-
-    /// Acquire the env lock, recovering from any prior poisoning.
-    ///
-    /// A poisoned lock just means a previous test panicked while holding
-    /// it; the guarded data is `()` so there is nothing to corrupt.
-    fn lock_env() -> MutexGuard<'static, ()> {
-        ENV_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
 
     /// RAII guard that restores `env::current_dir` on drop.
     struct CwdGuard {
@@ -299,8 +283,8 @@ mod tests {
     /// Exercises the `None` arm of `check_git_repository` by running the
     /// check from a tempdir with no `.git` in any ancestor.
     #[test]
+    #[serial(env)]
     fn test_check_git_repository_not_in_git() {
-        let _guard = lock_env();
         let _cwd = CwdGuard::capture();
 
         // Canonicalize to resolve any symlinks (e.g. /tmp -> /private/tmp on
@@ -329,8 +313,8 @@ mod tests {
     /// Exercises the not-found arm of `check_shelltool_in_path` by pointing
     /// `PATH` at an empty tempdir that cannot contain the shelltool binary.
     #[test]
+    #[serial(env)]
     fn test_check_shelltool_in_path_not_found() {
-        let _guard = lock_env();
         let _path_env = PathEnvGuard::capture();
 
         let tmp = TempDir::new().expect("create tempdir");

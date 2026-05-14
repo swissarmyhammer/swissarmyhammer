@@ -22,6 +22,10 @@ use test_helpers::fixtures_dir;
 // ============================================================================
 
 /// Create an AvpContext with a PlaybackAgent and an explicit ModelConfig.
+///
+/// In ACP 0.11 `PlaybackAgent` is `ConnectTo<Client>` and is passed directly
+/// to [`AvpContext::with_agent_and_model`]; notifications flow through the
+/// JSON-RPC connection rather than a separate broadcast receiver.
 fn create_context_with_model(
     temp: &TempDir,
     fixture_name: &str,
@@ -29,12 +33,11 @@ fn create_context_with_model(
 ) -> AvpContext {
     let fixture_path = fixtures_dir().join(fixture_name);
     let agent = PlaybackAgent::new(fixture_path, "claude");
-    let notification_rx = agent.subscribe_notifications();
 
     let original_dir = std::env::current_dir().unwrap();
     std::env::set_current_dir(temp.path()).unwrap();
 
-    let context = AvpContext::with_agent_and_model(Arc::new(agent), notification_rx, model_config)
+    let context = AvpContext::with_agent_and_model(agent, model_config)
         .expect("Should create context with playback agent and model config");
 
     std::env::set_current_dir(&original_dir).unwrap();

@@ -1,5 +1,11 @@
 {
   "mcpServers": {
+    "kanban": {
+      "args": [
+        "serve"
+      ],
+      "command": "kanban"
+    },
     "sah": {
       "args": [
         "serve"

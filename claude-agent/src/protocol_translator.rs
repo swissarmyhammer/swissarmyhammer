@@ -18,7 +18,7 @@
 //! ```
 
 use crate::{AgentError, Result};
-use agent_client_protocol::{
+use agent_client_protocol::schema::{
     ContentBlock, SessionId, SessionNotification, SessionUpdate, TextContent,
 };
 use serde::{Deserialize, Serialize};
@@ -127,9 +127,9 @@ impl ProtocolTranslator {
     /// Convert a resource content block to a text item.
     fn convert_resource_to_text_item(
         &self,
-        resource: &agent_client_protocol::EmbeddedResource,
+        resource: &agent_client_protocol::schema::EmbeddedResource,
     ) -> UserContentItem {
-        use agent_client_protocol::EmbeddedResourceResource;
+        use agent_client_protocol::schema::EmbeddedResourceResource;
 
         let text = match &resource.resource {
             EmbeddedResourceResource::TextResourceContents(text_res) => {
@@ -241,7 +241,7 @@ impl ProtocolTranslator {
         item: &JsonValue,
         session_id: &SessionId,
     ) -> Result<Option<SessionNotification>> {
-        use agent_client_protocol::{ToolCall, ToolCallId};
+        use agent_client_protocol::schema::{ToolCall, ToolCallId};
 
         let id = item
             .get("id")
@@ -286,11 +286,11 @@ impl ProtocolTranslator {
         name: &str,
         policy_evaluation: crate::permissions::PolicyEvaluation,
     ) -> (
-        agent_client_protocol::ToolCallStatus,
+        agent_client_protocol::schema::ToolCallStatus,
         Option<serde_json::Map<String, JsonValue>>,
     ) {
         use crate::permissions::PolicyEvaluation;
-        use agent_client_protocol::ToolCallStatus;
+        use agent_client_protocol::schema::ToolCallStatus;
 
         match policy_evaluation {
             PolicyEvaluation::Allowed => {
@@ -328,7 +328,7 @@ impl ProtocolTranslator {
         tracing::debug!("📨 ASSISTANT text: {} chars", text.len());
         let text_content = TextContent::new(text.to_string());
         let content_block = ContentBlock::Text(text_content);
-        let content_chunk = agent_client_protocol::ContentChunk::new(content_block);
+        let content_chunk = agent_client_protocol::schema::ContentChunk::new(content_block);
 
         Ok(Some(SessionNotification::new(
             session_id.clone(),
@@ -379,7 +379,7 @@ impl ProtocolTranslator {
 
         let tool_content = self.extract_tool_result_content(content_item);
 
-        use agent_client_protocol::{
+        use agent_client_protocol::schema::{
             ToolCallId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
         };
 
@@ -399,15 +399,17 @@ impl ProtocolTranslator {
     fn extract_tool_result_content(
         &self,
         content_item: &JsonValue,
-    ) -> Option<Vec<agent_client_protocol::ToolCallContent>> {
+    ) -> Option<Vec<agent_client_protocol::schema::ToolCallContent>> {
         let content_value = content_item.get("content")?;
 
         if let Some(content_str) = content_value.as_str() {
-            return Some(vec![agent_client_protocol::ToolCallContent::Content(
-                agent_client_protocol::Content::new(ContentBlock::Text(TextContent::new(
-                    content_str.to_string(),
-                ))),
-            )]);
+            return Some(vec![
+                agent_client_protocol::schema::ToolCallContent::Content(
+                    agent_client_protocol::schema::Content::new(ContentBlock::Text(
+                        TextContent::new(content_str.to_string()),
+                    )),
+                ),
+            ]);
         }
 
         if let Some(content_array) = content_value.as_array() {
@@ -428,16 +430,16 @@ impl ProtocolTranslator {
     fn parse_tool_content_item(
         &self,
         item: &JsonValue,
-    ) -> Option<agent_client_protocol::ToolCallContent> {
+    ) -> Option<agent_client_protocol::schema::ToolCallContent> {
         let item_type = item.get("type").and_then(|t| t.as_str())?;
 
         match item_type {
             "text" => {
                 let text = item.get("text").and_then(|t| t.as_str())?;
-                Some(agent_client_protocol::ToolCallContent::Content(
-                    agent_client_protocol::Content::new(ContentBlock::Text(TextContent::new(
-                        text.to_string(),
-                    ))),
+                Some(agent_client_protocol::schema::ToolCallContent::Content(
+                    agent_client_protocol::schema::Content::new(ContentBlock::Text(
+                        TextContent::new(text.to_string()),
+                    )),
                 ))
             }
             _ => {
@@ -557,7 +559,7 @@ impl ProtocolTranslator {
 
         let available_commands = self.convert_commands_to_acp(command_names);
         let commands_update =
-            agent_client_protocol::AvailableCommandsUpdate::new(available_commands);
+            agent_client_protocol::schema::AvailableCommandsUpdate::new(available_commands);
 
         let mut meta_map = serde_json::Map::new();
         meta_map.insert("source".to_string(), serde_json::json!("claude_cli_init"));
@@ -583,7 +585,7 @@ impl ProtocolTranslator {
     fn convert_commands_to_acp(
         &self,
         command_names: Vec<String>,
-    ) -> Vec<agent_client_protocol::AvailableCommand> {
+    ) -> Vec<agent_client_protocol::schema::AvailableCommand> {
         command_names
             .into_iter()
             .map(|cmd_name| {
@@ -591,7 +593,8 @@ impl ProtocolTranslator {
                 let mut meta_map = serde_json::Map::new();
                 meta_map.insert("source".to_string(), serde_json::json!("claude_cli"));
                 meta_map.insert("category".to_string(), serde_json::json!(category));
-                agent_client_protocol::AvailableCommand::new(cmd_name, description).meta(meta_map)
+                agent_client_protocol::schema::AvailableCommand::new(cmd_name, description)
+                    .meta(meta_map)
             })
             .collect()
     }
@@ -679,7 +682,7 @@ impl ProtocolTranslator {
 
         let text_content = TextContent::new(text.to_string());
         let content_block = ContentBlock::Text(text_content);
-        let content_chunk = agent_client_protocol::ContentChunk::new(content_block);
+        let content_chunk = agent_client_protocol::schema::ContentChunk::new(content_block);
 
         let mut notification = SessionNotification::new(
             session_id.clone(),
@@ -738,8 +741,8 @@ impl ProtocolTranslator {
     /// Infer ToolKind from tool name
     ///
     /// Maps common tool names to their appropriate ACP ToolKind categories
-    fn infer_tool_kind(tool_name: &str) -> agent_client_protocol::ToolKind {
-        use agent_client_protocol::ToolKind;
+    fn infer_tool_kind(tool_name: &str) -> agent_client_protocol::schema::ToolKind {
+        use agent_client_protocol::schema::ToolKind;
 
         // Check for common prefixes and patterns
         if tool_name.contains("read") || tool_name.contains("Read") || tool_name.ends_with("_read")
@@ -982,7 +985,7 @@ mod tests {
 
     #[test]
     fn test_acp_to_stream_json_single_image() {
-        use agent_client_protocol::ImageContent;
+        use agent_client_protocol::schema::ImageContent;
 
         // Test: Convert image message from ACP to stream-json
         let translator = create_test_translator();
@@ -1012,7 +1015,7 @@ mod tests {
 
     #[test]
     fn test_acp_to_stream_json_text_and_image() {
-        use agent_client_protocol::ImageContent;
+        use agent_client_protocol::schema::ImageContent;
 
         // Test: Convert mixed content (text + image) from ACP to stream-json
         let translator = create_test_translator();
@@ -1047,7 +1050,7 @@ mod tests {
 
     #[test]
     fn test_acp_to_stream_json_audio_unsupported() {
-        use agent_client_protocol::AudioContent;
+        use agent_client_protocol::schema::AudioContent;
 
         // Test: Audio content should return an error
         let translator = create_test_translator();
@@ -1267,10 +1270,13 @@ mod tests {
                 // Verify ToolCall structure per ACP spec
                 assert_eq!(tool_call.tool_call_id.0.as_ref(), "toolu_123");
                 assert_eq!(tool_call.title, "mcp__sah__files");
-                assert_eq!(tool_call.kind, agent_client_protocol::ToolKind::Other);
+                assert_eq!(
+                    tool_call.kind,
+                    agent_client_protocol::schema::ToolKind::Other
+                );
                 assert_eq!(
                     tool_call.status,
-                    agent_client_protocol::ToolCallStatus::Pending
+                    agent_client_protocol::schema::ToolCallStatus::Pending
                 );
                 assert!(tool_call.raw_input.is_some());
 
@@ -1367,10 +1373,13 @@ mod tests {
                 // Verify tool call is properly structured
                 assert_eq!(tool_call.tool_call_id.0.as_ref(), "toolu_456");
                 assert_eq!(tool_call.title, "bash");
-                assert_eq!(tool_call.kind, agent_client_protocol::ToolKind::Execute);
+                assert_eq!(
+                    tool_call.kind,
+                    agent_client_protocol::schema::ToolKind::Execute
+                );
                 assert_eq!(
                     tool_call.status,
-                    agent_client_protocol::ToolCallStatus::Pending
+                    agent_client_protocol::schema::ToolCallStatus::Pending
                 );
 
                 // Verify input was preserved
@@ -1424,7 +1433,7 @@ mod tests {
 
     #[test]
     fn test_acp_to_stream_json_resource_link() {
-        use agent_client_protocol::ResourceLink;
+        use agent_client_protocol::schema::ResourceLink;
 
         // Test: ResourceLink should be converted to resource_link format
         let translator = create_test_translator();
@@ -1462,7 +1471,7 @@ mod tests {
 
     #[test]
     fn test_acp_to_stream_json_embedded_resource_text() {
-        use agent_client_protocol::{
+        use agent_client_protocol::schema::{
             EmbeddedResource, EmbeddedResourceResource, TextResourceContents,
         };
 
@@ -1498,7 +1507,7 @@ mod tests {
 
     #[test]
     fn test_acp_to_stream_json_embedded_resource_blob() {
-        use agent_client_protocol::{
+        use agent_client_protocol::schema::{
             BlobResourceContents, EmbeddedResource, EmbeddedResourceResource,
         };
 
@@ -1628,7 +1637,7 @@ mod tests {
                 assert_eq!(update.tool_call_id.0.as_ref(), "toolu_123");
                 assert_eq!(
                     update.fields.status,
-                    Some(agent_client_protocol::ToolCallStatus::Completed)
+                    Some(agent_client_protocol::schema::ToolCallStatus::Completed)
                 );
 
                 // Verify content was extracted
@@ -1637,7 +1646,7 @@ mod tests {
                 assert_eq!(content.len(), 1);
 
                 match &content[0] {
-                    agent_client_protocol::ToolCallContent::Content(content_wrapper) => {
+                    agent_client_protocol::schema::ToolCallContent::Content(content_wrapper) => {
                         let block = &content_wrapper.content;
                         match block {
                             ContentBlock::Text(text) => {
@@ -1674,7 +1683,7 @@ mod tests {
                 assert_eq!(update.tool_call_id.0.as_ref(), "toolu_456");
                 assert_eq!(
                     update.fields.status,
-                    Some(agent_client_protocol::ToolCallStatus::Completed)
+                    Some(agent_client_protocol::schema::ToolCallStatus::Completed)
                 );
 
                 // Verify content chunks were extracted
@@ -1684,7 +1693,7 @@ mod tests {
 
                 // Check first chunk
                 match &content[0] {
-                    agent_client_protocol::ToolCallContent::Content(content_wrapper) => {
+                    agent_client_protocol::schema::ToolCallContent::Content(content_wrapper) => {
                         let block = &content_wrapper.content;
                         match block {
                             ContentBlock::Text(text) => {
@@ -1698,7 +1707,7 @@ mod tests {
 
                 // Check second chunk
                 match &content[1] {
-                    agent_client_protocol::ToolCallContent::Content(content_wrapper) => {
+                    agent_client_protocol::schema::ToolCallContent::Content(content_wrapper) => {
                         let block = &content_wrapper.content;
                         match block {
                             ContentBlock::Text(text) => {
@@ -1735,7 +1744,7 @@ mod tests {
                 assert_eq!(update.tool_call_id.0.as_ref(), "toolu_789");
                 assert_eq!(
                     update.fields.status,
-                    Some(agent_client_protocol::ToolCallStatus::Completed)
+                    Some(agent_client_protocol::schema::ToolCallStatus::Completed)
                 );
 
                 // Empty content array should result in None

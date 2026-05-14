@@ -2,7 +2,7 @@
 name: deduplicate
 description: Find and refactor duplicate code. Use this skill when the user wants to find near-duplicate code, check for copy-paste redundancy, or DRY up a codebase — optionally scoped to changed files. Automatically delegates to an implementer subagent.
 license: MIT OR Apache-2.0
-compatibility: Requires the `code_context` MCP tool for `find duplicates` and symbol/blast-radius analysis, plus the `kanban` MCP tool for tracking refactor work.
+compatibility: Requires the `code_context` MCP tool for `find duplicates` and symbol/blast-radius analysis, plus the `kanban` MCP tool for tracking refactor work. Both are provided by the swissarmyhammer `sah` MCP server; will not function on a harness that does not expose them.
 metadata:
   author: swissarmyhammer
   version: 0.12.11

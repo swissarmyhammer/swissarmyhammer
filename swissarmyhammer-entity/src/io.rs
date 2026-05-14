@@ -29,15 +29,6 @@ use crate::error::{EntityError, Result};
 /// with benchmark evidence.
 const READ_ENTITY_DIR_CONCURRENCY: usize = 64;
 
-/// Test-only counter incremented once per `read_entity_dir` invocation.
-///
-/// Used by tests to assert that caches actually short-circuit the disk path.
-/// Gated on `cfg(any(test, feature = "test-support"))` so release builds pay
-/// no cost for the atomic.
-#[cfg(any(test, feature = "test-support"))]
-pub static READ_ENTITY_DIR_CALLS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
 /// Get the file extension for an entity type.
 pub fn entity_extension(entity_def: &EntityDef) -> &'static str {
     if entity_def.body_field.is_some() {
@@ -156,9 +147,6 @@ pub async fn read_entity_dir(
     entity_type: impl AsRef<str>,
     entity_def: &EntityDef,
 ) -> Result<Vec<Entity>> {
-    #[cfg(any(test, feature = "test-support"))]
-    READ_ENTITY_DIR_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
     let entity_type = entity_type.as_ref();
     let ext = entity_extension(entity_def);
 
@@ -306,6 +294,38 @@ pub async fn restore_entity_files(path: &Path, trash_dir: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Parse raw entity text into an [`Entity`], honoring the entity definition.
+///
+/// Selects between frontmatter+body and plain-YAML parsing based on
+/// `entity_def.body_field`. Used by the changelog replay engine to materialise
+/// before/after snapshots from text patches without touching the filesystem.
+///
+/// The `path` argument is forwarded into error messages only — callers parsing
+/// in-memory text should pass a synthetic path that identifies the source
+/// (typically the live changelog path or `"<replay>"`).
+///
+/// Returns an [`EntityError`] if the text fails to parse as the expected
+/// format. An empty `text` yields an empty entity (no fields, just type/id),
+/// which is the correct "before" state for replaying a `Create` patch.
+pub fn parse_entity_text(
+    text: &str,
+    entity_type: impl AsRef<str>,
+    id: impl AsRef<str>,
+    entity_def: &EntityDef,
+    path: &Path,
+) -> Result<Entity> {
+    let entity_type = entity_type.as_ref();
+    let id = id.as_ref();
+    if text.is_empty() {
+        return Ok(Entity::new(entity_type, id));
+    }
+    if let Some(ref body_field) = entity_def.body_field {
+        parse_frontmatter_body(text, entity_type, id, body_field, path)
+    } else {
+        parse_plain_yaml(text, entity_type, id, path)
+    }
 }
 
 // --- Internal helpers ---

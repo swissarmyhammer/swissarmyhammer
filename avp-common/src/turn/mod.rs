@@ -19,5 +19,5 @@ pub use diff::{
     DIFF_TEXT_KEY,
 };
 pub use hash::{hash_bytes, hash_file, hash_files};
-pub use paths::extract_tool_paths;
+pub use paths::{extract_tool_paths, is_known_file_tool};
 pub use state::{TurnState, TurnStateManager};

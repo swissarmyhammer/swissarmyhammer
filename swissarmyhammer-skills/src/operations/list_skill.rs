@@ -44,13 +44,9 @@ impl Execute<SkillContext, SkillError> for ListSkills {
             })
             .collect();
 
-        ExecutionResult::Unlogged {
+        ExecutionResult::Success {
             value: json!(result),
         }
-    }
-
-    fn affected_resource_ids(&self, _result: &Value) -> Vec<String> {
-        vec![]
     }
 }
 
@@ -112,15 +108,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_list_skills_returns_unlogged() {
+    async fn test_list_skills_returns_success() {
         let ctx = test_context_empty();
         let op = ListSkills::new();
         let result = op.execute(&ctx).await;
 
-        // ListSkills is read-only, should always be Unlogged
+        // ListSkills is read-only and never errors on an empty library.
         match result {
-            ExecutionResult::Unlogged { .. } => {} // expected
-            _ => panic!("ListSkills should return Unlogged variant"),
+            ExecutionResult::Success { .. } => {} // expected
+            _ => panic!("ListSkills should return Success variant"),
         }
     }
 
@@ -143,12 +139,6 @@ mod tests {
             "source should be a valid SkillSource variant, got: {}",
             source
         );
-    }
-
-    #[test]
-    fn test_list_skills_affected_resource_ids_empty() {
-        let op = ListSkills::new();
-        assert!(op.affected_resource_ids(&json!([])).is_empty());
     }
 
     #[test]

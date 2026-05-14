@@ -111,6 +111,15 @@ tokio-stream = { workspace = true }
 serde_json = { workspace = true }
 serial_test = { workspace = true }
 
+# Validator MCP server for end-to-end tool-fetch integration tests.
+# This is a dev-only dependency: `swissarmyhammer-tools` declares
+# `llama-agent` as a regular dependency, but Cargo permits dev-only
+# cycles, and we need the real validator entry point
+# (`start_mcp_server_with_options`) here to verify that the URL → MCP
+# `tools/list` → `Session.available_tools` path actually works for the
+# always-on validator server.
+swissarmyhammer-tools = { workspace = true }
+
 rstest = { workspace = true }
 criterion = { workspace = true }
 

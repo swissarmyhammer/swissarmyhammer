@@ -1,8 +1,16 @@
 //! Terminal management for ACP
 //!
 //! This module handles terminal process management exposed via ACP protocol.
+//!
+//! Under ACP 0.11, [`ClientCapabilities`] lives in the
+//! `agent_client_protocol::schema` module and exposes a `terminal: bool`
+//! field together with a `.terminal(bool)` builder method. The terminal
+//! request/response types in this module are local newtypes — they do not
+//! mirror the schema's `terminal/*` request types (which live in
+//! `agent_client_protocol::schema::client`) because this module owns its
+//! own session/process lifecycle representation.
 
-use agent_client_protocol::ClientCapabilities;
+use agent_client_protocol::schema::ClientCapabilities;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;

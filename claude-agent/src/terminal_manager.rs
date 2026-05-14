@@ -19,7 +19,7 @@ use tokio::task::JoinHandle;
 pub struct TerminalManager {
     pub terminals: Arc<RwLock<HashMap<String, TerminalSession>>>,
     rate_limiter: Arc<RateLimiter>,
-    pub client_capabilities: Arc<RwLock<Option<agent_client_protocol::ClientCapabilities>>>,
+    pub client_capabilities: Arc<RwLock<Option<agent_client_protocol::schema::ClientCapabilities>>>,
 }
 
 /// Terminal lifecycle state
@@ -209,7 +209,7 @@ impl TerminalManager {
     /// Set client capabilities from initialize request
     pub async fn set_client_capabilities(
         &self,
-        capabilities: agent_client_protocol::ClientCapabilities,
+        capabilities: agent_client_protocol::schema::ClientCapabilities,
     ) {
         let mut caps = self.client_capabilities.write().await;
         *caps = Some(capabilities);

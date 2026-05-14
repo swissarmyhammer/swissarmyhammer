@@ -6,14 +6,31 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-/// Create a test session with the specified number of messages
-pub fn create_test_session_with_messages(message_count: usize) -> Session {
+/// Create a test session with the specified number of messages and the given available tools.
+///
+/// This is the canonical session-builder helper for compaction-style tests. Messages alternate
+/// between `User` and `Assistant` roles starting with `User`, and the provided `tools` are placed
+/// directly into `Session::available_tools` so callers can exercise tool rendering and tool-call
+/// extraction paths against the real chat-template engine.
+///
+/// # Arguments
+///
+/// * `message_count` - Number of alternating user/assistant messages to populate.
+/// * `tools` - Available tools to attach to the session. Pass `Vec::new()` for an empty toolset.
+///
+/// # Returns
+///
+/// A fresh `Session` with a new `SessionId`, the requested messages, and the supplied tools.
+pub fn create_test_session_with_messages_and_tools(
+    message_count: usize,
+    tools: Vec<ToolDefinition>,
+) -> Session {
     let mut session = Session {
         cwd: PathBuf::from("/tmp"),
         id: SessionId::new(),
         messages: Vec::new(),
         mcp_servers: Vec::new(),
-        available_tools: Vec::new(),
+        available_tools: tools,
         available_prompts: Vec::new(),
         created_at: SystemTime::now(),
         updated_at: SystemTime::now(),
@@ -46,6 +63,15 @@ pub fn create_test_session_with_messages(message_count: usize) -> Session {
     }
 
     session
+}
+
+/// Create a test session with the specified number of messages and no available tools.
+///
+/// Convenience wrapper around `create_test_session_with_messages_and_tools` for the common
+/// case where tests don't care about tool rendering. New tool-aware tests should call
+/// `create_test_session_with_messages_and_tools` directly.
+pub fn create_test_session_with_messages(message_count: usize) -> Session {
+    create_test_session_with_messages_and_tools(message_count, Vec::new())
 }
 
 /// Create a test session with messages that have substantial content for token testing
@@ -432,8 +458,18 @@ pub fn create_config_with_local_model(folder: PathBuf, filename: String) -> Agen
     config
 }
 
-/// Create a session with specified number of alternating messages
-pub fn create_session_with_messages(count: usize) -> Session {
+/// Create a session with the specified number of alternating messages and the given tools.
+///
+/// Like `create_test_session_with_messages_and_tools`, but uses a slightly shorter message body
+/// for tests that don't care about token-pressure simulation. Provides a single helper that
+/// captures both messages and tools so new tool-aware tests don't need to roll their own
+/// `Session { .. }` literal.
+///
+/// # Arguments
+///
+/// * `count` - Number of alternating user/assistant messages to populate.
+/// * `tools` - Available tools to attach to the session. Pass `Vec::new()` for an empty toolset.
+pub fn create_session_with_messages_and_tools(count: usize, tools: Vec<ToolDefinition>) -> Session {
     let messages = (0..count)
         .map(|i| Message {
             role: if i % 2 == 0 {
@@ -453,7 +489,7 @@ pub fn create_session_with_messages(count: usize) -> Session {
         id: SessionId::new(),
         messages,
         mcp_servers: Vec::new(),
-        available_tools: Vec::new(),
+        available_tools: tools,
         available_prompts: Vec::new(),
         created_at: SystemTime::now(),
         updated_at: SystemTime::now(),
@@ -466,6 +502,14 @@ pub fn create_session_with_messages(count: usize) -> Session {
         cached_message_count: 0,
         cached_token_count: 0,
     }
+}
+
+/// Create a session with the specified number of alternating messages and no available tools.
+///
+/// Convenience wrapper around `create_session_with_messages_and_tools`. Existing callers that
+/// don't need tools in the session continue to work unchanged.
+pub fn create_session_with_messages(count: usize) -> Session {
+    create_session_with_messages_and_tools(count, Vec::new())
 }
 
 /// Create a session with sample conversation

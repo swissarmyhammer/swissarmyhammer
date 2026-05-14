@@ -158,12 +158,34 @@ pub fn create_session_with_message(content: &str) -> Session {
 /// assert_eq!(session.messages.len(), 2);
 /// ```
 pub fn create_session_with_messages(messages: Vec<Message>) -> Session {
+    create_session_with_messages_and_tools(messages, vec![])
+}
+
+/// Create a test session with the provided messages and available tools.
+///
+/// This is the canonical helper for tests that exercise tool rendering and tool-call
+/// extraction against the chat-template engine. Existing callers that don't need tools
+/// can continue to use `create_session_with_messages`, which delegates here with an
+/// empty toolset.
+///
+/// # Arguments
+///
+/// * `messages` - Vector of `Message` objects to seed the session with.
+/// * `tools` - Available tools to attach to the session. Pass `vec![]` for an empty toolset.
+///
+/// # Returns
+///
+/// A fresh `Session` with a new `SessionId`, the supplied messages, and the supplied tools.
+pub fn create_session_with_messages_and_tools(
+    messages: Vec<Message>,
+    tools: Vec<ToolDefinition>,
+) -> Session {
     Session {
         cwd: PathBuf::from("/tmp"),
         id: SessionId::new(),
         messages,
         mcp_servers: vec![],
-        available_tools: vec![],
+        available_tools: tools,
         available_prompts: vec![],
         created_at: SystemTime::now(),
         updated_at: SystemTime::now(),

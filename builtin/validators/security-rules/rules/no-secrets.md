@@ -27,6 +27,8 @@ Examine the file content for any of these patterns:
 
 - Environment variable references: `process.env.API_KEY`, `os.environ['SECRET']`
 - Configuration file placeholders: `<YOUR_API_KEY>`, `${API_KEY}`, `{{secret}}`
-- Test files with obviously fake values: `test_api_key`, `dummy_password`, `xxx`, `yyy`
+- Obviously fake placeholder values whose content is plainly non-secret: `test_api_key`, `dummy_password`, `xxx`, `yyy`, `replace-me`, `changeme`
 - Documentation examples with placeholders
-- Tests that are testing secret detection functionality -- these are not real secrets
+- Code that is itself testing secret-detection logic — i.e. the string is the input to a secret-scanner under test, not a credential the program would use
+
+Note: Do not exempt code based on the filename containing `test`, `_test`, `test_`, `.spec.`, or `.test.`. A real API key checked into a fixture is still a real leaked key. The dispatcher decides whether a file is a test via `@file_groups/test_files`; this rule flags hardcoded secrets wherever they appear. Apply the "obviously fake" exception based on the value itself, not on the filename.

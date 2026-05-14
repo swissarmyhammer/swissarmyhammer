@@ -46,7 +46,6 @@ impl Execute<JsContext, JsError> for GetExpression {
             Err(e) => {
                 return ExecutionResult::Failed {
                     error: JsError::evaluation(e),
-                    log_entry: None,
                 }
             }
         };
@@ -56,11 +55,10 @@ impl Execute<JsContext, JsError> for GetExpression {
         match ctx.state().get(&name).await {
             Ok(json_result) => {
                 tracing::debug!("JS get '{}' = {:?}", name, json_result);
-                ExecutionResult::Unlogged { value: json_result }
+                ExecutionResult::Success { value: json_result }
             }
             Err(e) => ExecutionResult::Failed {
                 error: JsError::evaluation(e),
-                log_entry: None,
             },
         }
     }

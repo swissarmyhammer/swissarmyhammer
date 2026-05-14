@@ -34,6 +34,7 @@ use swissarmyhammer_kanban::{
 };
 use swissarmyhammer_perspectives::{PerspectiveEvent, PerspectiveStore};
 use swissarmyhammer_store::{StoreContext, StoreHandle};
+use swissarmyhammer_views::{ViewDef, ViewEvent, ViewKind, ViewStore};
 use tempfile::TempDir;
 
 // ===========================================================================
@@ -62,15 +63,22 @@ impl UndoEngine {
     async fn new() -> Self {
         let temp = TempDir::new().expect("temp dir");
         let kanban_dir = temp.path().join(".kanban");
-        let kanban = KanbanContext::new(&kanban_dir);
+        let init_ctx = KanbanContext::new(&kanban_dir);
 
         // Initialize the board (creates default columns + board entity)
         let processor = KanbanOperationProcessor::new();
         processor
-            .process(&InitBoard::new("Undo Test Board"), &kanban)
+            .process(&InitBoard::new("Undo Test Board"), &init_ctx)
             .await
             .expect("board init");
+        drop(init_ctx);
 
+        // Reopen via `KanbanContext::open` so the eagerly-constructed views
+        // context (which `new()` does not build) is populated. Mirrors the
+        // production wiring in `kanban-app/src/state.rs::BoardHandle::open`.
+        let kanban = KanbanContext::open(&kanban_dir)
+            .await
+            .expect("reopen kanban context");
         let kanban = Arc::new(kanban);
 
         // Wire StoreContext into the entity context so writes push to the
@@ -116,6 +124,18 @@ impl UndoEngine {
             let mut pctx = pctx.write().await;
             pctx.set_store_handle(perspective_handle);
             pctx.set_store_context(Arc::clone(&store_context));
+        }
+
+        // Register the view store + wire it into ViewsContext.
+        // Mirrors `register_view_store` in `kanban-app/src/state.rs`.
+        let views_dir = kanban.root().join("views");
+        let view_store = ViewStore::new(&views_dir);
+        let view_handle = Arc::new(StoreHandle::new(Arc::new(view_store)));
+        store_context.register(view_handle.clone()).await;
+        if let Some(views_lock) = kanban.views() {
+            let mut views = views_lock.write().await;
+            views.set_store_handle(view_handle);
+            views.set_store_context(Arc::clone(&store_context));
         }
 
         // Sanity: the canonical YAML registry must declare these commands
@@ -1244,4 +1264,185 @@ async fn perspective_create_undo_evicts_cache_and_emits_deleted() {
         }
         other => panic!("expected PerspectiveDeleted from undo of create, got {other:?}"),
     }
+}
+
+// ===========================================================================
+// View undo/redo — mirrors the perspective delete/undo coverage.
+// ===========================================================================
+
+/// Helper: write a view via `ViewsContext::write_view` (the store-handle-wired
+/// path) and return its id.
+async fn add_view(engine: &UndoEngine, id: &str, name: &str) -> String {
+    let views_lock = engine.kanban.views().expect("views context");
+    let mut views = views_lock.write().await;
+    let def = ViewDef {
+        id: id.to_string(),
+        name: name.to_string(),
+        icon: None,
+        kind: ViewKind::Board,
+        entity_type: None,
+        card_fields: Vec::new(),
+        commands: Vec::new(),
+    };
+    views.write_view(&def).await.expect("write view");
+    id.to_string()
+}
+
+/// Delete + undo loop must restore the view cache and emit the expected
+/// `ViewChanged { is_create: false }` event on undo.
+///
+/// Mirrors `perspective_delete_undo_restores_cache_and_emits_event` for views.
+/// The chain of behaviors exercised:
+///
+///   1. Write a view → file on disk, cache populated, ViewChanged{is_create=true}.
+///   2. Delete the view → file gone, cache empty, ViewDeleted event.
+///   3. Undo → file restored on disk, cache restored, ViewChanged{is_create=false}
+///      (via `KanbanUndoCmd` → `reconcile_view_cache` → `reload_from_disk`).
+///   4. Redo → file gone again, cache empty, ViewDeleted event.
+///   5. Second undo → file restored again.
+#[tokio::test]
+async fn view_delete_undo_restores_cache_and_emits_event() {
+    let engine = UndoEngine::new().await;
+
+    // Use a fresh view id that doesn't collide with the seeded builtins.
+    let vid = add_view(&engine, "01JVIEW000000000DOOMED000", "Doomed View").await;
+
+    let views_dir = engine.kanban.root().join("views");
+    let yaml_path = views_dir.join(format!("{vid}.yaml"));
+
+    // Sanity: view is present in both cache and disk before delete.
+    {
+        let views = engine.kanban.views().unwrap().read().await;
+        assert!(
+            views.get_by_id(&vid).is_some(),
+            "cache must contain the view before delete"
+        );
+    }
+    assert!(
+        yaml_path.exists(),
+        "YAML file must exist on disk before delete"
+    );
+
+    // Subscribe AFTER the create so only the delete/undo/redo events land.
+    let mut rx = {
+        let views = engine.kanban.views().unwrap().read().await;
+        views.subscribe()
+    };
+
+    // Delete via `ViewsContext::delete_view` (the store-handle-wired path).
+    // Routes through the same `StoreHandle::delete` as production code and
+    // pushes a delete entry onto the shared undo stack.
+    {
+        let views_lock = engine.kanban.views().unwrap();
+        let mut views = views_lock.write().await;
+        views.delete_view(&vid).await.expect("delete view");
+    }
+
+    // Cache is empty and file is gone — the forward delete path worked.
+    {
+        let views = engine.kanban.views().unwrap().read().await;
+        assert!(
+            views.get_by_id(&vid).is_none(),
+            "cache must not contain the view after delete"
+        );
+    }
+    assert!(
+        !yaml_path.exists(),
+        "YAML file must be gone from disk after delete"
+    );
+
+    // Drain the delete event.
+    let delete_event = rx
+        .try_recv()
+        .expect("delete_view must emit a ViewDeleted event");
+    match delete_event {
+        ViewEvent::ViewDeleted { ref id } => {
+            assert_eq!(id, &vid);
+        }
+        other => panic!("expected ViewDeleted from delete, got {other:?}"),
+    }
+
+    // Undo — the fix under test. The store layer restores the YAML file,
+    // and `KanbanUndoCmd` calls `reload_from_disk` to re-insert the cache
+    // entry and emit the event.
+    engine.undo().await;
+
+    // Assertion 1: YAML file is back on disk.
+    assert!(
+        yaml_path.exists(),
+        "YAML file must be restored on disk after undo of delete"
+    );
+
+    // Assertion 2: cache has the view back.
+    {
+        let views = engine.kanban.views().unwrap().read().await;
+        let restored = views
+            .get_by_id(&vid)
+            .expect("cache must contain the restored view after undo");
+        assert_eq!(
+            restored.name, "Doomed View",
+            "restored view must have its original name intact"
+        );
+    }
+
+    // Assertion 3: a ViewChanged event fired post-undo. The Tauri bridge
+    // translates this into an `entity-field-changed` event which the
+    // frontend treats as a refetch signal.
+    let undo_event = rx
+        .try_recv()
+        .expect("undo of delete must emit a ViewChanged event");
+    match undo_event {
+        ViewEvent::ViewChanged {
+            ref id, is_create, ..
+        } => {
+            assert_eq!(id, &vid);
+            assert!(
+                !is_create,
+                "undo of delete emits is_create=false — the view was \
+                 previously created, not re-created"
+            );
+        }
+        other => panic!("expected ViewChanged from undo of delete, got {other:?}"),
+    }
+
+    // Redo — removes it again. Full undo/redo cycle must work both ways.
+    engine.redo().await;
+
+    {
+        let views = engine.kanban.views().unwrap().read().await;
+        assert!(
+            views.get_by_id(&vid).is_none(),
+            "cache must be empty after redo of delete"
+        );
+    }
+    assert!(
+        !yaml_path.exists(),
+        "YAML file must be gone from disk after redo of delete"
+    );
+
+    let redo_event = rx
+        .try_recv()
+        .expect("redo of delete must emit a ViewDeleted event");
+    match redo_event {
+        ViewEvent::ViewDeleted { ref id } => {
+            assert_eq!(id, &vid);
+        }
+        other => panic!("expected ViewDeleted from redo of delete, got {other:?}"),
+    }
+
+    // A second undo restores the view again — the undo/redo history
+    // is not consumed by repeated cycles.
+    engine.undo().await;
+
+    {
+        let views = engine.kanban.views().unwrap().read().await;
+        assert!(
+            views.get_by_id(&vid).is_some(),
+            "second undo must restore the view again"
+        );
+    }
+    assert!(
+        yaml_path.exists(),
+        "YAML file must be restored on disk after second undo"
+    );
 }

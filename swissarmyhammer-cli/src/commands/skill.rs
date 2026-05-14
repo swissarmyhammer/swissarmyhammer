@@ -26,7 +26,9 @@ use swissarmyhammer_common::reporter::{InitEvent, InitReporter};
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_prompts::PromptLibrary;
 
-use super::install::components::{is_safe_name, remove_store_entries, save_lockfile_and_report};
+use super::install::components::{
+    is_safe_name, is_safe_relative_path, remove_store_entries, save_lockfile_and_report,
+};
 
 // ── SkillDeployment (priority 30) ────────────────────────────────────
 
@@ -156,22 +158,55 @@ fn deploy_single_skill(
     let rendered_skill =
         render_skill_instructions(skill, prompt_library, template_context, reporter);
 
+    write_skill_contents(&skill_dir, &rendered_skill)?;
+
+    mirdan::install::deploy_skill_to_agents(name, &skill_dir, None, global)
+        .map_err(|e| format!("Failed to deploy skill '{}': {}", name, e))
+}
+
+/// Write a rendered skill's `SKILL.md` and any bundled resource files into
+/// `skill_dir`, preserving the subdirectory structure of resource keys.
+///
+/// Resource keys may be multi-segment relative paths (e.g.
+/// `references/helper.md`) so skills can deploy progressive-disclosure
+/// content under subdirectories. Each path is validated with
+/// [`is_safe_relative_path`] and its parent directory is created before the
+/// file is written, so links like `[...](./references/FOO.md)` in `SKILL.md`
+/// resolve correctly after deployment.
+///
+/// # Errors
+///
+/// Returns an error if `SKILL.md` cannot be written, if any resource path
+/// fails the relative-path safety check, or if a resource's parent directory
+/// cannot be created or file cannot be written.
+fn write_skill_contents(
+    skill_dir: &std::path::Path,
+    skill: &swissarmyhammer_skills::Skill,
+) -> Result<(), String> {
     let skill_md_path = skill_dir.join("SKILL.md");
-    let content = format_skill_md(&rendered_skill);
+    let content = format_skill_md(skill);
     fs::write(&skill_md_path, &content)
         .map_err(|e| format!("Failed to write {}: {}", skill_md_path.display(), e))?;
 
-    for (filename, file_content) in &skill.resources.files {
-        if !is_safe_name(filename) {
-            return Err(format!("Unsafe resource filename: {:?}", filename));
+    for (resource_path, file_content) in &skill.resources.files {
+        if !is_safe_relative_path(resource_path) {
+            return Err(format!("Unsafe resource path: {:?}", resource_path));
         }
-        let file_path = skill_dir.join(filename);
+        let file_path = skill_dir.join(resource_path);
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "Failed to create resource directory {}: {}",
+                    parent.display(),
+                    e
+                )
+            })?;
+        }
         fs::write(&file_path, file_content)
             .map_err(|e| format!("Failed to write {}: {}", file_path.display(), e))?;
     }
 
-    mirdan::install::deploy_skill_to_agents(name, &skill_dir, None, global)
-        .map_err(|e| format!("Failed to deploy skill '{}': {}", name, e))
+    Ok(())
 }
 
 /// Deploy all builtin skills, update the mirdan lockfile, and report results.
@@ -187,16 +222,9 @@ fn deploy_all_skills(global: bool, reporter: &dyn InitReporter) -> Result<String
     let skills = resolver.resolve_builtins();
 
     let prompt_library = PromptLibrary::default();
-    let mut template_context = TemplateContext::new();
-    template_context.set(
-        "version".to_string(),
-        serde_json::json!(env!("CARGO_PKG_VERSION")),
-    );
+    let template_context = build_version_template_context();
 
-    let project_root =
-        std::env::current_dir().map_err(|e| format!("Failed to get current directory: {}", e))?;
-    let mut lockfile = mirdan::lockfile::Lockfile::load(&project_root)
-        .map_err(|e| format!("Failed to load lockfile: {}", e))?;
+    let (project_root, mut lockfile) = load_project_lockfile()?;
 
     let mut installed_count = 0;
     let mut skill_targets: Vec<String> = Vec::new();
@@ -213,17 +241,7 @@ fn deploy_all_skills(global: bool, reporter: &dyn InitReporter) -> Result<String
         if skill_targets.is_empty() {
             skill_targets = targets.clone();
         }
-        lockfile.add_package(
-            name.clone(),
-            mirdan::lockfile::LockedPackage {
-                package_type: mirdan::package_type::PackageType::Skill,
-                version: "0.0.0".to_string(),
-                resolved: "builtin".to_string(),
-                integrity: String::new(),
-                installed_at: chrono::Utc::now().to_rfc3339(),
-                targets,
-            },
-        );
+        lockfile.add_package(name.clone(), locked_builtin_skill_package(targets));
         installed_count += 1;
     }
 
@@ -236,6 +254,34 @@ fn deploy_all_skills(global: bool, reporter: &dyn InitReporter) -> Result<String
         reporter,
     )?;
     Ok(format!("Deployed {} builtin skills", installed_count))
+}
+
+fn build_version_template_context() -> TemplateContext {
+    let mut ctx = TemplateContext::new();
+    ctx.set(
+        "version".to_string(),
+        serde_json::json!(env!("CARGO_PKG_VERSION")),
+    );
+    ctx
+}
+
+fn load_project_lockfile() -> Result<(std::path::PathBuf, mirdan::lockfile::Lockfile), String> {
+    let project_root =
+        std::env::current_dir().map_err(|e| format!("Failed to get current directory: {}", e))?;
+    let lockfile = mirdan::lockfile::Lockfile::load(&project_root)
+        .map_err(|e| format!("Failed to load lockfile: {}", e))?;
+    Ok((project_root, lockfile))
+}
+
+fn locked_builtin_skill_package(targets: Vec<String>) -> mirdan::lockfile::LockedPackage {
+    mirdan::lockfile::LockedPackage {
+        package_type: mirdan::package_type::PackageType::Skill,
+        version: "0.0.0".to_string(),
+        resolved: "builtin".to_string(),
+        integrity: String::new(),
+        installed_at: chrono::Utc::now().to_rfc3339(),
+        targets,
+    }
 }
 
 /// Render skill instructions and metadata through the prompt library's
@@ -286,50 +332,51 @@ fn render_skill_instructions(
 /// characters (colons, quotes, newlines) are correctly escaped. The resulting
 /// document is compatible with `swissarmyhammer_skills::skill_loader::parse_skill_md`.
 fn format_skill_md(skill: &swissarmyhammer_skills::Skill) -> String {
-    // Build a frontmatter map and let serde_yaml_ng handle proper escaping/quoting
-    let mut frontmatter = serde_yaml_ng::Mapping::new();
-    frontmatter.insert(
-        serde_yaml_ng::Value::String("name".to_string()),
-        serde_yaml_ng::Value::String(skill.name.to_string()),
-    );
-    frontmatter.insert(
-        serde_yaml_ng::Value::String("description".to_string()),
-        serde_yaml_ng::Value::String(skill.description.clone()),
-    );
-
-    if !skill.allowed_tools.is_empty() {
-        let tools = skill.allowed_tools.join(" ");
-        frontmatter.insert(
-            serde_yaml_ng::Value::String("allowed-tools".to_string()),
-            serde_yaml_ng::Value::String(tools),
-        );
-    }
-
-    if let Some(ref license) = skill.license {
-        frontmatter.insert(
-            serde_yaml_ng::Value::String("license".to_string()),
-            serde_yaml_ng::Value::String(license.clone()),
-        );
-    }
-
-    if !skill.metadata.is_empty() {
-        let mut meta_map = serde_yaml_ng::Mapping::new();
-        let mut keys: Vec<_> = skill.metadata.keys().collect();
-        keys.sort();
-        for key in keys {
-            meta_map.insert(
-                serde_yaml_ng::Value::String(key.clone()),
-                serde_yaml_ng::Value::String(skill.metadata[key].clone()),
-            );
-        }
-        frontmatter.insert(
-            serde_yaml_ng::Value::String("metadata".to_string()),
-            serde_yaml_ng::Value::Mapping(meta_map),
-        );
-    }
-
+    let frontmatter = build_skill_frontmatter(skill);
     let yaml = serde_yaml_ng::to_string(&frontmatter).unwrap_or_default();
     format!("---\n{}---\n\n{}\n", yaml, skill.instructions)
+}
+
+fn build_skill_frontmatter(skill: &swissarmyhammer_skills::Skill) -> serde_yaml_ng::Mapping {
+    let mut fm = serde_yaml_ng::Mapping::new();
+    insert_yaml_string(&mut fm, "name", skill.name.as_str());
+    insert_yaml_string(&mut fm, "description", &skill.description);
+
+    if !skill.allowed_tools.is_empty() {
+        insert_yaml_string(&mut fm, "allowed-tools", &skill.allowed_tools.join(" "));
+    }
+    if let Some(ref license) = skill.license {
+        insert_yaml_string(&mut fm, "license", license);
+    }
+    if let Some(ref compatibility) = skill.compatibility {
+        insert_yaml_string(&mut fm, "compatibility", compatibility);
+    }
+    if !skill.metadata.is_empty() {
+        fm.insert(
+            serde_yaml_ng::Value::String("metadata".to_string()),
+            build_metadata_mapping(&skill.metadata),
+        );
+    }
+    fm
+}
+
+fn insert_yaml_string(map: &mut serde_yaml_ng::Mapping, key: &str, value: &str) {
+    map.insert(
+        serde_yaml_ng::Value::String(key.to_string()),
+        serde_yaml_ng::Value::String(value.to_string()),
+    );
+}
+
+fn build_metadata_mapping(
+    metadata: &std::collections::HashMap<String, String>,
+) -> serde_yaml_ng::Value {
+    let mut meta_map = serde_yaml_ng::Mapping::new();
+    let mut keys: Vec<_> = metadata.keys().collect();
+    keys.sort();
+    for key in keys {
+        insert_yaml_string(&mut meta_map, key, &metadata[key]);
+    }
+    serde_yaml_ng::Value::Mapping(meta_map)
 }
 
 #[cfg(test)]
@@ -448,9 +495,48 @@ mod tests {
         );
         assert!(!md.contains("license"), "None license should be omitted");
         assert!(
+            !md.contains("compatibility"),
+            "None compatibility should be omitted"
+        );
+        assert!(
             !md.contains("metadata:"),
             "empty metadata should be omitted"
         );
+    }
+
+    /// Regression: `compatibility` survives the serialize/parse round-trip used
+    /// by `sah init`, so tool-prerequisite metadata declared in `builtin/` is
+    /// preserved in the generated agent `.skills/` copies.
+    #[test]
+    fn test_format_skill_md_round_trips_compatibility() {
+        use std::collections::HashMap;
+        use swissarmyhammer_skills::{Skill, SkillName, SkillResources, SkillSource};
+
+        let compatibility = "Requires the `kanban` MCP tool .";
+        let skill = Skill {
+            name: SkillName::new("compat-skill").unwrap(),
+            description: "skill that declares tool prerequisites".to_string(),
+            license: Some("MIT OR Apache-2.0".to_string()),
+            compatibility: Some(compatibility.to_string()),
+            metadata: HashMap::new(),
+            allowed_tools: vec![],
+            instructions: "body".to_string(),
+            source_path: None,
+            source: SkillSource::Builtin,
+            resources: SkillResources::default(),
+        };
+
+        let md = format_skill_md(&skill);
+
+        assert!(
+            md.contains("compatibility:"),
+            "frontmatter should contain compatibility field, got:\n{md}"
+        );
+
+        let parsed =
+            swissarmyhammer_skills::skill_loader::parse_skill_md(&md, SkillSource::Builtin)
+                .expect("output should parse as valid SKILL.md");
+        assert_eq!(parsed.compatibility.as_deref(), Some(compatibility));
     }
 
     #[test]
@@ -528,5 +614,96 @@ mod tests {
         let reporter = NullReporter;
         let results = component.deinit(&InitScope::Project, &reporter);
         assert_eq!(results.len(), 1);
+    }
+
+    /// Regression for the `.skills/<name>/references/*.md` deploy bug: a skill
+    /// whose resource key includes a `references/` subdirectory must land at
+    /// `<skill_dir>/references/<name>` after deployment, with `SKILL.md` at the
+    /// skill root. Previously, resource keys were flattened and/or rejected by
+    /// `is_safe_name`, so bundled references wound up at the skill root and
+    /// `[...](./references/FOO.md)` links in `SKILL.md` broke.
+    #[test]
+    fn test_write_skill_contents_preserves_references_subdir() {
+        use std::collections::HashMap;
+        use swissarmyhammer_skills::{Skill, SkillName, SkillResources, SkillSource};
+
+        let mut resources = SkillResources::default();
+        resources.files.insert(
+            "references/helper.md".to_string(),
+            "# Helper\n\nReference body.".to_string(),
+        );
+
+        let skill = Skill {
+            name: SkillName::new("refs-skill").unwrap(),
+            description: "skill with a references/ resource".to_string(),
+            license: None,
+            compatibility: None,
+            metadata: HashMap::new(),
+            allowed_tools: vec![],
+            instructions: "See [helper](./references/helper.md).".to_string(),
+            source_path: None,
+            source: SkillSource::Builtin,
+            resources,
+        };
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let skill_dir = temp_dir.path().join("refs-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+
+        write_skill_contents(&skill_dir, &skill).expect("write_skill_contents should succeed");
+
+        let skill_md_path = skill_dir.join("SKILL.md");
+        assert!(
+            skill_md_path.exists(),
+            "SKILL.md should exist at the skill root, expected: {}",
+            skill_md_path.display()
+        );
+
+        let helper_path = skill_dir.join("references").join("helper.md");
+        assert!(
+            helper_path.exists(),
+            "resource should land at <skill>/references/<name>, expected: {}",
+            helper_path.display()
+        );
+
+        let helper_content = std::fs::read_to_string(&helper_path).unwrap();
+        assert_eq!(helper_content, "# Helper\n\nReference body.");
+    }
+
+    /// Parent-directory traversal must be refused at deploy time even if
+    /// somehow a resource key sneaks past the earlier validation layers.
+    #[test]
+    fn test_write_skill_contents_rejects_parent_traversal() {
+        use std::collections::HashMap;
+        use swissarmyhammer_skills::{Skill, SkillName, SkillResources, SkillSource};
+
+        let mut resources = SkillResources::default();
+        resources
+            .files
+            .insert("../escape.md".to_string(), "bad".to_string());
+
+        let skill = Skill {
+            name: SkillName::new("bad-skill").unwrap(),
+            description: "skill with an unsafe resource path".to_string(),
+            license: None,
+            compatibility: None,
+            metadata: HashMap::new(),
+            allowed_tools: vec![],
+            instructions: "body".to_string(),
+            source_path: None,
+            source: SkillSource::Builtin,
+            resources,
+        };
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let skill_dir = temp_dir.path().join("bad-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+
+        let err = write_skill_contents(&skill_dir, &skill)
+            .expect_err("write_skill_contents should reject `..` traversal");
+        assert!(
+            err.contains("Unsafe resource path"),
+            "error should mention unsafe resource path, got: {err}"
+        );
     }
 }

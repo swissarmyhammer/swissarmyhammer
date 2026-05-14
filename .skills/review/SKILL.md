@@ -2,7 +2,7 @@
 name: review
 description: Code review workflow. Use this skill whenever the user says "review", "code review", "review this PR", "review my changes", or otherwise wants a code review. Reviews produce verbose output — automatically delegates to a reviewer subagent.
 license: MIT OR Apache-2.0
-compatibility: Requires the `code_context` MCP tool (for symbol lookup, callgraph, and blast-radius during review) and the `kanban` MCP tool (to drive tasks through the review column and capture follow-up findings).
+compatibility: Requires the `code_context` MCP tool (for symbol lookup, callgraph, and blast-radius during review) and the `kanban` MCP tool (to drive tasks through the review column and capture follow-up findings). Both are provided by the swissarmyhammer `sah` MCP server; will not function on a harness that does not expose them.
 metadata:
   author: swissarmyhammer
   version: 0.12.11

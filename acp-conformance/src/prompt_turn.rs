@@ -44,11 +44,11 @@
 //!    - Client sends `session/cancel` notification
 //!    - Agent stops processing and returns cancelled stop reason
 
-use agent_client_protocol::{
-    Agent, ClientCapabilities, ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest,
+use agent_client_protocol::schema::{
+    ClientCapabilities, ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest,
     ProtocolVersion, StopReason, TextContent,
 };
-use agent_client_protocol_extras::recording::RecordedSession;
+use agent_client_protocol_extras::{recording::RecordedSession, AgentWithFixture};
 use swissarmyhammer_common::Pretty;
 
 /// Statistics from prompt turn fixture verification
@@ -63,18 +63,26 @@ pub struct PromptTurnStats {
 }
 
 /// Test basic prompt-response cycle
-pub async fn test_basic_prompt_response<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_basic_prompt_response(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing basic prompt-response cycle");
 
     // Initialize agent
     let client_caps = ClientCapabilities::new();
     let init_request = InitializeRequest::new(ProtocolVersion::V1).client_capabilities(client_caps);
-    agent.initialize(init_request).await?;
+    agent
+        .connection()
+        .send_request(init_request)
+        .block_task()
+        .await?;
 
     // Create session
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
     let new_session_request = NewSessionRequest::new(cwd);
-    let new_session_response = agent.new_session(new_session_request).await?;
+    let new_session_response = agent
+        .connection()
+        .send_request(new_session_request)
+        .block_task()
+        .await?;
     let session_id = new_session_response.session_id;
 
     // Send prompt
@@ -83,7 +91,11 @@ pub async fn test_basic_prompt_response<A: Agent + ?Sized>(agent: &A) -> crate::
     let prompt_request = PromptRequest::new(session_id.clone(), prompt);
 
     // Execute prompt and verify response
-    let response = agent.prompt(prompt_request).await?;
+    let response = agent
+        .connection()
+        .send_request(prompt_request)
+        .block_task()
+        .await?;
 
     // Verify stop reason is valid
     match response.stop_reason {
@@ -109,18 +121,26 @@ pub async fn test_basic_prompt_response<A: Agent + ?Sized>(agent: &A) -> crate::
 }
 
 /// Test that prompt responses complete successfully
-pub async fn test_prompt_completion<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_prompt_completion(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing prompt completion");
 
     // Initialize agent
     let client_caps = ClientCapabilities::new();
     let init_request = InitializeRequest::new(ProtocolVersion::V1).client_capabilities(client_caps);
-    agent.initialize(init_request).await?;
+    agent
+        .connection()
+        .send_request(init_request)
+        .block_task()
+        .await?;
 
     // Create session
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
     let new_session_request = NewSessionRequest::new(cwd);
-    let new_session_response = agent.new_session(new_session_request).await?;
+    let new_session_response = agent
+        .connection()
+        .send_request(new_session_request)
+        .block_task()
+        .await?;
     let session_id = new_session_response.session_id;
 
     // Send prompt
@@ -129,7 +149,11 @@ pub async fn test_prompt_completion<A: Agent + ?Sized>(agent: &A) -> crate::Resu
     let prompt_request = PromptRequest::new(session_id.clone(), prompt);
 
     // Execute prompt
-    let response = agent.prompt(prompt_request).await?;
+    let response = agent
+        .connection()
+        .send_request(prompt_request)
+        .block_task()
+        .await?;
 
     // Verify response has valid stop reason
     match response.stop_reason {
@@ -148,25 +172,37 @@ pub async fn test_prompt_completion<A: Agent + ?Sized>(agent: &A) -> crate::Resu
 }
 
 /// Test that stop reasons are properly returned
-pub async fn test_stop_reasons<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_stop_reasons(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing stop reason handling");
 
     // Initialize agent
     let client_caps = ClientCapabilities::new();
     let init_request = InitializeRequest::new(ProtocolVersion::V1).client_capabilities(client_caps);
-    agent.initialize(init_request).await?;
+    agent
+        .connection()
+        .send_request(init_request)
+        .block_task()
+        .await?;
 
     // Create session
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
     let new_session_request = NewSessionRequest::new(cwd);
-    let new_session_response = agent.new_session(new_session_request).await?;
+    let new_session_response = agent
+        .connection()
+        .send_request(new_session_request)
+        .block_task()
+        .await?;
     let session_id = new_session_response.session_id;
 
     // Test 1: Normal completion should return EndTurn
     {
         let prompt = vec![ContentBlock::Text(TextContent::new("Say hello"))];
         let prompt_request = PromptRequest::new(session_id.clone(), prompt);
-        let response = agent.prompt(prompt_request).await?;
+        let response = agent
+            .connection()
+            .send_request(prompt_request)
+            .block_task()
+            .await?;
 
         // Should be EndTurn or possibly MaxTokens depending on response length
         match response.stop_reason {
@@ -189,47 +225,72 @@ pub async fn test_stop_reasons<A: Agent + ?Sized>(agent: &A) -> crate::Result<()
 }
 
 /// Test cancellation handling
-pub async fn test_cancellation<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_cancellation(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing cancellation handling");
 
     // Initialize agent
     let client_caps = ClientCapabilities::new();
     let init_request = InitializeRequest::new(ProtocolVersion::V1).client_capabilities(client_caps);
-    agent.initialize(init_request).await?;
+    agent
+        .connection()
+        .send_request(init_request)
+        .block_task()
+        .await?;
 
     // Create session
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
     let new_session_request = NewSessionRequest::new(cwd);
-    let new_session_response = agent.new_session(new_session_request).await?;
+    let new_session_response = agent
+        .connection()
+        .send_request(new_session_request)
+        .block_task()
+        .await?;
     let session_id = new_session_response.session_id.clone();
 
-    // Send cancellation notification
-    let cancel_notification = agent_client_protocol::CancelNotification::new(session_id);
-    agent.cancel(cancel_notification).await?;
+    // Send cancellation notification.
+    //
+    // ACP 0.11: notifications are dispatched through the typed
+    // `ConnectionTo<Agent>::send_notification` method rather than the old
+    // `Agent::cancel` trait method. The call returns synchronously — there
+    // is no acknowledgement to await.
+    let cancel_notification = agent_client_protocol::schema::CancelNotification::new(session_id);
+    agent.connection().send_notification(cancel_notification)?;
 
     tracing::info!("Cancellation accepted by agent");
     Ok(())
 }
 
 /// Test that multiple prompts work in sequence
-pub async fn test_multiple_prompts<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_multiple_prompts(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing multiple sequential prompts");
 
     // Initialize agent
     let client_caps = ClientCapabilities::new();
     let init_request = InitializeRequest::new(ProtocolVersion::V1).client_capabilities(client_caps);
-    agent.initialize(init_request).await?;
+    agent
+        .connection()
+        .send_request(init_request)
+        .block_task()
+        .await?;
 
     // Create session
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
     let new_session_request = NewSessionRequest::new(cwd);
-    let new_session_response = agent.new_session(new_session_request).await?;
+    let new_session_response = agent
+        .connection()
+        .send_request(new_session_request)
+        .block_task()
+        .await?;
     let session_id = new_session_response.session_id;
 
     // Send first prompt
     let prompt1 = vec![ContentBlock::Text(TextContent::new("Hello"))];
     let prompt_request1 = PromptRequest::new(session_id.clone(), prompt1);
-    let response1 = agent.prompt(prompt_request1).await?;
+    let response1 = agent
+        .connection()
+        .send_request(prompt_request1)
+        .block_task()
+        .await?;
 
     tracing::info!(
         "First prompt completed with: {}",
@@ -239,7 +300,11 @@ pub async fn test_multiple_prompts<A: Agent + ?Sized>(agent: &A) -> crate::Resul
     // Send second prompt
     let prompt2 = vec![ContentBlock::Text(TextContent::new("How are you?"))];
     let prompt_request2 = PromptRequest::new(session_id.clone(), prompt2);
-    let response2 = agent.prompt(prompt_request2).await?;
+    let response2 = agent
+        .connection()
+        .send_request(prompt_request2)
+        .block_task()
+        .await?;
 
     tracing::info!(
         "Second prompt completed with: {}",
@@ -329,7 +394,7 @@ pub fn verify_prompt_turn_fixture(
 /// Verifies that when a client advertises streaming capability, the agent:
 /// 1. Accepts the capability during initialization
 /// 2. Sends agent_message_chunk notifications during prompt processing
-pub async fn test_streaming_capability<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_streaming_capability(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing streaming capability negotiation");
 
     // Initialize with streaming capability in meta
@@ -338,7 +403,11 @@ pub async fn test_streaming_capability<A: Agent + ?Sized>(agent: &A) -> crate::R
 
     let client_caps = ClientCapabilities::new().meta(Some(meta));
     let init_request = InitializeRequest::new(ProtocolVersion::V1).client_capabilities(client_caps);
-    let init_response = agent.initialize(init_request).await?;
+    let init_response = agent
+        .connection()
+        .send_request(init_request)
+        .block_task()
+        .await?;
 
     // Agent should acknowledge capabilities
     tracing::info!(
@@ -349,13 +418,21 @@ pub async fn test_streaming_capability<A: Agent + ?Sized>(agent: &A) -> crate::R
     // Create session
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
     let new_session_request = NewSessionRequest::new(cwd);
-    let new_session_response = agent.new_session(new_session_request).await?;
+    let new_session_response = agent
+        .connection()
+        .send_request(new_session_request)
+        .block_task()
+        .await?;
     let session_id = new_session_response.session_id;
 
     // Send prompt - streaming notifications should be sent
     let prompt = vec![ContentBlock::Text(TextContent::new("Hello"))];
     let prompt_request = PromptRequest::new(session_id.clone(), prompt);
-    let response = agent.prompt(prompt_request).await?;
+    let response = agent
+        .connection()
+        .send_request(prompt_request)
+        .block_task()
+        .await?;
 
     tracing::info!(
         "Streaming prompt completed with stop reason: {:?}",
@@ -370,7 +447,7 @@ pub async fn test_streaming_capability<A: Agent + ?Sized>(agent: &A) -> crate::R
 /// Verifies that:
 /// 1. Session context is maintained between streaming prompts
 /// 2. Each prompt produces streaming notifications
-pub async fn test_streaming_context_maintained<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_streaming_context_maintained(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing streaming with context maintained across prompts");
 
     // Initialize with streaming capability
@@ -379,12 +456,20 @@ pub async fn test_streaming_context_maintained<A: Agent + ?Sized>(agent: &A) -> 
 
     let client_caps = ClientCapabilities::new().meta(Some(meta));
     let init_request = InitializeRequest::new(ProtocolVersion::V1).client_capabilities(client_caps);
-    agent.initialize(init_request).await?;
+    agent
+        .connection()
+        .send_request(init_request)
+        .block_task()
+        .await?;
 
     // Create session
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
     let new_session_request = NewSessionRequest::new(cwd);
-    let new_session_response = agent.new_session(new_session_request).await?;
+    let new_session_response = agent
+        .connection()
+        .send_request(new_session_request)
+        .block_task()
+        .await?;
     let session_id = new_session_response.session_id;
 
     // First prompt - establish context
@@ -392,7 +477,11 @@ pub async fn test_streaming_context_maintained<A: Agent + ?Sized>(agent: &A) -> 
         "My favorite color is blue. Remember this.",
     ))];
     let prompt_request1 = PromptRequest::new(session_id.clone(), prompt1);
-    let response1 = agent.prompt(prompt_request1).await?;
+    let response1 = agent
+        .connection()
+        .send_request(prompt_request1)
+        .block_task()
+        .await?;
     tracing::info!("First prompt completed: {}", Pretty(&response1.stop_reason));
 
     // Second prompt - should have context from first
@@ -400,7 +489,11 @@ pub async fn test_streaming_context_maintained<A: Agent + ?Sized>(agent: &A) -> 
         "What is my favorite color?",
     ))];
     let prompt_request2 = PromptRequest::new(session_id.clone(), prompt2);
-    let response2 = agent.prompt(prompt_request2).await?;
+    let response2 = agent
+        .connection()
+        .send_request(prompt_request2)
+        .block_task()
+        .await?;
     tracing::info!(
         "Second prompt completed: {}",
         Pretty(&response2.stop_reason)
@@ -481,77 +574,40 @@ pub fn verify_prompt_fixture_with_response(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::{
-        AuthenticateRequest, AuthenticateResponse, CancelNotification, ExtNotification, ExtRequest,
-        ExtResponse, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
-        NewSessionResponse, SetSessionModeRequest, SetSessionModeResponse,
-    };
+    use crate::test_utils::{run_with_mock_agent_as_fixture, MockAgent};
+    use agent_client_protocol::schema::{InitializeResponse, NewSessionResponse, PromptResponse};
+    use futures::future::BoxFuture;
+    use std::sync::Arc;
 
-    /// Mock agent that returns simple prompt responses
+    /// Mock agent that returns simple prompt responses.
+    ///
+    /// Returns the same single session id for every `new_session` request and
+    /// always replies to `prompt` with `StopReason::EndTurn`. The default
+    /// [`MockAgent`] impls cover `cancel` (silent OK), `load_session`,
+    /// `set_session_mode`, and the ext-method paths so each scenario only
+    /// reaches the production helpers via the routes it actually exercises.
     struct PromptMockAgent;
 
-    #[async_trait::async_trait(?Send)]
-    impl Agent for PromptMockAgent {
-        async fn initialize(
-            &self,
+    impl MockAgent for PromptMockAgent {
+        fn initialize<'a>(
+            &'a self,
             _request: InitializeRequest,
-        ) -> agent_client_protocol::Result<InitializeResponse> {
-            Ok(InitializeResponse::new(ProtocolVersion::V1))
+        ) -> BoxFuture<'a, agent_client_protocol::Result<InitializeResponse>> {
+            Box::pin(async move { Ok(InitializeResponse::new(ProtocolVersion::V1)) })
         }
 
-        async fn authenticate(
-            &self,
-            _request: AuthenticateRequest,
-        ) -> agent_client_protocol::Result<AuthenticateResponse> {
-            Ok(AuthenticateResponse::new())
-        }
-
-        async fn new_session(
-            &self,
+        fn new_session<'a>(
+            &'a self,
             _request: NewSessionRequest,
-        ) -> agent_client_protocol::Result<NewSessionResponse> {
-            Ok(NewSessionResponse::new("prompt-test-session"))
+        ) -> BoxFuture<'a, agent_client_protocol::Result<NewSessionResponse>> {
+            Box::pin(async move { Ok(NewSessionResponse::new("prompt-test-session")) })
         }
 
-        async fn prompt(
-            &self,
+        fn prompt<'a>(
+            &'a self,
             _request: PromptRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::PromptResponse> {
-            Ok(agent_client_protocol::PromptResponse::new(
-                StopReason::EndTurn,
-            ))
-        }
-
-        async fn cancel(&self, _request: CancelNotification) -> agent_client_protocol::Result<()> {
-            Ok(())
-        }
-
-        async fn load_session(
-            &self,
-            _request: LoadSessionRequest,
-        ) -> agent_client_protocol::Result<LoadSessionResponse> {
-            Ok(LoadSessionResponse::new())
-        }
-
-        async fn set_session_mode(
-            &self,
-            _request: SetSessionModeRequest,
-        ) -> agent_client_protocol::Result<SetSessionModeResponse> {
-            Ok(SetSessionModeResponse::new())
-        }
-
-        async fn ext_method(
-            &self,
-            _request: ExtRequest,
-        ) -> agent_client_protocol::Result<ExtResponse> {
-            Err(agent_client_protocol::Error::method_not_found())
-        }
-
-        async fn ext_notification(
-            &self,
-            _notification: ExtNotification,
-        ) -> agent_client_protocol::Result<()> {
-            Ok(())
+        ) -> BoxFuture<'a, agent_client_protocol::Result<PromptResponse>> {
+            Box::pin(async move { Ok(PromptResponse::new(StopReason::EndTurn)) })
         }
     }
 
@@ -586,51 +642,74 @@ mod tests {
 
     #[tokio::test]
     async fn test_basic_prompt_response_mock() {
-        let agent = PromptMockAgent;
-        let result = test_basic_prompt_response(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(PromptMockAgent);
+        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
+            test_basic_prompt_response(&fx).await
+        })
+        .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[tokio::test]
     async fn test_prompt_completion_mock() {
-        let agent = PromptMockAgent;
-        let result = test_prompt_completion(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(PromptMockAgent);
+        let result =
+            run_with_mock_agent_as_fixture(
+                mock,
+                |fx| async move { test_prompt_completion(&fx).await },
+            )
+            .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[tokio::test]
     async fn test_stop_reasons_mock() {
-        let agent = PromptMockAgent;
-        let result = test_stop_reasons(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(PromptMockAgent);
+        let result =
+            run_with_mock_agent_as_fixture(mock, |fx| async move { test_stop_reasons(&fx).await })
+                .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[tokio::test]
     async fn test_cancellation_mock() {
-        let agent = PromptMockAgent;
-        let result = test_cancellation(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(PromptMockAgent);
+        let result =
+            run_with_mock_agent_as_fixture(mock, |fx| async move { test_cancellation(&fx).await })
+                .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[tokio::test]
     async fn test_multiple_prompts_mock() {
-        let agent = PromptMockAgent;
-        let result = test_multiple_prompts(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(PromptMockAgent);
+        let result =
+            run_with_mock_agent_as_fixture(
+                mock,
+                |fx| async move { test_multiple_prompts(&fx).await },
+            )
+            .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[tokio::test]
     async fn test_streaming_capability_mock() {
-        let agent = PromptMockAgent;
-        let result = test_streaming_capability(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(PromptMockAgent);
+        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
+            test_streaming_capability(&fx).await
+        })
+        .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[tokio::test]
     async fn test_streaming_context_maintained_mock() {
-        let agent = PromptMockAgent;
-        let result = test_streaming_context_maintained(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(PromptMockAgent);
+        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
+            test_streaming_context_maintained(&fx).await
+        })
+        .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[test]

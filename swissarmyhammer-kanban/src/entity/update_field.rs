@@ -10,9 +10,7 @@ use serde_json::{json, Value};
 use swissarmyhammer_entity::Entity;
 use swissarmyhammer_entity::EntityContext;
 use swissarmyhammer_fields::types::EntityDef;
-use swissarmyhammer_operations::{
-    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
-};
+use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// Parse `#tag` patterns from an entity's body field and auto-create tag entities
 /// for any that don't already exist.
@@ -79,9 +77,6 @@ impl UpdateEntityField {
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for UpdateEntityField {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
-        let start = std::time::Instant::now();
-        let input = serde_json::to_value(self).unwrap();
-
         let result: std::result::Result<Value, KanbanError> = async {
             let ectx = ctx.entity_context().await?;
 
@@ -165,31 +160,10 @@ impl Execute<KanbanContext, KanbanError> for UpdateEntityField {
         }
         .await;
 
-        let duration_ms = start.elapsed().as_millis() as u64;
-
         match result {
-            Ok(value) => ExecutionResult::Logged {
-                value: value.clone(),
-                log_entry: LogEntry::new(self.op_string(), input, value, None, duration_ms),
-            },
-            Err(error) => {
-                let error_msg = error.to_string();
-                ExecutionResult::Failed {
-                    error,
-                    log_entry: Some(LogEntry::new(
-                        self.op_string(),
-                        input,
-                        serde_json::json!({"error": error_msg}),
-                        None,
-                        duration_ms,
-                    )),
-                }
-            }
+            Ok(value) => ExecutionResult::Success { value },
+            Err(error) => ExecutionResult::Failed { error },
         }
-    }
-
-    fn affected_resource_ids(&self, _result: &Value) -> Vec<String> {
-        vec![self.id.clone()]
     }
 }
 

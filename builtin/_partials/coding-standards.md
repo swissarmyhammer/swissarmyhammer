@@ -31,10 +31,13 @@ partial: true
 
 ## Documentation
 
-- Every function needs a docstring explaining what it does
-- Document parameters, return values, and errors
-- Update existing documentation if your changes make it stale
-- Inline comments explain "why", not "what"
+Doc comments describe the code and its design — invariants, contracts, non-obvious decisions. They are not a log of the work that produced the code.
+
+- Default to no inline comments. Add one only when the WHY is non-obvious: a hidden constraint, a subtle invariant, a workaround for a specific bug, or behavior that would surprise a reader.
+- Don't restate what a well-named identifier already shows. If removing the comment wouldn't confuse a future reader, don't write it.
+- Don't reference tasks, plans, PRs, issue numbers, step numbers, "added for X", "fixes Y", or specific callers ("used by Z"). Point-in-time context belongs in commit messages and PR descriptions — it rots in source.
+- Keep doc comments short. One clear sentence usually beats a paragraph. Document parameters, return values, and errors only when their meaning isn't obvious from the signature and types.
+- Update or delete stale documentation as part of any change that makes it wrong.
 
 ## Error Handling
 
