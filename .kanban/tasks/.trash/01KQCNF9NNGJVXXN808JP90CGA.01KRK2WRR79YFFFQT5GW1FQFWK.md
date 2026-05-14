@@ -1,6 +1,7 @@
 ---
 assignees:
 - claude-code
+depends_on: []
 position_column: todo
 position_ordinal: fd80
 title: 'Validator hallucinations: missing-docs/no-magic-numbers fire on items that already comply (3 distinct misreads)'

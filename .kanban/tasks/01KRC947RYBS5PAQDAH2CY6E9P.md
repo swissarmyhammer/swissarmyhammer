@@ -1,7 +1,7 @@
 ---
 assignees: []
-position_column: todo
-position_ordinal: c980
+position_column: done
+position_ordinal: '7e80'
 project: single-changelog
 title: 'single-changelog: post-merge audit for residual duplicate change-logging'
 ---
