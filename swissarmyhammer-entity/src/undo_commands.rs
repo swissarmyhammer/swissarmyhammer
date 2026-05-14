@@ -106,8 +106,14 @@ async fn sync_entity_cache(ctx: &CommandContext, outcome: &UndoOutcome) {
     let Some(ectx) = ctx.extension::<EntityContext>() else {
         return;
     };
-    ectx.sync_entity_cache_from_disk(&outcome.store_name, outcome.item_id.as_str())
-        .await;
+    // Iterate every item the undo group touched. A single-entry outcome
+    // contains one pair; a group undo (e.g. column.reorder rewriting N
+    // columns) contains every entry, all of which need their caches
+    // resynced or the next read will see stale post-undo data.
+    for (store_name, item_id) in &outcome.items {
+        ectx.sync_entity_cache_from_disk(store_name, item_id.as_str())
+            .await;
+    }
 }
 
 #[cfg(test)]

@@ -283,9 +283,14 @@ impl Command for KanbanRedoCmd {
 /// failure as a command error would misrepresent what happened.
 async fn reconcile_post_undo_caches(ctx: &CommandContext, outcome: &UndoOutcome) {
     // Entity-layer reconciliation — orthogonal to perspective/view reconciliation.
+    // Iterate every item the undo group touched; a multi-write command
+    // (e.g. column.reorder) needs every column's cache resynced, not just
+    // the representative.
     if let Some(ectx) = ctx.extension::<EntityContext>() {
-        ectx.sync_entity_cache_from_disk(&outcome.store_name, outcome.item_id.as_str())
-            .await;
+        for (store_name, item_id) in &outcome.items {
+            ectx.sync_entity_cache_from_disk(store_name, item_id.as_str())
+                .await;
+        }
     }
 
     // Perspective-layer reconciliation — only fires when the undo target was

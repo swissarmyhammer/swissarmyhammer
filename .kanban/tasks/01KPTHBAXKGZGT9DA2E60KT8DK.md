@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '9680'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffe480
 title: Board view doesn't redraw after undoing a column drag — wire patchBoardData into entity-field-changed
 ---
 ## What

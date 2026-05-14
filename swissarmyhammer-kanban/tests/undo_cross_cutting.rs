@@ -1446,3 +1446,83 @@ async fn view_delete_undo_restores_cache_and_emits_event() {
         "YAML file must be restored on disk after second undo"
     );
 }
+
+// ===========================================================================
+// Column reorder undo — single dispatch, multiple writes, one undo entry.
+// ===========================================================================
+
+/// `column.reorder` re-orders all columns by issuing one `UpdateColumn` per
+/// column. The user expects a single `app.undo` to revert the entire drag —
+/// not just the last column's `order` field. If grouping is missing, only
+/// the most-recent `UpdateColumn` is reversed and the on-disk order ends up
+/// in a corrupt half-reverted state.
+#[tokio::test]
+async fn undo_column_reorder_restores_original_order() {
+    let engine = UndoEngine::new().await;
+    let ectx = engine.kanban.entity_context().await.unwrap();
+
+    async fn sorted_ids(ectx: &Arc<swissarmyhammer_entity::EntityContext>) -> Vec<String> {
+        let mut cols = ectx.list("column").await.unwrap();
+        cols.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0));
+        cols.iter().map(|c| c.id.to_string()).collect()
+    }
+
+    let original = sorted_ids(&ectx).await;
+    assert_eq!(original, vec!["todo", "doing", "done"]);
+
+    let mut args = HashMap::new();
+    args.insert("id".into(), json!("todo"));
+    args.insert("target_index".into(), json!(2));
+    engine
+        .dispatch("column.reorder", &[], None, args)
+        .await
+        .expect("column.reorder");
+    assert_eq!(
+        sorted_ids(&ectx).await,
+        vec!["doing", "done", "todo"],
+        "post-drag column order"
+    );
+
+    // Snapshot every column's order field after a single undo. The
+    // expectation is the *whole* drag reverts: todo=0, doing=1, done=2.
+    // Without grouping, only the last UpdateColumn (todo, 0 → 2) is
+    // reversed, leaving doing=0, done=1, todo=0 — a corrupted state
+    // with two columns tied at order=0.
+    engine.undo().await;
+    let mut orders: Vec<(String, u64)> = ectx
+        .list("column")
+        .await
+        .unwrap()
+        .iter()
+        .map(|c| {
+            (
+                c.id.to_string(),
+                c.get("order").and_then(|v| v.as_u64()).unwrap_or(0),
+            )
+        })
+        .collect();
+    orders.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(
+        orders,
+        vec![
+            ("doing".to_string(), 1),
+            ("done".to_string(), 2),
+            ("todo".to_string(), 0),
+        ],
+        "one app.undo must restore every column's pre-drag `order` field, \
+         not just the last UpdateColumn"
+    );
+
+    assert_eq!(
+        sorted_ids(&ectx).await,
+        original,
+        "one app.undo must restore the full pre-drag column order"
+    );
+
+    engine.redo().await;
+    assert_eq!(
+        sorted_ids(&ectx).await,
+        vec!["doing", "done", "todo"],
+        "one app.redo must reapply the entire column reorder"
+    );
+}

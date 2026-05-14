@@ -5,6 +5,7 @@ use crate::context::KanbanContext;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use swissarmyhammer_commands::{Command, CommandContext, CommandError};
+use swissarmyhammer_store::StoreContext;
 
 /// Reorder columns by moving a single column to a target index.
 ///
@@ -59,7 +60,18 @@ impl Command for ColumnReorderCmd {
         let insert_at = target_index.min(columns.len());
         columns.insert(insert_at, moved);
 
-        // 4. Assign sequential order values and persist
+        // 4. Assign sequential order values and persist.
+        //
+        // Open an undo group so the N `UpdateColumn` writes pop off the
+        // shared undo stack as one step. Without this, only the last
+        // column's `order` field is reversed by `app.undo`, leaving the
+        // board in a corrupt half-reverted state with duplicate orders.
+        let store_ctx = ctx.extension::<StoreContext>();
+        let _undo_group = match store_ctx.as_ref() {
+            Some(sc) => Some(sc.begin_undo_group().await),
+            None => None,
+        };
+
         let mut operation_ids: Vec<String> = Vec::new();
         for (i, col) in columns.iter().enumerate() {
             let op = crate::column::UpdateColumn::new(col.id.as_str()).with_order(i);

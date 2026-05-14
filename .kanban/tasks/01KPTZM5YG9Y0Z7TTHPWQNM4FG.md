@@ -1,6 +1,7 @@
 ---
 assignees:
 - claude-code
+depends_on: []
 position_column: todo
 position_ordinal: '9880'
 title: 'Grid empty-state copy: distinguish "no entities yet" from "filter matches nothing"'

@@ -2,7 +2,7 @@
 assignees:
 - wballard
 position_column: todo
-position_ordinal: '8680'
+position_ordinal: fd80
 title: 'Perspective switch: backend filters + pushes results to UIState'
 ---
 ## What

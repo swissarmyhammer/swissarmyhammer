@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: fc80
+position_ordinal: fe80
 title: 'Validator runner: 30s per-rule timeout is too aggressive — qwen times out on ~100% of rules'
 ---
 ## Symptom
