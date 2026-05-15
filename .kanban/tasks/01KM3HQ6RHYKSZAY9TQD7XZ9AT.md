@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffa80
+position_ordinal: ffffffffffc780
 title: set_active_view/set_inspector_stack silently no-op when window entry missing
 ---
 **commands.rs:232-248**

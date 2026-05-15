@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffff8380
+position_ordinal: ffffffffffffffffffffffffffffb180
 title: Display virtual tags in task card header below regular tags
 ---
 ## What
@@ -20,7 +20,7 @@ Virtual tags aren't real tag entities in the store, so `MentionPill` can't resol
 4. Ensure field ordering in `EntityCard` (`kanban-app/ui/src/components/entity-card.tsx`) places `virtual_tags` after `tags` — the YAML field order or an explicit sort may be needed.
 
 **Virtual tag metadata (from Rust `DEFAULT_REGISTRY` in `virtual_tags.rs`):**
-- `READY` — color `0e8a16` (green), description "Task has no unmet dependencies"  
+- `READY` — color `0e8a16` (green), description "Task has no unmet dependencies"
 - `BLOCKED` — color `e36209` (orange), description "Task has at least one unmet dependency"
 - `BLOCKING` — color `d73a4a` (red), description "Other tasks depend on this one"
 

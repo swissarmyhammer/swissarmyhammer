@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffa080
+position_ordinal: ffffffffffffffffffffffffffffde80
 title: Make FilterEditor autosave and match field editing vim/keymap behavior
 ---
 ## What

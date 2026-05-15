@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMGQDC1CB4FAFAHXGHQ6M2QP
 position_column: done
-position_ordinal: ffffffffff8a80
+position_ordinal: ffffffffffe380
 title: 'End-to-end test: git merge with all three drivers'
 ---
 ## What

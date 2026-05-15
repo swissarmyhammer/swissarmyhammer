@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffff480
+position_ordinal: ffffffffffba80
 title: Add before/after placement to MCP kanban move task operation
 ---
 ## What

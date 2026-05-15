@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffff8c80
+position_ordinal: ffffffffffffffffffffffffff8e80
 project: code-context-cli
 title: Create code-context-cli crate scaffolding
 ---

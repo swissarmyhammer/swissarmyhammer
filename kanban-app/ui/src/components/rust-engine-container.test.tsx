@@ -84,7 +84,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 
 // Import after mocks
-import { useEntityStore } from "@/lib/entity-store-context";
+import { useEntityStore, useFieldValue } from "@/lib/entity-store-context";
 import { useSchema } from "@/lib/schema-context";
 import { useUIState } from "@/lib/ui-state-context";
 import { useEntityFocus } from "@/lib/entity-focus-context";
@@ -1217,5 +1217,308 @@ describe("RustEngineContainer", () => {
       await p2;
     });
     expect(screen.getByTestId("busy").textContent).toBe("no");
+  });
+
+  // --------------------------------------------------------------------------
+  // useFieldValue reactivity — regression guard for the inspector-edit bug
+  // where editing a non-hardcoded field on a non-task entity failed to
+  // propagate to subscribers reading via `useFieldValue` (the hook used by
+  // cards, inspector rows, and grid cells).
+  // --------------------------------------------------------------------------
+
+  it("useFieldValue re-renders for a non-task entity when entity-field-changed patches a non-hardcoded field", async () => {
+    // Probe that subscribes to a tag's `color` field via the production
+    // `useFieldValue` hook — the same hook every `<Field>` uses.
+    function TagColorProbe() {
+      const color = useFieldValue("tag", "tag-1", "color");
+      return (
+        <span data-testid="tag-color">{(color as string) ?? "missing"}</span>
+      );
+    }
+
+    await act(async () => {
+      render(
+        <RustEngineContainer>
+          <TagColorProbe />
+        </RustEngineContainer>,
+      );
+    });
+
+    // Seed the tag via entity-created so the entity is in the store.
+    await act(async () => {
+      emitTauriEvent("entity-created", {
+        kind: "entity-created",
+        entity_type: "tag",
+        id: "tag-1",
+        fields: { tag_name: "bug", color: "#ff0000" },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("tag-color").textContent).toBe("#ff0000");
+    });
+
+    // Snapshot the get_entity call count immediately before the field-changed
+    // emit — we then assert below that the production listener did NOT issue
+    // a get_entity refetch in response. Acceptance criterion #4: the field
+    // must update purely from the event payload.
+    const getEntityCallsBefore = mockInvoke.mock.calls.filter(
+      (c) => c[0] === "get_entity",
+    ).length;
+
+    // Now patch the color via entity-field-changed — the same path the
+    // backend uses after an inspector edit.
+    await act(async () => {
+      emitTauriEvent("entity-field-changed", {
+        kind: "entity-field-changed",
+        entity_type: "tag",
+        id: "tag-1",
+        changes: [{ field: "color", value: "#00ff00" }],
+      });
+    });
+
+    // The subscriber must see the new value without any manual refresh.
+    await waitFor(() => {
+      expect(screen.getByTestId("tag-color").textContent).toBe("#00ff00");
+    });
+
+    // No get_entity refetch issued by the production listener.
+    const getEntityCallsAfter = mockInvoke.mock.calls.filter(
+      (c) => c[0] === "get_entity",
+    ).length;
+    expect(getEntityCallsAfter).toBe(getEntityCallsBefore);
+  });
+
+  it("useFieldValue re-renders for a project entity description (non-task, non-tag, non-hardcoded field)", async () => {
+    function DescriptionProbe() {
+      const description = useFieldValue("project", "proj-1", "description");
+      return (
+        <span data-testid="proj-description">
+          {(description as string) ?? "missing"}
+        </span>
+      );
+    }
+
+    await act(async () => {
+      render(
+        <RustEngineContainer>
+          <DescriptionProbe />
+        </RustEngineContainer>,
+      );
+    });
+
+    await act(async () => {
+      emitTauriEvent("entity-created", {
+        kind: "entity-created",
+        entity_type: "project",
+        id: "proj-1",
+        fields: { name: "Project One", description: "Initial" },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("proj-description").textContent).toBe(
+        "Initial",
+      );
+    });
+
+    const getEntityCallsBefore = mockInvoke.mock.calls.filter(
+      (c) => c[0] === "get_entity",
+    ).length;
+
+    await act(async () => {
+      emitTauriEvent("entity-field-changed", {
+        kind: "entity-field-changed",
+        entity_type: "project",
+        id: "proj-1",
+        changes: [{ field: "description", value: "Updated description" }],
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("proj-description").textContent).toBe(
+        "Updated description",
+      );
+    });
+
+    const getEntityCallsAfter = mockInvoke.mock.calls.filter(
+      (c) => c[0] === "get_entity",
+    ).length;
+    expect(getEntityCallsAfter).toBe(getEntityCallsBefore);
+  });
+
+  it("useFieldValue sees a newly added field that was previously absent", async () => {
+    // The entity is created without the field; the user later adds it via
+    // the inspector. The subscriber's prior snapshot is `undefined`; the
+    // new value must propagate when the event arrives.
+    function DescriptionProbe() {
+      const description = useFieldValue("tag", "tag-2", "description");
+      return (
+        <span data-testid="tag-desc">
+          {description === undefined ? "absent" : (description as string)}
+        </span>
+      );
+    }
+
+    await act(async () => {
+      render(
+        <RustEngineContainer>
+          <DescriptionProbe />
+        </RustEngineContainer>,
+      );
+    });
+
+    // Seed without the description field.
+    await act(async () => {
+      emitTauriEvent("entity-created", {
+        kind: "entity-created",
+        entity_type: "tag",
+        id: "tag-2",
+        fields: { tag_name: "new" },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("tag-desc").textContent).toBe("absent");
+    });
+
+    const getEntityCallsBefore = mockInvoke.mock.calls.filter(
+      (c) => c[0] === "get_entity",
+    ).length;
+
+    // Add the description for the first time.
+    await act(async () => {
+      emitTauriEvent("entity-field-changed", {
+        kind: "entity-field-changed",
+        entity_type: "tag",
+        id: "tag-2",
+        changes: [{ field: "description", value: "Newly added" }],
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("tag-desc").textContent).toBe("Newly added");
+    });
+
+    const getEntityCallsAfter = mockInvoke.mock.calls.filter(
+      (c) => c[0] === "get_entity",
+    ).length;
+    expect(getEntityCallsAfter).toBe(getEntityCallsBefore);
+  });
+
+  it("useFieldValue re-renders for a date field shape (task.due) — covers ISO-string-or-null serialization", async () => {
+    // Acceptance criterion #2 calls for coverage of three field shapes:
+    // text, select/enum, and date. Date values are ISO-8601 strings (or
+    // null) — a separate JSON shape from plain text that schema-driven
+    // serialization elsewhere could regress without a regression guard.
+    function DueProbe() {
+      const due = useFieldValue("task", "task-due-1", "due");
+      return (
+        <span data-testid="task-due">
+          {due === undefined ? "missing" : ((due as string | null) ?? "null")}
+        </span>
+      );
+    }
+
+    await act(async () => {
+      render(
+        <RustEngineContainer>
+          <DueProbe />
+        </RustEngineContainer>,
+      );
+    });
+
+    await act(async () => {
+      emitTauriEvent("entity-created", {
+        kind: "entity-created",
+        entity_type: "task",
+        id: "task-due-1",
+        fields: { title: "Date task", due: "2026-05-01" },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("task-due").textContent).toBe("2026-05-01");
+    });
+
+    const getEntityCallsBefore = mockInvoke.mock.calls.filter(
+      (c) => c[0] === "get_entity",
+    ).length;
+
+    // Patch to a new ISO date — same wire shape, different value.
+    await act(async () => {
+      emitTauriEvent("entity-field-changed", {
+        kind: "entity-field-changed",
+        entity_type: "task",
+        id: "task-due-1",
+        changes: [{ field: "due", value: "2026-06-15" }],
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("task-due").textContent).toBe("2026-06-15");
+    });
+
+    const getEntityCallsAfter = mockInvoke.mock.calls.filter(
+      (c) => c[0] === "get_entity",
+    ).length;
+    expect(getEntityCallsAfter).toBe(getEntityCallsBefore);
+  });
+
+  it("useFieldValue re-renders for a select/enum field shape (task.position_column) — covers slug-string serialization", async () => {
+    // Select/enum fields carry a slug string (one of a finite set) on the
+    // wire. Acceptance criterion #2 wants explicit regression coverage —
+    // not just text-shaped values — so this probe flips the value between
+    // two slugs and asserts the subscriber sees the new slug without a
+    // refetch.
+    function ColumnProbe() {
+      const column = useFieldValue("task", "task-enum-1", "position_column");
+      return (
+        <span data-testid="task-column">{(column as string) ?? "missing"}</span>
+      );
+    }
+
+    await act(async () => {
+      render(
+        <RustEngineContainer>
+          <ColumnProbe />
+        </RustEngineContainer>,
+      );
+    });
+
+    await act(async () => {
+      emitTauriEvent("entity-created", {
+        kind: "entity-created",
+        entity_type: "task",
+        id: "task-enum-1",
+        fields: { title: "Enum task", position_column: "todo" },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("task-column").textContent).toBe("todo");
+    });
+
+    const getEntityCallsBefore = mockInvoke.mock.calls.filter(
+      (c) => c[0] === "get_entity",
+    ).length;
+
+    await act(async () => {
+      emitTauriEvent("entity-field-changed", {
+        kind: "entity-field-changed",
+        entity_type: "task",
+        id: "task-enum-1",
+        changes: [{ field: "position_column", value: "doing" }],
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("task-column").textContent).toBe("doing");
+    });
+
+    const getEntityCallsAfter = mockInvoke.mock.calls.filter(
+      (c) => c[0] === "get_entity",
+    ).length;
+    expect(getEntityCallsAfter).toBe(getEntityCallsBefore);
   });
 });

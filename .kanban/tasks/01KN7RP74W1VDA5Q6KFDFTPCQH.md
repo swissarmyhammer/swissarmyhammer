@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffd080
+position_ordinal: ffffffffffffffffffeb80
 title: 'Integration tests: real .kanban board + browser UI for drag-and-drop scenarios'
 ---
 ## What

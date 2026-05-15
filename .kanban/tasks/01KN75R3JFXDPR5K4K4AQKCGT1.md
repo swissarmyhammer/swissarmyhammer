@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffff8580
+position_ordinal: ffffffffffffffffffffef80
 title: 'Test directory file_loader: search paths, dot-directory loading, and stacking'
 ---
 File: swissarmyhammer-directory/src/file_loader.rs (48.4%, 132 uncovered lines)

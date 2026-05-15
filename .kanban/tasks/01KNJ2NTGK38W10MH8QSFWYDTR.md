@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffff80
+position_ordinal: ffffffffffffffffffffffffffffae80
 title: Computed fields (tags, progress) not updated after body edit
 ---
 ## What

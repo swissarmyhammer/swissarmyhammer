@@ -1,0 +1,32 @@
+{
+  "command_count": 2,
+  "commands": [
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "board:ctx1",
+      "id": "entity.copy",
+      "keys": {
+        "cua": "Mod+C",
+        "vim": "y"
+      },
+      "menu_name": null,
+      "name": "Copy Board",
+      "target": "board:BOARD_ID_STABLE"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "board:ctx3",
+      "id": "ui.inspect",
+      "keys": null,
+      "menu_name": null,
+      "name": "Inspect Board",
+      "target": "board:BOARD_ID_STABLE"
+    }
+  ],
+  "context_menu_only": true,
+  "scope": [
+    "board:BOARD_ID_STABLE"
+  ]
+}

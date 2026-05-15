@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KN79NWWHY3FZ6GMJXR6Q6C2S
 position_column: done
-position_ordinal: ffffffffffffffffffa780
+position_ordinal: ffffffffffffffffffffffb580
 title: 4. Add perspective commands to scope chain
 ---
 ## What

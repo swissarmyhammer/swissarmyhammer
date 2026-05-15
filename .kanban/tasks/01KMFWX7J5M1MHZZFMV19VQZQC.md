@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffa280
+position_ordinal: fffffffffffff280
 title: 'CM6 vim mode: Escape in insert mode exits editor instead of returning to normal mode'
 ---
 ## What

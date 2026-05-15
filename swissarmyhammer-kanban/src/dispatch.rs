@@ -641,6 +641,9 @@ async fn dispatch_add_perspective(
     op: &KanbanOperation,
 ) -> Result<Value, KanbanError> {
     let mut cmd = AddPerspective::new(req(op, "name")?, req(op, "view")?);
+    if let Some(v) = op.get_string("view_id") {
+        cmd = cmd.with_view_id(v);
+    }
     if let Some(f) = parse_json_array(op, "fields")? {
         cmd = cmd.with_fields(f);
     }
@@ -667,6 +670,9 @@ async fn dispatch_update_perspective(
     }
     if let Some(v) = op.get_string("view") {
         cmd = cmd.with_view(v);
+    }
+    if op.params.contains_key("view_id") {
+        cmd = cmd.with_view_id(op.get_string("view_id").map(|s| s.to_string()));
     }
     if let Some(f) = parse_json_array(op, "fields")? {
         cmd = cmd.with_fields(f);
@@ -791,6 +797,7 @@ pub async fn execute_operation(
 mod tests {
     use super::*;
     use crate::parse::parse_input;
+    use crate::types::Ordinal;
     use serde_json::json;
     use tempfile::TempDir;
 
@@ -1784,13 +1791,17 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_add_task_with_ordinal() {
+        // Caller-supplied ordinals must be well-formed FractionalIndex
+        // encodings — legacy strings like "a5" are rejected at the
+        // validation boundary rather than silently stored.
         let (_temp, ctx) = setup().await;
 
+        let ordinal = Ordinal::DEFAULT_STR;
         let ops =
-            parse_input(json!({"op": "add task", "title": "Ordered", "ordinal": "a5"})).unwrap();
+            parse_input(json!({"op": "add task", "title": "Ordered", "ordinal": ordinal})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(result["title"], "Ordered");
-        assert_eq!(result["position"]["ordinal"], "a5");
+        assert_eq!(result["position"]["ordinal"], ordinal);
     }
 
     #[tokio::test]

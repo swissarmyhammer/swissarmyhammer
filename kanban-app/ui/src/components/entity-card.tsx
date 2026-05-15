@@ -1,21 +1,17 @@
 import { forwardRef, memo, useCallback, useMemo, useState } from "react";
-import { GripVertical, Info, type LucideIcon } from "lucide-react";
+import { GripVertical, Info } from "lucide-react";
 import { FocusScope } from "@/components/focus-scope";
-import {
-  Field,
-  getDisplayIconOverride,
-  getDisplayTooltipOverride,
-} from "@/components/fields/field";
-import { fieldIcon } from "@/components/fields/field-icon";
+import { Inspectable } from "@/components/inspectable";
+import { Pressable } from "@/components/pressable";
+import { asSegment } from "@/types/spatial";
+import { Field } from "@/components/fields/field";
 import { useSchema } from "@/lib/schema-context";
-import { useEntityCommands } from "@/lib/entity-commands";
 import { useDispatchCommand, type CommandDef } from "@/lib/command-scope";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import type { ClaimPredicate } from "@/lib/entity-focus-context";
 import type { Entity, FieldDef } from "@/types/kanban";
 import {
   useEntitySections,
@@ -31,8 +27,6 @@ interface EntityCardProps {
   onDragEnd?: (e: React.DragEvent) => void;
   /** Additional commands to append to the entity's context menu. */
   extraCommands?: CommandDef[];
-  /** Predicates for pull-based navigation via broadcastNavCommand. */
-  claimWhen?: ClaimPredicate[];
 }
 
 /**
@@ -58,39 +52,35 @@ export const EntityCard = memo(
       onDragStart,
       onDragEnd,
       extraCommands,
-      claimWhen,
       ...rest
     } = props;
     const cardSections = useCardSections(entity.entity_type);
-    const commands = useEntityCommands(
-      entity.entity_type,
-      entity.id,
-      entity,
-      extraCommands,
-    );
 
+    // The card is a navigable container: its body holds `<Field>`
+    // scopes that nest under the card's FQM via `FocusScopeContext`,
+    // so drill-in / drill-out walk field → card → column → board.
     return (
-      <FocusScope
-        moniker={entity.moniker}
-        commands={commands}
-        claimWhen={claimWhen}
-        className="entity-card-focus"
-      >
-        <div
-          ref={ref}
-          style={style}
-          data-entity-card={entity.id}
-          draggable={draggable}
-          onDragStart={onDragStart}
-          onDragEnd={onDragEnd}
-          className="rounded-md bg-card px-3 py-2 text-sm border border-border relative group flex items-start gap-2 overflow-hidden"
-          {...rest}
+      <Inspectable moniker={asSegment(entity.moniker)}>
+        <FocusScope
+          moniker={asSegment(entity.moniker)}
+          commands={extraCommands}
         >
-          <DragHandle dragHandleProps={dragHandleProps} />
-          <CardFields sections={cardSections} entity={entity} />
-          <InspectButton moniker={entity.moniker} />
-        </div>
-      </FocusScope>
+          <div
+            ref={ref}
+            style={style}
+            data-entity-card={entity.id}
+            draggable={draggable}
+            onDragStart={onDragStart}
+            onDragEnd={onDragEnd}
+            className="rounded-md bg-card px-3 py-2 text-sm border border-border relative group flex items-start gap-2 overflow-hidden"
+            {...rest}
+          >
+            <DragHandle dragHandleProps={dragHandleProps} />
+            <CardFields sections={cardSections} entity={entity} />
+            <InspectButton entityId={entity.id} moniker={entity.moniker} />
+          </div>
+        </FocusScope>
+      </Inspectable>
     );
   }),
 );
@@ -121,7 +111,27 @@ function useCardSections(entityType: string): ResolvedSection[] {
   }, [resolved, entitySections]);
 }
 
-/** Drag handle button — stops click propagation and wires drag handle props. */
+/**
+ * Drag handle button — stops click propagation and wires drag handle props.
+ *
+ * The drag handle is **mouse-only**. `@dnd-kit` is configured on the
+ * board with `useSensor(PointerSensor, …)` and no `KeyboardSensor`
+ * (see `board-view.tsx::useSensor(PointerSensor, …)`). It is
+ * intentionally NOT wrapped in a `<FocusScope>` because there is
+ * nothing the keyboard user could do once focus landed there: the
+ * `<button>` has no `onClick` action of its own (the handler only
+ * stops propagation so the click doesn't bubble to the card body's
+ * inspect dispatch), and the drag handlers from `dragHandleProps`
+ * respond exclusively to pointer events. Registering it as a leaf
+ * scope would create a tab-stop trap with no keyboard activation
+ * story — contrast with `InspectButton` below, which IS a leaf
+ * because Space/Enter on a focused inspect button dispatches
+ * `ui.inspect`.
+ *
+ * The `onClick={(e) => e.stopPropagation()}` is preserved: it
+ * prevents click-bubble to the card body, which would otherwise
+ * dispatch `ui.inspect` via the `<Inspectable>` wrapper.
+ */
 function DragHandle({
   dragHandleProps,
 }: {
@@ -209,83 +219,35 @@ function CardField({
   onDone,
   onCancel,
 }: CardFieldProps) {
-  // Resolve the icon: prefer a value-dependent override from the display,
-  // then fall back to the static YAML icon resolved by fieldIcon().
-  const overrideFn = getDisplayIconOverride(field.display ?? "");
-  const overrideResult = overrideFn
-    ? overrideFn(entity.fields[field.name])
-    : null;
-  const resolvedIcon = overrideResult ?? fieldIcon(field);
-
-  // Resolve the tooltip: prefer a value-dependent override from the display,
-  // then fall back to the static YAML description or humanised field name.
-  const tooltipOverrideFn = getDisplayTooltipOverride(field.display ?? "");
-  const tooltipOverrideResult = tooltipOverrideFn
-    ? tooltipOverrideFn(entity.fields[field.name])
-    : null;
-
-  const hasIcon = !!resolvedIcon;
+  // Render through `<Field withIcon />` so the icon renders *inside*
+  // the field's `<FocusZone>` — matching the inspector path
+  // (`entity-inspector.tsx`'s `FieldRow`). The unified `<Field>` already
+  // implements value-dependent icon and tooltip overrides via
+  // `resolveFieldIconAndTip` (see `fields/field.tsx`), so the card no
+  // longer needs to duplicate that logic.
+  //
+  // `showFocus={true}` makes the field zone render a visible
+  // `<FocusIndicator>` when its `SpatialKey` becomes the focused key
+  // for the window. Without this, a click on a single-value field
+  // inside the card (title, status, plain text fields) would fire
+  // `spatial_focus` and flip `data-focused`, but no visible decoration
+  // would appear — leaving the user without feedback that they had
+  // selected the field. The card body itself owns a separate focus bar
+  // at the zone level; the per-field bar sits at the inner leaf so the
+  // user can tell which atom of the card carries focus.
   return (
-    <div className={hasIcon ? "flex items-start gap-1.5" : ""}>
-      <CardFieldIcon
-        field={field}
-        icon={resolvedIcon}
-        tooltipOverride={tooltipOverrideResult}
-      />
-      <div className="flex-1 min-w-0">
-        <Field
-          fieldDef={field}
-          entityType={entity.entity_type}
-          entityId={entity.id}
-          mode="compact"
-          editing={editing}
-          onEdit={onEdit}
-          onDone={onDone}
-          onCancel={onCancel}
-        />
-      </div>
-    </div>
-  );
-}
-
-/**
- * Tooltip-wrapped icon badge for a field on the card.
- *
- * Accepts a pre-resolved `icon` from the parent — this may be a
- * value-dependent override from the display's `iconOverride` registration,
- * or the static icon from the field's YAML definition. If null, nothing
- * renders.
- *
- * When a `tooltipOverride` string is provided it replaces the static YAML
- * description in the tooltip so the card shows dynamic, value-dependent text
- * (e.g. "Completed 3 days ago").
- */
-function CardFieldIcon({
-  field,
-  icon: Icon,
-  tooltipOverride,
-}: {
-  field: FieldDef;
-  icon: LucideIcon | null;
-  tooltipOverride?: string | null;
-}) {
-  if (!Icon) return null;
-  const staticTip = field.description || field.name.replace(/_/g, " ");
-  const tip = tooltipOverride ?? staticTip;
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          aria-label={tip}
-          className="h-4 inline-flex items-center shrink-0 text-muted-foreground/50"
-        >
-          <Icon className="h-3 w-3" />
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side="left" align="start">
-        {tip}
-      </TooltipContent>
-    </Tooltip>
+    <Field
+      fieldDef={field}
+      entityType={entity.entity_type}
+      entityId={entity.id}
+      mode="compact"
+      editing={editing}
+      onEdit={onEdit}
+      onDone={onDone}
+      onCancel={onCancel}
+      showFocus
+      withIcon
+    />
   );
 }
 
@@ -295,23 +257,53 @@ function CardFieldIcon({
  * The target is passed directly so the backend uses ctx.target rather than
  * walking the scope chain (which comes from FocusedScopeContext and may
  * point to a previously-focused entity, not this card).
+ *
+ * Migrates to `<Pressable asChild>` so the inspect leaf gains both
+ * keyboard reachability (`<FocusScope>` provided by Pressable) AND the
+ * scope-level CommandDefs that bind Enter (vim/cua) and Space (cua) to
+ * the same dispatch as a pointer click. Pre-migration the leaf was
+ * focusable but Enter did NOTHING — the kernel's drillIn echoes the
+ * focused FQM for a leaf, `setFocus` is idempotent, the visible effect
+ * was a no-op. Pressable's CommandDefs close that gap. The `entityId`
+ * suffix keeps each card's inspect leaf at a distinct FQM under the
+ * card.
+ *
+ * The inner `<button>`'s `onClick={(e) => e.stopPropagation()}` is
+ * preserved: a click on (i) must NOT bubble to the enclosing card
+ * `<FocusZone>`'s own onClick (which would fire `spatial_focus(cardFq)`
+ * and steal focus to the card body). Radix Slot's `mergeProps` runs
+ * the child's `onClick` first, then the slot's — so
+ * `e.stopPropagation()` lands BEFORE Pressable's `handleClick`
+ * triggers `onPress` (dispatch). Both behaviours hold in the correct
+ * order.
  */
-function InspectButton({ moniker }: { moniker: string }) {
+function InspectButton({
+  entityId,
+  moniker,
+}: {
+  entityId: string;
+  moniker: string;
+}) {
   const dispatch = useDispatchCommand("ui.inspect");
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-label="Inspect"
-          className="shrink-0 mt-0.5 p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
-          onClick={(e) => {
-            e.stopPropagation();
+        <Pressable
+          asChild
+          moniker={asSegment(`card.inspect:${entityId}`)}
+          ariaLabel="Inspect"
+          onPress={() => {
             dispatch({ target: moniker }).catch(console.error);
           }}
         >
-          <Info className="h-3.5 w-3.5" />
-        </button>
+          <button
+            type="button"
+            className="shrink-0 mt-0.5 p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Info className="h-3.5 w-3.5" />
+          </button>
+        </Pressable>
       </TooltipTrigger>
       <TooltipContent>Inspect</TooltipContent>
     </Tooltip>

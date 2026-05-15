@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffffe280
+position_ordinal: ffffe980
 title: CM6 multi-select editor for assignees field
 ---
 Build a CM6-based multi-select editor for reference fields. Adapts behavior based on whether target entity type has a mention prefix.

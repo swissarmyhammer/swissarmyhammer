@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffc280
+position_ordinal: ffffffffd580
 title: Backend drag session state and Tauri commands
 ---
 ## What

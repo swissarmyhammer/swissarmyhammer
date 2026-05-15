@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffbf80
+position_ordinal: ffffffffffffffff9580
 title: 'Shell tool: clamp negative max_lines to 0'
 ---
 ## What

@@ -841,7 +841,6 @@ type:
             mention_display_field: None,
             mention_slug_field: None,
             search_display_field: None,
-            commands: vec![],
         };
         ctx.write_entity(&entity).await.unwrap();
 
@@ -873,7 +872,6 @@ type:
             mention_display_field: None,
             mention_slug_field: None,
             search_display_field: None,
-            commands: vec![],
         };
         ctx.write_entity(&entity).await.unwrap();
 
@@ -903,7 +901,6 @@ type:
                 mention_display_field: None,
                 mention_slug_field: None,
                 search_display_field: None,
-                commands: vec![],
             })
             .await
             .unwrap();
@@ -1168,7 +1165,6 @@ fields:
             mention_display_field: None,
             mention_slug_field: None,
             search_display_field: None,
-            commands: vec![],
         };
         // write_entity should create_dir_all for the parent (entities/)
         ctx.write_entity(&entity).await.unwrap();
@@ -1316,7 +1312,6 @@ fields:
             mention_display_field: None,
             mention_slug_field: None,
             search_display_field: None,
-            commands: vec![],
         };
         ctx.write_entity(&entity).await.unwrap();
         assert_eq!(ctx.get_entity("task").unwrap().fields.len(), 1);
@@ -1333,7 +1328,6 @@ fields:
             mention_display_field: None,
             mention_slug_field: None,
             search_display_field: None,
-            commands: vec![],
         };
         ctx.write_entity(&updated).await.unwrap();
 
@@ -1360,7 +1354,6 @@ fields:
                 mention_display_field: None,
                 mention_slug_field: None,
                 search_display_field: None,
-                commands: vec![],
             })
             .await
             .unwrap();
@@ -1523,7 +1516,6 @@ fields:
                 mention_display_field: None,
                 mention_slug_field: None,
                 search_display_field: None,
-                commands: vec![],
             };
             ctx.write_entity(&entity).await.unwrap();
         }

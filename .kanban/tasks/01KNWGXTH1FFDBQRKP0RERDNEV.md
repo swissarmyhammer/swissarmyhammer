@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffb680
+position_ordinal: ffffffffffffffffffffffffffffff8380
 title: 'Palette: "Rename Perspective" appears twice; make perspective rename view-aware'
 ---
 ## What

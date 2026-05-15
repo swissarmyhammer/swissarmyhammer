@@ -6,9 +6,7 @@ use crate::error::{KanbanError, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use swissarmyhammer_entity::Entity;
-use swissarmyhammer_operations::{
-    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
-};
+use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// Add a new tag to the board.
 ///
@@ -49,9 +47,6 @@ impl AddTag {
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for AddTag {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
-        let start = std::time::Instant::now();
-        let input = serde_json::to_value(self).unwrap();
-
         let result: Result<Value> = async {
             let ectx = ctx.entity_context().await?;
 
@@ -79,26 +74,9 @@ impl Execute<KanbanContext, KanbanError> for AddTag {
         }
         .await;
 
-        let duration_ms = start.elapsed().as_millis() as u64;
-
         match result {
-            Ok(value) => ExecutionResult::Logged {
-                value: value.clone(),
-                log_entry: LogEntry::new(self.op_string(), input, value, None, duration_ms),
-            },
-            Err(error) => {
-                let error_msg = error.to_string();
-                ExecutionResult::Failed {
-                    error,
-                    log_entry: Some(LogEntry::new(
-                        self.op_string(),
-                        input,
-                        serde_json::json!({"error": error_msg}),
-                        None,
-                        duration_ms,
-                    )),
-                }
-            }
+            Ok(value) => ExecutionResult::Success { value },
+            Err(error) => ExecutionResult::Failed { error },
         }
     }
 }

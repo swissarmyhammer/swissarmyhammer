@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffff9d80
+position_ordinal: ffffffffffffffffffffffffffb080
 title: 'Bug: GridView crashes — activePerspective not destructured from useActivePerspective()'
 ---
 ## What

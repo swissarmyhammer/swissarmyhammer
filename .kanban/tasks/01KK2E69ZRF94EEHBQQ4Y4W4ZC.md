@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffffc880
+position_ordinal: ffffcf80
 title: useGrid hook — cursor navigation and mode
 ---
 Build the core `useGrid` hook managing cursor position (row, col), normal/edit mode, and visual selection. Pure state logic with tests.

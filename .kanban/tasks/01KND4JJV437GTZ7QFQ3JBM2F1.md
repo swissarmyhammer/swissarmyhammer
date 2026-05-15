@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KND4J0P5NK9XY1VM3ZCQ1BY9
 position_column: done
-position_ordinal: ffffffffffffffffd980
+position_ordinal: ffffffffffffffffffff8780
 title: 'VT-2: VirtualTagStrategy trait and registry'
 ---
 ## What

@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNCE4QYJ2WZJ4H4KWXNP7RR8
 position_column: done
-position_ordinal: ffffffffffffffffffdc80
+position_ordinal: ffffffffffffffffffffffffa480
 title: Filter changed-file context passed to Stop validators by their file patterns
 ---
 ## What

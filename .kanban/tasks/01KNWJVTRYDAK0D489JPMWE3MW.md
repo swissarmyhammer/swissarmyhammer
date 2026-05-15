@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffff9f80
+position_ordinal: ffffffffffffffffffffffffffffdc80
 title: Add test for shelltool-cli banner::print_banner
 ---
 shelltool-cli/src/banner.rs:91-95

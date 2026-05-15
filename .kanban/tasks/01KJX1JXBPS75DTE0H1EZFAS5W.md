@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: e380
+position_ordinal: ea80
 title: Mode indicator bottom bar — Normal/Command/Search
 ---
 Phase 1 deliverable from app-architecture.md.

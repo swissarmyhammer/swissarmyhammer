@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffffb80
+position_ordinal: ffffffffffffffffe080
 title: Inspect does nothing from context menu or palette
 ---
 ## What

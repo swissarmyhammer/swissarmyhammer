@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffbc80
+position_ordinal: ffffffffffffffff9180
 title: 'Shell tool: tolerant parsing of integer params from strings'
 ---
 ## What

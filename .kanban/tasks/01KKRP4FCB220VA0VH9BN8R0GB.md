@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffff8f80
+position_ordinal: ffffff9680
 title: 'hookable_agent.rs: new HookEvent variants have required String fields where Optional makes more sense'
 ---
 agent-client-protocol-extras/src/hookable_agent.rs:125-182

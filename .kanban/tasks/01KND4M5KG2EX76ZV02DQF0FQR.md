@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KND4KPNAEPKSDEN98TFYBEH1
 position_column: done
-position_ordinal: ffffffffffffffffdb80
+position_ordinal: ffffffffffffffffffff8d80
 title: 'VT-5: Strategy — READY virtual tag'
 ---
 ## What

@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KN4NEJ6J90Q1FDRP9JCS0R5K
 position_column: done
-position_ordinal: ffffffffffffffffb680
+position_ordinal: ffffffffffffffffffae80
 title: Attachment display components (attachment + attachment-list)
 ---
 ## What

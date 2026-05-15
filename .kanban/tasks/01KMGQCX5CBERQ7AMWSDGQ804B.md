@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMGQCDYS8CFHVK5BR517MER4
 position_column: done
-position_ordinal: ffffffffff8680
+position_ordinal: ffffffffffdb80
 title: 'CLI subcommand: `sah merge {jsonl,yaml,md} %O %A %B`'
 ---
 ## What
@@ -32,7 +32,7 @@ Git calls merge drivers as: `sah merge jsonl %O %A %B` where %O=base, %A=ours (w
 
 ## Acceptance Criteria
 - [ ] `sah merge jsonl base ours theirs` produces correct merged output
-- [ ] `sah merge yaml base ours theirs` produces correct merged output  
+- [ ] `sah merge yaml base ours theirs` produces correct merged output
 - [ ] `sah merge md base ours theirs` produces correct merged output
 - [ ] Exit code 0 on success, 1 on conflict for all three
 - [ ] `sah merge --help` shows available file types

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffa080
+position_ordinal: ffffffffffffef80
 title: 'field-renderer.tsx: fix hardcoded computed editability check'
 ---
 Fix hardcoded computed editability check in `kanban-app/ui/src/components/field-renderer.tsx:36`.

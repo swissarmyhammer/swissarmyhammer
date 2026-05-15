@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffdd80
+position_ordinal: ffffffffffffac80
 title: Make active_view_id per-window in UIState
 ---
 ## What

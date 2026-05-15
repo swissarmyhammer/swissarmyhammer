@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffd880
+position_ordinal: ffffffffffffffffffffffff9a80
 title: 'LSP-INFRA: Layered resolution, LspContext, shared types'
 ---
 ## What

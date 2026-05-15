@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffb980
+position_ordinal: ffffffffffffffff8c80
 title: 'Rust-side UndoStack: YAML-persisted on disk'
 ---
 ## What

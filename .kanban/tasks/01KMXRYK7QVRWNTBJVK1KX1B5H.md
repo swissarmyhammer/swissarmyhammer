@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMXRY4SHGCHEGMG2M8EMDA6P
 position_column: done
-position_ordinal: fffffffffffffff780
+position_ordinal: ffffffffffffffffdc80
 title: Tauri endpoint + wire context menu and palette to backend
 ---
 ## What
@@ -26,7 +26,7 @@ Add Tauri command that wraps commands_for_scope. Rewrite frontend context menu a
 
 ### Remove from frontend
 - `useEntityCommands()` command building (keep schema loading for field display)
-- `buildEntityCommandDefs()` 
+- `buildEntityCommandDefs()`
 - `resolveCommandName()` for commands (backend does this)
 - `collectAvailableCommands()` — backend replacement
 - `useAvailableCommands()` — backend replacement

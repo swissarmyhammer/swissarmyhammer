@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM85TNG65NWR6Z17B4443FC4
 position_column: done
-position_ordinal: ffffffffffd880
+position_ordinal: ffffffffffffa780
 title: 'Migrate focus scope_chain: deduplicate from AppState into UIState only'
 ---
 ## What

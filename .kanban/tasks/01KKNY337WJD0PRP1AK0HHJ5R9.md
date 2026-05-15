@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: '9180'
+position_ordinal: '9580'
 title: Add deep-link support to kanban-app
 ---
 ## What

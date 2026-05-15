@@ -1,6 +1,5 @@
 name: attachment
 icon: paperclip
-commands: []
 fields:
   - attachment_name
   - attachment_path

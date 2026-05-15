@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffcc80
+position_ordinal: ffffffffffffffffffe080
 title: 'Test: task card drag between columns (cross-column move)'
 ---
 ## What

@@ -1,9 +1,15 @@
 //! Application-level command implementations: quit, keymap mode, about, help,
-//! reset windows, dismiss, command palette, search palette.
+//! reset windows, dismiss, command palette, search palette, undo, redo.
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use swissarmyhammer_commands::{Command, CommandContext, CommandError};
+use swissarmyhammer_entity::EntityContext;
+use swissarmyhammer_perspectives::PERSPECTIVE_STORE_NAME;
+use swissarmyhammer_store::{StoreContext, StoreError, UndoOutcome};
+use swissarmyhammer_views::VIEW_STORE_NAME;
+
+use crate::context::KanbanContext;
 
 /// Set the keymap mode to a fixed value (vim, cua, emacs).
 ///
@@ -161,5 +167,197 @@ impl Command for DismissCmd {
 
         // Nothing to dismiss
         Ok(Value::Null)
+    }
+}
+
+/// Kanban-aware undo command.
+///
+/// This is a **parallel implementation** of the generic
+/// `swissarmyhammer_entity::UndoCmd` flow — not a wrapper. The body
+/// duplicates the `StoreContext::undo` + error-matching + success-value
+/// sequence because it needs the `UndoOutcome` to dispatch to both
+/// reconciliation hooks (entity cache and perspective cache), and the
+/// generic command does not expose the outcome to its callers. Delegating
+/// would require either returning the outcome from `UndoCmd::execute`
+/// (a breaking change to its public API) or re-running `StoreContext::undo`
+/// which would be racy.
+///
+/// The control flow mirrors the entity-layer command:
+///
+///   1. `StoreContext::undo()` finds the owning store and rewrites bytes
+///      on disk.
+///   2. For entity-backed stores, the attached `EntityContext` cache is
+///      refreshed via `sync_entity_cache_from_disk`.
+///   3. **New** — when the undo target was a perspective, the
+///      `PerspectiveContext` cache is refreshed via `reload_from_disk`,
+///      which also emits `PerspectiveEvent::PerspectiveChanged` so the
+///      Tauri bridge forwards the refresh to the frontend.
+///
+/// Both reconciliation steps are orthogonal: entity-only boards still
+/// work (the perspective branch is a no-op when no perspective extension
+/// is attached), and perspective-only mutations still work (the entity
+/// branch is a no-op when the store isn't entity-backed).
+pub struct KanbanUndoCmd;
+
+#[async_trait]
+impl Command for KanbanUndoCmd {
+    /// Returns `true` only when the undo stack has entries to undo.
+    ///
+    /// Delegates to the generic `UndoCmd::available` so the availability
+    /// contract stays consistent across crates.
+    fn available(&self, ctx: &CommandContext) -> bool {
+        swissarmyhammer_entity::UndoCmd.available(ctx)
+    }
+
+    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        let store_ctx = ctx.require_extension::<StoreContext>()?;
+
+        match store_ctx.undo().await {
+            Ok(outcome) => {
+                reconcile_post_undo_caches(ctx, &outcome).await;
+                Ok(json!({ "undone": true }))
+            }
+            Err(StoreError::NotFound(_)) => Ok(json!({ "noop": true })),
+            Err(e) => Err(CommandError::ExecutionFailed(e.to_string())),
+        }
+    }
+}
+
+/// Kanban-aware redo command.
+///
+/// See [`KanbanUndoCmd`] for the rationale. Structurally identical —
+/// a parallel implementation (not a wrapper) of
+/// `swissarmyhammer_entity::RedoCmd`: calls `StoreContext::redo()` and
+/// runs the same post-redo reconciliation over the returned
+/// `UndoOutcome`.
+pub struct KanbanRedoCmd;
+
+#[async_trait]
+impl Command for KanbanRedoCmd {
+    /// Returns `true` only when the undo stack has entries to redo.
+    fn available(&self, ctx: &CommandContext) -> bool {
+        swissarmyhammer_entity::RedoCmd.available(ctx)
+    }
+
+    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        let store_ctx = ctx.require_extension::<StoreContext>()?;
+
+        match store_ctx.redo().await {
+            Ok(outcome) => {
+                reconcile_post_undo_caches(ctx, &outcome).await;
+                Ok(json!({ "redone": true }))
+            }
+            Err(StoreError::NotFound(_)) => Ok(json!({ "noop": true })),
+            Err(e) => Err(CommandError::ExecutionFailed(e.to_string())),
+        }
+    }
+}
+
+/// Reconcile every in-memory cache that might shadow the on-disk state
+/// the store layer just rewrote.
+///
+/// Called after `StoreContext::undo` / `redo` succeeds. Two caches may
+/// need syncing, keyed by `outcome.store_name`:
+///
+///   - **Entity-backed stores** (`task`, `tag`, `column`, `actor`,
+///     `board`, `project`, `attachment`): the [`EntityContext`] cache
+///     holds parsed `Entity` values. `sync_entity_cache_from_disk`
+///     refreshes or evicts the entry so the next read sees the reversed
+///     state without waiting for the file-watcher round trip. No-op when
+///     no `EntityContext` extension is attached.
+///
+///   - **Perspective store** (`perspective`): the [`PerspectiveContext`]
+///     cache holds parsed `Perspective` values and is accessible via the
+///     [`KanbanContext`] extension. `reload_from_disk` refreshes or
+///     evicts the entry *and* emits a `PerspectiveChanged` /
+///     `PerspectiveDeleted` broadcast event. The Tauri bridge forwards
+///     that event to the frontend as `entity-field-changed` /
+///     `entity-removed` with `entity_type = "perspective"`, which drives
+///     the perspective-list re-fetch in `perspective-context.tsx`.
+///     No-op when no `KanbanContext` extension is attached or the
+///     perspective sub-context hasn't been initialized yet.
+///
+/// The two branches are independent: failure of one does not affect the
+/// other. Errors are logged at warn-level and otherwise swallowed — the
+/// undo/redo itself already succeeded on disk, so surfacing a cache-sync
+/// failure as a command error would misrepresent what happened.
+async fn reconcile_post_undo_caches(ctx: &CommandContext, outcome: &UndoOutcome) {
+    // Entity-layer reconciliation — orthogonal to perspective/view reconciliation.
+    // Iterate every item the undo group touched; a multi-write command
+    // (e.g. column.reorder) needs every column's cache resynced, not just
+    // the representative.
+    if let Some(ectx) = ctx.extension::<EntityContext>() {
+        for (store_name, item_id) in &outcome.items {
+            ectx.sync_entity_cache_from_disk(store_name, item_id.as_str())
+                .await;
+        }
+    }
+
+    // Perspective-layer reconciliation — only fires when the undo target was
+    // a perspective. Guarded by `store_name` so we don't read the perspective
+    // directory when the reversed mutation was a task / tag / view edit. The
+    // `PERSPECTIVE_STORE_NAME` constant is the same string
+    // `PerspectiveStore::store_name()` returns — if either side moves,
+    // compilation fails rather than silently falling through.
+    if outcome.store_name == PERSPECTIVE_STORE_NAME {
+        reconcile_perspective_cache(ctx, outcome).await;
+    }
+
+    // View-layer reconciliation — same shape as perspective, keyed by
+    // `VIEW_STORE_NAME` which `ViewStore::store_name()` also returns. The
+    // `ViewsContext` cache is refreshed and a `ViewEvent` is emitted so the
+    // Tauri bridge can forward the refresh to the frontend.
+    if outcome.store_name == VIEW_STORE_NAME {
+        reconcile_view_cache(ctx, outcome).await;
+    }
+}
+
+/// Refresh the perspective cache after an undo/redo that touched a perspective.
+///
+/// Pulled out of `reconcile_post_undo_caches` to keep each function focused on
+/// one cache. Looks up the [`KanbanContext`] extension, grabs the perspective
+/// subcontext via the non-initializing accessor (lazy initialization here
+/// would trigger a fresh load_all on a cold context, which is wasteful and
+/// can mask bugs in the caller), and calls `reload_from_disk` to refresh or
+/// evict the cache entry.
+async fn reconcile_perspective_cache(ctx: &CommandContext, outcome: &UndoOutcome) {
+    let Some(kanban) = ctx.extension::<KanbanContext>() else {
+        return;
+    };
+    let Some(pctx) = kanban.perspective_context_if_ready() else {
+        return;
+    };
+    let mut pctx = pctx.write().await;
+    if let Err(e) = pctx.reload_from_disk(outcome.item_id.as_str()).await {
+        tracing::warn!(
+            id = %outcome.item_id.as_str(),
+            error = %e,
+            "perspective reload_from_disk after undo/redo failed"
+        );
+    }
+}
+
+/// Refresh the view cache after an undo/redo that touched a view.
+///
+/// Mirrors [`reconcile_perspective_cache`]: looks up the [`KanbanContext`]
+/// extension, grabs the views subcontext (which is eagerly constructed in
+/// `KanbanContext::open`, so the accessor returns `Some` whenever it could),
+/// and calls `reload_from_disk` to refresh or evict the cache entry. The
+/// `reload_from_disk` call also emits a `ViewEvent` so the Tauri bridge can
+/// forward the refresh to the frontend.
+async fn reconcile_view_cache(ctx: &CommandContext, outcome: &UndoOutcome) {
+    let Some(kanban) = ctx.extension::<KanbanContext>() else {
+        return;
+    };
+    let Some(views_lock) = kanban.views() else {
+        return;
+    };
+    let mut views = views_lock.write().await;
+    if let Err(e) = views.reload_from_disk(outcome.item_id.as_str()).await {
+        tracing::warn!(
+            id = %outcome.item_id.as_str(),
+            error = %e,
+            "view reload_from_disk after undo/redo failed"
+        );
     }
 }

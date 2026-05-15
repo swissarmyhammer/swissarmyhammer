@@ -1,4 +1,5 @@
 import { MentionView } from "@/components/mention-view";
+import { CompactCellWrapper } from "./compact-cell-wrapper";
 import type { DisplayProps } from "./text-display";
 
 /**
@@ -17,20 +18,35 @@ import type { DisplayProps } from "./text-display";
  * - When `field.type.entity` is unset (defensive guard — no shipping
  *   field has this shape), renders the raw value as a plain text span.
  *
+ * In compact mode, the output is wrapped in {@link CompactCellWrapper}
+ * so populated and empty variants render at the exact same pixel height
+ * — required for the `DataTable` row virtualizer's fixed `ROW_HEIGHT`.
+ *
  * The legacy `options`-based select branch was removed: no shipping field
  * definition carries `field.type.options`, so the branch was dead code.
  */
-export function BadgeDisplay({ value, field }: DisplayProps) {
+export function BadgeDisplay({ value, field, mode }: DisplayProps) {
   const text = typeof value === "string" ? value : "";
-  if (!text)
-    return (
+
+  let inner: React.ReactNode;
+  if (!text) {
+    inner = (
       <span className="text-muted-foreground/50">
         {field.placeholder ?? "-"}
       </span>
     );
+  } else {
+    const targetEntityType = field.type.entity as string | undefined;
+    inner = targetEntityType ? (
+      <MentionView entityType={targetEntityType} id={text} />
+    ) : (
+      <span>{text}</span>
+    );
+  }
 
-  const targetEntityType = field.type.entity as string | undefined;
-  if (!targetEntityType) return <span>{text}</span>;
-
-  return <MentionView entityType={targetEntityType} id={text} />;
+  return mode === "compact" ? (
+    <CompactCellWrapper>{inner}</CompactCellWrapper>
+  ) : (
+    <>{inner}</>
+  );
 }

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffff8980
+position_ordinal: ffffffffffffffffed80
 title: 'window.focus commands: dynamic commands for open windows, drawn in Window menu'
 ---
 ## What

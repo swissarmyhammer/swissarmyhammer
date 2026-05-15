@@ -57,7 +57,7 @@ function AppModeScopeWrapper({ children }: { children: ReactNode }) {
   const { mode } = useAppMode();
 
   return (
-    <CommandScopeProvider commands={[]} moniker={`mode:${mode}`}>
+    <CommandScopeProvider moniker={`mode:${mode}`}>
       {children}
     </CommandScopeProvider>
   );

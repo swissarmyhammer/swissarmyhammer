@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffb280
+position_ordinal: ffffffffffffffffffffffcb80
 title: Perspectives don't load — add integration test with sample data, debug end-to-end
 ---
 ## What
@@ -28,7 +28,7 @@ The FIRST thing to do is prove whether `perspective.list` returns data in an int
 - In `swissarmyhammer-kanban/tests/perspective_integration.rs`, add a test with StoreHandle wired in that proves: `add perspective` → `list perspectives` → results include the added one → `flush_changes()` has pending events
 
 **5. Quick fixes:**
-- `perspective-tab-bar.tsx:154` — add `title="New perspective"` to "+" button  
+- `perspective-tab-bar.tsx:154` — add `title="New perspective"` to "+" button
 - `perspective.yaml` — add `palette: true` to `perspective.save`, `perspective.delete`, `perspective.list`
 
 ### Files to modify

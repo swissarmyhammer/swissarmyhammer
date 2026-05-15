@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KND4A5F0ED791N2AF8RMMD0E
 position_column: done
-position_ordinal: ffffffffffffffffffed80
+position_ordinal: ffffffffffffffffffffffffd480
 title: 'Self-test: cargo install and verify Stop validators fire with agent execution'
 ---
 ## What

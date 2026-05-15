@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffff9b80
+position_ordinal: fffffffffffffff080
 title: ColumnView claimWhen predicates rebuilt on every task add/remove in adjacent columns
 ---
 **Severity: Low (Performance)**

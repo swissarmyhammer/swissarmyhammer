@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: e280
+position_ordinal: e980
 title: Extract McpRegistration as Initializable component
 ---
 ## What

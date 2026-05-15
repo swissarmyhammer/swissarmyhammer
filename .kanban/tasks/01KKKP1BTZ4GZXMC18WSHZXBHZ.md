@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffa680
+position_ordinal: ffad80
 title: Remove js MCP tool registration and module
 ---
 ## What

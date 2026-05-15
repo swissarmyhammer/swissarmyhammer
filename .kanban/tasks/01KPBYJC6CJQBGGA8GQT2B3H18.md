@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffdf80
+position_ordinal: ffffffffffffffffffffffffffffffd980
 title: Extract DisplayText primitive from TextDisplay, use it in StatusDateDisplay for consistent text rendering
 ---
 ## What

@@ -1,0 +1,348 @@
+- id: perspective.load
+  name: Load Perspective
+  params:
+    - name: name
+      from: args
+  keys: {}
+
+- id: perspective.save
+  name: Save Perspective
+  # Tab-button + picker command: the `+` icon on the perspective tab bar
+  # renders this command as a `<CommandButton>`; clicking opens a
+  # `<CommandPopover>` whose `name` text input collects the new
+  # perspective's name. Submitting dispatches this command with the typed
+  # name plus the scope-chain-resolved `view_id` (so the new perspective
+  # pins to the active view instance per the view_id-first / kind-fallback
+  # rule on `PerspectiveDef`).
+  #
+  # `name` carries `shape: text` so the popover renders a text input. An
+  # empty submission is legal: the dispatcher (`SavePerspectiveCmd::execute`)
+  # falls back to `"Untitled"` so the user-visible behavior matches the
+  # legacy `<AddPerspectiveButton>` which inferred a name when the user
+  # just clicked the `+` glyph. `view_id` resolves from the scope chain's
+  # `view:` moniker, matching how `<RegistryTabButtons>` builds its scope
+  # (perspective:, view:, board:) — no per-call prop-drilling needed.
+  #
+  # Migrated to command-driven rendering by 01KRE21GJMPP289N1HSTMJG5HE
+  # (the final migration of the command-driven-ui epic). The legacy
+  # `<AddPerspectiveButton>` (which dispatched this command with a
+  # pre-computed "Untitled" name and the view kind) is deleted; the
+  # registry-driven path renders the same affordance with the popover
+  # collecting the name explicitly.
+  tab_button:
+    icon: plus
+  undoable: true
+  params:
+    # `from: args, shape: text` is the real wire format for a popover-
+    # collected text input: the popover writes the typed string into the
+    # args bag at submit time, and the dispatcher reads it via
+    # `ctx.arg("name")`. Task 01KRE21GJMPP289N1HSTMJG5HE's pseudo-YAML
+    # showed `from: picker` for the same shape, but `picker` is not a
+    # real `ParamSource` value — the translation `from: picker` →
+    # `from: args, shape: text` happens here in the YAML. Same
+    # convention applies to every other popover-collected param.
+    - name: name
+      from: args
+      shape: text
+    - name: view_id
+      from: scope_chain
+      entity_type: view
+  keys: {}
+
+- id: perspective.delete
+  name: Delete Perspective
+  scope: "entity:perspective"
+  undoable: true
+  context_menu: true
+  params:
+    - name: name
+      from: args
+  keys: {}
+
+- id: perspective.rename
+  name: Rename Perspective
+  # Hidden from the palette: this command requires `id` + `new_name` args
+  # and cannot be invoked directly from the palette (no args prompt UI).
+  # The user-facing entry point is `ui.entity.startRename`, which
+  # triggers inline rename mode and then dispatches this command with the
+  # collected arguments.
+  visible: false
+  undoable: true
+  params:
+    - name: id
+      from: args
+    - name: new_name
+      from: args
+  keys: {}
+
+- id: perspective.filter.focus
+  name: Focus Filter
+  # UI-only marker for the Filter tab button. Renders as a `<CommandButton>`
+  # in `<RegistryTabButtons>` via `tab_button: { icon: filter }`, and the
+  # `isActive` highlight is read from the perspective's `filter` field
+  # (see `isCommandActiveForPerspective` in
+  # `kanban-app/ui/src/components/perspective-tab-bar.tsx`).
+  #
+  # The click does NOT route through this command's backend `execute` —
+  # `<FilterFocusCommandButton>` (same file) overrides the dispatch and
+  # issues `nav.focus({ args: { fq } })` against the formula bar's
+  # `filter_editor:${id}` spatial-nav scope. That is the single auditable
+  # focus primitive (card `01KR7CDEFWWVF4WH0BCHE8Y21J`); cross-cutting
+  # concerns (telemetry, animations, scroll-on-focus) live on `nav.focus`,
+  # not on a per-command parallel channel.
+  #
+  # The backend `FocusFilterCmd` exists as a deliberate no-op solely to
+  # satisfy the YAML ↔ Rust completeness invariant
+  # (`test_all_yaml_commands_have_rust_implementations` in
+  # `swissarmyhammer-kanban/src/commands/mod.rs`). See `FocusFilterCmd`
+  # in `swissarmyhammer-kanban/src/commands/perspective_commands.rs` for
+  # the rationale and the post-refactor contract.
+  #
+  # Refactor history: card `01KRGZY33P99J7CGG0XRQGZ352` deleted the prior
+  # `FocusFilter` marker-envelope + `ui.focus.filter` Tauri event channel.
+  # See `nav.yaml` (where `nav.focus` is declared) and
+  # `kanban-app/ui/src/lib/spatial-focus-context.tsx` (where the kernel-
+  # facing `nav.focus` execute closure is registered) for the focus
+  # primitive itself.
+  #
+  # No `view_kinds` — filter is meaningful on every view kind.
+  # No `context_menu: true` — the right-click already has Clear Filter;
+  # "Focus the filter editor" doesn't add value there.
+  scope: "entity:perspective"
+  tab_button:
+    icon: filter
+  params:
+    - name: perspective_id
+      from: scope_chain
+      entity_type: perspective
+  keys: {}
+
+- id: perspective.filter
+  name: Set Filter
+  # Palette-only: requires a `filter` expression arg that the bare context
+  # menu has no way to collect. Users set filters through the formula bar
+  # CM6 editor on the tab bar, not through a right-click → "Set Filter"
+  # menu item, so exposing it in the context menu would surface a command
+  # that silently fails at dispatch time with `MissingArg("filter")`.
+  #
+  # `scope: "entity:perspective"` still applies — a palette invocation
+  # outside a perspective-bearing scope would also fail, so we hide it
+  # from the palette too in that case. `resolve_perspective_id` handles
+  # the scope/arg/UIState cascade at execute time.
+  scope: "entity:perspective"
+  undoable: true
+  params:
+    - name: filter
+      from: args
+    - name: perspective_id
+      from: args
+  keys: {}
+
+- id: perspective.clearFilter
+  name: Clear Filter
+  scope: "entity:perspective"
+  undoable: true
+  context_menu: true
+  params:
+    - name: perspective_id
+      from: args
+  keys: {}
+
+- id: perspective.group
+  name: Group By
+  # Tab-button + picker command: the group icon on the active perspective
+  # tab renders this command as a `<CommandButton>`; clicking opens a
+  # `<CommandPopover>` whose enum-shaped `group` param is populated by
+  # the backend `PerspectiveFieldsResolver` (registered in
+  # `swissarmyhammer-perspectives`). Picking a field dispatches this
+  # command with the picked value plus a scope-chain-resolved
+  # `perspective_id`.
+  #
+  # The `clear_command: perspective.clearGroup` annotation on the `group`
+  # param surfaces a "(none)" entry as the first option in the popover;
+  # picking it dispatches `perspective.clearGroup` (instead of this
+  # command) with the same scope-resolved `perspective_id`. This restores
+  # the legacy `<GroupSelector>` "None" affordance without forcing the
+  # user to leave the popover and right-click. The Sort migration can
+  # reuse the same annotation when it lands.
+  #
+  # Migrated to command-driven rendering by 01KRE1ZTYJ5PPTQ29K72KE88B5
+  # (the second migration of the command-driven-ui epic; pattern
+  # established by `perspective.filter.focus`). The `name` was changed
+  # from "Set Group" to "Group By" to match the user-facing button
+  # label. The dispatcher's `SetGroupCmd::execute` still accepts `group`
+  # from any source (args bag → scope chain → UIState → first-for-view-
+  # kind), so palette / right-click paths that pre-fill `group` continue
+  # to work unchanged.
+  scope: "entity:perspective"
+  tab_button:
+    icon: group
+  undoable: true
+  params:
+    - name: group
+      from: args
+      shape: enum
+      options_from: "perspective.fields"
+      clear_command: "perspective.clearGroup"
+    - name: perspective_id
+      from: scope_chain
+      entity_type: perspective
+  keys: {}
+
+- id: perspective.clearGroup
+  name: Clear Group
+  scope: "entity:perspective"
+  undoable: true
+  context_menu: true
+  params:
+    - name: perspective_id
+      from: args
+  keys: {}
+
+- id: perspective.sort.set
+  name: Sort Field
+  # Tab-button + picker command: the sort icon (arrow-up-down) on the
+  # active perspective tab renders this command as a `<CommandButton>`;
+  # clicking opens a `<CommandPopover>` whose two enum params (`field` +
+  # `direction`) drive the form-branch popover with Submit. Picking a
+  # field + direction dispatches this command with the picked values
+  # plus a scope-chain-resolved `perspective_id`.
+  #
+  # `field`'s `options_from` is `perspective.fields` — same backend
+  # resolver as Group By (in `swissarmyhammer-perspectives`), projecting
+  # the active perspective's groupable/sortable fields onto the picker.
+  # `direction`'s `options_from` is `sort.directions` — the static
+  # `[Ascending, Descending]` list emitted by `SortDirectionsResolver`
+  # (in `swissarmyhammer-commands`); the values match
+  # `swissarmyhammer-perspectives::SortDirection`'s serde representation
+  # (`asc` / `desc`) so the dispatcher's `match` arm round-trips cleanly.
+  #
+  # `view_kinds: [grid]` keeps Sort Field out of palettes, context
+  # menus, AND the tab bar on the board view — boards organise by
+  # column, not by sort order. This is the long-standing user-visible
+  # bug: pre-migration the Sort affordance was a hardcoded column-
+  # header click in the grid view's tanstack-table, with no surfaced
+  # tab-bar entry point and no view-kind gating; the migration both
+  # surfaces the affordance properly AND fixes the gating via the
+  # same `view_kinds` mechanism every other view-restricted command
+  # uses.
+  #
+  # Migrated to command-driven rendering by 01KRE21GJMPP289N1HSTMJG5HE
+  # (the final migration of the command-driven-ui epic). See
+  # `perspective.group` above for the picker-pipeline pattern this
+  # command follows — multi-param popovers fall through to the form
+  # branch automatically.
+  scope: "entity:perspective"
+  view_kinds: [grid]
+  tab_button:
+    icon: arrow-up-down
+  undoable: true
+  params:
+    - name: field
+      from: args
+      shape: enum
+      options_from: "perspective.fields"
+    - name: direction
+      from: args
+      shape: enum
+      options_from: "sort.directions"
+    - name: perspective_id
+      from: scope_chain
+      entity_type: perspective
+  keys: {}
+
+- id: perspective.sort.clear
+  name: Clear Sort
+  # Unconditionally clears every sort entry on the resolved perspective.
+  # Per-field removal is covered by `perspective.sort.toggle`'s asc → desc →
+  # none state cycle; this command is the palette / context-menu entry point
+  # for "reset the whole sort list" and never takes a `field` arg.
+  #
+  # See `perspective.sort.set` above for the `view_kinds: [grid]` rationale.
+  scope: "entity:perspective"
+  view_kinds: [grid]
+  undoable: true
+  context_menu: true
+  params:
+    - name: perspective_id
+      from: args
+  keys: {}
+
+- id: perspective.sort.toggle
+  name: Toggle Sort
+  # Palette-only: requires a `field` arg. Toggle is invoked from column
+  # headers with the field already known; see `perspective.sort.set` above.
+  #
+  # See `perspective.sort.set` above for the `view_kinds: [grid]` rationale.
+  scope: "entity:perspective"
+  view_kinds: [grid]
+  undoable: true
+  params:
+    - name: field
+      from: args
+    - name: perspective_id
+      from: args
+  keys: {}
+
+- id: perspective.next
+  name: Next Perspective
+  params:
+    - name: view_kind
+      from: args
+    - name: view_id
+      from: args
+  keys:
+    cua: "Mod+]"
+    vim: "gt"
+
+- id: perspective.prev
+  name: Previous Perspective
+  params:
+    - name: view_kind
+      from: args
+    - name: view_id
+      from: args
+  keys:
+    cua: "Mod+["
+    vim: "gT"
+
+- id: perspective.goto
+  name: Go to Perspective
+  visible: false
+  params:
+    - name: id
+      from: args
+    - name: view_kind
+      from: args
+    - name: view_id
+      from: args
+  keys: {}
+
+- id: perspective.list
+  name: List Perspectives
+  visible: false
+
+- id: perspective.switch
+  name: Switch Perspective
+  # Hidden from the palette: requires a `perspective_id` arg the palette has
+  # no generic UI for collecting. User-facing palette entries are emitted
+  # by `scope_commands::emit_perspective_goto` — one `perspective.switch`
+  # row per known perspective with `perspective_id` pre-filled in `args`.
+  # The dispatcher takes those rows verbatim; there is no suffix
+  # indirection.
+  #
+  # Replaces `perspective.set` (and its predecessor `ui.perspective.set`).
+  # The old command only mutated `UIState.active_perspective_id` and the
+  # frontend chased the change with a follow-up `list_entities(filter=...)`
+  # roundtrip in a `useEffect`. `perspective.switch` collapses that into
+  # one backend command: the handler loads the perspective, evaluates its
+  # filter DSL against the board's tasks, and atomically writes BOTH the
+  # new `active_perspective_id` AND a per-window `filtered_task_ids` list
+  # in a single `UIStateChange::PerspectiveSwitch` — so exactly one
+  # `ui-state-changed` event fires per click and the indeterminate
+  # progress bar tied to `inflightCount` covers the real filter work
+  # naturally. See 01KP3ERHEDP86C2JYYR7NM1593.
+  visible: false
+  params:
+    - name: perspective_id
+      from: args

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffa880
+position_ordinal: ffffffffffffffffffffffffffffed80
 title: Add tests for daemon initialize_handshake and capture_stderr
 ---
 daemon.rs:439, 449, 465, 487, 496\n\nCoverage: 74.6% (153/205 lines)\n\nUncovered lines: 439, 449, 465, 487, 496\n\nFunctions:\n1. `initialize_handshake()` (lines 426-489)\n2. `capture_stderr()` (lines 493-503)\n\n#coverage-gap\n\n=== RESOLUTION ===\nAdded 7 tests covering:\n- test_initialize_handshake_invalid_workspace_path: relative workspace path → HandshakeFailed('invalid workspace path')\n- test_initialize_handshake_stdin_unavailable: stdin.take() before handshake → HandshakeFailed('child stdin unavailable')\n- test_initialize_handshake_stdout_unavailable: stdout.take() before handshake → HandshakeFailed('child stdout unavailable')\n- test_initialize_handshake_full_happy_path_direct: direct invocation of private handshake method with a valid python mock — covers the final `send_jsonrpc_message(&mut writer, &initialized)` line\n- test_initialize_handshake_includes_stderr_context_in_error: confirms stderr-decoration branch in error message when read_jsonrpc_message fails\n- test_capture_stderr_returns_empty_when_no_stderr_handle: stderr.take() → empty string (None branch)\n- test_capture_stderr_reads_available_bytes: stderr has data → trimmed content returned\n- test_capture_stderr_returns_empty_on_timeout: stderr with no data within 1s → empty string (timeout arm)\n\nAll uncovered lines from the card are now reachable by these tests.

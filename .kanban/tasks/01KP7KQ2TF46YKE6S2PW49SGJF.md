@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffd580
+position_ordinal: ffffffffffffffffffffffffffffffcb80
 title: Refactor board-view.tsx — split long hooks and component
 ---
 ## What

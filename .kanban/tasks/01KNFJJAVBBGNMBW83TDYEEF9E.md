@@ -5,7 +5,7 @@ depends_on:
 - 01KNFJGP4Y3YJBK3BKZDSNJ9AZ
 - 01KNFJH9W9Z4XRJGQ41KV2904W
 position_column: done
-position_ordinal: ffffffffffffffffffffae80
+position_ordinal: ffffffffffffffffffffffffffcc80
 title: 'GroupedBoardView: collapsible group sections, each containing a column layout'
 ---
 ## What

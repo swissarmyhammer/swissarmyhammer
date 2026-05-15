@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffff8980
+position_ordinal: ffffffffffffffffffffffffffffbc80
 title: 'Bug: pasting a tag onto a task causes computed auto-tags to vanish'
 ---
 ## What

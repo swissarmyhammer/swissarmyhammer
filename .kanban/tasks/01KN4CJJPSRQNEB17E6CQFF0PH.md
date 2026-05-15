@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffb780
+position_ordinal: ffffffffffffffffffaf80
 title: 'EXTRACT-1: Create swissarmyhammer-perspectives crate skeleton'
 ---
 ## What

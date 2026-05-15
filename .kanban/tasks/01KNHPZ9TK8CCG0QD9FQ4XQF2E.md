@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffff8980
+position_ordinal: ffffffffffffffffffffffffff8980
 title: 'Coverage: build() full pipeline path (unified.rs, ~20 lines)'
 ---
 ## What

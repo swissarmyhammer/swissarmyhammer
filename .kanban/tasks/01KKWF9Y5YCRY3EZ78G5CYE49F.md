@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KKWF8YVWQ4XNC24DV8YCK650
 position_column: done
-position_ordinal: ffffffffc680
+position_ordinal: ffffffffdd80
 title: Frontend drag session provider and hooks
 ---
 ## What

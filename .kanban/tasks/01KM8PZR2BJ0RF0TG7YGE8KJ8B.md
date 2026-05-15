@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffde80
+position_ordinal: ffffffffffffad80
 title: Fix view switching affecting all windows instead of just the active one
 ---
 ## What

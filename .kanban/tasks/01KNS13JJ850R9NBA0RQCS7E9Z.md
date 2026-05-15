@@ -8,7 +8,7 @@ depends_on:
 - 01KNS903T77DCWAH339AD550K5
 - 01KP0KZZ9VDQJVNK15JQAY4BKH
 position_column: done
-position_ordinal: ffffffffffffffffffffffca80
+position_ordinal: ffffffffffffffffffffffffffffffb780
 project: kanban-mcp
 title: 'kanban-cli: wire serve/init/deinit/doctor into existing command tree'
 ---

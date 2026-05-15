@@ -2,7 +2,7 @@
 depends_on:
 - 01KKC8ASRCG1CKVV8RPG74YADK
 position_column: done
-position_ordinal: ffffffffffb680
+position_ordinal: ffffffffffff8380
 title: 'STATUSLINE-6: Pipeline + CLI integration (statusline + statusline config)'
 ---
 ## What

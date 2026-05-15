@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNS1TQR2C3TYG1G8STEYZPA5
 position_column: done
-position_ordinal: ffffffffffffffffffff8e80
+position_ordinal: ffffffffffffffffffffffffff9380
 project: code-context-cli
 title: Implement magnifying glass banner for code-context CLI
 ---
@@ -22,13 +22,13 @@ Mirror `shelltool-cli/src/banner.rs` exactly in structure:
 
 Magnifying glass ASCII art (7 lines tall):
 ```
-  .---.   
- /  O  \  
-|  ( )  | 
- \  O  /  
-  '---'   
-    |     
-    |___  
+  .---.
+ /  O  \
+|  ( )  |
+ \  O  /
+  '---'
+    |
+    |___
 ```
 Adjust to 7 lines. The word "CODE" follows on the right in ANSI Shadow block font.
 "CONTEXT" continues in the second block (5 lines).

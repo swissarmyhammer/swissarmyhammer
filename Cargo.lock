@@ -4049,20 +4049,18 @@ name = "kanban-app"
 version = "0.12.11"
 dependencies = [
  "base64 0.22.1",
- "chrono",
  "clap",
  "dirs",
  "objc2",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "swissarmyhammer-commands",
  "swissarmyhammer-common",
- "swissarmyhammer-directory",
  "swissarmyhammer-entity",
  "swissarmyhammer-entity-search",
  "swissarmyhammer-fields",
  "swissarmyhammer-filter-expr",
+ "swissarmyhammer-focus",
  "swissarmyhammer-kanban",
  "swissarmyhammer-perspectives",
  "swissarmyhammer-store",
@@ -4075,10 +4073,8 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-log",
  "tempfile",
- "thiserror 2.0.18",
  "tokio",
  "tracing",
- "tracing-log",
  "tracing-oslog",
  "tracing-subscriber",
  "ulid",
@@ -8263,6 +8259,7 @@ name = "swissarmyhammer-commands"
 version = "0.12.11"
 dependencies = [
  "async-trait",
+ "include_dir",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -8334,6 +8331,7 @@ dependencies = [
  "serde",
  "serde_yaml_ng",
  "serial_test",
+ "swissarmyhammer-common",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
@@ -8434,6 +8432,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-focus"
+version = "0.12.11"
+dependencies = [
+ "include_dir",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "swissarmyhammer-commands",
+ "swissarmyhammer-common",
+ "thiserror 2.0.18",
+ "tracing",
+ "tracing-subscriber",
+ "ulid",
+]
+
+[[package]]
 name = "swissarmyhammer-git"
 version = "0.12.11"
 dependencies = [
@@ -8482,11 +8496,15 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "serial_test",
  "swissarmyhammer-commands",
  "swissarmyhammer-common",
+ "swissarmyhammer-directory",
  "swissarmyhammer-entity",
  "swissarmyhammer-fields",
  "swissarmyhammer-filter-expr",
+ "swissarmyhammer-focus",
+ "swissarmyhammer-kanban",
  "swissarmyhammer-operations",
  "swissarmyhammer-perspectives",
  "swissarmyhammer-store",
@@ -8496,6 +8514,7 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tracing",
+ "tracing-test",
  "ulid",
 ]
 
@@ -8618,6 +8637,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "swissarmyhammer-commands",
  "swissarmyhammer-common",
  "swissarmyhammer-store",
  "tempfile",
@@ -8935,6 +8955,8 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "swissarmyhammer-commands",
+ "swissarmyhammer-store",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

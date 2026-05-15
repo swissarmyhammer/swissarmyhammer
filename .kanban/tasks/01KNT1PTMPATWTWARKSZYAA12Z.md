@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNT1PDFJHP3SAYVQKFFK39GW
 position_column: done
-position_ordinal: ffffffffffffffffffffffe080
+position_ordinal: ffffffffffffffffffffffffffffffdb80
 project: null
 title: Implement incremental invalidation for symbol tracking
 ---
@@ -32,6 +32,6 @@ When files change, only re-index the changed files and their dependents instead 
 - [x] `swissarmyhammer-code-context/src/invalidation.rs:82-92` — The allocation pattern `Vec<Box<dyn ToSql>>` followed by a parallel `Vec<&dyn ToSql>` is clever but noisy. `rusqlite::params_from_iter(callee_ids.iter().chain(std::iter::once(&exclude_file_owned)))` (after materializing `exclude_file` into an owned `String`) reads more clearly. Minor style preference.
     - Resolution: Both dynamic-IN sites now use `rusqlite::params_from_iter` over borrowed `&str` iterators. No more `Box<dyn ToSql>` allocations.
 - [x] `swissarmyhammer-code-context/src/invalidation.rs:265-267` — `refresh_edges` is a one-line wrapper around `write_edges` that does nothing else. It reads like a leftover from an earlier design where refresh had to diff edges. Either delete it and have callers use `write_edges` directly, or give it meaningful behavior (e.g. explicit `DELETE then INSERT` for clarity).
-    - Resolution: Deleted (covered by Blocker #2).
+    - Resolution: Deleted (covered by Blocker
 - [x] `swissarmyhammer-code-context/src/lsp_indexer.rs` — Visibility bump of `symbol_kind_to_i32` from `fn` to `pub(crate) fn` is fine; no concerns.
     - Resolution: No action needed per the reviewer.

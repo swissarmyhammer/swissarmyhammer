@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KN4QPGVXP1DS6G7R5N3GJKXS
 position_column: done
-position_ordinal: ffffffffffffffffdf80
+position_ordinal: ffffffffffffffffffff9b80
 title: EntityTypeStore — TrackedStore impl with serialize/deserialize round-trip
 ---
 ## What

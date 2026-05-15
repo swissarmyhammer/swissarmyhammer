@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffc980
+position_ordinal: ffffffffffffffffffffffffffffffb580
 project: kanban-mcp
 title: Extract logging.rs as standard pattern across all CLIs
 ---

@@ -1,7 +1,7 @@
 ---
 assignees: []
 position_column: done
-position_ordinal: ffffffffffffffffffffffd180
+position_ordinal: ffffffffffffffffffffffffffffffc480
 project: pill-via-cm6
 title: 'Filter autocomplete: accepted tag lost when perspective is toggled before debounce fires'
 ---

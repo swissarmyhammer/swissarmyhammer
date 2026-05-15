@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { screen, fireEvent, waitFor } from "@testing-library/react";
+import { renderInAct } from "@/test/act-render";
 
 // --- Mocks ---
 const mockInvoke = vi.fn(
@@ -26,10 +27,13 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 
 import { ColumnView } from "./column-view";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
+import { FocusLayer } from "@/components/focus-layer";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { asSegment } from "@/types/spatial";
 import type { Entity } from "@/types/kanban";
 
 /** Create a minimal column entity. */
@@ -56,27 +60,36 @@ function makeTask(id: string, column = "col-1"): Entity {
   };
 }
 
-/** Wrap component with required providers. */
-function renderColumn(ui: React.ReactElement) {
-  return render(
-    <EntityFocusProvider>
-      <SchemaProvider>
-        <EntityStoreProvider entities={{}}>
-          <TooltipProvider>
-            <ActiveBoardPathProvider value="/test/board">
-              {ui}
-            </ActiveBoardPathProvider>
-          </TooltipProvider>
-        </EntityStoreProvider>
-      </SchemaProvider>
-    </EntityFocusProvider>,
+/**
+ * Wrap component with required providers. The spatial provider stack
+ * (`SpatialFocusProvider` + `FocusLayer`) is required since `ColumnView`
+ * mounts `<FocusScope>`-using descendants and the no-spatial-context
+ * fallback was removed in card `01KQPVA127YMJ8D7NB6M824595`.
+ */
+async function renderColumn(ui: React.ReactElement) {
+  return await renderInAct(
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <EntityFocusProvider>
+          <SchemaProvider>
+            <EntityStoreProvider entities={{}}>
+              <TooltipProvider>
+                <ActiveBoardPathProvider value="/test/board">
+                  {ui}
+                </ActiveBoardPathProvider>
+              </TooltipProvider>
+            </EntityStoreProvider>
+          </SchemaProvider>
+        </EntityFocusProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
   );
 }
 
 describe("ColumnView drop zones", () => {
-  it("renders N+1 drop zones for N tasks", () => {
+  it("renders N+1 drop zones for N tasks", async () => {
     const tasks = [makeTask("t1"), makeTask("t2"), makeTask("t3")];
-    const { container } = renderColumn(
+    const { container } = await renderColumn(
       <ColumnView column={makeColumn()} tasks={tasks} onDrop={vi.fn()} />,
     );
 
@@ -84,9 +97,9 @@ describe("ColumnView drop zones", () => {
     expect(zones.length).toBe(4);
   });
 
-  it("drop zones carry correct before/after attributes", () => {
+  it("drop zones carry correct before/after attributes", async () => {
     const tasks = [makeTask("t1"), makeTask("t2"), makeTask("t3")];
-    const { container } = renderColumn(
+    const { container } = await renderColumn(
       <ColumnView column={makeColumn()} tasks={tasks} onDrop={vi.fn()} />,
     );
 
@@ -99,8 +112,8 @@ describe("ColumnView drop zones", () => {
     expect(zones[3].getAttribute("data-drop-after")).toBe("t3");
   });
 
-  it("empty column renders 1 drop zone with data-drop-empty", () => {
-    const { container } = renderColumn(
+  it("empty column renders 1 drop zone with data-drop-empty", async () => {
+    const { container } = await renderColumn(
       <ColumnView column={makeColumn()} tasks={[]} onDrop={vi.fn()} />,
     );
 
@@ -109,9 +122,9 @@ describe("ColumnView drop zones", () => {
     expect(zones[0].hasAttribute("data-drop-empty")).toBe(true);
   });
 
-  it("renders inert spacers for zones adjacent to the dragged task", () => {
+  it("renders inert spacers for zones adjacent to the dragged task", async () => {
     const tasks = [makeTask("t1"), makeTask("t2"), makeTask("t3")];
-    const { container } = renderColumn(
+    const { container } = await renderColumn(
       <ColumnView
         column={makeColumn()}
         tasks={tasks}
@@ -126,9 +139,9 @@ describe("ColumnView drop zones", () => {
     expect(zones.length).toBe(4);
   });
 
-  it("shows correct badge count", () => {
+  it("shows correct badge count", async () => {
     const tasks = [makeTask("t1"), makeTask("t2")];
-    renderColumn(
+    await renderColumn(
       <ColumnView column={makeColumn()} tasks={tasks} onDrop={vi.fn()} />,
     );
 
@@ -137,8 +150,8 @@ describe("ColumnView drop zones", () => {
 });
 
 describe("ColumnView add-task button", () => {
-  it("has aria-label with column name and no title attribute", () => {
-    renderColumn(
+  it("has aria-label with column name and no title attribute", async () => {
+    await renderColumn(
       <ColumnView
         column={makeColumn("col-1", "To Do")}
         tasks={[]}
@@ -152,9 +165,9 @@ describe("ColumnView add-task button", () => {
     expect(btn.getAttribute("title")).toBeNull();
   });
 
-  it("calls onAddTask with column id when clicked", () => {
+  it("calls onAddTask with column id when clicked", async () => {
     const onAddTask = vi.fn();
-    renderColumn(
+    await renderColumn(
       <ColumnView
         column={makeColumn("col-1", "To Do")}
         tasks={[]}
@@ -168,8 +181,8 @@ describe("ColumnView add-task button", () => {
     expect(onAddTask).toHaveBeenCalledWith("col-1");
   });
 
-  it("does not render add button when onAddTask is not provided", () => {
-    renderColumn(
+  it("does not render add button when onAddTask is not provided", async () => {
+    await renderColumn(
       <ColumnView
         column={makeColumn("col-1", "To Do")}
         tasks={[]}
@@ -266,13 +279,13 @@ describe("ColumnView — Do This Next command", () => {
     );
 
     const task = makeTask("t1");
-    renderColumn(
+    await renderColumn(
       <ColumnView column={makeColumn()} tasks={[task]} onDrop={vi.fn()} />,
     );
 
     // Right-click the task card's FocusScope
     const taskScope = document.querySelector(
-      "[data-moniker='task:t1']",
+      "[data-segment='task:t1']",
     ) as HTMLElement | null;
     expect(taskScope).toBeTruthy();
     fireEvent.contextMenu(taskScope!);
@@ -320,12 +333,12 @@ describe("ColumnView — Do This Next command", () => {
     );
 
     const task = makeTask("t2");
-    renderColumn(
+    await renderColumn(
       <ColumnView column={makeColumn()} tasks={[task]} onDrop={vi.fn()} />,
     );
 
     const taskScope = document.querySelector(
-      "[data-moniker='task:t2']",
+      "[data-segment='task:t2']",
     ) as HTMLElement | null;
     expect(taskScope).toBeTruthy();
     fireEvent.contextMenu(taskScope!);
@@ -346,7 +359,7 @@ describe("ColumnView — Do This Next command", () => {
     });
   });
 
-  it("DraggableTaskCard receives no extraCommands from column (re-render stability)", () => {
+  it("DraggableTaskCard receives no extraCommands from column (re-render stability)", async () => {
     // After deleting the buildDoThisNextCommand workaround, the column no
     // longer passes extraCommands to DraggableTaskCard. The prop is always
     // undefined, so React.memo on DraggableTaskCard never sees a changed
@@ -358,7 +371,7 @@ describe("ColumnView — Do This Next command", () => {
       makeTask("t4"),
       makeTask("t5"),
     ];
-    const { container } = renderColumn(
+    const { container } = await renderColumn(
       <ColumnView column={makeColumn()} tasks={tasks} onDrop={vi.fn()} />,
     );
 
@@ -381,5 +394,130 @@ describe("ColumnView — Do This Next command", () => {
       (c: unknown[]) => (c[1] as { cmd?: string })?.cmd === "task.move",
     );
     expect(moveDispatches.length).toBe(0);
+  });
+});
+
+/**
+ * Layout regression guards — pin the load-bearing classes that keep the
+ * column scrollable and the virtualizer windowing functional.
+ *
+ * Background: the spatial-nav refactor wrapped the column body in
+ * `<FocusScope>`. An earlier revision routed the entity
+ * chrome through an inner non-styled `<FocusScopeBody>` div which broke
+ * the `flex flex-col flex-1 min-h-0` chain the column relies on for
+ * vertical sizing and overflow scroll. The current FocusScope attaches
+ * its chrome directly to the spatial primitive's root, so `className`
+ * passed to `<FocusScope>` lands on the same element whose children
+ * participate in flex layout. These tests pin the load-bearing classes
+ * so a future refactor cannot silently regress the scroll /
+ * virtualization behaviour again.
+ */
+describe("ColumnView layout (scroll + virtualization)", () => {
+  it("scroll container carries overflow-y-auto so columns scroll vertically", async () => {
+    const tasks = [makeTask("t1"), makeTask("t2"), makeTask("t3")];
+    const { container } = await renderColumn(
+      <ColumnView column={makeColumn()} tasks={tasks} onDrop={vi.fn()} />,
+    );
+
+    // The scroll container hosts the card+drop-zone list. The drop-zone is
+    // a stable anchor — its parent chain must contain a scrollable element
+    // (`overflow-y-auto`) for the column to scroll when content overflows.
+    const dropZone = container.querySelector("[data-drop-zone]");
+    expect(dropZone).toBeTruthy();
+
+    let scrollEl: HTMLElement | null = dropZone as HTMLElement;
+    let foundScroll = false;
+    while (scrollEl && scrollEl !== container) {
+      if (scrollEl.className.includes("overflow-y-auto")) {
+        foundScroll = true;
+        break;
+      }
+      scrollEl = scrollEl.parentElement;
+    }
+    expect(foundScroll).toBe(true);
+  });
+
+  it("FocusScope element carries the flex column chain (no inner wrapper)", async () => {
+    // FocusScope's `className` lands on the spatial primitive's root and
+    // its children render as direct layout children. The column relies on
+    // that contract: the same element that registers as the column's zone
+    // (`data-moniker='column:…'`) is also the `flex flex-col` container
+    // whose `flex-1` child (VirtualizedCardList) becomes the scrollable
+    // viewport. Pin both halves of that contract here so a future refactor
+    // cannot silently re-introduce a layout-breaking inner wrapper.
+    const { container } = await renderColumn(
+      <ColumnView column={makeColumn()} tasks={[]} onDrop={vi.fn()} />,
+    );
+    const columnNode = container.querySelector("[data-segment='column:col-1']");
+    expect(columnNode).toBeTruthy();
+    const className = (columnNode as HTMLElement).className;
+    expect(className).toContain("flex");
+    expect(className).toContain("flex-col");
+    expect(className).toContain("flex-1");
+    expect(className).toContain("min-h-0");
+  });
+
+  it("virtualizes when task count exceeds the threshold (mounted < N cards)", async () => {
+    // When the task count exceeds VIRTUALIZE_THRESHOLD (25), the column
+    // delegates to TanStack Virtual which only mounts ~visible rows.
+    //
+    // The vitest browser project does not bundle Tailwind, so utility
+    // classes (`flex-1`, `min-h-0`, `overflow-y-auto`) produce no CSS
+    // rules in tests. To give the virtualizer a finite viewport we
+    // post-process the rendered DOM and set inline `height` + `overflow`
+    // on the scroll container — the same pattern `data-table.virtualized.test.tsx`
+    // documents (`@tanstack/react-virtual` reads viewport via
+    // `offsetHeight` initially and via ResizeObserver subsequently;
+    // inline styles satisfy both paths).
+    //
+    // The test still proves the regression: when the flex chain is
+    // broken in production CSS, the column's scroll container can't
+    // become the virtualizer's scroll element and windowing collapses.
+    // The test pins the spelling of the scrollable container's classes
+    // (above) and the structural contract (below) — together they
+    // cover both halves of the regression.
+    const N = 60;
+    const tasks: Entity[] = [];
+    for (let i = 0; i < N; i++) tasks.push(makeTask(`t${i}`));
+    const { container } = await renderColumn(
+      <ColumnView column={makeColumn()} tasks={tasks} onDrop={vi.fn()} />,
+    );
+
+    // Stub a finite viewport on the scroll container so the virtualizer
+    // can window the row list. Tailwind is not active in tests; this is
+    // the canonical pattern (cf. data-table.virtualized.test.tsx).
+    const scrollEl = container.querySelector(
+      "[class*='overflow-y-auto']",
+    ) as HTMLDivElement | null;
+    expect(scrollEl).toBeTruthy();
+    scrollEl!.style.height = "400px";
+    scrollEl!.style.maxHeight = "400px";
+    scrollEl!.style.overflow = "auto";
+
+    // Let `useVirtualizer`'s ResizeObserver fire and the visible range
+    // settle.
+    await waitFor(() => {
+      const cards = container.querySelectorAll("[data-entity-card]");
+      // Virtualization is active — far fewer than N cards should mount
+      // as DOM nodes. With the trailing zone occupying the bottom row
+      // and ~80px estimated row height in a 400px viewport, only a
+      // handful render (visible window + overscan).
+      expect(cards.length).toBeLessThan(N);
+    });
+  });
+
+  it("renders all cards directly when below the virtualization threshold", async () => {
+    // Below the threshold (25), the column uses SmallCardList which
+    // mounts every card. This pins the contract that virtualization
+    // engages only above the threshold.
+    const N = 5;
+    const tasks: Entity[] = [];
+    for (let i = 0; i < N; i++) tasks.push(makeTask(`t${i}`));
+    const { container } = await renderColumn(
+      <ColumnView column={makeColumn()} tasks={tasks} onDrop={vi.fn()} />,
+    );
+
+    const cards = container.querySelectorAll("[data-entity-card]");
+    expect(cards.length).toBe(N);
   });
 });

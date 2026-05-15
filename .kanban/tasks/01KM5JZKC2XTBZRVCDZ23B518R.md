@@ -5,7 +5,7 @@ depends_on:
 - 01KM5JYNBZW86RNHCVS9VMZ31D
 - 01KM5JYX09RBFTQFD2T715FAEW
 position_column: done
-position_ordinal: ffffffffffca80
+position_ordinal: ffffffffffff9780
 title: Update mention infrastructure for slugified task titles
 ---
 ## What

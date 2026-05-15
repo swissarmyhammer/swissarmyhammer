@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffdf80
+position_ordinal: ffffffffffffffffffffffffffff8e80
 title: 'Bug: Task drag-and-drop does not visually update the board'
 ---
 ## What

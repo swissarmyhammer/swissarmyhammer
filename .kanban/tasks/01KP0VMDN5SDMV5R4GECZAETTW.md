@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffc280
+position_ordinal: ffffffffffffffffffffffffffffffa680
 project: kanban-mcp
 title: 'sah-cli: add commands/skill.rs for explicit skill deployment'
 ---

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffbe80
+position_ordinal: ffffffffffffffffffffffffffffff9980
 project: kanban-mcp
 title: 'sah-cli: create commands/registry.rs with Initializable pattern'
 ---

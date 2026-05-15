@@ -4,15 +4,14 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
-use swissarmyhammer_commands::{
-    builtin_yaml_sources, load_yaml_dir, Command, CommandsRegistry, UIState,
-};
+use swissarmyhammer_commands::{load_yaml_dir, Command, CommandsRegistry, UIState};
 use swissarmyhammer_entity::Entity;
 use swissarmyhammer_entity_search::EntitySearchIndex;
+use swissarmyhammer_focus::{SpatialRegistry, SpatialState};
 use swissarmyhammer_kanban::clipboard::ClipboardProvider;
 use swissarmyhammer_kanban::KanbanContext;
 use tauri::menu::{CheckMenuItem, MenuItem};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex as TokioMutex, RwLock};
 
 use swissarmyhammer_kanban::actor::AddActor;
 use swissarmyhammer_kanban::Execute;
@@ -20,8 +19,10 @@ use swissarmyhammer_kanban::Execute;
 use crate::watcher;
 use swissarmyhammer_entity::EntityCache;
 
+/// XDG subdirectory for this consumer's UIState config file. Passed to
+/// [`swissarmyhammer_kanban::default_ui_state`], which owns the full
+/// `$XDG_CONFIG_HOME/sah/<subdir>/ui-state.yaml` resolution.
 const CONFIG_APP_SUBDIR: &str = "kanban-app";
-const UI_STATE_FILE_NAME: &str = "ui-state.yaml";
 
 /// System clipboard provider using the Tauri clipboard plugin.
 pub struct TauriClipboardProvider {
@@ -169,6 +170,32 @@ async fn register_perspective_store(
     }
 }
 
+/// Register the view store for undo/redo and wire it into `ViewsContext` so
+/// writes delegate to it and push onto the undo stack.
+///
+/// Mirrors [`register_perspective_store`]: creates a `ViewStore` rooted at the
+/// `views/` directory, wraps it in a `StoreHandle`, registers the handle with
+/// the shared `StoreContext`, and attaches both to the `ViewsContext` that
+/// `KanbanContext::open` already constructed.
+async fn register_view_store(
+    ctx: &KanbanContext,
+    store_context: &Arc<swissarmyhammer_store::StoreContext>,
+    kanban_path: &Path,
+) {
+    let views_dir = kanban_path.join("views");
+    let view_store = swissarmyhammer_views::ViewStore::new(&views_dir);
+    let handle = Arc::new(swissarmyhammer_store::StoreHandle::new(Arc::new(
+        view_store,
+    )));
+    store_context.register(handle.clone()).await;
+
+    if let Some(views_lock) = ctx.views() {
+        let mut views = views_lock.write().await;
+        views.set_store_handle(handle);
+        views.set_store_context(Arc::clone(store_context));
+    }
+}
+
 /// Load every searchable entity (task, tag, column, actor, board) into a
 /// fresh `EntitySearchIndex`.
 async fn load_search_index(ctx: &KanbanContext) -> EntitySearchIndex {
@@ -255,6 +282,7 @@ impl BoardHandle {
         ));
         register_entity_stores(&ctx, &store_context).await;
         register_perspective_store(&ctx, &store_context, &kanban_path).await;
+        register_view_store(&ctx, &store_context, &kanban_path).await;
 
         // Ensure the entity context is initialized — this also constructs
         // and attaches the `EntityCache`. After this call,
@@ -361,9 +389,17 @@ impl BoardHandle {
             .perspective_context_if_ready()
             .and_then(|pctx| pctx.try_read().ok().map(|guard| guard.subscribe()));
 
+        // Same idea for views — `views()` is the non-initializing accessor
+        // (the ViewsContext is eagerly constructed in `KanbanContext::open`),
+        // so a `try_read` here is safe at startup.
+        let view_rx = ctx
+            .views()
+            .and_then(|views_lock| views_lock.try_read().ok().map(|guard| guard.subscribe()));
+
         tracing::info!(
             path = %kanban_root.display(),
             has_perspective_rx = perspective_rx.is_some(),
+            has_view_rx = view_rx.is_some(),
             "entity-cache bridge starting for board"
         );
         let handle = tokio::spawn(watcher::run_bridge(
@@ -373,6 +409,7 @@ impl BoardHandle {
             board_path_str,
             search_index,
             perspective_rx,
+            view_rx,
         ));
         self.bridge_task = Some(handle);
     }
@@ -428,41 +465,72 @@ pub(crate) struct AppState {
     /// resurrecting previous-session windows on top of the one the deep-link
     /// handler focused or created.
     pub(crate) deep_link_handled: AtomicBool,
+    /// Headless spatial-navigation registry — stores every layer and
+    /// the focus tracker's `last_focused_by_fq` map. Wrapped in a
+    /// `tokio::sync::Mutex` because spatial commands hold both this and
+    /// `spatial_state` together for the duration of a single
+    /// transaction; using the async mutex matches the pattern used by
+    /// the rest of `AppState`'s shared state.
+    pub(crate) spatial_registry: TokioMutex<SpatialRegistry>,
+    /// Per-window focused [`swissarmyhammer_focus::FullyQualifiedMoniker`] tracker.
+    /// Mutated by every spatial command that commits a focus transition
+    /// (`spatial_focus`, `spatial_navigate`, `spatial_focus_lost`,
+    /// `spatial_clear_focus`). Held under `tokio::sync::Mutex` because
+    /// spatial commands routinely take both `spatial_registry` and
+    /// `spatial_state` for the duration of a single transaction.
+    pub(crate) spatial_state: TokioMutex<SpatialState>,
 }
 
 impl AppState {
     /// Create a new AppState, loading config from disk.
     ///
-    /// Restores the inspector stack from the persisted config into UIState
-    /// so the backend is the single source of truth from startup.
+    /// Delegates UI state loading to
+    /// [`swissarmyhammer_kanban::default_ui_state`] (which resolves the
+    /// XDG config path and reads the YAML, or seeds defaults). The
+    /// builtin command stack is composed at this app layer via
+    /// [`swissarmyhammer_commands::compose_registry!`] over the
+    /// contributor crates the app pulls in. This struct does not know
+    /// the config file format or the default path — it just wires the
+    /// pieces together.
     pub fn new() -> Self {
-        Self::with_ui_state_path(ui_state_file_path())
+        Self::with_ui_state(swissarmyhammer_kanban::default_ui_state(CONFIG_APP_SUBDIR))
     }
 
-    /// Create AppState with a specific UIState persistence path.
-    ///
-    /// Used by tests to avoid polluting the real config file.
+    /// Create AppState with a freshly loaded UIState written to a
+    /// per-test temp path, so unit tests don't clobber the developer's
+    /// real config. Still goes through [`UIState::load`] to exercise the
+    /// same loader the production path uses.
     #[cfg(test)]
     pub fn new_for_test() -> Self {
-        Self::with_ui_state_path(
-            std::env::temp_dir().join(format!("kanban-test-{}.yaml", ulid::Ulid::new())),
-        )
+        let path = std::env::temp_dir().join(format!("kanban-test-{}.yaml", ulid::Ulid::new()));
+        Self::with_ui_state(UIState::load(path))
     }
 
-    /// Internal constructor with an explicit UIState persistence path.
-    fn with_ui_state_path(ui_state_path: PathBuf) -> Self {
-        let sources = builtin_yaml_sources();
-        let source_refs: Vec<(&str, &str)> = sources.iter().map(|(n, c)| (*n, *c)).collect();
-        let ui_state = Arc::new(UIState::load(ui_state_path));
-
+    /// Internal constructor that takes an already-loaded [`UIState`].
+    ///
+    /// Every other constructor funnels through here so the wiring (MRU,
+    /// window bookkeeping, command registry) sits in exactly one place.
+    /// The command registry is composed via
+    /// [`swissarmyhammer_commands::compose_registry!`] over the
+    /// contributor crates this app pulls in (generic UI commands from
+    /// `swissarmyhammer_commands`, then domain commands from
+    /// `swissarmyhammer_kanban`). User overrides from `.kanban/commands/`
+    /// layer on top later via [`Self::reload_command_overrides`].
+    fn with_ui_state(ui_state: UIState) -> Self {
         Self {
             boards: RwLock::new(HashMap::new()),
-            ui_state,
-            commands_registry: RwLock::new(CommandsRegistry::from_yaml_sources(&source_refs)),
+            ui_state: Arc::new(ui_state),
+            commands_registry: RwLock::new(swissarmyhammer_commands::compose_registry![
+                swissarmyhammer_commands,
+                swissarmyhammer_focus,
+                swissarmyhammer_kanban,
+            ]),
             command_impls: swissarmyhammer_kanban::commands::register_commands(),
             menu_items: Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
             deep_link_handled: AtomicBool::new(false),
+            spatial_registry: TokioMutex::new(SpatialRegistry::new()),
+            spatial_state: TokioMutex::new(SpatialState::new()),
         }
     }
 
@@ -691,25 +759,39 @@ impl AppState {
 
     /// Rebuild the commands registry from builtins + user overrides from the
     /// active board's `.kanban/commands/` directory.
+    ///
+    /// Composes the builtin stack via
+    /// [`swissarmyhammer_commands::compose_yaml_sources!`] (same crate
+    /// list and order as [`Self::with_ui_state`]) and appends the user
+    /// overrides last so they take precedence by command id.
     async fn reload_command_overrides(&self, kanban_path: &Path) {
         let commands_dir = kanban_path.join("commands");
         let user_sources = load_yaml_dir(&commands_dir);
         if user_sources.is_empty() {
             return;
         }
-        let refs: Vec<(&str, &str)> = user_sources
+
+        let count = user_sources.len();
+
+        let mut sources = swissarmyhammer_commands::compose_yaml_sources![
+            swissarmyhammer_commands,
+            swissarmyhammer_focus,
+            swissarmyhammer_kanban,
+        ];
+        // User overrides apply last with partial-merge-by-id semantics.
+        let user_refs: Vec<(&str, &str)> = user_sources
             .iter()
             .map(|(n, c)| (n.as_str(), c.as_str()))
             .collect();
-
-        // Rebuild from scratch: builtins + user overrides
-        let builtin = builtin_yaml_sources();
-        let builtin_refs: Vec<(&str, &str)> = builtin.iter().map(|(n, c)| (*n, *c)).collect();
-        let mut registry = CommandsRegistry::from_yaml_sources(&builtin_refs);
-        registry.merge_yaml_sources(&refs);
+        sources.extend(user_refs);
+        let registry = swissarmyhammer_commands::CommandsRegistry::from_yaml_sources(&sources);
 
         *self.commands_registry.write().await = registry;
-        tracing::info!(dir = %commands_dir.display(), count = user_sources.len(), "loaded user command overrides");
+        tracing::info!(
+            dir = %commands_dir.display(),
+            count,
+            "loaded user command overrides",
+        );
     }
 
     /// Start file watchers for all open boards that don't have one yet.
@@ -959,21 +1041,6 @@ fn dscl_jpeg_photo(username: &str) -> Option<String> {
 #[cfg(not(target_os = "macos"))]
 fn macos_profile_picture(_username: &str) -> Option<String> {
     None
-}
-
-/// Get the path to the UIState persistence file.
-///
-/// Uses XDG config directory: `$XDG_CONFIG_HOME/sah/kanban-app/ui-state.yaml`
-fn ui_state_file_path() -> PathBuf {
-    use swissarmyhammer_directory::{ManagedDirectory, SwissarmyhammerConfig};
-
-    ManagedDirectory::<SwissarmyhammerConfig>::xdg_config()
-        .map(|dir| dir.root().join(CONFIG_APP_SUBDIR).join(UI_STATE_FILE_NAME))
-        .unwrap_or_else(|_| {
-            PathBuf::from(".")
-                .join(CONFIG_APP_SUBDIR)
-                .join(UI_STATE_FILE_NAME)
-        })
 }
 
 #[cfg(test)]
@@ -1230,10 +1297,13 @@ mod tests {
     fn make_drag_session(task_id: &str, board_path: &str) -> swissarmyhammer_commands::DragSession {
         swissarmyhammer_commands::DragSession {
             session_id: ulid::Ulid::new().to_string(),
-            source_board_path: board_path.to_string(),
-            source_window_label: "main".to_string(),
-            task_id: task_id.to_string(),
-            task_fields: serde_json::json!({"title": "Test task"}),
+            from: swissarmyhammer_commands::DragSource::FocusChain {
+                entity_type: "task".to_string(),
+                entity_id: task_id.to_string(),
+                fields: serde_json::json!({"title": "Test task"}),
+                source_board_path: board_path.to_string(),
+                source_window_label: "main".to_string(),
+            },
             copy_mode: false,
             started_at_ms: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1255,7 +1325,7 @@ mod tests {
         // Cancel session
         let taken = state.ui_state.take_drag();
         assert!(taken.is_some());
-        assert_eq!(taken.unwrap().task_id, "task-1");
+        assert_eq!(taken.unwrap().entity_id(), Some("task-1"));
         assert!(state.ui_state.drag_session().is_none());
     }
 
@@ -1290,7 +1360,7 @@ mod tests {
         let current = state.ui_state.drag_session();
         assert_eq!(current.as_ref().unwrap().session_id, id2);
         assert_ne!(id1, id2);
-        assert_eq!(current.as_ref().unwrap().task_id, "task-2");
+        assert_eq!(current.as_ref().unwrap().entity_id(), Some("task-2"));
     }
 
     #[test]
@@ -1314,9 +1384,16 @@ mod tests {
     fn test_drag_session_serialization() {
         let session = make_drag_session("task-1", "/board/a");
         let json = serde_json::to_value(&session).unwrap();
-        assert_eq!(json["task_id"], "task-1");
-        assert_eq!(json["source_board_path"], "/board/a");
-        assert_eq!(json["source_window_label"], "main");
+        // The session's source is now nested under `from` as a tagged enum
+        // (`kind: "focus_chain"`). The frontend's `drag-session-active`
+        // wire payload still ships the legacy flat shape; that wire payload
+        // is built by `DragStartCmd` directly and is exercised by the
+        // drag_start_cmd_returns_drag_start_result test in mod.rs.
+        assert_eq!(json["from"]["kind"], "focus_chain");
+        assert_eq!(json["from"]["entity_type"], "task");
+        assert_eq!(json["from"]["entity_id"], "task-1");
+        assert_eq!(json["from"]["source_board_path"], "/board/a");
+        assert_eq!(json["from"]["source_window_label"], "main");
         assert_eq!(json["copy_mode"], false);
         assert!(json["started_at_ms"].as_u64().unwrap() > 0);
     }

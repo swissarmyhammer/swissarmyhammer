@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffdc80
+position_ordinal: ffffffffffffffffffffffffffffffd680
 title: Add `log` and `turn_pre/` to AvpConfig::GITIGNORE_CONTENT
 ---
 ## What

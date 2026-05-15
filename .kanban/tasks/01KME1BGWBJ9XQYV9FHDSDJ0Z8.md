@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffff9580
+position_ordinal: ffffffffffffe380
 title: 'multi-select-editor.test.tsx: rewrite tests for inline doc-as-truth model'
 ---
 ## What

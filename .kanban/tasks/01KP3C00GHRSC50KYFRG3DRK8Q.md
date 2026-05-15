@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffcc80
+position_ordinal: ffffffffffffffffffffffffffffffba80
 project: kanban-mcp
 title: 'kanban doctor: fix false-negative "Board Initialized" check'
 ---

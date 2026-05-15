@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffcd80
+position_ordinal: ffffffffffffffffffffffffffffffbc80
 project: task-card-fields
 title: Re-enrich dependent tasks when a task's computed-tag inputs change (stale BLOCKED/READY/BLOCKING tags)
 ---

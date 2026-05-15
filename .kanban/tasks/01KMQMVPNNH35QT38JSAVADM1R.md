@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMQMV1NK8EA6AC7NRQC15T7V
 position_column: done
-position_ordinal: ffffffffffffee80
+position_ordinal: ffffffffffffffc480
 title: Pill navigation via claimWhen
 ---
 ## What

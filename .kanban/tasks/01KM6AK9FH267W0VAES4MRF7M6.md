@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffcb80
+position_ordinal: ffffffffffff9880
 title: Add Archive/Unarchive verbs and Archived noun to operation types
 ---
 ## What

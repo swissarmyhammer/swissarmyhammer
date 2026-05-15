@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KP65XNZTM9FF4Z5DTE967PBX
 position_column: done
-position_ordinal: ffffffffffffffffffffffd480
+position_ordinal: ffffffffffffffffffffffffffffffca80
 title: 'entity-cache follow-up: close MoveTask 20ms bench gap by caching per-task compute inputs (changelog, _file_created)'
 ---
 #entity-cache

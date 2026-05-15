@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffb580
+position_ordinal: ffffffffffffffffffffffffffffff8180
 project: spatial-nav
 title: 'Wire up projects in the UI: load into entity store and render project badge on tasks'
 ---

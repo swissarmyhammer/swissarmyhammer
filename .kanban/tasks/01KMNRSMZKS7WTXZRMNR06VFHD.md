@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffcf80
+position_ordinal: ffffffffffffffa580
 title: Fix dual-focus and drag ghost focus indicator bugs
 ---
 ## What

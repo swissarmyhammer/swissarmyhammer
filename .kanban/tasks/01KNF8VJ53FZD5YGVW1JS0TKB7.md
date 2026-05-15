@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNF8SW8CJHRFE6B3ZEQF1FV9
 position_column: done
-position_ordinal: ffffffffffffffffffffdc80
+position_ordinal: ffffffffffffffffffffffffffff8b80
 title: 'Frontend: Remove swimlanes, wire project field grouping'
 ---
 ## What

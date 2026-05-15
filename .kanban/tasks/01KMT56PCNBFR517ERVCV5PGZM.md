@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffff9a80
+position_ordinal: ffffffffffffffef80
 title: broadcastNavCommand O(N) linear scan on every keystroke
 ---
 **Severity: Medium (Performance)**

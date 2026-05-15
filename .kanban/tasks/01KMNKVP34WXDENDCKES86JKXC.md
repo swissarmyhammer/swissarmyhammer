@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffc880
+position_ordinal: ffffffffffffff9e80
 title: Extract computeDropZones pure function + tests
 ---
 ## What

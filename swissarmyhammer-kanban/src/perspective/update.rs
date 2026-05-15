@@ -6,9 +6,7 @@ use crate::perspective::add::perspective_to_json;
 use crate::perspective::{PerspectiveFieldEntry, SortEntry};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{
-    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
-};
+use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// Update a perspective's properties.
 ///
@@ -25,8 +23,13 @@ pub struct UpdatePerspective {
     pub id: String,
     /// New name
     pub name: Option<String>,
-    /// New view type
+    /// New view kind
     pub view: Option<String>,
+    /// New view instance id (`Some(Some(id))` pins it, `Some(None)` clears it
+    /// back to legacy shared-by-kind). Mirrors the `filter`/`group` tri-state
+    /// shape: outer `None` means "do not touch".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_id: Option<Option<String>>,
     /// New fields list (replaces entire list)
     pub fields: Option<Vec<PerspectiveFieldEntry>>,
     /// New filter expression (Some(None) clears it)
@@ -44,6 +47,7 @@ impl UpdatePerspective {
             id: id.into(),
             name: None,
             view: None,
+            view_id: None,
             fields: None,
             filter: None,
             group: None,
@@ -57,9 +61,18 @@ impl UpdatePerspective {
         self
     }
 
-    /// Set the new view type.
+    /// Set the new view kind.
     pub fn with_view(mut self, view: impl Into<String>) -> Self {
         self.view = Some(view.into());
+        self
+    }
+
+    /// Set the new view instance id.
+    ///
+    /// Pass `Some(id)` to pin the perspective to that view instance, or
+    /// `None` to clear it back to legacy shared-by-kind.
+    pub fn with_view_id(mut self, view_id: Option<String>) -> Self {
+        self.view_id = Some(view_id);
         self
     }
 
@@ -91,9 +104,6 @@ impl UpdatePerspective {
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for UpdatePerspective {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
-        let start = std::time::Instant::now();
-        let input = serde_json::to_value(self).unwrap();
-
         let result: std::result::Result<Value, KanbanError> = async {
             let pctx = ctx.perspective_context().await?;
             let mut pctx = pctx.write().await;
@@ -115,6 +125,10 @@ impl Execute<KanbanContext, KanbanError> for UpdatePerspective {
             )
             .with_fields(self.fields.clone().unwrap_or(existing.fields))
             .with_sort(self.sort.clone().unwrap_or(existing.sort));
+            updated.view_id = match &self.view_id {
+                Some(v) => v.clone(),
+                None => existing.view_id,
+            };
             updated.filter = match &self.filter {
                 Some(f) => f.clone(),
                 None => existing.filter,
@@ -124,32 +138,24 @@ impl Execute<KanbanContext, KanbanError> for UpdatePerspective {
                 None => existing.group,
             };
 
+            // Opt-in legacy migration: when the perspective still lacks a
+            // `view_id` and the workspace has exactly one matching view, pin
+            // it before persisting. See `perspective::migrate` for the
+            // save-vs-load placement rationale.
+            if let Some(views_lock) = ctx.views() {
+                let views = views_lock.read().await;
+                crate::perspective::migrate::maybe_pin_view_id_on_save(&mut updated, &views);
+            }
+
             pctx.write(&updated).await?;
 
             Ok(perspective_to_json(&updated))
         }
         .await;
 
-        let duration_ms = start.elapsed().as_millis() as u64;
-
         match result {
-            Ok(value) => ExecutionResult::Logged {
-                value: value.clone(),
-                log_entry: LogEntry::new(self.op_string(), input, value, None, duration_ms),
-            },
-            Err(error) => {
-                let error_msg = error.to_string();
-                ExecutionResult::Failed {
-                    error,
-                    log_entry: Some(LogEntry::new(
-                        self.op_string(),
-                        input,
-                        serde_json::json!({"error": error_msg}),
-                        None,
-                        duration_ms,
-                    )),
-                }
-            }
+            Ok(value) => ExecutionResult::Success { value },
+            Err(error) => ExecutionResult::Failed { error },
         }
     }
 }

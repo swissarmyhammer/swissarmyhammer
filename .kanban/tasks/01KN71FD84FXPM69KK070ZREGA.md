@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffc980
+position_ordinal: ffffffffffffffffffd880
 title: Fix card drag-and-drop broken by file drop introduction
 ---
 ## What

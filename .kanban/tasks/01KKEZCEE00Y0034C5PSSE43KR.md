@@ -2,7 +2,7 @@
 depends_on:
 - 01KKEZBH4FK62AN2Z3BT0MCMY8
 position_column: done
-position_ordinal: ff80
+position_ordinal: ff8780
 title: Create /lsp skill
 ---
 ## What

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffffffff480
+position_ordinal: ffffffffffffffffffffffffe180
 title: 'Coverage: lsp_callees_of in layered_context.rs'
 ---
 crates/code-context/src/layered_context.rs

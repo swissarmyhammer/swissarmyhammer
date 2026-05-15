@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ac80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffd080
 title: Refactor dispatch_command_internal result handlers into smaller functions
 ---
 ## What
@@ -30,15 +30,25 @@ This is the core dispatch pipeline. Must run full test suite before and after. T
 - `kanban-app/src/commands.rs` — extract result handlers from `dispatch_command_internal`
 
 ## Acceptance Criteria
-- [ ] `dispatch_command_internal` is under 100 lines (down from ~490)
-- [ ] No nesting deeper than 3 levels in any extracted handler
-- [ ] All existing behavior preserved — no dispatch regressions
-- [ ] `cargo check -p kanban-app` clean, no warnings
+- [x] `dispatch_command_internal` is under 100 lines (down from ~490) — now 50 lines
+- [x] No nesting deeper than 3 levels in any extracted handler
+- [x] All existing behavior preserved — no dispatch regressions
+- [x] `cargo check -p kanban-app` clean, no warnings
 
 ## Tests
-- [ ] `cargo nextest run -p swissarmyhammer-kanban` — all pass
-- [ ] `cd kanban-app/ui && npx vitest run src/components/filter-editor.test.tsx` — all 14 guard tests pass
-- [ ] `cd kanban-app/ui && npx vitest run src/components/` — full component suite passes
+- [x] `cargo nextest run -p swissarmyhammer-kanban` — all pass (workspace: 13484 passing, same as baseline)
+- [x] `cd kanban-app/ui && npx vitest run src/components/filter-editor.test.tsx` — all 28 guard tests pass
+- [x] `cd kanban-app/ui && npx vitest run src/components/` — full component suite passes (156 files, 1309 tests)
 
 ## Workflow
 - Use `/tdd` — run ALL tests before and after. This is high-risk refactoring.
+
+## Notes
+
+Most of the original ~490-line decomposition was performed in earlier passes — `dispatch_command_internal` was already down to ~50 lines with `apply_post_command_side_effects` orchestrating the side-effects (`handle_board_switch_result`, `handle_board_close_result`, `handle_ui_trigger_results`, `handle_drag_events`, `emit_ui_state_change_if_needed`, `maybe_rebuild_menu_after_cmd`, `flush_and_sync_after_command`).
+
+This pass split the two remaining conflated handlers into the per-variant shape the task called for:
+- `handle_ui_trigger_results` → now dispatches to `handle_new_board_dialog`, `handle_open_board_dialog`, `handle_create_window`, `handle_quit`.
+- `handle_drag_events` → now dispatches to `handle_drag_start`, `handle_drag_cancel`, and the existing `handle_drag_complete`.
+
+Each new handler has a docstring describing its variant and side-effects. No behavior changes.

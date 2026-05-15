@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffcc80
+position_ordinal: ffffffffffffffffffffffffffffffbb80
 project: task-card-fields
 title: Add YAML-configurable `placeholder` hint for empty field displays
 ---

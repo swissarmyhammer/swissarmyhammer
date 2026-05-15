@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffffffffea80
+position_ordinal: ffffffffffa780
 title: BusMessage trait + make election types generic
 ---
 ## What

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffff8880
+position_ordinal: ffffffffffffffffffffffffffffb980
 position_swimlane: null
 title: 'FILTER-3: Lezer grammar + CM6 language extension'
 ---

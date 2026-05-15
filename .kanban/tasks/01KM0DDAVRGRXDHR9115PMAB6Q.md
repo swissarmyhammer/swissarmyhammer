@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM0DC89WJ5A3ZAE4YYM1WATR
 position_column: done
-position_ordinal: ffffffffc380
+position_ordinal: ffffffffd780
 title: Extract execute_command operation
 ---
 Move ExecuteCommand struct + impl Operation + handler into `execute/execute_command/mod.rs`.

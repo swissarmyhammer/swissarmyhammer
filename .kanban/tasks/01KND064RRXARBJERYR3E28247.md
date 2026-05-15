@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffff8e80
+position_ordinal: ffffffffffffffffffffffffff9280
 title: Replace title= with shadcn Tooltip in column-view.tsx
 ---
 ## What

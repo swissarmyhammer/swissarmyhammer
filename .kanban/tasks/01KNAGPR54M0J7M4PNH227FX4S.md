@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffc780
+position_ordinal: fffffffffffffffffffffff680
 title: Remove inspect special-casing in entity-commands.ts — dispatch like any other command
 ---
 ## What

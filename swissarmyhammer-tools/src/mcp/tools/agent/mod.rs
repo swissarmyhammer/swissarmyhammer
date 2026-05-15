@@ -189,7 +189,7 @@ impl McpTool for AgentMcpTool {
         };
 
         match result {
-            ExecutionResult::Unlogged { value } => {
+            ExecutionResult::Success { value } => {
                 // For Use operations, render instructions through the prompt library's
                 // Liquid template engine so {% include %} partials are resolved
                 let value = if is_use_op {
@@ -201,10 +201,7 @@ impl McpTool for AgentMcpTool {
                     serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()),
                 ))
             }
-            ExecutionResult::Logged { value, .. } => Ok(BaseToolImpl::create_success_response(
-                serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()),
-            )),
-            ExecutionResult::Failed { error, .. } => Err(McpError::internal_error(
+            ExecutionResult::Failed { error } => Err(McpError::internal_error(
                 format!("agent operation failed: {}", error),
                 None,
             )),

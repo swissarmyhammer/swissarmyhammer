@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ca80
+position_ordinal: d180
 title: Add Initializable trait to swissarmyhammer-common
 ---
 ## What

@@ -2,7 +2,7 @@
 name: finish
 description: Drive kanban tasks from ready to done by looping implement → test → review until each task is clean. Use when the user says "/finish", "drive tasks to done", "work the board", "finish the tasks", "finish the batch", or otherwise wants to orchestrate tasks through the full pipeline to done. Supports single-task mode (one task id) and scoped-batch mode (all ready tasks in a tag, project, or filter). Uses ralph to prevent stopping between iterations.
 license: MIT OR Apache-2.0
-compatibility: Requires the `kanban` and `ralph` MCP tools plus a Stop-hook-capable harness (e.g. Claude Code) so the declared Stop hook can re-invoke the agent across iterations.
+compatibility: Requires the `kanban` and `ralph` MCP tools, plus a Stop-hook-capable harness (e.g. Claude Code) so the declared Stop hook can re-invoke the agent across iterations. Will not function on harnesses that lack Stop hooks or these MCP tools.
 metadata:
   author: swissarmyhammer
   version: 0.12.11

@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNZ42426TGY4AVSDMQMRFQGS
 position_column: done
-position_ordinal: ffffffffffffffffffffffbd80
+position_ordinal: ffffffffffffffffffffffffffffff9780
 project: pill-via-cm6
 title: Autocomplete dropdown shows display name, writes slug
 ---

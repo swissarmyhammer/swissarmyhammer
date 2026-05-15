@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffcc80
+position_ordinal: ffffffffffffffffffffffffffffffb980
 project: expr-filter
 title: Profile list_entities for 2000-task boards and parallelize read_entity_dir disk I/O
 ---

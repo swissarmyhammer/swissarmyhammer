@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffff8880
+position_ordinal: ffffffffffffffffec80
 title: Add menu_name to CommandDef and show board switch commands in Window menu
 ---
 ## What

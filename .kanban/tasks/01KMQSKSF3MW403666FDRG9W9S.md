@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffe780
+position_ordinal: ffffffffffffffbd80
 title: broadcastNavCommand "first match wins" depends on undocumented Map insertion order
 ---
 **Severity: Low / Design**

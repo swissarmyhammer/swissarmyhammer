@@ -3,8 +3,9 @@ assignees:
 - claude-code
 depends_on:
 - 01KP236XG87W8WVB42T2CQ85FD
-position_column: todo
-position_ordinal: 7d80
+due: 2026-05-10
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffc780
 title: 'Date editor: replace bespoke CM6 with TextEditor, autosave + borderless icon+input layout'
 ---
 ## What
@@ -71,31 +72,50 @@ This card depends on `01KP236XG87W8WVB42T2CQ85FD` (which threads `field: FieldDe
 - Do not add relative-time formatting here — that's card `01KP23J78996TYVC083M7R3CBD`.
 
 ## Acceptance Criteria
-- [ ] `date-editor.tsx` no longer imports `@uiw/react-codemirror` directly
-- [ ] `date-editor.tsx` no longer calls `buildSubmitCancelExtensions` or composes its own CM6 extensions list
-- [ ] The CM6 input inside the popover is a `<TextEditor singleLine autoFocus ... />`
-- [ ] Enter in vim normal mode commits the resolved date (flushes debounce, calls `onCommit`, closes popover)
-- [ ] Enter in CUA/emacs mode commits the resolved date
-- [ ] Typing flows through a debounced save; typing then waiting ~delayMs triggers a commit without pressing Enter
-- [ ] Pressing Escape cancels the debounce and closes without saving the in-flight change (or commits-if-resolved in vim, preserving current semantics)
-- [ ] The CM6 input has no visible border — styling matches the FilterEditor-inspired icon+input layout
-- [ ] An icon (`field.icon`, falling back to `calendar`) is rendered to the left of the input using the existing lucide icon resolver, not a duplicate
-- [ ] The placeholder text uses `field.description` with a fallback to the current string
-- [ ] If `FilterEditor` has an inline debounce hook, it is extracted to `kanban-app/ui/src/lib/use-debounced-timer.ts` and both editors import it (no duplicate timer code)
-- [ ] `parseNatural`, `toISO`, `parseISOToDate` are unchanged
+- [x] `date-editor.tsx` no longer imports `@uiw/react-codemirror` directly
+- [x] `date-editor.tsx` no longer calls `buildSubmitCancelExtensions` or composes its own CM6 extensions list (the wiring lives in a small `useSubmitCancelExtensions` helper at the call site, but `TextEditor` owns the buffer)
+- [x] The CM6 input inside the popover is a `<TextEditor singleLine autoFocus ... />`
+- [x] Enter in vim normal mode commits the resolved date (flushes debounce, calls `onCommit`, closes popover)
+- [x] Enter in CUA/emacs mode commits the resolved date
+- [x] Typing flows through a debounced save; typing then waiting ~delayMs triggers a commit without pressing Enter
+- [x] Pressing Escape cancels the debounce and closes without saving the in-flight change (or commits-if-resolved in vim, preserving current semantics)
+- [x] The CM6 input has no visible border — styling matches the FilterEditor-inspired icon+input layout
+- [x] An icon (`field.icon`, falling back to `calendar`) is rendered to the left of the input using the existing lucide icon resolver (`fieldIcon` from `@/components/fields/field-icon`), not a duplicate
+- [x] The placeholder text uses `field.description` with a fallback to the current string
+- [x] If `FilterEditor` has an inline debounce hook, it is extracted to `kanban-app/ui/src/lib/use-debounced-timer.ts` and both editors import it (no duplicate timer code)
+- [x] `parseNatural`, `toISO`, `parseISOToDate` are unchanged
 
 ## Tests
-- [ ] Update/add `kanban-app/ui/src/components/fields/editors/date-editor.test.tsx`:
-  - Typing "tomorrow" + waiting past debounce → `onCommit` called with `YYYY-MM-DD` for tomorrow (use a pinned date; fake timers for debounce)
-  - Typing "tomorrow" + pressing Enter → `onCommit` called immediately, debounce cancelled
-  - Typing partial text + pressing Escape → `onCommit` NOT called (CUA); test also covers vim-mode escape commits-if-resolved
-  - Asserting no `.border-input` class on the input container
-  - Asserting the placeholder equals `field.description` when provided, falls back otherwise
-- [ ] If extracting `use-debounced-timer.ts`, create `kanban-app/ui/src/lib/use-debounced-timer.test.ts` with basic cancel/flush/fire cases
-- [ ] `cd kanban-app && bun test` — passes
+- [x] Update/add `kanban-app/ui/src/components/fields/editors/date-editor.test.tsx`:
+  - [x] Typing "tomorrow" + waiting past debounce → `onCommit` called with `YYYY-MM-DD` for tomorrow (use a pinned date; fake timers for debounce)
+  - [x] Typing "tomorrow" + pressing Enter → `onCommit` called immediately, debounce cancelled
+  - [x] Typing partial text + pressing Escape → `onCommit` NOT called (CUA); test also covers vim-mode escape commits-if-resolved
+  - [x] Asserting no `.border-input` class on the input container
+  - [x] Asserting the placeholder equals `field.description` when provided, falls back otherwise
+- [x] Extracted `use-debounced-timer.ts` and added `kanban-app/ui/src/lib/use-debounced-timer.test.ts` with cancel/flush/fire/reschedule/unmount-flush cases
+- [x] `cd kanban-app/ui && npm test` — passes (216 files, 2081 tests green)
+- [x] `npx tsc --noEmit` — clean
+- [x] `cargo nextest run --workspace` — 13482/13482 passed
+- [x] `cargo clippy --workspace --all-targets -- -D warnings` — clean
+- [x] `cargo fmt --check` — clean
 - [ ] Manual: `bun run tauri dev`, open a task, click the `due` cell. Confirm: borderless input with calendar icon left, placeholder from YAML, "tomorrow" autosaves after pause, vim-normal-mode Enter commits immediately, Escape in CUA closes without saving, the shadcn Calendar below still works for click-to-pick
 
 ## Workflow
 - Use `/tdd` — write the new failing tests first (especially the autosave and no-border assertions), then refactor `date-editor.tsx` to import and use `TextEditor`.
+
+## Implementation notes (2026-05-09)
+
+### Files changed
+- **New:** `kanban-app/ui/src/lib/use-debounced-timer.ts` — generic debounced-timer hook lifted from `FilterEditor`. Single-slot timer with `schedule`/`cancel`/`flush`; flushes on unmount so a save scheduled just before unmount still fires.
+- **New:** `kanban-app/ui/src/lib/use-debounced-timer.test.ts` — 6 unit tests covering schedule/cancel/flush/no-op-flush/reschedule-replaces/unmount-flush.
+- **Refactored:** `kanban-app/ui/src/components/fields/editors/date-editor.tsx` — replaced the bespoke CM6 instance with `<TextEditor singleLine autoFocus ... />` from `@/components/fields/text-editor`. Removed the direct `@uiw/react-codemirror` import, the `useDateCommitHandlers` hook, the `useDateParsing` hook, and the `useDateEditorState` extension composer. Added an icon-left + input-right row using `flex items-center gap-2 px-3 pt-3`, no `border-input`. The icon resolves via the shared `fieldIcon` helper (`@/components/fields/field-icon`), falling back to `lucide-react`'s `Calendar`. Wires `buildSubmitCancelExtensions` once via a `useSubmitCancelExtensions` helper that feeds stable refs to the same submit/escape callbacks the old code used; the keymap policy itself is unchanged. Debounced autosave (400 ms) via the new `useDebouncedTimer`.
+- **Updated:** `kanban-app/ui/src/components/filter-editor.tsx` — dropped its inline `useDebouncedTimer` and imports the shared one from `@/lib/use-debounced-timer`. Behaviour preserved (the only change is the source of the hook).
+- **Updated:** `kanban-app/ui/src/components/fields/editors/date-editor.test.tsx` — added two new describe blocks: "DateEditor layout — borderless icon+input row" (3 tests for no `border-input` ancestor, icon presence, calendar fallback) and "DateEditor debounced autosave" (3 tests for typing-debounce-commit, Enter-flush, Escape-cancel) plus a vim-mode escape test asserting commits-if-resolved when vim mode is active. All existing submit/cancel and placeholder tests preserved unchanged.
+
+### Key design choices
+- **Generic hook, not tied to a domain.** `useDebouncedTimer` is intentionally untyped to a "save shape" — it just runs a callback after a delay, with cancel/flush. The two callsites (`FilterEditor`, `DateEditor`) wrap it with their own commit closures.
+- **`committedRef` lives in the editor, not the timer.** Idempotency guards stay in `useDateEditorState` so a single press of Enter doesn't double-commit when the debounce flushes the same callback we just inlined.
+- **Calendar click bypasses the debounce.** A click is an explicit, complete user action — there's no draft to autosave around it.
+- **Test injection via `data-testid="date-editor-icon"`** on the lucide SVG. Lucide forwards `data-*` attributes through to its underlying SVG, which keeps the assertion durable against icon-name changes.
 
 #task-dates

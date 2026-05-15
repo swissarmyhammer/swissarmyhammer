@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useMemo, useState } from "react";
+import { memo, useRef, useEffect, useCallback, useMemo, useState } from "react";
 import { ArrowUp, ArrowDown, ChevronRight, ChevronDown } from "lucide-react";
 import {
   useReactTable,
@@ -12,6 +12,7 @@ import {
   type GroupingState,
   type Row,
 } from "@tanstack/react-table";
+import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import {
   Table,
   TableHeader,
@@ -22,15 +23,45 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { useContextMenu } from "@/lib/context-menu";
-import { useDispatchCommand, type CommandDef } from "@/lib/command-scope";
+import { useDispatchCommand } from "@/lib/command-scope";
 import { FocusScope } from "@/components/focus-scope";
+import { useFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
+import { useInspectOnDoubleClick } from "@/components/inspectable";
+import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
+import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
 import { Field } from "@/components/fields/field";
 import type { UseGridReturn } from "@/hooks/use-grid";
-import {
-  useEntityFocus,
-  type ClaimPredicate,
-} from "@/lib/entity-focus-context";
+import { COMPACT_ROW_HEIGHT_PX } from "@/components/fields/displays/compact-cell-wrapper";
+import { gridCellMoniker } from "@/lib/moniker";
 import type { Entity, FieldDef, PerspectiveSortEntry } from "@/types/kanban";
+import { asSegment } from "@/types/spatial";
+
+/**
+ * Body row height in pixels.
+ *
+ * Body cells use `px-3 py-1.5` (12px combined vertical padding) and render
+ * `<Field mode="compact" />` whose displays wrap their output in
+ * {@link file://./fields/displays/compact-cell-wrapper.tsx CompactCellWrapper}
+ * (24px = `h-6`). 12 + 24 = 36 — the exact height every data row renders at
+ * regardless of which fields are populated, empty, or contain CM6 mention
+ * pills / avatars.
+ *
+ * Sourced from {@link COMPACT_ROW_HEIGHT_PX} so the wrapper class and the
+ * virtualizer's fixed-height estimate stay in lock-step automatically;
+ * changing one without the other used to silently reintroduce the
+ * row-jitter the wrapper was added to fix.
+ */
+const ROW_HEIGHT = COMPACT_ROW_HEIGHT_PX;
+
+/**
+ * Overscan rows rendered above and below the visible window.
+ *
+ * Mirrors `column-view.tsx::VirtualColumn` so card-grid and table-grid
+ * virtualization stay in lockstep. Five rows on each side keeps fast
+ * keyboard / wheel scrolling visually seamless without paying for many
+ * off-screen renders.
+ */
+const ROW_OVERSCAN = 5;
 
 export interface DataTableColumn {
   field: FieldDef;
@@ -41,17 +72,6 @@ interface DataTableProps {
   columns: DataTableColumn[];
   rows: Entity[];
   grid: UseGridReturn;
-  /**
-   * 2D array of cell monikers: cellMonikers[row][col] = moniker string.
-   * When provided together with claimPredicates, each cell is wrapped
-   * in a FocusScope for pull-based navigation.
-   */
-  cellMonikers?: string[][];
-  /**
-   * 2D array of claim predicates: claimPredicates[row][col] = ClaimPredicate[].
-   * Must match dimensions of cellMonikers.
-   */
-  claimPredicates?: ClaimPredicate[][][];
   onCellClick?: (row: number, col: number) => void;
   onRowContextMenu?: (entity: Entity, e: React.MouseEvent) => void;
   renderEditor?: (
@@ -66,39 +86,226 @@ interface DataTableProps {
   /** Show a leading selector column before field columns (default true). */
   showRowSelector?: boolean;
   /**
-   * Optional factory that returns entity-specific commands for a given row.
-   * When provided, each row is wrapped in a FocusScope with these commands
-   * so right-click, inspect, and palette resolve for that row's entity.
-   */
-  rowEntityCommands?: (entity: Entity) => CommandDef[];
-  /**
    * Active perspective sort entries. When provided, column headers show
    * sort indicators and dispatch `perspective.sort.toggle` on click.
    */
   perspectiveSort?: readonly PerspectiveSortEntry[];
   /** Active perspective ID — required for dispatching sort commands. */
   perspectiveId?: string;
+  /**
+   * Context-menu handler for the outer scroll container. Right-clicking
+   * whitespace between rows or below the last row fires this handler so
+   * view-scoped commands (e.g. `entity.add:{type}`) surface even when the
+   * click doesn't land on a row. Per-row context menus stop propagation
+   * via `useContextMenu`, so this handler only fires from non-row areas.
+   */
+  onContainerContextMenu?: (e: React.MouseEvent) => void;
+  /**
+   * The grid-cell coordinates of the focused `grid_cell:R:K` moniker.
+   *
+   * `null` when the focused moniker is outside the grid (e.g. `ui:navbar`,
+   * an entity moniker, or no focus at all). The matching cell stamps a
+   * `data-cell-cursor="{row}:{colKey}"` attribute as an output-only
+   * debugging / e2e selector — no CSS rule reads it. A `null` cursor
+   * suppresses the attribute (and any e2e match) entirely, instead of
+   * falling back to the internal `{0, 0}` default. The visible focus
+   * decoration on the matching cell is the `<FocusIndicator>` rendered
+   * inside the cell's `<FocusScope>` from React state — the previous
+   * cell-ring (`ring-2 ring-primary ring-inset`) was removed in
+   * `01KQ573XBT0GFQWVY6QEZQ74R6` to enforce "one decorator, one place".
+   */
+  gridCellCursor?: { row: number; colKey: string } | null;
 }
 
-export function DataTable({
-  columns,
-  rows,
-  grid,
-  cellMonikers,
-  claimPredicates,
-  onCellClick,
-  onRowContextMenu: _onRowContextMenu,
-  renderEditor,
-  grouping: groupingProp,
-  onVisibleRowCount,
-  showRowSelector = true,
-  rowEntityCommands,
-  perspectiveSort,
-  perspectiveId,
-}: DataTableProps) {
-  const tableContainerRef = useRef<HTMLDivElement>(null);
+export function DataTable(props: DataTableProps) {
   const cursorRef = useRef<HTMLTableCellElement>(null);
-  const dispatchSortToggle = useDispatchCommand("perspective.sort.toggle");
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const { table, perspectiveSortMap, dataRowIndices, handleCellClick } =
+    useDataTableState(props, cursorRef);
+
+  const flatRows = table.getRowModel().rows;
+
+  // Virtualize body rows. Header is a CSS-sticky `<thead>` outside the
+  // virtualized list so it continues to pin to the scroll container's
+  // top edge during scroll without needing virtualization itself.
+  const virtualizer = useVirtualizer({
+    count: flatRows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: ROW_OVERSCAN,
+  });
+
+  // Translate the cursor's data-row index into a flat-row index and
+  // scroll the virtualizer to that row whenever the cursor moves
+  // vertically. Without this, moving the cursor past the visible
+  // window leaves the cursor row unmounted -- `cursorRef.scrollIntoView`
+  // (the existing horizontal-scroll handler in `useDataTableState`)
+  // can't scroll a node that does not exist.
+  useCursorRowScroll(virtualizer, dataRowIndices, props.grid.cursor.row);
+
+  const virtualItems = virtualizer.getVirtualItems();
+  const totalSize = virtualizer.getTotalSize();
+  const paddingTop = virtualItems.length > 0 ? virtualItems[0].start : 0;
+  const paddingBottom =
+    virtualItems.length > 0
+      ? totalSize - virtualItems[virtualItems.length - 1].end
+      : 0;
+
+  return (
+    <div
+      ref={scrollRef}
+      className="flex-1 overflow-auto min-h-0"
+      onContextMenu={props.onContainerContextMenu}
+    >
+      <Table className="border-collapse text-sm">
+        <TableHeader className="sticky top-0 z-[1] bg-muted/80 backdrop-blur-sm">
+          {table.getHeaderGroups().map((headerGroup) => (
+            <DataTableHeaderRow
+              key={headerGroup.id}
+              headerGroup={headerGroup}
+              showRowSelector={props.showRowSelector ?? true}
+              perspectiveSortMap={perspectiveSortMap}
+              perspectiveId={props.perspectiveId}
+            />
+          ))}
+        </TableHeader>
+        <TableBody>
+          {paddingTop > 0 && <PaddingRow height={paddingTop} />}
+          {virtualItems.map((vi) => {
+            const row = flatRows[vi.index];
+            return (
+              <DataTableRow
+                key={row.id}
+                row={row}
+                ri={vi.index}
+                columns={props.columns}
+                grid={props.grid}
+                dataRowIndices={dataRowIndices}
+                showRowSelector={props.showRowSelector ?? true}
+                handleCellClick={handleCellClick}
+                renderEditor={props.renderEditor}
+                onCellClick={props.onCellClick}
+                cursorRef={cursorRef}
+                gridCellCursor={props.gridCellCursor ?? null}
+              />
+            );
+          })}
+          {paddingBottom > 0 && <PaddingRow height={paddingBottom} />}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
+interface PaddingRowProps {
+  height: number;
+}
+
+/**
+ * Empty `<tr>` spacer that reserves vertical space above or below the
+ * virtualized window of body rows.
+ *
+ * The padding-row pattern is the standard way to virtualize inside a
+ * `<table>` element while keeping browser table layout intact: two
+ * blank rows (top + bottom) absorb the scroll-extent that the unmounted
+ * rows would otherwise occupy, so the scrollbar reflects the full row
+ * count and `scrollToIndex` lands at the right pixel.
+ *
+ * `pointer-events: none` prevents the spacer (which can be hundreds of
+ * pixels tall on long lists) from swallowing right-click events that
+ * the outer scroll container's `onContainerContextMenu` handler relies
+ * on for view-scoped commands like "New Task" on whitespace.
+ */
+function PaddingRow({ height }: PaddingRowProps) {
+  return (
+    <tr
+      aria-hidden="true"
+      data-virtual-padding="true"
+      style={{ height, pointerEvents: "none" }}
+    />
+  );
+}
+
+/**
+ * Build an inverse map from data-row index to flat-row index.
+ *
+ * `dataRowIndices` maps `flatRowIndex -> dataRowIndex` (with `-1` for
+ * group-header rows). The virtualizer indexes into the flat row list,
+ * but the grid cursor uses data-row indices -- so to call
+ * `virtualizer.scrollToIndex(...)` for a cursor move we need the
+ * inverse: `dataRowIndex -> flatRowIndex`.
+ */
+function useDataRowToFlatRow(dataRowIndices: number[]): number[] {
+  return useMemo(() => {
+    const inverse: number[] = [];
+    for (let fi = 0; fi < dataRowIndices.length; fi++) {
+      const di = dataRowIndices[fi];
+      if (di >= 0) inverse[di] = fi;
+    }
+    return inverse;
+  }, [dataRowIndices]);
+}
+
+/**
+ * Scroll the virtualizer to the cursor row when the cursor moves
+ * outside the currently mounted virtual window.
+ *
+ * Runs only when the data-row index changes -- horizontal cursor moves
+ * (column changes) do not trigger a virtualizer scroll because they
+ * cannot move the cursor outside the vertical viewport. The existing
+ * `cursorRef.scrollIntoView` effect in `useDataTableState` handles
+ * inline (horizontal) scrolling once the row remounts.
+ *
+ * Skips the initial mount: on first render the cursor's previous row
+ * is undefined, so there is nothing to scroll *to* (the user has not
+ * yet moved). This also prevents an unconditional `scrollToIndex` on
+ * every component mount, which would fire a React state update inside
+ * the virtualizer outside any pending `act()` scope and produce a
+ * spurious warning in test runs.
+ *
+ * Bails out early when the cursor row is already within the mounted
+ * virtual window -- intra-window cursor moves are handled entirely by
+ * the existing `cursorRef.scrollIntoView` effect.
+ */
+function useCursorRowScroll(
+  virtualizer: Virtualizer<HTMLDivElement, Element>,
+  dataRowIndices: number[],
+  cursorRow: number,
+) {
+  const dataRowToFlatRow = useDataRowToFlatRow(dataRowIndices);
+  const previousCursorRow = useRef<number | null>(null);
+  useEffect(() => {
+    const previous = previousCursorRow.current;
+    previousCursorRow.current = cursorRow;
+    // Skip initial mount -- nothing to scroll to until the cursor moves.
+    if (previous === null) return;
+    if (previous === cursorRow) return;
+
+    const flatIndex = dataRowToFlatRow[cursorRow];
+    if (flatIndex === undefined) return;
+    const visible = virtualizer.getVirtualItems();
+    if (visible.length === 0) return;
+    const firstVisible = visible[0].index;
+    const lastVisible = visible[visible.length - 1].index;
+    if (flatIndex >= firstVisible && flatIndex <= lastVisible) return;
+    virtualizer.scrollToIndex(flatIndex, { align: "auto" });
+  }, [virtualizer, dataRowToFlatRow, cursorRow]);
+}
+
+/** Bundle all the table-state hooks the renderer needs. */
+function useDataTableState(
+  props: DataTableProps,
+  cursorRef: React.RefObject<HTMLTableCellElement | null>,
+) {
+  const {
+    columns,
+    rows,
+    grid,
+    grouping: groupingProp,
+    onVisibleRowCount,
+    perspectiveSort,
+    onCellClick,
+  } = props;
   const [sorting, setSorting] = useState<SortingState>([]);
   const [grouping, setGrouping] = useState<GroupingState>(groupingProp ?? []);
 
@@ -108,51 +315,8 @@ export function DataTable({
     setGrouping(groupingProp ?? []);
   }, [groupingProp]);
 
-  // Build a lookup: field name → { direction, priority } from perspective sort entries.
-  const perspectiveSortMap = useMemo(() => {
-    const map = new Map<
-      string,
-      { direction: "asc" | "desc"; priority: number }
-    >();
-    if (!perspectiveSort) return map;
-    for (let i = 0; i < perspectiveSort.length; i++) {
-      map.set(perspectiveSort[i].field, {
-        direction: perspectiveSort[i].direction,
-        priority: i + 1,
-      });
-    }
-    return map;
-  }, [perspectiveSort]);
-
-  // Build TanStack column definitions from our field-based columns
-  const tanstackColumns = useMemo<ColumnDef<Entity>[]>(
-    () =>
-      columns.map((col) => ({
-        id: col.field.name,
-        accessorFn: (row: Entity) => row.fields[col.field.name],
-        header: col.field.name.replace(/_/g, " "),
-        size: col.width,
-        cell: ({ row: tanRow }) => {
-          const entity = tanRow.original;
-          return (
-            <Field
-              fieldDef={col.field}
-              entityType={entity.entity_type}
-              entityId={entity.id}
-              mode="compact"
-              editing={false}
-            />
-          );
-        },
-        sortingFn: (rowA: Row<Entity>, rowB: Row<Entity>, columnId: string) => {
-          const a = rowA.original.fields[columnId];
-          const b = rowB.original.fields[columnId];
-          return compareValues(a, b, col.field);
-        },
-        aggregationFn: "count" as const,
-      })),
-    [columns],
-  );
+  const perspectiveSortMap = usePerspectiveSortMap(perspectiveSort);
+  const tanstackColumns = useTanstackColumns(columns);
 
   const table = useReactTable({
     data: rows,
@@ -168,10 +332,99 @@ export function DataTable({
   });
 
   const flatRows = table.getRowModel().rows;
+  const dataRowIndices = useDataRowIndices(flatRows);
+  const visibleDataRowCount = useMemo(
+    () => dataRowIndices.filter((i) => i >= 0).length,
+    [dataRowIndices],
+  );
+  useEffect(() => {
+    onVisibleRowCount?.(visibleDataRowCount);
+  }, [visibleDataRowCount, onVisibleRowCount]);
 
-  // Map each flatRow index to a data-row index (-1 for group headers).
-  // The grid cursor operates on data-row indices, not visual row indices.
-  const dataRowIndices = useMemo(() => {
+  useEffect(() => {
+    cursorRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [grid.cursor.row, grid.cursor.col, cursorRef]);
+
+  const handleCellClick = useCallback(
+    (row: number, col: number) => {
+      onCellClick?.(row, col);
+    },
+    [onCellClick],
+  );
+
+  return { table, perspectiveSortMap, dataRowIndices, handleCellClick };
+}
+
+/** Build the per-field-name lookup of `{ direction, priority }`. */
+function usePerspectiveSortMap(
+  perspectiveSort: readonly PerspectiveSortEntry[] | undefined,
+) {
+  return useMemo(() => {
+    const map = new Map<
+      string,
+      { direction: "asc" | "desc"; priority: number }
+    >();
+    if (!perspectiveSort) return map;
+    for (let i = 0; i < perspectiveSort.length; i++) {
+      map.set(perspectiveSort[i].field, {
+        direction: perspectiveSort[i].direction,
+        priority: i + 1,
+      });
+    }
+    return map;
+  }, [perspectiveSort]);
+}
+
+/** Build TanStack column definitions from our field-based columns. */
+function useTanstackColumns(columns: DataTableColumn[]) {
+  return useMemo<ColumnDef<Entity>[]>(
+    () =>
+      columns.map((col) => ({
+        id: col.field.name,
+        accessorFn: (row: Entity) => row.fields[col.field.name],
+        header: col.field.name.replace(/_/g, " "),
+        size: col.width,
+        cell: ({ row: tanRow }) => {
+          const entity = tanRow.original;
+          return (
+            <Field
+              fieldDef={col.field}
+              entityType={entity.entity_type}
+              entityId={entity.id}
+              mode="compact"
+              editing={false}
+              // The enclosing `grid_cell:R:K` `<FocusScope>` leaf is the
+              // cursor target. Field's inner `<FocusScope>` must NOT
+              // register in the spatial graph here: the kernel's
+              // scope-is-leaf invariant rejects nested `<FocusScope>`
+              // registrations, and an inner field scope would cause the
+              // outer cell scope to be dropped as `scope-not-leaf` —
+              // making the cell invisible to beam search and click-focus.
+              // `register={false}` suppresses the inner `<FocusScope>`;
+              // the `<Inspectable>` wrapper inside `<Field>` is preserved
+              // so double-click → field inspect still works. The
+              // `handleEvents={false}` is now structurally redundant
+              // (no inner scope to handle events) but kept as belt-and-
+              // suspenders for the prop's documented contract.
+              register={false}
+              handleEvents={false}
+            />
+          );
+        },
+        sortingFn: (rowA: Row<Entity>, rowB: Row<Entity>, columnId: string) => {
+          const a = rowA.original.fields[columnId];
+          const b = rowB.original.fields[columnId];
+          return compareValues(a, b, col.field);
+        },
+        aggregationFn: "count" as const,
+      })),
+    [columns],
+  );
+}
+
+/** Map each flat-row index to a data-row index (-1 for group headers). */
+function useDataRowIndices(flatRows: Row<Entity>[]) {
+  return useMemo(() => {
     const indices: number[] = [];
     let di = 0;
     for (const row of flatRows) {
@@ -183,362 +436,739 @@ export function DataTable({
     }
     return indices;
   }, [flatRows]);
+}
 
-  const visibleDataRowCount = useMemo(
-    () => dataRowIndices.filter((i) => i >= 0).length,
-    [dataRowIndices],
-  );
+interface DataTableHeaderRowProps {
+  headerGroup: ReturnType<
+    ReturnType<typeof useReactTable<Entity>>["getHeaderGroups"]
+  >[number];
+  showRowSelector: boolean;
+  perspectiveSortMap: Map<
+    string,
+    { direction: "asc" | "desc"; priority: number }
+  >;
+  perspectiveId: string | undefined;
+}
 
-  // Report visible data row count changes to parent
-  useEffect(() => {
-    onVisibleRowCount?.(visibleDataRowCount);
-  }, [visibleDataRowCount, onVisibleRowCount]);
-
-  // Scroll the active cell into view
-  useEffect(() => {
-    cursorRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [grid.cursor.row, grid.cursor.col]);
-
-  const handleCellClick = useCallback(
-    (row: number, col: number) => {
-      onCellClick?.(row, col);
-    },
-    [onCellClick],
-  );
-
-  const selectedRange = grid.getSelectedRange();
-  const isSelected = (row: number, col: number) => {
-    if (!selectedRange) return false;
-    return (
-      row >= selectedRange.startRow &&
-      row <= selectedRange.endRow &&
-      col >= selectedRange.startCol &&
-      col <= selectedRange.endCol
-    );
-  };
-
-  /** Whether claimWhen-based FocusScopes should wrap cells. */
-  const useClaimNav =
-    cellMonikers !== undefined && claimPredicates !== undefined;
-
-  if (flatRows.length === 0) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-muted-foreground">
-        No rows to display
-      </div>
-    );
-  }
-
+/** One header row containing the selector cell (optional) and all field headers. */
+function DataTableHeaderRow({
+  headerGroup,
+  showRowSelector,
+  perspectiveSortMap,
+  perspectiveId,
+}: DataTableHeaderRowProps) {
   return (
-    <div ref={tableContainerRef} className="flex-1 overflow-auto min-h-0">
-      <Table className="border-collapse text-sm">
-        <TableHeader className="sticky top-0 z-[1] bg-muted/80 backdrop-blur-sm">
-          {table.getHeaderGroups().map((headerGroup) => (
-            <TableRow
-              key={headerGroup.id}
-              className="border-b border-border hover:bg-transparent"
-            >
-              {showRowSelector && (
-                <TableHead
-                  data-testid="row-selector-header"
-                  className="w-10 px-0 py-1.5 bg-muted/80"
-                  style={{ width: 40 }}
-                />
-              )}
-              {headerGroup.headers.map((header, ci) => {
-                const columnId = header.column.id;
-                const isGrouped = header.column.getIsGrouped();
-                // Use perspective sort state when available, fall back to TanStack
-                const pSort = perspectiveSortMap.get(columnId);
-                const isSorted = pSort
-                  ? pSort.direction
-                  : header.column.getIsSorted();
-                const sortPriority = pSort?.priority;
-                const showPriority =
-                  sortPriority !== undefined && perspectiveSortMap.size > 1;
-
-                const handleHeaderClick = perspectiveId
-                  ? (e: React.MouseEvent) => {
-                      // Shift+click appends to multi-sort via set; plain click toggles
-                      if (e.shiftKey) {
-                        // Shift+click: cycle this field independently (toggle)
-                        dispatchSortToggle({
-                          args: {
-                            field: columnId,
-                            perspective_id: perspectiveId,
-                          },
-                        }).catch(console.error);
-                      } else {
-                        dispatchSortToggle({
-                          args: {
-                            field: columnId,
-                            perspective_id: perspectiveId,
-                          },
-                        }).catch(console.error);
-                      }
-                    }
-                  : header.column.getToggleSortingHandler();
-
-                const handleHeaderContextMenu = perspectiveId
-                  ? (e: React.MouseEvent) => {
-                      e.preventDefault();
-                      // Context menu not wired to command palette yet —
-                      // for now toggle grouping as before.
-                      header.column.toggleGrouping();
-                    }
-                  : (e: React.MouseEvent) => {
-                      e.preventDefault();
-                      header.column.toggleGrouping();
-                    };
-
-                return (
-                  <TableHead
-                    key={header.id}
-                    data-testid={`column-header-${columnId}`}
-                    className={cn(
-                      "text-left px-3 py-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide select-none cursor-pointer hover:bg-muted/60 transition-colors h-auto",
-                      ci === 0 && "pl-4",
-                    )}
-                    style={
-                      header.column.getSize()
-                        ? { width: header.column.getSize() }
-                        : undefined
-                    }
-                    onClick={handleHeaderClick}
-                    onContextMenu={handleHeaderContextMenu}
-                  >
-                    <span className="flex items-center gap-1">
-                      {isGrouped && (
-                        <ChevronRight className="h-3 w-3 text-primary" />
-                      )}
-                      {flexRender(
-                        header.column.columnDef.header,
-                        header.getContext(),
-                      )}
-                      {isSorted === "asc" && (
-                        <ArrowUp
-                          className="h-3 w-3"
-                          data-testid={`sort-indicator-${columnId}`}
-                        />
-                      )}
-                      {isSorted === "desc" && (
-                        <ArrowDown
-                          className="h-3 w-3"
-                          data-testid={`sort-indicator-${columnId}`}
-                        />
-                      )}
-                      {showPriority && (
-                        <span
-                          className="text-[9px] text-muted-foreground/70"
-                          data-testid={`sort-priority-${columnId}`}
-                        >
-                          {sortPriority}
-                        </span>
-                      )}
-                    </span>
-                  </TableHead>
-                );
-              })}
-            </TableRow>
-          ))}
-        </TableHeader>
-        <TableBody>
-          {flatRows.map((row, ri) => {
-            // Group header rows -- not part of grid cursor navigation
-            if (row.getIsGrouped()) {
-              // colSpan covers all field columns plus the selector column when visible
-              const groupColSpan = showRowSelector
-                ? columns.length + 1
-                : columns.length;
-              return (
-                <TableRow
-                  key={row.id}
-                  className="border-b border-border/50 bg-muted/20 hover:bg-muted/40 cursor-pointer"
-                  onClick={() => row.toggleExpanded()}
-                >
-                  <TableCell
-                    colSpan={groupColSpan}
-                    className="px-4 py-1.5 font-medium text-sm"
-                  >
-                    <span className="flex items-center gap-1.5">
-                      {row.getIsExpanded() ? (
-                        <ChevronDown className="h-3.5 w-3.5" />
-                      ) : (
-                        <ChevronRight className="h-3.5 w-3.5" />
-                      )}
-                      {String(row.groupingValue ?? "—")}
-                      <span className="text-muted-foreground text-xs">
-                        ({row.subRows.length})
-                      </span>
-                    </span>
-                  </TableCell>
-                </TableRow>
-              );
-            }
-
-            // Data row -- use data-row index (di) for grid cursor, not visual index (ri)
-            const di = dataRowIndices[ri];
-            const entity = row.original;
-            const entityMk = entity.moniker;
-            const rowCommands = rowEntityCommands?.(entity) ?? [];
-            return (
-              <FocusScope
-                key={row.id}
-                moniker={entityMk}
-                commands={rowCommands}
-                renderContainer={false}
-              >
-                <EntityRow
-                  entityMk={entityMk}
-                  isCursorRow={di === grid.cursor.row}
-                  isEditing={grid.mode === "edit"}
-                >
-                  {showRowSelector && (
-                    <RowSelector
-                      di={di}
-                      isCursorRow={di === grid.cursor.row}
-                      onClick={() => handleCellClick(di, grid.cursor.col)}
-                    />
-                  )}
-                  {columns.map((col, ci) => {
-                    const isCursor =
-                      di === grid.cursor.row && ci === grid.cursor.col;
-                    const isSel = isSelected(di, ci);
-                    const isEditing =
-                      isCursor && grid.mode === "edit" && renderEditor;
-
-                    const cellContent = isEditing ? (
-                      renderEditor(
-                        entity,
-                        col.field,
-                        () => grid.exitEdit(),
-                        () => grid.exitEdit(),
-                      )
-                    ) : (
-                      <Field
-                        fieldDef={col.field}
-                        entityType={entity.entity_type}
-                        entityId={entity.id}
-                        mode="compact"
-                        editing={false}
-                      />
-                    );
-
-                    const cellClasses = cn(
-                      "px-3 py-1.5 align-middle max-w-[300px]",
-                      ci === 0 && "pl-4",
-                      isCursor && "ring-2 ring-primary ring-inset",
-                      isSel && !isCursor && "bg-primary/10",
-                      // Strip cell padding during editing for editors that
-                      // fill the entire cell.
-                      isEditing &&
-                        col.field.editor !== "color-palette" &&
-                        col.field.editor !== "select" &&
-                        col.field.editor !== "multi-select" &&
-                        "p-0",
-                    );
-
-                    // Wrap in FocusScope when claimWhen navigation is active
-                    if (useClaimNav) {
-                      const mk = cellMonikers[di]?.[ci];
-                      const preds = claimPredicates[di]?.[ci];
-                      if (mk && preds) {
-                        return (
-                          <GridCellScope
-                            key={col.field.id}
-                            moniker={mk}
-                            claimWhen={preds}
-                            isCursor={isCursor}
-                            cursorRef={isCursor ? cursorRef : undefined}
-                            className={cellClasses}
-                            onClick={() => handleCellClick(di, ci)}
-                            onDoubleClick={() => {
-                              onCellClick?.(di, ci);
-                              grid.enterEdit();
-                            }}
-                          >
-                            {cellContent}
-                          </GridCellScope>
-                        );
-                      }
-                    }
-
-                    // Fallback: plain TableCell (no claimWhen)
-                    return (
-                      <TableCell
-                        key={col.field.id}
-                        ref={isCursor ? cursorRef : undefined}
-                        className={cellClasses}
-                        onClick={() => handleCellClick(di, ci)}
-                        onDoubleClick={() => {
-                          onCellClick?.(di, ci);
-                          grid.enterEdit();
-                        }}
-                      >
-                        {cellContent}
-                      </TableCell>
-                    );
-                  })}
-                </EntityRow>
-              </FocusScope>
-            );
-          })}
-        </TableBody>
-      </Table>
-    </div>
+    <TableRow className="border-b border-border hover:bg-transparent">
+      {showRowSelector && (
+        <TableHead
+          data-testid="row-selector-header"
+          className="w-10 px-0 py-1.5 bg-muted/80"
+          style={{ width: 40 }}
+        />
+      )}
+      {headerGroup.headers.map((header, ci) => (
+        <DataTableHeaderCell
+          key={header.id}
+          header={header}
+          ci={ci}
+          perspectiveSortMap={perspectiveSortMap}
+          perspectiveId={perspectiveId}
+        />
+      ))}
+    </TableRow>
   );
 }
 
-interface GridCellScopeProps {
-  moniker: string;
-  claimWhen: ClaimPredicate[];
-  isCursor: boolean;
+interface DataTableHeaderCellProps {
+  header: ReturnType<
+    ReturnType<typeof useReactTable<Entity>>["getHeaderGroups"]
+  >[number]["headers"][number];
+  ci: number;
+  perspectiveSortMap: Map<
+    string,
+    { direction: "asc" | "desc"; priority: number }
+  >;
+  perspectiveId: string | undefined;
+}
+
+/**
+ * One TableHead cell. Left-click dispatches a sort toggle (when a perspective
+ * is active) or falls back to TanStack's built-in toggle; right-click toggles
+ * column grouping and stops propagation so the outer container's view-scoped
+ * context menu does not also fire.
+ */
+function DataTableHeaderCell({
+  header,
+  ci,
+  perspectiveSortMap,
+  perspectiveId,
+}: DataTableHeaderCellProps) {
+  const dispatchSortToggle = useDispatchCommand("perspective.sort.toggle");
+  const columnId = header.column.id;
+  const isGrouped = header.column.getIsGrouped();
+  const pSort = perspectiveSortMap.get(columnId);
+  const isSorted = pSort ? pSort.direction : header.column.getIsSorted();
+  const sortPriority = pSort?.priority;
+  const showPriority =
+    sortPriority !== undefined && perspectiveSortMap.size > 1;
+
+  const handleHeaderClick = perspectiveId
+    ? () => {
+        dispatchSortToggle({
+          args: { field: columnId, perspective_id: perspectiveId },
+        }).catch(console.error);
+      }
+    : header.column.getToggleSortingHandler();
+
+  // Right-clicking a column header toggles grouping. Must stopPropagation so
+  // the contextmenu event does NOT bubble to the outer scroll container's
+  // `onContainerContextMenu` — otherwise the header toggle would fire
+  // alongside the view-scoped native menu ("New <EntityType>" etc.).
+  const handleHeaderContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    header.column.toggleGrouping();
+  };
+
+  return (
+    <TableHead
+      data-testid={`column-header-${columnId}`}
+      className={cn(
+        "text-left px-3 py-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide select-none cursor-pointer hover:bg-muted/60 transition-colors h-auto",
+        ci === 0 && "pl-4",
+      )}
+      style={
+        header.column.getSize() ? { width: header.column.getSize() } : undefined
+      }
+      onClick={handleHeaderClick}
+      onContextMenu={handleHeaderContextMenu}
+    >
+      <span className="flex items-center gap-1">
+        {isGrouped && <ChevronRight className="h-3 w-3 text-primary" />}
+        {flexRender(header.column.columnDef.header, header.getContext())}
+        {isSorted === "asc" && (
+          <ArrowUp
+            className="h-3 w-3"
+            data-testid={`sort-indicator-${columnId}`}
+          />
+        )}
+        {isSorted === "desc" && (
+          <ArrowDown
+            className="h-3 w-3"
+            data-testid={`sort-indicator-${columnId}`}
+          />
+        )}
+        {showPriority && (
+          <span
+            className="text-[9px] text-muted-foreground/70"
+            data-testid={`sort-priority-${columnId}`}
+          >
+            {sortPriority}
+          </span>
+        )}
+      </span>
+    </TableHead>
+  );
+}
+
+interface DataTableRowProps {
+  row: Row<Entity>;
+  ri: number;
+  columns: DataTableColumn[];
+  grid: UseGridReturn;
+  dataRowIndices: number[];
+  showRowSelector: boolean;
+  handleCellClick: (row: number, col: number) => void;
+  renderEditor: DataTableProps["renderEditor"];
+  onCellClick: DataTableProps["onCellClick"];
+  cursorRef: React.RefObject<HTMLTableCellElement | null>;
+  /**
+   * Grid-cell cursor coordinates resolved from the focused moniker. When a
+   * cell's `(di, col.field.name)` matches, it stamps `data-cell-cursor` —
+   * `null` suppresses the attribute entirely. The visible focus decoration
+   * is rendered by the `<FocusIndicator>` inside the cell's `<FocusScope>`,
+   * not by this attribute.
+   */
+  gridCellCursor: { row: number; colKey: string } | null;
+}
+
+/**
+ * Render one data or group-header row.
+ *
+ * `React.memo` so the ~2000 sibling rows don't re-render when GridView
+ * re-renders with identical per-row state (same grid cursor, same mode,
+ * same row data). Initial mount on a 2000-row grid used to fire 4x
+ * (strict-mode + focus/cursor init) × 2000 = 8000 row renders; with memo
+ * the three repeat renders skip the subtree when props are shallow-equal.
+ */
+const DataTableRow = memo(function DataTableRowImpl(props: DataTableRowProps) {
+  const { row, ri, columns, grid, dataRowIndices, showRowSelector } = props;
+  if (row.getIsGrouped()) {
+    return (
+      <GroupHeaderRow
+        row={row}
+        columns={columns}
+        showRowSelector={showRowSelector}
+      />
+    );
+  }
+  const di = dataRowIndices[ri];
+  const entity = row.original;
+  const entityMk = entity.moniker;
+  return (
+    // The row carries the row entity's moniker (`task:<id>` or
+    // `tag:<id>`). `renderContainer={false}` means the FocusZone
+    // publishes its identity downward (CommandScopeContext +
+    // FocusZoneContext + FullyQualifiedMonikerContext) so cell scopes
+    // compose their FQMs and `parent_zone` under the row entity,
+    // without rendering a wrapping `<div>` — the table layout
+    // requires `<tr>` to be a direct child of `<tbody>`, which a
+    // `<div>` parent would break.
+    //
+    // Why a `<FocusZone>` and not a `<FocusScope>`: the row's React
+    // subtree contains per-cell `<GridCellFocusable>` `<FocusScope>`
+    // leaves. Wrapping leaves inside another `<FocusScope>` violates
+    // the kernel's scope-is-leaf invariant (the path-prefix branch in
+    // `swissarmyhammer-focus/src/registry.rs` flags any registered
+    // descendant whose FQM begins with a registered Scope's FQM
+    // followed by `/`). Promoting the row to a Zone lifts the
+    // restriction — Zones legally contain nested scopes — and keeps
+    // the entity-moniker frame in the command-scope chain so
+    // right-click still resolves entity-level commands against the
+    // row.
+    //
+    // Because of the `<tr>`-must-be-`<tbody>`-child DOM constraint,
+    // the standard `<Inspectable>` wrapper (which renders a `<div
+    // className="contents">`) cannot wrap the row. Instead,
+    // `<EntityRow>` calls `useInspectOnDoubleClick(entityMk)`
+    // directly and attaches the resulting handler to its `<tr>`.
+    // Both paths share the same hook, so Guard A continues to hold
+    // (the inspect dispatch site is still `inspectable.tsx`).
+    <FocusScope moniker={asSegment(entityMk)} renderContainer={false}>
+      <EntityRow
+        entityMk={entityMk}
+        isCursorRow={di === grid.cursor.row}
+        isEditing={grid.mode === "edit"}
+      >
+        {showRowSelector && (
+          <RowSelector
+            di={di}
+            isCursorRow={di === grid.cursor.row}
+            onClick={() => props.handleCellClick(di, grid.cursor.col)}
+          />
+        )}
+        {columns.map((col, ci) => {
+          const cursorMatches =
+            props.gridCellCursor !== null &&
+            props.gridCellCursor.row === di &&
+            props.gridCellCursor.colKey === col.field.name;
+          const cellCursorAttr = cursorMatches
+            ? `${di}:${col.field.name}`
+            : undefined;
+          return (
+            <DataBodyCell
+              key={col.field.id}
+              di={di}
+              ci={ci}
+              col={col}
+              entity={entity}
+              grid={grid}
+              handleCellClick={props.handleCellClick}
+              renderEditor={props.renderEditor}
+              onCellClick={props.onCellClick}
+              cursorRef={props.cursorRef}
+              cellCursorAttr={cellCursorAttr}
+            />
+          );
+        })}
+      </EntityRow>
+    </FocusScope>
+  );
+});
+
+interface GroupHeaderRowProps {
+  row: Row<Entity>;
+  columns: DataTableColumn[];
+  showRowSelector: boolean;
+}
+
+/** Row rendering the "— (N)" collapsible header for a TanStack group. */
+function GroupHeaderRow({
+  row,
+  columns,
+  showRowSelector,
+}: GroupHeaderRowProps) {
+  const groupColSpan = showRowSelector ? columns.length + 1 : columns.length;
+  return (
+    <TableRow
+      className="border-b border-border/50 bg-muted/20 hover:bg-muted/40 cursor-pointer"
+      onClick={() => row.toggleExpanded()}
+    >
+      <TableCell
+        colSpan={groupColSpan}
+        className="px-4 py-1.5 font-medium text-sm"
+      >
+        <span className="flex items-center gap-1.5">
+          {row.getIsExpanded() ? (
+            <ChevronDown className="h-3.5 w-3.5" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5" />
+          )}
+          {String(row.groupingValue ?? "—")}
+          <span className="text-muted-foreground text-xs">
+            ({row.subRows.length})
+          </span>
+        </span>
+      </TableCell>
+    </TableRow>
+  );
+}
+
+interface DataBodyCellProps {
+  di: number;
+  ci: number;
+  col: DataTableColumn;
+  entity: Entity;
+  grid: UseGridReturn;
+  /**
+   * Value for the `data-cell-cursor` attribute when this cell is the
+   * grid-cell cursor target — `undefined` suppresses the attribute.
+   * Computed once per row in the parent so this cell's `React.memo`
+   * shallow comparison treats sibling cells' cursor flips as equal.
+   * Output-only: no CSS rule reads it; the visible focus bar is rendered
+   * by `<FocusIndicator>` inside the cell's `<FocusScope>`.
+   */
+  cellCursorAttr: string | undefined;
+  handleCellClick: (row: number, col: number) => void;
+  renderEditor: DataTableProps["renderEditor"];
+  onCellClick: DataTableProps["onCellClick"];
+  cursorRef: React.RefObject<HTMLTableCellElement | null>;
+}
+
+/**
+ * Whether `field` renders a "leaf" editor — one where clicking the visible
+ * cell IS the edit gesture and there's no separate inspector view that adds
+ * value over the editor itself.
+ *
+ * Color is the canonical example: the swatch the user sees in display mode
+ * is itself the popover trigger, so a single click should drill straight
+ * into editing (open the picker), and a double-click should also drill in
+ * rather than route to `ui.inspect` (there's nothing to inspect that the
+ * editor doesn't already show).
+ *
+ * The check is a hardcoded editor-name list today because there's only one
+ * leaf editor in the codebase. When a second one lands (e.g.
+ * `icon-palette`, `boolean-toggle`), this should move onto the schema as a
+ * `FieldDef` registry flag (e.g. `editorKind: "leaf"`) so the cell's
+ * behavior is metadata-driven — see JS_TS_REVIEW.md "no hardcoded field
+ * logic in components". Until then, this helper is the single point of
+ * truth that all call sites in this file route through, so the migration
+ * to a schema flag is a one-line change here.
+ */
+function isLeafEditorField(field: FieldDef): boolean {
+  return field.editor === "color-palette";
+}
+
+/**
+ * One data cell.
+ *
+ * Memoized so that when GridView re-renders with identical per-cell state,
+ * the ~12k sibling cells skip their render entirely. React.memo's default
+ * shallow comparison treats stable useMemo/useCallback/ref props as equal,
+ * so only cells whose props actually changed re-render.
+ *
+ * Each cell mounts a `<GridCellFocusable>` that registers as a `<FocusScope>`
+ * leaf in the spatial-nav graph (under the surrounding `ui:grid` zone) when
+ * the spatial stack is mounted. The leaf moniker is `grid_cell:{di}:{colKey}`
+ * — the canonical wire-shape consumed by `parseGridCellMoniker` in
+ * `grid-view.tsx`. When the spatial stack is absent (unit tests with a
+ * narrow provider tree), the focusable falls through to a plain
+ * `<TableCell>` so the table HTML stays valid without forcing tests to
+ * mount the full spatial provider stack.
+ */
+const DataBodyCell = memo(function DataBodyCellImpl(props: DataBodyCellProps) {
+  const { di, ci, col, entity, grid, renderEditor, onCellClick } = props;
+  const isCursor = di === grid.cursor.row && ci === grid.cursor.col;
+  const isSel = isCellSelected(grid, di, ci);
+  const isEditing = isCursor && grid.mode === "edit" && renderEditor;
+  // Leaf editor — a click is itself the edit gesture (no separate display
+  // mode that has to be drilled into). Color is the canonical example: the
+  // visible swatch *is* the popover trigger, and clicking it opens the
+  // picker. For these editors the cell:
+  //   - enters edit mode on a single click (so the picker opens
+  //     immediately instead of needing a double-click first);
+  //   - stops the dblclick gesture from bubbling to `<EntityRow>`'s
+  //     `useInspectOnDoubleClick`, which would otherwise pop the
+  //     inspector for the row entity (color is a leaf — drilling in IS
+  //     the right semantics, not "inspect the parent");
+  //   - skips the inner click-handling wrapper around editing-mode
+  //     children, because that wrapper sits between the `<FocusScope>`
+  //     host and the editor's own popover trigger and breaks Radix's
+  //     click-toggle handling.
+  // See task `01KQZ77F629SHHJD5X470NZGJ0` for the bug report. The
+  // discriminator routes through `isLeafEditorField` so all leaf-editor
+  // checks in this file have a single point of truth.
+  const isLeafEditor = isLeafEditorField(col.field);
+  const cellContent = isEditing ? (
+    renderEditor!(
+      entity,
+      col.field,
+      () => grid.exitEdit(),
+      () => grid.exitEdit(),
+    )
+  ) : (
+    <Field
+      fieldDef={col.field}
+      entityType={entity.entity_type}
+      entityId={entity.id}
+      mode="compact"
+      editing={false}
+      // See note in `useTanstackColumns` above — the enclosing
+      // `grid_cell:R:K` `<FocusScope>` is the cursor target, so the
+      // Field's inner `<FocusScope>` must NOT register (it would
+      // violate the kernel's scope-is-leaf invariant and cause the
+      // outer cell scope to be dropped as `scope-not-leaf`). The
+      // `<Inspectable>` wrapper inside `<Field>` is preserved.
+      register={false}
+      handleEvents={false}
+    />
+  );
+  // Visual focus decoration on a grid cell is rendered exclusively by the
+  // `<FocusIndicator>` mounted inside the cell's `<FocusScope>` (see
+  // `GridCellFocusable` below). The previous implementation also painted a
+  // cell-spanning `ring-2 ring-primary ring-inset` border driven by
+  // `isCursor`, which double-decorated the focused cell — the bar AND the
+  // ring rendered together for the same focus state. The ring was removed
+  // to enforce the architectural rule "one decorator, one place"
+  // (`focus-architecture.guards.node.test.ts`); the bar is now the canonical
+  // grid-cell focus visual, identical to every other `<FocusScope>` in the
+  // app. The selection-range tint (`isSel && !isCursor`) is unrelated to
+  // focus and stays.
+  //
+  // Class split — `tdClassName` vs `innerClassName`:
+  //
+  // The visible cell border is the `<td>`'s rect, but in the spatial path
+  // the focusable region is the `<FocusScope>`'s rendered `<div>` mounted
+  // *inside* that `<td>`. Putting padding on the `<td>` would shrink the
+  // focusable region inward by the padding amount, leaving a "dead zone"
+  // around the cell edge where left-clicks land on the `<td>` (visible
+  // cell) but miss the focusable. To make the focusable rect equal the
+  // visible cell rect, padding moves OFF the `<td>` and ONTO the
+  // focusable child (which is sized `block h-full w-full` to fill the
+  // `<td>` — see `GridCellFocusable`). The `<td>` keeps the structural /
+  // selection-tint chrome (`align-middle`, `max-w-[300px]`,
+  // `bg-primary/10`) that should still extend to the full cell box, and
+  // explicitly zeroes out `<TableCell>`'s default `p-2` so no padding
+  // sneaks back in. In the fallback path (tests without the spatial
+  // stack), `GridCellFocusable` merges the two halves back onto the
+  // `<td>` so behaviour is unchanged there.
+  const tdClassName = cn(
+    "p-0 align-middle max-w-[300px]",
+    isSel && !isCursor && "bg-primary/10",
+  );
+  const innerClassName = cn(
+    "block h-full w-full px-3 py-1.5",
+    ci === 0 && "pl-4",
+    // Strip cell padding during editing for editors that fill the entire cell.
+    isEditing &&
+      col.field.editor !== "color-palette" &&
+      col.field.editor !== "select" &&
+      col.field.editor !== "multi-select" &&
+      "p-0",
+  );
+
+  return (
+    <GridCellFocusable
+      di={di}
+      colKey={col.field.name}
+      cursorRef={isCursor ? props.cursorRef : undefined}
+      tdClassName={tdClassName}
+      innerClassName={innerClassName}
+      cellCursorAttr={props.cellCursorAttr}
+      isEditing={!!isEditing}
+      isLeafEditor={isLeafEditor}
+      onClick={() => {
+        props.handleCellClick(di, ci);
+        // Leaf editors (color-palette) drill into editing on a single
+        // click so the picker opens immediately. The popover starts
+        // `open: true` on mount, so flipping the cell into edit mode
+        // here is what makes the popover visible.
+        if (isLeafEditor) grid.enterEdit();
+      }}
+      onDoubleClick={(e) => {
+        onCellClick?.(di, ci);
+        grid.enterEdit();
+        // For a leaf editor (color-palette) the dblclick gesture is the
+        // edit gesture, not "inspect parent". Stop the gesture before
+        // it reaches `<EntityRow>`'s `useInspectOnDoubleClick`, which
+        // would otherwise pop the inspector for the row entity.
+        if (isLeafEditor) e.stopPropagation();
+      }}
+    >
+      {cellContent}
+    </GridCellFocusable>
+  );
+});
+
+/** Is cell (row,col) inside the current grid selection range? */
+function isCellSelected(
+  grid: UseGridReturn,
+  row: number,
+  col: number,
+): boolean {
+  const r = grid.getSelectedRange();
+  if (!r) return false;
+  return (
+    row >= r.startRow && row <= r.endRow && col >= r.startCol && col <= r.endCol
+  );
+}
+
+interface GridCellFocusableProps {
+  di: number;
+  colKey: string;
   cursorRef?: React.Ref<HTMLTableCellElement>;
-  className?: string;
+  /**
+   * Classes applied to the outer `<td>` — structural / chrome concerns
+   * that should extend to the full visible cell rect (alignment,
+   * max-width, selection background). MUST NOT include padding: in the
+   * spatial path, padding lives on the inner focusable child so the
+   * focusable rect equals the visible cell rect (no dead-zone around the
+   * cell edge). The default `<TableCell>` `p-2` is zeroed by the
+   * caller's `tdClassName` so no padding sneaks in.
+   */
+  tdClassName?: string;
+  /**
+   * Classes applied to the click-region wrapper that lives INSIDE the
+   * `<FocusScope>` in the spatial path (sized `block h-full w-full` so it
+   * fills the `<td>`, then padded with the caller's padding utilities).
+   * In the fallback path these classes are merged onto the `<td>`
+   * directly (the `block h-full w-full` is harmless on a `<td>`) so the
+   * fallback behaves exactly as a plain padded table cell.
+   */
+  innerClassName?: string;
+  /** Value for the `data-cell-cursor` attribute, or `undefined` to omit. */
+  cellCursorAttr?: string | undefined;
+  /**
+   * Whether the cell is currently rendering its inline editor (cursor
+   * cell + grid mode is `"edit"`). Combined with `isLeafEditor` this
+   * controls whether the inner click-handling wrapper around editing-
+   * mode children is rendered or skipped — see {@link isLeafEditor}.
+   */
+  isEditing: boolean;
+  /**
+   * The cell's editor is a *leaf* editor — clicking the visible cell
+   * surface IS the edit gesture (e.g. `color-palette`'s swatch is the
+   * popover trigger). When `isEditing` is also true the inner
+   * click-handling `<div onClick onDoubleClick>` wrapper is skipped, so
+   * the editor's own popover trigger sits directly under the
+   * `<FocusScope>` host without an extra `onClick` interfering with
+   * Radix's click-toggle handling.
+   */
+  isLeafEditor: boolean;
   onClick: () => void;
-  onDoubleClick: () => void;
+  onDoubleClick: (e: React.MouseEvent) => void;
   children: React.ReactNode;
 }
 
 /**
- * Wraps a grid cell in a FocusScope with claimWhen predicates.
+ * Wraps `children` in a `<FocusScope>` leaf mounted inside a `<TableCell>`.
  *
- * The FocusScope renders as a <td> element (via the underlying FocusHighlight).
- * This component bridges the FocusScope's div-based rendering with the table
- * structure by wrapping FocusScope inside a TableCell.
+ * The cell's moniker is the canonical `grid_cell:{di}:{colKey}` shape
+ * (built via {@link gridCellMoniker}). The leaf registers in the spatial-nav
+ * graph with `parent_zone` pointing at the row Zone — the row's outer
+ * `<FocusZone renderContainer={false}>` publishes its FQM through
+ * `FocusZoneContext`, so `useParentZoneFq()` resolves to the row entity
+ * instead of skipping past it to the surrounding `<GridSpatialZone>`
+ * (`ui:grid`). The row Zone itself does not register a rect with the
+ * kernel (it has no DOM node — `<tr>` is structural), but its FQM is
+ * still the legal nearest-zone ancestor for cell registrations.
  *
- * @param moniker - Cell moniker (entityType:entityId.fieldName)
- * @param claimWhen - Predicates for pull-based navigation
- * @param isCursor - Whether this cell is the current cursor position
- * @param cursorRef - Ref to attach for scroll-into-view
- * @param className - CSS classes for the cell
- * @param onClick - Click handler
- * @param onDoubleClick - Double-click handler
+ * When the spatial stack is absent (unit tests with a narrow provider
+ * tree), `<FocusScope>` would throw because no `<FocusLayer>` ancestor is
+ * mounted, so we render a plain `<TableCell>` instead — keeping the table
+ * HTML valid without forcing every test to set up the spatial providers.
+ *
+ * Click handler placement differs by branch:
+ *
+ *   - **Spatial path (production):** `FocusScope.onClick` calls
+ *     `spatial_focus(key)` and then `e.stopPropagation()` (per the
+ *     long-standing FocusScope convention so a leaf click does not
+ *     re-fire on its enclosing zone). Because of that, an `onClick` on
+ *     the surrounding `<TableCell>` would never fire — the click is
+ *     swallowed before it bubbles to the cell. We therefore mount a
+ *     thin `<div>` *inside* the `<FocusScope>`, attach `onClick` /
+ *     `onDoubleClick` to it, and rely on React's bubble order: the inner
+ *     wrapper sees the event before `FocusScope`'s outer handler stops it.
+ *     This keeps both sides firing on a left-click — `FocusScope` updates
+ *     spatial focus (Rust side), and the inner `onClick` runs the legacy
+ *     entity-focus `setFocus(gridCellMoniker(...))` so the
+ *     `data-cell-cursor` debug/e2e attribute (derived from entity-focus)
+ *     tracks click-to-move-cursor in production. The wrapper is local to
+ *     the data-table edge case — `<FocusScope>` itself attaches its
+ *     chrome directly to the spatial primitive's root, so most call sites
+ *     do not need this pattern.
+ *
+ *   - **Fallback path (tests without the spatial stack):** there is no
+ *     enclosing `<FocusScope>`, so the click handlers attach directly to
+ *     the `<TableCell>` and behave exactly as a plain table cell.
+ *
+ * Click region — focusable rect equals visible cell rect:
+ *
+ *   In the spatial path, `<FocusScope>` mounts a `<div>` *inside* the
+ *   `<td>`, and `getBoundingClientRect()` on that `<div>` is what the
+ *   spatial-nav kernel registers as the cell's hit rect. Putting padding
+ *   on the `<td>` shrinks the inner `<div>` inward, leaving a "dead
+ *   zone" around the visible cell edge where left-clicks land on the
+ *   `<td>` (visible cell) but miss the focusable. To eliminate the dead
+ *   zone we size the `<FocusScope>`'s `<div>` `block h-full w-full` so
+ *   it fills the `<td>`, attach the inner click wrapper with the same
+ *   sizing plus the caller's padding (`innerClassName`), and zero out
+ *   the `<td>`'s padding via the caller's `tdClassName` (which sets
+ *   `p-0` to override `<TableCell>`'s default `p-2`). Net effect: the
+ *   focusable's `getBoundingClientRect()` matches the `<td>`'s rect, so
+ *   every click anywhere inside the visible cell border lands on the
+ *   focusable.
+ *
+ * @param di - Zero-based data-row index.
+ * @param colKey - Column field name (the moniker's column key).
+ * @param cursorRef - Ref to attach for scroll-into-view.
+ * @param tdClassName - Classes for the outer `<td>` (chrome / structural).
+ * @param innerClassName - Classes for the inner click region (padding / fill).
+ * @param cellCursorAttr - Value for the `data-cell-cursor` attribute, or
+ *                         `undefined` to omit.
+ * @param onClick - Click handler — fires on left-click in both branches.
+ * @param onDoubleClick - Double-click handler — fires in both branches.
  */
-function GridCellScope({
-  moniker,
-  claimWhen,
-  isCursor: _isCursor,
+function GridCellFocusable({
+  di,
+  colKey,
   cursorRef,
-  className,
+  tdClassName,
+  innerClassName,
+  cellCursorAttr,
+  isEditing,
+  isLeafEditor,
   onClick,
   onDoubleClick,
   children,
-}: GridCellScopeProps) {
+}: GridCellFocusableProps) {
+  const moniker = useMemo(
+    () => asSegment(gridCellMoniker(di, colKey)),
+    [di, colKey],
+  );
+  const layerKey = useOptionalEnclosingLayerFq();
+  const actions = useOptionalSpatialFocusActions();
+  // The spatial-nav stack may be absent in unit tests with a narrow
+  // provider tree (the bare `<DataTable>` test harness deliberately
+  // omits `<SpatialFocusProvider>` + `<FocusLayer>` to keep its scope
+  // tight on table-row structure). Mounting `<FocusScope>` in that case
+  // would throw `useCurrentLayerKey must be called inside a <FocusLayer>`.
+  // When either lookup returns nullish, fall through to a plain
+  // `<TableCell>` with click handlers attached directly — production
+  // renders the providers, so the leaf path is exercised end-to-end
+  // there and in `grid-view.cursor-ring.test.tsx` which spins up the
+  // full stack.
+  const inSpatialStack = layerKey !== null && actions !== null;
+
+  // Leaf editors render their own click target (e.g. color-palette's
+  // Radix `<PopoverTrigger>` IS the swatch). When a leaf editor is
+  // mounted in editing mode, we omit the inner click-handling wrapper:
+  // the editor's trigger sits directly under the `<FocusScope>` host,
+  // so a click on the trigger reaches Radix without an intermediate
+  // `onClick` interfering with the popover's open/close toggle. The
+  // wrapper is still rendered in non-leaf editing modes (text editors
+  // expect the cell-level click handlers to manage cursor placement)
+  // and in display mode (the wrapper is the move-cursor click target
+  // for the cell). See task `01KQZ77F629SHHJD5X470NZGJ0`.
+  const skipInnerWrapper = isEditing && isLeafEditor;
+
+  // For leaf editors in display mode, the cell-level dblclick handler
+  // must run BEFORE the descendant `<Field>`'s `<Inspectable>` swallows
+  // the event (Inspectable's `onDoubleClick` calls `e.stopPropagation()`
+  // after dispatching `ui.inspect` for the field, so a bubble-phase
+  // wrapper handler never sees the gesture). Capture-phase handlers run
+  // top-down before the bubble phase reaches the descendant, so they
+  // get first crack at the gesture and can call `e.stopPropagation()`
+  // to prevent the descendant inspector dispatch.
+  //
+  // The same reasoning applies to single-click on a leaf editor cell —
+  // we want a single click to drill into editing, and no descendant
+  // handler should interfere. Routing both gestures through capture
+  // phase keeps the leaf-editor semantics consistent regardless of how
+  // the cell is wrapped further down.
+  //
+  // For non-leaf editors the existing bubble-phase handlers stay — they
+  // are no-ops in production (cell-level click is move-cursor only,
+  // owned by `<FocusScope>`) but the wrapper still exists so the click
+  // region equals the visible cell rect (see
+  // `data-table.cell-click-region.spatial.test.tsx`).
+  const innerOnClick = isLeafEditor ? undefined : onClick;
+  const innerOnDoubleClick = isLeafEditor ? undefined : onDoubleClick;
+  const innerOnClickCapture = isLeafEditor ? onClick : undefined;
+  const innerOnDoubleClickCapture = isLeafEditor ? onDoubleClick : undefined;
+
+  if (!inSpatialStack) {
+    // Fallback path: there is no inner focusable wrapper, so the `<td>`
+    // itself is the click target. Merge the two halves back onto it so
+    // the visible cell carries the padding (and any selection / chrome
+    // styling). The `block h-full w-full` from `innerClassName` is a
+    // no-op on a `<td>` and is left in for symmetry with the spatial
+    // branch.
+    //
+    // For a leaf editor in editing mode, drop the cell-level click
+    // handlers so the editor's own trigger handles clicks without
+    // interference (see `skipInnerWrapper` above).
+    return (
+      <TableCell
+        ref={cursorRef}
+        className={cn(tdClassName, innerClassName)}
+        data-cell-cursor={cellCursorAttr}
+        onClick={skipInnerWrapper ? undefined : innerOnClick}
+        onDoubleClick={skipInnerWrapper ? undefined : innerOnDoubleClick}
+        onClickCapture={skipInnerWrapper ? undefined : innerOnClickCapture}
+        onDoubleClickCapture={
+          skipInnerWrapper ? undefined : innerOnDoubleClickCapture
+        }
+      >
+        {children}
+      </TableCell>
+    );
+  }
+
+  // Spatial path: handlers go on a wrapper INSIDE the `<FocusScope>` so
+  // they fire before `FocusScope.onClick` calls `e.stopPropagation()`. An
+  // `onClick` on the outer `<TableCell>` would never see the event in
+  // this branch — the leaf swallows it before it reaches the cell.
+  //
+  // Both the `<FocusScope>`'s rendered `<div>` and the inner click
+  // wrapper are sized `block h-full w-full` so the focusable (and the
+  // click region) fill the `<td>` exactly. The caller's padding lives on
+  // the inner wrapper via `innerClassName`, not on the `<td>`, so the
+  // focusable's `getBoundingClientRect()` equals the `<td>`'s rect.
+  //
+  // When a leaf editor is in editing mode, the inner click wrapper is
+  // omitted entirely — the editor's own trigger is rendered directly
+  // under the `<FocusScope>`. See `skipInnerWrapper` above.
   return (
     <TableCell
       ref={cursorRef}
-      className={className}
-      onClick={onClick}
-      onDoubleClick={onDoubleClick}
+      className={tdClassName}
+      data-cell-cursor={cellCursorAttr}
     >
-      <FocusScope
-        moniker={moniker}
-        commands={[]}
-        claimWhen={claimWhen}
-        showFocusBar={false}
-      >
-        {children}
+      <FocusScope moniker={moniker} className="block h-full w-full">
+        {skipInnerWrapper ? (
+          children
+        ) : (
+          <div
+            className={innerClassName}
+            onClick={innerOnClick}
+            onDoubleClick={innerOnDoubleClick}
+            onClickCapture={innerOnClickCapture}
+            onDoubleClickCapture={innerOnDoubleClickCapture}
+          >
+            {children}
+          </div>
+        )}
       </FocusScope>
     </TableCell>
   );
@@ -552,11 +1182,30 @@ interface EntityRowProps {
 }
 
 /**
- * Table row rendered inside a FocusScope(renderContainer=false).
+ * Table row rendered inside a FocusZone(renderContainer=false).
  *
- * Mirrors FocusScopeInner behavior on a <tr>: click sets entity focus,
- * double-click dispatches ui.inspect, right-click opens context menu.
- * All hooks read from the per-row FocusScope that wraps this component.
+ * Mirrors FocusZone's behavior on a `<tr>`: right-click opens the
+ * context menu, double-click dispatches `ui.inspect` against the row's
+ * entity moniker. Per-cell click semantics live on the grid-cell
+ * `<FocusScope>` leaves; the row itself does not own click → focus.
+ *
+ * The wrapping `<FocusZone>` is `renderContainer={false}` so the
+ * primitive does NOT register a rect with the kernel — the row has no
+ * focusable DOM node of its own (a `<tr>` is structural, not
+ * focusable). Promoting the row from a Scope to a Zone keeps the
+ * scope-is-leaf invariant intact (the row's per-cell `<FocusScope>`
+ * leaves can no longer be path-prefix-flagged as illegal descendants
+ * of an outer Scope) while still pushing the entity moniker into the
+ * React `CommandScopeContext` chain so right-click resolves
+ * entity-level commands against the row.
+ *
+ * Inspector dispatch on double-click would normally live in the
+ * `<Inspectable>` wrapper, but DOM table rules forbid `<div>` between
+ * `<tbody>` and `<tr>`. The row therefore calls
+ * `useInspectOnDoubleClick(entityMk)` directly and attaches the
+ * handler to the `<tr>`. The hook lives in `inspectable.tsx`
+ * alongside `<Inspectable>`, so the inspect dispatch is still
+ * single-sourced.
  */
 function EntityRow({
   entityMk,
@@ -565,19 +1214,34 @@ function EntityRow({
   children,
 }: EntityRowProps) {
   const contextMenuHandler = useContextMenu();
-  const { setFocus } = useEntityFocus();
+  // Card `01KR7CDEFWWVF4WH0BCHE8Y21J`: focus claims flow through
+  // `nav.focus`. Right-click on a row claims focus on the row's FQM
+  // before the context menu opens, so the menu commands resolve
+  // against the row's scope chain.
+  const dispatchNavFocus = useDispatchCommand("nav.focus");
+  // Read the row's FQM from the surrounding `<FocusZone moniker={entityMk}
+  // renderContainer={false}>` — that wrapper publishes the row's FQM
+  // through `FullyQualifiedMonikerContext.Provider` even though it
+  // renders no DOM node, so this hook resolves to the composed row FQM
+  // (the spatial identity nav.focus needs to dispatch against).
+  const rowFq = useFullyQualifiedMoniker();
+  const onDoubleClick = useInspectOnDoubleClick(asSegment(entityMk));
 
   return (
     <TableRow
-      data-moniker={entityMk}
+      data-moniker={rowFq}
+      data-segment={entityMk}
       className={cn(
         "border-b border-border/50 transition-colors",
         isCursorRow && !isEditing && "bg-accent/30",
       )}
       onContextMenu={(e) => {
-        setFocus(entityMk);
+        void dispatchNavFocus({ args: { fq: rowFq } }).catch((err) =>
+          console.error("[EntityRow] nav.focus dispatch failed", err),
+        );
         contextMenuHandler(e);
       }}
+      onDoubleClick={onDoubleClick}
     >
       {children}
     </TableRow>
@@ -590,20 +1254,117 @@ interface RowSelectorProps {
   onClick: () => void;
 }
 
-/** Row number selector cell. */
+/**
+ * Build the row label leaf's moniker segment.
+ *
+ * Encodes the data-row index (`row_label:{di}`) as a defensive
+ * disambiguation. After the row was promoted to a `<FocusZone
+ * renderContainer={false}>`, every row publishes its own distinct FQM
+ * (`.../ui:grid/task:T1`, `.../ui:grid/task:T2`, …), so a bare
+ * `row_label` segment under each row would already produce distinct
+ * composed FQMs. The `{di}` suffix is kept to mirror the
+ * `grid_cell:{di}:{colKey}` convention (see {@link gridCellMoniker})
+ * and to keep the leaf's segment self-describing in `data-segment`
+ * attributes and focus-chain logs.
+ *
+ * The `row_label:` namespace prefix keeps the segment distinguishable
+ * from cell monikers in the focus chain.
+ */
+function rowLabelMoniker(di: number): string {
+  return `row_label:${di}`;
+}
+
+/**
+ * Row number selector cell — the leftmost "row label" of each data row.
+ *
+ * Renders a `<FocusScope>` leaf inside the cell when mounted under the
+ * spatial-nav stack, so a keyboard user can navigate to the row label
+ * (e.g. `ArrowLeft` from the first data cell of the row). When the leaf
+ * is focused, entity-level commands (`entity.archive`, `task.archive`,
+ * …) resolve against the row entity via the surrounding row's
+ * `<FocusZone moniker={asSegment(entityMk)} renderContainer={false}>`
+ * command-scope frame — that wrapper pushes the entity moniker into
+ * the React `CommandScopeContext` chain so `useDispatchCommand`'s
+ * scope walk picks it up at dispatch time.
+ *
+ * Mirrors the spatial-path / fallback-path split documented on
+ * {@link GridCellFocusable}: when `useOptionalEnclosingLayerFq()` and
+ * `useOptionalSpatialFocusActions()` both return non-null we mount the
+ * `<FocusScope>` with an inner click wrapper (so the legacy
+ * move-cursor click runs before `FocusScope.onClick` calls
+ * `e.stopPropagation()`); otherwise we render a plain `<TableCell>` so
+ * a narrower test harness without `<FocusLayer>` keeps working without
+ * throwing.
+ *
+ * @param di - Zero-based data-row index (1-based label rendered).
+ * @param isCursorRow - Whether this row is the current cursor row.
+ * @param onClick - Legacy move-cursor handler — fires in both branches.
+ */
 function RowSelector({ di, isCursorRow, onClick }: RowSelectorProps) {
+  const layerKey = useOptionalEnclosingLayerFq();
+  const actions = useOptionalSpatialFocusActions();
+  // The spatial-nav stack may be absent in unit tests with a narrow
+  // provider tree (see {@link GridCellFocusable} for the same guard).
+  // Mounting `<FocusScope>` in that case would throw
+  // `useCurrentLayerKey must be called inside a <FocusLayer>`.
+  const inSpatialStack = layerKey !== null && actions !== null;
+
+  const moniker = useMemo(() => asSegment(rowLabelMoniker(di)), [di]);
+
+  // Class split mirrors `DataBodyCellImpl`: `tdClassName` is chrome that
+  // should extend to the full visible cell rect (background, border,
+  // width, cursor), `innerClassName` is the click region that lives
+  // INSIDE the `<FocusScope>` and is sized `block h-full w-full` so the
+  // focusable's `getBoundingClientRect()` equals the `<td>`'s rect (no
+  // dead zone around the cell edge). The `<td>`'s default `p-2` is
+  // explicitly zeroed via `p-0` in `tdClassName` so no padding sneaks
+  // back in. See `GridCellFocusable` for the full rationale.
+  const tdClassName = cn(
+    "w-10 p-0 text-center cursor-pointer select-none text-[10px] font-medium text-muted-foreground bg-muted/50 border-r border-border/50",
+    isCursorRow && "bg-muted text-foreground",
+  );
+  const innerClassName = "block h-full w-full px-0 py-1.5";
+
+  if (!inSpatialStack) {
+    // Fallback path: no inner focusable wrapper. Merge the chrome and
+    // padding back onto the `<td>` itself. The `block h-full w-full`
+    // utilities are a no-op on `<td>` and left in for symmetry.
+    return (
+      <TableCell
+        data-testid="row-selector"
+        data-active={isCursorRow ? "true" : "false"}
+        className={cn(tdClassName, innerClassName)}
+        style={{ width: 40 }}
+        onClick={onClick}
+      >
+        {di + 1}
+      </TableCell>
+    );
+  }
+
+  // Spatial path: the click handler goes on a wrapper INSIDE the
+  // `<FocusScope>` so it fires before `FocusScope.onClick` calls
+  // `e.stopPropagation()`. An `onClick` on the outer `<TableCell>`
+  // would never see the event in this branch — the leaf swallows it
+  // before it reaches the cell. Same shape as {@link GridCellFocusable}.
+  //
+  // Both the `<FocusScope>`'s rendered `<div>` and the inner click
+  // wrapper are sized `block h-full w-full` so the focusable rect
+  // equals the visible cell rect — clicks anywhere in the cell border
+  // (including the top/bottom 6px of `py-1.5` padding above/below the
+  // row number) land on the focusable.
   return (
     <TableCell
       data-testid="row-selector"
       data-active={isCursorRow ? "true" : "false"}
-      className={cn(
-        "w-10 px-0 py-1.5 text-center cursor-pointer select-none text-[10px] font-medium text-muted-foreground bg-muted/50 border-r border-border/50",
-        isCursorRow && "bg-muted text-foreground",
-      )}
+      className={tdClassName}
       style={{ width: 40 }}
-      onClick={onClick}
     >
-      {di + 1}
+      <FocusScope moniker={moniker} className="block h-full w-full">
+        <div className={innerClassName} onClick={onClick}>
+          {di + 1}
+        </div>
+      </FocusScope>
     </TableCell>
   );
 }

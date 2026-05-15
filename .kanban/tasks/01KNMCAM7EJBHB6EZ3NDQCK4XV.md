@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffff8d80
+position_ordinal: ffffffffffffffffffffffffffffc280
 title: Fix InspectButton dispatching ui.inspect without target — inspects wrong entity on first click
 ---
 ## What

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffb580
+position_ordinal: ffffffffffffffffffab80
 title: Fix attachments.yaml editor/display overrides
 ---
 ## What

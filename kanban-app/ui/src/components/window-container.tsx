@@ -52,6 +52,7 @@ import {
   useEngineSetActiveBoardPath,
 } from "@/components/rust-engine-container";
 import type { BoardData, OpenBoard } from "@/types/kanban";
+import { useBoardDataSync } from "@/lib/board-data-sync";
 
 // ---------------------------------------------------------------------------
 // Module-level constants
@@ -142,7 +143,7 @@ interface WindowContainerProps {
  */
 export function WindowContainer({ children }: WindowContainerProps) {
   return (
-    <CommandScopeProvider commands={[]} moniker={`window:${WINDOW_LABEL}`}>
+    <CommandScopeProvider moniker={`window:${WINDOW_LABEL}`}>
       <WindowContainerInner>{children}</WindowContainerInner>
     </CommandScopeProvider>
   );
@@ -217,6 +218,13 @@ function WindowContainerInner({ children }: WindowContainerProps) {
   const refresh = useWindowRefresh(deps);
   useRestoreWindowStateOnMount(deps, refresh);
   useBoardEventListeners(deps);
+  // Keep BoardData in sync with entity-field-changed events for the board
+  // and its columns. Without this, column renames/reorders and board
+  // renames don't redraw the view — most visibly, undo of a column drag
+  // leaves the view stuck in its post-drag order. The ref scopes the
+  // listener to this window's active board so secondary windows aren't
+  // cross-patched by events for other boards.
+  useBoardDataSync(setBoard, activeBoardPathRef);
   const handleSwitchBoard = useSwitchBoardHandler(deps, refresh, dispatch);
 
   return (

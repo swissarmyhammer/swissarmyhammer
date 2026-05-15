@@ -46,11 +46,8 @@ impl Execute<KanbanContext, KanbanError> for GetTag {
         }
         .await
         {
-            Ok(value) => ExecutionResult::Unlogged { value },
-            Err(error) => ExecutionResult::Failed {
-                error,
-                log_entry: None,
-            },
+            Ok(value) => ExecutionResult::Success { value },
+            Err(error) => ExecutionResult::Failed { error },
         }
     }
 }

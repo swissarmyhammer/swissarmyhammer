@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { screen, fireEvent } from "@testing-library/react";
 import { act } from "react";
+import { renderInAct } from "@/test/act-render";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(() => Promise.resolve("ok")),
@@ -21,26 +22,39 @@ import { Avatar } from "./avatar";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
+import { asSegment } from "@/types/spatial";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity } from "@/types/kanban";
 
-/** Render Avatar inside required providers with a configurable entity store. */
-function renderAvatar(
+/**
+ * Render `Avatar` inside required providers with a configurable entity
+ * store. The spatial provider stack (`SpatialFocusProvider` +
+ * `FocusLayer`) is required since `Avatar` mounts a `<FocusScope>`, and
+ * the no-spatial-context fallback was removed in card
+ * `01KQPVA127YMJ8D7NB6M824595`.
+ */
+async function renderAvatar(
   actorId: string,
   actors: Entity[],
   size?: "sm" | "md" | "lg",
 ) {
-  return render(
-    <TooltipProvider delayDuration={0}>
-      <SchemaProvider>
-        <EntityStoreProvider entities={{ actor: actors }}>
-          <EntityFocusProvider>
-            <Avatar actorId={actorId} size={size} />
-          </EntityFocusProvider>
-        </EntityStoreProvider>
-      </SchemaProvider>
-    </TooltipProvider>,
+  return await renderInAct(
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <TooltipProvider delayDuration={0}>
+          <SchemaProvider>
+            <EntityStoreProvider entities={{ actor: actors }}>
+              <EntityFocusProvider>
+                <Avatar actorId={actorId} size={size} />
+              </EntityFocusProvider>
+            </EntityStoreProvider>
+          </SchemaProvider>
+        </TooltipProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
   );
 }
 
@@ -64,9 +78,9 @@ function makeActor(
 const DATA_URI = "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=";
 
 describe("Avatar", () => {
-  it("renders an <img> when actor has a data:image avatar", () => {
+  it("renders an <img> when actor has a data:image avatar", async () => {
     const actor = makeActor("alice", "Alice Smith", { avatar: DATA_URI });
-    const { container } = renderAvatar("alice", [actor]);
+    const { container } = await renderAvatar("alice", [actor]);
 
     const img = container.querySelector("img");
     expect(img).not.toBeNull();
@@ -74,61 +88,65 @@ describe("Avatar", () => {
     expect(img!.alt).toBe("Alice Smith");
   });
 
-  it("image avatar uses rounded-full (circle, not rounded rectangle)", () => {
+  it("image avatar uses rounded-full (circle, not rounded rectangle)", async () => {
     const actor = makeActor("alice", "Alice Smith", { avatar: DATA_URI });
-    const { container } = renderAvatar("alice", [actor]);
+    const { container } = await renderAvatar("alice", [actor]);
 
     const img = container.querySelector("img")!;
     expect(img.className).toContain("rounded-full");
     expect(img.className).not.toMatch(/rounded-(?:lg|md|sm|xl|2xl)\b/);
   });
 
-  it("image avatar uses object-cover for proper circle fit", () => {
+  it("image avatar uses object-cover for proper circle fit", async () => {
     const actor = makeActor("alice", "Alice Smith", { avatar: DATA_URI });
-    const { container } = renderAvatar("alice", [actor]);
+    const { container } = await renderAvatar("alice", [actor]);
 
     const img = container.querySelector("img")!;
     expect(img.className).toContain("object-cover");
   });
 
-  it("falls back to initials when actor has no avatar field", () => {
+  it("falls back to initials when actor has no avatar field", async () => {
     const actor = makeActor("alice", "Alice Smith");
-    const { container } = renderAvatar("alice", [actor]);
+    const { container } = await renderAvatar("alice", [actor]);
 
     expect(container.querySelector("img")).toBeNull();
     expect(screen.getByText("AS")).toBeTruthy();
   });
 
-  it("initials fallback uses rounded-full (circle)", () => {
+  it("initials fallback uses rounded-full (circle)", async () => {
     const actor = makeActor("alice", "Alice Smith");
-    renderAvatar("alice", [actor]);
+    await renderAvatar("alice", [actor]);
 
     const span = screen.getByText("AS");
     expect(span.className).toContain("rounded-full");
     expect(span.className).not.toMatch(/rounded-(?:lg|md|sm|xl|2xl)\b/);
   });
 
-  it("falls back to initials when avatar is empty string", () => {
+  it("falls back to initials when avatar is empty string", async () => {
     const actor = makeActor("alice", "Alice Smith", { avatar: "" });
-    const { container } = renderAvatar("alice", [actor]);
+    const { container } = await renderAvatar("alice", [actor]);
 
     expect(container.querySelector("img")).toBeNull();
     expect(screen.getByText("AS")).toBeTruthy();
   });
 
-  it("shows actorId-based initials when actor is not in store", () => {
-    const { container } = renderAvatar("unknown-user", []);
+  it("shows actorId-based initials when actor is not in store", async () => {
+    const { container } = await renderAvatar("unknown-user", []);
 
     expect(container.querySelector("img")).toBeNull();
     // Falls back to first char of actorId
     expect(screen.getByText("U")).toBeTruthy();
   });
 
-  it("applies size classes correctly for all sizes", () => {
+  it("applies size classes correctly for all sizes", async () => {
     const actor = makeActor("alice", "Alice Smith", { avatar: DATA_URI });
 
     for (const size of ["sm", "md", "lg"] as const) {
-      const { container: c, unmount } = renderAvatar("alice", [actor], size);
+      const { container: c, unmount } = await renderAvatar(
+        "alice",
+        [actor],
+        size,
+      );
       const img = c.querySelector("img")!;
       expect(img).not.toBeNull();
       // All sizes should be round
@@ -137,30 +155,30 @@ describe("Avatar", () => {
     }
   });
 
-  it("single-name actor gets single initial", () => {
+  it("single-name actor gets single initial", async () => {
     const actor = makeActor("bob", "Bob");
-    renderAvatar("bob", [actor]);
+    await renderAvatar("bob", [actor]);
 
     expect(screen.getByText("B")).toBeTruthy();
   });
 
-  it("initials avatar has aria-label with actor name", () => {
+  it("initials avatar has aria-label with actor name", async () => {
     const actor = makeActor("alice", "Alice Smith");
-    renderAvatar("alice", [actor]);
+    await renderAvatar("alice", [actor]);
 
     expect(screen.getByLabelText("Alice Smith")).toBeTruthy();
   });
 
-  it("image avatar has aria-label with actor name", () => {
+  it("image avatar has aria-label with actor name", async () => {
     const actor = makeActor("alice", "Alice Smith", { avatar: DATA_URI });
-    renderAvatar("alice", [actor]);
+    await renderAvatar("alice", [actor]);
 
     expect(screen.getByLabelText("Alice Smith")).toBeTruthy();
   });
 
   it("shows tooltip with actor name on hover", async () => {
     const actor = makeActor("alice", "Alice Smith");
-    renderAvatar("alice", [actor]);
+    await renderAvatar("alice", [actor]);
 
     const trigger = screen.getByLabelText("Alice Smith");
 

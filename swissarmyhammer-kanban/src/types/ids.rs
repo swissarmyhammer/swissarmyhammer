@@ -9,7 +9,7 @@ use swissarmyhammer_common::define_id;
 // Define all ID types
 define_id!(TaskId, "ULID-based identifier for tasks");
 define_id!(ColumnId, "Identifier for columns (slug-style)");
-define_id!(LogEntryId, "ULID-based identifier for log entries");
+define_id!(OperationId, "ULID-based identifier for operations");
 define_id!(ActorId, "Identifier for actors (people or agents)");
 define_id!(TagId, "ULID-based identifier for tags");
 define_id!(ProjectId, "Identifier for projects (slug-style)");

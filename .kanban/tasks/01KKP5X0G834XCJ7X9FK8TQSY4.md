@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: 9c80
+position_ordinal: a080
 title: Command palette search mode
 ---
 ## What

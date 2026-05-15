@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffffe80
+position_ordinal: ffffffffffffffffe380
 title: No view switch commands in palette (Tag Grid, Task Grid missing)
 ---
 ## What

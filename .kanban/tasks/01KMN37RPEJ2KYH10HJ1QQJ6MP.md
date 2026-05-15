@@ -3,7 +3,7 @@ assignees:
 - claude-code
 depends_on: []
 position_column: done
-position_ordinal: ffffffffffffef80
+position_ordinal: ffffffffffffffc580
 title: Fix mention pill focus bar — add left spacing and close gap to pill
 ---
 ## What

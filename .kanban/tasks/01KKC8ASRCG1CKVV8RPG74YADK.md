@@ -2,7 +2,7 @@
 depends_on:
 - 01KKC8A9RVGEJP5XBVJH6H3G5V
 position_column: done
-position_ordinal: ffffffffffc880
+position_ordinal: ffffffffffff9580
 title: 'STATUSLINE-2: DirectoryConfig + config stacking'
 ---
 ## What

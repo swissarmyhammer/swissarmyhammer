@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffa180
+position_ordinal: ffffffffffffffffffffffa780
 title: Remove global activity log (current.jsonl) and list activity operation
 ---
 ## What

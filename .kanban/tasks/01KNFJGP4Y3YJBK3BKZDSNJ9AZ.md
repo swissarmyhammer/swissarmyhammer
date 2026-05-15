@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffaa80
+position_ordinal: ffffffffffffffffffffffffffc580
 title: 'Group computation utility: compute group buckets from tasks + groupField'
 ---
 ## What
@@ -21,7 +21,7 @@ Create a pure utility function `computeGroups(tasks, groupField, fieldDefs)` tha
      /** Task entities belonging to this group, preserving their input order. */
      tasks: Entity[];
    }
-   
+
    function computeGroups(
      tasks: Entity[],
      groupField: string,

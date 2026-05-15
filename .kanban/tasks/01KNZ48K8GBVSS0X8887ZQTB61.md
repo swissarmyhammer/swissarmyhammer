@@ -6,7 +6,7 @@ depends_on:
 - 01KNZ46V6W1JGY5C491A8R9BVN
 - 01KNZ47NWKY0DQPWRNPPHMDBDN
 position_column: done
-position_ordinal: ffffffffffffffffffffffc280
+position_ordinal: ffffffffffffffffffffffffffffffa780
 project: pill-via-cm6
 title: Delete MentionPill, remark-mentions, and dead helpers
 ---

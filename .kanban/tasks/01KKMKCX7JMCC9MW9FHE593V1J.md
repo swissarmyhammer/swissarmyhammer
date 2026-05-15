@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: '8380'
+position_ordinal: '8880'
 title: Create swissarmyhammer-entity-search crate scaffold!
 ---
 ## What

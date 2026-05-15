@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffff8680
+position_ordinal: fffffffffffffffffffff280
 title: 'Fix: remove tag operation not working with StoreHandle write path'
 ---
 ## What

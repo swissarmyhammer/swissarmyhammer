@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffffffa80
+position_ordinal: ffffffffffffffffffffda80
 title: 'Test git2_utils: add_files and create_commit'
 ---
 File: swissarmyhammer-git/src/git2_utils.rs (0%, 40 uncovered lines)

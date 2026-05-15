@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffbc80
+position_ordinal: ffffffffffffffffffffffffffffff9380
 project: kanban-mcp
 title: 'code-context-cli: move serve/doctor/registry/skill into commands/'
 ---

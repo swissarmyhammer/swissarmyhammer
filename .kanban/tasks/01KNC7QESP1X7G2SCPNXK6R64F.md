@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNC7N6PKWCAXPXXT2CZ4228P
 position_column: done
-position_ordinal: fffffffffffffffffff680
+position_ordinal: ffffffffffffffffffffffffe680
 title: Extract InspectorContainer from App.tsx
 ---
 ## What

@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNJD76746DTJ540A5SHGRCF0
 position_column: done
-position_ordinal: ffffffffffffffffffffff9580
+position_ordinal: ffffffffffffffffffffffffffffcb80
 title: 'FILTER-7: Replace individual filter fields with DSL param on ListTasks + NextTask'
 ---
 ## What

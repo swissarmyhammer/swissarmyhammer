@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KND4KPNAEPKSDEN98TFYBEH1
 position_column: done
-position_ordinal: ffffffffffffffffdd80
+position_ordinal: ffffffffffffffffffff9480
 title: 'VT-6: Strategy — BLOCKED virtual tag'
 ---
 ## What

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffff8f80
+position_ordinal: ffffffffffffdd80
 title: 'board-view: remove direct updateField for drag position updates'
 ---
 ## What

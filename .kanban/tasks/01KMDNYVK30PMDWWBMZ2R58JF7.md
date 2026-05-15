@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffff9080
+position_ordinal: ffffffffffffde80
 title: 'quick-capture: vim Escape in normal mode should close, Enter should submit'
 ---
 ## What

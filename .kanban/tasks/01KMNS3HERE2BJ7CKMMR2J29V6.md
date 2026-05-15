@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffce80
+position_ordinal: ffffffffffffffa480
 title: Fix useActiveBoardPath returning wrong/undefined path with multiple boards
 ---
 ## What

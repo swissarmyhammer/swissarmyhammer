@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffa680
+position_ordinal: ffffffffffffffffffffffffffbe80
 title: Extend EntityCommand struct to carry full CommandDef metadata
 ---
 ## What

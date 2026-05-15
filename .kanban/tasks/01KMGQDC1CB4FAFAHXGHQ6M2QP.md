@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMGQCX5CBERQ7AMWSDGQ804B
 position_column: done
-position_ordinal: ffffffffff8880
+position_ordinal: ffffffffffde80
 title: 'Init component: GitMergeDrivers (install/uninstall all three drivers)'
 ---
 ## What

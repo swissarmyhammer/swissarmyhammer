@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffee80
+position_ordinal: ffffffffffffffffffffc180
 title: 'Fix StoreHandle: per-item changelogs instead of per-store changelog'
 ---
 ## What

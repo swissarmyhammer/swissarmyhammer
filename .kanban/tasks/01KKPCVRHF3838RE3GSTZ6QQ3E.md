@@ -2,7 +2,7 @@
 depends_on:
 - 01KKPCVAZQMJ1Z0TV5HVCVW5DZ
 position_column: done
-position_ordinal: f580
+position_ordinal: fc80
 title: 'Backend decides search strategy: use search_hybrid instead of search-only'
 ---
 ## What

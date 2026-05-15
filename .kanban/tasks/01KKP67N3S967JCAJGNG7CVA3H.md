@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: a080
+position_ordinal: a480
 title: Enrich EntitySearchIndex as the in-memory search context with embedding cache
 ---
 ## What

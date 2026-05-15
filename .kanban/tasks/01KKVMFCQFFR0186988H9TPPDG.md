@@ -1,5 +1,5 @@
 ---
 position_column: done
-position_ordinal: ffffffffbf80
+position_ordinal: ffffffffd180
 title: we need a border on the quick capture, not the background OS window, but our react elements
 ---

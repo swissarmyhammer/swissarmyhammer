@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffc480
+position_ordinal: ffffffffffffffff9e80
 title: Migrate AgentResolver to use VirtualFileSystem
 ---
 AgentResolver in `swissarmyhammer-agents/src/agent_resolver.rs` hand-rolls the same file stacking pattern as SkillResolver instead of using the shared `VirtualFileSystem`.

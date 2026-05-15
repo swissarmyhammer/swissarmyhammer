@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMBE4FGC1WWF29PV5SEJG4VY
 position_column: done
-position_ordinal: ffffffffffff8280
+position_ordinal: ffffffffffffd080
 title: 'Field: select field type'
 ---
 ## What

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffffffffffc80
+position_ordinal: ffffffffffffffffffffffffffffab80
 title: 'Fix CM6 autosave exiting edit mode: onBlur should save-in-place, not commit-and-exit'
 ---
 ## What

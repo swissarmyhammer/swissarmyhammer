@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMNKW4Y3JHWNN73J22HZJM7Y
 position_column: done
-position_ordinal: ffffffffffffcb80
+position_ordinal: ffffffffffffffa180
 title: Wire DropZones into ColumnView — replace midpoint computation
 ---
 ## What
@@ -46,7 +46,7 @@ Empty column:                    Empty column:
 
 ### Props interface changes
 - **Remove**: `insertAtIndex`, `onDragOver`, `onDragEnter`, `onDragLeave`, `isDragTarget`
-- **Change**: `onDrop` signature from `(columnId, taskData, insertIndex)` to `(descriptor, taskData)` 
+- **Change**: `onDrop` signature from `(columnId, taskData, insertIndex)` to `(descriptor, taskData)`
 - **Add**: `dragTaskId` — passed to DropZones for no-op hiding
 - **Add**: `boardPath` — needed by `computeDropZones`
 - **Add**: `dragActive` — passed to DropZones so they expand during any drag

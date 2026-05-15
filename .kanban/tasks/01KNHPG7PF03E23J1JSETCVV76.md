@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffff8480
+position_ordinal: fffffffffffffffffffffffffd80
 title: 'Coverage: yaml_loader.rs fallback loading path'
 ---
 ## What

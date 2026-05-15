@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffff8980
+position_ordinal: fffffffffffffffffffff780
 title: 'Test web tools: search execution and fetch operations'
 ---
 Files in swissarmyhammer-tools/src/mcp/tools/web/:

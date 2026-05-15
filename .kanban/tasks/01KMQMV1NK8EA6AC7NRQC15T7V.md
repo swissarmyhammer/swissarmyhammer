@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMQMTAMHZHA79PTZAB453KYT
 position_column: done
-position_ordinal: ffffffffffffed80
+position_ordinal: ffffffffffffffc380
 title: Migrate inspector field navigation to claimWhen
 ---
 ## What

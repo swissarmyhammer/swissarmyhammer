@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffff8880
+position_ordinal: ffffffffffffffffffffffffff8680
 title: 'Coverage: write_ts_symbols_and_edges (unified.rs, ~87 lines, 0%)'
 ---
 ## What

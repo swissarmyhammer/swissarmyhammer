@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM85WCYYAT2XC8J2FDVRFMNT
 position_column: done
-position_ordinal: ffffffffffe180
+position_ordinal: ffffffffffffb080
 title: 'Remove AppConfig: delete struct and all references'
 ---
 ## What
@@ -14,7 +14,7 @@ By this point all state has migrated from AppConfig into UIState. AppConfig shou
 ### Changes
 - Delete `AppConfig` struct from `kanban-app/src/state.rs`
 - Delete `WindowState` struct (now in UIState)
-- Delete `RecentBoard` struct (now in UIState) 
+- Delete `RecentBoard` struct (now in UIState)
 - Delete `config_file_path()` and `legacy_config_file_path()` helpers
 - Delete `AppConfig::load()` and `AppConfig::save()`
 - Remove `config: RwLock<AppConfig>` from AppState

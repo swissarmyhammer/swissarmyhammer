@@ -3,7 +3,7 @@ assignees:
 - claude-code
 due: 2026-06-13
 position_column: done
-position_ordinal: ffffffffffffffffffffffbd80
+position_ordinal: ffffffffffffffffffffffffffffff9680
 title: Fix DoThisNextCmd column sort — get_str on numeric order field picks wrong column
 ---
 ## What

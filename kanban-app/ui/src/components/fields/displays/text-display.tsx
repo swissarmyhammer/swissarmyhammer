@@ -1,5 +1,6 @@
 import type { FieldDisplayProps } from "../field";
 import type { Entity } from "@/types/kanban";
+import { CompactCellWrapper } from "./compact-cell-wrapper";
 
 /**
  * Display props with entity guaranteed present.
@@ -22,6 +23,10 @@ export type DisplayProps = Omit<FieldDisplayProps, "entity"> & {
  * and color in compact mode — this primitive only inherits them — which
  * keeps card cells and inspector rows visually consistent field-to-field.
  *
+ * In compact mode the output is wrapped in {@link CompactCellWrapper} so
+ * populated and empty branches share the same fixed height — required by
+ * the `DataTable` row virtualizer's fixed `ROW_HEIGHT`.
+ *
  * @param text - The string to render. Empty string renders a muted dash.
  * @param mode - `compact` (list/card cells) or `full` (inspector rows).
  * @param title - Optional native tooltip text applied to the rendered span.
@@ -35,13 +40,17 @@ export function DisplayText({
   mode: "compact" | "full";
   title?: string;
 }) {
-  if (!text) return <span className="text-muted-foreground/50">-</span>;
-  if (mode === "compact")
-    return (
+  if (mode === "compact") {
+    const inner = !text ? (
+      <span className="text-muted-foreground/50">-</span>
+    ) : (
       <span className="truncate block" title={title}>
         {text}
       </span>
     );
+    return <CompactCellWrapper>{inner}</CompactCellWrapper>;
+  }
+  if (!text) return <span className="text-muted-foreground/50">-</span>;
   return (
     <span className="text-sm" title={title}>
       {text}

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffd680
+position_ordinal: fffffffffffffffffffe80
 title: 'VT-0: Entity-level predicate filtering with EntityFilterContext'
 ---
 ## What

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffeb80
+position_ordinal: ffffffffffffffc180
 title: '[Design/Medium] g g sequence now fires nav.first instead of board.firstCard -- semantic mismatch'
 ---
 **Files:** `kanban-app/ui/src/lib/keybindings.ts:60`, `kanban-app/ui/src/components/board-view.tsx:218-222`\n\n**What:** The `g g` vim sequence was changed from `board.firstCard` to `nav.first`. The `nav.first` command calls `broadcastNavCommand(\"nav.first\")` which (if predicates were registered) would let any FocusScope claim focus. However, `board.firstCard` is a concrete action: it calls `boardNavRef.current.moveToFirstCard()` which moves the board cursor to the first card. These are semantically different operations.\n\n**Current behavior:** Because no claimWhen predicates exist (see related finding), `g g` now calls broadcastNavCommand which returns false and does nothing. Previously it would have resolved to `board.firstCard` via scope bindings if the board was focused. The sequence handler in keybindings.ts calls `executeCommand(commandId)` which goes through `KeybindingHandler.executeCommand` which checks the focused scope first. But the focused scope has `board.firstCard`, not `nav.first`. So `nav.first` resolves from the global scope and calls broadcastNavCommand (no-op).\n\n**Severity:** Medium -- the g g sequence is broken for board navigation until claim predicates are wired up." #review-finding

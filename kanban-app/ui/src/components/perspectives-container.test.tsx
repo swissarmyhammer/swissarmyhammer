@@ -79,7 +79,6 @@ vi.mock("@/lib/ui-state-context", () => ({
 vi.mock("@/lib/schema-context", () => ({
   useSchema: () => ({
     getSchema: () => null,
-    getEntityCommands: () => [],
   }),
 }));
 

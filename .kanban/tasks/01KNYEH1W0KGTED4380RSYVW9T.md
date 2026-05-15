@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffcd80
+position_ordinal: ffffffffffffffffffffffffffffffbd80
 project: expr-filter
 title: 'Decouple perspective filter save from filter refresh: make refetch visibly in-flight and latest-wins'
 ---

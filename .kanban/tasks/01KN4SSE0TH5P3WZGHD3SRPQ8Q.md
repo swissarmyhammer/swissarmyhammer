@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffb880
+position_ordinal: ffffffffffffffffffb180
 title: Prevent browser default file drop and support drag-to-attach
 ---
 ## What

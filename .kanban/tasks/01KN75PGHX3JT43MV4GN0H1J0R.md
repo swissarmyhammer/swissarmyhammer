@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffff9380
+position_ordinal: ffffffffffffffffffffff8b80
 title: 'Test git operations: branch management and merge'
 ---
 File: swissarmyhammer-git/src/operations.rs (12.9%, 392 uncovered lines)

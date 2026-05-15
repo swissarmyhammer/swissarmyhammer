@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffdb80
+position_ordinal: ffffffffffffffffffffffffffffffd580
 title: Fix field icon vertical alignment — icon sits 1px too high in inspector
 ---
 ## What

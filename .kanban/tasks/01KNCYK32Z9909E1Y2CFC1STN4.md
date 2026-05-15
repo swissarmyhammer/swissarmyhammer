@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffee80
+position_ordinal: ffffffffffffffffffffffffd780
 title: Fix command palette inspect on grid — cell moniker field suffix causes entity not found
 ---
 ## What

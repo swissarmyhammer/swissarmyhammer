@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNM7QS0FJ0JNRYJD3NG3BWHC
 position_column: done
-position_ordinal: ffffffffffffffffffffffbd80
+position_ordinal: ffffffffffffffffffffffffffffff9880
 title: 'MCP/CLI: expose user-set date fields in task operations'
 ---
 ## What

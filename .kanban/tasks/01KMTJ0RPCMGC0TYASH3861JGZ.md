@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMTJ02YMZ071QJ6VWYTZ0X4C
 position_column: done
-position_ordinal: ffffffffffffffbc80
+position_ordinal: ffffffffffffffff9280
 title: Move UndoCmd/RedoCmd to entity layer + add query API
 ---
 ## What

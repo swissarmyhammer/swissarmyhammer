@@ -4,6 +4,7 @@ description: Display name
 type:
   kind: text
   single_line: true
+default: New item
 icon: type
 editor: markdown
 display: text

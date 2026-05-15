@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: fd80
+position_ordinal: ff8580
 title: Move column reorder logic to backend
 ---
 ## What

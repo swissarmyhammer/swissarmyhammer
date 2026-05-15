@@ -2,7 +2,7 @@
 depends_on:
 - 01KKEYM9KDP3WDT0VVYRJKHMDT
 position_column: done
-position_ordinal: d580
+position_ordinal: dc80
 title: Add unit tests for lsp_degradation_notice() and verify notice presence/absence on operations
 ---
 ## What

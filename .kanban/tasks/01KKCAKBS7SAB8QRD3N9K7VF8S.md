@@ -2,7 +2,7 @@
 depends_on:
 - 01KKCADZV71JJH01V5GVEPQTAX
 position_column: done
-position_ordinal: ffffffffffbd80
+position_ordinal: ffffffffffff8a80
 title: 'STATUSLINE-M6: vim_mode module'
 ---
 ## What

@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNZ3ZX03HSEYVAJFGEFTC2ZE
 position_column: done
-position_ordinal: ffffffffffffffffffffffbb80
+position_ordinal: ffffffffffffffffffffffffffffff9180
 project: pill-via-cm6
 title: Replace SelectEditor with searchable combobox for reference fields
 ---

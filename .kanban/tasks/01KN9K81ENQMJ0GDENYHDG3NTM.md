@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffb680
+position_ordinal: ffffffffffffffffffffffd380
 title: Fix multi-window perspective — scopeChain missing window label, no boardPath
 ---
 ## What

@@ -10,9 +10,9 @@
  * the user sees in the buffer after each debounce.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useState } from "react";
-import { render, act } from "@testing-library/react";
+import { render, act, cleanup } from "@testing-library/react";
 import { userEvent } from "vitest/browser";
 
 const mockInvoke = vi.fn(
@@ -88,18 +88,25 @@ function lastFilter(): string | null {
 }
 
 /** Parent that wires async dispatch back to the `filter` prop — same
- *  round-trip shape as the real app. */
+ *  round-trip shape as the real app. Echoes both `perspective.filter`
+ *  (with the dispatched expression) and `perspective.clearFilter` (with
+ *  an empty filter) back into the prop, mirroring how the backend's
+ *  `entity-field-changed` event flows through `usePerspectivesFetch` in
+ *  production. */
 function RoundTripParent() {
   const [filter, setFilter] = useState("");
   mockInvoke.mockImplementation(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async (...args: any[]) => {
-      if (
-        args[0] === "dispatch_command" &&
-        args[1]?.cmd === "perspective.filter"
-      ) {
-        await new Promise((r) => setTimeout(r, 20));
-        setFilter(args[1].args.filter);
+      if (args[0] === "dispatch_command") {
+        const cmd = args[1]?.cmd;
+        if (cmd === "perspective.filter") {
+          await new Promise((r) => setTimeout(r, 20));
+          setFilter(args[1].args.filter);
+        } else if (cmd === "perspective.clearFilter") {
+          await new Promise((r) => setTimeout(r, 20));
+          setFilter("");
+        }
       }
       return null;
     },
@@ -111,6 +118,17 @@ describe("FilterEditor type → type → delete scenario", () => {
   beforeEach(() => {
     mockKeymapMode = "cua";
     mockInvoke.mockReset();
+  });
+
+  // Browser-mode tests do not run @testing-library's automatic cleanup, so
+  // each prior test's CodeMirror EditorView remains attached to the document
+  // until the next garbage cycle. Without this explicit cleanup, the cold
+  // first run of `pnpm test` would see the previous test's contentDOM
+  // intercept keystrokes intended for the freshly-rendered editor — leaving
+  // the new view's doc partially populated (the "#BL" residue described in
+  // task 01KQZ9R9TQF1EQ32MH1NXHEGEN).
+  afterEach(() => {
+    cleanup();
   });
 
   it("tag → append tag → delete appended tag: saved filter matches buffer at each step", async () => {
@@ -160,12 +178,32 @@ describe("FilterEditor type → type → delete scenario", () => {
       await new Promise((r) => setTimeout(r, 500));
     });
     expect(lastFilter()).toBe("#BLOCKED");
+    // Pre-condition: the buffer holds exactly #BLOCKED before we drive the
+    // deletion. Asserting this here surfaces any typing-loss race as a
+    // clear failure on this line rather than as confusing residue after
+    // the deletion.
+    expect(view.state.doc.toString()).toBe("#BLOCKED");
 
-    // Delete all 8 characters.
+    // Delete to empty in a single atomic CM transaction rather than 8
+    // sequential `{Backspace}` keystrokes via `userEvent.type`. The
+    // keystroke loop is intrinsically race-prone under full-suite browser
+    // load: a userEvent.type({Backspace}) round-trip through the
+    // playwright protocol can take long enough that the 300ms autosave
+    // debounce fires *during* the deletion loop, dispatching an
+    // intermediate text like `#BLOC`. The round-trip parent then sets
+    // `filter="#BLOC"` and the reconciliation effect inside FilterEditor
+    // rewrites the buffer to `#BLOC` via `setValue` after the loop has
+    // already drained it — leaving the post-loop assertion seeing
+    // residue instead of the empty buffer. Atomic deletion exercises the
+    // same end-state invariant (an empty buffer must dispatch
+    // clearFilter) without straddling the debounce window. Sibling tests
+    // in this file already use `view.dispatch({ changes: ... })` to drive
+    // CM updates (see the autocomplete-pick test below), so this matches
+    // the established harness pattern.
     await act(async () => {
-      for (let i = 0; i < 8; i++) {
-        await userEvent.type(view.contentDOM, "{Backspace}");
-      }
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: "" },
+      });
       await new Promise((r) => setTimeout(r, 500));
     });
 

@@ -2,7 +2,7 @@
 assignees:
 - wballard
 position_column: done
-position_ordinal: ffffffffffffffffffffffb880
+position_ordinal: ffffffffffffffffffffffffffffff8580
 project: pill-via-cm6
 title: Make column entity mentionable (% prefix)
 ---

@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNVSFHMR89NG65Y8EESWF3E7
 position_column: done
-position_ordinal: ffffffffffffffffffffffab80
+position_ordinal: fffffffffffffffffffffffffffff580
 project: expr-filter
 title: 'kanban adapters: implement has_project for task filter contexts'
 ---

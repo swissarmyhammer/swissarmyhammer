@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNS13JJ850R9NBA0RQCS7E9Z
 position_column: done
-position_ordinal: ffffffffffffffffffffffcb80
+position_ordinal: ffffffffffffffffffffffffffffffb880
 project: kanban-mcp
 title: 'kanban-cli: update README with icon and MCP server selling points'
 ---

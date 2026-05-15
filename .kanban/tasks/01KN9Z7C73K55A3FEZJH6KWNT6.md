@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffc080
+position_ordinal: ffffffffffffffffffffffe780
 title: Fix ESC dismiss on unfocused window — palette opens without keyboard focus, ESC is dead
 ---
 ## What

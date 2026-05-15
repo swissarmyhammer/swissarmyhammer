@@ -25,12 +25,20 @@ import {
 import { ColumnView } from "@/components/column-view";
 import { SortableColumn } from "@/components/sortable-column";
 import { FocusScope } from "@/components/focus-scope";
-import { useEntityFocus } from "@/lib/entity-focus-context";
-/** Default title for new tasks — the Rust side also uses this as fallback. */
-function defaultTaskTitle(_columnName: string): string {
-  return "New task";
-}
-import { useEntityCommands } from "@/lib/entity-commands";
+import { Inspectable } from "@/components/inspectable";
+import { useFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
+import {
+  useOptionalSpatialFocusActions,
+  type SpatialFocusActions,
+} from "@/lib/spatial-focus-context";
+import {
+  asSegment,
+  composeFq,
+  type Direction,
+  type FullyQualifiedMoniker,
+  type SegmentMoniker,
+} from "@/types/spatial";
+import { useFocusedFq } from "@/lib/entity-focus-context";
 import { useDragSession } from "@/lib/drag-session-context";
 import { useActivePerspective } from "@/components/perspective-container";
 import type { BoardData, Entity } from "@/types/kanban";
@@ -165,55 +173,61 @@ function useColumnTaskBuckets(
   return { taskMap, baseLayout, columnTasks };
 }
 
-/** Moniker tables needed for cross-column keyboard navigation. */
-interface BoardMonikers {
-  columnTaskMonikers: Map<string, string[]>;
-  allBoardTaskMonikers: Set<string>;
-  allBoardHeaderMonikers: Set<string>;
+/**
+ * Initial-focus target descriptor.
+ *
+ * The board zone is at FQ `<board-fq>/ui:board`. Below that:
+ *   - cards live at `<board-fq>/ui:board/<columnSegment>/<cardSegment>`
+ *   - column zones live at `<board-fq>/ui:board/<columnSegment>`
+ *
+ * `columnSegment` carries the enclosing column's segment so callers
+ * inside the board zone can compose the full FQM via two `composeFq`
+ * calls; `leafSegment` carries the final segment (the card segment for
+ * task targets, or `null` when the target IS the column zone).
+ */
+interface InitialFocusTarget {
+  columnSegment: SegmentMoniker;
+  leafSegment: SegmentMoniker | null;
 }
 
 /**
- * Build the moniker tables that drive cross-column nav predicates.
+ * Resolve the initial focus target the board should seed on mount.
  *
- * - `columnTaskMonikers` preserves per-column task moniker order so each
- *   column can expose its left/right neighbor's moniker list.
- * - The two `allBoard*` sets drive nav.first / nav.last claim predicates.
+ * Walks the ordered columns and returns a descriptor pointing at the
+ * first task it finds (preserving the in-column ordinal order
+ * established by `useColumnTaskBuckets`). When no column has any
+ * tasks, returns the first column's own zone. Returns `null` when
+ * the board has no columns at all.
+ *
+ * Once focus is seeded, the spatial-nav layer drives every subsequent
+ * traversal via the `<FocusZone>` graph — so a single seed call is
+ * all `useInitialBoardFocus` needs.
  */
-function useBoardMonikers(
+function useInitialFocusTarget(
   columns: Entity[],
   baseLayout: ColumnLayout,
   taskMap: Map<string, Entity>,
-): BoardMonikers {
-  const columnTaskMonikers = useMemo(() => {
-    const map = new Map<string, string[]>();
+): InitialFocusTarget | null {
+  return useMemo(() => {
     for (const col of columns) {
       const taskIds = baseLayout.get(col.id) ?? [];
-      map.set(
-        col.id,
-        taskIds.map((id) => taskMap.get(id)?.moniker ?? `task:${id}`),
-      );
+      if (taskIds.length > 0) {
+        const firstId = taskIds[0];
+        const taskSegment = taskMap.get(firstId)?.moniker ?? `task:${firstId}`;
+        return {
+          columnSegment: asSegment(col.moniker),
+          leafSegment: asSegment(taskSegment),
+        };
+      }
     }
-    return map;
+    if (columns.length > 0) {
+      return {
+        columnSegment: asSegment(columns[0].moniker),
+        leafSegment: null,
+      };
+    }
+    return null;
   }, [columns, baseLayout, taskMap]);
-
-  const allBoardTaskMonikers = useMemo(() => {
-    const set = new Set<string>();
-    for (const monikers of columnTaskMonikers.values()) {
-      for (const m of monikers) set.add(m);
-    }
-    return set;
-  }, [columnTaskMonikers]);
-
-  const allBoardHeaderMonikers = useMemo(() => {
-    const set = new Set<string>();
-    for (const col of columns) {
-      set.add(col.moniker);
-      set.add(`${col.moniker}.name`);
-    }
-    return set;
-  }, [columns]);
-
-  return { columnTaskMonikers, allBoardTaskMonikers, allBoardHeaderMonikers };
 }
 
 /** Return value from useBoardLayout — all derived board data needed for rendering. */
@@ -225,16 +239,14 @@ interface BoardLayoutResult {
   columnMap: Map<string, Entity>;
   baseLayout: ColumnLayout;
   columnTasks: Map<string, Entity[]>;
-  columnTaskMonikers: Map<string, string[]>;
-  allBoardTaskMonikers: Set<string>;
-  allBoardHeaderMonikers: Set<string>;
+  initialFocusTarget: InitialFocusTarget | null;
 }
 
 /**
  * Derive all board layout data from raw board/task props.
  *
  * Thin composer over three focused hooks: column ordering, task bucketing,
- * and moniker table construction. See each sub-hook for specifics.
+ * and initial-focus resolution. See each sub-hook for specifics.
  */
 function useBoardLayout(
   board: BoardData,
@@ -249,8 +261,11 @@ function useBoardLayout(
     groupField,
     groupValue,
   );
-  const { columnTaskMonikers, allBoardTaskMonikers, allBoardHeaderMonikers } =
-    useBoardMonikers(columns, baseLayout, taskMap);
+  const initialFocusTarget = useInitialFocusTarget(
+    columns,
+    baseLayout,
+    taskMap,
+  );
 
   return {
     columns,
@@ -261,9 +276,7 @@ function useBoardLayout(
     columnMap,
     baseLayout,
     columnTasks,
-    columnTaskMonikers,
-    allBoardTaskMonikers,
-    allBoardHeaderMonikers,
+    initialFocusTarget,
   };
 }
 
@@ -602,237 +615,289 @@ function BoardDragOverlay({ activeColumn }: BoardDragOverlayProps) {
   );
 }
 
-/**
- * Resolve the column id the user is focused on (or the leftmost as fallback).
- *
- * A column moniker (`column:<id>`) resolves directly. A task moniker
- * (`task:<id>`) resolves to its home column via `taskMap`. Any other or
- * missing moniker falls back to the first column.
- */
-function resolveFocusedColumnId(
-  focusedMoniker: string | null,
-  columns: Entity[],
-  taskMap: Map<string, Entity>,
-): string | null {
-  const fallback = columns[0]?.id ?? null;
-  if (!focusedMoniker) return fallback;
-  if (focusedMoniker.startsWith("column:"))
-    return focusedMoniker.slice("column:".length);
-  if (focusedMoniker.startsWith("task:")) {
-    const entity = taskMap.get(focusedMoniker.slice("task:".length));
-    if (entity) return getStr(entity, "position_column") || fallback;
-  }
-  return fallback;
-}
-
 /** Shared dependencies passed to each board-action command factory. */
 interface BoardActionDeps {
   columns: Entity[];
-  taskMap: Map<string, Entity>;
-  focusedMonikerRef: React.RefObject<string | null>;
-  broadcastRef: React.RefObject<(cmd: string) => void>;
-  handleAddTaskRef: React.RefObject<(columnId: string) => void>;
-  dispatchInspect: ReturnType<typeof useDispatchCommand>;
+  /**
+   * Latest spatial-focus actions ref. Read at command-execute time so
+   * the column-extreme commands dispatch `spatial_navigate` against the
+   * focused FQM the kernel currently knows about — without re-binding
+   * the command list on every focus move.
+   *
+   * `null` when the board is mounted in a pre-spatial-nav harness
+   * (legacy unit tests that wrap only `<EntityFocusProvider>`); in that
+   * case the column-extreme commands are no-ops, matching the same
+   * "no kernel, nothing to navigate" fallback that
+   * `app-shell.tsx::buildNavCommands` uses.
+   */
+  spatialActionsRef: React.RefObject<SpatialFocusActions | null>;
+  dispatchEntityAddTask: ReturnType<typeof useDispatchCommand>;
+  /**
+   * Focus a freshly-created task by composing the FQM from the
+   * known board-zone FQM, the column segment the task lives under,
+   * and the task's segment.
+   *
+   * Resolves the column at dispatch time via the kernel's
+   * `resolve_focused_column` semantics — when the task was created
+   * with no `column` arg, the kernel routed it to the focused
+   * column; the React side mirrors that fallback by walking the
+   * `columns` list to the first one.
+   */
+  focusCreatedTask: (taskId: string, columnSegment: SegmentMoniker) => void;
 }
 
-/** Factory for the "inspect focused entity" command. */
-function makeInspectCommand(deps: BoardActionDeps): CommandDef {
-  return {
-    id: "board.inspect",
-    name: "Inspect",
-    keys: { vim: "Enter", cua: "Enter" },
-    execute: () => {
-      const fm = deps.focusedMonikerRef.current;
-      if (fm) deps.dispatchInspect({ target: fm }).catch(console.error);
-    },
-  };
-}
-
-/** Factory for the "create task in focused column" command. */
+/** Factory for the "create task in focused column" command.
+ *
+ * Dispatches the unified `entity.add:task` with no `column` arg. The
+ * backend resolves the target column from the scope chain — which the
+ * dispatcher already carries — via
+ * `swissarmyhammer_kanban::focus::resolve_focused_column` inside
+ * `AddEntityCmd`. That matches the React flow that used to live here as
+ * `resolveFocusedColumnId`: a focused `column:<id>` moniker routes the
+ * new task into that column; a focused `task:<id>` moniker routes it
+ * into the focused task's home column; anything else falls through to
+ * the lowest-order column in `AddEntity::apply_position`.
+ *
+ * Per PR #40 review — column resolution is business logic, not
+ * presentation; it belongs in headless Rust (see
+ * `swissarmyhammer-kanban/src/focus.rs`).
+ */
 function makeNewTaskCommand(deps: BoardActionDeps): CommandDef {
   return {
     id: "board.newTask",
     name: "New Task",
     keys: { vim: "o", cua: "Mod+Enter" },
     execute: () => {
-      const colId = resolveFocusedColumnId(
-        deps.focusedMonikerRef.current,
-        deps.columns,
-        deps.taskMap,
-      );
-      if (colId) deps.handleAddTaskRef.current(colId);
-    },
-  };
-}
-
-/** Factory for a nav-broadcast command (first/last column). */
-function makeNavBroadcastCommand(
-  deps: BoardActionDeps,
-  id: string,
-  name: string,
-  keys: CommandDef["keys"],
-  navCmd: string,
-): CommandDef {
-  return {
-    id,
-    name,
-    keys,
-    execute: () => {
-      if (deps.columns.length > 0) deps.broadcastRef.current(navCmd);
+      if (deps.columns.length === 0) return;
+      // Default placement: the kernel's `resolve_focused_column` lands
+      // the new task in the lowest-order column when no focused column
+      // can be resolved. Match that fallback so the React-side focus
+      // dispatch composes the right FQM.
+      const fallbackColumnSegment = asSegment(deps.columns[0].moniker);
+      deps
+        .dispatchEntityAddTask()
+        .then((result) => {
+          const id = (result as { id?: string } | undefined)?.id;
+          if (id) deps.focusCreatedTask(id, fallbackColumnSegment);
+        })
+        .catch((e) => {
+          toast.error(
+            `Failed to add task: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        });
     },
   };
 }
 
 /**
- * Board-level action commands: inspect, new task, first/last column navigation.
+ * Factory for a column-extreme nav command (first / last column).
  *
- * Uses refs for focused moniker and add-task callback to avoid circular
- * dependency between commands and the handlers that depend on them.
+ * Dispatches `spatial_navigate(focusedFq, direction)` to the Rust
+ * spatial-nav kernel directly — same wire shape as the global
+ * `nav.first` / `nav.last` commands defined in
+ * `app-shell.tsx::buildNavCommands`. The board defines this command
+ * locally only because vim `0` / `$` and cua `Mod+Home` / `Mod+End`
+ * are NOT in the global `NAV_COMMAND_SPEC` (`Home` / `End` are cua
+ * there, vim has only `Shift+G` for last). Both keysets resolve to
+ * the same kernel call; the command exists to fill the keymap gap.
+ *
+ * No broadcast indirection — earlier the closure threaded the press
+ * through `FocusActions.broadcastNavCommand`, which was a no-op stub
+ * that always returned `false`. That pathway has been deleted (kanban
+ * task `01KQJDKBQ2VNT3SE7AN3VM2KGZ`).
+ *
+ * Reads the latest spatial-focus actions from `deps.spatialActionsRef`
+ * at execute time so the command memo stays stable across focus moves.
+ * No-ops when the kernel is unavailable (pre-spatial-nav unit harnesses)
+ * or when nothing is focused — there is nothing to navigate from.
+ */
+function makeNavCommand(
+  deps: BoardActionDeps,
+  id: string,
+  name: string,
+  keys: CommandDef["keys"],
+  direction: Direction,
+): CommandDef {
+  return {
+    id,
+    name,
+    keys,
+    execute: async () => {
+      if (deps.columns.length === 0) return;
+      const actions = deps.spatialActionsRef.current;
+      if (!actions) return;
+      const fq = actions.focusedFq();
+      if (fq === null) return;
+      await actions.navigate(fq, direction);
+    },
+  };
+}
+
+/**
+ * Board-level action commands: new task, first/last column navigation.
+ *
+ * The first / last column commands fill keymap gaps the global
+ * `NAV_COMMAND_SPEC` (in `app-shell.tsx`) does not cover: vim `0` /
+ * `$` and cua `Mod+Home` / `Mod+End`. Both pairs map to the kernel's
+ * `first` / `last` directions and dispatch `spatial_navigate` against
+ * the focused FQM. The global `nav.first` / `nav.last` (cua `Home` /
+ * `End`, emacs `Alt+<` / `Alt+>`, vim `Shift+G`) still own those keys
+ * — these commands shadow nothing.
+ *
+ * Inspect is no longer a board-scope concern — it lives on each
+ * `<Inspectable>` wrapper (see `inspectable.tsx`), so every
+ * inspectable entity carries its own scope-level Space binding
+ * regardless of which layer it is rendered in (board, inspector,
+ * palette result list).
  */
 function useBoardActionCommands(
   columns: Entity[],
-  taskMap: Map<string, Entity>,
-  focusedMonikerRef: React.RefObject<string | null>,
-  broadcastRef: React.RefObject<(cmd: string) => void>,
-  handleAddTaskRef: React.RefObject<(columnId: string) => void>,
-  dispatchInspect: ReturnType<typeof useDispatchCommand>,
+  spatialActionsRef: React.RefObject<SpatialFocusActions | null>,
+  dispatchEntityAddTask: ReturnType<typeof useDispatchCommand>,
+  focusCreatedTask: (taskId: string, columnSegment: SegmentMoniker) => void,
 ): CommandDef[] {
   return useMemo<CommandDef[]>(() => {
     const deps: BoardActionDeps = {
       columns,
-      taskMap,
-      focusedMonikerRef,
-      broadcastRef,
-      handleAddTaskRef,
-      dispatchInspect,
+      spatialActionsRef,
+      dispatchEntityAddTask,
+      focusCreatedTask,
     };
     return [
-      makeInspectCommand(deps),
       makeNewTaskCommand(deps),
-      makeNavBroadcastCommand(
+      makeNavCommand(
         deps,
         "board.firstColumn",
         "First Column",
         { vim: "0", cua: "Mod+Home" },
-        "nav.first",
+        "first",
       ),
-      makeNavBroadcastCommand(
+      makeNavCommand(
         deps,
         "board.lastColumn",
         "Last Column",
         { vim: "$", cua: "Mod+End" },
-        "nav.last",
+        "last",
       ),
     ];
-  }, [
-    columns,
-    taskMap,
-    dispatchInspect,
-    focusedMonikerRef,
-    broadcastRef,
-    handleAddTaskRef,
-  ]);
+  }, [columns, dispatchEntityAddTask, spatialActionsRef, focusCreatedTask]);
 }
 
 /**
  * Scroll the focused moniker's element into view within the board strip.
  *
  * Kept as its own hook so the main BoardView body stays short.
+ *
+ * The effect fires only when `focusedFq` *actually changes value* —
+ * comparing against the prior value via a ref. A re-render that
+ * happens to swap `scrollContainerRef` identity (or any other
+ * dep-churn that does not represent a real focus transition) must NOT
+ * re-trigger `scrollIntoView`; otherwise the user's scroll inside a
+ * column gets yanked back to the focused card after every render that
+ * stable-but-different deps would normally re-fire on.
+ *
+ * Exported so the unit test in `board-view.scroll-focused.test.tsx`
+ * can drive the hook against a deterministic container without
+ * spinning up the entire `<BoardView>` body.
  */
-function useScrollFocusedIntoView(
+export function useScrollFocusedIntoView(
   scrollContainerRef: React.RefObject<HTMLDivElement | null>,
-  focusedMoniker: string | null,
+  focusedFq: FullyQualifiedMoniker | null,
 ): void {
+  const prevFocusedFqRef = useRef<FullyQualifiedMoniker | null>(null);
   useEffect(() => {
+    if (focusedFq === prevFocusedFqRef.current) return;
+    prevFocusedFqRef.current = focusedFq;
     const container = scrollContainerRef.current;
-    if (!container || !focusedMoniker) return;
+    if (!container || !focusedFq) return;
     const el = container.querySelector<HTMLElement>(
-      `[data-moniker="${CSS.escape(focusedMoniker)}"]`,
+      `[data-moniker="${CSS.escape(focusedFq)}"]`,
     );
     if (el?.scrollIntoView)
       el.scrollIntoView({ inline: "nearest", block: "nearest" });
-  }, [scrollContainerRef, focusedMoniker]);
+  }, [scrollContainerRef, focusedFq]);
 }
 
 /**
- * Focus the first task (or first column header) exactly once on mount.
+ * Seed the spatial navigator's selection exactly once on mount.
  *
- * Subsequent focus is driven by pull-based claimWhen predicates — we only
- * need to seed the initial selection.
+ * The spatial-nav layer ( `<FocusZone>` graph ) owns every subsequent focus
+ * move once a moniker is selected, but it has no opinion about which entity
+ * starts focused on a fresh mount. This hook fires that initial `setFocus`
+ * call — pointing at the first task on the board, or the first column when
+ * the board is empty — and then stays out of the way.
+ *
+ * `initialMoniker` is resolved by `useInitialFocusMoniker` and is `null`
+ * only when the board has no columns at all (in which case there is nothing
+ * to focus).
  */
 function useInitialBoardFocus(
-  columns: Entity[],
-  columnTaskMonikers: Map<string, string[]>,
-  setFocus: (moniker: string) => void,
+  initialTarget: InitialFocusTarget | null,
+  boardZoneFq: FullyQualifiedMoniker,
+  dispatchNavFocus: (
+    opts?: import("@/lib/command-scope").DispatchOptions,
+  ) => Promise<unknown>,
 ): void {
   const initialFocusDone = useRef(false);
   useEffect(() => {
     if (initialFocusDone.current) return;
+    if (!initialTarget) return;
     initialFocusDone.current = true;
-    for (const col of columns) {
-      const monikers = columnTaskMonikers.get(col.id) ?? [];
-      if (monikers.length > 0) {
-        setFocus(monikers[0]);
-        return;
-      }
-    }
-    if (columns.length > 0) setFocus(columns[0].moniker);
-  }, [columns, columnTaskMonikers, setFocus]);
+    const columnFq = composeFq(boardZoneFq, initialTarget.columnSegment);
+    const targetFq =
+      initialTarget.leafSegment === null
+        ? columnFq
+        : composeFq(columnFq, initialTarget.leafSegment);
+    // Card `01KR7CDEFWWVF4WH0BCHE8Y21J`: focus claims flow through
+    // `nav.focus`. The initial-focus dispatch happens on mount once
+    // the layout has resolved a target moniker.
+    void dispatchNavFocus({ args: { fq: targetFq } }).catch((err) =>
+      console.error("[useInitialBoardFocus] nav.focus dispatch failed", err),
+    );
+  }, [initialTarget, boardZoneFq, dispatchNavFocus]);
 }
 
 /**
  * Build the `onAddTask` callback that creates a task in the given column.
+ *
+ * Dispatches the unified `entity.add:task` command that the grid view and the
+ * palette also route through — the backend `AddEntity` operation honours the
+ * `column` override, so a single creation path serves every UI entry point.
  *
  * On success, focus moves to the newly-created task. On failure, surfaces
  * the error via a toast.
  */
 function useAddTaskHandler(
   columnMap: Map<string, Entity>,
-  setFocus: (moniker: string) => void,
+  focusCreatedTask: (taskId: string, columnSegment: SegmentMoniker) => void,
 ): (columnId: string) => Promise<void> {
   const dispatch = useDispatchCommand();
   return useCallback(
     async (columnId: string) => {
-      const col = columnMap.get(columnId);
-      const title = defaultTaskTitle(col ? getStr(col, "name") : "");
       try {
-        const result = (await dispatch("task.add", {
-          args: { title, column: columnId },
+        const result = (await dispatch("entity.add:task", {
+          args: { column: columnId },
         })) as { id?: string } | undefined;
-        if (result?.id) setFocus(`task:${result.id}`);
+        if (result?.id) {
+          const column = columnMap.get(columnId);
+          if (column) {
+            focusCreatedTask(result.id, asSegment(column.moniker));
+          }
+        }
       } catch (e) {
         toast.error(
           `Failed to add task: ${e instanceof Error ? e.message : String(e)}`,
         );
       }
     },
-    [columnMap, setFocus, dispatch],
+    [columnMap, focusCreatedTask, dispatch],
   );
-}
-
-/**
- * Build the header-moniker string for a neighbor column, or null.
- *
- * Neighbor columns expose a `<moniker>.name` target that `ColumnView` uses
- * to wire its cross-column nav predicates; callers pass `null` when there
- * is no neighbor on that side.
- */
-function neighborHeaderMoniker(
-  neighborId: string | null,
-  columnMap: Map<string, Entity>,
-): string | null {
-  if (!neighborId) return null;
-  const col = columnMap.get(neighborId);
-  return `${col?.moniker ?? `column:${neighborId}`}.name`;
 }
 
 /** Props for a single positioned column inside the strip. */
 interface BoardColumnItemProps {
   col: Entity;
   index: number;
-  total: number;
-  prevColId: string | null;
-  nextColId: string | null;
   layout: BoardLayoutResult;
   taskDrag: TaskDragState | null;
   handleAddTask: (columnId: string) => void;
@@ -842,18 +907,16 @@ interface BoardColumnItemProps {
 }
 
 /**
- * Render one sortable column with its neighbor moniker wiring.
+ * Render one sortable column.
  *
- * Kept as its own component so the strip map body stays tiny — only
- * `BoardColumnStrip` knows about neighbor indices; this component takes
- * the resolved ids as props.
+ * Cross-column keyboard navigation now lives in the spatial-nav layer (each
+ * column is its own `<FocusZone>`), so this component no longer threads
+ * neighbor moniker lists or header monikers down to `ColumnView`. Only the
+ * structural / drag-drop wiring stays.
  */
 function BoardColumnItem({
   col,
   index,
-  total,
-  prevColId,
-  nextColId,
   layout,
   taskDrag,
   handleAddTask,
@@ -861,13 +924,7 @@ function BoardColumnItem({
   handleTaskDragEnd,
   handleZoneDrop,
 }: BoardColumnItemProps) {
-  const {
-    columnMap,
-    columnTasks,
-    columnTaskMonikers,
-    allBoardTaskMonikers,
-    allBoardHeaderMonikers,
-  } = layout;
+  const { columnTasks } = layout;
   return (
     <SortableColumn id={col.id} showSeparator={index > 0}>
       <ColumnView
@@ -878,18 +935,6 @@ function BoardColumnItem({
         onTaskDragEnd={handleTaskDragEnd}
         onDrop={handleZoneDrop}
         dragTaskId={taskDrag?.sourceTaskId ?? null}
-        leftColumnTaskMonikers={
-          prevColId ? (columnTaskMonikers.get(prevColId) ?? []) : []
-        }
-        leftColumnHeaderMoniker={neighborHeaderMoniker(prevColId, columnMap)}
-        rightColumnTaskMonikers={
-          nextColId ? (columnTaskMonikers.get(nextColId) ?? []) : []
-        }
-        rightColumnHeaderMoniker={neighborHeaderMoniker(nextColId, columnMap)}
-        allBoardTaskMonikers={allBoardTaskMonikers}
-        allBoardHeaderMonikers={allBoardHeaderMonikers}
-        isFirstColumn={index === 0}
-        isLastColumn={index === total - 1}
       />
     </SortableColumn>
   );
@@ -930,17 +975,11 @@ function BoardColumnStrip({
       {currentColumnOrder.map((colId, i) => {
         const col = columnMap.get(colId);
         if (!col) return null;
-        const prevColId = i > 0 ? currentColumnOrder[i - 1] : null;
-        const nextColId =
-          i < currentColumnOrder.length - 1 ? currentColumnOrder[i + 1] : null;
         return (
           <BoardColumnItem
             key={col.id}
             col={col}
             index={i}
-            total={currentColumnOrder.length}
-            prevColId={prevColId}
-            nextColId={nextColId}
             layout={layout}
             taskDrag={taskDrag}
             handleAddTask={handleAddTask}
@@ -1005,81 +1044,157 @@ function BoardDndWrapper({
 
 /** Mutable refs BoardView threads into its action-command factories. */
 interface BoardCommandRefs {
-  focusedMonikerRef: React.RefObject<string | null>;
-  broadcastRef: React.RefObject<(cmd: string) => void>;
-  handleAddTaskRef: React.RefObject<(columnId: string) => void>;
+  spatialActionsRef: React.RefObject<SpatialFocusActions | null>;
 }
 
 /**
  * Allocate and keep up-to-date the refs used by board action commands.
  *
- * The commands are memoized but need to see the latest focused moniker and
- * add-task callback; refs avoid rebuilding the command list on every render.
+ * The spatial-focus actions come from `useOptionalSpatialFocusActions()`,
+ * which can be `null` when `<BoardView>` is mounted outside the
+ * spatial-nav stack (older unit tests). We wrap the latest value in a
+ * ref so the column-extreme command factories receive a mutable handle
+ * — keeping the command list memo stable across BoardView renders. The
+ * commands themselves no-op when the ref is null at execute time.
  */
 function useBoardCommandRefs(
-  focusedMoniker: string | null,
-  broadcastNavCommand: (cmd: string) => void,
+  spatialActions: SpatialFocusActions | null,
 ): BoardCommandRefs {
-  const focusedMonikerRef = useRef(focusedMoniker);
-  focusedMonikerRef.current = focusedMoniker;
-  const broadcastRef = useRef(broadcastNavCommand);
-  broadcastRef.current = broadcastNavCommand;
-  const handleAddTaskRef = useRef<(columnId: string) => void>(() => {});
-  return { focusedMonikerRef, broadcastRef, handleAddTaskRef };
+  const spatialActionsRef = useRef<SpatialFocusActions | null>(spatialActions);
+  spatialActionsRef.current = spatialActions;
+  return { spatialActionsRef };
 }
 
 /**
  * Board view that renders columns and cards.
  *
- * Navigation is pull-based: each card and column header FocusScope declares
- * claimWhen predicates. The global KeybindingHandler broadcasts nav.up/down/
- * left/right/first/last, and each predicate evaluates whether it should claim
- * focus. No push-based cursor state is needed.
+ * Navigation flows through the spatial-nav `<FocusZone>` graph: this view
+ * registers a single `ui:board` zone at its root and each column / card
+ * mounts its own zone underneath. Direction keys (nav.up/down/left/right
+ * and friends) are routed by the spatial navigator against that zone tree
+ * — there are no claimWhen predicates and no document-level keydown
+ * listeners on the board. `useInitialBoardFocus` only seeds the initial
+ * selection; every subsequent move belongs to the navigator.
  */
 export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
-  const boardCommands = useEntityCommands("board", "board");
-  const dispatchInspect = useDispatchCommand("ui.inspect");
-  const { focusedMoniker, broadcastNavCommand, setFocus } = useEntityFocus();
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const { focusedMonikerRef, broadcastRef, handleAddTaskRef } =
-    useBoardCommandRefs(focusedMoniker, broadcastNavCommand);
-
   const layout = useBoardLayout(board, tasks, groupValue);
   const dragDrop = useBoardDragDrop(
     layout.columnIdList,
     layout.columnMap,
     layout.taskMap,
   );
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // The wrapper carries the real `board:<id>` entity moniker. The
+  // `<Inspectable>` wrapper owns inspector dispatch on double-click;
+  // the spatial primitive `<FocusScope>` stays pure-spatial.
+  //
+  // `showFocus={false}` because the board fills the viewport and a
+  // focus rectangle around the entire content area would be visual
+  // noise. Sized inner containers (columns, cards, fields) keep
+  // `showFocus={true}` because they are bounded boxes whose users
+  // need a visible "here is focus" hint; viewport-sized chrome scopes
+  // (board, perspective, navbar) suppress it.
+  //
+  // BoardSpatialBody runs inside this FocusScope so its
+  // `useFullyQualifiedMoniker()` reads the board entity FQ — that is
+  // the parent FQ for column / card / field composition.
+  return (
+    <Inspectable moniker={asSegment(board.board.moniker)}>
+      <FocusScope
+        moniker={asSegment(board.board.moniker)}
+        // showFocus=false: board zone fills the viewport; inner columns / cards / fields advertise focus.
+        showFocus={false}
+        className="flex flex-col flex-1 min-h-0 relative"
+      >
+        <BoardSpatialBody
+          layout={layout}
+          dragDrop={dragDrop}
+          scrollContainerRef={scrollContainerRef}
+        />
+      </FocusScope>
+    </Inspectable>
+  );
+}
+
+/** Props for the spatial-zone-aware board body. */
+interface BoardSpatialBodyProps {
+  layout: BoardLayoutResult;
+  dragDrop: BoardDragDropResult;
+  scrollContainerRef: React.RefObject<HTMLDivElement | null>;
+}
+
+/**
+ * Render the board content inside the `board:<id>` entity scope.
+ *
+ * Mounts the action-command provider, seeds initial focus, and wires
+ * `useAddTaskHandler` against the board's FQM. Lives one level
+ * deeper than `BoardView` so its hooks read the board's FQM via
+ * `useFullyQualifiedMoniker()` — which is the FQ context at this
+ * depth (the ancestor `<FocusScope moniker={board.moniker}>` provides
+ * it).
+ *
+ * Production trees always mount inside the spatial-nav stack, so the
+ * board FQM is guaranteed to be present. Pre-spatial-nav unit tests
+ * that mount only `<EntityFocusProvider>` will throw from
+ * `useFullyQualifiedMoniker()` — which is correct: those tests never
+ * exercise the board action commands or initial-focus seeding.
+ */
+function BoardSpatialBody({
+  layout,
+  dragDrop,
+  scrollContainerRef,
+}: BoardSpatialBodyProps) {
+  const dispatchEntityAddTask = useDispatchCommand("entity.add:task");
+  // Card `01KR7CDEFWWVF4WH0BCHE8Y21J`: focus claims flow through
+  // `nav.focus`. Both the initial-focus seeding and the
+  // newly-created-task focus jump dispatch this command.
+  const dispatchNavFocus = useDispatchCommand("nav.focus");
+  const focusedFq = useFocusedFq();
+  const boardZoneFq = useFullyQualifiedMoniker();
+  // The column-extreme commands (`board.firstColumn` /
+  // `board.lastColumn`) dispatch `spatial_navigate` against the
+  // spatial-nav kernel — same wire shape as `app-shell.tsx`'s global
+  // nav commands. The actions are read through a ref so the command
+  // memo stays stable across focus moves.
+  const spatialActions = useOptionalSpatialFocusActions();
+  const { spatialActionsRef } = useBoardCommandRefs(spatialActions);
+
+  const focusCreatedTask = useCallback(
+    (taskId: string, columnSegment: SegmentMoniker) => {
+      const columnFq = composeFq(boardZoneFq, columnSegment);
+      const cardFq = composeFq(columnFq, asSegment(`task:${taskId}`));
+      void dispatchNavFocus({ args: { fq: cardFq } }).catch((err) =>
+        console.error("[focusCreatedTask] nav.focus dispatch failed", err),
+      );
+    },
+    [boardZoneFq, dispatchNavFocus],
+  );
 
   const boardActionCommands = useBoardActionCommands(
     layout.columns,
-    layout.taskMap,
-    focusedMonikerRef,
-    broadcastRef,
-    handleAddTaskRef,
-    dispatchInspect,
+    spatialActionsRef,
+    dispatchEntityAddTask,
+    focusCreatedTask,
   );
 
-  useScrollFocusedIntoView(scrollContainerRef, focusedMoniker);
-  useInitialBoardFocus(layout.columns, layout.columnTaskMonikers, setFocus);
+  useScrollFocusedIntoView(scrollContainerRef, focusedFq);
+  useInitialBoardFocus(
+    layout.initialFocusTarget,
+    boardZoneFq,
+    dispatchNavFocus,
+  );
 
-  const handleAddTask = useAddTaskHandler(layout.columnMap, setFocus);
-  handleAddTaskRef.current = handleAddTask;
+  const handleAddTask = useAddTaskHandler(layout.columnMap, focusCreatedTask);
 
   return (
-    <FocusScope
-      moniker={board.board.moniker}
-      commands={boardCommands}
-      className="flex flex-col flex-1 min-h-0 relative"
-    >
-      <CommandScopeProvider commands={boardActionCommands}>
-        <BoardDndWrapper
-          scrollContainerRef={scrollContainerRef}
-          dragDrop={dragDrop}
-          layout={layout}
-          handleAddTask={handleAddTask}
-        />
-      </CommandScopeProvider>
-    </FocusScope>
+    <CommandScopeProvider commands={boardActionCommands}>
+      <BoardDndWrapper
+        scrollContainerRef={scrollContainerRef}
+        dragDrop={dragDrop}
+        layout={layout}
+        handleAddTask={handleAddTask}
+      />
+    </CommandScopeProvider>
   );
 }

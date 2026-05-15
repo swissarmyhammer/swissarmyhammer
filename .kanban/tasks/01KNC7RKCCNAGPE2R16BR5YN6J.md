@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffff8280
+position_ordinal: fffffffffffffffffffffffff980
 position_swimlane: container-refactor
 title: Add Rust tests for UI commands (view/perspective switching)
 ---

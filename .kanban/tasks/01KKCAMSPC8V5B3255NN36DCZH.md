@@ -2,7 +2,7 @@
 depends_on:
 - 01KKCADZV71JJH01V5GVEPQTAX
 position_column: done
-position_ordinal: ffffffffffc280
+position_ordinal: ffffffffffff8f80
 title: 'STATUSLINE-M11: git_status module'
 ---
 ## What

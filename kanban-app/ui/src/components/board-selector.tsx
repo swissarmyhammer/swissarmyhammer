@@ -3,12 +3,21 @@
  *
  * The name is editable in place via the Field component (schema-driven).
  * The path stem + chevron open a Radix Select dropdown to switch boards.
+ *
+ * # Spatial-nav model
+ *
+ * The selector is a **navigable container** — it contains multiple
+ * focusable surfaces (the editable name `<Field>`, the dropdown
+ * trigger, the optional tear-off button). The caller (e.g. `<NavBar>`)
+ * wraps this component in a `<FocusZone>`; inside this component we
+ * wrap each interactive non-Field surface in its own `<FocusScope>`
+ * leaf. The `<Field>` is itself a `<FocusZone>` so it participates as a
+ * peer zone with its own leaves.
  */
 
 import { useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { useDispatchCommand } from "@/lib/command-scope";
-import { Button } from "@/components/ui/button";
 import {
   Tooltip,
   TooltipTrigger,
@@ -21,8 +30,11 @@ import {
   SelectTrigger,
 } from "@/components/ui/select";
 import { Field } from "@/components/fields/field";
+import { FocusScope } from "@/components/focus-scope";
+import { Pressable } from "@/components/pressable";
 import { useSchema } from "@/lib/schema-context";
 import { useFieldValue } from "@/lib/entity-store-context";
+import { asSegment } from "@/types/spatial";
 import type { Entity, OpenBoard } from "@/types/kanban";
 
 /** Extract the last meaningful path segment (parent of .kanban). */
@@ -88,62 +100,69 @@ export function BoardSelector({
             onEdit={() => setEditingName(true)}
             onDone={() => setEditingName(false)}
             onCancel={() => setEditingName(false)}
+            showFocus
           />
         ) : (
           <span className="text-sm cursor-text truncate">{displayName}</span>
         )}
       </div>
 
-      <Select
-        value={selectedPath ?? undefined}
-        onValueChange={(path) => {
-          onSelect(path);
-        }}
-      >
-        <SelectTrigger
-          className="border-none shadow-none h-auto py-0 px-0 gap-1 w-auto min-w-0 focus-visible:ring-0 focus-visible:border-transparent"
-          size="sm"
+      <FocusScope moniker={asSegment("board-selector.dropdown")}>
+        <Select
+          value={selectedPath ?? undefined}
+          onValueChange={(path) => {
+            onSelect(path);
+          }}
         >
-          {stem && (
-            <span className="text-xs text-muted-foreground/50 shrink-0">
-              {stem}
-            </span>
-          )}
-        </SelectTrigger>
-        <SelectContent position="popper">
-          {boards.map((b) => {
-            const name =
-              b.path === selectedPath
-                ? displayName
-                : b.name || pathStem(b.path);
-            return (
-              <SelectItem key={b.path} value={b.path}>
-                <span>{name}</span>
-                <span className="ml-2 text-muted-foreground/50">
-                  {pathStem(b.path)}
-                </span>
-              </SelectItem>
-            );
-          })}
-        </SelectContent>
-      </Select>
+          <SelectTrigger
+            className="border-none shadow-none h-auto py-0 px-0 gap-1 w-auto min-w-0 focus-visible:ring-0 focus-visible:border-transparent"
+            size="sm"
+          >
+            {stem && (
+              <span className="text-xs text-muted-foreground/50 shrink-0">
+                {stem}
+              </span>
+            )}
+          </SelectTrigger>
+          <SelectContent position="popper">
+            {boards.map((b) => {
+              const name =
+                b.path === selectedPath
+                  ? displayName
+                  : b.name || pathStem(b.path);
+              return (
+                <SelectItem key={b.path} value={b.path}>
+                  <span>{name}</span>
+                  <span className="ml-2 text-muted-foreground/50">
+                    {pathStem(b.path)}
+                  </span>
+                </SelectItem>
+              );
+            })}
+          </SelectContent>
+        </Select>
+      </FocusScope>
 
       {showTearOff && selectedPath && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Open in new window"
-              className="h-6 w-6 text-muted-foreground/40"
-              onClick={() => {
+            <Pressable
+              asChild
+              moniker={asSegment("board-selector.tear-off")}
+              ariaLabel="Open in new window"
+              onPress={() => {
                 dispatchNewWindow({ args: { board_path: selectedPath } }).catch(
                   console.error,
                 );
               }}
             >
-              <ExternalLink className="h-3.5 w-3.5" />
-            </Button>
+              <button
+                type="button"
+                className="inline-flex items-center justify-center h-6 w-6 rounded-md text-muted-foreground/40 hover:bg-accent hover:text-accent-foreground transition-colors"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+              </button>
+            </Pressable>
           </TooltipTrigger>
           <TooltipContent side="bottom">Open in new window</TooltipContent>
         </Tooltip>

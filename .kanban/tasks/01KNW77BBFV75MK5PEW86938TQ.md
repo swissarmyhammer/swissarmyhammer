@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffb380
+position_ordinal: fffffffffffffffffffffffffffffe80
 project: expr-filter
 title: 'filter-expr: add test for ParseError Display impl'
 ---

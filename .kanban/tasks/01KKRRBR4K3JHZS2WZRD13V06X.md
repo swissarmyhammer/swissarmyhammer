@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KKRRB7864W4BQTEZFDCS084V
 position_column: done
-position_ordinal: ffffffff9b80
+position_ordinal: ffffffffa280
 title: Render project-type partials through PromptLibrary in detect.rs
 ---
 ## What

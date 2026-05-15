@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffaf80
+position_ordinal: ffffffffffffffffffa080
 title: Board name autosave doesn't update window title or inspector while typing
 ---
 ## What

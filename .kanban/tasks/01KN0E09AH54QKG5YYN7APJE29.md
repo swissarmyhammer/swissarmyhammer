@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffff9580
+position_ordinal: fffffffffffffffff980
 title: Set window title from board display name
 ---
 ## What

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffff9480
+position_ordinal: ffffffffffffe280
 title: 'progress display: hide when total items is zero'
 ---
 ## What

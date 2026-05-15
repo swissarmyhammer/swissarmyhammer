@@ -33,14 +33,15 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_fields::EntityTypeName;
-use tokio::fs::{self, OpenOptions};
-use tokio::io::AsyncWriteExt;
+use swissarmyhammer_fields::{EntityDef, EntityTypeName};
+use swissarmyhammer_store::{ChangeOp, ChangelogEntry as StoreChangelogEntry};
+use tokio::fs;
 use tracing::warn;
 
 use crate::entity::Entity;
 use crate::error::Result;
 use crate::id_types::{ChangeEntryId, EntityId, TransactionId};
+use crate::io::parse_entity_text;
 
 /// What happened to a single field.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -299,28 +300,23 @@ pub fn apply_changes(entity: &mut Entity, changes: &[(String, FieldChange)]) -> 
     Ok(())
 }
 
-/// Append a change entry to an entity's JSONL log file.
-pub async fn append_changelog(path: &Path, entry: &ChangeEntry) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).await?;
-    }
-
-    let mut line = serde_json::to_string(entry).unwrap_or_default();
-    line.push('\n');
-
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .await?;
-    file.write_all(line.as_bytes()).await?;
-
-    Ok(())
-}
-
-/// Read all change entries from a JSONL log file.
+/// Read all change entries from a JSONL log file (legacy entity format only).
 ///
-/// Malformed lines are logged as warnings and skipped.
+/// Entity-format records (`ChangeEntry`) are returned as-is; store-format
+/// records (`swissarmyhammer_store::ChangelogEntry`, patch-based) are silently
+/// skipped because this entry point lacks the entity schema needed to replay
+/// patches into field-level diffs.
+///
+/// Callers that need the full synthesised field-level history — including
+/// projections of store-format records — must use [`read_changelog_for`]
+/// instead. This function exists for the small set of internal call sites
+/// that still operate without a resolved [`EntityDef`].
+///
+/// Malformed lines (neither entity nor store shape) are logged as warnings
+/// and skipped.
+#[deprecated(
+    note = "prefer `read_changelog_for`, which projects store-format patches into field-level changes"
+)]
 pub async fn read_changelog(path: &Path) -> Result<Vec<ChangeEntry>> {
     let content = match fs::read_to_string(path).await {
         Ok(c) => c,
@@ -333,40 +329,280 @@ pub async fn read_changelog(path: &Path) -> Result<Vec<ChangeEntry>> {
         if line.trim().is_empty() {
             continue;
         }
-        match serde_json::from_str::<ChangeEntry>(line) {
-            Ok(entry) => entries.push(entry),
-            Err(e) => {
-                warn!(
-                    path = %path.display(),
-                    line_number = i + 1,
-                    error = %e,
-                    "skipping malformed changelog entry"
-                );
-            }
+        if let Some(entry) = try_parse_entity_format(line) {
+            entries.push(entry);
+            continue;
         }
+        if try_parse_store_format(line).is_some() {
+            // Store-format lines are not field-level entries on their own.
+            // The legacy reader silently drops them; new callers should use
+            // `read_changelog_for` to replay them into field diffs.
+            continue;
+        }
+        warn!(
+            path = %path.display(),
+            line_number = i + 1,
+            "skipping malformed changelog entry"
+        );
     }
 
     Ok(entries)
+}
+
+/// Read all change entries for an entity, replaying any store-format text
+/// patches into field-level diffs.
+///
+/// The on-disk JSONL log can contain a mix of:
+///
+/// 1. Entity-format `ChangeEntry` records (legacy writer) — returned as-is.
+/// 2. Store-format `ChangelogEntry` records (text patches via `diffy`) —
+///    walked in file order with a running text cursor, applied forward,
+///    parsed against the entity schema, and diffed to produce a synthesised
+///    `ChangeEntry` with `changes` populated by [`diff_entities`].
+/// 3. Blank lines — skipped.
+/// 4. Genuinely malformed lines — warned and skipped.
+///
+/// The cursor advance is per-patch: each store record's `forward_patch` is
+/// applied to the current text, the resulting new text is parsed as an
+/// [`Entity`], and the diff against the previous parsed state becomes the
+/// `changes` vector. The first store record in the log replays from an
+/// empty cursor; subsequent ones build on the previous result.
+///
+/// Returned entries are sorted by timestamp so consumers see a chronological
+/// view regardless of how entity-format and store-format records interleave
+/// on disk.
+///
+/// `entity_def` is the schema for `entity_type`; it is consulted when parsing
+/// patched text back into `Entity` so frontmatter+body and plain-YAML entities
+/// are handled correctly.
+pub async fn read_changelog_for(
+    entity_type: &EntityTypeName,
+    entity_def: &EntityDef,
+    path: &Path,
+) -> Result<Vec<ChangeEntry>> {
+    let content = match fs::read_to_string(path).await {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(crate::error::EntityError::Io(e)),
+    };
+
+    // Walk the file once, partitioning lines into the two on-disk shapes.
+    // Store-format records are accumulated as a homogeneous slice so the
+    // patch chain can be replayed by [`replay_store_log`] — that keeps the
+    // homogeneous and interleaved code paths sharing one implementation
+    // and guarantees patch `n` always applies to the result of patch
+    // `n-1`, regardless of how many entity-format lines sit between them
+    // on disk. Legacy entity-format records live in a parallel projection
+    // (not the patch chain) and are collected separately.
+    let mut entity_entries = Vec::new();
+    let mut store_entries = Vec::new();
+
+    for (i, line) in content.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Some(entry) = try_parse_entity_format(line) {
+            entity_entries.push(entry);
+            continue;
+        }
+        if let Some(store_entry) = try_parse_store_format(line) {
+            store_entries.push(store_entry);
+            continue;
+        }
+        warn!(
+            path = %path.display(),
+            line_number = i + 1,
+            "skipping malformed changelog entry"
+        );
+    }
+
+    let mut entries = replay_store_log(entity_type, entity_def, &store_entries, path)?;
+    entries.append(&mut entity_entries);
+
+    // Stable sort by timestamp so mixed-shape logs come back chronologically,
+    // and ties preserve the on-disk order within each shape.
+    entries.sort_by_key(|e| e.timestamp);
+    Ok(entries)
+}
+
+/// Try to parse `line` as an entity-format [`ChangeEntry`]. Returns `None`
+/// if the line is not entity-shape JSON (it may still be store-format or
+/// garbage).
+fn try_parse_entity_format(line: &str) -> Option<ChangeEntry> {
+    serde_json::from_str::<ChangeEntry>(line).ok()
+}
+
+/// Try to parse `line` as a [`StoreChangelogEntry`] (patch-based). Returns
+/// `None` if the line is not store-shape JSON.
+///
+/// The discriminator is the presence of `forward_patch` plus `item_id`:
+/// entity-format records use `changes`/`entity_id` and never carry those
+/// fields. We deserialise into the strongly-typed struct rather than peeking
+/// at a generic `Value` so any partial overlap surfaces as a parse error.
+fn try_parse_store_format(line: &str) -> Option<StoreChangelogEntry> {
+    serde_json::from_str::<StoreChangelogEntry>(line).ok()
+}
+
+/// Replay a slice of store-format records into field-level
+/// [`ChangeEntry`]s.
+///
+/// Walks the slice in order, applying each `forward_patch` to a running text
+/// cursor (starting from the empty string for the first record), parsing
+/// before/after as [`Entity`] using `entity_def`, and diffing to produce
+/// `changes`. Each output entry preserves the store record's `id`,
+/// `timestamp`, and translated `op`.
+///
+/// This is the homogeneous-input core of [`read_changelog_for`]: the reader
+/// partitions the JSONL file into entity-format and store-format records,
+/// then delegates the store-format slice here so the patch chain is replayed
+/// in exactly one place.
+fn replay_store_log(
+    entity_type: &EntityTypeName,
+    entity_def: &EntityDef,
+    store_entries: &[StoreChangelogEntry],
+    source_path: &Path,
+) -> Result<Vec<ChangeEntry>> {
+    let mut out = Vec::with_capacity(store_entries.len());
+    let mut cursor = String::new();
+
+    for store_entry in store_entries {
+        let (entry, next_cursor) =
+            replay_one_store_entry(entity_type, entity_def, store_entry, &cursor, source_path)?;
+        out.push(entry);
+        cursor = next_cursor;
+    }
+
+    Ok(out)
+}
+
+/// Replay a single store-format record against the running text `cursor`.
+///
+/// Returns the synthesised [`ChangeEntry`] and the updated cursor (the text
+/// produced by applying `forward_patch`). Factoring this step out keeps
+/// [`replay_store_log`] a thin loop over a shared cursor, so the patch
+/// chain has exactly one implementation regardless of how the surrounding
+/// reader assembled the slice.
+fn replay_one_store_entry(
+    entity_type: &EntityTypeName,
+    entity_def: &EntityDef,
+    store_entry: &StoreChangelogEntry,
+    cursor: &str,
+    source_path: &Path,
+) -> Result<(ChangeEntry, String)> {
+    let entity_id = EntityId::from(store_entry.item_id.as_str());
+    let before = parse_entity_text(
+        cursor,
+        entity_type.as_str(),
+        entity_id.as_str(),
+        entity_def,
+        source_path,
+    )?;
+
+    let new_text = swissarmyhammer_store::diff::apply_patch(cursor, &store_entry.forward_patch)
+        .map_err(|e| {
+            crate::error::EntityError::PatchApply(format!(
+                "failed to apply store-format patch for {}/{}: {}",
+                entity_type.as_str(),
+                entity_id.as_str(),
+                e
+            ))
+        })?;
+
+    let after = parse_entity_text(
+        &new_text,
+        entity_type.as_str(),
+        entity_id.as_str(),
+        entity_def,
+        source_path,
+    )?;
+
+    let changes = if matches!(store_entry.op, ChangeOp::Create) {
+        // Treat creates as "every field set from nothing" — diff_entities
+        // against an empty entity already produces exactly that, but we
+        // call it out for clarity.
+        diff_entities(
+            &Entity::new(entity_type.as_str(), entity_id.as_str()),
+            &after,
+        )
+    } else {
+        diff_entities(&before, &after)
+    };
+
+    let entry = ChangeEntry {
+        id: ChangeEntryId::from(store_entry.id.to_string()),
+        timestamp: store_entry.timestamp,
+        entity_type: entity_type.clone(),
+        entity_id,
+        op: store_op_to_string(&store_entry.op).to_string(),
+        actor: None,
+        changes,
+        undone_id: None,
+        redone_id: None,
+        transaction_id: store_entry
+            .transaction_id
+            .as_deref()
+            .map(TransactionId::from),
+    };
+
+    Ok((entry, new_text))
+}
+
+/// Translate a store-layer [`ChangeOp`] to the lowercase string form used by
+/// entity-layer [`ChangeEntry::op`]. Mirrors the `#[serde(rename_all =
+/// "lowercase")]` form so round-trips via JSON stay stable.
+fn store_op_to_string(op: &ChangeOp) -> &'static str {
+    match op {
+        ChangeOp::Create => "create",
+        ChangeOp::Update => "update",
+        ChangeOp::Delete => "delete",
+        ChangeOp::Archive => "archive",
+        ChangeOp::Unarchive => "unarchive",
+    }
 }
 
 /// Read all change entries, falling back to a secondary path if the primary does not exist.
 ///
 /// Tries the `primary` path first. If the file is not found there, tries the `fallback` path.
 /// This is useful for reading changelogs of deleted entities whose files have been moved to trash.
+///
+/// Honors the entity schema, so store-format text patches are replayed into
+/// field-level diffs just like [`read_changelog_for`].
 pub async fn read_changelog_with_fallback(
+    entity_type: &EntityTypeName,
+    entity_def: &EntityDef,
     primary: &Path,
     fallback: &Path,
 ) -> Result<Vec<ChangeEntry>> {
-    let entries = read_changelog(primary).await?;
+    let entries = read_changelog_for(entity_type, entity_def, primary).await?;
     if entries.is_empty() && !primary.exists() {
-        return read_changelog(fallback).await;
+        return read_changelog_for(entity_type, entity_def, fallback).await;
     }
     Ok(entries)
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncWriteExt;
+
+    /// Append a legacy entity-format `ChangeEntry` line to the given
+    /// `.jsonl` path. Used by tests to seed on-disk fixtures that the
+    /// projecting reader will translate back into field-level diffs.
+    async fn write_legacy_changelog_line(path: &Path, entry: &ChangeEntry) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).await.unwrap();
+        }
+        let mut line = serde_json::to_string(entry).unwrap();
+        line.push('\n');
+        let mut file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .await
+            .unwrap();
+        file.write_all(line.as_bytes()).await.unwrap();
+    }
 
     #[test]
     fn diff_no_changes() {
@@ -743,8 +979,8 @@ mod tests {
             )],
         );
 
-        append_changelog(&log_path, &entry1).await.unwrap();
-        append_changelog(&log_path, &entry2).await.unwrap();
+        write_legacy_changelog_line(&log_path, &entry1).await;
+        write_legacy_changelog_line(&log_path, &entry2).await;
 
         let entries = read_changelog(&log_path).await.unwrap();
         assert_eq!(entries.len(), 2);
@@ -787,6 +1023,252 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].op, "create");
         assert_eq!(entries[1].op, "create");
+    }
+
+    // -----------------------------------------------------------------------
+    // Replay-reader tests (single-changelog: read field-level history by
+    // projecting store-layer text patches via the entity schema).
+    // -----------------------------------------------------------------------
+
+    /// Build a minimal task-shaped `EntityDef` (md frontmatter + body field).
+    fn task_entity_def() -> swissarmyhammer_fields::EntityDef {
+        swissarmyhammer_fields::EntityDef {
+            name: "task".into(),
+            icon: None,
+            body_field: Some("body".into()),
+            fields: vec!["title".into(), "body".into()],
+            sections: vec![],
+            validate: None,
+            mention_prefix: None,
+            mention_display_field: None,
+            mention_slug_field: None,
+            search_display_field: None,
+        }
+    }
+
+    /// Render a task entity as its on-disk markdown text. The exact output of
+    /// the entity writer is what gets diffed, so the replay engine must be
+    /// driven with the same shape: frontmatter contains only non-body fields
+    /// (here, `title`), and the body field lives solely in the post-`---`
+    /// section. Mirrors `swissarmyhammer-entity/src/io.rs::format_frontmatter_body`.
+    fn task_text(title: &str, body: &str) -> String {
+        format!(
+            "---\ntitle: {title}\n---\n{body}",
+            title = title,
+            body = body
+        )
+    }
+
+    /// Build a synthetic store-format ChangelogEntry that transforms `old`
+    /// into `new` text via `diffy`.
+    fn store_entry(
+        item_id: &str,
+        op: swissarmyhammer_store::ChangeOp,
+        old: &str,
+        new: &str,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    ) -> swissarmyhammer_store::ChangelogEntry {
+        let (forward_patch, reverse_patch) = swissarmyhammer_store::diff::create_patches(old, new);
+        swissarmyhammer_store::ChangelogEntry::new(
+            swissarmyhammer_store::UndoEntryId::new(),
+            timestamp,
+            op,
+            swissarmyhammer_store::StoredItemId::from(item_id),
+            forward_patch,
+            reverse_patch,
+        )
+    }
+
+    #[tokio::test]
+    async fn read_changelog_replays_store_format_to_field_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("01ABC.jsonl");
+        let def = task_entity_def();
+        let type_name = EntityTypeName::from("task");
+
+        let v0 = "";
+        let v1 = task_text("First", "alpha");
+        let v2 = task_text("Second", "alpha");
+        let v3 = task_text("Second", "beta");
+
+        let ts0 = chrono::Utc::now();
+        let ts1 = ts0 + chrono::Duration::seconds(1);
+        let ts2 = ts0 + chrono::Duration::seconds(2);
+
+        let e0 = store_entry("01ABC", ChangeOp::Create, v0, &v1, ts0);
+        let e1 = store_entry("01ABC", ChangeOp::Update, &v1, &v2, ts1);
+        let e2 = store_entry("01ABC", ChangeOp::Update, &v2, &v3, ts2);
+
+        let mut content = String::new();
+        for entry in [&e0, &e1, &e2] {
+            content.push_str(&serde_json::to_string(entry).unwrap());
+            content.push('\n');
+        }
+        fs::write(&log_path, content).await.unwrap();
+
+        let entries = read_changelog_for(&type_name, &def, &log_path)
+            .await
+            .unwrap();
+
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].op, "create");
+        assert_eq!(entries[1].op, "update");
+        assert_eq!(entries[2].op, "update");
+        assert_eq!(entries[0].timestamp, ts0);
+        assert_eq!(entries[1].timestamp, ts1);
+        assert_eq!(entries[2].timestamp, ts2);
+
+        // Create: every field surfaces as Set against the empty before-state.
+        let create_fields: Vec<&str> = entries[0].changes.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(create_fields.contains(&"title"));
+        assert!(create_fields.contains(&"body"));
+        for (_, change) in &entries[0].changes {
+            assert!(
+                matches!(change, FieldChange::Set { .. }),
+                "create changes must all be Set: {:?}",
+                change
+            );
+        }
+
+        // First update: title only.
+        let update_keys: Vec<&str> = entries[1].changes.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(update_keys.contains(&"title"), "expected title in update");
+
+        // Second update: body only.
+        let update2_keys: Vec<&str> = entries[2].changes.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(update2_keys.contains(&"body"), "expected body in update");
+    }
+
+    #[tokio::test]
+    async fn read_changelog_handles_mixed_legacy_and_store_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("01ABC.jsonl");
+        let def = task_entity_def();
+        let type_name = EntityTypeName::from("task");
+
+        let v0 = "";
+        let v1 = task_text("First", "alpha");
+        let v2 = task_text("Second", "alpha");
+
+        let ts0 = chrono::Utc::now();
+        let ts1 = ts0 + chrono::Duration::seconds(1);
+        let ts2 = ts0 + chrono::Duration::seconds(2);
+        let ts3 = ts0 + chrono::Duration::seconds(3);
+
+        // Two store-format records...
+        let s0 = store_entry("01ABC", ChangeOp::Create, v0, &v1, ts0);
+        let s2 = store_entry("01ABC", ChangeOp::Update, &v1, &v2, ts2);
+
+        // ...interleaved with two entity-format legacy records.
+        let mut legacy_a = ChangeEntry::new(
+            "task",
+            "01ABC",
+            "annotate",
+            vec![(
+                "comment".to_string(),
+                FieldChange::Set {
+                    value: Value::String("legacy A".into()),
+                },
+            )],
+        );
+        legacy_a.timestamp = ts1;
+        let mut legacy_b = ChangeEntry::new(
+            "task",
+            "01ABC",
+            "annotate",
+            vec![(
+                "comment".to_string(),
+                FieldChange::Set {
+                    value: Value::String("legacy B".into()),
+                },
+            )],
+        );
+        legacy_b.timestamp = ts3;
+
+        let lines = [
+            serde_json::to_string(&legacy_a).unwrap(),
+            serde_json::to_string(&s0).unwrap(),
+            serde_json::to_string(&legacy_b).unwrap(),
+            serde_json::to_string(&s2).unwrap(),
+        ];
+        fs::write(&log_path, lines.join("\n") + "\n").await.unwrap();
+
+        let entries = read_changelog_for(&type_name, &def, &log_path)
+            .await
+            .unwrap();
+
+        assert_eq!(entries.len(), 4);
+
+        // Sorted by timestamp regardless of on-disk order.
+        let timestamps: Vec<_> = entries.iter().map(|e| e.timestamp).collect();
+        let mut sorted = timestamps.clone();
+        sorted.sort();
+        assert_eq!(timestamps, sorted, "entries must come out chronologically");
+
+        assert_eq!(entries[0].op, "create"); // s0 at ts0
+        assert_eq!(entries[1].op, "annotate"); // legacy_a at ts1
+        assert_eq!(entries[2].op, "update"); // s2 at ts2
+        assert_eq!(entries[3].op, "annotate"); // legacy_b at ts3
+    }
+
+    #[tokio::test]
+    async fn read_changelog_replay_handles_create_from_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("01ABC.jsonl");
+        let def = task_entity_def();
+        let type_name = EntityTypeName::from("task");
+
+        let v0 = "";
+        let v1 = task_text("Hello", "world");
+        let ts0 = chrono::Utc::now();
+        let s0 = store_entry("01ABC", ChangeOp::Create, v0, &v1, ts0);
+
+        fs::write(&log_path, serde_json::to_string(&s0).unwrap() + "\n")
+            .await
+            .unwrap();
+
+        let entries = read_changelog_for(&type_name, &def, &log_path)
+            .await
+            .unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].op, "create");
+
+        // Every field surfaces as Set.
+        assert!(
+            !entries[0].changes.is_empty(),
+            "create must produce at least one field change"
+        );
+        for (key, change) in &entries[0].changes {
+            assert!(
+                matches!(change, FieldChange::Set { .. }),
+                "field {key} should be Set on create-from-empty, got {:?}",
+                change
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn read_changelog_replay_skips_genuinely_malformed_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("01ABC.jsonl");
+        let def = task_entity_def();
+        let type_name = EntityTypeName::from("task");
+
+        let v0 = "";
+        let v1 = task_text("Hello", "world");
+        let ts0 = chrono::Utc::now();
+        let s0 = store_entry("01ABC", ChangeOp::Create, v0, &v1, ts0);
+
+        let content = format!("{}\n{{not json\n", serde_json::to_string(&s0).unwrap());
+        fs::write(&log_path, content).await.unwrap();
+
+        let entries = read_changelog_for(&type_name, &def, &log_path)
+            .await
+            .unwrap();
+        // The valid store record replays; the garbage line is warned and skipped.
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].op, "create");
     }
 
     #[test]
@@ -1150,6 +1632,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let primary = dir.path().join("primary.jsonl");
         let fallback = dir.path().join("fallback.jsonl");
+        let def = task_entity_def();
+        let type_name = EntityTypeName::from("task");
 
         let entry = ChangeEntry::new(
             "task",
@@ -1162,7 +1646,7 @@ mod tests {
                 },
             )],
         );
-        append_changelog(&primary, &entry).await.unwrap();
+        write_legacy_changelog_line(&primary, &entry).await;
 
         let fallback_entry = ChangeEntry::new(
             "task",
@@ -1175,9 +1659,9 @@ mod tests {
                 },
             )],
         );
-        append_changelog(&fallback, &fallback_entry).await.unwrap();
+        write_legacy_changelog_line(&fallback, &fallback_entry).await;
 
-        let entries = read_changelog_with_fallback(&primary, &fallback)
+        let entries = read_changelog_with_fallback(&type_name, &def, &primary, &fallback)
             .await
             .unwrap();
         assert_eq!(entries.len(), 1);
@@ -1189,6 +1673,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let primary = dir.path().join("nonexistent_primary.jsonl");
         let fallback = dir.path().join("fallback.jsonl");
+        let def = task_entity_def();
+        let type_name = EntityTypeName::from("task");
 
         let entry = ChangeEntry::new(
             "task",
@@ -1201,9 +1687,9 @@ mod tests {
                 },
             )],
         );
-        append_changelog(&fallback, &entry).await.unwrap();
+        write_legacy_changelog_line(&fallback, &entry).await;
 
-        let entries = read_changelog_with_fallback(&primary, &fallback)
+        let entries = read_changelog_with_fallback(&type_name, &def, &primary, &fallback)
             .await
             .unwrap();
         assert_eq!(entries.len(), 1);
@@ -1215,8 +1701,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let primary = dir.path().join("a.jsonl");
         let fallback = dir.path().join("b.jsonl");
+        let def = task_entity_def();
+        let type_name = EntityTypeName::from("task");
 
-        let entries = read_changelog_with_fallback(&primary, &fallback)
+        let entries = read_changelog_with_fallback(&type_name, &def, &primary, &fallback)
             .await
             .unwrap();
         assert!(entries.is_empty());
@@ -1269,26 +1757,6 @@ mod tests {
         let entry =
             ChangeEntry::new("task", "01ABC", "update", vec![]).with_transaction_id("TX001");
         assert_eq!(entry.transaction_id.as_deref(), Some("TX001"));
-    }
-
-    #[tokio::test]
-    async fn append_changelog_creates_parent_dirs() {
-        let dir = tempfile::tempdir().unwrap();
-        let log_path = dir.path().join("deep").join("nested").join("test.jsonl");
-
-        let entry = ChangeEntry::new(
-            "task",
-            "01ABC",
-            "create",
-            vec![(
-                "title".to_string(),
-                FieldChange::Set {
-                    value: Value::String("Hello".into()),
-                },
-            )],
-        );
-        append_changelog(&log_path, &entry).await.unwrap();
-        assert!(log_path.exists());
     }
 
     #[test]

@@ -5,7 +5,7 @@ depends_on:
 - 01KN4NG67RE9YSA4J3Q25YM98R
 - 01KN4NGQY7NMEZ0HGDN10RVMWH
 position_column: done
-position_ordinal: ffffffffffffffffffad80
+position_ordinal: ffffffffffffffffffffffc180
 title: 8. CM6 inline JS filter expression editor
 ---
 ## What

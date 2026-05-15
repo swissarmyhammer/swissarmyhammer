@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffa180
+position_ordinal: ffffffffffffffffffffffffffffdf80
 title: Add tests for shelltool-cli main::FileWriterGuard and dispatch_command
 ---
 shelltool-cli/src/main.rs

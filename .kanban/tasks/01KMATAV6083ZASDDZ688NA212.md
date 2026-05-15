@@ -9,7 +9,7 @@ depends_on:
 - 01KMASXXREC3EN3HGKRAHNKJEN
 - 01KMASY66JVJYD8GFDH6K8ZHRK
 position_column: done
-position_ordinal: fffffffffffb80
+position_ordinal: ffffffffffffca80
 title: Remove container save logic from grid-view and entity-inspector
 ---
 ## What

@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMX2N13T0WEDMK9V93DCJ7VH
 position_column: done
-position_ordinal: ffffffffffffffec80
+position_ordinal: ffffffffffffffffd080
 title: Build native menu from command registry
 ---
 ## What

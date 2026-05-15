@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffffc780
+position_ordinal: ffffce80
 title: ViewKind::Grid + builtin YAML + view routing
 ---
 Add Grid variant to backend ViewKind enum, create builtin tasks-grid.yaml, and wire frontend routing so clicking the grid icon renders a skeleton GridView component.

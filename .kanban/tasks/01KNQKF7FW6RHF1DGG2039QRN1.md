@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNMJYX1RR52N3AS3M2MD5A8D
 position_column: done
-position_ordinal: ffffffffffffffffffffff9b80
+position_ordinal: ffffffffffffffffffffffffffffd580
 title: 'Add test: every YAML-defined command must have a registered Rust implementation'
 ---
 ## What

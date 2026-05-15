@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffff8180
+position_ordinal: ffffffffffffffffffffffffffffaf80
 title: Add indeterminate progress bar to NavBar during long operations
 ---
 ## What

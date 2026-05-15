@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM85VKK0GZ27A4N1WX102HBK
 position_column: done
-position_ordinal: ffffffffffdb80
+position_ordinal: ffffffffffffaa80
 title: Migrate window state (geometry + inspector_stack) into UIState
 ---
 ## What

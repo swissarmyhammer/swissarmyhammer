@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffff80
+position_ordinal: ffffffffffffffffe480
 title: No board switch commands in palette
 ---
 ## What

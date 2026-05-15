@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffb780
+position_ordinal: ffffffffffffffffffffffffffffff8480
 title: 'Bug: Virtual tag pills missing # prefix in display'
 ---
 ## What

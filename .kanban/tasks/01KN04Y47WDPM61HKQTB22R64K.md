@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffff8680
+position_ordinal: ffffffffffffffffea80
 title: 'Fix: pressing : for command palette causes white screen'
 ---
 ## What

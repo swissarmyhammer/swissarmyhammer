@@ -4,10 +4,6 @@ mention_prefix: "@"
 mention_display_field: name
 mention_color_field: color
 search_display_field: name
-commands:
-  - id: ui.inspect
-    name: "Inspect {{entity.type}}"
-    context_menu: true
 fields:
   - name
   - color

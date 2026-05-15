@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNCE5ZJ49DZHB4FM7H1747PE
 position_column: done
-position_ordinal: ffffffffffffffffffdb80
+position_ordinal: ffffffffffffffffffffffffa180
 title: Scope turn_state.yaml by session ID and clean at SessionStart
 ---
 ## What

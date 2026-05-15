@@ -1,8 +1,9 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: d680
+depends_on: []
+position_column: done
+position_ordinal: 7b80
 title: 'Fix: `#<tag> !$<project>` filter still shows tasks in the excluded project'
 ---
 ## What

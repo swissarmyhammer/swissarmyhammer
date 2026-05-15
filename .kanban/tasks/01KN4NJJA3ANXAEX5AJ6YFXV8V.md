@@ -5,7 +5,7 @@ depends_on:
 - 01KN4NH98Q3Z479FBQP2SCYDX0
 - 01KN4NJ21PSS15MAR0R542SYWF
 position_column: done
-position_ordinal: ffffffffffffffffffaf80
+position_ordinal: ffffffffffffffffffffffc580
 title: 10. Group-by selector + perspective scope command
 ---
 ## What

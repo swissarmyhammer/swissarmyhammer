@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffc380
+position_ordinal: ffffffffffffffffffffffffffffffa880
 project: task-card-fields
 title: Pick smarter icons for created and completed date fields
 ---

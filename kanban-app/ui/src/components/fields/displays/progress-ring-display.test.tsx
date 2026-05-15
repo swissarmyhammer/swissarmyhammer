@@ -42,20 +42,60 @@ describe("ProgressRingDisplay", () => {
     expect(container.textContent).toContain("50%");
   });
 
-  it("returns null when total is 0", () => {
+  // ---------------------------------------------------------------------
+  // Empty-state wrapper invariant — every compact-mode display in a
+  // virtualized grid row must emit a `[data-compact-cell="true"]`
+  // wrapper, so a column composed entirely of empty progress rings
+  // doesn't collapse rows below `data-table.tsx::ROW_HEIGHT`. Mirrors
+  // the contract on `ProgressDisplay` / `StatusDateDisplay`.
+  // ---------------------------------------------------------------------
+
+  it("compact mode wraps an empty cell in CompactCellWrapper when total is 0", () => {
     const { container } = render(
-      <ProgressRingDisplay {...makeProps({ done: 0, total: 0, percent: 0 })} />,
+      <ProgressRingDisplay
+        {...makeProps({ done: 0, total: 0, percent: 0 }, "compact")}
+      />,
+    );
+    const wrapper = container.querySelector("[data-compact-cell='true']");
+    expect(wrapper).toBeTruthy();
+  });
+
+  it("compact mode wraps an empty cell in CompactCellWrapper for null value", () => {
+    const { container } = render(
+      <ProgressRingDisplay {...makeProps(null, "compact")} />,
+    );
+    const wrapper = container.querySelector("[data-compact-cell='true']");
+    expect(wrapper).toBeTruthy();
+  });
+
+  it("compact mode wraps an empty cell in CompactCellWrapper for non-object value", () => {
+    const { container } = render(
+      <ProgressRingDisplay {...makeProps(42, "compact")} />,
+    );
+    const wrapper = container.querySelector("[data-compact-cell='true']");
+    expect(wrapper).toBeTruthy();
+  });
+
+  it("full mode returns null when total is 0", () => {
+    const { container } = render(
+      <ProgressRingDisplay
+        {...makeProps({ done: 0, total: 0, percent: 0 }, "full")}
+      />,
     );
     expect(container.innerHTML).toBe("");
   });
 
-  it("returns null for null value", () => {
-    const { container } = render(<ProgressRingDisplay {...makeProps(null)} />);
+  it("full mode returns null for null value", () => {
+    const { container } = render(
+      <ProgressRingDisplay {...makeProps(null, "full")} />,
+    );
     expect(container.innerHTML).toBe("");
   });
 
-  it("returns null for non-object value", () => {
-    const { container } = render(<ProgressRingDisplay {...makeProps(42)} />);
+  it("full mode returns null for non-object value", () => {
+    const { container } = render(
+      <ProgressRingDisplay {...makeProps(42, "full")} />,
+    );
     expect(container.innerHTML).toBe("");
   });
 

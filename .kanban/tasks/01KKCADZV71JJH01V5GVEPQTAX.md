@@ -2,7 +2,7 @@
 depends_on:
 - 01KKC8BB5V6RCWGCQH73QREWF2
 position_column: done
-position_ordinal: ffffffffffb880
+position_ordinal: ffffffffffff8580
 title: 'STATUSLINE-4: Module framework + registry'
 ---
 ## What\nImplement the module framework that all modules plug into. This is the harness — no modules yet.\n\nKey files:\n- `swissarmyhammer-statusline/src/module.rs` (new) — `Segment` struct, `ModuleFn` type alias, `build_registry()` returning `HashMap<&str, ModuleFn>`\n- `swissarmyhammer-statusline/src/modules/mod.rs` (new) — empty registry, re-exports\n\n`Segment` holds text + optional style. `ModuleFn` signature:\n```rust\nfn(input: &StatuslineInput, config: &serde_yaml::Value, cwd: &Path) -> Option<Segment>\n```\n\nPer-module format string interpolation: each module reads its `format` key from config, substitutes `$variable` placeholders with computed values, returns the result as a Segment. A shared helper `interpolate_format(template, vars)` does the substitution.\n\n## Acceptance Criteria\n- [ ] `Segment` struct with text + optional `Style`\n- [ ] `ModuleFn` type alias defined\n- [ ] `build_registry()` returns empty HashMap (modules register in later cards)\n- [ ] `interpolate_format()` helper substitutes `$var` placeholders from a HashMap\n- [ ] Module returns `None` when all its variables are empty (like starship conditional rendering)\n\n## Tests\n- [ ] Unit test: interpolate_format with variables present\n- [ ] Unit test: interpolate_format with missing variables (removed from output)\n- [ ] Unit test: build_registry returns a HashMap\n- [ ] `cargo test -p swissarmyhammer-statusline`

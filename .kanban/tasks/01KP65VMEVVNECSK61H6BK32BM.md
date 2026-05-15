@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffd180
+position_ordinal: ffffffffffffffffffffffffffffffc380
 title: 'entity-cache 1/4: EntityEvent::EntityChanged carries Vec&lt;FieldChange&gt;; EntityCache computes the diff'
 ---
 #entity-cache

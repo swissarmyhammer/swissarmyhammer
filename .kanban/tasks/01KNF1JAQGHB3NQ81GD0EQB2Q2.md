@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNESD0630BPJG3BK84KEJMJP
 position_column: done
-position_ordinal: ffffffffffffffffffe280
+position_ordinal: ffffffffffffffffffffffffb880
 title: 'LSP-SKILL: Update explore skill for layered resolution and live LSP ops'
 ---
 ## What

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, cleanup, act } from "@testing-library/react";
+import { cleanup, act } from "@testing-library/react";
+import { renderInAct, rerenderInAct } from "@/test/act-render";
 import { createElement, type ReactNode } from "react";
 import { TextEditor } from "./text-editor";
 
@@ -43,38 +44,34 @@ afterEach(cleanup);
 // ---------------------------------------------------------------------------
 
 describe("TextEditor smoke tests", () => {
-  it("renders with minimal props (value)", () => {
-    expect(() =>
-      render(
+  it("renders with minimal props (value)", async () => {
+    await expect(
+      renderInAct(
         <Wrapper>
           <TextEditor value="hello" />
         </Wrapper>,
       ),
-    ).not.toThrow();
+    ).resolves.toBeDefined();
   });
 
-  it("renders with placeholder and onChange", () => {
-    expect(() =>
-      render(
+  it("renders with placeholder and onChange", async () => {
+    await expect(
+      renderInAct(
         <Wrapper>
-          <TextEditor
-            value=""
-            placeholder="Type here..."
-            onChange={() => {}}
-          />
+          <TextEditor value="" placeholder="Type here..." onChange={() => {}} />
         </Wrapper>,
       ),
-    ).not.toThrow();
+    ).resolves.toBeDefined();
   });
 
-  it("renders with singleLine flag", () => {
-    expect(() =>
-      render(
+  it("renders with singleLine flag", async () => {
+    await expect(
+      renderInAct(
         <Wrapper>
           <TextEditor value="" singleLine />
         </Wrapper>,
       ),
-    ).not.toThrow();
+    ).resolves.toBeDefined();
   });
 });
 
@@ -83,8 +80,8 @@ describe("TextEditor smoke tests", () => {
 // ---------------------------------------------------------------------------
 
 describe("TextEditor behavior", () => {
-  it("mounts a CodeMirror editor in the DOM", () => {
-    const { container } = render(
+  it("mounts a CodeMirror editor in the DOM", async () => {
+    const { container } = await renderInAct(
       <Wrapper>
         <TextEditor value="hello world" />
       </Wrapper>,
@@ -93,8 +90,8 @@ describe("TextEditor behavior", () => {
     expect(cmEditor).toBeTruthy();
   });
 
-  it("displays the initial value in the editor", () => {
-    const { container } = render(
+  it("displays the initial value in the editor", async () => {
+    const { container } = await renderInAct(
       <Wrapper>
         <TextEditor value="test content" />
       </Wrapper>,
@@ -105,7 +102,7 @@ describe("TextEditor behavior", () => {
 
   it("fires onChange when the document changes", async () => {
     const onChange = vi.fn();
-    const { container } = render(
+    const { container } = await renderInAct(
       <Wrapper>
         <TextEditor value="" onChange={onChange} />
       </Wrapper>,
@@ -127,7 +124,7 @@ describe("TextEditor behavior", () => {
   it("does not reset the document when parent passes new value prop", async () => {
     // Core invariant: once mounted, the CM6 buffer is the source of truth.
     // Parent re-renders with a different `value` must NOT clobber typed text.
-    const { container, rerender } = render(
+    const { container, rerender } = await renderInAct(
       <Wrapper>
         <TextEditor value="initial" />
       </Wrapper>,
@@ -143,7 +140,8 @@ describe("TextEditor behavior", () => {
       await new Promise((r) => setTimeout(r, 20));
     });
 
-    rerender(
+    await rerenderInAct(
+      rerender,
       <Wrapper>
         <TextEditor value="totally different parent value" />
       </Wrapper>,

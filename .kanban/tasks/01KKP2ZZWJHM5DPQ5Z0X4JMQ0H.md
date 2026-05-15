@@ -2,7 +2,7 @@
 depends_on:
 - 01KKP2ZGXYGR9S4KQW7H8BX73W
 position_column: done
-position_ordinal: ffffffffd880
+position_ordinal: ffffffffff8280
 title: Add Claude input structs for new hook events
 ---
 ## What

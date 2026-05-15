@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNM9JJVA01Y8ZDWJSR4F799N
 position_column: done
-position_ordinal: ffffffffffffffffffffffba80
+position_ordinal: ffffffffffffffffffffffffffffff8a80
 title: Define date field YAML definitions and register on task entity
 ---
 ## What

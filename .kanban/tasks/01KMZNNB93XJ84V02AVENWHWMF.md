@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffff8180
+position_ordinal: ffffffffffffffffe580
 title: Eliminate frontend globalCommands — move remaining commands to backend
 ---
 ## What

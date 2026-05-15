@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffd480
+position_ordinal: ffffffffffffa380
 title: Add YAML persistence to UIState
 ---
 ## What

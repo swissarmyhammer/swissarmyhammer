@@ -3,7 +3,7 @@ assignees:
 - claude-code
 depends_on: []
 position_column: done
-position_ordinal: ffffffffffffc680
+position_ordinal: ffffffffffffff9c80
 title: 'Inspector: clicking a field should set nav cursor and enter edit mode'
 ---
 ## What

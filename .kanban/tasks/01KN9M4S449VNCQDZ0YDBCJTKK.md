@@ -3,7 +3,7 @@ assignees:
 - claude-code
 depends_on: []
 position_column: done
-position_ordinal: ffffffffffffffffffff8680
+position_ordinal: ffffffffffffffffffffffffff8380
 title: Migrate board-view.tsx to useDispatchCommand
 ---
 ## What

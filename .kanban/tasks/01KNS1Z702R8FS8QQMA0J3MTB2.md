@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNS1WP3ZEAKNNAD6G3WAGSEK
 position_column: done
-position_ordinal: ffffffffffffffffffff9480
+position_ordinal: ffffffffffffffffffffffffff9e80
 project: code-context-cli
 title: Implement operations executor — run code-context ops from CLI
 ---

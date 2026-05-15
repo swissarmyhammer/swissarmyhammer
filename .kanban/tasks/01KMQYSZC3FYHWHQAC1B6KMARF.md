@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffa80
+position_ordinal: ffffffffffffffd080
 title: 'BadgeListDisplay: values array reference instability defeats pill memoization'
 ---
 **Severity**: Medium / Performance

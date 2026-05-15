@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffffffff180
+position_ordinal: ffffffffffffffffffffffffdd80
 title: 'Fix: 6 new MCP handlers still pass None LSP client to LayeredContext'
 ---
 ## What

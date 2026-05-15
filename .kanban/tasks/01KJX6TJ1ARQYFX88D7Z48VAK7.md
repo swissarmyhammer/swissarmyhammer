@@ -2,7 +2,7 @@
 assignees:
 - assistant
 position_column: done
-position_ordinal: ffb080
+position_ordinal: ffb780
 title: 'Card 11: Extend CommandDef with MenuPlacement metadata'
 ---
 Add optional menuPlacement to CommandDef specifying which OS menu group a command belongs to, its position, and radio group membership. No behavior change — purely additive.

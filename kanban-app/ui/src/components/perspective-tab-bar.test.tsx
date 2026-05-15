@@ -85,7 +85,6 @@ vi.mock("@/lib/schema-context", () => ({
   useSchema: () => ({
     getSchema: () => ({ entity: { name: "task", fields: [] }, fields: [] }),
     getFieldDef: () => undefined,
-    getEntityCommands: () => [],
     mentionableTypes: [],
     loading: false,
   }),
@@ -111,13 +110,32 @@ vi.mock("@/lib/ui-state-context", () => ({
 }));
 
 import { PerspectiveTabBar, triggerStartRename } from "./perspective-tab-bar";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { FocusLayer } from "./focus-layer";
+import { asSegment } from "@/types/spatial";
 
-/** Renders PerspectiveTabBar inside the required TooltipProvider. */
+/**
+ * Renders PerspectiveTabBar inside the required providers. The spatial
+ * provider stack (`SpatialFocusProvider` + `FocusLayer`) is required
+ * since `PerspectiveTabBar` mounts `<FocusScope>` / `<FocusScope>` and
+ * the no-spatial-context fallback was removed in card
+ * `01KQPVA127YMJ8D7NB6M824595`. `<EntityFocusProvider>` is required
+ * because `FilterEditorDrillOutWiring` (mounted by the filter editor's
+ * surrounding `<FocusScope>`) calls `useFocusActions()` to dispatch
+ * focus changes when the editor's drill-out fires.
+ */
 function renderTabBar(delayDuration = 100) {
   return render(
-    <TooltipProvider delayDuration={delayDuration}>
-      <PerspectiveTabBar />
-    </TooltipProvider>,
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <EntityFocusProvider>
+          <TooltipProvider delayDuration={delayDuration}>
+            <PerspectiveTabBar />
+          </TooltipProvider>
+        </EntityFocusProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
   );
 }
 
@@ -199,36 +217,15 @@ describe("PerspectiveTabBar", () => {
     expect(mockSetActivePerspectiveId).toHaveBeenCalledWith("p2");
   });
 
-  it("creates a new perspective via '+' button", () => {
-    mockPerspectivesValue = {
-      ...mockPerspectivesValue,
-      perspectives: [{ id: "p1", name: "Default", view: "board" }],
-      activePerspective: { id: "p1", name: "Default", view: "board" },
-    };
-
-    renderTabBar();
-
-    const addButton = screen.getByRole("button", { name: /add perspective/i });
-    fireEvent.click(addButton);
-
-    expect(mockInvoke).toHaveBeenCalledWith(
-      "dispatch_command",
-      expect.objectContaining({
-        cmd: "perspective.save",
-        args: expect.objectContaining({
-          name: expect.any(String),
-          view: "board",
-        }),
-      }),
-    );
-  });
-
-  it("renders the '+' button", () => {
-    renderTabBar();
-
-    const addButton = screen.getByRole("button", { name: /add perspective/i });
-    expect(addButton).toBeDefined();
-  });
+  // The hardcoded `<AddPerspectiveButton>` + its direct
+  // `perspective.save` dispatch + "renders the '+' button" + the tooltip
+  // tests were removed by 01KRE21GJMPP289N1HSTMJG5HE — the `+` affordance
+  // is now a registry-rendered `<CommandButton>` whose mount, icon,
+  // popover-driven dispatch, and absence-of-hardcoded-JSX contracts live
+  // in `perspective-tab-bar.add-and-sort-migration.test.tsx`. Asserting
+  // the post-migration contracts here would duplicate that file and
+  // require the registry-driven render harness (board id mock + flushed
+  // `list_commands_for_scope` effect) the sibling file already maintains.
 
   it("renders nothing when no active view", () => {
     mockViewsValue = {
@@ -308,7 +305,7 @@ describe("PerspectiveTabBar", () => {
     // active — so before triggering rename, we expect exactly one editor.
     expect(container.querySelectorAll(".cm-editor").length).toBe(1);
 
-    // Dispatching ui.perspective.startRename (via triggerStartRename — the
+    // Dispatching ui.entity.startRename (via triggerStartRename — the
     // same code path the AppShell global command handler calls) should put
     // the active tab into rename mode.
     act(() => {
@@ -372,31 +369,14 @@ describe("PerspectiveTabBar", () => {
     expect(cmContent?.textContent).toContain("My View");
   });
 
-  it("shows a tooltip on hover of the add-perspective button", async () => {
-    renderTabBar(0);
-
-    const addButton = screen.getByRole("button", { name: /add perspective/i });
-
-    // Hover the button to trigger the Radix tooltip.
-    await act(async () => {
-      fireEvent.pointerMove(addButton, { clientX: 10, clientY: 10 });
-      fireEvent.mouseEnter(addButton);
-      // Allow Radix tooltip to open (even with 0 delay it schedules async).
-      await new Promise((r) => setTimeout(r, 100));
-    });
-
-    // The tooltip content should be visible.
-    const tooltip = screen.getByRole("tooltip");
-    expect(tooltip).toBeDefined();
-    expect(tooltip.textContent).toBe("New perspective");
-  });
-
-  it("does not have an HTML title attribute on the add-perspective button", () => {
-    renderTabBar();
-
-    const addButton = screen.getByRole("button", { name: /add perspective/i });
-    expect(addButton.getAttribute("title")).toBeNull();
-  });
+  // The Radix tooltip + missing-`title` tests on the legacy
+  // `<AddPerspectiveButton>` were removed by 01KRE21GJMPP289N1HSTMJG5HE.
+  // The registry-rendered `<CommandButton>` doesn't surface a Radix
+  // tooltip and uses `aria-label` (forwarded from `command.name`) as the
+  // accessible name. The "no `title` attribute" guard is now an implicit
+  // contract of `<CommandButton>` (which never sets `title=...`); if a
+  // regression surfaces, it should be pinned in `command-button.test.tsx`
+  // alongside the other CommandButton-level invariants.
 
   // =========================================================================
   // Rename integration — Enter/Escape across keymap modes
@@ -609,60 +589,31 @@ describe("PerspectiveTabBar", () => {
       expect(placeholder).toBeTruthy();
     });
 
-    it("filter icon button is highlighted (text-primary) when active perspective has a filter", () => {
-      mockPerspectivesValue = {
-        ...mockPerspectivesValue,
-        perspectives: [
-          { id: "p1", name: "Sprint View", view: "board", filter: "#bug" },
-        ],
-        activePerspective: {
-          id: "p1",
-          name: "Sprint View",
-          view: "board",
-          filter: "#bug",
-        },
-      };
-
-      renderTabBar();
-
-      // Use exact match to distinguish "Filter" (tab icon) from "Clear filter" (formula bar)
-      const filterButton = screen.getByRole("button", { name: "Filter" });
-      expect(filterButton.className).toContain("text-primary");
-    });
-
-    it("filter button click does not open a popover", () => {
-      mockPerspectivesValue = {
-        ...mockPerspectivesValue,
-        perspectives: [{ id: "p1", name: "Sprint View", view: "board" }],
-        activePerspective: { id: "p1", name: "Sprint View", view: "board" },
-      };
-
-      renderTabBar();
-
-      const filterButton = screen.getByRole("button", { name: /filter/i });
-      fireEvent.click(filterButton);
-
-      // No Radix popover/dialog should appear in the DOM
-      expect(screen.queryByRole("dialog")).toBeNull();
-    });
-
-    it("clicking the filter button on the active tab focuses the formula bar CM6 editor", () => {
-      mockPerspectivesValue = {
-        ...mockPerspectivesValue,
-        perspectives: [{ id: "p1", name: "Sprint View", view: "board" }],
-        activePerspective: { id: "p1", name: "Sprint View", view: "board" },
-      };
-
-      const { container } = renderTabBar();
-
-      const filterButton = screen.getByRole("button", { name: "Filter" });
-      fireEvent.click(filterButton);
-
-      // After clicking filter button, the CM6 content area should have focus
-      const cmContent = container.querySelector(".cm-content") as HTMLElement;
-      expect(cmContent).toBeTruthy();
-      expect(document.activeElement).toBe(cmContent);
-    });
+    // The three legacy tests that exercised the hardcoded
+    // `<FilterFocusButton>` (aria-label "Filter", click → local
+    // `onFilterFocus` callback → `filterEditorRef.current?.focus()`)
+    // were removed by task 01KRE1YA65MMG29RDQDQ0VPJQG when the button
+    // migrated to a registry-rendered tab button. The current click
+    // path is the `<FilterFocusCommandButton>` adapter introduced by
+    // 01KRGZY33P99J7CGG0XRQGZ352 — it dispatches `nav.focus` against
+    // the formula bar's `filter_editor:${id}` spatial-nav scope. The
+    // equivalent contracts now live in
+    // `perspective-tab-bar.filter-migration.test.tsx`:
+    //
+    //   - `filter_button_is_active_when_perspective_has_a_filter`
+    //     (aria-label "Focus Filter", `text-primary` highlight).
+    //   - `filter_button_click_dispatches_nav_focus_with_filter_editor_fq`
+    //     (click → `spatial_focus` IPC with `fq` ending in
+    //     `filter_editor:<perspective-id>`).
+    //   - `filter_button_click_targets_the_currently_active_perspective`
+    //     (sibling-perspective targeting).
+    //
+    // The local-callback path the deleted tests exercised does not
+    // exist anymore — the click no longer focuses the editor directly;
+    // it dispatches `nav.focus`, the kernel claims focus on the scope,
+    // and `nav.drillIn` drives CM6 to take DOM focus. Holding onto
+    // rewritten "click → focus" tests here would test the mock
+    // plumbing rather than the production wire.
 
     it("clicking the formula bar container area focuses the CM6 editor", () => {
       mockPerspectivesValue = {
@@ -698,6 +649,123 @@ describe("PerspectiveTabBar", () => {
       );
       expect(formulaBar).toBeTruthy();
       expect(formulaBar?.className).toContain("cursor-text");
+    });
+  });
+
+  // =========================================================================
+  // Rect regression — first-paint kernel-stored rects must be non-zero
+  // =========================================================================
+  //
+  // Source-of-truth assertion for kanban card `01KQ9Z56M556DQHYMA502B9FKB`'s
+  // rect-regression criterion: none of the perspective tabs' kernel-stored
+  // rects may be zero-sized at first paint, including the active tab whose
+  // box is wider due to registry-rendered `<CommandButton>` chrome
+  // (the migrated `perspective.filter.focus` and `perspective.group`
+  // entries each contribute an inline affordance on the active tab).
+  //
+  // Beam search picks candidates by their rect center / left-edge ordering;
+  // a zero-sized rect from a tab leaf would either tie with siblings (making
+  // the picks non-deterministic) or fail the in-beam filter outright (making
+  // the next tab unreachable). Both manifestations were on the user's
+  // candidate-cause list — pin first-paint non-zero rects so a future
+  // measurement-timing regression surfaces immediately.
+  //
+  // Mounts the bar inside the production-shaped spatial-nav stack so each
+  // tab's `<FocusScope>` registers itself with the kernel via
+  // `spatial_register_scope`. The recorded `rect` argument is the rect
+  // snapshotted by `<FocusScope>`'s mount effect via
+  // `node.getBoundingClientRect()` — the kernel's source-of-truth at first
+  // paint.
+  // =========================================================================
+
+  describe("rect regression — first paint", () => {
+    it("kernel-stored rects of all perspective tabs are non-zero on first paint", async () => {
+      mockPerspectivesValue = {
+        ...mockPerspectivesValue,
+        perspectives: [
+          { id: "p1", name: "Sprint", view: "board" },
+          { id: "p2", name: "Backlog", view: "board" },
+          { id: "p3", name: "Archive", view: "board" },
+        ],
+        // p2 is active — its leaf is widened by the registry-rendered
+        // `<CommandButton>` chrome that only the active tab renders.
+        // The regression guard must hold for the wider leaf as well
+        // as the flanking ones.
+        activePerspective: { id: "p2", name: "Backlog", view: "board" },
+      };
+
+      // Lazy-import to avoid pulling the spatial-nav stack into the simpler
+      // tests above (and to keep this rect-regression block self-contained).
+      const { FocusLayer } = await import("./focus-layer");
+      const { SpatialFocusProvider } =
+        await import("@/lib/spatial-focus-context");
+      const { EntityFocusProvider: EFP } =
+        await import("@/lib/entity-focus-context");
+      const { asSegment } = await import("@/types/spatial");
+
+      const { unmount } = render(
+        <SpatialFocusProvider>
+          <FocusLayer name={asSegment("window")}>
+            <EFP>
+              <TooltipProvider delayDuration={100}>
+                <PerspectiveTabBar />
+              </TooltipProvider>
+            </EFP>
+          </FocusLayer>
+        </SpatialFocusProvider>,
+      );
+
+      // Flush the register effects scheduled by `<FocusScope>` on mount.
+      await act(async () => {
+        await Promise.resolve();
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      // Collect the rect for each perspective tab from the
+      // `spatial_register_scope` invocation argument bag. After the
+      // iteration-2 reshape the per-tab wrapper is a `<FocusScope>`, not
+      // a `<FocusScope>` leaf — the rect lives on the zone now and the
+      // inner name / filter focus / group leaves are smaller children inside
+      // it.
+      type RectArg = {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      };
+      const tabRects = new Map<string, RectArg>();
+      for (const call of mockInvoke.mock.calls) {
+        if (call[0] !== "spatial_register_scope") continue;
+        const args = call[1] as { segment: string; rect: RectArg };
+        if (typeof args?.segment !== "string") continue;
+        if (!args.segment.startsWith("perspective_tab:")) continue;
+        tabRects.set(args.segment, args.rect);
+      }
+
+      expect(
+        tabRects.size,
+        "all three perspective tabs must register a rect with the kernel",
+      ).toBe(3);
+      expect(tabRects.has("perspective_tab:p1")).toBe(true);
+      expect(tabRects.has("perspective_tab:p2")).toBe(true);
+      expect(tabRects.has("perspective_tab:p3")).toBe(true);
+
+      // Every tab's rect must be non-zero in both dimensions. A leaf with
+      // a zero-width or zero-height rect is invisible to beam search.
+      for (const [moniker, rect] of tabRects) {
+        expect(
+          rect.width,
+          `${moniker} rect.width must be > 0 at first paint (got ${rect.width})`,
+        ).toBeGreaterThan(0);
+        expect(
+          rect.height,
+          `${moniker} rect.height must be > 0 at first paint (got ${rect.height})`,
+        ).toBeGreaterThan(0);
+      }
+
+      unmount();
     });
   });
 });

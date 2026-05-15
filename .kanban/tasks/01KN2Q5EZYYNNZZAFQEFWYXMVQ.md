@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KN2Q4ZRV7651J5XCQ4BXETKK
 position_column: done
-position_ordinal: ffffffffffffffffa980
+position_ordinal: ffffffffffffffffff9280
 title: 'PERSP-2: PerspectiveContext storage layer'
 ---
 ## What

@@ -1,6 +1,7 @@
 import { useContext, useEffect, useRef } from "react";
-import { CommandScopeContext } from "@/lib/command-scope";
-import { useEntityFocus } from "@/lib/entity-focus-context";
+import { CommandScopeContext, useDispatchCommand } from "@/lib/command-scope";
+import { useFocusActions } from "@/lib/entity-focus-context";
+import type { FullyQualifiedMoniker } from "@/types/spatial";
 
 /**
  * Renderless component that bridges a navigation cursor to entity focus.
@@ -12,26 +13,41 @@ import { useEntityFocus } from "@/lib/entity-focus-context";
  *
  * Shared by BoardView and GridView — both need identical cursor-to-focus
  * bridging behaviour.
+ *
+ * # Focus claim path (card `01KR7CDEFWWVF4WH0BCHE8Y21J`)
+ *
+ * Cursor movement → focus claim is routed through `nav.focus`, the
+ * single auditable command that wraps the kernel-facing `setFocus`
+ * primitive. Every focus claim in the UI flows through that one
+ * closure so cross-cutting concerns (telemetry, animations,
+ * scroll-on-focus) hang off it rather than off N call sites.
  */
-export function CursorFocusBridge({ moniker: mk }: { moniker: string }) {
+export function CursorFocusBridge({
+  moniker: fq,
+}: {
+  moniker: FullyQualifiedMoniker;
+}) {
   const scope = useContext(CommandScopeContext);
-  const { setFocus, registerScope, unregisterScope } = useEntityFocus();
-  const prevMonikerRef = useRef<string | null>(null);
+  const { registerScope, unregisterScope } = useFocusActions();
+  const dispatchNavFocus = useDispatchCommand("nav.focus");
+  const prevFqRef = useRef<FullyQualifiedMoniker | null>(null);
 
   // Register scope — fires on any change to keep registry current
   useEffect(() => {
-    if (scope) registerScope(mk, scope);
-    return () => unregisterScope(mk);
-  }, [mk, scope, registerScope, unregisterScope]);
+    if (scope) registerScope(fq, scope);
+    return () => unregisterScope(fq);
+  }, [fq, scope, registerScope, unregisterScope]);
 
-  // Set focus only on cursor movement (moniker change), not on initial mount.
+  // Set focus only on cursor movement (FQM change), not on initial mount.
   // On mount, something else may already have focus (e.g. inspector).
   useEffect(() => {
-    if (prevMonikerRef.current !== null && prevMonikerRef.current !== mk) {
-      setFocus(mk);
+    if (prevFqRef.current !== null && prevFqRef.current !== fq) {
+      void dispatchNavFocus({ args: { fq } }).catch((err) =>
+        console.error("[CursorFocusBridge] nav.focus dispatch failed", err),
+      );
     }
-    prevMonikerRef.current = mk;
-  }, [mk, setFocus]);
+    prevFqRef.current = fq;
+  }, [fq, dispatchNavFocus]);
 
   return null;
 }

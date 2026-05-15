@@ -30,9 +30,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use swissarmyhammer_entity::Entity;
-use swissarmyhammer_filter_expr::FilterContext;
 use swissarmyhammer_kanban::task_helpers::{
-    enrich_all_task_entities, enrich_task_entity, EntitySlugRegistry,
+    enrich_all_task_entities, enrich_task_entity, retain_filtered_tasks, EntitySlugRegistry,
 };
 use swissarmyhammer_kanban::virtual_tags::default_virtual_tag_registry;
 use tauri::menu::{ContextMenu, MenuBuilder};
@@ -101,71 +100,14 @@ fn update_window_title(app: &AppHandle, label: &str, board_name: Option<&str>) {
     }
 }
 
-/// Gather view info from an optional board handle for dynamic commands.
-fn gather_views(
-    handle: Option<&BoardHandle>,
-) -> Vec<swissarmyhammer_kanban::scope_commands::ViewInfo> {
-    use swissarmyhammer_kanban::scope_commands::ViewInfo;
-    let Some(handle) = handle else { return vec![] };
-    let Some(views_lock) = handle.ctx.views() else {
-        return vec![];
-    };
-    let Ok(vc) = views_lock.try_read() else {
-        return vec![];
-    };
-    vc.all_views()
-        .iter()
-        .map(|v| ViewInfo {
-            id: v.id.clone(),
-            name: v.name.clone(),
-        })
-        .collect()
-}
-
-/// Gather open board info from UIState for dynamic commands.
-async fn gather_boards(
-    ui_state: &swissarmyhammer_commands::UIState,
-    boards: &tokio::sync::RwLock<
-        std::collections::HashMap<std::path::PathBuf, std::sync::Arc<BoardHandle>>,
-    >,
-) -> Vec<swissarmyhammer_kanban::scope_commands::BoardInfo> {
-    use swissarmyhammer_kanban::scope_commands::BoardInfo;
-    let open_paths = ui_state.open_boards();
-    let boards_lock = boards.read().await;
-    let mut result = Vec::new();
-    for path in &open_paths {
-        let p = std::path::Path::new(path);
-        let dir_name = p
-            .parent()
-            .and_then(|parent| parent.file_name())
-            .and_then(|n| n.to_str())
-            .unwrap_or("Board")
-            .to_string();
-        let entity_name = match boards_lock.get(p) {
-            Some(handle) => board_display_name(handle)
-                .await
-                .unwrap_or_else(|| dir_name.clone()),
-            None => dir_name.clone(),
-        };
-        let context_name = boards_lock
-            .get(p)
-            .map(|h| h.ctx.name().to_string())
-            .unwrap_or_else(|| dir_name.clone());
-        result.push(BoardInfo {
-            path: path.clone(),
-            name: dir_name,
-            entity_name,
-            context_name,
-        });
-    }
-    result
-}
-
 /// Gather window info from Tauri for dynamic commands.
-fn gather_windows(
-    app: &tauri::AppHandle,
-) -> Vec<swissarmyhammer_kanban::scope_commands::WindowInfo> {
-    use swissarmyhammer_kanban::scope_commands::WindowInfo;
+///
+/// Stays in the GUI crate because live window titles, visibility, and focus
+/// state only exist on the Tauri runtime. The headless `DynamicSources`
+/// builder in `swissarmyhammer_kanban::dynamic_sources` takes the result of
+/// this function as a caller-supplied input; tests fabricate the list.
+fn gather_windows(app: &tauri::AppHandle) -> Vec<swissarmyhammer_commands::WindowInfo> {
+    use swissarmyhammer_commands::WindowInfo;
     app.webview_windows()
         .iter()
         .filter_map(|(label, w)| {
@@ -180,65 +122,6 @@ fn gather_windows(
             })
         })
         .collect()
-}
-
-/// Resolve the active view kind (e.g. "board", "grid") from the UIState and views context.
-fn resolve_active_view_kind(
-    handle: Option<&BoardHandle>,
-    ui_state: &swissarmyhammer_commands::UIState,
-) -> Option<String> {
-    let handle = handle?;
-    let active_id = ui_state.active_view_id("main");
-    if active_id.is_empty() {
-        return None;
-    }
-    let views_lock = handle.ctx.views()?;
-    let vc = views_lock.try_read().ok()?;
-    let view = vc.all_views().iter().find(|v| v.id == active_id)?;
-    Some(serde_json::to_value(&view.kind).ok()?.as_str()?.to_string())
-}
-
-/// Gather perspective info from an optional board handle for dynamic commands.
-///
-/// When `view_kind` is provided, only perspectives matching that view kind are
-/// returned. This prevents duplicate "Default" entries across view kinds.
-async fn gather_perspectives(
-    handle: Option<&BoardHandle>,
-    view_kind: Option<&str>,
-) -> Vec<swissarmyhammer_kanban::scope_commands::PerspectiveInfo> {
-    use swissarmyhammer_kanban::scope_commands::PerspectiveInfo;
-    let Some(handle) = handle else { return vec![] };
-    let Ok(pctx) = handle.ctx.perspective_context().await else {
-        return vec![];
-    };
-    let Ok(pc) = pctx.try_read() else {
-        return vec![];
-    };
-    pc.all()
-        .iter()
-        .filter(|p| view_kind.is_none_or(|vk| p.view == vk))
-        .map(|p| PerspectiveInfo {
-            id: p.id.clone(),
-            name: p.name.clone(),
-            view: p.view.clone(),
-        })
-        .collect()
-}
-
-/// Read the board entity's display name from the entity context.
-///
-/// Returns the `name` field of the board entity (entity type "board", id "board").
-/// This is the canonical display name set during `init board` — typically the
-/// directory name, but editable by the user.
-async fn board_display_name(handle: &BoardHandle) -> Option<String> {
-    let ectx = handle.ctx.entity_context().await.ok()?;
-    let entity = ectx.read("board", "board").await.ok()?;
-    entity
-        .fields
-        .get("name")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
 }
 
 /// Resolve a board handle — by explicit path or falling back to active board.
@@ -276,7 +159,9 @@ pub async fn list_open_boards(state: State<'_, AppState>) -> Result<Value, Strin
     let mut list: Vec<Value> = Vec::new();
     for (path, handle) in boards.iter() {
         let is_active = most_recent.as_ref() == Some(path);
-        let name = board_display_name(handle).await.unwrap_or_default();
+        let name = swissarmyhammer_kanban::board_display_name(&handle.ctx)
+            .await
+            .unwrap_or_default();
         list.push(json!({
             "path": path.display().to_string(),
             "is_active": is_active,
@@ -356,88 +241,6 @@ pub async fn list_entity_types(
     Ok(json!(names))
 }
 
-/// Adapter that maps filter DSL atoms to entity fields.
-///
-/// Uses `filter_tags` (union of body tags + virtual tags) for `#tag` lookups,
-/// `assignees` for `@user` lookups, `depends_on` + `id` for `^ref` lookups,
-/// and the single-value `project` field for `$project` lookups.
-///
-/// When a `registry` is provided, `$project` / `@user` / `^task` predicates
-/// ALSO match the slug of the referenced entity's display name (project
-/// `name`, actor `name`, task `title`). This keeps backend filter semantics
-/// aligned with the frontend autocomplete, which offers name-slugs. Without
-/// a registry, only the stored id is compared — preserving backwards
-/// compatibility for callers that don't have the registry loaded.
-struct EntityFilterAdapter<'a> {
-    entity: &'a Entity,
-    registry: Option<&'a EntitySlugRegistry>,
-}
-
-impl<'a> FilterContext for EntityFilterAdapter<'a> {
-    fn has_tag(&self, tag: &str) -> bool {
-        self.entity
-            .get_string_list("filter_tags")
-            .iter()
-            .any(|t| t.eq_ignore_ascii_case(tag))
-    }
-
-    fn has_assignee(&self, user: &str) -> bool {
-        let assignees = self.entity.get_string_list("assignees");
-        if assignees.iter().any(|a| a.eq_ignore_ascii_case(user)) {
-            return true;
-        }
-        if let Some(registry) = self.registry {
-            if let Some(resolved_id) = registry.actor_id_for_slug(user) {
-                if assignees
-                    .iter()
-                    .any(|a| a.eq_ignore_ascii_case(resolved_id))
-                {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
-    fn has_ref(&self, id: &str) -> bool {
-        if self.entity.id.as_ref() == id {
-            return true;
-        }
-        let depends_on = self.entity.get_string_list("depends_on");
-        if depends_on.iter().any(|r| r == id) {
-            return true;
-        }
-        if let Some(registry) = self.registry {
-            if let Some(resolved_id) = registry.task_id_for_slug(id) {
-                if self.entity.id.as_ref() == resolved_id {
-                    return true;
-                }
-                if depends_on.iter().any(|r| r == resolved_id) {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
-    fn has_project(&self, project: &str) -> bool {
-        let Some(stored) = self.entity.get_str("project") else {
-            return false;
-        };
-        if stored.eq_ignore_ascii_case(project) {
-            return true;
-        }
-        if let Some(registry) = self.registry {
-            if let Some(resolved_id) = registry.project_id_for_slug(project) {
-                if stored.eq_ignore_ascii_case(resolved_id) {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-}
-
 /// Enrich task entities with computed fields and sort by position.
 ///
 /// Loads columns to determine the terminal column, then batch-enriches tasks
@@ -468,31 +271,6 @@ async fn enrich_and_sort_tasks(
             let ord_a = a.get_str("position_ordinal").unwrap_or("a0");
             let ord_b = b.get_str("position_ordinal").unwrap_or("a0");
             ord_a.cmp(ord_b)
-        })
-    });
-    Ok(())
-}
-
-/// Apply a filter DSL expression to an entity list, retaining only matches.
-///
-/// Parses the filter string and evaluates it against each entity via
-/// `EntityFilterAdapter`. The `registry` carries project/actor/task display
-/// name slugs so `$project`, `@user`, and `^task` predicates can match on
-/// id OR slug-of-name — keeping backend filter semantics aligned with the
-/// frontend autocomplete. Returns an error if the expression is invalid.
-fn apply_filter(
-    entities: &mut Vec<Entity>,
-    filter_str: &str,
-    registry: &EntitySlugRegistry,
-) -> Result<(), String> {
-    let expr = swissarmyhammer_filter_expr::parse(filter_str).map_err(|errors| {
-        let msgs: Vec<String> = errors.iter().map(|e| e.message.clone()).collect();
-        format!("invalid filter expression: {}", msgs.join("; "))
-    })?;
-    entities.retain(|e| {
-        expr.matches(&EntityFilterAdapter {
-            entity: e,
-            registry: Some(registry),
         })
     });
     Ok(())
@@ -556,7 +334,7 @@ pub async fn list_entities(
         };
         let task_slice: &[Entity] = tasks.as_deref().unwrap_or(&entities);
         let registry = EntitySlugRegistry::build(&projects, &actors, task_slice);
-        apply_filter(&mut entities, filter_str, &registry)?;
+        retain_filtered_tasks(&mut entities, filter_str, &registry)?;
     }
 
     let json_entities: Vec<Value> = entities.iter().map(|e| e.to_json()).collect();
@@ -1120,7 +898,7 @@ async fn apply_board_title(app: &AppHandle, state: &AppState, label: &str, board
         .unwrap_or_else(|_| board_path.clone());
     let boards = state.boards.read().await;
     if let Some(handle) = boards.get(&canonical) {
-        let name = board_display_name(handle).await;
+        let name = swissarmyhammer_kanban::board_display_name(&handle.ctx).await;
         update_window_title(app, label, name.as_deref());
     }
 }
@@ -1306,20 +1084,38 @@ fn handle_window_focus(app: &AppHandle, label: &str) -> Value {
 }
 
 /// Match a dynamic command prefix and return (new_cmd, arg_key, arg_value, updates_board_path).
+///
+/// The two remaining dynamic prefixes:
+///
+///   * `board.switch:{path}` — rewrites to `file.switchBoard` with `path`
+///     lifted into args and additionally propagated as the effective board
+///     path so downstream multi-window targeting switches boards in lockstep
+///     with the command.
+///   * `entity.add:{type}` — rewrites to the canonical `entity.add` with
+///     `entity_type` moved into the arg bag; `AddEntityCmd` reads
+///     `entity_type` from args and forwards every other arg as a field
+///     override, so adding a new entity type needs zero Rust changes here.
+///
+/// `view.switch:{id}` and `perspective.goto:{id}` were retired in
+/// 01KPZMXXEXKVE3RNPA4XJP0105 — the emit_* helpers in
+/// `swissarmyhammer_kanban::scope_commands` now produce `view.set` /
+/// `perspective.switch` rows directly with the view / perspective id
+/// pre-filled in `args`, so no rewrite hop is needed.
 fn match_dynamic_prefix(
     cmd: &str,
 ) -> Result<Option<(&'static str, &'static str, String, bool)>, String> {
-    if let Some(suffix) = cmd.strip_prefix("view.switch:") {
-        Ok(Some(("ui.view.set", "view_id", suffix.to_string(), false)))
-    } else if let Some(suffix) = cmd.strip_prefix("board.switch:") {
+    if let Some(suffix) = cmd.strip_prefix("board.switch:") {
         if suffix.contains("..") || !std::path::Path::new(suffix).is_absolute() {
             return Err(format!("Invalid board path in command: {:?}", suffix));
         }
         Ok(Some(("file.switchBoard", "path", suffix.to_string(), true)))
-    } else if let Some(suffix) = cmd.strip_prefix("perspective.goto:") {
+    } else if let Some(suffix) = cmd.strip_prefix("entity.add:") {
+        if suffix.is_empty() {
+            return Err(format!("Missing entity type in command: {:?}", cmd));
+        }
         Ok(Some((
-            "ui.perspective.set",
-            "perspective_id",
+            "entity.add",
+            "entity_type",
             suffix.to_string(),
             false,
         )))
@@ -1330,10 +1126,15 @@ fn match_dynamic_prefix(
 
 /// Rewrite dynamic palette command prefixes to their canonical forms.
 ///
-/// Handles `window.focus:*` (pure side-effect, returns early), `view.switch:*`,
-/// `board.switch:*`, and `perspective.goto:*` by stripping the prefix and
-/// injecting the suffix as an arg. Preserves all input validation (ASCII-only,
-/// `MAX_COMMAND_LENGTH`-byte limit, bounded rewrite depth).
+/// Handles `window.focus:*` (pure side-effect, returns early),
+/// `board.switch:*`, and `entity.add:*` by stripping the prefix and
+/// injecting the suffix as an arg. Preserves all input validation
+/// (ASCII-only, `MAX_COMMAND_LENGTH`-byte limit, bounded rewrite depth).
+///
+/// `view.switch:{id}` and `perspective.goto:{id}` were retired in
+/// 01KPZMXXEXKVE3RNPA4XJP0105 — the palette now emits `view.set` /
+/// `perspective.switch` directly with args pre-filled, so no rewrite is
+/// needed.
 fn rewrite_dynamic_prefix(
     app: &AppHandle,
     cmd: &str,
@@ -1436,10 +1237,14 @@ fn apply_prefix_rewrite(
 /// It handles: command lookup, context building, execution, undo tracking,
 /// entity flush, event emission, and UIState change broadcasting.
 ///
-/// Dynamic prefix commands (`view.switch:*`, `board.switch:*`) are rewritten
+/// Dynamic prefix commands (`board.switch:*`, `entity.add:*`) are rewritten
 /// to their canonical command IDs via a single-pass loop. The rewrite is
 /// limited to one iteration (`MAX_REWRITE_DEPTH`) to prevent unbounded
 /// recursion from malformed command chains like `board.switch:board.switch:…`.
+///
+/// `view.switch:{id}` and `perspective.goto:{id}` used to travel this path
+/// and were retired in 01KPZMXXEXKVE3RNPA4XJP0105 — the palette now emits
+/// `view.set` / `perspective.switch` directly with args pre-filled.
 ///
 /// The `window.focus:*` prefix is a pure side-effect (unminimize + focus) that
 /// returns early without entering the standard result-processing pipeline.
@@ -1463,8 +1268,11 @@ pub(crate) async fn dispatch_command_internal(
     args: Option<Value>,
     board_path: Option<String>,
 ) -> Result<Value, String> {
-    // Rewrite dynamic prefixes (view.switch:*, board.switch:*, perspective.goto:*)
-    // to canonical commands with merged args. Also validates command ID.
+    // Rewrite the remaining dynamic prefixes (`window.focus:*`,
+    // `board.switch:*`, `entity.add:*`) to canonical commands with merged
+    // args. Also validates command ID. `view.switch:*` /
+    // `perspective.goto:*` are emitted as `view.set` / `perspective.switch`
+    // directly (see 01KPZMXXEXKVE3RNPA4XJP0105) so no rewrite hop applies.
     let rw = rewrite_dynamic_prefix(app, cmd, args, board_path, &target, &scope_chain)?;
     if let Some(result) = rw.early_return {
         return Ok(result);
@@ -1636,7 +1444,7 @@ async fn handle_board_switch_result(
                 .set_window_board(label, &canonical.display().to_string());
             let boards = state.boards.read().await;
             if let Some(handle) = boards.get(&canonical) {
-                let name = board_display_name(handle).await;
+                let name = swissarmyhammer_kanban::board_display_name(&handle.ctx).await;
                 update_window_title(app, label, name.as_deref());
             }
         }
@@ -1722,17 +1530,45 @@ fn close_or_retitle_window(app: &AppHandle, requesting_label: &str) {
 }
 
 /// Apply UI-triggering command results: file dialogs, new-window creation,
-/// and app quit. These are fire-and-forget hooks into the Tauri app.
+/// app quit, and UI-broadcast envelopes (e.g. focus signals). Each result
+/// variant is dispatched to a dedicated handler so the side-effect for each
+/// shape lives in one place and can be tested or changed in isolation.
 async fn handle_ui_trigger_results(app: &AppHandle, state: &AppState, result: &Value) {
+    handle_new_board_dialog(app, result);
+    handle_open_board_dialog(app, result);
+    handle_create_window(app, state, result).await;
+    handle_quit(app, result);
+}
+
+/// Trigger the native "new board" file dialog when the command emitted a
+/// `NewBoardDialog` result envelope. Fire-and-forget — the dialog drives any
+/// follow-up command on completion.
+fn handle_new_board_dialog(app: &AppHandle, result: &Value) {
     if result.get("NewBoardDialog").is_some() {
         menu::trigger_new_board(app);
     }
+}
+
+/// Trigger the native "open board" file dialog when the command emitted an
+/// `OpenBoardDialog` result envelope. Fire-and-forget — the dialog drives any
+/// follow-up command on completion.
+fn handle_open_board_dialog(app: &AppHandle, result: &Value) {
     if result.get("OpenBoardDialog").is_some() {
         menu::trigger_open_board(app);
     }
+}
+
+/// Spawn a new Tauri window when the command emitted a `CreateWindow` result.
+/// Delegates to `create_window_internal`, which resolves the board path and
+/// applies any persisted geometry.
+async fn handle_create_window(app: &AppHandle, state: &AppState, result: &Value) {
     if result.get("CreateWindow").is_some() {
         create_window_internal(app, state).await;
     }
+}
+
+/// Exit the Tauri app when the command emitted a `quit` result envelope.
+fn handle_quit(app: &AppHandle, result: &Value) {
     if result.get("quit").is_some() {
         app.exit(0);
     }
@@ -1747,15 +1583,28 @@ async fn handle_drag_events(
     active_handle: Option<&Arc<BoardHandle>>,
     result: &Value,
 ) {
-    if let Some(drag_start) = result.get("DragStart") {
-        let payload = drag_start.clone();
-        let _ = app.emit("drag-session-active", &payload);
-    }
-    if let Some(drag_cancel) = result.get("DragCancel") {
-        let _ = app.emit("drag-session-cancelled", &drag_cancel);
-    }
+    handle_drag_start(app, result);
+    handle_drag_cancel(app, result);
     if let Some(drag_complete) = result.get("DragComplete") {
         handle_drag_complete(app, state, active_handle, drag_complete).await;
+    }
+}
+
+/// Forward the `DragStart` payload to the frontend on the
+/// `drag-session-active` channel. No-op when the result does not carry a
+/// `DragStart` envelope.
+fn handle_drag_start(app: &AppHandle, result: &Value) {
+    if let Some(drag_start) = result.get("DragStart") {
+        let _ = app.emit("drag-session-active", drag_start);
+    }
+}
+
+/// Forward the `DragCancel` payload to the frontend on the
+/// `drag-session-cancelled` channel. No-op when the result does not carry a
+/// `DragCancel` envelope.
+fn handle_drag_cancel(app: &AppHandle, result: &Value) {
+    if let Some(drag_cancel) = result.get("DragCancel") {
+        let _ = app.emit("drag-session-cancelled", drag_cancel);
     }
 }
 
@@ -1897,13 +1746,67 @@ async fn perform_cross_board_drag_transfer(
 /// `UIStateChange` result envelope or mutated board open/close state (which
 /// is not typed as a `UIStateChange` but still affects what the React
 /// `UIStateProvider` renders).
+///
+/// The emitted payload is a wrapper of the form
+/// `{ "kind": "<discriminator>", "state": <full UIState snapshot> }`.
+/// `kind` names which slice of UI state changed — one of the seven
+/// `UIStateChange` variants plus the two board result shapes — so the
+/// frontend can skip `setState` for events it doesn't care about (e.g.
+/// every `ui.setFocus` arrow-key fires a `scope_chain` event; the
+/// frontend owns that slice via `FocusedScopeContext` and ignores the
+/// echo). No UI-specific policy lives here — the backend just tells the
+/// truth about which change it made.
 fn emit_ui_state_change_if_needed(app: &AppHandle, state: &AppState, result: &Value) {
-    if serde_json::from_value::<swissarmyhammer_commands::UIStateChange>(result.clone()).is_ok() {
-        let _ = app.emit("ui-state-changed", state.ui_state.to_json());
+    let Some(kind) = ui_state_change_kind(result) else {
+        return;
+    };
+    let _ = app.emit(
+        "ui-state-changed",
+        serde_json::json!({ "kind": kind, "state": state.ui_state.to_json() }),
+    );
+}
+
+/// Classify a command result into a `ui-state-changed` discriminator, or
+/// `None` if the result does not trigger a UI state event.
+///
+/// Returns the `kind` string used on the wire:
+/// - One per `UIStateChange` variant (`scope_chain`, `palette_open`,
+///   `keymap_mode`, `inspector_stack`, `active_view`,
+///   `active_perspective`, `app_mode`, `inspector_width`,
+///   `perspective_switch`).
+/// - `board_switch` / `board_close` for the two board result shapes,
+///   which are not typed as `UIStateChange` but still mutate what the
+///   `UIStateProvider` renders.
+fn ui_state_change_kind(result: &Value) -> Option<&'static str> {
+    if let Ok(change) =
+        serde_json::from_value::<swissarmyhammer_commands::UIStateChange>(result.clone())
+    {
+        return Some(match change {
+            swissarmyhammer_commands::UIStateChange::ScopeChain(_) => "scope_chain",
+            swissarmyhammer_commands::UIStateChange::PaletteOpen(_) => "palette_open",
+            swissarmyhammer_commands::UIStateChange::KeymapMode(_) => "keymap_mode",
+            swissarmyhammer_commands::UIStateChange::InspectorStack(_) => "inspector_stack",
+            swissarmyhammer_commands::UIStateChange::ActiveView(_) => "active_view",
+            swissarmyhammer_commands::UIStateChange::ActivePerspective(_) => "active_perspective",
+            swissarmyhammer_commands::UIStateChange::AppMode(_) => "app_mode",
+            swissarmyhammer_commands::UIStateChange::InspectorWidth { .. } => "inspector_width",
+            // `PerspectiveSwitch` is the atomic id+filtered-ids update emitted
+            // by `perspective.switch`. We classify it as `perspective_switch`
+            // so the frontend can register its own debounce/skip policy
+            // independently of the legacy `active_perspective` kind (which
+            // covered id-only mutations).
+            swissarmyhammer_commands::UIStateChange::PerspectiveSwitch { .. } => {
+                "perspective_switch"
+            }
+        });
     }
-    if result.get("BoardSwitch").is_some() || result.get("BoardClose").is_some() {
-        let _ = app.emit("ui-state-changed", state.ui_state.to_json());
+    if result.get("BoardSwitch").is_some() {
+        return Some("board_switch");
     }
+    if result.get("BoardClose").is_some() {
+        return Some("board_close");
+    }
+    None
 }
 
 /// Rebuild the native menu after commands whose effects change what items
@@ -1958,7 +1861,7 @@ async fn flush_and_sync_after_command(
 /// match the board entity's display name. Catches board renames, undo/redo
 /// of name changes, etc.
 async fn refresh_board_window_titles(app: &AppHandle, state: &AppState, handle: &BoardHandle) {
-    let display_name = board_display_name(handle).await;
+    let display_name = swissarmyhammer_kanban::board_display_name(&handle.ctx).await;
     let canonical = handle
         .ctx
         .root()
@@ -1976,11 +1879,93 @@ async fn refresh_board_window_titles(app: &AppHandle, state: &AppState, handle: 
 // list_commands_for_scope — backend-driven command resolution
 // ---------------------------------------------------------------------------
 
-/// Return all available commands for the given scope chain.
+/// Build a `DynamicSources` for the current app state (views, boards,
+/// windows, perspectives).
 ///
-/// This is the single source of truth for what commands are available.
-/// The frontend calls this with a scope chain and renders the result.
-/// No command logic in the UI — just render and dispatch.
+/// This is a thin Tauri-side shim around the headless
+/// [`swissarmyhammer_kanban::dynamic_sources::build_dynamic_sources`]
+/// entry point. All assembly logic (views/boards/perspectives + active
+/// view kind) lives in the kanban crate so it can be exercised without
+/// Tauri scaffolding; this shim contributes the one input that can only
+/// come from the GUI runtime — live window titles/visibility/focus.
+async fn build_dynamic_sources(
+    app: &AppHandle,
+    state: &AppState,
+    active_handle: Option<&crate::state::BoardHandle>,
+) -> swissarmyhammer_kanban::scope_commands::DynamicSources {
+    use swissarmyhammer_kanban::dynamic_sources::{
+        build_dynamic_sources as build_headless, DynamicSourcesInputs,
+    };
+    let windows = gather_windows(app);
+    // Project the `HashMap<PathBuf, Arc<BoardHandle>>` down to
+    // `HashMap<PathBuf, Arc<KanbanContext>>` — the headless builder only
+    // needs the context, not the full handle (entity cache, bridge task,
+    // search index are irrelevant to dynamic-source assembly).
+    let boards_guard = state.boards.read().await;
+    let open_board_ctxs: std::collections::HashMap<
+        PathBuf,
+        Arc<swissarmyhammer_kanban::KanbanContext>,
+    > = boards_guard
+        .iter()
+        .map(|(path, handle)| (path.clone(), Arc::clone(&handle.ctx)))
+        .collect();
+    drop(boards_guard);
+    let active_ctx = active_handle.map(|h| h.ctx.as_ref());
+    build_headless(DynamicSourcesInputs {
+        ui_state: &state.ui_state,
+        active_ctx,
+        open_board_ctxs: &open_board_ctxs,
+        active_window_label: Some("main"),
+        windows,
+    })
+    .await
+}
+
+/// Emit `info`-level telemetry about the resolved-command list so a
+/// "no entity.add" bug is diagnosable from logs alone.
+fn log_scope_inputs(
+    scope_chain: &[String],
+    context_menu: Option<bool>,
+    dynamic: &swissarmyhammer_kanban::scope_commands::DynamicSources,
+) {
+    let views_with_entity_type = dynamic
+        .views
+        .iter()
+        .filter(|v| v.entity_type.as_deref().is_some_and(|s| !s.is_empty()))
+        .count();
+    tracing::info!(
+        scope_chain = ?scope_chain,
+        context_menu = ?context_menu,
+        views_count = dynamic.views.len(),
+        views_with_entity_type,
+        boards_count = dynamic.boards.len(),
+        windows_count = dynamic.windows.len(),
+        perspectives_count = dynamic.perspectives.len(),
+        "list_commands_for_scope"
+    );
+}
+
+fn log_scope_result(result: &[swissarmyhammer_kanban::scope_commands::ResolvedCommand]) {
+    if !tracing::enabled!(tracing::Level::INFO) {
+        return;
+    }
+    let mut by_group: HashMap<&str, usize> = HashMap::new();
+    for cmd in result {
+        *by_group.entry(cmd.group.as_str()).or_default() += 1;
+    }
+    let entity_add_ids: Vec<&str> = result
+        .iter()
+        .filter(|c| c.id.starts_with("entity.add:"))
+        .map(|c| c.id.as_str())
+        .collect();
+    tracing::info!(
+        total = result.len(),
+        by_group = ?by_group,
+        entity_add_ids = ?entity_add_ids,
+        "list_commands_for_scope result"
+    );
+}
+
 #[tauri::command]
 pub async fn list_commands_for_scope(
     app: AppHandle,
@@ -1989,36 +1974,29 @@ pub async fn list_commands_for_scope(
     context_menu: Option<bool>,
 ) -> Result<Value, String> {
     let active_handle = state.active_handle().await;
-    let fields = active_handle.as_ref().and_then(|h| h.ctx.fields());
-
     let registry = state.commands_registry.read().await;
+    let dynamic = build_dynamic_sources(&app, &state, active_handle.as_deref()).await;
+    log_scope_inputs(&scope_chain, context_menu, &dynamic);
 
-    let dynamic = {
-        use swissarmyhammer_kanban::scope_commands::DynamicSources;
-        let views = gather_views(active_handle.as_deref());
-        let boards = gather_boards(&state.ui_state, &state.boards).await;
-        let windows = gather_windows(&app);
-        let view_kind = resolve_active_view_kind(active_handle.as_deref(), &state.ui_state);
-        let perspectives =
-            gather_perspectives(active_handle.as_deref(), view_kind.as_deref()).await;
-        DynamicSources {
-            views,
-            boards,
-            windows,
-            perspectives,
-        }
-    };
-
-    let result = swissarmyhammer_kanban::scope_commands::commands_for_scope(
+    // Thread the active context through `commands_for_scope_with_context`
+    // so the call carries BOTH the entity schemas (via `fields`) AND the
+    // options resolver registry (via `options_registry`) — sourced from the
+    // same context object. The earlier direct call to `commands_for_scope`
+    // passed `None` for the options registry, which silently disabled the
+    // enrichment pass and left every picker (Group By, View, Sort, etc.)
+    // with `options: None` — the empty-popover bug tracked in kanban task
+    // 01KRGW1DYD0T05PSTEDPT5D076 (iteration 4).
+    let result = swissarmyhammer_kanban::scope_commands::commands_for_scope_with_context(
         &scope_chain,
         &registry,
         &state.command_impls,
-        fields,
+        active_handle.as_ref().map(|h| h.ctx.as_ref()),
         &state.ui_state,
         context_menu == Some(true),
         Some(&dynamic),
     );
 
+    log_scope_result(&result);
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
@@ -2086,8 +2064,444 @@ pub async fn show_context_menu(
     Ok(())
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Spatial-navigation commands.
+//
+// These wire the headless `swissarmyhammer-focus` kernel into Tauri. Each
+// command derives a `WindowLabel` from its `tauri::Window` parameter, locks
+// the registry and per-window focus state held in `AppState`, performs its
+// kernel call, and (where the kernel returns a `FocusChangedEvent`) emits
+// `focus-changed` so the React `SpatialFocusProvider` can update its claim
+// listeners.
+//
+// These commands intentionally bypass `dispatch_command` per the rule at the
+// top of this file: they are transient UI plumbing — not business state
+// mutations. The headless kernel owns the model; these commands only forward
+// register / focus / navigate calls and surface the resulting events.
+//
+// ## Lock ordering
+//
+// Every spatial command that touches both the registry and per-window focus
+// holds the locks in the same order: **registry first, state second**. The
+// helper [`with_spatial`] enforces this so callers cannot deadlock by
+// accident. The unregister command intentionally takes both locks together
+// for the duration of the transaction so observers (focus listeners,
+// fallback computations) cannot see a half-applied unregister.
+// ─────────────────────────────────────────────────────────────────────────────
+
+use swissarmyhammer_focus::{
+    Direction, FocusChangedEvent, FocusLayer, FullyQualifiedMoniker, LayerName, NavSnapshot, Rect,
+    SegmentMoniker, SpatialRegistry, SpatialState, WindowLabel,
+};
+
+/// Tauri event name for spatial focus changes — mirrors the listener
+/// registered in `kanban-app/ui/src/lib/spatial-focus-context.tsx`.
+const FOCUS_CHANGED_EVENT: &str = "focus-changed";
+
+/// Derive a [`WindowLabel`] newtype from a Tauri window handle.
+///
+/// `tauri::Window::label()` returns the borrowed string the user-space
+/// constructor mints (`"main"`, `"board-<ulid>"`, `"quick-capture"`, …);
+/// the kernel speaks in newtypes, so we wrap it at the boundary. Every
+/// spatial command funnels through this helper so a stray `String` cannot
+/// leak into the kernel surface.
+fn window_label_from(window: &Window) -> WindowLabel {
+    WindowLabel::from_string(window.label())
+}
+
+/// Acquire both spatial locks in canonical order and run `f` with mutable
+/// access.
+///
+/// Order is `spatial_registry` then `spatial_state` for any command that
+/// holds both at once. Centralizing the order here means every adapter
+/// inherits it for free and cannot accidentally lock-invert.
+async fn with_spatial<R, F>(state: &State<'_, AppState>, f: F) -> R
+where
+    F: FnOnce(&mut SpatialRegistry, &mut SpatialState) -> R,
+{
+    let mut registry = state.spatial_registry.lock().await;
+    let mut spatial_state = state.spatial_state.lock().await;
+    f(&mut registry, &mut spatial_state)
+}
+
+/// Forward a kernel-produced [`FocusChangedEvent`] to the React side.
+///
+/// Emits via the `tauri::Window` so the event reaches every webview the
+/// app has spawned. The frontend's `SpatialFocusProvider` filters its own
+/// claim registry by the `payload.next_key` lookup — windows that don't
+/// own the key receive the event silently and drop it, which matches the
+/// per-window claim-registry semantics described in the React module
+/// docs.
+fn emit_focus_changed(window: &Window, event: &FocusChangedEvent) -> Result<(), String> {
+    window
+        .emit(FOCUS_CHANGED_EVENT, event)
+        .map_err(|e| format!("failed to emit {FOCUS_CHANGED_EVENT}: {e}"))
+}
+
+// ── Pure inner logic, factored out of the Tauri commands so unit tests can
+// drive the same code paths against `&mut SpatialRegistry, &mut SpatialState`
+// without spinning up Tauri. The Tauri commands below are thin wrappers that
+// derive the [`WindowLabel`] from `tauri::Window`, lock the registry/state in
+// canonical order, dispatch to one of these helpers, and emit the resulting
+// `FocusChangedEvent` (when any) on the calling window.
+
+/// Push a layer into the registry under the given owning window.
+///
+/// `window_label` is derived from the calling `tauri::Window` in the
+/// command wrapper; the layer's owning window cannot be supplied by the
+/// React side because Tauri webviews are server-tracked, not client-known.
+fn spatial_push_layer_inner(
+    registry: &mut SpatialRegistry,
+    fq: FullyQualifiedMoniker,
+    segment: SegmentMoniker,
+    name: LayerName,
+    parent: Option<FullyQualifiedMoniker>,
+    window_label: WindowLabel,
+) {
+    registry.push_layer(FocusLayer {
+        fq,
+        segment,
+        name,
+        parent,
+        window_label,
+        last_focused: None,
+    });
+}
+
+/// Move focus to the scope at `fq`.
+///
+/// The kernel records ancestry from the snapshot's `parent_zone` chain —
+/// mid-life `navOverride` and `parent_zone` changes propagate without a
+/// re-register. The registry is consulted only for the focused entry's
+/// owning window, segment, and layer-ancestor chain.
+///
+/// `snapshot` is `None` only during the transient unmount window where
+/// the focused scope's React-side layer registry has already torn down;
+/// the kernel drops the commit silently in that case rather than guess
+/// at scope ancestry without a snapshot.
+///
+/// Delegates to [`SpatialState::focus`]. Returns
+/// `Some(FocusChangedEvent)` when focus actually moved and `None`
+/// otherwise (no snapshot, window unknown, already focused, or the FQM
+/// is missing from `snapshot.scopes`). We forward only actual
+/// transitions so claim listeners don't see redundant events.
+#[tauri::command]
+pub async fn spatial_focus(
+    window: Window,
+    state: State<'_, AppState>,
+    fq: FullyQualifiedMoniker,
+    snapshot: Option<NavSnapshot>,
+) -> Result<(), String> {
+    let Some(snapshot) = snapshot else {
+        tracing::debug!(
+            op = "spatial_focus",
+            focused_fq = %fq,
+            "snapshot=None — dropping focus commit (transient unmount race)"
+        );
+        return Ok(());
+    };
+    let event = with_spatial(&state, |registry, spatial_state| {
+        spatial_state.focus(registry, &snapshot, fq.clone())
+    })
+    .await;
+
+    if let Some(event) = event {
+        emit_focus_changed(&window, &event)?;
+    }
+    Ok(())
+}
+
+/// Clear focus for the calling window.
+///
+/// Explicit-clear counterpart of [`spatial_focus`]. The React side calls this when the user
+/// (or a component-level handler) wants to drop focus altogether — for
+/// example `setFocus(null)` from `entity-focus-context.tsx`. Routing
+/// the clear through the kernel preserves the architectural invariant
+/// from card `01KQD0WK54G0FRD7SZVZASA9ST`: the React entity-focus
+/// store is a pure projection of `focus-changed` events. Without this
+/// command, `setFocus(null)` would have to mutate the React store
+/// synchronously to clear focus, which is exactly the kernel/React
+/// drift the card was filed to eliminate.
+///
+/// Delegates to [`SpatialState::clear_focus`], which removes the
+/// per-window focus slot and returns a `Some(prev) → None`
+/// [`FocusChangedEvent`] when focus was actually cleared. We forward
+/// the event so the React-side bridge writes the entity-focus store
+/// to `null` and dispatches `ui.setFocus` with an empty scope chain.
+/// When the window had no prior focus, the kernel returns `None` and
+/// no event is emitted (idempotent).
+#[tauri::command]
+pub async fn spatial_clear_focus(window: Window, state: State<'_, AppState>) -> Result<(), String> {
+    let label = window_label_from(&window);
+    let event = with_spatial(&state, |_registry, spatial_state| {
+        spatial_state.clear_focus(&label)
+    })
+    .await;
+
+    if let Some(event) = event {
+        emit_focus_changed(&window, &event)?;
+    }
+    Ok(())
+}
+
+/// Move focus relative to `focused_fq` in `direction`.
+///
+/// Pathfinding runs against the snapshot; the registry is consulted only
+/// for the focused entry's segment / window and the target's commit
+/// metadata. When `snapshot` is `None` (the transient unmount window),
+/// the call drops silently — the React-side layer registry has torn
+/// down and there is no live geometry to navigate over.
+///
+/// Returns `Ok(())` whether or not focus actually moved — under the
+/// no-silent-dropout contract, the kernel always returns a moniker; if
+/// it equals the focused moniker (semantic "stay put" or torn-state
+/// echo), the inner method short-circuits via the
+/// "already focused → no event" check in `SpatialState::focus` and
+/// nothing is emitted. Same outcome when the resolved moniker doesn't
+/// own any registered scope.
+#[tauri::command]
+pub async fn spatial_navigate(
+    window: Window,
+    state: State<'_, AppState>,
+    focused_fq: FullyQualifiedMoniker,
+    direction: Direction,
+    snapshot: Option<NavSnapshot>,
+) -> Result<(), String> {
+    let Some(snapshot) = snapshot else {
+        tracing::debug!(
+            op = "spatial_navigate",
+            focused_fq = %focused_fq,
+            direction = ?direction,
+            "snapshot=None — dropping navigation (transient unmount race)"
+        );
+        return Ok(());
+    };
+    let event = with_spatial(&state, |registry, spatial_state| {
+        spatial_state.navigate(registry, &snapshot, focused_fq.clone(), direction)
+    })
+    .await;
+
+    if let Some(event) = event {
+        emit_focus_changed(&window, &event)?;
+    }
+    Ok(())
+}
+
+/// React to the focused scope unmounting on the React side.
+///
+/// Called from the React-side layer registry's deletion path when the
+/// scope being unmounted is the currently focused FQM in this window.
+/// React supplies the lost FQM, its `parent_zone`, owning layer FQM, and
+/// last-known bounding rect alongside a snapshot whose `scopes` set has
+/// already had the lost FQM removed — the kernel's fallback walk reads
+/// from the snapshot only, so no registry mutation around the lost
+/// entry's metadata is required.
+#[tauri::command]
+pub async fn spatial_focus_lost(
+    window: Window,
+    state: State<'_, AppState>,
+    focused_fq: FullyQualifiedMoniker,
+    lost_parent_zone: Option<FullyQualifiedMoniker>,
+    lost_layer_fq: FullyQualifiedMoniker,
+    lost_rect: Rect,
+    snapshot: NavSnapshot,
+) -> Result<(), String> {
+    let event = with_spatial(&state, |registry, spatial_state| {
+        spatial_state.focus_lost(
+            registry,
+            &snapshot,
+            &focused_fq,
+            lost_parent_zone.as_ref(),
+            &lost_layer_fq,
+            lost_rect,
+        )
+    })
+    .await;
+
+    if let Some(event) = event {
+        emit_focus_changed(&window, &event)?;
+    }
+    Ok(())
+}
+
+/// Push a new layer onto the registry.
+///
+/// Layers form a per-window forest: the window root has `parent = None`;
+/// inspector / dialog / palette overlays are stacked under their parent.
+/// `key` is the stable mount identifier; `name` is the layer role
+/// (`"window"`, `"inspector"`, `"dialog"`, `"palette"`); `parent` ties
+/// the layer to its stacking parent (`None` for a window root).
+///
+/// The owning window is taken from the calling `tauri::Window` — every
+/// layer in a forest path back to a root shares the same window label,
+/// and the registry uses that to bound spatial nav and fallback
+/// resolution to a single window.
+#[tauri::command]
+pub async fn spatial_push_layer(
+    window: Window,
+    state: State<'_, AppState>,
+    fq: FullyQualifiedMoniker,
+    segment: SegmentMoniker,
+    name: LayerName,
+    parent: Option<FullyQualifiedMoniker>,
+) -> Result<(), String> {
+    let window_label = window_label_from(&window);
+    with_spatial(&state, |registry, _spatial_state| {
+        spatial_push_layer_inner(registry, fq, segment, name, parent, window_label);
+    })
+    .await;
+    Ok(())
+}
+
+/// Pop a previously-pushed layer and return the focus-restoration target.
+///
+/// Reads the popped layer's `last_focused` slot before removal and
+/// returns it so the caller can issue a follow-up `spatial_focus` to
+/// commit the restoration through the snapshot path. The kernel does
+/// not mutate `focus_by_window` or emit a `focus-changed` event from
+/// this command — focus restoration is a two-step round-trip that
+/// keeps every commit on the snapshot-driven path.
+///
+/// Returns `None` when the layer is unknown or has no recorded
+/// `last_focused`. The React side treats `None` as "leave focus
+/// as-is".
+///
+/// The registry side is a single `remove_layer` call; descendant scope
+/// entries are dropped by the React side beforehand, so no GC pass is
+/// needed here.
+#[tauri::command]
+pub async fn spatial_pop_layer(
+    state: State<'_, AppState>,
+    fq: FullyQualifiedMoniker,
+) -> Result<Option<FullyQualifiedMoniker>, String> {
+    let next_fq = with_spatial(&state, |registry, _spatial_state| {
+        let next_fq = registry.layer(&fq).and_then(|l| l.last_focused.clone());
+        registry.remove_layer(&fq);
+        next_fq
+    })
+    .await;
+    Ok(next_fq)
+}
+
+/// Compute the FQM to focus when the user drills *into* the scope at
+/// `fq`.
+///
+/// Returns the result of [`swissarmyhammer_focus::drill_in`]: the
+/// scope's recorded `last_focused_by_fq` target if it is still in
+/// `snapshot`, else the topmost-then-leftmost child by rect, else
+/// `focused_fq` (semantic no-op).
+///
+/// Pure query — does not mutate focus state and does not emit a
+/// `focus-changed` event; the React side calls `setFocus(moniker)` on
+/// the result. Returns `Ok(focused_fq)` when `snapshot` is `None`
+/// (transient unmount window; the React side has nothing live to drill
+/// into).
+#[tauri::command]
+pub async fn spatial_drill_in(
+    _window: Window,
+    state: State<'_, AppState>,
+    fq: FullyQualifiedMoniker,
+    focused_fq: FullyQualifiedMoniker,
+    snapshot: Option<NavSnapshot>,
+) -> Result<FullyQualifiedMoniker, String> {
+    let Some(snapshot) = snapshot else {
+        tracing::debug!(
+            op = "spatial_drill_in",
+            focused_fq = %focused_fq,
+            target_fq = %fq,
+            "snapshot=None — returning focused_fq (transient unmount race)"
+        );
+        return Ok(focused_fq);
+    };
+    let next_fq = with_spatial(&state, |registry, _spatial_state| {
+        let view = swissarmyhammer_focus::IndexedSnapshot::new(&snapshot);
+        swissarmyhammer_focus::drill_in(&view, registry, fq, &focused_fq)
+    })
+    .await;
+    Ok(next_fq)
+}
+
+/// Compute the FQM to focus when the user drills *out of* the scope at
+/// `fq`.
+///
+/// Returns the result of [`swissarmyhammer_focus::drill_out`]: the
+/// scope's `parent_zone` if it is still in `snapshot`, else
+/// `focused_fq` (the React side compares against `focused_fq` to fall
+/// through to `app.dismiss`).
+#[tauri::command]
+pub async fn spatial_drill_out(
+    _window: Window,
+    state: State<'_, AppState>,
+    fq: FullyQualifiedMoniker,
+    focused_fq: FullyQualifiedMoniker,
+    snapshot: Option<NavSnapshot>,
+) -> Result<FullyQualifiedMoniker, String> {
+    let Some(snapshot) = snapshot else {
+        tracing::debug!(
+            op = "spatial_drill_out",
+            focused_fq = %focused_fq,
+            target_fq = %fq,
+            "snapshot=None — returning focused_fq (transient unmount race)"
+        );
+        return Ok(focused_fq);
+    };
+    let next_fq = with_spatial(&state, |_registry, _spatial_state| {
+        let view = swissarmyhammer_focus::IndexedSnapshot::new(&snapshot);
+        swissarmyhammer_focus::drill_out(&view, fq, &focused_fq)
+    })
+    .await;
+    Ok(next_fq)
+}
+
+/// Generate `count` distinct, prefix-free key codes for the Jump-To
+/// overlay (vim-sneak / AceJump-style labels).
+///
+/// Pure pass-through to
+/// [`swissarmyhammer_focus::generate_sneak_codes`] — no state mutation,
+/// no I/O. The frontend calls this once when the overlay opens and uses
+/// the resulting codes to label visible scopes.
+///
+/// # Errors
+///
+/// Returns the stringified
+/// [`swissarmyhammer_focus::SneakError`] when `count` exceeds
+/// the maximum capacity of the alphabet (currently 529 — `23²`). In
+/// practice this means an upstream bug, since the overlay never shows
+/// hundreds of targets.
+#[tauri::command]
+pub fn generate_jump_codes(count: usize) -> Result<Vec<String>, String> {
+    swissarmyhammer_focus::generate_sneak_codes(count).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
+    use super::generate_jump_codes;
+
+    /// `generate_jump_codes` round-trips through the same code path the
+    /// Tauri runtime invokes — identical output to the underlying Rust
+    /// impl, errors flattened to `String`.
+    #[test]
+    fn generate_jump_codes_matches_rust_impl_for_known_count() {
+        let count = 30usize;
+        let via_command = generate_jump_codes(count).expect("count=30 must succeed");
+        let via_rust = swissarmyhammer_focus::generate_sneak_codes(count)
+            .expect("count=30 must succeed via direct call");
+        assert_eq!(via_command, via_rust);
+        assert_eq!(via_command.len(), count);
+    }
+
+    /// `generate_jump_codes` flattens [`SneakError`] to a `String`
+    /// preserving the canonical error message.
+    #[test]
+    fn generate_jump_codes_flattens_too_many_targets_error() {
+        let over = swissarmyhammer_focus::MAX_SNEAK_CODES + 1;
+        let err = generate_jump_codes(over).expect_err("over-capacity must fail");
+        assert!(
+            err.contains("too many jump targets"),
+            "unexpected error message: {err:?}",
+        );
+    }
+
     /// Verifies that store_name and id are correctly extracted from ChangeEvent
     /// payloads, and that events with missing fields are identified.
     #[test]
@@ -2155,11 +2569,21 @@ mod tests {
         assert!(id.is_empty());
     }
 
-    // ── EntityFilterAdapter tests ──────────────────────────────────
+    // ── retain_filtered_tasks delegation test ─────────────────────
+    //
+    // Filter DSL evaluation (`#tag`, `@user`, `^ref`, `$project`) lives in
+    // `swissarmyhammer_kanban::task_helpers` as `TaskFilterAdapter` /
+    // `retain_filtered_tasks`. The kanban-app crate consumes the shared
+    // implementation via `retain_filtered_tasks` in `list_entities` so a
+    // single DSL evaluator backs both `list_entities` and the
+    // `perspective.switch` command. Full adapter coverage (tag / assignee /
+    // ref / project, slug fallback, every operator) lives in
+    // `swissarmyhammer-kanban/src/task_helpers.rs` — this test only pins the
+    // delegation so a future refactor cannot silently re-introduce a
+    // duplicate evaluator in this crate.
 
-    use super::EntityFilterAdapter;
     use swissarmyhammer_entity::Entity;
-    use swissarmyhammer_filter_expr::FilterContext;
+    use swissarmyhammer_kanban::task_helpers::{retain_filtered_tasks, EntitySlugRegistry};
 
     /// Build a task entity with the given filter_tags, assignees, and depends_on.
     fn make_entity(
@@ -2176,152 +2600,17 @@ mod tests {
     }
 
     #[test]
-    fn adapter_has_tag_matches_filter_tags() {
-        let e = make_entity("t1", &["bug", "READY"], &[], &[]);
-        let adapter = EntityFilterAdapter {
-            entity: &e,
-            registry: None,
-        };
-        assert!(adapter.has_tag("bug"));
-        assert!(adapter.has_tag("READY"));
-        assert!(!adapter.has_tag("feature"));
-    }
-
-    #[test]
-    fn adapter_has_tag_case_insensitive() {
-        let e = make_entity("t1", &["READY"], &[], &[]);
-        let adapter = EntityFilterAdapter {
-            entity: &e,
-            registry: None,
-        };
-        assert!(adapter.has_tag("ready"));
-        assert!(adapter.has_tag("Ready"));
-    }
-
-    #[test]
-    fn adapter_has_assignee() {
-        let e = make_entity("t1", &[], &["alice", "bob"], &[]);
-        let adapter = EntityFilterAdapter {
-            entity: &e,
-            registry: None,
-        };
-        assert!(adapter.has_assignee("alice"));
-        assert!(adapter.has_assignee("bob"));
-        assert!(!adapter.has_assignee("carol"));
-    }
-
-    #[test]
-    fn adapter_has_assignee_case_insensitive() {
-        let e = make_entity("t1", &[], &["Alice"], &[]);
-        let adapter = EntityFilterAdapter {
-            entity: &e,
-            registry: None,
-        };
-        assert!(adapter.has_assignee("alice"));
-    }
-
-    #[test]
-    fn adapter_has_ref_matches_depends_on() {
-        let e = make_entity("t1", &[], &[], &["dep1", "dep2"]);
-        let adapter = EntityFilterAdapter {
-            entity: &e,
-            registry: None,
-        };
-        assert!(adapter.has_ref("dep1"));
-        assert!(adapter.has_ref("dep2"));
-        assert!(!adapter.has_ref("dep3"));
-    }
-
-    #[test]
-    fn adapter_has_ref_matches_own_id() {
-        let e = make_entity("t1", &[], &[], &[]);
-        let adapter = EntityFilterAdapter {
-            entity: &e,
-            registry: None,
-        };
-        assert!(adapter.has_ref("t1"));
-    }
-
-    #[test]
-    fn adapter_end_to_end_with_filter_expr() {
-        let e = make_entity("t1", &["bug", "READY"], &["will"], &["dep1"]);
-        let adapter = EntityFilterAdapter {
-            entity: &e,
-            registry: None,
-        };
-
-        let expr = swissarmyhammer_filter_expr::parse("#bug && @will").unwrap();
-        assert!(expr.matches(&adapter));
-
-        let expr = swissarmyhammer_filter_expr::parse("#bug && @alice").unwrap();
-        assert!(!expr.matches(&adapter));
-
-        let expr = swissarmyhammer_filter_expr::parse("#READY").unwrap();
-        assert!(expr.matches(&adapter));
-
-        let expr = swissarmyhammer_filter_expr::parse("!#done").unwrap();
-        assert!(expr.matches(&adapter));
-
-        let expr = swissarmyhammer_filter_expr::parse("^dep1").unwrap();
-        assert!(expr.matches(&adapter));
-    }
-
-    /// Build a task entity with a `project` field set.
-    fn make_entity_with_project(id: &str, project: &str) -> Entity {
-        let mut e = Entity::new("task", id);
-        e.set("project", serde_json::json!(project));
-        e
-    }
-
-    #[test]
-    fn adapter_has_project_matches_project_field() {
-        let e = make_entity_with_project("t1", "auth-migration");
-        let adapter = EntityFilterAdapter {
-            entity: &e,
-            registry: None,
-        };
-        assert!(adapter.has_project("auth-migration"));
-        assert!(!adapter.has_project("frontend"));
-    }
-
-    #[test]
-    fn adapter_has_project_case_insensitive() {
-        let e = make_entity_with_project("t1", "auth-migration");
-        let adapter = EntityFilterAdapter {
-            entity: &e,
-            registry: None,
-        };
-        assert!(adapter.has_project("AUTH-MIGRATION"));
-        assert!(adapter.has_project("Auth-Migration"));
-    }
-
-    #[test]
-    fn adapter_has_project_absent_field_is_false() {
-        // Entity with no `project` field set — should never match a `$project` filter.
-        let e = make_entity("t1", &[], &[], &[]);
-        let adapter = EntityFilterAdapter {
-            entity: &e,
-            registry: None,
-        };
-        assert!(!adapter.has_project("anything"));
-    }
-
-    #[test]
-    fn adapter_has_project_with_filter_expr() {
-        let e = make_entity_with_project("t1", "auth");
-        let adapter = EntityFilterAdapter {
-            entity: &e,
-            registry: None,
-        };
-
-        let expr = swissarmyhammer_filter_expr::parse("$auth").unwrap();
-        assert!(expr.matches(&adapter));
-
-        let expr = swissarmyhammer_filter_expr::parse("$frontend").unwrap();
-        assert!(!expr.matches(&adapter));
-
-        let expr = swissarmyhammer_filter_expr::parse("$AUTH").unwrap();
-        assert!(expr.matches(&adapter));
+    fn list_entities_filter_path_delegates_to_kanban_crate() {
+        // Two tasks, one tagged `#bug`. The shared `retain_filtered_tasks`
+        // must keep only the bug-tagged entity.
+        let mut entities = vec![
+            make_entity("t1", &["bug", "READY"], &["will"], &[]),
+            make_entity("t2", &["feature"], &["alice"], &[]),
+        ];
+        let registry = EntitySlugRegistry::empty();
+        retain_filtered_tasks(&mut entities, "#bug", &registry).unwrap();
+        assert_eq!(entities.len(), 1);
+        assert_eq!(entities[0].id.as_ref(), "t1");
     }
 
     // ── filter_mention_candidates tests ────────────────────────────
@@ -2373,6 +2662,62 @@ mod tests {
         );
     }
 
+    // ── match_dynamic_prefix tests ────────────────────────────────
+
+    use super::match_dynamic_prefix;
+
+    #[test]
+    fn match_dynamic_prefix_rewrites_entity_add_to_canonical_command() {
+        // `entity.add:task` rewrites to canonical `entity.add` with the
+        // type moved into the arg bag under `entity_type`. The dispatcher
+        // then routes to the generic `AddEntityCmd`.
+        let (new_cmd, arg_key, arg_val, updates_bp) =
+            match_dynamic_prefix("entity.add:task").unwrap().unwrap();
+        assert_eq!(new_cmd, "entity.add");
+        assert_eq!(arg_key, "entity_type");
+        assert_eq!(arg_val, "task");
+        assert!(!updates_bp);
+    }
+
+    #[test]
+    fn match_dynamic_prefix_entity_add_requires_type_suffix() {
+        // An empty suffix is a malformed command — reject it rather than
+        // dispatch to `entity.add` with `entity_type: ""` which would
+        // then fail availability checks.
+        assert!(match_dynamic_prefix("entity.add:").is_err());
+    }
+
+    #[test]
+    fn match_dynamic_prefix_passes_through_non_prefix_commands() {
+        // Non-prefix commands (like `entity.add` without a suffix) are
+        // NOT rewritten — the rewriter returns Ok(None) so the dispatcher
+        // can fall through to the registry.
+        assert!(match_dynamic_prefix("entity.add").unwrap().is_none());
+        assert!(match_dynamic_prefix("task.add").unwrap().is_none());
+    }
+
+    /// Regression guard for 01KPZMXXEXKVE3RNPA4XJP0105: the palette emits
+    /// `view.set` / `perspective.switch` directly with pre-filled `args` —
+    /// there is no longer a `view.switch:*` or `perspective.goto:*` rewrite
+    /// branch. If an input string still carries one of the legacy prefixes
+    /// it must fall through to `Ok(None)` so the dispatcher surfaces it as
+    /// an unknown command rather than silently translating it.
+    #[test]
+    fn match_dynamic_prefix_no_longer_rewrites_view_switch_or_perspective_goto() {
+        assert!(
+            match_dynamic_prefix("view.switch:board-view")
+                .unwrap()
+                .is_none(),
+            "view.switch:* rewrite was retired in 01KPZMXXEXKVE3RNPA4XJP0105"
+        );
+        assert!(
+            match_dynamic_prefix("perspective.goto:sprint-01")
+                .unwrap()
+                .is_none(),
+            "perspective.goto:* rewrite was retired in 01KPZMXXEXKVE3RNPA4XJP0105"
+        );
+    }
+
     #[test]
     fn filter_mention_candidates_tag_id_and_display_name_match() {
         // Tags are the control case: id == tag_name, so the emitted row
@@ -2386,6 +2731,343 @@ mod tests {
         assert_eq!(
             row.get("display_name").and_then(|v| v.as_str()),
             Some("bug")
+        );
+    }
+
+    // ── ui_state_change_kind tests ─────────────────────────────────
+    //
+    // These guard the wire-format contract for `ui-state-changed` events:
+    // every payload carries a `kind` discriminator so the frontend can skip
+    // `setState` for slices it owns (notably `scope_chain`, which echoes
+    // back from every `ui.setFocus` call and would otherwise cascade
+    // re-renders through every `useUIState()` consumer).
+
+    use super::ui_state_change_kind;
+    use swissarmyhammer_commands::UIStateChange;
+
+    #[test]
+    fn ui_state_change_kind_scope_chain() {
+        let value = serde_json::to_value(UIStateChange::ScopeChain(vec!["board:main".to_string()]))
+            .unwrap();
+        assert_eq!(ui_state_change_kind(&value), Some("scope_chain"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_palette_open() {
+        let value = serde_json::to_value(UIStateChange::PaletteOpen(true)).unwrap();
+        assert_eq!(ui_state_change_kind(&value), Some("palette_open"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_keymap_mode() {
+        let value = serde_json::to_value(UIStateChange::KeymapMode("vim".into())).unwrap();
+        assert_eq!(ui_state_change_kind(&value), Some("keymap_mode"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_inspector_stack() {
+        let value =
+            serde_json::to_value(UIStateChange::InspectorStack(vec!["task:1".into()])).unwrap();
+        assert_eq!(ui_state_change_kind(&value), Some("inspector_stack"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_active_view() {
+        let value = serde_json::to_value(UIStateChange::ActiveView("board".into())).unwrap();
+        assert_eq!(ui_state_change_kind(&value), Some("active_view"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_active_perspective() {
+        let value =
+            serde_json::to_value(UIStateChange::ActivePerspective("sprint-01".into())).unwrap();
+        assert_eq!(ui_state_change_kind(&value), Some("active_perspective"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_app_mode() {
+        let value = serde_json::to_value(UIStateChange::AppMode("normal".into())).unwrap();
+        assert_eq!(ui_state_change_kind(&value), Some("app_mode"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_inspector_width() {
+        // Pinned for the resizable-inspector pipeline. The frontend
+        // listens for `inspector_width` events to learn the persisted
+        // width set in another window or session.
+        let value = serde_json::to_value(UIStateChange::InspectorWidth {
+            window_label: "main".into(),
+            width: 540,
+        })
+        .unwrap();
+        assert_eq!(ui_state_change_kind(&value), Some("inspector_width"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_perspective_switch() {
+        // Pinned for the `perspective.switch` command introduced in
+        // 01KP3ERHEDP86C2JYYR7NM1593. The atomic id + filtered_task_ids
+        // update must serialize to the `perspective_switch` wire kind so
+        // the frontend can apply its own debounce/skip policy
+        // independently of the legacy `active_perspective` id-only kind.
+        let value = serde_json::to_value(UIStateChange::PerspectiveSwitch {
+            perspective_id: "p1".into(),
+            filtered_task_ids: vec!["t1".into(), "t2".into()],
+        })
+        .unwrap();
+        assert_eq!(ui_state_change_kind(&value), Some("perspective_switch"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_board_switch() {
+        // BoardSwitch is not typed as a UIStateChange — it's a side-effect
+        // result shape. Detected by the presence of the `BoardSwitch` key.
+        let value = serde_json::json!({
+            "BoardSwitch": {
+                "path": "/boards/my-board",
+                "window_label": "main",
+            }
+        });
+        assert_eq!(ui_state_change_kind(&value), Some("board_switch"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_board_close() {
+        // Same shape as BoardSwitch — detected by the `BoardClose` key.
+        let value = serde_json::json!({
+            "BoardClose": {
+                "path": "/boards/my-board",
+            }
+        });
+        assert_eq!(ui_state_change_kind(&value), Some("board_close"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_unrelated_result_is_none() {
+        // Results that are neither a UIStateChange nor a board side-effect
+        // must NOT trigger a ui-state-changed emit. Null, plain strings,
+        // and arbitrary objects all fall through to None.
+        assert_eq!(ui_state_change_kind(&serde_json::Value::Null), None);
+        assert_eq!(ui_state_change_kind(&serde_json::json!("ok")), None);
+        assert_eq!(
+            ui_state_change_kind(&serde_json::json!({ "some_other_key": 1 })),
+            None
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Spatial-navigation command tests.
+//
+// These exercise the inner functions extracted from each `#[tauri::command]`
+// shell. We can't construct a `tauri::Window` or `State<'_, AppState>` in a
+// unit test without a Tauri runtime — so the inner helpers operate directly
+// on `&mut SpatialRegistry, &mut SpatialState`, which is exactly the
+// signature these tests want.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod spatial_command_tests {
+    use super::*;
+    use std::collections::HashMap;
+    use swissarmyhammer_focus::{Pixels, SnapshotScope};
+
+    fn rect_at(x: f64, y: f64, w: f64, h: f64) -> Rect {
+        Rect {
+            x: Pixels::new(x),
+            y: Pixels::new(y),
+            width: Pixels::new(w),
+            height: Pixels::new(h),
+        }
+    }
+
+    /// Push a window-root layer into `registry`, returning the layer FQM
+    /// for use as `snapshot.layer_fq`.
+    fn push_root_layer(
+        registry: &mut SpatialRegistry,
+        window: &str,
+        layer_segment: &str,
+    ) -> FullyQualifiedMoniker {
+        let segment = SegmentMoniker::from_string(layer_segment);
+        let fq = FullyQualifiedMoniker::root(&segment);
+        spatial_push_layer_inner(
+            registry,
+            fq.clone(),
+            segment,
+            LayerName::from_string("window"),
+            None,
+            WindowLabel::from_string(window),
+        );
+        fq
+    }
+
+    /// Build a snapshot scope at the composed FQM `<layer_fq>/<segment>`
+    /// with the given rect.
+    fn snapshot_leaf(
+        layer_fq: &FullyQualifiedMoniker,
+        segment_str: &str,
+        rect: Rect,
+    ) -> (FullyQualifiedMoniker, SnapshotScope) {
+        let segment = SegmentMoniker::from_string(segment_str);
+        let fq = FullyQualifiedMoniker::compose(layer_fq, &segment);
+        (
+            fq.clone(),
+            SnapshotScope {
+                fq,
+                rect,
+                parent_zone: None,
+                nav_override: HashMap::new(),
+            },
+        )
+    }
+
+    /// `spatial_focus` invokes the snapshot-driven focus path and the
+    /// kernel returns a `FocusChangedEvent` carrying the focused window,
+    /// FQM, and segment.
+    #[test]
+    fn spatial_focus_emits_focus_changed_event() {
+        let mut registry = SpatialRegistry::new();
+        let mut state = SpatialState::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+        let (fq, scope) = snapshot_leaf(&layer, "task:01", rect_at(0.0, 0.0, 10.0, 10.0));
+        let snapshot = NavSnapshot {
+            layer_fq: layer,
+            scopes: vec![scope],
+        };
+
+        let event = state
+            .focus(&mut registry, &snapshot, fq.clone())
+            .expect("focus emits an event for a snapshot scope");
+
+        assert_eq!(event.window_label, WindowLabel::from_string("main"));
+        assert_eq!(event.prev_fq, None);
+        assert_eq!(event.next_fq, Some(fq));
+        assert_eq!(
+            event.next_segment,
+            Some(SegmentMoniker::from_string("task:01"))
+        );
+    }
+
+    /// `spatial_navigate` lands on the snapshot-determined target and
+    /// emits the matching `FocusChangedEvent`.
+    #[test]
+    fn spatial_navigate_with_snapshot_resolves_target() {
+        let mut registry = SpatialRegistry::new();
+        let mut state = SpatialState::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+
+        let (top, top_scope) = snapshot_leaf(&layer, "task:top", rect_at(0.0, 0.0, 10.0, 10.0));
+        let (bottom, bottom_scope) =
+            snapshot_leaf(&layer, "task:bottom", rect_at(0.0, 20.0, 10.0, 10.0));
+
+        let snapshot = NavSnapshot {
+            layer_fq: layer,
+            scopes: vec![top_scope, bottom_scope],
+        };
+
+        state
+            .focus(&mut registry, &snapshot, top.clone())
+            .expect("focus top");
+
+        let event = state
+            .navigate(&mut registry, &snapshot, top, Direction::Down)
+            .expect("Down resolves to bottom");
+
+        assert_eq!(event.next_fq, Some(bottom));
+    }
+
+    /// `spatial_push_layer_inner` derives `window_label` from the calling
+    /// command and stores the layer under that label so `root_for_window`
+    /// can find it.
+    #[test]
+    fn spatial_push_layer_associates_window_label() {
+        let mut registry = SpatialRegistry::new();
+        let segment = SegmentMoniker::from_string("L1");
+        let fq = FullyQualifiedMoniker::root(&segment);
+        spatial_push_layer_inner(
+            &mut registry,
+            fq.clone(),
+            segment,
+            LayerName::from_string("window"),
+            None,
+            WindowLabel::from_string("board-abc"),
+        );
+
+        let root = registry
+            .root_for_window(&WindowLabel::from_string("board-abc"))
+            .expect("root layer registered for the window");
+        assert_eq!(root.fq, fq);
+        assert_eq!(root.window_label, WindowLabel::from_string("board-abc"));
+    }
+
+    /// `spatial_pop_layer` removes the layer from the registry.
+    #[test]
+    fn spatial_pop_layer_removes_layer() {
+        let mut registry = SpatialRegistry::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+        assert!(registry.layer(&layer).is_some());
+
+        registry.remove_layer(&layer);
+        assert!(registry.layer(&layer).is_none());
+    }
+
+    /// When `fq` is missing from `snapshot.scopes`, `focus` drops the
+    /// commit and returns `None`.
+    #[test]
+    fn focus_drops_when_fq_missing_from_snapshot() {
+        let mut registry = SpatialRegistry::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+        let leaf = FullyQualifiedMoniker::compose(&layer, &SegmentMoniker::from_string("leaf:01"));
+
+        let empty_snapshot = NavSnapshot {
+            layer_fq: layer,
+            scopes: vec![],
+        };
+
+        let mut state = SpatialState::new();
+        let event = state.focus(&mut registry, &empty_snapshot, leaf);
+        assert!(
+            event.is_none(),
+            "focus must drop when target is absent from snapshot"
+        );
+    }
+
+    /// `focus` populates `last_focused_by_fq` for every ancestor in the
+    /// snapshot's `parent_zone` chain.
+    #[test]
+    fn focus_records_last_focused_for_ancestor_zones() {
+        let mut registry = SpatialRegistry::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+        let zone = FullyQualifiedMoniker::compose(&layer, &SegmentMoniker::from_string("zone:01"));
+        let leaf = FullyQualifiedMoniker::compose(&zone, &SegmentMoniker::from_string("leaf:01"));
+
+        let snapshot = NavSnapshot {
+            layer_fq: layer,
+            scopes: vec![
+                SnapshotScope {
+                    fq: zone.clone(),
+                    rect: rect_at(0.0, 0.0, 100.0, 100.0),
+                    parent_zone: None,
+                    nav_override: HashMap::new(),
+                },
+                SnapshotScope {
+                    fq: leaf.clone(),
+                    rect: rect_at(10.0, 10.0, 10.0, 10.0),
+                    parent_zone: Some(zone.clone()),
+                    nav_override: HashMap::new(),
+                },
+            ],
+        };
+
+        let mut state = SpatialState::new();
+        state
+            .focus(&mut registry, &snapshot, leaf.clone())
+            .expect("focus emits");
+
+        assert_eq!(
+            registry.last_focused_by_fq.get(&zone),
+            Some(&leaf),
+            "ancestor zone records the focused descendant",
         );
     }
 }

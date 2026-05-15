@@ -1,0 +1,3 @@
+color: e36209
+description: Clean rebuild of the stateless focus mechanism + all motion correctness fixes. Replaces the abandoned stateless-nav redesign which got tangled in hybrid intermediate states.
+tag_name: stateless-rebuild

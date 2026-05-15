@@ -1,3 +1,4 @@
 id: 01KPE34WR8CHA2NSAJ7GEG5RJZ
-name: Untitled
+name: Test Failure
 view: board
+filter: '#test-failure'

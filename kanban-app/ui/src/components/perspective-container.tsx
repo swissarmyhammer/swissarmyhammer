@@ -6,8 +6,14 @@
  * - `groupField` — the perspective's group-by field name (if any)
  * - `activePerspective` — the full active PerspectiveDef
  *
- * Filter evaluation is handled server-side by `list_entities` — the frontend
- * no longer applies filters client-side.
+ * Filter evaluation runs entirely server-side as part of the
+ * `perspective.switch` command (see 01KP3ERHEDP86C2JYYR7NM1593): the
+ * backend writes the matching task ids into `UIState.filtered_task_ids`
+ * atomically with the new `active_perspective_id`, and the views
+ * (`view-container.tsx`) intersect that id list with the canonical task
+ * list. The frontend no longer fetches via `list_entities(filter=...)`
+ * on perspective change — the active perspective's filter is already
+ * baked into the UIState snapshot the view consumes.
  *
  * Owns a CommandScopeProvider with moniker `perspective:{activePerspectiveId}`.
  *
@@ -23,14 +29,16 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
   useMemo,
   type ReactNode,
 } from "react";
 import { usePerspectives } from "@/lib/perspective-context";
 import { evaluateSort } from "@/lib/perspective-eval";
-import { CommandScopeProvider, useActiveBoardPath } from "@/lib/command-scope";
-import { useRefreshEntities } from "@/components/rust-engine-container";
+import { CommandScopeProvider } from "@/lib/command-scope";
+import { FocusScope } from "@/components/focus-scope";
+import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
+import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
+import { asSegment } from "@/types/spatial";
 import type { Entity, PerspectiveDef } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
@@ -86,23 +94,20 @@ interface PerspectiveContainerProps {
  */
 export function PerspectiveContainer({ children }: PerspectiveContainerProps) {
   const { activePerspective } = usePerspectives();
-  const boardPath = useActiveBoardPath();
-  const refreshEntities = useRefreshEntities();
 
   const perspectiveId = activePerspective?.id ?? "default";
-  const activeFilter = activePerspective?.filter;
   const scopeMoniker = useMemo(
     () => `perspective:${perspectiveId}`,
     [perspectiveId],
   );
 
-  // Re-fetch tasks when the active perspective's filter changes.
-  // Fires on mount (if a filtered perspective is active) and whenever the
-  // filter value changes (typing, switching perspectives, clearing).
-  useEffect(() => {
-    if (!boardPath) return;
-    refreshEntities(boardPath, activeFilter).catch(console.error);
-  }, [activeFilter, boardPath, refreshEntities]);
+  // Filter evaluation is server-side: `perspective.switch` pre-computes the
+  // matching task ids into `UIState.filtered_task_ids` and the view layer
+  // (see `view-container.tsx`) intersects that list with the canonical
+  // tasks. No `refreshEntities` roundtrip is needed when the perspective
+  // (or its filter) changes — the UIState snapshot already carries the
+  // result. See 01KP3ERHEDP86C2JYYR7NM1593 for the migration that retired
+  // the prior frontend-side `useEffect` filter-fetch.
 
   const sortEntries = activePerspective?.sort;
   const groupField = activePerspective?.group;
@@ -122,10 +127,51 @@ export function PerspectiveContainer({ children }: PerspectiveContainerProps) {
   );
 
   return (
-    <CommandScopeProvider commands={[]} moniker={scopeMoniker}>
+    <CommandScopeProvider moniker={scopeMoniker}>
       <ActivePerspectiveContext.Provider value={value}>
-        {children}
+        <PerspectiveSpatialZone>{children}</PerspectiveSpatialZone>
       </ActivePerspectiveContext.Provider>
     </CommandScopeProvider>
+  );
+}
+
+/**
+ * Wrap the active perspective body in a `<FocusZone moniker={asSegment("ui:perspective")}>`
+ * when the surrounding tree mounts the spatial-nav stack.
+ *
+ * `<FocusZone>` enforces a strict contract — it throws when no `<FocusLayer>`
+ * ancestor is present. That contract is correct for the production tree
+ * (`App.tsx` always mounts the providers) but would force every
+ * `PerspectiveContainer` unit test that doesn't care about spatial nav to
+ * set up the providers. Conditionally rendering the zone when both context
+ * lookups succeed keeps the strict contract intact for direct
+ * `<FocusZone>` usage while letting the existing test suite keep its narrow
+ * provider tree.
+ *
+ * The zone preserves the `flex flex-col flex-1 min-h-0 min-w-0` chain so the
+ * nested view body (BoardView / GridView and its own viewport-sized
+ * `ui:board` / `ui:grid` chrome zone) can keep filling the available space
+ * when the spatial-nav stack is present.
+ */
+function PerspectiveSpatialZone({ children }: { children: ReactNode }) {
+  const layerKey = useOptionalEnclosingLayerFq();
+  const actions = useOptionalSpatialFocusActions();
+  if (!layerKey || !actions) {
+    return <>{children}</>;
+  }
+  return (
+    <FocusScope
+      moniker={asSegment("ui:perspective")}
+      // Viewport-sized chrome zone — a visible focus bar around the entire
+      // perspective body would frame the whole window and add no signal.
+      // The zone exists so the navigator can drill *into* it from the bar
+      // and remember a last-focused inner leaf; the leaves it contains
+      // (board columns, grid cells, etc.) render their own indicator.
+      // showFocus=false: viewport-sized chrome; inner board / grid leaves own focus.
+      showFocus={false}
+      className="flex flex-col flex-1 min-h-0 min-w-0"
+    >
+      {children}
+    </FocusScope>
   );
 }

@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNS10MMDVZG731XKM390C682
 position_column: done
-position_ordinal: ffffffffffffffffffffffc780
+position_ordinal: ffffffffffffffffffffffffffffffb080
 project: kanban-mcp
 title: 'kanban-cli: add commands/skill.rs for explicit skill deployment'
 ---

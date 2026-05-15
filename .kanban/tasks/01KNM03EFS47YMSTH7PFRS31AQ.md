@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNKZYSYT8W352AP4KZFYVH1G
 position_column: done
-position_ordinal: ffffffffffffffffffffff9580
+position_ordinal: ffffffffffffffffffffffffffffcc80
 title: Add `perspective.goto` command for switching to a perspective by ID
 ---
 ## What

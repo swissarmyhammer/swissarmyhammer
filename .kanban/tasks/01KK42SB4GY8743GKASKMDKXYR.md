@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffffd380
+position_ordinal: ffffda80
 title: 'Shared editor components: deduplicate grid CellEditor and inspector FieldDispatch edit paths'
 ---
 The problem: The grid view's CellEditor dispatches on `field.type.kind` (should use `field.editor`). The inspector's FieldDispatch inlines its own editors. Neither shares editor components with the other.

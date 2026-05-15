@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffd080
+position_ordinal: ffffffffffffffffffffffffffffffc180
 title: 'entity-cache 3/4: EntityWatcher absorbs attachment watching; new EntityEvent::AttachmentChanged variant'
 ---
 #entity-cache

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffa580
+position_ordinal: ffffffffffffffffff8a80
 title: 'Bug: keymap commands hidden from command palette by visible: false'
 ---
 ## What

@@ -2,7 +2,7 @@
 depends_on:
 - 01KKH7RYD7CCTBN48W76ZF1E2M
 position_column: done
-position_ordinal: ffbf80
+position_ordinal: ffc680
 title: 'fix: stop silently swallowing mark_ts_indexed errors'
 ---
 In `swissarmyhammer-code-context/src/indexing.rs` (line 127), `let _ = mark_ts_indexed(&db, &file_path);` silently discards errors. When `mark_ts_indexed` fails due to `SQLITE_BUSY`, the file stays dirty forever with no log output.

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffe280
+position_ordinal: ffffffffffffffffffffffffb780
 title: 'Integration test: Stop validator prompt contains changed files and diff blocks'
 ---
 ## What

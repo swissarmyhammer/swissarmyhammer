@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffee80
+position_ordinal: ffffffffffffffffffffffffd880
 title: Remove command-safety builtin validator and associated tests
 ---
 ## What

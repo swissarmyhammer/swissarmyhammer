@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffffffff980
+position_ordinal: ffffffffffffffffffffffffed80
 title: 'Coverage: parse_code_actions + parse_workspace_edit in ops/get_code_actions.rs'
 ---
 crates/code-context/src/ops/get_code_actions.rs

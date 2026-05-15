@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffc980
+position_ordinal: fffffffffffffffffffffffa80
 title: 'Refactor view/perspective into container hierarchy: ViewContainer > PerspectiveScope > PerspectiveTabBar + ViewDisplay'
 ---
 ## What

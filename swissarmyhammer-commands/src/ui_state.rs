@@ -7,26 +7,145 @@ use serde::{Deserialize, Serialize};
 /// Maximum number of entries to keep in the MRU recent boards list.
 const MAX_RECENT_BOARDS: usize = 20;
 
+/// Where a drag originates from.
+///
+/// A drag's source is either an entity in the app's focus chain (the
+/// typical drag-from-card case) or an external file dragged in from the
+/// host operating system.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DragSource {
+    /// Source is an entity from the app's focus chain.
+    FocusChain {
+        /// The entity type being dragged (e.g. `"task"`, `"tag"`).
+        entity_type: String,
+        /// The entity ID (ULID).
+        entity_id: String,
+        /// Serialized entity field snapshot for ghost preview in target
+        /// windows.
+        fields: serde_json::Value,
+        /// Filesystem path of the board the source entity belongs to.
+        source_board_path: String,
+        /// Tauri window label of the source window.
+        source_window_label: String,
+    },
+    /// Source is an external file dragged in from the OS.
+    ///
+    /// Emitted by the frontend's `startFileSession` hook when the user
+    /// drops a file from the desktop onto the app. `DragCompleteCmd`
+    /// dispatches this variant through the `PasteMatrix` keyed on
+    /// `(attachment, <target_type>)` — typically `attachment_onto_task`
+    /// for file-onto-task drops — treating the external file as if it
+    /// were on the clipboard.
+    File {
+        /// Absolute path of the dragged file on the host filesystem.
+        path: String,
+    },
+}
+
+/// Where a drag is dropped.
+///
+/// A drag's destination is either an entity in the app's focus chain
+/// (drop-on-target) or an external file path (drag-out-to-desktop). The
+/// destination is not stored on the [`DragSession`] — it is computed
+/// from the drop-time arguments passed to `drag.complete`. The enum
+/// exists so the dispatcher can reason about the same set of targets a
+/// paste would handle.
+///
+/// Reserved for the broader from/to drag model; only `FocusChain` is
+/// produced today.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DragDestination {
+    /// Drop target is an entity in the focus chain.
+    FocusChain {
+        /// The destination entity type (e.g. `"column"`, `"task"`).
+        entity_type: String,
+        /// The destination entity ID.
+        entity_id: String,
+        /// Filesystem path of the destination board.
+        target_board_path: String,
+    },
+    /// Drop target is an external file path on the OS.
+    File {
+        /// Absolute destination path on the host filesystem.
+        path: String,
+    },
+}
+
 /// Active drag session for cross-window drag coordination.
 ///
 /// Transient — carried in UIState but never persisted to the YAML config.
+///
+/// The session captures only the drag's *source*: the destination is
+/// computed at drop time from the args passed to `drag.complete`. This
+/// mirrors the way the OS drag-and-drop primitives work (the source is
+/// committed when the drag starts; the target is whatever the cursor is
+/// over when the user releases the mouse).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DragSession {
     /// Unique session ID (ULID).
     pub session_id: String,
-    /// Board path the task originates from.
-    pub source_board_path: String,
-    /// Tauri window label of the source window.
-    pub source_window_label: String,
-    /// The task ID being dragged.
-    pub task_id: String,
-    /// Serialized task fields for ghost preview in target windows.
-    pub task_fields: serde_json::Value,
+    /// Where the drag originated from.
+    pub from: DragSource,
     /// Whether Alt/Option was held (copy mode).
     pub copy_mode: bool,
     /// When the session was started (epoch millis).
     #[serde(default)]
     pub started_at_ms: u64,
+}
+
+impl DragSession {
+    /// Convenience accessor for the source board path when the drag is
+    /// from a focus-chain entity. Returns `None` for `File` sources.
+    pub fn source_board_path(&self) -> Option<&str> {
+        match &self.from {
+            DragSource::FocusChain {
+                source_board_path, ..
+            } => Some(source_board_path.as_str()),
+            DragSource::File { .. } => None,
+        }
+    }
+
+    /// Convenience accessor for the source window label when the drag is
+    /// from a focus-chain entity. Returns `None` for `File` sources.
+    pub fn source_window_label(&self) -> Option<&str> {
+        match &self.from {
+            DragSource::FocusChain {
+                source_window_label,
+                ..
+            } => Some(source_window_label.as_str()),
+            DragSource::File { .. } => None,
+        }
+    }
+
+    /// Convenience accessor for the source entity id when the drag is
+    /// from a focus-chain entity. Returns `None` for `File` sources.
+    pub fn entity_id(&self) -> Option<&str> {
+        match &self.from {
+            DragSource::FocusChain { entity_id, .. } => Some(entity_id.as_str()),
+            DragSource::File { .. } => None,
+        }
+    }
+
+    /// Convenience accessor for the source entity type when the drag is
+    /// from a focus-chain entity. Returns `None` for `File` sources.
+    pub fn entity_type(&self) -> Option<&str> {
+        match &self.from {
+            DragSource::FocusChain { entity_type, .. } => Some(entity_type.as_str()),
+            DragSource::File { .. } => None,
+        }
+    }
+
+    /// Convenience accessor for the source entity field snapshot when
+    /// the drag is from a focus-chain entity. Returns `None` for `File`
+    /// sources.
+    pub fn fields(&self) -> Option<&serde_json::Value> {
+        match &self.from {
+            DragSource::FocusChain { fields, .. } => Some(fields),
+            DragSource::File { .. } => None,
+        }
+    }
 }
 
 /// Persisted per-window state: board path, inspector stack, active view, and window geometry.
@@ -45,6 +164,15 @@ pub struct WindowState {
     pub active_view_id: String,
     /// The active perspective ID for this window. Empty string means no perspective selected.
     pub active_perspective_id: String,
+    /// IDs of tasks visible under the active perspective's filter.
+    ///
+    /// Written atomically with `active_perspective_id` by
+    /// [`UIState::switch_perspective`] so the frontend sees both fields land
+    /// in a single `ui-state-changed` event. Transient — not persisted: a
+    /// fresh window restart will repopulate this on the next perspective
+    /// switch.
+    #[serde(skip)]
+    pub filtered_task_ids: Vec<String>,
     /// Whether the command palette is open in this window. Transient — not persisted.
     #[serde(skip)]
     pub palette_open: bool,
@@ -64,6 +192,13 @@ pub struct WindowState {
     pub height: Option<u32>,
     /// Whether the window is maximized.
     pub maximized: bool,
+    /// User-chosen width of inspector panels in this window (CSS pixels).
+    ///
+    /// `None` falls back to the React default (420 px). Persisted so the
+    /// chosen width survives window restarts. A single value applies to
+    /// every panel in the stack — adjacent inspectors share the same
+    /// width so the right-edge tile offsets stay aligned.
+    pub inspector_width: Option<u32>,
 }
 
 impl Default for WindowState {
@@ -73,6 +208,7 @@ impl Default for WindowState {
             inspector_stack: Vec::new(),
             active_view_id: String::new(),
             active_perspective_id: String::new(),
+            filtered_task_ids: Vec::new(),
             palette_open: false,
             palette_mode: "command".to_string(),
             app_mode: "normal".to_string(),
@@ -81,6 +217,7 @@ impl Default for WindowState {
             width: None,
             height: None,
             maximized: false,
+            inspector_width: None,
         }
     }
 }
@@ -119,6 +256,32 @@ pub enum UIStateChange {
     ScopeChain(Vec<String>),
     /// The application interaction mode changed (e.g. "normal", "command", "search").
     AppMode(String),
+    /// The user-chosen inspector panel width changed for a specific window.
+    ///
+    /// Carries the window label so the React side can ignore echoes for
+    /// other windows, and the new width in CSS pixels.
+    InspectorWidth {
+        /// The window whose inspector_width changed.
+        window_label: String,
+        /// The new width in CSS pixels.
+        width: u32,
+    },
+    /// The active perspective and its filtered task id list changed in one
+    /// atomic update.
+    ///
+    /// Emitted by [`UIState::switch_perspective`] so the frontend sees both
+    /// fields land in a single `ui-state-changed` event. Replaces the
+    /// previous pair of (`ActivePerspective` + frontend-side filter fetch)
+    /// roundtrips — backend now owns the filter evaluation and pushes the
+    /// resulting id list to the window's `filtered_task_ids`.
+    PerspectiveSwitch {
+        /// The new active perspective id for the window.
+        perspective_id: String,
+        /// IDs of tasks that match the new perspective's filter.
+        ///
+        /// Empty when the perspective has no filter or no tasks match.
+        filtered_task_ids: Vec<String>,
+    },
 }
 
 /// Pure state machine for UI state: inspector stack, active view, palette, keymap.
@@ -383,6 +546,43 @@ impl UIState {
             }
             ws.active_perspective_id = id.to_string();
             Some(UIStateChange::ActivePerspective(id.to_string()))
+        };
+        self.try_save();
+        change
+    }
+
+    /// Atomically set both the active perspective id and the filtered task
+    /// id list for a specific window.
+    ///
+    /// Emits a single [`UIStateChange::PerspectiveSwitch`] event so the
+    /// frontend sees both fields land in one `ui-state-changed` payload —
+    /// no transitional render shows the new perspective with the old
+    /// filtered list (or vice versa). When neither field is actually
+    /// changing, returns `None` and skips the save / event.
+    ///
+    /// `filtered_task_ids` is transient (`#[serde(skip)]`) so this method
+    /// does not auto-save when only the id list changes. The perspective
+    /// id mutation is still persisted via [`Self::try_save`].
+    pub fn switch_perspective(
+        &self,
+        window_label: &str,
+        perspective_id: &str,
+        filtered_task_ids: Vec<String>,
+    ) -> Option<UIStateChange> {
+        let change = {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            let ws = inner.windows.entry(window_label.to_string()).or_default();
+            let id_changed = ws.active_perspective_id != perspective_id;
+            let ids_changed = ws.filtered_task_ids != filtered_task_ids;
+            if !id_changed && !ids_changed {
+                return None;
+            }
+            ws.active_perspective_id = perspective_id.to_string();
+            ws.filtered_task_ids = filtered_task_ids.clone();
+            Some(UIStateChange::PerspectiveSwitch {
+                perspective_id: perspective_id.to_string(),
+                filtered_task_ids,
+            })
         };
         self.try_save();
         change
@@ -701,6 +901,42 @@ impl UIState {
             .unwrap_or_default()
     }
 
+    /// Set the user-chosen inspector panel width for a specific window.
+    ///
+    /// Returns `Some(InspectorWidth)` describing the change, or `None`
+    /// when the new width matches the existing value (so the bridge can
+    /// skip a redundant `ui-state-changed` emit). Auto-saves if a config
+    /// path is configured.
+    pub fn set_inspector_width(&self, window_label: &str, width: u32) -> Option<UIStateChange> {
+        let change = {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            let ws = inner.windows.entry(window_label.to_string()).or_default();
+            if ws.inspector_width == Some(width) {
+                return None;
+            }
+            ws.inspector_width = Some(width);
+            UIStateChange::InspectorWidth {
+                window_label: window_label.to_string(),
+                width,
+            }
+        };
+        self.try_save();
+        Some(change)
+    }
+
+    /// Get the user-chosen inspector panel width for a specific window.
+    ///
+    /// Returns `None` when no width has been set for the window — the
+    /// React side falls back to a default (currently 420 px).
+    pub fn inspector_width(&self, window_label: &str) -> Option<u32> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .windows
+            .get(window_label)
+            .and_then(|ws| ws.inspector_width)
+    }
+
     /// Save window geometry for a specific window.
     ///
     /// Auto-saves if a config path is configured. Use this for deliberate
@@ -799,6 +1035,21 @@ impl UIState {
             .windows
             .get(window_label)
             .map(|ws| ws.active_perspective_id.clone())
+            .unwrap_or_default()
+    }
+
+    /// Get the filtered task id list for a specific window.
+    ///
+    /// Populated by [`Self::switch_perspective`]. Returns an empty vec when
+    /// the window has not switched perspective yet (or after a restart —
+    /// the field is transient).
+    pub fn filtered_task_ids(&self, window_label: &str) -> Vec<String> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .windows
+            .get(window_label)
+            .map(|ws| ws.filtered_task_ids.clone())
             .unwrap_or_default()
     }
 
@@ -957,6 +1208,10 @@ impl UIState {
                         serde_json::json!(ws.palette_mode),
                     );
                     map.insert("app_mode".to_string(), serde_json::json!(ws.app_mode));
+                    map.insert(
+                        "filtered_task_ids".to_string(),
+                        serde_json::json!(ws.filtered_task_ids),
+                    );
                 }
                 (label.clone(), obj)
             })
@@ -1221,6 +1476,60 @@ mod tests {
         assert!(state.inspector_stack("unknown-window").is_empty());
     }
 
+    #[test]
+    fn inspector_width_defaults_to_none() {
+        let state = UIState::new();
+        // Unknown windows return None — the React side falls back to 420 px.
+        assert!(state.inspector_width("unknown-window").is_none());
+        // A window with no inspector_width set also returns None.
+        state.inspect("main", "task:01XYZ");
+        assert!(state.inspector_width("main").is_none());
+    }
+
+    #[test]
+    fn set_inspector_width_round_trip() {
+        let state = UIState::new();
+        let change = state.set_inspector_width("main", 540);
+        // Mutation returns a payload describing the change.
+        match change {
+            Some(UIStateChange::InspectorWidth {
+                window_label,
+                width,
+            }) => {
+                assert_eq!(window_label, "main");
+                assert_eq!(width, 540);
+            }
+            other => panic!("Expected Some(InspectorWidth), got {other:?}"),
+        }
+        assert_eq!(state.inspector_width("main"), Some(540));
+    }
+
+    #[test]
+    fn set_inspector_width_noop_returns_none() {
+        let state = UIState::new();
+        assert!(state.set_inspector_width("main", 540).is_some());
+        // Setting the same width is a no-op — returns None so the bridge
+        // does not emit a redundant ui-state-changed event.
+        assert!(state.set_inspector_width("main", 540).is_none());
+        assert_eq!(state.inspector_width("main"), Some(540));
+    }
+
+    #[test]
+    fn set_inspector_width_persists_through_save_load() {
+        let path = temp_yaml_path("inspector_width_roundtrip");
+        let _ = fs::remove_file(&path);
+        {
+            let state = UIState::load(&path);
+            state.set_inspector_width("main", 540);
+            state.save().unwrap();
+        }
+        {
+            let state = UIState::load(&path);
+            assert_eq!(state.inspector_width("main"), Some(540));
+        }
+        let _ = fs::remove_file(&path);
+    }
+
     // --- Persistence tests ---
 
     /// Returns a unique temp file path for each test run, avoiding collisions.
@@ -1424,10 +1733,13 @@ mod tests {
     fn make_drag_session(task_id: &str, board_path: &str) -> DragSession {
         DragSession {
             session_id: format!("sess-{task_id}"),
-            source_board_path: board_path.to_string(),
-            source_window_label: "main".to_string(),
-            task_id: task_id.to_string(),
-            task_fields: serde_json::json!({}),
+            from: DragSource::FocusChain {
+                entity_type: "task".to_string(),
+                entity_id: task_id.to_string(),
+                fields: serde_json::json!({}),
+                source_board_path: board_path.to_string(),
+                source_window_label: "main".to_string(),
+            },
             copy_mode: false,
             started_at_ms: 0,
         }
@@ -1439,7 +1751,7 @@ mod tests {
         state.start_drag(make_drag_session("task-1", "/board/a"));
         let current = state.drag_session();
         assert!(current.is_some());
-        assert_eq!(current.unwrap().task_id, "task-1");
+        assert_eq!(current.unwrap().entity_id(), Some("task-1"));
     }
 
     #[test]
@@ -1449,7 +1761,7 @@ mod tests {
 
         let taken = state.take_drag();
         assert!(taken.is_some());
-        assert_eq!(taken.unwrap().task_id, "task-1");
+        assert_eq!(taken.unwrap().entity_id(), Some("task-1"));
 
         assert!(state.take_drag().is_none());
     }
@@ -1469,8 +1781,8 @@ mod tests {
         state.start_drag(make_drag_session("task-2", "/board/b"));
 
         let current = state.drag_session().unwrap();
-        assert_eq!(current.task_id, "task-2");
-        assert_eq!(current.source_board_path, "/board/b");
+        assert_eq!(current.entity_id(), Some("task-2"));
+        assert_eq!(current.source_board_path(), Some("/board/b"));
     }
 
     #[test]
@@ -2277,5 +2589,108 @@ mod tests {
         assert!(win_b["maximized"].as_bool().unwrap());
         let stack = win_b["inspector_stack"].as_array().unwrap();
         assert_eq!(stack[0].as_str(), Some("task:01Z"));
+    }
+
+    // -----------------------------------------------------------------------
+    // switch_perspective tests — atomic id + filtered_task_ids update
+    // -----------------------------------------------------------------------
+
+    /// Switching to a new perspective with a fresh filtered list must:
+    /// - update `active_perspective_id`
+    /// - update `filtered_task_ids`
+    /// - return exactly one `UIStateChange::PerspectiveSwitch` carrying both
+    #[test]
+    fn switch_perspective_sets_both_fields_atomically() {
+        let state = UIState::new();
+        let change =
+            state.switch_perspective("main", "p1", vec!["t1".to_string(), "t2".to_string()]);
+        assert!(change.is_some(), "first switch should produce a change");
+        match change.unwrap() {
+            UIStateChange::PerspectiveSwitch {
+                perspective_id,
+                filtered_task_ids,
+            } => {
+                assert_eq!(perspective_id, "p1");
+                assert_eq!(filtered_task_ids, vec!["t1", "t2"]);
+            }
+            other => panic!("expected PerspectiveSwitch, got: {other:?}"),
+        }
+        assert_eq!(state.active_perspective_id("main"), "p1");
+        assert_eq!(state.filtered_task_ids("main"), vec!["t1", "t2"]);
+    }
+
+    /// A no-op switch (same id, same filtered list) returns `None` so the
+    /// caller does not emit a redundant `ui-state-changed` event.
+    #[test]
+    fn switch_perspective_noop_returns_none() {
+        let state = UIState::new();
+        state.switch_perspective("main", "p1", vec!["t1".to_string()]);
+        let change = state.switch_perspective("main", "p1", vec!["t1".to_string()]);
+        assert!(change.is_none(), "identical switch must not emit a change",);
+    }
+
+    /// Changing only the filtered_task_ids (perspective id unchanged) still
+    /// produces a change — e.g. tasks were added under the same active
+    /// perspective and the caller is re-evaluating the filter.
+    #[test]
+    fn switch_perspective_emits_change_when_only_ids_change() {
+        let state = UIState::new();
+        state.switch_perspective("main", "p1", vec!["t1".to_string()]);
+        let change =
+            state.switch_perspective("main", "p1", vec!["t1".to_string(), "t2".to_string()]);
+        assert!(change.is_some());
+        assert_eq!(state.filtered_task_ids("main"), vec!["t1", "t2"]);
+    }
+
+    /// switch_perspective is per-window: a switch on `main` must not touch
+    /// `secondary`'s slot.
+    #[test]
+    fn switch_perspective_isolates_windows() {
+        let state = UIState::new();
+        state.switch_perspective("main", "p1", vec!["t1".to_string()]);
+        state.switch_perspective("secondary", "p2", vec!["t9".to_string()]);
+        assert_eq!(state.active_perspective_id("main"), "p1");
+        assert_eq!(state.filtered_task_ids("main"), vec!["t1"]);
+        assert_eq!(state.active_perspective_id("secondary"), "p2");
+        assert_eq!(state.filtered_task_ids("secondary"), vec!["t9"]);
+    }
+
+    /// `to_json` exposes `filtered_task_ids` on each window so the frontend
+    /// can read it without a separate fetch. The field is `#[serde(skip)]`
+    /// for YAML persistence but must be injected on the wire.
+    #[test]
+    fn switch_perspective_appears_in_to_json() {
+        let state = UIState::new();
+        state.switch_perspective("main", "p1", vec!["t1".to_string(), "t2".to_string()]);
+        let json = state.to_json();
+        let main_win = &json["windows"]["main"];
+        assert_eq!(main_win["active_perspective_id"], "p1");
+        assert_eq!(
+            main_win["filtered_task_ids"],
+            serde_json::json!(["t1", "t2"])
+        );
+    }
+
+    /// `filtered_task_ids` must be `#[serde(skip)]` — round-tripping through
+    /// the YAML persistence layer must drop the field (next launch starts
+    /// fresh and recomputes on the first perspective switch).
+    #[test]
+    fn filtered_task_ids_not_persisted() {
+        let path = temp_yaml_path("filtered_task_ids_transient");
+        let _ = fs::remove_file(&path);
+        {
+            let state = UIState::load(&path);
+            state.switch_perspective("main", "p1", vec!["t1".to_string(), "t2".to_string()]);
+            state.save().unwrap();
+        }
+        {
+            let state = UIState::load(&path);
+            assert_eq!(state.active_perspective_id("main"), "p1");
+            assert!(
+                state.filtered_task_ids("main").is_empty(),
+                "filtered_task_ids must be transient",
+            );
+        }
+        let _ = fs::remove_file(&path);
     }
 }

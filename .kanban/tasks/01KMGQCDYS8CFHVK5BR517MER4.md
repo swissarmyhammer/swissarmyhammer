@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffff8580
+position_ordinal: ffffffffffd980
 title: 'JSONL merge library: new swissarmyhammer-merge crate'
 ---
 ## What

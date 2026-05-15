@@ -53,6 +53,35 @@ pub struct ChangelogEntry {
     pub transaction_id: Option<String>,
 }
 
+impl ChangelogEntry {
+    /// Construct a new changelog entry.
+    ///
+    /// `transaction_id` defaults to `None`; callers that need transactional
+    /// grouping can set it on the returned value before passing it to
+    /// [`Changelog::append`].
+    ///
+    /// Provided primarily for external crates (the type is `#[non_exhaustive]`,
+    /// so the struct literal form is only available within this crate).
+    pub fn new(
+        id: UndoEntryId,
+        timestamp: DateTime<Utc>,
+        op: ChangeOp,
+        item_id: StoredItemId,
+        forward_patch: String,
+        reverse_patch: String,
+    ) -> Self {
+        Self {
+            id,
+            timestamp,
+            op,
+            item_id,
+            forward_patch,
+            reverse_patch,
+            transaction_id: None,
+        }
+    }
+}
+
 /// Handle for an append-only JSONL changelog file.
 ///
 /// The changelog file is created on first append. Reading a nonexistent
@@ -70,7 +99,14 @@ impl Changelog {
 
     /// Append a single entry as one JSON line to the changelog.
     ///
-    /// Uses `write_all` for atomicity of each line write.
+    /// Uses `write_all` for atomicity of each line write, then flushes
+    /// tokio's internal state machine so the bytes are committed to the
+    /// kernel before the function returns. Without the explicit flush,
+    /// `tokio::fs::File::drop` schedules close asynchronously, which can
+    /// race a subsequent synchronous `std::fs::rename` (e.g. in
+    /// `trash::archive_file`) and leave the renamed file truncated on
+    /// disk under load. Observed as a flaky `archive_writes_changelog`
+    /// failure in CI.
     pub async fn append(&self, entry: &ChangelogEntry) -> io::Result<()> {
         if let Some(parent) = self.path.parent() {
             tokio::fs::create_dir_all(parent).await?;
@@ -84,6 +120,7 @@ impl Changelog {
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         line.push('\n');
         file.write_all(line.as_bytes()).await?;
+        file.flush().await?;
         Ok(())
     }
 

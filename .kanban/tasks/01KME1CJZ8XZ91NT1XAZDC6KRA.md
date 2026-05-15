@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffff9880
+position_ordinal: ffffffffffffe680
 title: 'editor-save.test.tsx: fix multi-select Escape tests and entity coverage gaps'
 ---
 ## What

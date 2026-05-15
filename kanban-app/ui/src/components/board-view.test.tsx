@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { screen, fireEvent, waitFor } from "@testing-library/react";
+import { renderInAct } from "@/test/act-render";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -9,6 +10,9 @@ import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { BoardView } from "./board-view";
+import { FocusLayer } from "./focus-layer";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { asSegment } from "@/types/spatial";
 import type { BoardData, Entity } from "@/types/kanban";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -88,26 +92,32 @@ const tasks: Entity[] = [
   makeTask("t3", "col-doing", "a0"),
 ];
 
-function renderBoard(overrides?: { board?: BoardData; tasks?: Entity[] }) {
-  const result = render(
-    <EntityFocusProvider>
-      <SchemaProvider>
-        <EntityStoreProvider entities={{}}>
-          <TooltipProvider>
-            <ActiveBoardPathProvider value="/test/board">
-              <DragSessionProvider>
-                <BoardView
-                  board={overrides?.board ?? board}
-                  tasks={overrides?.tasks ?? tasks}
-                />
-              </DragSessionProvider>
-            </ActiveBoardPathProvider>
-          </TooltipProvider>
-        </EntityStoreProvider>
-      </SchemaProvider>
-    </EntityFocusProvider>,
+async function renderBoard(overrides?: {
+  board?: BoardData;
+  tasks?: Entity[];
+}) {
+  return await renderInAct(
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <EntityFocusProvider>
+          <SchemaProvider>
+            <EntityStoreProvider entities={{}}>
+              <TooltipProvider>
+                <ActiveBoardPathProvider value="/test/board">
+                  <DragSessionProvider>
+                    <BoardView
+                      board={overrides?.board ?? board}
+                      tasks={overrides?.tasks ?? tasks}
+                    />
+                  </DragSessionProvider>
+                </ActiveBoardPathProvider>
+              </TooltipProvider>
+            </EntityStoreProvider>
+          </SchemaProvider>
+        </EntityFocusProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
   );
-  return result;
 }
 
 describe("BoardView navigation commands", () => {
@@ -116,13 +126,13 @@ describe("BoardView navigation commands", () => {
     (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
   });
 
-  it("renders without crashing", () => {
-    const { container } = renderBoard();
+  it("renders without crashing", async () => {
+    const { container } = await renderBoard();
     expect(container).toBeTruthy();
   });
 
-  it("renders all columns", () => {
-    const { container } = renderBoard();
+  it("renders all columns", async () => {
+    const { container } = await renderBoard();
     // The board should render column views
     expect(container.textContent).toContain("Todo");
     expect(container.textContent).toContain("Doing");
@@ -130,7 +140,7 @@ describe("BoardView navigation commands", () => {
   });
 
   it("board nav commands are registered in scope", async () => {
-    const { container } = renderBoard();
+    const { container } = await renderBoard();
 
     // BoardView wraps itself in a FocusScope with moniker="board:{id}".
     // Verify the scope is rendered by checking that the board's data-moniker
@@ -153,8 +163,8 @@ describe("BoardView scrollContainer layout", () => {
     (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
   });
 
-  it("scroll container has the min-w-0 and overflow-x-auto classes", () => {
-    const { container } = renderBoard();
+  it("scroll container has the min-w-0 and overflow-x-auto classes", async () => {
+    const { container } = await renderBoard();
     // scrollContainerRef is the direct parent of the SortableContext wrapper.
     // It must have min-w-0 (so it shrinks to its flex share) plus the
     // overflow-x-auto that drives horizontal scrolling. Without min-w-0 the
@@ -169,7 +179,7 @@ describe("BoardView scrollContainer layout", () => {
     expect(scrollContainer.className).toContain("flex-1");
   });
 
-  it("scrollWidth exceeds clientWidth when the column strip is wider than the viewport", () => {
+  it("scrollWidth exceeds clientWidth when the column strip is wider than the viewport", async () => {
     // Render with many columns so the tree has multiple column children, then
     // force the scroll container wider than its parent via an inline-width
     // probe injected alongside the columns. This sidesteps the fact that
@@ -195,30 +205,34 @@ describe("BoardView scrollContainer layout", () => {
     document.body.appendChild(host);
 
     try {
-      const { container } = render(
-        <EntityFocusProvider>
-          <SchemaProvider>
-            <EntityStoreProvider entities={{}}>
-              <TooltipProvider>
-                <ActiveBoardPathProvider value="/test/wide">
-                  <DragSessionProvider>
-                    <div
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        flex: "1 1 0%",
-                        minHeight: 0,
-                        minWidth: 0,
-                      }}
-                    >
-                      <BoardView board={wideBoard} tasks={manyTasks} />
-                    </div>
-                  </DragSessionProvider>
-                </ActiveBoardPathProvider>
-              </TooltipProvider>
-            </EntityStoreProvider>
-          </SchemaProvider>
-        </EntityFocusProvider>,
+      const { container } = await renderInAct(
+        <SpatialFocusProvider>
+          <FocusLayer name={asSegment("window")}>
+            <EntityFocusProvider>
+              <SchemaProvider>
+                <EntityStoreProvider entities={{}}>
+                  <TooltipProvider>
+                    <ActiveBoardPathProvider value="/test/wide">
+                      <DragSessionProvider>
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            flex: "1 1 0%",
+                            minHeight: 0,
+                            minWidth: 0,
+                          }}
+                        >
+                          <BoardView board={wideBoard} tasks={manyTasks} />
+                        </div>
+                      </DragSessionProvider>
+                    </ActiveBoardPathProvider>
+                  </TooltipProvider>
+                </EntityStoreProvider>
+              </SchemaProvider>
+            </EntityFocusProvider>
+          </FocusLayer>
+        </SpatialFocusProvider>,
         { container: host },
       );
 
@@ -261,15 +275,15 @@ describe("BoardView add task", () => {
     (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
   });
 
-  it("shows the add-task button only on the first column", () => {
-    renderBoard();
+  it("shows the add-task button only on the first column", async () => {
+    await renderBoard();
     // Only the first column (Todo) should have the add button
     const buttons = screen.getAllByRole("button", { name: /add task/i });
     expect(buttons.length).toBe(1);
     expect(buttons[0].getAttribute("aria-label")).toMatch(/todo/i);
   });
 
-  it("shows toast error when task.add dispatch fails", async () => {
+  it("shows toast error when entity.add:task dispatch fails", async () => {
     (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string) => {
       if (cmd === "dispatch_command") {
         return Promise.reject(new Error("Column not found"));
@@ -277,7 +291,7 @@ describe("BoardView add task", () => {
       return Promise.resolve(undefined);
     });
 
-    renderBoard();
+    await renderBoard();
     const btn = screen.getByRole("button", { name: /add task/i });
     fireEvent.click(btn);
 
@@ -286,5 +300,40 @@ describe("BoardView add task", () => {
         expect.stringContaining("Column not found"),
       );
     });
+  });
+
+  it("routes the column (+) button through the unified entity.add:task command", async () => {
+    // Regression guard for the "one true creation path" refactor: the board
+    // column (+) button must NOT dispatch the legacy `task.add` — it must go
+    // through `entity.add:task` with a `column` arg, the same path the grid
+    // (+) and the palette use. This keeps creation logic in one place
+    // (AddEntity on the Rust side) across every UI entry point.
+    const invokeMock = invoke as ReturnType<typeof vi.fn>;
+    invokeMock.mockClear();
+    await renderBoard();
+
+    const btn = screen.getByRole("button", { name: /add task/i });
+    fireEvent.click(btn);
+
+    const findDispatchByCmd = (cmd: string) =>
+      invokeMock.mock.calls.find(
+        (c) =>
+          c[0] === "dispatch_command" &&
+          (c[1] as { cmd?: string } | undefined)?.cmd === cmd,
+      );
+
+    await waitFor(() => {
+      const call = findDispatchByCmd("entity.add:task");
+      expect(call).toBeTruthy();
+      const payload = call?.[1] as
+        | { cmd?: string; args?: Record<string, unknown> }
+        | undefined;
+      // The `column` override must be forwarded so the new task lands in the
+      // column the user clicked, not the default lowest-order column.
+      expect(payload?.args).toMatchObject({ column: "col-todo" });
+    });
+
+    // The legacy task.add dispatch must NOT fire from the column (+) button.
+    expect(findDispatchByCmd("task.add")).toBeUndefined();
   });
 });

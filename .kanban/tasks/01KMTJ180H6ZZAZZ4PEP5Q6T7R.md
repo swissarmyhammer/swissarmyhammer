@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMTJ0RPCMGC0TYASH3861JGZ
 position_column: done
-position_ordinal: ffffffffffffffc080
+position_ordinal: ffffffffffffffff9780
 title: Wire native Edit menu Undo/Redo to command system
 ---
 ## What

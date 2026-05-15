@@ -5,7 +5,7 @@ depends_on:
 - 01KND4JJV437GTZ7QFQ3JBM2F1
 - 01KNESGZ1B8G4JKAB1231YTM9J
 position_column: done
-position_ordinal: ffffffffffffffffda80
+position_ordinal: ffffffffffffffffffff8b80
 title: 'VT-4: Populate virtual_tags and filter_tags in enrichment pipeline'
 ---
 ## What

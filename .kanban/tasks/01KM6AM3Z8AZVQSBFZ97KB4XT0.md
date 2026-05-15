@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM6AKQV2WB1X0H8H27Z6ZE0W
 position_column: done
-position_ordinal: ffffffffffcd80
+position_ordinal: ffffffffffff9a80
 title: Wire archive/unarchive/list-archived dispatch in MCP kanban tool
 ---
 ## What

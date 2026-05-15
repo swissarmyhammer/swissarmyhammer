@@ -4,6 +4,7 @@ description: Sort position
 type:
   kind: number
   min: 0.0
+default: 0
 icon: hash
 editor: number
 display: number

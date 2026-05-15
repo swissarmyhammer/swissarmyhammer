@@ -1,34 +1,50 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { listen } from "@tauri-apps/api/event";
 import { DropZone } from "@/components/drop-zone";
 import { computeDropZones, type DropZoneDescriptor } from "@/lib/drop-zones";
 import { Field } from "@/components/fields/field";
 import { DraggableTaskCard } from "@/components/sortable-task-card";
 import { FocusScope } from "@/components/focus-scope";
+import { Inspectable } from "@/components/inspectable";
+import { Pressable } from "@/components/pressable";
+import { useOptionalFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
 import { Badge } from "@/components/ui/badge";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { useEntityCommands } from "@/lib/entity-commands";
 import { useSchema } from "@/lib/schema-context";
-import {
-  useEntityFocus,
-  type ClaimPredicate,
-} from "@/lib/entity-focus-context";
+import { useDispatchCommand } from "@/lib/command-scope";
 import type { Entity } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
+import { asSegment, type FullyQualifiedMoniker } from "@/types/spatial";
 
 /**
  * Props for {@link ColumnView} — one column in the kanban board.
  *
- * Carries the column entity and its pre-sorted tasks plus the navigation
- * monikers of neighboring columns so the column can compute focus-claim
- * predicates for keyboard nav (up/down within the column, left/right across
- * columns, first/last at board edges). Drag/drop callbacks are optional and
- * wired by the parent board to route drops back through the command layer.
+ * Carries the column entity and its pre-sorted tasks plus the drag/drop
+ * callbacks the parent board uses to route drops through the command layer.
+ *
+ * Cross-column keyboard navigation now lives in the spatial-nav layer: each
+ * column body wraps in a `<FocusZone>` (parent zone = `ui:board`), the
+ * column-name header renders a `<Field>` whose own `<FocusZone>` (moniker
+ * `field:column:<id>.name`) is the sole spatial-nav registration for the
+ * name surface, and each task card body is its own `<FocusScope>` leaf
+ * parented at the column. Cards must be leaves so the unified cascade
+ * produces the cross-column trajectory:
+ * iter 0 scores in-column card peers (leaf candidates), and when no
+ * peer satisfies the beam test the cascade escalates to iter 1 — the
+ * card's parent column zone — and lands on the neighbouring column
+ * zone. Making cards zones would collapse iter 0 into sibling-zones
+ * only (same-column cards reachable as zones), trapping focus inside
+ * the column. The spatial graph computes nav.up / nav.down / nav.left /
+ * nav.right from the registered rectangles, so the legacy
+ * neighbor-moniker plumbing and the pull-based claim-predicate
+ * threading that used to live here are gone — the column receives only
+ * structural / drag-drop wiring now.
  */
 interface ColumnViewProps {
   column: Entity;
@@ -45,31 +61,6 @@ interface ColumnViewProps {
   dragTaskId?: string | null;
   /** Ref callback for the column container — used for cross-window hit-testing. */
   containerRef?: (el: HTMLDivElement | null) => void;
-  /**
-   * Task monikers in the column to the left (in order), or empty array.
-   * Used to compute nav.right claimWhen predicates for cross-column navigation.
-   */
-  leftColumnTaskMonikers?: string[];
-  /** Column header moniker for the column to the left, or null. */
-  leftColumnHeaderMoniker?: string | null;
-  /**
-   * Task monikers in the column to the right (in order), or empty array.
-   * Used to compute nav.left claimWhen predicates for cross-column navigation.
-   */
-  rightColumnTaskMonikers?: string[];
-  /** Column header moniker for the column to the right, or null. */
-  rightColumnHeaderMoniker?: string | null;
-  /**
-   * All task monikers on the board, across all columns.
-   * Used for nav.first/nav.last predicates (any board card focused -> claim).
-   */
-  allBoardTaskMonikers?: Set<string>;
-  /** All column header monikers on the board. Used for nav.first/nav.last. */
-  allBoardHeaderMonikers?: Set<string>;
-  /** Whether this column contains the overall first card on the board. */
-  isFirstColumn?: boolean;
-  /** Whether this column contains the overall last card on the board. */
-  isLastColumn?: boolean;
 }
 
 /** Distance from container edge (px) that triggers auto-scroll during drag. */
@@ -84,167 +75,6 @@ const TRAILING_ZONE_HEIGHT = 6;
 const VIRTUALIZE_THRESHOLD = 25;
 
 // ---------------------------------------------------------------------------
-// Navigation predicate hooks — extracted from ColumnView to keep it focused
-// ---------------------------------------------------------------------------
-
-/** Params for the header navigation predicate hook. */
-interface HeaderClaimParams {
-  taskMonikers: string[];
-  rightColumnHeaderMoniker: string | null;
-  leftColumnHeaderMoniker: string | null;
-  rightColumnTaskMonikers: string[];
-  leftColumnTaskMonikers: string[];
-  taskCount: number;
-  isFirstColumn: boolean;
-  isLastColumn: boolean;
-  columnNameMoniker: string;
-  isBoardElement: (f: string | null) => boolean;
-}
-
-/**
- * Compute claimWhen predicates for the column name field FocusScope.
- *
- * These predicates tell broadcastNavCommand when this header should claim
- * focus: nav.up from the first card, nav.left/right from adjacent headers,
- * cross-column nav into empty columns, and nav.first/last at board edges.
- */
-function useHeaderClaimPredicates(p: HeaderClaimParams): ClaimPredicate[] {
-  return useMemo<ClaimPredicate[]>(() => {
-    const predicates: ClaimPredicate[] = [];
-
-    if (p.taskMonikers.length > 0) {
-      const firstCard = p.taskMonikers[0];
-      predicates.push({ command: "nav.up", when: (f) => f === firstCard });
-    }
-    if (p.rightColumnHeaderMoniker) {
-      predicates.push({
-        command: "nav.left",
-        when: (f) => f === p.rightColumnHeaderMoniker,
-      });
-    }
-    if (p.leftColumnHeaderMoniker) {
-      predicates.push({
-        command: "nav.right",
-        when: (f) => f === p.leftColumnHeaderMoniker,
-      });
-    }
-    if (p.taskCount === 0) {
-      for (const m of p.rightColumnTaskMonikers) {
-        predicates.push({ command: "nav.left", when: (f) => f === m });
-      }
-      for (const m of p.leftColumnTaskMonikers) {
-        predicates.push({ command: "nav.right", when: (f) => f === m });
-      }
-    }
-    if (p.isFirstColumn && p.taskCount === 0) {
-      predicates.push({
-        command: "nav.first",
-        when: (f) => p.isBoardElement(f) && f !== p.columnNameMoniker,
-      });
-    }
-    if (p.isLastColumn && p.taskCount === 0) {
-      predicates.push({
-        command: "nav.last",
-        when: (f) => p.isBoardElement(f) && f !== p.columnNameMoniker,
-      });
-    }
-    return predicates;
-  }, [p]);
-}
-
-/** Params for the per-card navigation predicate hook. */
-interface CardClaimParams {
-  taskMonikers: string[];
-  columnMoniker: string;
-  columnNameMoniker: string;
-  rightColumnTaskMonikers: string[];
-  leftColumnTaskMonikers: string[];
-  isFirstColumn: boolean;
-  isLastColumn: boolean;
-  isBoardElement: (f: string | null) => boolean;
-}
-
-/**
- * Compute claimWhen predicates for each card in the column, indexed by position.
- *
- * Each card declares when it should claim focus for nav.up/down (within column),
- * nav.left/right (cross-column with clamped index), and nav.first/last (board edges).
- */
-function verticalNavPredicates(
-  i: number,
-  p: CardClaimParams,
-): ClaimPredicate[] {
-  const out: ClaimPredicate[] = [];
-  if (i === 0) {
-    out.push({
-      command: "nav.down",
-      when: (f) => f === p.columnNameMoniker || f === p.columnMoniker,
-    });
-  } else {
-    const prev = p.taskMonikers[i - 1];
-    out.push({ command: "nav.down", when: (f) => f === prev });
-  }
-  if (i < p.taskMonikers.length - 1) {
-    const next = p.taskMonikers[i + 1];
-    out.push({ command: "nav.up", when: (f) => f === next });
-  }
-  return out;
-}
-
-function horizontalNavPredicates(
-  i: number,
-  p: CardClaimParams,
-): ClaimPredicate[] {
-  const out: ClaimPredicate[] = [];
-  for (let ri = 0; ri < p.rightColumnTaskMonikers.length; ri++) {
-    const rightMoniker = p.rightColumnTaskMonikers[ri];
-    if (Math.min(ri, p.taskMonikers.length - 1) === i) {
-      out.push({ command: "nav.left", when: (f) => f === rightMoniker });
-    }
-  }
-  for (let li = 0; li < p.leftColumnTaskMonikers.length; li++) {
-    const leftMoniker = p.leftColumnTaskMonikers[li];
-    if (Math.min(li, p.taskMonikers.length - 1) === i) {
-      out.push({ command: "nav.right", when: (f) => f === leftMoniker });
-    }
-  }
-  return out;
-}
-
-function edgeNavPredicates(i: number, p: CardClaimParams): ClaimPredicate[] {
-  const out: ClaimPredicate[] = [];
-  if (p.isFirstColumn && i === 0) {
-    out.push({
-      command: "nav.first",
-      when: (f) => p.isBoardElement(f) && f !== p.taskMonikers[0],
-    });
-  }
-  if (p.isLastColumn && i === p.taskMonikers.length - 1) {
-    out.push({
-      command: "nav.last",
-      when: (f) =>
-        p.isBoardElement(f) && f !== p.taskMonikers[p.taskMonikers.length - 1],
-    });
-  }
-  return out;
-}
-
-function buildCardPredicates(i: number, p: CardClaimParams): ClaimPredicate[] {
-  return [
-    ...verticalNavPredicates(i, p),
-    ...horizontalNavPredicates(i, p),
-    ...edgeNavPredicates(i, p),
-  ];
-}
-
-function useCardClaimPredicates(p: CardClaimParams): ClaimPredicate[][] {
-  return useMemo<ClaimPredicate[][]>(
-    () => p.taskMonikers.map((_, i) => buildCardPredicates(i, p)),
-    [p],
-  );
-}
-
-// ---------------------------------------------------------------------------
 // useColumnDragScroll — auto-scroll + drag-over handler for a column
 // ---------------------------------------------------------------------------
 
@@ -252,6 +82,16 @@ function useCardClaimPredicates(p: CardClaimParams): ClaimPredicate[][] {
 interface ColumnDragScroll {
   setContainerRef: (el: HTMLDivElement | null) => void;
   handleDragOver: (e: React.DragEvent) => void;
+  /**
+   * Stops the auto-scroll rAF loop. Wired to the column scroller's
+   * `onDragLeave` so the loop ends when the pointer leaves the column
+   * without a drop. The hook also subscribes to the global `drag-ended`
+   * event (emitted by `useTaskDragHandlers` after every task drag
+   * completes) so a drop near a column edge — where `dragover` stops
+   * firing while `dirRef.current` is still non-zero — does not leave
+   * the loop running and fight the user's scroll.
+   */
+  handleDragLeave: () => void;
 }
 
 /**
@@ -327,43 +167,59 @@ function useColumnDragScroll(
     [start, stop],
   );
 
-  return { setContainerRef, handleDragOver };
+  // The auto-scroll rAF loop is only stopped from inside `handleDragOver`
+  // when the pointer is in the middle of the column. If the user drops a
+  // card with the pointer still in the top or bottom SCROLL_ZONE,
+  // `dragover` stops firing while `dirRef.current` is still non-zero —
+  // the loop keeps calling `scrollBy` every frame and fights the user's
+  // post-drop scroll. `useTaskDragHandlers` already emits a global
+  // `drag-ended` event the moment a task drag completes (success or
+  // cancel); subscribing to it here is the canonical "drag is over"
+  // signal and stops the loop regardless of where the pointer landed.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+    void listen("drag-ended", () => stop()).then((un) => {
+      if (cancelled) un();
+      else unlisten = un;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [stop]);
+
+  // Stop the loop when the pointer leaves the column scroller without a
+  // drop — the user dragged out to a different column or off the board.
+  // Without this, the loop would keep running until `dragend` fires on
+  // the source card, which is observably laggy on long drags.
+  const handleDragLeave = useCallback(() => {
+    stop();
+  }, [stop]);
+
+  return { setContainerRef, handleDragOver, handleDragLeave };
 }
 
 // ---------------------------------------------------------------------------
-// useColumnLayout — zones, monikers, and navigation predicates
+// useColumnLayout — drop zones for one column
 // ---------------------------------------------------------------------------
 
 /** Derived layout data used by ColumnView's render. */
 interface ColumnLayout {
   zones: DropZoneDescriptor[];
-  nameFieldClaimWhen: ClaimPredicate[];
-  cardClaimPredicates: ClaimPredicate[][];
 }
 
-function useIsBoardElement(
-  allBoardTaskMonikers: Set<string> | undefined,
-  allBoardHeaderMonikers: Set<string> | undefined,
-): (f: string | null) => boolean {
-  return useCallback(
-    (f: string | null): boolean => {
-      if (!f) return false;
-      return !!(allBoardTaskMonikers?.has(f) || allBoardHeaderMonikers?.has(f));
-    },
-    [allBoardTaskMonikers, allBoardHeaderMonikers],
-  );
-}
-
-/** Compute drop zones and navigation predicates for one column. */
+/**
+ * Compute the drop-zone descriptor list for one column.
+ *
+ * Returns one descriptor per insertion point: a "before" zone for each task
+ * plus a trailing "after" zone (or a single "empty" zone when the column has
+ * no tasks). The keyboard-nav claim predicates that used to live here are
+ * gone — the spatial-nav layer derives those from the registered zone /
+ * focusable rectangles instead.
+ */
 function useColumnLayout(props: ColumnViewProps): ColumnLayout {
   const { column, tasks } = props;
-  const leftColumnTaskMonikers = props.leftColumnTaskMonikers ?? [];
-  const rightColumnTaskMonikers = props.rightColumnTaskMonikers ?? [];
-  const isFirstColumn = props.isFirstColumn ?? false;
-  const isLastColumn = props.isLastColumn ?? false;
-  const columnMoniker = column.moniker;
-  const columnNameMoniker = `${columnMoniker}.name`;
-
   const zones = useMemo(
     () =>
       computeDropZones(
@@ -372,37 +228,7 @@ function useColumnLayout(props: ColumnViewProps): ColumnLayout {
       ),
     [tasks, column.id],
   );
-  const taskMonikers = useMemo(() => tasks.map((t) => t.moniker), [tasks]);
-  const isBoardElement = useIsBoardElement(
-    props.allBoardTaskMonikers,
-    props.allBoardHeaderMonikers,
-  );
-
-  const nameFieldClaimWhen = useHeaderClaimPredicates({
-    taskMonikers,
-    rightColumnHeaderMoniker: props.rightColumnHeaderMoniker ?? null,
-    leftColumnHeaderMoniker: props.leftColumnHeaderMoniker ?? null,
-    rightColumnTaskMonikers,
-    leftColumnTaskMonikers,
-    taskCount: tasks.length,
-    isFirstColumn,
-    isLastColumn,
-    columnNameMoniker,
-    isBoardElement,
-  });
-
-  const cardClaimPredicates = useCardClaimPredicates({
-    taskMonikers,
-    columnMoniker,
-    columnNameMoniker,
-    rightColumnTaskMonikers,
-    leftColumnTaskMonikers,
-    isFirstColumn,
-    isLastColumn,
-    isBoardElement,
-  });
-
-  return { zones, nameFieldClaimWhen, cardClaimPredicates };
+  return { zones };
 }
 
 // ---------------------------------------------------------------------------
@@ -416,25 +242,31 @@ function useColumnLayout(props: ColumnViewProps): ColumnLayout {
 interface ColumnBodyProps {
   props: ColumnViewProps;
   columnMoniker: string;
-  columnNameMoniker: string;
   layout: ColumnLayout;
   dragScroll: ColumnDragScroll;
   nameFieldDef: import("@/types/kanban").FieldDef | undefined;
   editingName: boolean;
   setEditingName: (v: boolean) => void;
-  setFocus: (moniker: string) => void;
 }
 
+/**
+ * Renders the column header and the virtualized card list as siblings.
+ *
+ * The flex chain (`flex flex-col` parent + `flex-1 overflow-y-auto` on the
+ * scroll container) is established by the outer `<FocusScope>`
+ * directly — its `className` lands on the spatial primitive's root and
+ * children render as direct layout children. ColumnBody therefore returns
+ * a `<>` fragment so its children participate in that flex chain without
+ * an intermediate div.
+ */
 function ColumnBody({
   props,
   columnMoniker,
-  columnNameMoniker,
   layout,
   dragScroll,
   nameFieldDef,
   editingName,
   setEditingName,
-  setFocus,
 }: ColumnBodyProps): React.ReactElement {
   const {
     column,
@@ -450,18 +282,15 @@ function ColumnBody({
     [props],
   );
   return (
-    <div className="flex flex-col min-h-0 min-w-0 flex-1">
+    <>
       <ColumnHeader
         column={column}
         columnMoniker={columnMoniker}
-        columnNameMoniker={columnNameMoniker}
-        nameFieldClaimWhen={layout.nameFieldClaimWhen}
         nameFieldDef={nameFieldDef}
         editingName={editingName}
         setEditingName={setEditingName}
         taskCount={tasks.length}
         onAddTask={onAddTask}
-        setFocus={setFocus}
       />
       <VirtualizedCardList
         tasks={tasks}
@@ -470,44 +299,70 @@ function ColumnBody({
         onZoneDrop={handleZoneDrop}
         onTaskDragStart={onTaskDragStart}
         onTaskDragEnd={onTaskDragEnd}
-        cardClaimPredicates={layout.cardClaimPredicates}
         containerRef={dragScroll.setContainerRef}
         onDragOver={dragScroll.handleDragOver}
+        onDragLeave={dragScroll.handleDragLeave}
       />
-    </div>
+    </>
   );
 }
 
 export const ColumnView = memo(function ColumnView(props: ColumnViewProps) {
   const { column } = props;
   const columnMoniker = column.moniker;
-  const columnNameMoniker = `${columnMoniker}.name`;
   const { getFieldDef } = useSchema();
   const nameFieldDef = getFieldDef("column", "name");
   const [editingName, setEditingName] = useState(false);
-  const { setFocus } = useEntityFocus();
-  const commands = useEntityCommands("column", column.id, column);
   const layout = useColumnLayout(props);
   const dragScroll = useColumnDragScroll(props.containerRef);
 
+  // FocusZone's `className` lands on its outer primitive `<div>` and the
+  // primitive renders children as direct layout children — the `flex flex-col`
+  // chain established here propagates straight into ColumnHeader (header at
+  // top) and VirtualizedCardList (`flex-1 overflow-y-auto` fills the rest).
+  // `flex-1 min-h-0` participates in the SortableColumn parent's flex chain
+  // so the column takes its share of the board's width and gets a bounded
+  // scroll height for `useVirtualizer`'s windowing.
+  //
+  // The column body is a zone (parent of cards), not a leaf — descendants
+  // (`task:{id}` card scopes, the column-name `<Field>` zone in the header)
+  // register `parentZone = column-zone-key` via `FocusZoneContext`, so beam
+  // search treats the column's children as in-zone candidates.
+  //
+  // `showFocus` defaults to `true`. The column is a sized, distinct entity
+  // — when the user clicks its body or drills out from a card with Escape,
+  // they need a visible indicator on the column itself. Container zones that
+  // are viewport-sized chrome (board, perspective, view, navbar) suppress the
+  // bar because a focus rectangle around the entire viewport would be visual
+  // noise; columns are bounded boxes inside the board, so they advertise
+  // their focus the same way cards and field rows do. The
+  // `<FocusIndicator>` renders along the left edge of the column box at full
+  // height — see `kanban-app/ui/src/components/focus-indicator.tsx`.
+  // The column body wraps a real entity (`column:<id>` moniker), so
+  // double-clicking the column whitespace should open the inspector
+  // for that column. The `<Inspectable>` wrapper owns the
+  // `useDispatchCommand("ui.inspect")` hook and its `onDoubleClick`
+  // handler; the spatial primitive `<FocusZone>` stays pure-spatial.
+  // The architectural guard
+  // (`focus-architecture.guards.node.test.ts`, Guards B + C) enforces
+  // this for every entity-monikered zone.
   return (
-    <FocusScope
-      moniker={columnMoniker}
-      commands={commands}
-      className="flex flex-col min-h-0 min-w-[24em] max-w-[48em] flex-1 shrink-0"
-    >
-      <ColumnBody
-        props={props}
-        columnMoniker={columnMoniker}
-        columnNameMoniker={columnNameMoniker}
-        layout={layout}
-        dragScroll={dragScroll}
-        nameFieldDef={nameFieldDef}
-        editingName={editingName}
-        setEditingName={setEditingName}
-        setFocus={setFocus}
-      />
-    </FocusScope>
+    <Inspectable moniker={asSegment(columnMoniker)}>
+      <FocusScope
+        moniker={asSegment(columnMoniker)}
+        className="flex flex-col flex-1 min-h-0 min-w-[24em] max-w-[48em] shrink-0"
+      >
+        <ColumnBody
+          props={props}
+          columnMoniker={columnMoniker}
+          layout={layout}
+          dragScroll={dragScroll}
+          nameFieldDef={nameFieldDef}
+          editingName={editingName}
+          setEditingName={setEditingName}
+        />
+      </FocusScope>
+    </Inspectable>
   );
 });
 
@@ -518,14 +373,11 @@ export const ColumnView = memo(function ColumnView(props: ColumnViewProps) {
 interface ColumnHeaderProps {
   column: Entity;
   columnMoniker: string;
-  columnNameMoniker: string;
-  nameFieldClaimWhen: ClaimPredicate[];
   nameFieldDef: import("@/types/kanban").FieldDef | undefined;
   editingName: boolean;
   setEditingName: (v: boolean) => void;
   taskCount: number;
   onAddTask?: (columnId: string) => void;
-  setFocus: (moniker: string) => void;
 }
 
 /** Renders the column header row with name, task count badge, and add button. */
@@ -549,6 +401,14 @@ function ColumnNameField({
       </span>
     );
   }
+  // `showFocus` opts the field zone into rendering its own
+  // `<FocusIndicator>`. The column header has no enclosing focus
+  // chrome around just the name surface (the column body's own bar
+  // sits on the column zone, not on its descendants), so the field
+  // zone is the user's only focus cue when the name is the spatial
+  // focus. This replaces the focus indicator the synthetic outer
+  // `<FocusScope>` rendered before card 01KQAWVDS931PADB0559F2TVCS
+  // collapsed it.
   return (
     <Field
       fieldDef={nameFieldDef}
@@ -559,83 +419,109 @@ function ColumnNameField({
       onEdit={() => setEditingName(true)}
       onDone={() => setEditingName(false)}
       onCancel={() => setEditingName(false)}
+      showFocus
     />
   );
 }
 
 function ColumnHeader({
   column,
-  columnMoniker,
-  columnNameMoniker,
-  nameFieldClaimWhen,
   nameFieldDef,
   editingName,
   setEditingName,
   taskCount,
   onAddTask,
-  setFocus,
 }: ColumnHeaderProps) {
+  // Inside the column's `<FocusZone>` body — `useOptionalFullyQualifiedMoniker`
+  // returns the column's FQM. The AddTaskButton dispatches
+  // `nav.focus({ args: { fq: columnFq } })` (card
+  // `01KR7CDEFWWVF4WH0BCHE8Y21J`) so the new task lands inside the
+  // user-targeted column.
+  const columnFq = useOptionalFullyQualifiedMoniker();
+  // The column-name surface is registered exactly once — by the inner
+  // `<Field>` component as a `<FocusZone moniker="field:column:<id>.name">`.
+  // The Field already owns its own `<Inspectable>` wrap, click →
+  // `spatial_focus(fq)` handler, and edit-mode plumbing, so the column
+  // header renders `<ColumnNameField>` directly without a synthetic
+  // outer wrapper. Double-click on the displayed column name enters
+  // edit mode via `FieldDisplayContent`'s `onClick={onEdit}` surface;
+  // once the editor mounts, `<Inspectable>`'s editable-surface skip
+  // suppresses the inspector dispatch on the second click.
   return (
-    <div
-      className="column-header-focus px-3 py-2 flex items-center gap-2 rounded"
-      onClickCapture={() => setFocus(columnNameMoniker)}
-    >
-      <FocusScope
-        moniker={columnNameMoniker}
-        commands={[]}
-        claimWhen={nameFieldClaimWhen}
-        className="inline"
-      >
-        <ColumnNameField
-          column={column}
-          nameFieldDef={nameFieldDef}
-          editingName={editingName}
-          setEditingName={setEditingName}
-        />
-      </FocusScope>
+    <div className="px-3 py-2 flex items-center gap-2 rounded">
+      <ColumnNameField
+        column={column}
+        nameFieldDef={nameFieldDef}
+        editingName={editingName}
+        setEditingName={setEditingName}
+      />
       <Badge variant="secondary">{taskCount}</Badge>
       <div className="flex-1" />
       {onAddTask && (
         <AddTaskButton
           columnId={column.id}
           columnName={getStr(column, "name") ?? ""}
-          columnMoniker={columnMoniker}
+          columnFq={columnFq}
           onAddTask={onAddTask}
-          setFocus={setFocus}
         />
       )}
     </div>
   );
 }
 
-/** The "+" button in the column header that adds a new task. */
+/**
+ * The "+" button in the column header that adds a new task.
+ *
+ * Wraps a `<Pressable asChild>` inside the existing `<TooltipTrigger asChild>`
+ * so the button gains both keyboard reachability AND Enter / Space
+ * activation. Pre-migration this was a bare `<button>` with no
+ * `<FocusScope>` — keyboard users could not focus it at all.
+ *
+ * Moniker `ui:column.add-task:{columnId}` — entity-disambiguated like
+ * `card.inspect:{id}`, namespaced under `ui:column.*` so future
+ * column-level icon buttons (filter, sort, etc.) can compose under the
+ * same prefix.
+ */
 function AddTaskButton({
   columnId,
   columnName,
-  columnMoniker,
+  columnFq,
   onAddTask,
-  setFocus,
 }: {
   columnId: string;
   columnName: string;
-  columnMoniker: string;
+  columnFq: FullyQualifiedMoniker | null;
   onAddTask: (columnId: string) => void;
-  setFocus: (moniker: string) => void;
 }) {
+  // Card `01KR7CDEFWWVF4WH0BCHE8Y21J`: focus claims flow through
+  // `nav.focus`, the single auditable command that wraps the
+  // kernel-facing `setFocus` primitive. The "+" button moves focus to
+  // the column zone before delegating to `onAddTask` so the new task
+  // lands inside the user-targeted column.
+  const dispatchNavFocus = useDispatchCommand("nav.focus");
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-label={`Add task to ${columnName}`}
-          className="p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
-          onClick={() => {
-            setFocus(columnMoniker);
+        <Pressable
+          asChild
+          moniker={asSegment(`ui:column.add-task:${columnId}`)}
+          ariaLabel={`Add task to ${columnName}`}
+          onPress={() => {
+            if (columnFq) {
+              void dispatchNavFocus({ args: { fq: columnFq } }).catch((err) =>
+                console.error("[AddTaskButton] nav.focus dispatch failed", err),
+              );
+            }
             onAddTask(columnId);
           }}
         >
-          <Plus className="h-4 w-4" />
-        </button>
+          <button
+            type="button"
+            className="p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
+          >
+            <Plus className="h-4 w-4" />
+          </button>
+        </Pressable>
       </TooltipTrigger>
       <TooltipContent>{`Add task to ${columnName}`}</TooltipContent>
     </Tooltip>
@@ -653,9 +539,9 @@ interface VirtualizedCardListProps {
   onZoneDrop: (descriptor: DropZoneDescriptor, taskData: string) => void;
   onTaskDragStart?: (entity: Entity) => void;
   onTaskDragEnd?: (entity: Entity, dropEffect: string) => void;
-  cardClaimPredicates: ClaimPredicate[][];
   containerRef: (el: HTMLDivElement | null) => void;
   onDragOver: (e: React.DragEvent) => void;
+  onDragLeave: () => void;
 }
 
 const CONTAINER_CLASS =
@@ -703,10 +589,16 @@ function EmptyColumn({
   dragTaskId,
   onZoneDrop,
   onDragOver,
+  onDragLeave,
   setRef,
 }: VirtualizedCardListProps & { setRef: (el: HTMLDivElement | null) => void }) {
   return (
-    <div ref={setRef} className={CONTAINER_CLASS} onDragOver={onDragOver}>
+    <div
+      ref={setRef}
+      className={CONTAINER_CLASS}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+    >
       <DropZone
         descriptor={zones[0]}
         dragTaskId={dragTaskId}
@@ -725,12 +617,17 @@ function SmallCardList({
   onZoneDrop,
   onTaskDragStart,
   onTaskDragEnd,
-  cardClaimPredicates,
   onDragOver,
+  onDragLeave,
   setRef,
 }: VirtualizedCardListProps & { setRef: (el: HTMLDivElement | null) => void }) {
   return (
-    <div ref={setRef} className={CONTAINER_CLASS} onDragOver={onDragOver}>
+    <div
+      ref={setRef}
+      className={CONTAINER_CLASS}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+    >
       {tasks.map((entity, i) => (
         <div key={entity.id}>
           <DropZone
@@ -743,7 +640,6 @@ function SmallCardList({
               entity={entity}
               onDragStart={onTaskDragStart}
               onDragEnd={onTaskDragEnd}
-              claimWhen={cardClaimPredicates[i]}
             />
           </div>
         </div>
@@ -764,11 +660,11 @@ interface VirtualColumnProps {
   onZoneDrop: (descriptor: DropZoneDescriptor, taskData: string) => void;
   onTaskDragStart?: (entity: Entity) => void;
   onTaskDragEnd?: (entity: Entity, dropEffect: string) => void;
-  cardClaimPredicates: ClaimPredicate[][];
   scrollRef: React.RefObject<HTMLDivElement | null>;
   setRef: (el: HTMLDivElement | null) => void;
   containerClass: string;
   onDragOver: (e: React.DragEvent) => void;
+  onDragLeave: () => void;
 }
 
 /** Absolute positioning style for a virtual row at `startPx`. */
@@ -790,7 +686,6 @@ interface VirtualRowProps {
   onZoneDrop: (descriptor: DropZoneDescriptor, taskData: string) => void;
   onTaskDragStart?: (entity: Entity) => void;
   onTaskDragEnd?: (entity: Entity, dropEffect: string) => void;
-  cardClaimPredicates: ClaimPredicate[][];
   measureElement: (node: HTMLElement | null) => void;
 }
 
@@ -830,7 +725,6 @@ function VirtualRow(props: VirtualRowProps): React.ReactElement {
           entity={entity}
           onDragStart={props.onTaskDragStart}
           onDragEnd={props.onTaskDragEnd}
-          claimWhen={props.cardClaimPredicates[vr.index]}
         />
       </div>
     </div>
@@ -839,7 +733,8 @@ function VirtualRow(props: VirtualRowProps): React.ReactElement {
 
 /** Inner component that calls useVirtualizer (hook must be unconditional). */
 function VirtualColumn(props: VirtualColumnProps) {
-  const { tasks, scrollRef, setRef, containerClass, onDragOver } = props;
+  const { tasks, scrollRef, setRef, containerClass, onDragOver, onDragLeave } =
+    props;
   const virtualizer = useVirtualizer({
     count: tasks.length + 1,
     getScrollElement: () => scrollRef.current,
@@ -849,7 +744,12 @@ function VirtualColumn(props: VirtualColumnProps) {
   });
 
   return (
-    <div ref={setRef} className={containerClass} onDragOver={onDragOver}>
+    <div
+      ref={setRef}
+      className={containerClass}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+    >
       <div
         style={{
           height: virtualizer.getTotalSize(),
@@ -869,7 +769,6 @@ function VirtualColumn(props: VirtualColumnProps) {
             onZoneDrop={props.onZoneDrop}
             onTaskDragStart={props.onTaskDragStart}
             onTaskDragEnd={props.onTaskDragEnd}
-            cardClaimPredicates={props.cardClaimPredicates}
             measureElement={virtualizer.measureElement}
           />
         ))}

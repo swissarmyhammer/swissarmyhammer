@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffff8b80
+position_ordinal: ffffff9280
 title: 'avp-common/types/avp_output.rs: massive code duplication across new output types'
 ---
 avp-common/src/types/avp_output.rs (new types section)

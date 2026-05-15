@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffd880
+position_ordinal: ffffffffffffffae80
 title: Unify all focus mechanisms under FocusScope
 ---
 ## What

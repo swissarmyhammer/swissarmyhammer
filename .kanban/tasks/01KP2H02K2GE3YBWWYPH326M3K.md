@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffc980
+position_ordinal: ffffffffffffffffffffffffffffffb480
 project: task-card-fields
 title: Render `progress` last in task header (card and inspector)
 ---

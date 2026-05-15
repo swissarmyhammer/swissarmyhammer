@@ -715,6 +715,80 @@ impl<'a> swissarmyhammer_filter_expr::FilterContext for TaskFilterAdapter<'a> {
     }
 }
 
+/// Apply a filter DSL expression to a slice of enriched task entities and
+/// return the ids of those that match.
+///
+/// Parses `filter_str` once and evaluates the resulting expression against
+/// each entity through [`TaskFilterAdapter`], which is the same adapter the
+/// `list_entities` Tauri command uses — so backend filter semantics stay
+/// aligned across every entry point (filter in `list_entities`,
+/// `perspective.switch`, etc.). The `registry` resolves `$project`, `@user`,
+/// and `^task` predicates against display-name slugs in addition to ids; pass
+/// [`EntitySlugRegistry::empty`] for id-only matching.
+///
+/// `entities` must be enriched (via [`enrich_task_entity`] or
+/// [`enrich_all_task_entities`]) before this call — the adapter reads the
+/// pre-computed `filter_tags` field.
+///
+/// Returns the matching task ids in input order. An empty / whitespace-only
+/// `filter_str` is treated as "no filter" and returns every input task's id.
+///
+/// # Errors
+///
+/// Returns a human-readable parse error string when the expression is invalid
+/// (mirrors what `list_entities` shows the frontend today).
+pub fn filter_task_ids(
+    entities: &[Entity],
+    filter_str: &str,
+    registry: &EntitySlugRegistry,
+) -> Result<Vec<String>, String> {
+    if filter_str.trim().is_empty() {
+        return Ok(entities.iter().map(|e| e.id.to_string()).collect());
+    }
+    let expr = swissarmyhammer_filter_expr::parse(filter_str).map_err(|errors| {
+        let msgs: Vec<String> = errors.iter().map(|e| e.message.clone()).collect();
+        format!("invalid filter expression: {}", msgs.join("; "))
+    })?;
+    let ids = entities
+        .iter()
+        .filter(|e| {
+            expr.matches(&TaskFilterAdapter {
+                entity: e,
+                registry: Some(registry),
+            })
+        })
+        .map(|e| e.id.to_string())
+        .collect();
+    Ok(ids)
+}
+
+/// In-place variant of [`filter_task_ids`] that retains only matching
+/// entities. Used by `list_entities` to filter the result Vec before
+/// serialization.
+///
+/// Identical parse-once semantics; identical error contract. Empty filter
+/// is a no-op.
+pub fn retain_filtered_tasks(
+    entities: &mut Vec<Entity>,
+    filter_str: &str,
+    registry: &EntitySlugRegistry,
+) -> Result<(), String> {
+    if filter_str.trim().is_empty() {
+        return Ok(());
+    }
+    let expr = swissarmyhammer_filter_expr::parse(filter_str).map_err(|errors| {
+        let msgs: Vec<String> = errors.iter().map(|e| e.message.clone()).collect();
+        format!("invalid filter expression: {}", msgs.join("; "))
+    })?;
+    entities.retain(|e| {
+        expr.matches(&TaskFilterAdapter {
+            entity: e,
+            registry: Some(registry),
+        })
+    });
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

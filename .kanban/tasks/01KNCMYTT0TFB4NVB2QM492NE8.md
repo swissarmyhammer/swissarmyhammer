@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffffffffe80
+position_ordinal: fffffffffffffffffffffffff480
 title: Remove client-side entity mutation commands from grid-view
 ---
 ## What

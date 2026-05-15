@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNF8S3X6BZX4YXVSWAD5FZSG
 position_column: done
-position_ordinal: ffffffffffffffffffffdb80
+position_ordinal: ffffffffffffffffffffffffffff8a80
 title: 'Rust: Remove swimlane module and all references'
 ---
 ## What

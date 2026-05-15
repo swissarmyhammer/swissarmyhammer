@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffa080
+position_ordinal: ffffffffffffffffffffffa680
 title: 'Test shell tool: dispatch, init/deinit lifecycle, and process management'
 ---
 File: swissarmyhammer-tools/src/mcp/tools/shell/mod.rs (51.4%, 156 uncovered lines)

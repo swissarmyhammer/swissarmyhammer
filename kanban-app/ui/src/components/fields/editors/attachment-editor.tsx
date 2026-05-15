@@ -11,48 +11,11 @@ import { useCallback, useEffect, useRef } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { X, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  AttachmentItem,
-  type AttachmentMeta,
-} from "@/components/fields/displays/attachment-display";
+import { AttachmentItem } from "@/components/fields/displays/attachment-display";
+import { normalizeAttachments } from "@/components/fields/attachment-utils";
 import { useFileDrop } from "@/lib/file-drop-context";
 import type { FieldDef } from "@/types/kanban";
 import type { EditorProps } from ".";
-
-/**
- * Check whether a single value is a valid attachment element.
- *
- * Valid elements are either strings (file paths) or objects with a
- * string `id` property (AttachmentMeta).
- */
-function isValidElement(v: unknown): v is AttachmentMeta | string {
-  if (typeof v === "string") return true;
-  if (
-    v != null &&
-    typeof v === "object" &&
-    "id" in v &&
-    typeof (v as Record<string, unknown>).id === "string"
-  )
-    return true;
-  return false;
-}
-
-/**
- * Normalize the value prop into an array of attachments/paths.
- *
- * The value can be:
- * - An array of AttachmentMeta objects (existing attachments)
- * - An array containing a mix of AttachmentMeta and string paths (new picks)
- * - null/undefined (empty)
- *
- * Invalid elements (e.g. numbers, objects without an `id`) are silently
- * filtered out so downstream code never receives unexpected shapes.
- */
-function normalizeAttachments(value: unknown): Array<AttachmentMeta | string> {
-  if (Array.isArray(value)) return value.filter(isValidElement);
-  if (isValidElement(value)) return [value];
-  return [];
-}
 
 /**
  * Returns whether the field supports multiple attachments.

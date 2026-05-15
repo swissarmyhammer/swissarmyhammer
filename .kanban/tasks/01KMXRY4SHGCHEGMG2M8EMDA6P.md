@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffff680
+position_ordinal: ffffffffffffffffdb80
 title: Implement commands_for_scope in Rust with comprehensive tests
 ---
 ## What

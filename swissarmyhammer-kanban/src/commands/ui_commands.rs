@@ -95,6 +95,75 @@ impl Command for InspectorCloseAllCmd {
     }
 }
 
+/// Persist the user-chosen inspector panel width for the current window.
+///
+/// Called once on `mouseup` after a left-edge drag — the transient drag
+/// state lives in React and only the final value round-trips through the
+/// backend (mirrors the window-geometry save pattern). Required arg:
+/// `width` (positive integer in CSS pixels).
+pub struct InspectorSetWidthCmd;
+
+/// Minimum inspector width enforced by the command.
+///
+/// Mirrors the `MIN_PANEL_WIDTH` clamp in `slide-panel.tsx`. Even though
+/// the frontend already clamps drag deltas to this floor, the command
+/// must enforce it independently — a direct dispatch from the palette,
+/// CLI, or test harness with `width: 1` would otherwise be silently
+/// persisted and reload as a 1 px panel.
+const MIN_INSPECTOR_WIDTH: u32 = 320;
+
+/// Absolute upper clamp on inspector width.
+///
+/// Mirrors the `MAX_PANEL_WIDTH` constant in `slide-panel.tsx`. The
+/// 0.85 × viewport rule on the frontend is viewport-dependent and so
+/// can't be re-applied here; we enforce only the hard absolute cap.
+const MAX_INSPECTOR_WIDTH: u32 = 800;
+
+#[async_trait]
+impl Command for InspectorSetWidthCmd {
+    fn available(&self, _ctx: &CommandContext) -> bool {
+        true
+    }
+
+    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        let ui = ctx
+            .ui_state
+            .as_ref()
+            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+
+        // Distinguish "missing" from "present but not coercible" so the
+        // error label matches reality. `as_i64` accepts negative integers
+        // (which `as_u64` silently rejects), so we can issue an explicit
+        // out-of-range error for `width: -5` instead of a misleading
+        // `MissingArg("width")`.
+        let raw = ctx
+            .args
+            .get("width")
+            .ok_or_else(|| CommandError::MissingArg("width".into()))?;
+        let signed = raw.as_i64().ok_or_else(|| {
+            CommandError::ExecutionFailed(format!("inspector width must be an integer, got: {raw}"))
+        })?;
+        // Clamp into [MIN_INSPECTOR_WIDTH, MAX_INSPECTOR_WIDTH] rather
+        // than rejecting — the contract documented in the task spec is
+        // that the command itself enforces the same bounds the frontend
+        // applies during drag, so a stray `width: 1` becomes 320 px and
+        // a stray `width: 9999` becomes 800 px (instead of producing a
+        // 1 px panel that reloads from disk on next launch).
+        let clamped = signed.clamp(
+            i64::from(MIN_INSPECTOR_WIDTH),
+            i64::from(MAX_INSPECTOR_WIDTH),
+        );
+        // Safe: clamped lies in [MIN_INSPECTOR_WIDTH, MAX_INSPECTOR_WIDTH]
+        // which both fit in u32, and the clamp lower-bounds at a positive
+        // value, so the cast can never lose information.
+        let width = clamped as u32;
+
+        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let change = ui.set_inspector_width(window_label, width);
+        Ok(serde_json::to_value(change).unwrap_or(Value::Null))
+    }
+}
+
 /// Open the command palette.
 ///
 /// Always available.
@@ -167,30 +236,6 @@ impl Command for SetFocusCmd {
             .unwrap_or_default();
 
         let change = ui.set_scope_chain(scope_chain);
-        Ok(serde_json::to_value(change).unwrap_or(Value::Null))
-    }
-}
-
-/// Set the active perspective by ID.
-///
-/// Always available. Required arg: `perspective_id`.
-pub struct SetActivePerspectiveCmd;
-
-#[async_trait]
-impl Command for SetActivePerspectiveCmd {
-    fn available(&self, _ctx: &CommandContext) -> bool {
-        true
-    }
-
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
-        let ui = ctx
-            .ui_state
-            .as_ref()
-            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
-
-        let perspective_id = ctx.require_arg_str("perspective_id")?;
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
-        let change = ui.set_active_perspective(window_label, perspective_id);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
 }
@@ -270,6 +315,37 @@ impl Command for SetActiveViewCmd {
         let view_id = ctx.require_arg_str("view_id")?;
         let window_label = ctx.window_label_from_scope().unwrap_or("main");
         let change = ui.set_active_view(window_label, view_id);
+
+        // Keep the backend scope_chain consistent with the newly active view.
+        //
+        // The command palette and right-click menu both read `scope_chain` from
+        // UIState to ask the backend which commands are available. Dynamic
+        // commands like `entity.add:{type}` fan out from the `view:{id}` moniker
+        // in that chain. If we only update `active_view` here without touching
+        // `scope_chain`, the palette keeps emitting commands for whichever view
+        // happened to be in scope last (commonly the board the user launched
+        // from) even after they switch to a different view — so "New Tag" and
+        // "New Project" never appear on their respective grids.
+        //
+        // Rewrite every `view:*` element in the current chain to point at the
+        // new active view. When the user later focuses a FocusScope inside the
+        // new view, `ui.setFocus` will rebuild the full chain from scratch —
+        // this bridge makes the palette work in the interim.
+        let mut chain = ui.scope_chain();
+        let mut mutated = false;
+        for moniker in &mut chain {
+            if moniker.starts_with("view:") {
+                let new_moniker = format!("view:{view_id}");
+                if *moniker != new_moniker {
+                    *moniker = new_moniker;
+                    mutated = true;
+                }
+            }
+        }
+        if mutated {
+            ui.set_scope_chain(chain);
+        }
+
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
 }
@@ -311,6 +387,73 @@ mod tests {
     fn first_inspectable_returns_none_for_only_field_monikers() {
         let scope = vec!["field:task:abc.title".to_string()];
         assert!(first_inspectable(&scope).is_none());
+    }
+
+    /// When the active view changes, the `view:{id}` moniker in the current
+    /// scope_chain must be rewritten to point at the new view. This is the
+    /// regression guard for the user-visible bug where switching from the
+    /// Board to the Tags/Projects grid left the backend scope_chain pointing
+    /// at the Board's view id, so the command palette kept offering
+    /// "New Task" instead of "New Tag" / "New Project".
+    #[tokio::test]
+    async fn set_active_view_rewrites_view_moniker_in_scope_chain() {
+        let ui = Arc::new(UIState::new());
+        // Simulate the user having focused a task card on the board, which
+        // landed this chain in UIState via a prior ui.setFocus dispatch.
+        ui.set_scope_chain(vec![
+            "task:01ABC".to_string(),
+            "column:todo".to_string(),
+            "board:board".to_string(),
+            "view:01JMVIEW0000000000BOARD0".to_string(),
+            "window:main".to_string(),
+            "engine".to_string(),
+        ]);
+
+        let mut args = HashMap::new();
+        args.insert(
+            "view_id".to_string(),
+            serde_json::json!("01JMVIEW0000000000TGGRD0"),
+        );
+        let ctx = CommandContext::new("view.set", vec!["window:main".to_string()], None, args)
+            .with_ui_state(Arc::clone(&ui));
+
+        SetActiveViewCmd.execute(&ctx).await.unwrap();
+
+        let chain = ui.scope_chain();
+        assert!(
+            chain.contains(&"view:01JMVIEW0000000000TGGRD0".to_string()),
+            "scope_chain must now reference the NEW active view, got: {chain:?}"
+        );
+        assert!(
+            !chain.contains(&"view:01JMVIEW0000000000BOARD0".to_string()),
+            "scope_chain must not still reference the OLD view, got: {chain:?}"
+        );
+    }
+
+    /// If no `view:*` moniker is in the current scope_chain, changing the
+    /// active view must not synthesise one — the scope_chain stays untouched
+    /// and the next ui.setFocus rebuild populates it. This guards against
+    /// spurious scope changes when the user hasn't focused anything yet.
+    #[tokio::test]
+    async fn set_active_view_leaves_scope_chain_alone_when_no_view_moniker() {
+        let ui = Arc::new(UIState::new());
+        ui.set_scope_chain(vec!["window:main".to_string(), "engine".to_string()]);
+
+        let mut args = HashMap::new();
+        args.insert(
+            "view_id".to_string(),
+            serde_json::json!("01JMVIEW0000000000TGGRD0"),
+        );
+        let ctx = CommandContext::new("view.set", vec!["window:main".to_string()], None, args)
+            .with_ui_state(Arc::clone(&ui));
+
+        SetActiveViewCmd.execute(&ctx).await.unwrap();
+
+        assert_eq!(
+            ui.scope_chain(),
+            vec!["window:main".to_string(), "engine".to_string()],
+            "scope_chain must be untouched when it has no view:* moniker"
+        );
     }
 
     #[tokio::test]
@@ -366,7 +509,7 @@ mod tests {
         // not be available — it has nothing to rename.
         let ui = Arc::new(UIState::new());
         let ctx = CommandContext::new(
-            "ui.perspective.startRename",
+            "ui.entity.startRename",
             vec!["window:main".to_string()],
             None,
             HashMap::new(),
@@ -388,6 +531,162 @@ mod tests {
         );
     }
 
+    /// Helper: build a CommandContext for `ui.inspector.set_width` with the
+    /// given `width` arg. The arg is stored as a `serde_json::Value`, so
+    /// passing `serde_json::json!(540)` produces a number, while
+    /// `serde_json::json!(-5)` produces a negative number that exercises
+    /// the `as_i64` / out-of-range branch.
+    fn ctx_with_width_arg(width: serde_json::Value) -> CommandContext {
+        let ui = Arc::new(UIState::new());
+        let mut args = HashMap::new();
+        args.insert("width".to_string(), width);
+        CommandContext::new(
+            "ui.inspector.set_width",
+            vec!["window:main".to_string()],
+            None,
+            args,
+        )
+        .with_ui_state(ui)
+    }
+
+    #[tokio::test]
+    async fn set_inspector_width_changes_ui_state() {
+        let ctx = ctx_with_width_arg(serde_json::json!(540));
+        let cmd = InspectorSetWidthCmd;
+
+        assert!(cmd.available(&ctx));
+
+        let result = cmd.execute(&ctx).await.unwrap();
+        // Should return the InspectorWidth change variant.
+        assert!(!result.is_null());
+
+        let ui = ctx.ui_state.as_ref().unwrap();
+        assert_eq!(ui.inspector_width("main"), Some(540));
+    }
+
+    #[tokio::test]
+    async fn set_inspector_width_noop_returns_null() {
+        let ctx = ctx_with_width_arg(serde_json::json!(540));
+        let cmd = InspectorSetWidthCmd;
+
+        // First dispatch: change from None → Some(540) returns the change.
+        let first = cmd.execute(&ctx).await.unwrap();
+        assert!(!first.is_null());
+
+        // Second dispatch with the same value: backend's
+        // `set_inspector_width` returns `None`, so the command serializes
+        // it as `Value::Null`.
+        let second = cmd.execute(&ctx).await.unwrap();
+        assert!(second.is_null());
+    }
+
+    #[tokio::test]
+    async fn set_inspector_width_missing_arg() {
+        // No `width` key in args at all → MissingArg.
+        let ui = Arc::new(UIState::new());
+        let ctx = CommandContext::new(
+            "ui.inspector.set_width",
+            vec!["window:main".to_string()],
+            None,
+            HashMap::new(),
+        )
+        .with_ui_state(ui);
+
+        let err = InspectorSetWidthCmd.execute(&ctx).await.unwrap_err();
+        match err {
+            CommandError::MissingArg(name) => assert_eq!(name, "width"),
+            other => panic!("expected MissingArg, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn set_inspector_width_non_integer_arg() {
+        // Present but not coercible to an integer (a string here) — must
+        // surface as ExecutionFailed with a descriptive message, not as
+        // MissingArg. This is the regression guard for the misleading
+        // error label flagged in the 2026-05-09 review.
+        let ctx = ctx_with_width_arg(serde_json::json!("forty-two"));
+        let err = InspectorSetWidthCmd.execute(&ctx).await.unwrap_err();
+        match err {
+            CommandError::ExecutionFailed(msg) => {
+                assert!(
+                    msg.contains("integer"),
+                    "expected message to mention integer coercion, got: {msg}"
+                );
+            }
+            other => panic!("expected ExecutionFailed, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn set_inspector_width_clamps_below_minimum() {
+        // A direct dispatch of a too-small width must not persist a
+        // sub-MIN value — the command itself enforces the contract that
+        // matches the frontend's [320, …] clamp.
+        let ctx = ctx_with_width_arg(serde_json::json!(1));
+        InspectorSetWidthCmd.execute(&ctx).await.unwrap();
+
+        let ui = ctx.ui_state.as_ref().unwrap();
+        assert_eq!(
+            ui.inspector_width("main"),
+            Some(MIN_INSPECTOR_WIDTH),
+            "width: 1 should be clamped to MIN_INSPECTOR_WIDTH"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_inspector_width_clamps_above_maximum() {
+        // Symmetrically, an oversize width clamps to MAX_INSPECTOR_WIDTH.
+        let ctx = ctx_with_width_arg(serde_json::json!(9999));
+        InspectorSetWidthCmd.execute(&ctx).await.unwrap();
+
+        let ui = ctx.ui_state.as_ref().unwrap();
+        assert_eq!(
+            ui.inspector_width("main"),
+            Some(MAX_INSPECTOR_WIDTH),
+            "width: 9999 should be clamped to MAX_INSPECTOR_WIDTH"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_inspector_width_clamps_negative() {
+        // Negative widths used to fail with `MissingArg("width")` because
+        // `Value::as_u64` returns `None` on negatives. After the fix they
+        // surface as ExecutionFailed (covered above) when not an integer,
+        // OR (when present as a negative integer) clamp up to the floor.
+        let ctx = ctx_with_width_arg(serde_json::json!(-50));
+        InspectorSetWidthCmd.execute(&ctx).await.unwrap();
+
+        let ui = ctx.ui_state.as_ref().unwrap();
+        assert_eq!(
+            ui.inspector_width("main"),
+            Some(MIN_INSPECTOR_WIDTH),
+            "width: -50 should be clamped to MIN_INSPECTOR_WIDTH"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_inspector_width_uses_window_from_scope() {
+        // The window label is resolved from the scope chain, not hard-
+        // coded to "main". A dispatch under window:secondary must persist
+        // there and leave window:main untouched.
+        let ui = Arc::new(UIState::new());
+        let mut args = HashMap::new();
+        args.insert("width".to_string(), serde_json::json!(540));
+        let ctx = CommandContext::new(
+            "ui.inspector.set_width",
+            vec!["window:secondary".to_string()],
+            None,
+            args,
+        )
+        .with_ui_state(Arc::clone(&ui));
+
+        InspectorSetWidthCmd.execute(&ctx).await.unwrap();
+
+        assert_eq!(ui.inspector_width("secondary"), Some(540));
+        assert_eq!(ui.inspector_width("main"), None);
+    }
+
     #[test]
     fn start_rename_perspective_available_per_window() {
         // The availability check is scoped to the window label resolved from
@@ -397,7 +696,7 @@ mod tests {
         ui.set_active_perspective("main", "p1");
 
         let ctx_secondary = CommandContext::new(
-            "ui.perspective.startRename",
+            "ui.entity.startRename",
             vec!["window:secondary".to_string()],
             None,
             HashMap::new(),

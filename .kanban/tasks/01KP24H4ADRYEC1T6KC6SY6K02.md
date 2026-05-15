@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffc080
+position_ordinal: ffffffffffffffffffffffffffffff9f80
 title: Add smart `status_date` computed field for tasks
 ---
 ## What

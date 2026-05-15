@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KN4C4R94N21004BP3YNEAJSK
 position_column: done
-position_ordinal: ffffffffffffffffb280
+position_ordinal: ffffffffffffffffffa580
 title: 'Migrate kanban attachments to use kind: attachment field type'
 ---
 ## What
@@ -43,7 +43,7 @@ The 5 operations in `src/attachment/` become thin wrappers around entity write/r
 - Remove compute stubs for `attachment-mime-type` and `attachment-file-size` in `defaults.rs`
 
 ### Cascade delete
-`task/delete.rs` and `task/cut.rs` currently iterate attachment IDs and call `ectx.delete("attachment", id)`. Remove this manual cascade — entity layer now handles trashing attachment files when an entity is deleted (card #2).
+`task/delete.rs` and `task/cut.rs` currently iterate attachment IDs and call `ectx.delete("attachment", id)`. Remove this manual cascade — entity layer now handles trashing attachment files when an entity is deleted (card
 
 ### Watcher: add `is_attachment` check
 The watcher's `is_entity_file()` currently filters by `.yaml`/`.yml`/`.md` extensions, so binary attachment files (`.png`, `.pdf`, etc.) are ignored. Add a parallel `is_attachment()` check that recognizes files in `.attachments/` subdirectories (any extension). These should emit events so the frontend knows when attachments change (e.g., for thumbnail previews, badge counts).

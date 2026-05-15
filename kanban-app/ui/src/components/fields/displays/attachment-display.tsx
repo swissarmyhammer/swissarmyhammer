@@ -24,7 +24,15 @@ import {
 } from "lucide-react";
 import { useDispatchCommand } from "@/lib/command-scope";
 import { FocusScope } from "@/components/focus-scope";
+import { Inspectable } from "@/components/inspectable";
 import { useFileDrop, type DropCallback } from "@/lib/file-drop-context";
+import { CompactCellWrapper } from "./compact-cell-wrapper";
+import {
+  basename,
+  normalizeAttachments,
+} from "@/components/fields/attachment-utils";
+import type { FieldDef } from "@/types/kanban";
+import { asSegment } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -41,6 +49,16 @@ export interface AttachmentMeta {
 
 /** Props for the AttachmentDisplay component. */
 export interface AttachmentDisplayProps {
+  /**
+   * Field definition — drives the empty-state placeholder convention
+   * (`field.placeholder ?? "-"` in compact mode), matching
+   * {@link file://./avatar-display.tsx AvatarDisplay},
+   * {@link file://./badge-display.tsx BadgeDisplay}, and
+   * {@link file://./badge-list-display.tsx BadgeListDisplay}. Optional
+   * because some test call-sites still construct the component directly
+   * without wiring up a registration adapter.
+   */
+  field?: FieldDef;
   value: unknown;
   mode: "compact" | "full";
   onCommit?: (value: unknown) => void;
@@ -48,6 +66,8 @@ export interface AttachmentDisplayProps {
 
 /** Props for the AttachmentListDisplay component. */
 export interface AttachmentListDisplayProps {
+  /** See {@link AttachmentDisplayProps.field} — same convention. */
+  field?: FieldDef;
   value: unknown;
   mode: "compact" | "full";
   onCommit?: (value: unknown) => void;
@@ -189,14 +209,23 @@ export function getFileIcon(
 export function AttachmentItem({ attachment }: AttachmentItemProps) {
   const Icon = getFileIcon(attachment.mime_type, attachment.name);
 
+  // An attachment item wraps a real entity moniker
+  // (`attachment:<path>`) so the architectural guard
+  // (`focus-architecture.guards.node.test.ts`, Guards B + C) requires
+  // a wrapping `<Inspectable>` for every entity zone/scope. The inner
+  // `<AttachmentItemInner>` owns its own `onDoubleClick` that
+  // dispatches `attachment.open` — the inner gesture does NOT call
+  // `e.stopPropagation()`, so a double-click both opens the file and
+  // inspects the attachment. To suppress inspect at the outer wrapper,
+  // the inner handler would need to stop the event itself; that is a
+  // separate UX decision and out of scope for this refactor.
+  const moniker = asSegment(`attachment:${attachment.path}`);
   return (
-    <FocusScope
-      moniker={`attachment:${attachment.path}`}
-      commands={[]}
-      className="min-w-0"
-    >
-      <AttachmentItemInner attachment={attachment} Icon={Icon} />
-    </FocusScope>
+    <Inspectable moniker={moniker}>
+      <FocusScope moniker={moniker} className="min-w-0">
+        <AttachmentItemInner attachment={attachment} Icon={Icon} />
+      </FocusScope>
+    </Inspectable>
   );
 }
 
@@ -230,6 +259,7 @@ function AttachmentItemInner({ attachment, Icon }: AttachmentItemInnerProps) {
 
 /** Renders a single attachment metadata object. Also acts as a drag-drop target. */
 export function AttachmentDisplay({
+  field,
   value,
   mode,
   onCommit,
@@ -255,8 +285,28 @@ export function AttachmentDisplay({
     return () => unregisterDropTarget(cb);
   }, [registerDropTarget, unregisterDropTarget]);
 
-  if (mode === "compact" && !hasAttachment) {
-    return <span className="text-muted-foreground/50">-</span>;
+  // Compact mode renders an inline one-line summary so the row honors
+  // the fixed `ROW_HEIGHT` virtualizer contract — the full drop-zone UI
+  // would balloon the row well beyond the reserved slot. Empty cells
+  // honor `field.placeholder` (falling back to `-`) per the convention
+  // shared with `AvatarDisplay`/`BadgeDisplay`/`BadgeListDisplay`.
+  if (mode === "compact") {
+    return (
+      <CompactCellWrapper>
+        {hasAttachment ? (
+          <span className="flex items-center gap-1.5 truncate text-sm">
+            <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate">
+              {(attachment as AttachmentMeta).name}
+            </span>
+          </span>
+        ) : (
+          <span className="text-muted-foreground/50">
+            {field?.placeholder ?? "-"}
+          </span>
+        )}
+      </CompactCellWrapper>
+    );
   }
 
   return (
@@ -281,13 +331,47 @@ export function AttachmentDisplay({
   );
 }
 
+/** Props for the PendingAttachmentItem component. */
+interface PendingAttachmentItemProps {
+  path: string;
+}
+
+/**
+ * Renders a row for a string entry that landed in the array between the
+ * drop commit and the entity-layer enrichment. Mirrors the layout of
+ * {@link AttachmentItem} (icon + truncated name) so the row does not
+ * reflow once the metadata arrives. Muted styling signals "pending" to
+ * sighted users; `aria-busy="true"` plus a visually-hidden "pending"
+ * label communicates the same transient state to assistive tech.
+ */
+function PendingAttachmentItem({ path }: PendingAttachmentItemProps) {
+  return (
+    <div
+      className="flex items-center gap-2 min-w-0 opacity-60"
+      aria-busy="true"
+    >
+      <Paperclip className="shrink-0 text-muted-foreground" size={16} />
+      <span className="truncate text-sm italic">{basename(path)}</span>
+      <span className="sr-only">pending</span>
+    </div>
+  );
+}
+
 /** Renders a list of attachment metadata objects. Also acts as a drag-drop target. */
 export function AttachmentListDisplay({
+  field,
   value,
   mode,
   onCommit,
 }: AttachmentListDisplayProps) {
-  const attachments = Array.isArray(value) ? (value as AttachmentMeta[]) : [];
+  // The runtime contract is `(AttachmentMeta | string)[]` — string entries
+  // appear briefly during the drop commit -> entity-layer enrichment
+  // round-trip (see `process_attachment_field` in the Rust entity layer).
+  // `normalizeAttachments` is shared with `AttachmentEditor` so both
+  // sides agree on the contract: it filters out unexpected shapes
+  // (`null`/numbers/objects without a string `id`) before they hit
+  // `AttachmentItem` and crash `getFileIcon` on `undefined.lastIndexOf`.
+  const attachments = normalizeAttachments(value);
   const { isDragging, registerDropTarget, unregisterDropTarget } =
     useFileDrop();
 
@@ -306,8 +390,28 @@ export function AttachmentListDisplay({
     return () => unregisterDropTarget(handleDrop);
   }, [handleDrop, registerDropTarget, unregisterDropTarget]);
 
-  if (mode === "compact" && attachments.length === 0) {
-    return <span className="text-muted-foreground/50">-</span>;
+  // Compact mode collapses to an inline summary so the fixed-height row
+  // virtualizer contract (`data-table.tsx::ROW_HEIGHT`) holds — the
+  // full drop-zone UI is reserved for inspector rows in `mode="full"`.
+  // Empty cells honor `field.placeholder` (falling back to `-`) per the
+  // convention shared with `AvatarDisplay`/`BadgeDisplay`/`BadgeListDisplay`.
+  if (mode === "compact") {
+    return (
+      <CompactCellWrapper>
+        {attachments.length > 0 ? (
+          <span className="flex items-center gap-1.5 text-sm">
+            <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="text-muted-foreground tabular-nums">
+              {attachments.length}
+            </span>
+          </span>
+        ) : (
+          <span className="text-muted-foreground/50">
+            {field?.placeholder ?? "-"}
+          </span>
+        )}
+      </CompactCellWrapper>
+    );
   }
 
   return (
@@ -322,9 +426,13 @@ export function AttachmentListDisplay({
     >
       {attachments.length > 0 ? (
         <div className="flex flex-col gap-1">
-          {attachments.map((att) => (
-            <AttachmentItem key={att.id} attachment={att} />
-          ))}
+          {attachments.map((att, index) =>
+            typeof att === "string" ? (
+              <PendingAttachmentItem key={`pending:${index}:${att}`} path={att} />
+            ) : (
+              <AttachmentItem key={att.id} attachment={att} />
+            ),
+          )}
         </div>
       ) : (
         <div className="flex flex-col items-center text-muted-foreground opacity-40 py-1">

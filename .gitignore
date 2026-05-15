@@ -99,6 +99,8 @@ builtin/workflows/*-test.md
 # Node.js (no package.json in this Rust project)
 package-lock.json
 node_modules/
+# Reject pnpm lockfiles entirely — Tauri apps enforce npm via `only-allow npm`.
+pnpm-lock.yaml
 
 # Output scratch files
 output_*.txt
@@ -141,6 +143,7 @@ ane-embedding/convert/output/
 # Claude Code local settings
 .claude/settings.local.json
 .claude/plans/
+.claude/scheduled_tasks.lock
 
 # Ralph runtime state
 .ralph/

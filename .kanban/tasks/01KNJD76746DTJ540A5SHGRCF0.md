@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffff8580
+position_ordinal: ffffffffffffffffffffffffffffb480
 position_swimlane: null
 title: 'FILTER-0: Rust crate — chumsky parser + AST evaluator'
 ---

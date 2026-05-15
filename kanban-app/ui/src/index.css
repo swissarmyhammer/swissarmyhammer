@@ -130,33 +130,14 @@
   }
 }
 
-/* Entity focus — target bar on the left edge.
- * FocusScope is the single decorator that owns focus rendering.
- * Only one FocusScope is ever focused at a time (via focusedMoniker). */
-[data-focused] {
-  position: relative;
-}
-[data-focused]::before {
-  content: "";
-  position: absolute;
-  left: -0.5rem;
-  top: 0.125rem;
-  bottom: 0.125rem;
-  width: 0.25rem;
-  border-radius: 9999px;
-  background-color: var(--primary);
-  box-shadow: 0 1px 2px 0 color-mix(in oklch, var(--primary) 50%, transparent);
-}
-
-/* Column header focus — position bar just inside the header, left of the title text */
-.column-header-focus[data-focused]::before {
-  left: 0.25rem;
-}
-
-/* Mention pill focus — tighter bar positioning for inline pills in flex layouts */
-.mention-pill-focus[data-focused]::before {
-  left: -0.25rem;
-}
+/* Focus decoration is rendered by the React `<FocusIndicator>` component
+ * embedded in the spatial primitives (`<FocusScope>` and `<FocusZone>`).
+ * No CSS rule reads `[data-focused]`: focus state flows from Rust
+ * (`SpatialState::focus_by_window`) through `useFocusClaim` into React
+ * state, and the indicator's className paints the visible bar. The
+ * `data-focused` attribute remains as an output-only debugging / e2e hook
+ * but is intentionally never used as a CSS selector — that would
+ * reintroduce the dual-state-channel antipattern this design eliminates. */
 
 /* Indeterminate progress bar — slides a bar left-to-right continuously */
 @keyframes indeterminate {

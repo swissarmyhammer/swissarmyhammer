@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNESD0630BPJG3BK84KEJMJP
 position_column: done
-position_ordinal: ffffffffffffffffffe380
+position_ordinal: ffffffffffffffffffffffffba80
 title: 'LSP-T3C: workspace_symbol_live op'
 ---
 ## What

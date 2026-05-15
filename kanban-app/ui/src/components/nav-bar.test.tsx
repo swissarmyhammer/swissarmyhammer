@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { BoardData, OpenBoard } from "@/types/kanban";
 
@@ -7,8 +7,12 @@ import type { BoardData, OpenBoard } from "@/types/kanban";
 // Mock Tauri APIs before importing components.
 // ---------------------------------------------------------------------------
 
+const mockInvoke = vi.hoisted(() =>
+  vi.fn((..._args: unknown[]) => Promise.resolve()),
+);
+
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(() => Promise.resolve()),
+  invoke: (...args: unknown[]) => mockInvoke(...args),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -79,7 +83,6 @@ vi.mock("@/lib/schema-context", () => ({
     getSchema: () => undefined,
     getFieldDef: (_entityType: string, fieldName: string) =>
       fieldName === "percent_complete" ? mockPercentFieldDef : undefined,
-    getEntityCommands: () => [],
     mentionableTypes: [],
     loading: false,
   }),
@@ -97,14 +100,39 @@ vi.mock("@/components/fields/field", () => ({
 
 // Import after mocks
 import { NavBar } from "./nav-bar";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
+import { asSegment } from "@/types/spatial";
 
-/** Renders NavBar inside the required TooltipProvider. */
+/** Identity-stable layer name for the test window root, matches App.tsx. */
+const WINDOW_LAYER_NAME = asSegment("window");
+
+/**
+ * Render `NavBar` inside the spatial-focus + window-root layer providers
+ * that the production tree mounts in `App.tsx`.
+ *
+ * `NavBar` is wrapped in a `<FocusScope>`, which registers via
+ * `spatial_register_scope` only inside a `<FocusLayer>` — production wraps
+ * everything in one, so we mirror that here to exercise the spatial-context
+ * path.
+ */
 function renderNavBar() {
   return render(
-    <TooltipProvider>
-      <NavBar />
-    </TooltipProvider>,
+    <SpatialFocusProvider>
+      <FocusLayer name={WINDOW_LAYER_NAME}>
+        <TooltipProvider>
+          <NavBar />
+        </TooltipProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
   );
+}
+
+/** Flush microtasks queued by the spatial-focus register effects. */
+async function flushSetup() {
+  await act(async () => {
+    await Promise.resolve();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -147,6 +175,7 @@ describe("NavBar", () => {
     mockBoardData.mockReturnValue(null);
     mockOpenBoards.mockReturnValue([]);
     mockActiveBoardPath.mockReturnValue(undefined);
+    mockIsBusy.mockReturnValue(false);
   });
 
   it("renders without props", () => {
@@ -219,5 +248,125 @@ describe("NavBar", () => {
 
     renderNavBar();
     expect(screen.queryByRole("progressbar")).toBeNull();
+  });
+
+  // -------------------------------------------------------------------------
+  // Spatial-nav wiring
+  //
+  // The nav bar is a plain `<div role="banner">` — NOT a `<FocusScope>`.
+  // Each actionable child registers its own `<FocusScope>` leaf with a
+  // `ui:navbar.{name}` moniker, and those leaves register as **peer
+  // top-level scopes** under the surrounding `<FocusLayer name="window">`
+  // — siblings of `ui:left-nav` and `ui:perspective-bar`. The outer
+  // `<FocusScope moniker="ui:navbar">` wrapper used to swallow clicks on
+  // bar whitespace and beam-search candidates arriving from below; with
+  // the wrapper gone, the inner leaves become first-class hit-test
+  // targets and beam-search candidates. See the `nav-bar.tsx` docstring
+  // for the full rationale.
+  // -------------------------------------------------------------------------
+
+  /** Filter mock invoke calls to those whose first arg matches `cmd`. */
+  function callsFor(cmd: string): Record<string, unknown>[] {
+    return mockInvoke.mock.calls
+      .filter((c) => c[0] === cmd)
+      .map((c) => c[1] as Record<string, unknown>);
+  }
+
+  it("exposes the implicit banner landmark for screen readers", () => {
+    // The bar uses a plain `<div role="banner">` so the screen-reader
+    // landmark survives the removal of the outer `<FocusScope>` wrapper.
+    renderNavBar();
+    expect(screen.getByRole("banner")).toBeTruthy();
+  });
+
+  it("does NOT register an outer ui:navbar FocusScope wrapper", async () => {
+    // Regression guard for the focus-swallowing bug: an outer
+    // `<FocusScope moniker="ui:navbar">` covering the whole row would
+    // hit-test before its inner leaves and silently steal click /
+    // beam-search focus that belongs to the leaves. The bar must stay a
+    // plain `<div role="banner">` so the leaves are reached directly.
+    renderNavBar();
+    await flushSetup();
+
+    const zoneCalls = callsFor("spatial_register_scope");
+    const navbarZone = zoneCalls.find((c) => c.segment === "ui:navbar");
+    expect(navbarZone).toBeUndefined();
+  });
+
+  it("registers ui:navbar.board-selector as a peer top-level FocusScope under the window layer", async () => {
+    // The board-selector houses multiple focusable surfaces (editable name
+    // Field, dropdown trigger, tear-off button), so it registers as a
+    // FocusScope-with-children container. With the outer `ui:navbar`
+    // wrapper removed, `parentZone` is null — the selector is a peer of
+    // `ui:left-nav` and `ui:perspective-bar` directly under the window
+    // layer.
+    mockOpenBoards.mockReturnValue(MOCK_OPEN_BOARDS);
+    mockActiveBoardPath.mockReturnValue("/boards/a/.kanban");
+
+    renderNavBar();
+    await flushSetup();
+
+    const zoneCalls = callsFor("spatial_register_scope");
+    const boardSelectorZone = zoneCalls.find(
+      (c) => c.segment === "ui:navbar.board-selector",
+    );
+    expect(boardSelectorZone).toBeDefined();
+    expect(boardSelectorZone!.parentZone).toBeNull();
+    expect(boardSelectorZone!.layerFq).toBeTruthy();
+  });
+
+  it("registers ui:navbar.inspect as a peer top-level FocusScope only when a board is loaded", async () => {
+    mockBoardData.mockReturnValue(MOCK_BOARD);
+
+    renderNavBar();
+    await flushSetup();
+
+    const focusableCalls = callsFor("spatial_register_scope");
+    const leaf = focusableCalls.find((c) => c.segment === "ui:navbar.inspect");
+    expect(leaf).toBeDefined();
+    expect(leaf!.parentZone).toBeNull();
+    expect(leaf!.layerFq).toBeTruthy();
+  });
+
+  it("does not register ui:navbar.inspect when no board is loaded", async () => {
+    mockBoardData.mockReturnValue(null);
+
+    renderNavBar();
+    await flushSetup();
+
+    const focusableCalls = callsFor("spatial_register_scope");
+    expect(
+      focusableCalls.find((c) => c.segment === "ui:navbar.inspect"),
+    ).toBeUndefined();
+  });
+
+  it("registers ui:navbar.search as a peer top-level FocusScope under the window layer", async () => {
+    renderNavBar();
+    await flushSetup();
+
+    const focusableCalls = callsFor("spatial_register_scope");
+    const leaf = focusableCalls.find((c) => c.segment === "ui:navbar.search");
+    expect(leaf).toBeDefined();
+    expect(leaf!.parentZone).toBeNull();
+    expect(leaf!.layerFq).toBeTruthy();
+  });
+
+  it("regression: does not attach a global keydown listener for legacy nav", () => {
+    // The nav bar is purely declarative — arrow-key traversal is handled by
+    // the Rust spatial navigator, not by component-level keyboard handlers.
+    // Wiring up a `keydown` listener on `document` or `window` would resurrect
+    // the legacy nav model and race the spatial graph.
+    const docSpy = vi.spyOn(document, "addEventListener");
+    const winSpy = vi.spyOn(window, "addEventListener");
+
+    renderNavBar();
+
+    const docKeydown = docSpy.mock.calls.filter((c) => c[0] === "keydown");
+    const winKeydown = winSpy.mock.calls.filter((c) => c[0] === "keydown");
+    expect(docKeydown).toHaveLength(0);
+    expect(winKeydown).toHaveLength(0);
+
+    docSpy.mockRestore();
+    winSpy.mockRestore();
   });
 });

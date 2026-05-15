@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMQMTAMHZHA79PTZAB453KYT
 position_column: done
-position_ordinal: ffffffffffffff9780
+position_ordinal: ffffffffffffffec80
 title: Migrate grid navigation to claimWhen
 ---
 ## What

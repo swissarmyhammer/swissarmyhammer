@@ -55,4 +55,4 @@ kanban-logs:
 
 # Tail all app logs (both Mirdan and Kanban)
 logs:
-    log stream --predicate 'subsystem == "ai.mirdan.app" OR subsystem == "com.swissarmyhammer.kanban"' --level debug
+    log stream --style compact --predicate 'subsystem == "ai.mirdan.app" OR subsystem == "com.swissarmyhammer.kanban"' --level debug

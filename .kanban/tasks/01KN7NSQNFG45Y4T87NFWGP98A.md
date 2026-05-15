@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffcb80
+position_ordinal: ffffffffffffffffffdd80
 title: 'Test: task card drag reorder within a column'
 ---
 ## What

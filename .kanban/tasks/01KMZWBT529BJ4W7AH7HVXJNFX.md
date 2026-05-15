@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffff8380
+position_ordinal: ffffffffffffffffe780
 title: 'Fix: inspector opens in wrong window — pass windowLabel in context-menu and entity-command dispatch'
 ---
 ## What

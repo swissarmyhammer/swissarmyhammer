@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffff8980
+position_ordinal: ffffffffffffffffffffffffff8880
 title: Replace title= with shadcn Tooltip in nav-bar.tsx
 ---
 ## What

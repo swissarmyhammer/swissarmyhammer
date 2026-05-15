@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMQMSTA0PYVHXKWKGT4631PN
 position_column: done
-position_ordinal: ffffffffffffe980
+position_ordinal: ffffffffffffffbf80
 title: Register global nav commands and fix sequence tables
 ---
 ## What

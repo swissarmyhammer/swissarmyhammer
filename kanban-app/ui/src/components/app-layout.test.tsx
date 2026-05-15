@@ -29,7 +29,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
+import { renderInAct } from "@/test/act-render";
 import { invoke } from "@tauri-apps/api/core";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { DragSessionProvider } from "@/lib/drag-session-context";
@@ -37,6 +38,9 @@ import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
+import { asSegment } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Mocks — Tauri APIs must be mocked before importing presenters.
@@ -178,12 +182,14 @@ const TAILWIND_SHIM = `
 .overflow-x-auto { overflow-x: auto; }
 .pl-2 { padding-left: 0.5rem; }
 /*
- * Column-width utilities used in column-view.tsx. These are arbitrary-value
- * Tailwind classes whose names contain brackets — escape the brackets for
- * CSS selectors so the shim matches the real class names.
+ * Column-width utilities used in column-view.tsx and sortable-column.tsx.
+ * These are arbitrary-value Tailwind classes whose names contain brackets —
+ * escape the brackets for CSS selectors so the shim matches the real class
+ * names.
  */
 .min-w-\\[24em\\] { min-width: 24em; }
 .max-w-\\[48em\\] { max-width: 48em; }
+.max-w-\\[60em\\] { max-width: 60em; }
 .shrink-0 { flex-shrink: 0; }
 `;
 
@@ -241,7 +247,7 @@ function WideContentProbe() {
  * The App root wrapper is also sized to `height: 600px` via inline style so
  * the inner `flex-1 min-h-0` descendants get a finite height to lay out in.
  */
-function renderAppLayout() {
+async function renderAppLayout() {
   // Install the Tailwind utility shim so classes like `min-w-0` and
   // `overflow-hidden` actually translate to CSS during the test.
   installTailwindShim();
@@ -253,49 +259,53 @@ function renderAppLayout() {
   document.body.appendChild(mount);
 
   const ui = (
-    <EntityFocusProvider>
-      <SchemaProvider>
-        <EntityStoreProvider entities={{}}>
-          <TooltipProvider>
-            <ActiveBoardPathProvider value="/test/wide">
-              <DragSessionProvider>
-                {/*
-                 * Mirrors App.tsx line-for-line so the test catches any
-                 * regression in the outer app shell's classes. See App.tsx:62.
-                 */}
-                <div
-                  data-testid="app-root"
-                  className="h-screen bg-background text-foreground flex flex-col overflow-hidden"
-                  style={{ height: "600px" }}
-                >
-                  <NavBar />
-                  <ViewsContainer>
-                    <PerspectivesContainer>
-                      <div
-                        data-testid="perspective-content"
-                        className="flex-1 min-w-0 overflow-hidden flex flex-col"
-                      >
-                        {/* Stand-in for BoardView's wide column strip. */}
-                        <div
-                          data-testid="board-scroll"
-                          className="flex flex-1 min-h-0 min-w-0 overflow-x-auto pl-2"
-                        >
-                          <WideContentProbe />
-                        </div>
-                      </div>
-                    </PerspectivesContainer>
-                  </ViewsContainer>
-                  <ModeIndicator />
-                </div>
-              </DragSessionProvider>
-            </ActiveBoardPathProvider>
-          </TooltipProvider>
-        </EntityStoreProvider>
-      </SchemaProvider>
-    </EntityFocusProvider>
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <EntityFocusProvider>
+          <SchemaProvider>
+            <EntityStoreProvider entities={{}}>
+              <TooltipProvider>
+                <ActiveBoardPathProvider value="/test/wide">
+                  <DragSessionProvider>
+                    {/*
+                     * Mirrors App.tsx line-for-line so the test catches any
+                     * regression in the outer app shell's classes. See App.tsx:62.
+                     */}
+                    <div
+                      data-testid="app-root"
+                      className="h-screen bg-background text-foreground flex flex-col overflow-hidden"
+                      style={{ height: "600px" }}
+                    >
+                      <NavBar />
+                      <ViewsContainer>
+                        <PerspectivesContainer>
+                          <div
+                            data-testid="perspective-content"
+                            className="flex-1 min-w-0 overflow-hidden flex flex-col"
+                          >
+                            {/* Stand-in for BoardView's wide column strip. */}
+                            <div
+                              data-testid="board-scroll"
+                              className="flex flex-1 min-h-0 min-w-0 overflow-x-auto pl-2"
+                            >
+                              <WideContentProbe />
+                            </div>
+                          </div>
+                        </PerspectivesContainer>
+                      </ViewsContainer>
+                      <ModeIndicator />
+                    </div>
+                  </DragSessionProvider>
+                </ActiveBoardPathProvider>
+              </TooltipProvider>
+            </EntityStoreProvider>
+          </SchemaProvider>
+        </EntityFocusProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>
   );
 
-  const result = render(ui, { container: mount });
+  const result = await renderInAct(ui, { container: mount });
   return { ...result, mount };
 }
 
@@ -316,8 +326,8 @@ describe("App layout — horizontal overflow containment", () => {
     document.body.scrollLeft = 0;
   });
 
-  it("ViewsContainer's flex row has min-w-0 so content can shrink below intrinsic width", () => {
-    const { mount } = renderAppLayout();
+  it("ViewsContainer's flex row has min-w-0 so content can shrink below intrinsic width", async () => {
+    const { mount } = await renderAppLayout();
     const leftNav = screen.getByTestId("left-nav");
     // The row is LeftNav's parent — the
     // <div className="flex-1 flex min-h-0 ..."> in views-container.tsx.
@@ -329,8 +339,8 @@ describe("App layout — horizontal overflow containment", () => {
     mount.remove();
   });
 
-  it("PerspectivesContainer's column has min-w-0 so it cannot be pushed wider", () => {
-    const { mount } = renderAppLayout();
+  it("PerspectivesContainer's column has min-w-0 so it cannot be pushed wider", async () => {
+    const { mount } = await renderAppLayout();
     const tabBar = screen.getByTestId("perspective-tab-bar");
     // The column is PerspectiveTabBar's parent — the
     // <div className="flex flex-col flex-1 min-h-0 ..."> in
@@ -344,8 +354,8 @@ describe("App layout — horizontal overflow containment", () => {
     mount.remove();
   });
 
-  it("document.body has no horizontal scroll when a 2000px content block is inside the app layout", () => {
-    const { mount } = renderAppLayout();
+  it("document.body has no horizontal scroll when a 2000px content block is inside the app layout", async () => {
+    const { mount } = await renderAppLayout();
     // If any ancestor in the chain lacks min-w-0 or overflow-hidden, the
     // 2000px-wide content propagates up and body scrolls horizontally.
     // With the fix applied, the `overflow-x-auto` scroll container owns
@@ -354,8 +364,8 @@ describe("App layout — horizontal overflow containment", () => {
     mount.remove();
   });
 
-  it("the board scroll container (overflow-x-auto) has scrollWidth > clientWidth when content overflows", () => {
-    const { mount } = renderAppLayout();
+  it("the board scroll container (overflow-x-auto) has scrollWidth > clientWidth when content overflows", async () => {
+    const { mount } = await renderAppLayout();
     const scrollContainer = screen.getByTestId("board-scroll");
     // The 2000px WideContentProbe must overflow the scroll container
     // horizontally — that's the whole point of the scroll container.
@@ -365,8 +375,8 @@ describe("App layout — horizontal overflow containment", () => {
     mount.remove();
   });
 
-  it("chrome elements (NavBar/TabBar/LeftNav/ModeIndicator) stay at stable viewport positions when scrolling the board horizontally", () => {
-    const { mount } = renderAppLayout();
+  it("chrome elements (NavBar/TabBar/LeftNav/ModeIndicator) stay at stable viewport positions when scrolling the board horizontally", async () => {
+    const { mount } = await renderAppLayout();
     const navBar = screen.getByRole("banner");
     const tabBar = screen.getByTestId("perspective-tab-bar");
     const leftNav = screen.getByTestId("left-nav");
@@ -436,7 +446,7 @@ describe("Board column widths — min 24em bound holds, overflow stays in scroll
     document.body.scrollLeft = 0;
   });
 
-  it("with 6 columns in an 800px viewport, every column is ≥24em wide and the board strip scrolls horizontally", () => {
+  it("with 6 columns in an 800px viewport, every column is ≥24em wide and the board strip scrolls horizontally", async () => {
     installTailwindShim();
 
     // 800px ≪ 6 × 24em (≈ 2304px at 16px/em). With shrink-0 on each column
@@ -476,30 +486,34 @@ describe("Board column widths — min 24em bound holds, overflow stays in scroll
     };
 
     try {
-      render(
-        <EntityFocusProvider>
-          <SchemaProvider>
-            <EntityStoreProvider entities={{}}>
-              <TooltipProvider>
-                <ActiveBoardPathProvider value="/test/wide-columns">
-                  <DragSessionProvider>
-                    <div
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        flex: "1 1 0%",
-                        minHeight: 0,
-                        minWidth: 0,
-                      }}
-                    >
-                      <BoardView board={boardFixture} tasks={[]} />
-                    </div>
-                  </DragSessionProvider>
-                </ActiveBoardPathProvider>
-              </TooltipProvider>
-            </EntityStoreProvider>
-          </SchemaProvider>
-        </EntityFocusProvider>,
+      await renderInAct(
+        <SpatialFocusProvider>
+          <FocusLayer name={asSegment("window")}>
+            <EntityFocusProvider>
+              <SchemaProvider>
+                <EntityStoreProvider entities={{}}>
+                  <TooltipProvider>
+                    <ActiveBoardPathProvider value="/test/wide-columns">
+                      <DragSessionProvider>
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            flex: "1 1 0%",
+                            minHeight: 0,
+                            minWidth: 0,
+                          }}
+                        >
+                          <BoardView board={boardFixture} tasks={[]} />
+                        </div>
+                      </DragSessionProvider>
+                    </ActiveBoardPathProvider>
+                  </TooltipProvider>
+                </EntityStoreProvider>
+              </SchemaProvider>
+            </EntityFocusProvider>
+          </FocusLayer>
+        </SpatialFocusProvider>,
         { container: host },
       );
 
@@ -508,12 +522,14 @@ describe("Board column widths — min 24em bound holds, overflow stays in scroll
       );
       const expectedMinPx = 24 * rootFontSize;
 
-      // Every column FocusScope carries data-moniker="column:<id>" — select
-      // by the stable moniker attribute rather than by Tailwind class names.
-      // Exclude "column:<id>.name" (the header's inner FocusScope for the
-      // name field, used by keyboard navigation).
+      // Every column FocusScope carries data-segment="column:<id>" — select
+      // by the stable segment attribute rather than by Tailwind class names.
+      // The synthetic `column:<id>.name` wrapper has been collapsed into the
+      // inner `<Field>` zone (which carries `field:column:<id>.name`), so a
+      // bare `column:` prefix selector is exact — no `.name`-style
+      // exclusion needed.
       const columnEls = host.querySelectorAll<HTMLElement>(
-        '[data-moniker^="column:"]:not([data-moniker*="."])',
+        '[data-segment^="column:"]',
       );
       expect(columnEls.length).toBe(6);
       for (const el of columnEls) {
@@ -542,7 +558,7 @@ describe("Board column widths — min 24em bound holds, overflow stays in scroll
     }
   });
 
-  it("each column FocusScope carries shrink-0 plus min-w-[24em]/max-w-[48em]", () => {
+  it("each column FocusScope carries shrink-0 plus min-w-[24em]/max-w-[48em]", async () => {
     installTailwindShim();
 
     const host = document.createElement("div");
@@ -578,31 +594,121 @@ describe("Board column widths — min 24em bound holds, overflow stays in scroll
     };
 
     try {
-      render(
-        <EntityFocusProvider>
-          <SchemaProvider>
-            <EntityStoreProvider entities={{}}>
-              <TooltipProvider>
-                <ActiveBoardPathProvider value="/test/class">
-                  <DragSessionProvider>
-                    <BoardView board={boardFixture} tasks={[]} />
-                  </DragSessionProvider>
-                </ActiveBoardPathProvider>
-              </TooltipProvider>
-            </EntityStoreProvider>
-          </SchemaProvider>
-        </EntityFocusProvider>,
+      await renderInAct(
+        <SpatialFocusProvider>
+          <FocusLayer name={asSegment("window")}>
+            <EntityFocusProvider>
+              <SchemaProvider>
+                <EntityStoreProvider entities={{}}>
+                  <TooltipProvider>
+                    <ActiveBoardPathProvider value="/test/class">
+                      <DragSessionProvider>
+                        <BoardView board={boardFixture} tasks={[]} />
+                      </DragSessionProvider>
+                    </ActiveBoardPathProvider>
+                  </TooltipProvider>
+                </EntityStoreProvider>
+              </SchemaProvider>
+            </EntityFocusProvider>
+          </FocusLayer>
+        </SpatialFocusProvider>,
         { container: host },
       );
 
       const columnEls = host.querySelectorAll<HTMLElement>(
-        '[data-moniker^="column:"]:not([data-moniker*="."])',
+        '[data-segment^="column:"]:not([data-segment*="."])',
       );
       expect(columnEls.length).toBe(2);
       for (const el of columnEls) {
         expect(el.className).toContain("min-w-[24em]");
         expect(el.className).toContain("max-w-[48em]");
         expect(el.className).toContain("shrink-0");
+      }
+    } finally {
+      host.remove();
+    }
+  });
+
+  it("each SortableColumn outer wrapper carries shrink-0 plus min-w-[24em]/max-w-[60em]", async () => {
+    // Regression for the narrow-viewport overlap bug: the SortableColumn flex
+    // item is the slot that the column scroll strip lays out. Without
+    // `shrink-0` it compresses under the strip's pressure and the inner
+    // ColumnView (which has its own `min-w-[24em] shrink-0`) overflows its
+    // slot, visually overlapping the next column. The strip's
+    // `overflow-x-auto` only kicks in when slots refuse to shrink — so this
+    // test guards every SortableColumn slot.
+    installTailwindShim();
+
+    const host = document.createElement("div");
+    host.style.width = "800px";
+    host.style.height = "400px";
+    host.style.display = "flex";
+    host.style.flexDirection = "column";
+    host.style.overflow = "hidden";
+    document.body.appendChild(host);
+
+    const columns = [
+      makeColumnFixture("a", "A", 0),
+      makeColumnFixture("b", "B", 1),
+    ];
+    const boardFixture: BoardData = {
+      board: {
+        id: "board-sortable-class",
+        entity_type: "board",
+        moniker: "board:board-sortable-class",
+        fields: { name: "Sortable Class Board" },
+      },
+      columns,
+      tags: [],
+      virtualTagMeta: [],
+      summary: {
+        total_tasks: 0,
+        total_actors: 0,
+        ready_tasks: 0,
+        blocked_tasks: 0,
+        done_tasks: 0,
+        percent_complete: 0,
+      },
+    };
+
+    try {
+      await renderInAct(
+        <SpatialFocusProvider>
+          <FocusLayer name={asSegment("window")}>
+            <EntityFocusProvider>
+              <SchemaProvider>
+                <EntityStoreProvider entities={{}}>
+                  <TooltipProvider>
+                    <ActiveBoardPathProvider value="/test/sortable-class">
+                      <DragSessionProvider>
+                        <BoardView board={boardFixture} tasks={[]} />
+                      </DragSessionProvider>
+                    </ActiveBoardPathProvider>
+                  </TooltipProvider>
+                </EntityStoreProvider>
+              </SchemaProvider>
+            </EntityFocusProvider>
+          </FocusLayer>
+        </SpatialFocusProvider>,
+        { container: host },
+      );
+
+      // The inner ColumnView FocusScope carries `data-segment="column:<id>"`.
+      // Walk up to its enclosing SortableColumn wrapper — the outer flex item
+      // with the `max-w-[60em]` class (unique to SortableColumn in this
+      // tree). The wrapper sits a few divs above the FocusScope: FocusScope
+      // -> Inspectable (`contents` div) -> SortableColumn inner (`min-w-0
+      // flex-1`) -> SortableColumn outer (the slot we're checking).
+      const columnEls = host.querySelectorAll<HTMLElement>(
+        '[data-segment^="column:"]:not([data-segment*="."])',
+      );
+      expect(columnEls.length).toBe(2);
+      for (const el of columnEls) {
+        const slot = el.closest<HTMLElement>(".max-w-\\[60em\\]");
+        expect(slot).toBeTruthy();
+        expect(slot!.className).toContain("shrink-0");
+        expect(slot!.className).toContain("min-w-[24em]");
+        expect(slot!.className).toContain("max-w-[60em]");
       }
     } finally {
       host.remove();

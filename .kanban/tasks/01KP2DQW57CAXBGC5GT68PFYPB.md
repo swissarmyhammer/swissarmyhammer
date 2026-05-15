@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffd280
+position_ordinal: ffffffffffffffffffffffffffffffc580
 project: task-card-fields
 title: Fix multi-select + vim + Enter combo in editor-save test matrix
 ---

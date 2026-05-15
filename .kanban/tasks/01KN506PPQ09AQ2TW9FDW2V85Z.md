@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KN4S7XVZJ7ZZ6MSB7WAG2F99
 position_column: done
-position_ordinal: ffffffffffffffffe880
+position_ordinal: ffffffffffffffffffffb480
 title: Extract validation layer above EntityContext::write()
 ---
 ## What

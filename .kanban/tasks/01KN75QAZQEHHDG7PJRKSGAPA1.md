@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffffff280
+position_ordinal: ffffffffffffffffffffca80
 title: 'Test MCP server: initialization, tool execution, and prompt handling'
 ---
 File: swissarmyhammer-tools/src/mcp/server.rs (53.0%, 224 uncovered lines)

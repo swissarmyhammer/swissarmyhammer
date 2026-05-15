@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffde80
+position_ordinal: ffffffffff8f80
 title: '[NIT] card/SKILL.md: schema examples in skill tool don''t include arguments field'
 ---
 ## What

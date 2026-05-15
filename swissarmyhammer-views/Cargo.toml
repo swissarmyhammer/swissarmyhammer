@@ -16,6 +16,8 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 ulid = { workspace = true }
 chrono = { workspace = true }
+swissarmyhammer-commands = { path = "../swissarmyhammer-commands" }
+swissarmyhammer-store = { path = "../swissarmyhammer-store" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

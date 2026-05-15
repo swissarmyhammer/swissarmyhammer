@@ -8,17 +8,17 @@ use crate::defaults::{
     builtin_view_definitions, kanban_compute_engine, KanbanLookup,
 };
 use crate::error::{KanbanError, Result};
-use crate::types::{ActorId, ColumnId, LogEntry, TagId, TaskId};
+use crate::types::{ActorId, ColumnId, TagId, TaskId};
 use fs2::FileExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use swissarmyhammer_commands::OptionsRegistry;
 use swissarmyhammer_entity::changelog::ChangeEntry;
 use swissarmyhammer_entity::{Entity, EntityCache, EntityContext, EntityWatcher};
 use swissarmyhammer_fields::{load_yaml_dir, DeriveRegistry, FieldsContext, ValidationEngine};
 use swissarmyhammer_perspectives::PerspectiveContext;
-use swissarmyhammer_views::{ViewsChangelog, ViewsContext};
+use swissarmyhammer_views::ViewsContext;
 use tokio::fs;
-use tokio::io::AsyncWriteExt;
 use tokio::sync::{OnceCell, RwLock};
 
 /// Context passed to every command - provides access, not logic
@@ -50,12 +50,20 @@ pub struct KanbanContext {
     entity_watcher: OnceCell<EntityWatcher>,
     /// View registry (populated via `open()`, None when created via `new()`)
     views: Option<RwLock<ViewsContext>>,
-    /// View changelog (populated via `open()`, None when created via `new()`)
-    views_changelog: Option<ViewsChangelog>,
     /// Perspective registry — lazy-initialized on first access.
     perspectives: OnceCell<RwLock<PerspectiveContext>>,
     /// Derive handlers for computed field read/write
     derive_registry: Arc<DeriveRegistry>,
+    /// Resolver registry for `ParamDef.options_from` enrichment.
+    ///
+    /// Default-constructed with the kanban built-ins
+    /// (`perspective.fields`, `view.kinds`, `sort.directions`) via
+    /// [`crate::commands::options_resolvers::default_options_registry`].
+    /// Stored as an `Arc` so callers can clone cheaply and so the
+    /// registry can be threaded into
+    /// [`crate::scope_commands::commands_for_scope`] without
+    /// borrowing through the context.
+    options_registry: Arc<OptionsRegistry>,
 }
 
 impl KanbanContext {
@@ -87,9 +95,11 @@ impl KanbanContext {
             entity_cache: OnceCell::new(),
             entity_watcher: OnceCell::new(),
             views: None,
-            views_changelog: None,
             perspectives: OnceCell::new(),
             derive_registry: Arc::new(crate::derive_handlers::kanban_derive_registry()),
+            options_registry: Arc::new(
+                crate::commands::options_resolvers::default_options_registry(),
+            ),
         }
     }
 
@@ -117,7 +127,6 @@ impl KanbanContext {
         Self::seed_builtin_views(&views_root).await?;
         Self::seed_builtin_actors(&root).await?;
         let views = Self::build_views_context(&views_root)?;
-        let views_changelog = ViewsChangelog::new(root.join("views.jsonl"));
 
         // Build perspectives context
         let perspectives_dir = root.join("perspectives");
@@ -136,9 +145,11 @@ impl KanbanContext {
             entity_cache: OnceCell::new(),
             entity_watcher: OnceCell::new(),
             views: Some(RwLock::new(views)),
-            views_changelog: Some(views_changelog),
             perspectives: persp_cell,
             derive_registry: Arc::new(crate::derive_handlers::kanban_derive_registry()),
+            options_registry: Arc::new(
+                crate::commands::options_resolvers::default_options_registry(),
+            ),
         })
     }
 
@@ -170,14 +181,22 @@ impl KanbanContext {
         &self.derive_registry
     }
 
+    /// Access the options-resolver registry.
+    ///
+    /// Default-constructed at context-init time with the kanban
+    /// built-in resolvers (`perspective.fields`, `view.kinds`,
+    /// `sort.directions`) pre-registered. Threaded into
+    /// [`crate::scope_commands::commands_for_scope`] by callers
+    /// (e.g. the kanban-app GUI's `list_commands_for_scope`) so
+    /// emitted commands carry concrete picker options for every
+    /// `options_from`-tagged param.
+    pub fn options_registry(&self) -> &OptionsRegistry {
+        &self.options_registry
+    }
+
     /// Access the view registry lock, if initialized.
     pub fn views(&self) -> Option<&RwLock<ViewsContext>> {
         self.views.as_ref()
-    }
-
-    /// Access the view changelog, if initialized.
-    pub fn views_changelog(&self) -> Option<&ViewsChangelog> {
-        self.views_changelog.as_ref()
     }
 
     /// Access the perspective registry if it has already been initialized.
@@ -217,6 +236,29 @@ impl KanbanContext {
         &self.context_name
     }
 
+    /// Process-wide [`PasteMatrix`] singleton, populated lazily on first
+    /// call by [`register_paste_handlers`].
+    ///
+    /// The matrix is a pure registry of `(clipboard_type, target_type) →
+    /// PasteHandler` mappings — it carries no per-board state, so a single
+    /// instance is shared across every [`KanbanContext`] (and across every
+    /// board open in the process). Callers that need to dispatch a
+    /// synthetic paste — notably the external-file branch of
+    /// [`crate::commands::drag_commands::DragCompleteCmd`] — read it via
+    /// this accessor instead of building their own matrix per invocation.
+    ///
+    /// [`PasteMatrix`]: crate::commands::paste_handlers::PasteMatrix
+    /// [`register_paste_handlers`]: crate::commands::paste_handlers::register_paste_handlers
+    pub fn paste_matrix(&self) -> Arc<crate::commands::paste_handlers::PasteMatrix> {
+        static MATRIX: OnceLock<Arc<crate::commands::paste_handlers::PasteMatrix>> =
+            OnceLock::new();
+        Arc::clone(
+            MATRIX.get_or_init(|| {
+                Arc::new(crate::commands::paste_handlers::register_paste_handlers())
+            }),
+        )
+    }
+
     /// Path to board.yaml
     pub fn board_path(&self) -> PathBuf {
         self.root.join("board.yaml")
@@ -230,11 +272,6 @@ impl KanbanContext {
     /// Path to a task's markdown file (YAML frontmatter + markdown body)
     pub fn task_path(&self, id: &TaskId) -> PathBuf {
         self.root.join("tasks").join(format!("{}.md", id))
-    }
-
-    /// Path to a task's log file
-    pub fn task_log_path(&self, id: &TaskId) -> PathBuf {
-        self.root.join("tasks").join(format!("{}.jsonl", id))
     }
 
     /// Path to actors directory
@@ -265,11 +302,6 @@ impl KanbanContext {
     /// Path to a column's YAML file
     pub fn column_path(&self, id: &ColumnId) -> PathBuf {
         self.root.join("columns").join(format!("{}.yaml", id))
-    }
-
-    /// Path to a column's log file
-    pub fn column_log_path(&self, id: &ColumnId) -> PathBuf {
-        self.root.join("columns").join(format!("{}.jsonl", id))
     }
 
     /// Path to the perspectives directory
@@ -329,64 +361,6 @@ impl KanbanContext {
         if !self.directories_exist() {
             self.create_directories().await?;
         }
-        Ok(())
-    }
-
-    // =========================================================================
-    /// Append a log entry to a task's log
-    pub async fn append_task_log(&self, task_id: &TaskId, entry: &LogEntry) -> Result<()> {
-        self.append_log(&self.task_log_path(task_id), entry).await
-    }
-
-    /// Path to a tag's log file
-    pub fn tag_log_path(&self, id: &TagId) -> PathBuf {
-        self.root.join("tags").join(format!("{}.jsonl", id))
-    }
-
-    /// Path to an actor's log file
-    pub fn actor_log_path(&self, id: &ActorId) -> PathBuf {
-        self.root.join("actors").join(format!("{}.jsonl", id))
-    }
-
-    /// Path to the board log file
-    pub fn board_log_path(&self) -> PathBuf {
-        self.root.join("board.jsonl")
-    }
-
-    /// Append a log entry to a tag's log
-    pub async fn append_tag_log(&self, id: &TagId, entry: &LogEntry) -> Result<()> {
-        self.append_log(&self.tag_log_path(id), entry).await
-    }
-
-    /// Append a log entry to an actor's log
-    pub async fn append_actor_log(&self, id: &ActorId, entry: &LogEntry) -> Result<()> {
-        self.append_log(&self.actor_log_path(id), entry).await
-    }
-
-    /// Append a log entry to a column's log
-    pub async fn append_column_log(&self, id: &ColumnId, entry: &LogEntry) -> Result<()> {
-        self.append_log(&self.column_log_path(id), entry).await
-    }
-
-    /// Append a log entry to the board log
-    pub async fn append_board_log(&self, entry: &LogEntry) -> Result<()> {
-        self.append_log(&self.board_log_path(), entry).await
-    }
-
-    /// Append a log entry to a JSONL file
-    async fn append_log(&self, path: &Path, entry: &LogEntry) -> Result<()> {
-        let mut line = serde_json::to_string(entry)?;
-        line.push('\n');
-
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .await?;
-
-        file.write_all(line.as_bytes()).await?;
-        file.flush().await?;
-
         Ok(())
     }
 
@@ -900,10 +874,6 @@ mod tests {
             ctx.column_path(&ColumnId::from_string("todo")),
             root.join("columns").join("todo.yaml")
         );
-        assert_eq!(
-            ctx.column_log_path(&ColumnId::from_string("todo")),
-            root.join("columns").join("todo.jsonl")
-        );
     }
 
     #[tokio::test]
@@ -1271,16 +1241,6 @@ type:
     }
 
     #[tokio::test]
-    async fn test_views_changelog_initialized() {
-        let temp = TempDir::new().unwrap();
-        let kanban_dir = temp.path().join(".kanban");
-        std::fs::create_dir_all(&kanban_dir).unwrap();
-
-        let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
-        assert!(ctx.views_changelog().is_some());
-    }
-
-    #[tokio::test]
     async fn test_builtin_views_seeded_to_disk() {
         let temp = TempDir::new().unwrap();
         let kanban_dir = temp.path().join(".kanban");
@@ -1343,104 +1303,6 @@ type:
 
         let ctx = KanbanContext::find(temp.path().join("sub")).unwrap();
         assert_eq!(ctx.root(), sub_kanban);
-    }
-
-    // =========================================================================
-
-    #[tokio::test]
-    async fn test_append_task_log() {
-        let (_temp, ctx) = setup().await;
-
-        let task_id = TaskId::new();
-        let entry = LogEntry::new(
-            "update task",
-            serde_json::json!({"id": task_id.to_string()}),
-            serde_json::json!({}),
-            Some("alice".into()),
-            5,
-        );
-        ctx.append_task_log(&task_id, &entry).await.unwrap();
-
-        // Verify the file was created at the expected path
-        let log_path = ctx.task_log_path(&task_id);
-        assert!(log_path.exists());
-
-        // Read back and verify content
-        let content = tokio::fs::read_to_string(&log_path).await.unwrap();
-        let parsed: LogEntry = serde_json::from_str(content.trim()).unwrap();
-        assert_eq!(parsed.op, "update task");
-        assert_eq!(parsed.actor, Some("alice".into()));
-    }
-
-    #[tokio::test]
-    async fn test_append_tag_log() {
-        let (_temp, ctx) = setup().await;
-
-        let tag_id = TagId::new();
-        let entry = LogEntry::new(
-            "add tag",
-            serde_json::json!({}),
-            serde_json::json!({}),
-            None,
-            1,
-        );
-        ctx.append_tag_log(&tag_id, &entry).await.unwrap();
-
-        let log_path = ctx.tag_log_path(&tag_id);
-        assert!(log_path.exists());
-    }
-
-    #[tokio::test]
-    async fn test_append_actor_log() {
-        let (_temp, ctx) = setup().await;
-
-        let actor_id = ActorId::from_string("bob");
-        let entry = LogEntry::new(
-            "add actor",
-            serde_json::json!({}),
-            serde_json::json!({}),
-            None,
-            1,
-        );
-        ctx.append_actor_log(&actor_id, &entry).await.unwrap();
-
-        let log_path = ctx.actor_log_path(&actor_id);
-        assert!(log_path.exists());
-    }
-
-    #[tokio::test]
-    async fn test_append_column_log() {
-        let (_temp, ctx) = setup().await;
-
-        let col_id = ColumnId::from_string("doing");
-        let entry = LogEntry::new(
-            "add column",
-            serde_json::json!({}),
-            serde_json::json!({}),
-            None,
-            1,
-        );
-        ctx.append_column_log(&col_id, &entry).await.unwrap();
-
-        let log_path = ctx.column_log_path(&col_id);
-        assert!(log_path.exists());
-    }
-
-    #[tokio::test]
-    async fn test_append_board_log() {
-        let (_temp, ctx) = setup().await;
-
-        let entry = LogEntry::new(
-            "update board",
-            serde_json::json!({}),
-            serde_json::json!({}),
-            None,
-            1,
-        );
-        ctx.append_board_log(&entry).await.unwrap();
-
-        let log_path = ctx.board_log_path();
-        assert!(log_path.exists());
     }
 
     // =========================================================================
@@ -1518,144 +1380,6 @@ card_fields:
         // The custom name should be preserved (local override wins)
         let board = views.get_by_id("01JMVIEW0000000000BOARD0").unwrap();
         assert_eq!(board.name, "My Custom Board");
-    }
-
-    // =========================================================================
-    // Activity logging tests
-    // =========================================================================
-
-    /// Helper to create a LogEntry for testing
-    fn make_log_entry(op: &str) -> LogEntry {
-        LogEntry::new(
-            op,
-            serde_json::json!({"test": true}),
-            serde_json::json!({"ok": true}),
-            None,
-            10,
-        )
-    }
-
-    #[tokio::test]
-    async fn test_append_task_log_writes_jsonl() {
-        let (_temp, ctx) = setup().await;
-        let task_id = TaskId::from_string("01TESTTASK00000000000000");
-        let entry = make_log_entry("add task");
-
-        ctx.append_task_log(&task_id, &entry).await.unwrap();
-
-        let path = ctx.task_log_path(&task_id);
-        let content = tokio::fs::read_to_string(&path).await.unwrap();
-        let parsed: LogEntry = serde_json::from_str(content.trim()).unwrap();
-        assert_eq!(parsed.op, "add task");
-    }
-
-    #[tokio::test]
-    async fn test_append_tag_log_writes_jsonl() {
-        let (_temp, ctx) = setup().await;
-        let tag_id = TagId::from_string("01TESTTAG000000000000000");
-        let entry = make_log_entry("add tag");
-
-        ctx.append_tag_log(&tag_id, &entry).await.unwrap();
-
-        let path = ctx.tag_log_path(&tag_id);
-        let content = tokio::fs::read_to_string(&path).await.unwrap();
-        let parsed: LogEntry = serde_json::from_str(content.trim()).unwrap();
-        assert_eq!(parsed.op, "add tag");
-    }
-
-    #[tokio::test]
-    async fn test_append_actor_log_writes_jsonl() {
-        let (_temp, ctx) = setup().await;
-        let actor_id = ActorId::from_string("test-actor");
-        let entry = make_log_entry("add actor");
-
-        ctx.append_actor_log(&actor_id, &entry).await.unwrap();
-
-        let path = ctx.actor_log_path(&actor_id);
-        let content = tokio::fs::read_to_string(&path).await.unwrap();
-        let parsed: LogEntry = serde_json::from_str(content.trim()).unwrap();
-        assert_eq!(parsed.op, "add actor");
-    }
-
-    #[tokio::test]
-    async fn test_append_column_log_writes_jsonl() {
-        let (_temp, ctx) = setup().await;
-        let col_id = ColumnId::from_string("todo");
-        let entry = make_log_entry("add column");
-
-        ctx.append_column_log(&col_id, &entry).await.unwrap();
-
-        let path = ctx.column_log_path(&col_id);
-        let content = tokio::fs::read_to_string(&path).await.unwrap();
-        let parsed: LogEntry = serde_json::from_str(content.trim()).unwrap();
-        assert_eq!(parsed.op, "add column");
-    }
-
-    #[tokio::test]
-    async fn test_append_board_log_writes_jsonl() {
-        let (_temp, ctx) = setup().await;
-        let entry = make_log_entry("update board");
-
-        ctx.append_board_log(&entry).await.unwrap();
-
-        let path = ctx.board_log_path();
-        let content = tokio::fs::read_to_string(&path).await.unwrap();
-        let parsed: LogEntry = serde_json::from_str(content.trim()).unwrap();
-        assert_eq!(parsed.op, "update board");
-    }
-
-    #[tokio::test]
-    async fn test_append_log_appends_multiple_entries() {
-        let (_temp, ctx) = setup().await;
-        let task_id = TaskId::from_string("01TESTTASK00000000000000");
-
-        let e1 = make_log_entry("add task");
-        let e2 = make_log_entry("update task");
-        ctx.append_task_log(&task_id, &e1).await.unwrap();
-        ctx.append_task_log(&task_id, &e2).await.unwrap();
-
-        let path = ctx.task_log_path(&task_id);
-        let content = tokio::fs::read_to_string(&path).await.unwrap();
-        let lines: Vec<&str> = content.lines().filter(|l| !l.is_empty()).collect();
-        assert_eq!(lines.len(), 2);
-
-        let p1: LogEntry = serde_json::from_str(lines[0]).unwrap();
-        let p2: LogEntry = serde_json::from_str(lines[1]).unwrap();
-        assert_eq!(p1.op, "add task");
-        assert_eq!(p2.op, "update task");
-    }
-
-    // =========================================================================
-    // Path helper tests for tag, actor, board log paths
-    // =========================================================================
-
-    #[tokio::test]
-    async fn test_tag_log_path() {
-        let (temp, ctx) = setup().await;
-        let root = temp.path().join(".kanban");
-        let tag_id = TagId::from_string("01TESTTAG000000000000000");
-        assert_eq!(
-            ctx.tag_log_path(&tag_id),
-            root.join("tags").join("01TESTTAG000000000000000.jsonl")
-        );
-    }
-
-    #[tokio::test]
-    async fn test_actor_log_path() {
-        let (temp, ctx) = setup().await;
-        let root = temp.path().join(".kanban");
-        let actor_id = ActorId::from_string("alice");
-        assert_eq!(
-            ctx.actor_log_path(&actor_id),
-            root.join("actors").join("alice.jsonl")
-        );
-    }
-
-    #[tokio::test]
-    async fn test_board_log_path() {
-        let (temp, ctx) = setup().await;
-        let root = temp.path().join(".kanban");
-        assert_eq!(ctx.board_log_path(), root.join("board.jsonl"));
     }
 
     // =========================================================================

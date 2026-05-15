@@ -16,6 +16,41 @@ use crate::event::ChangeEvent;
 use crate::id::{StoredItemId, UndoEntryId};
 use crate::stack::UndoStack;
 
+/// The concrete target an undo or redo touched.
+///
+/// Returned from [`StoreContext::undo`] / [`StoreContext::redo`] so callers
+/// that maintain caches parallel to the on-disk store (e.g. the entity-layer
+/// cache) can synchronize the single affected item without re-scanning the
+/// whole store.
+///
+/// `store_name` is the underlying store's human-readable name (e.g.
+/// `"task"`, `"tag"`) as returned by [`ErasedStore::store_name`].
+/// `item_id` is the identifier of the item whose changelog was rewound /
+/// replayed.
+#[derive(Debug, Clone)]
+pub struct UndoOutcome {
+    /// Name of the store that owned the entry (e.g. `"task"`, `"tag"`).
+    ///
+    /// For a multi-entry undo group, this is the store of the last entry
+    /// processed (kept as a single field for backward compatibility with
+    /// existing single-entry consumers). Every store the group touched is
+    /// enumerated in [`items`].
+    pub store_name: String,
+    /// Identifier of the item whose state was reversed or reapplied.
+    ///
+    /// For a multi-entry undo group, this is the last item processed; full
+    /// per-item details are in [`items`].
+    pub item_id: StoredItemId,
+    /// Every (store_name, item_id) pair affected by this undo/redo call.
+    ///
+    /// For a single-entry undo this contains exactly one pair matching
+    /// `(store_name, item_id)`. For a group undo it contains every entry
+    /// that was reversed/reapplied, in processing order. Callers that
+    /// maintain caches mirroring on-disk state must iterate this list so
+    /// every touched item is resynced — not just the representative.
+    pub items: Vec<(String, StoredItemId)>,
+}
+
 /// Central coordinator for multiple file-backed stores.
 ///
 /// Manages a shared undo/redo stack and dispatches operations to the
@@ -24,6 +59,39 @@ pub struct StoreContext {
     stack: RwLock<UndoStack>,
     stores: RwLock<Vec<Arc<dyn ErasedStore>>>,
     root: PathBuf,
+    /// Active undo-group correlator. While set, every `push` stamps the
+    /// new entry with this group id so a later `undo()` unwinds the whole
+    /// run atomically. Set/cleared by [`begin_undo_group`] / [`end_undo_group`].
+    current_group: tokio::sync::Mutex<Option<UndoEntryId>>,
+}
+
+/// RAII guard that ends the active undo group when dropped.
+///
+/// Returned by [`StoreContext::begin_undo_group`]. Dropping the guard
+/// clears the context's active group state so subsequent writes are
+/// pushed as independent undo entries again.
+pub struct UndoGroupGuard<'a> {
+    ctx: &'a StoreContext,
+}
+
+impl<'a> UndoGroupGuard<'a> {
+    /// Explicitly end the group. Equivalent to dropping the guard.
+    pub async fn end(self) {
+        self.ctx.end_undo_group().await;
+        std::mem::forget(self);
+    }
+}
+
+impl<'a> Drop for UndoGroupGuard<'a> {
+    fn drop(&mut self) {
+        // Best-effort sync clear when the guard is dropped without an
+        // explicit `.end().await`. The mutex contention here is bounded
+        // — only the command that opened the group holds it — so a
+        // blocking lock attempt is safe.
+        if let Ok(mut g) = self.ctx.current_group.try_lock() {
+            *g = None;
+        }
+    }
 }
 
 impl StoreContext {
@@ -43,7 +111,33 @@ impl StoreContext {
             stack: RwLock::new(stack),
             stores: RwLock::new(Vec::new()),
             root,
+            current_group: tokio::sync::Mutex::new(None),
         }
+    }
+
+    /// Begin a multi-write undo group.
+    ///
+    /// Every `push` call between this and the returned guard going out
+    /// of scope (or `.end()` being called) is stamped with a shared
+    /// `group_id`. A single `undo()` then reverses every entry in the
+    /// group as one step.
+    ///
+    /// Calling this while a group is already open returns a guard that
+    /// reuses the current group id — nested calls do not create
+    /// sub-groups.
+    pub async fn begin_undo_group(&self) -> UndoGroupGuard<'_> {
+        let mut g = self.current_group.lock().await;
+        if g.is_none() {
+            *g = Some(UndoEntryId::new());
+        }
+        UndoGroupGuard { ctx: self }
+    }
+
+    /// Clear the active undo group. Called by [`UndoGroupGuard::end`]
+    /// and the guard's `Drop` impl; rarely needed directly.
+    pub async fn end_undo_group(&self) {
+        let mut g = self.current_group.lock().await;
+        *g = None;
     }
 
     /// Register a store with this context.
@@ -55,9 +149,14 @@ impl StoreContext {
     ///
     /// The `item_id` records which item's per-item changelog contains this
     /// entry, so that undo/redo can look it up without scanning all files.
+    ///
+    /// If a group is currently open via [`begin_undo_group`], the entry is
+    /// stamped with the active `group_id` so it will be undone/redone
+    /// together with its siblings.
     pub async fn push(&self, id: UndoEntryId, label: String, item_id: StoredItemId) {
+        let group_id = *self.current_group.lock().await;
         let mut stack = self.stack.write().await;
-        stack.push(id, label, item_id);
+        stack.push_with_group(id, label, item_id, group_id);
         if let Err(e) = stack.save(&self.root.join("undo_stack.yaml")) {
             tracing::warn!(error = %e, "failed to save undo stack");
         }
@@ -69,42 +168,63 @@ impl StoreContext {
     /// the undo to it. Updates the stack pointer and persists.
     /// Minimizes the scope of the stores read lock by cloning the matching
     /// `Arc<dyn ErasedStore>` before awaiting the undo operation.
-    pub async fn undo(&self) -> Result<()> {
-        let (target_id, item_id) = {
+    ///
+    /// Returns an [`UndoOutcome`] identifying the store and item whose
+    /// on-disk state was reversed, so the caller can reconcile any
+    /// higher-level caches it maintains over those files.
+    pub async fn undo(&self) -> Result<UndoOutcome> {
+        // Snapshot the full set of entries to undo as one group. The group
+        // is `[start, end)` on the stack; we reverse them in reverse-push
+        // order so each store sees the file state the entry was diffed
+        // against.
+        let group_entries: Vec<(UndoEntryId, StoredItemId)> = {
             let stack = self.stack.read().await;
-            let entry = stack
-                .undo_target()
+            let range = stack
+                .group_undo_range()
                 .ok_or_else(|| StoreError::NotFound("nothing to undo".into()))?;
-            (entry.id, entry.item_id.clone())
+            stack.entries()[range]
+                .iter()
+                .map(|e| (e.id, e.item_id.clone()))
+                .collect()
         };
 
-        // Clone matching store out of the lock, then release it before awaiting
-        let store = {
+        let stores_snapshot: Vec<Arc<dyn ErasedStore>> = {
             let stores = self.stores.read().await;
-            let mut found = None;
-            for s in stores.iter() {
-                if s.has_entry(&target_id, &item_id).await {
-                    found = Some(Arc::clone(s));
+            stores.iter().map(Arc::clone).collect()
+        };
+
+        // Reverse the group from newest to oldest so each store sees the
+        // disk state the entry was diffed against when it was written.
+        let mut items: Vec<(String, StoredItemId)> = Vec::with_capacity(group_entries.len());
+        for (target_id, item_id) in group_entries.iter().rev() {
+            let mut owning = None;
+            for s in &stores_snapshot {
+                if s.has_entry(target_id, item_id).await {
+                    owning = Some(Arc::clone(s));
                     break;
                 }
             }
-            found
-        };
-        // Lock released here
-
-        if let Some(store) = store {
-            store.undo_erased(&target_id, &item_id).await?;
-        } else {
-            return Err(StoreError::NoProvider(target_id.to_string()));
+            let Some(store) = owning else {
+                return Err(StoreError::NoProvider(target_id.to_string()));
+            };
+            store.undo_erased(target_id, item_id).await?;
+            items.push((store.store_name().to_string(), item_id.clone()));
         }
 
+        let popped = group_entries.len();
         let mut stack = self.stack.write().await;
-        stack.record_undo();
+        stack.record_undo_n(popped);
         if let Err(e) = stack.save(&self.root.join("undo_stack.yaml")) {
             tracing::warn!(error = %e, "failed to save undo stack");
         }
 
-        Ok(())
+        // `items` is non-empty here — `group_undo_range` returned `Some`.
+        let (store_name, item_id) = items.last().cloned().expect("at least one entry processed");
+        Ok(UndoOutcome {
+            store_name,
+            item_id,
+            items,
+        })
     }
 
     /// Redo the most recently undone operation.
@@ -113,42 +233,58 @@ impl StoreContext {
     /// the redo to it. Updates the stack pointer and persists.
     /// Minimizes the scope of the stores read lock by cloning the matching
     /// `Arc<dyn ErasedStore>` before awaiting the redo operation.
-    pub async fn redo(&self) -> Result<()> {
-        let (target_id, item_id) = {
+    ///
+    /// Returns an [`UndoOutcome`] identifying the store and item whose
+    /// on-disk state was reapplied, so the caller can reconcile any
+    /// higher-level caches it maintains over those files.
+    pub async fn redo(&self) -> Result<UndoOutcome> {
+        let group_entries: Vec<(UndoEntryId, StoredItemId)> = {
             let stack = self.stack.read().await;
-            let entry = stack
-                .redo_target()
+            let range = stack
+                .group_redo_range()
                 .ok_or_else(|| StoreError::NotFound("nothing to redo".into()))?;
-            (entry.id, entry.item_id.clone())
+            stack.entries()[range]
+                .iter()
+                .map(|e| (e.id, e.item_id.clone()))
+                .collect()
         };
 
-        // Clone matching store out of the lock, then release it before awaiting
-        let store = {
+        let stores_snapshot: Vec<Arc<dyn ErasedStore>> = {
             let stores = self.stores.read().await;
-            let mut found = None;
-            for s in stores.iter() {
-                if s.has_entry(&target_id, &item_id).await {
-                    found = Some(Arc::clone(s));
+            stores.iter().map(Arc::clone).collect()
+        };
+
+        // Reapply in original push order so the disk state matches what
+        // the command produced the first time.
+        let mut items: Vec<(String, StoredItemId)> = Vec::with_capacity(group_entries.len());
+        for (target_id, item_id) in group_entries.iter() {
+            let mut owning = None;
+            for s in &stores_snapshot {
+                if s.has_entry(target_id, item_id).await {
+                    owning = Some(Arc::clone(s));
                     break;
                 }
             }
-            found
-        };
-        // Lock released here
-
-        if let Some(store) = store {
-            store.redo_erased(&target_id, &item_id).await?;
-        } else {
-            return Err(StoreError::NoProvider(target_id.to_string()));
+            let Some(store) = owning else {
+                return Err(StoreError::NoProvider(target_id.to_string()));
+            };
+            store.redo_erased(target_id, item_id).await?;
+            items.push((store.store_name().to_string(), item_id.clone()));
         }
 
+        let pushed = group_entries.len();
         let mut stack = self.stack.write().await;
-        stack.record_redo();
+        stack.record_redo_n(pushed);
         if let Err(e) = stack.save(&self.root.join("undo_stack.yaml")) {
             tracing::warn!(error = %e, "failed to save undo stack");
         }
 
-        Ok(())
+        let (store_name, item_id) = items.last().cloned().expect("at least one entry processed");
+        Ok(UndoOutcome {
+            store_name,
+            item_id,
+            items,
+        })
     }
 
     /// Whether there is an operation that can be undone.
@@ -159,6 +295,17 @@ impl StoreContext {
     /// Whether there is an operation that can be redone.
     pub async fn can_redo(&self) -> bool {
         self.stack.read().await.can_redo()
+    }
+
+    /// Number of entries currently available to undo.
+    ///
+    /// Equivalent to counting how many successful `undo()` calls could be
+    /// performed right now without error. Exposed primarily for tests that
+    /// need a cheap read-only probe of stack depth — driving real
+    /// `undo`/`redo` round-trips to measure depth is correct but fragile
+    /// (if any probed `redo` fails the stack is left inconsistent).
+    pub async fn undo_depth(&self) -> usize {
+        self.stack.read().await.pointer()
     }
 
     /// Flush changes from all registered stores and aggregate events.

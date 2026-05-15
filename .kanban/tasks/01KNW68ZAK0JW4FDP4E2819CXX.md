@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffb280
+position_ordinal: fffffffffffffffffffffffffffffd80
 project: expr-filter
 title: Update parse_error_on_invalid_input comment in filter-expr lib.rs to explain why $$garbage fails
 ---

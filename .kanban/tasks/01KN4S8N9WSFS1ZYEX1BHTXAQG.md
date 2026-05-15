@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KN508KF8KTZX1ZE371DHRFF7
 position_column: done
-position_ordinal: ffffffffffffffffff9f80
+position_ordinal: ffffffffffffffffffffffa380
 title: Implement TrackedStore for Perspective + undoable commands + events
 ---
 ## What

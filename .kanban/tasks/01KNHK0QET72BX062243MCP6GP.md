@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffffffff780
+position_ordinal: ffffffffffffffffffffffffe880
 title: 'Coverage: read_source_range in ops/lsp_helpers.rs'
 ---
 crates/code-context/src/ops/lsp_helpers.rs

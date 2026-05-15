@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffe680
+position_ordinal: ffffffffffffffbc80
 title: popClaim dispatches redundant IPC when removing non-active claim
 ---
 **Severity: Low / Performance**

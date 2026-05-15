@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM8PZM4PDZS7A4FKWDQ34ZHZ
 position_column: done
-position_ordinal: ffffffffffe080
+position_ordinal: ffffffffffffaf80
 title: Move active board into per-window WindowState
 ---
 ## What

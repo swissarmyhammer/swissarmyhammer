@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KN4NF5Q66P2PXYAKJ7BJZKCS
 position_column: done
-position_ordinal: ffffffffffffffffb780
+position_ordinal: ffffffffffffffffffb080
 title: Attachment editor component (file picker + remove)
 ---
 ## What

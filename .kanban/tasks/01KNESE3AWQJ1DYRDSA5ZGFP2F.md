@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNESD0630BPJG3BK84KEJMJP
 position_column: done
-position_ordinal: ffffffffffffffffffdc80
+position_ordinal: ffffffffffffffffffffffffa680
 title: 'LSP-T1A: get_definition + get_type_definition ops'
 ---
 ## What
@@ -20,7 +20,7 @@ Implement two location-returning ops that share the `DefinitionLocation` result 
 - Returns `Vec<DefinitionLocation>` + `SourceLayer` indicating which layer provided results.
 
 ### `get_type_definition` — live LSP only
-- New file: `swissarmyhammer-code-context/src/ops/get_type_definition.rs`  
+- New file: `swissarmyhammer-code-context/src/ops/get_type_definition.rs`
 - Takes `&LayeredContext` + same options
 - **Layer 1 only**: `ctx.lsp_request("textDocument/typeDefinition", ...)`. Type definition is inherently a live LSP feature — no index equivalent.
 - Returns empty + `SourceLayer::None` when `ctx.has_live_lsp()` is false.

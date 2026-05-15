@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KN2Q67HEFFEM63KJ5V006ASD
 position_column: done
-position_ordinal: ffffffffffffffffac80
+position_ordinal: ffffffffffffffffff9a80
 title: 'PERSP-7: Perspective YAML command definitions + Command trait impls'
 ---
 ## What

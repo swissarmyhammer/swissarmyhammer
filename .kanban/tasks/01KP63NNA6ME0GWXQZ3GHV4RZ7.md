@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffd780
+position_ordinal: ffffffffffffffffffffffffffffffce80
 title: 'Fix Do This Next: delete frontend workaround, route through backend task.doThisNext, add tests'
 ---
 ## What

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffff9e80
+position_ordinal: ffffffffffffffffffffffffffb380
 title: 'Bug: Clearing perspective group-by leaves grid stuck in grouped layout'
 ---
 ## What

@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: f880
+position_ordinal: ff80
 title: 'LSP daemon: rust-analyzer handshake fails with EOF'
 ---
 ## Problem

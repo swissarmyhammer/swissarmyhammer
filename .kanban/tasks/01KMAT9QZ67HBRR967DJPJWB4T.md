@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMASVT0S8EHWVJ0MSPFCG5RY
 position_column: done
-position_ordinal: fffffffffffa80
+position_ordinal: ffffffffffffc980
 title: Delete field-placeholder.test.tsx — replaced by editor-save.test.tsx
 ---
 ## What

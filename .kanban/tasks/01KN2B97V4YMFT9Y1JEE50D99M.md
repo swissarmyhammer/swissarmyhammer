@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KN24NAX41PVGAZ927NKZZ95X
 position_column: done
-position_ordinal: ffffffffffffffffa280
+position_ordinal: ffffffffffffffffff8780
 title: 'Bug: command palette opens in wrong window (stale scope chain)'
 ---
 ## What

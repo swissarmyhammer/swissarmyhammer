@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KN9C5394341SWFR5E65YZV4W
 position_column: done
-position_ordinal: ffffffffffffffffffff8480
+position_ordinal: fffffffffffffffffffffffffe80
 title: Auto-select perspective after creation — both \"+\" button and auto-create
 ---
 ## What

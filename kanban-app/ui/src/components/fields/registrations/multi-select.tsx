@@ -52,8 +52,15 @@ function BadgeListDisplayAdapter({
   );
 }
 
-function AvatarDisplayAdapter({ value }: FieldDisplayProps) {
-  return <AvatarDisplay value={value} />;
+function AvatarDisplayAdapter({
+  field,
+  value,
+  entity,
+  mode,
+}: FieldDisplayProps) {
+  return (
+    <AvatarDisplay field={field} value={value} entity={entity!} mode={mode} />
+  );
 }
 
 registerEditor("multi-select", MultiSelectEditorAdapter);

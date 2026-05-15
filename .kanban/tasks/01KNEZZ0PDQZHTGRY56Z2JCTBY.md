@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffa180
+position_ordinal: ffffffffffffffffffffffffffb880
 title: Add `groupable` attribute to FieldDef (Rust + YAML definitions)
 ---
 ## What

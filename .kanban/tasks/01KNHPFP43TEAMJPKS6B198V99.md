@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffffffffd80
+position_ordinal: fffffffffffffffffffffffff280
 title: 'Coverage: daemon.rs::file_extensions accessor'
 ---
 ## What

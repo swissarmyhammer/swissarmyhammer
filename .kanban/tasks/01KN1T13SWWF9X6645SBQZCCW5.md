@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffff9480
+position_ordinal: fffffffffffffffff880
 title: 'Fix: secondary windows not restored on startup — board open ordering race'
 ---
 ## What

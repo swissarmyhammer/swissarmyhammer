@@ -5,7 +5,7 @@ depends_on:
 - 01KNZ432XEGXX0VWPFSDXXXG32
 - 01KNZ42426TGY4AVSDMQMRFQGS
 position_column: done
-position_ordinal: ffffffffffffffffffffffbe80
+position_ordinal: ffffffffffffffffffffffffffffff9a80
 project: pill-via-cm6
 title: 'MentionView component: ID → CM6 pill renderer'
 ---

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffb380
+position_ordinal: ffffffffffffffffffa880
 title: Entity write path accepts enriched attachment objects on round-trip
 ---
 ## What

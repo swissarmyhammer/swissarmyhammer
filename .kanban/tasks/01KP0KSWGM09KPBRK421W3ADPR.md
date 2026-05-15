@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KP0KZZ9VDQJVNK15JQAY4BKH
 position_column: done
-position_ordinal: ffffffffffffffffffffffc680
+position_ordinal: ffffffffffffffffffffffffffffffae80
 project: kanban-mcp
 title: 'kanban-cli: add build.rs for man pages, shell completions, and doc reference'
 ---

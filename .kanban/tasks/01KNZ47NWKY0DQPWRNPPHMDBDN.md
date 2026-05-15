@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNZ44E91F4NYAGZX13H0FDAJ
 position_column: done
-position_ordinal: ffffffffffffffffffffffc080
+position_ordinal: ffffffffffffffffffffffffffffffa080
 project: pill-via-cm6
 title: Migrate BadgeDisplay (scalar refs) to MentionView; drop dead select branch
 ---

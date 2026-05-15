@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM6CGNBFV5GXFSC2VJJ93CSZ
 position_column: done
-position_ordinal: ffffffffffd080
+position_ordinal: ffffffffffff9f80
 title: Build CommandDefs from entity schema instead of hardcoding
 ---
 ## What

@@ -2,7 +2,7 @@
 depends_on:
 - 01KKP67N3S967JCAJGNG7CVA3H
 position_column: done
-position_ordinal: a180
+position_ordinal: a680
 title: Mount EntitySearchIndex in BoardHandle and sync with entity events
 ---
 ## What

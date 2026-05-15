@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM5ZQ6520JTV136H2J2R89VY
 position_column: done
-position_ordinal: ffffffffffad80
+position_ordinal: fffffffffff680
 title: Per-row entity command scope for context menu
 ---
 ## What

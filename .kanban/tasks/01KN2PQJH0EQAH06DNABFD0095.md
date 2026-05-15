@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffa780
+position_ordinal: ffffffffffffffffff8c80
 title: Debounced autosave infrastructure
 ---
 ## What

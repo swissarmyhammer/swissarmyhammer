@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffce80
+position_ordinal: ffffffffffffffffffffffffffffffbf80
 project: kanban-mcp
 title: Add tauri-plugin-single-instance for cross-platform warm-start routing
 ---

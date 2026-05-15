@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffff8780
+position_ordinal: ffffffffffffffffffffffffff8580
 title: 'Coverage: WorkspaceWatcher::start event handling (watcher.rs, ~16 lines)'
 ---
 ## What

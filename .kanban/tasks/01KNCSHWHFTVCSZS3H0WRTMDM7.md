@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffe480
+position_ordinal: ffffffffffffffffffffffffbc80
 title: Fix inspect from grid cell — cell moniker field suffix causes entity not found
 ---
 ## What

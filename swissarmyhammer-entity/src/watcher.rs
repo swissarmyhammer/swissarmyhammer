@@ -849,6 +849,10 @@ mod tests {
         tokio::fs::write(&path, b"new").await.unwrap();
 
         // Drain events looking for AttachmentChanged within the debounce window.
+        // The match guard filters on `!removed` because the FSEvents backend on
+        // macOS can replay spurious events for pre-existing files at watcher
+        // start; without the guard the first such event would short-circuit
+        // the loop and the assertion would race with the real create.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         let mut got = None;
         while tokio::time::Instant::now() < deadline {
@@ -857,7 +861,7 @@ mod tests {
                     entity_type,
                     filename,
                     removed,
-                })) if filename == "new.png" => {
+                })) if filename == "new.png" && !removed => {
                     got = Some((entity_type, filename, removed));
                     break;
                 }
@@ -891,6 +895,10 @@ mod tests {
 
         tokio::fs::remove_file(&path).await.unwrap();
 
+        // The match guard filters on `removed` because the FSEvents backend on
+        // macOS can replay spurious events for pre-existing files at watcher
+        // start; without the guard the first such event (with `removed: false`)
+        // would short-circuit the loop and the final assertion would fail.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         let mut got = None;
         while tokio::time::Instant::now() < deadline {
@@ -899,7 +907,7 @@ mod tests {
                     entity_type,
                     filename,
                     removed,
-                })) if filename == "doomed.png" => {
+                })) if filename == "doomed.png" && removed => {
                     got = Some((entity_type, filename, removed));
                     break;
                 }

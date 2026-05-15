@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffca80
+position_ordinal: ffffffffffffffffac80
 title: 'Review finding: Changelog index not rebuilt on load -- undo after restart only works for new operations'
 ---
 **Severity**: Medium (correctness)\n**File**: `swissarmyhammer-entity/src/context.rs` lines 47-60\n\nThe `UndoStack` is persisted and reloaded from `undo_stack.yaml`, but the `changelog_index` and `transaction_index` HashMaps start empty on every `EntityContext::new()`. The undo stack stores entry IDs that reference these indexes.\n\nWhen the user restarts the app and presses undo:\n1. `UndoStack` loads from YAML -- has entries with IDs\n2. `UndoCmd::execute()` reads `undo_target()` -- gets an ID string\n3. `EntityContext::undo()` looks up the ID in `changelog_index` -- NOT FOUND\n4. Falls through to `transaction_index` -- NOT FOUND\n5. Returns `ChangelogEntryNotFound` error\n\nThe YAML round-trip persistence test (`yaml_round_trip_persistence`) verifies the stack state but does NOT attempt an undo after reload -- it only checks `can_undo()` / `can_redo()` / `redo_target()`. This masks the bug.\n\nFix options:\n1. Rebuild `changelog_index` and `transaction_index` from all `.jsonl` changelog files on `EntityContext::new()` (expensive but correct)\n2. Clear the `UndoStack` on startup if the indexes are empty (safe degradation)\n3. Rebuild indexes lazily on first undo/redo attempt\n\nOption 1 is the proper fix. Option 2 is acceptable if startup performance is critical.\n\nReproduction: add a test that creates entities, drops the EntityContext, creates a new one from the same root, then calls `undo()` with the ID from `undo_target()`. #review-finding

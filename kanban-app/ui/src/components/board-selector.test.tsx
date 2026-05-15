@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
+import { renderInAct } from "@/test/act-render";
 
 const mockInvoke = vi.fn((..._args: unknown[]) => Promise.resolve("ok"));
 
@@ -14,18 +15,32 @@ import { BoardSelector, pathStem } from "./board-selector";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { asSegment } from "@/types/spatial";
 import type { OpenBoard } from "@/types/kanban";
 
+/**
+ * Wrap `BoardSelector` in the providers it (transitively) needs. The
+ * spatial provider stack (`SpatialFocusProvider` + `FocusLayer`) is
+ * required since the component mounts `<FocusScope>`-using descendants
+ * and the no-spatial-context fallback was removed in card
+ * `01KQPVA127YMJ8D7NB6M824595`.
+ */
 function Wrapper({ children }: { children: React.ReactNode }) {
   return (
-    <SchemaProvider>
-      <EntityStoreProvider entities={{}}>
-        <FieldUpdateProvider>
-          <TooltipProvider>{children}</TooltipProvider>
-        </FieldUpdateProvider>
-      </EntityStoreProvider>
-    </SchemaProvider>
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <SchemaProvider>
+          <EntityStoreProvider entities={{}}>
+            <FieldUpdateProvider>
+              <TooltipProvider>{children}</TooltipProvider>
+            </FieldUpdateProvider>
+          </EntityStoreProvider>
+        </SchemaProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>
   );
 }
 
@@ -45,8 +60,8 @@ describe("pathStem", () => {
 });
 
 describe("BoardSelector", () => {
-  it("renders the trigger with the selected board stem", () => {
-    render(
+  it("renders the trigger with the selected board stem", async () => {
+    await renderInAct(
       <Wrapper>
         <BoardSelector
           boards={twoBoards}
@@ -58,8 +73,8 @@ describe("BoardSelector", () => {
     expect(screen.getByText("project-b")).toBeTruthy();
   });
 
-  it("renders nothing when boards is empty", () => {
-    const { container } = render(
+  it("renders nothing when boards is empty", async () => {
+    const { container } = await renderInAct(
       <Wrapper>
         <BoardSelector boards={[]} selectedPath={null} onSelect={() => {}} />
       </Wrapper>,
@@ -68,7 +83,7 @@ describe("BoardSelector", () => {
   });
 
   it("renders SelectContent with position=popper", async () => {
-    const { container } = render(
+    const { container } = await renderInAct(
       <Wrapper>
         <BoardSelector
           boards={twoBoards}
@@ -91,7 +106,7 @@ describe("BoardSelector", () => {
     const onSelect = vi.fn();
     mockInvoke.mockClear();
 
-    render(
+    await renderInAct(
       <Wrapper>
         <BoardSelector
           boards={twoBoards}
@@ -113,8 +128,8 @@ describe("BoardSelector", () => {
     expect(switchBoardCalls).toHaveLength(0);
   });
 
-  it("renders tear-off button with aria-label when showTearOff is true", () => {
-    render(
+  it("renders tear-off button with aria-label when showTearOff is true", async () => {
+    await renderInAct(
       <Wrapper>
         <BoardSelector
           boards={twoBoards}
@@ -128,8 +143,8 @@ describe("BoardSelector", () => {
     expect(btn).toBeTruthy();
   });
 
-  it("does not render tear-off button when showTearOff is false", () => {
-    render(
+  it("does not render tear-off button when showTearOff is false", async () => {
+    await renderInAct(
       <Wrapper>
         <BoardSelector
           boards={twoBoards}

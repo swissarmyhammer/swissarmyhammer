@@ -14,6 +14,8 @@
 pub mod context;
 pub mod error;
 pub mod events;
+pub mod options_resolvers;
+pub mod perspective_info;
 pub mod store;
 pub mod types;
 
@@ -26,5 +28,9 @@ define_id!(PerspectiveId, "ULID-based identifier for perspectives");
 pub use context::PerspectiveContext;
 pub use error::{PerspectiveError, Result};
 pub use events::PerspectiveEvent;
-pub use store::PerspectiveStore;
+pub use options_resolvers::{
+    register_perspective_resolvers, PerspectiveFieldsResolver, PerspectivesOptionsData,
+};
+pub use perspective_info::{PerspectiveFieldInfo, PerspectiveInfo};
+pub use store::{PerspectiveStore, PERSPECTIVE_STORE_NAME};
 pub use types::{Perspective, PerspectiveFieldEntry, SortDirection, SortEntry};

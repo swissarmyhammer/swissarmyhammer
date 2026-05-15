@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffffff9e80
+position_ordinal: ffffffa580
 title: Add embedding_enabled flag to IndexConfig
 ---
 ## What

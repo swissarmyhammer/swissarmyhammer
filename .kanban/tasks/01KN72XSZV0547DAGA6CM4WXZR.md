@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffa280
+position_ordinal: ffffffffffffffffffffffaa80
 title: Test store file change → ChangeEvent → entity enrichment pipeline
 ---
 ## What

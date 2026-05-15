@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM32AES07EG43SA1872HCY0D
 position_column: done
-position_ordinal: fffffffffd80
+position_ordinal: ffffffffffcd80
 title: 'Frontend: strip localStorage/refs, restore state from commands on mount'
 ---
 ## What

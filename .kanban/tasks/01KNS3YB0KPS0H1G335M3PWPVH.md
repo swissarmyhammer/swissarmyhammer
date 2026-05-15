@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNS1TQR2C3TYG1G8STEYZPA5
 position_column: done
-position_ordinal: ffffffffffffffffffff8d80
+position_ordinal: ffffffffffffffffffffffffff9080
 project: code-context-cli
 title: Add code-context-cli entry to doc/src/SUMMARY.md
 ---

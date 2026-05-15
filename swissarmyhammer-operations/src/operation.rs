@@ -48,21 +48,10 @@ pub trait Execute<C, E>: Operation
 where
     C: Send + Sync,
 {
-    /// Execute the operation and return result + logging intent
+    /// Execute the operation and return the result
     ///
-    /// Returns ExecutionResult which indicates:
-    /// - Logged: Mutation operations that should be audited
-    /// - Unlogged: Read-only operations with no side effects
-    /// - Failed: Errors (optionally logged)
+    /// Returns an [`ExecutionResult`] indicating success or failure.
     async fn execute(&self, ctx: &C) -> ExecutionResult<Value, E>;
-
-    /// Extract affected resource IDs for targeted logging
-    ///
-    /// Used for per-resource logs (e.g., per-task logs in kanban).
-    /// Default returns empty (most operations don't affect specific resources).
-    fn affected_resource_ids(&self, _result: &Value) -> Vec<String> {
-        Vec::new()
-    }
 }
 
 #[cfg(test)]
@@ -96,7 +85,7 @@ mod tests {
     #[async_trait]
     impl Execute<TestContext, TestError> for AddTask {
         async fn execute(&self, _ctx: &TestContext) -> ExecutionResult<Value, TestError> {
-            ExecutionResult::Unlogged {
+            ExecutionResult::Success {
                 value: serde_json::json!({
                     "title": self.title
                 }),
@@ -140,17 +129,6 @@ mod tests {
             description: None,
         };
         assert_eq!(op.op_string(), format!("{} {}", op.verb(), op.noun()));
-    }
-
-    #[test]
-    fn test_affected_resource_ids_default_empty() {
-        let op = AddTask {
-            title: "Test".to_string(),
-            description: None,
-        };
-        let result = serde_json::json!({});
-        let ids = op.affected_resource_ids(&result);
-        assert!(ids.is_empty());
     }
 
     #[tokio::test]

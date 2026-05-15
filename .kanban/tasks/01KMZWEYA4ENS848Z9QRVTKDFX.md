@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffff8280
+position_ordinal: ffffffffffffffffe680
 title: 'Fix view switching: palette dispatch fails, left nav icons bypass command system'
 ---
 ## What

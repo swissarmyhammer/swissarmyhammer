@@ -5,7 +5,7 @@ attachments: []
 depends_on:
 - 01KMFVR6G48ZSGCZ0PWYJWYFPJ
 position_column: done
-position_ordinal: 7a80
+position_ordinal: '80'
 title: 'Frontend: Replace BoardProgress with Field-based percent_complete rendering'
 ---
 

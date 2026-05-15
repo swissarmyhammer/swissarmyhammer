@@ -16,6 +16,11 @@ use crate::id::{StoredItemId, UndoEntryId};
 ///
 /// Stores the ID used to invoke undo/redo (a changelog entry ID), the item
 /// whose per-item changelog contains the entry, and a human-readable label.
+///
+/// `group_id` correlates multiple entries that should be undone or redone
+/// atomically. When a command issues several writes (e.g. `column.reorder`
+/// updates N columns) they share one `group_id`, and `StoreContext::undo`
+/// pops the entire run as a single step.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UndoEntry {
     /// The changelog entry ID.
@@ -25,6 +30,10 @@ pub struct UndoEntry {
     /// The item whose per-item changelog contains this entry.
     #[serde(default)]
     pub item_id: StoredItemId,
+    /// Optional correlator binding this entry to a multi-write transaction.
+    /// Entries sharing a `group_id` are undone/redone as one step.
+    #[serde(default)]
+    pub group_id: Option<UndoEntryId>,
 }
 
 /// A bounded, pointer-based undo/redo stack persisted as YAML.
@@ -128,6 +137,21 @@ impl UndoStack {
     /// entry at `pointer - 1`), the push is skipped. This prevents multiple
     /// writes within the same transaction from creating duplicate stack entries.
     pub fn push(&mut self, id: UndoEntryId, label: impl Into<String>, item_id: StoredItemId) {
+        self.push_with_group(id, label, item_id, None);
+    }
+
+    /// Push a new entry, optionally tagging it with a group correlator.
+    ///
+    /// Entries that share a `group_id` are popped together by
+    /// [`group_undo_range`] / [`group_redo_range`] so a single `undo()` call
+    /// reverses the whole transaction.
+    pub fn push_with_group(
+        &mut self,
+        id: UndoEntryId,
+        label: impl Into<String>,
+        item_id: StoredItemId,
+        group_id: Option<UndoEntryId>,
+    ) {
         // Transaction dedup: skip if same ID is already at top of done side
         if self.pointer > 0 && self.entries[self.pointer - 1].id == id {
             return;
@@ -140,6 +164,7 @@ impl UndoStack {
             id,
             label: label.into(),
             item_id,
+            group_id,
         });
         self.pointer += 1;
 
@@ -149,6 +174,61 @@ impl UndoStack {
             self.entries.drain(0..excess);
             self.pointer -= excess;
         }
+    }
+
+    /// Range of entries that would be undone together by a single
+    /// `StoreContext::undo` call.
+    ///
+    /// If the top entry has no `group_id`, the range is `[pointer-1, pointer)`
+    /// — one entry, the historical behavior. If the top entry carries a
+    /// `group_id`, the range walks backward to include every consecutive
+    /// entry with the same `group_id`.
+    ///
+    /// Returns `None` if there is nothing to undo.
+    pub fn group_undo_range(&self) -> Option<std::ops::Range<usize>> {
+        if !self.can_undo() {
+            return None;
+        }
+        let end = self.pointer;
+        let top = &self.entries[end - 1];
+        let Some(group_id) = top.group_id else {
+            return Some(end - 1..end);
+        };
+        let mut start = end - 1;
+        while start > 0 && self.entries[start - 1].group_id == Some(group_id) {
+            start -= 1;
+        }
+        Some(start..end)
+    }
+
+    /// Range of entries that would be redone together by a single
+    /// `StoreContext::redo` call. Mirror of [`group_undo_range`].
+    pub fn group_redo_range(&self) -> Option<std::ops::Range<usize>> {
+        if !self.can_redo() {
+            return None;
+        }
+        let start = self.pointer;
+        let bottom = &self.entries[start];
+        let Some(group_id) = bottom.group_id else {
+            return Some(start..start + 1);
+        };
+        let mut end = start + 1;
+        while end < self.entries.len() && self.entries[end].group_id == Some(group_id) {
+            end += 1;
+        }
+        Some(start..end)
+    }
+
+    /// Move the pointer back by `n` entries.
+    pub fn record_undo_n(&mut self, n: usize) {
+        let new = self.pointer.saturating_sub(n);
+        self.pointer = new;
+    }
+
+    /// Move the pointer forward by `n` entries (clamped to entries length).
+    pub fn record_redo_n(&mut self, n: usize) {
+        let new = (self.pointer + n).min(self.entries.len());
+        self.pointer = new;
     }
 
     /// Record that an undo was performed -- move the pointer back by one.
@@ -498,5 +578,96 @@ mod tests {
         assert_eq!(from_default.entries.len(), from_new.entries.len());
         assert_eq!(from_default.pointer, from_new.pointer);
         assert_eq!(from_default.max_size, from_new.max_size);
+    }
+
+    // -----------------------------------------------------------------
+    // Group-tagged entries: push_with_group / group_{undo,redo}_range /
+    // record_{undo,redo}_n.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn group_undo_range_returns_single_entry_when_top_has_no_group() {
+        let mut stack = UndoStack::new();
+        stack.push(UndoEntryId::new(), "op1", "i1".into());
+        stack.push(UndoEntryId::new(), "op2", "i2".into());
+        let range = stack.group_undo_range().expect("can undo");
+        assert_eq!(range, 1..2, "no group_id → exactly one entry");
+    }
+
+    #[test]
+    fn group_undo_range_walks_consecutive_same_group() {
+        let mut stack = UndoStack::new();
+        let group = UndoEntryId::new();
+        // One ungrouped entry, then three grouped entries.
+        stack.push(UndoEntryId::new(), "solo", "s".into());
+        stack.push_with_group(UndoEntryId::new(), "g1", "i1".into(), Some(group));
+        stack.push_with_group(UndoEntryId::new(), "g2", "i2".into(), Some(group));
+        stack.push_with_group(UndoEntryId::new(), "g3", "i3".into(), Some(group));
+
+        let range = stack.group_undo_range().expect("can undo");
+        assert_eq!(range, 1..4, "all three grouped entries");
+    }
+
+    #[test]
+    fn group_undo_range_stops_at_different_group() {
+        let mut stack = UndoStack::new();
+        let group_a = UndoEntryId::new();
+        let group_b = UndoEntryId::new();
+        stack.push_with_group(UndoEntryId::new(), "a1", "i1".into(), Some(group_a));
+        stack.push_with_group(UndoEntryId::new(), "b1", "i2".into(), Some(group_b));
+        stack.push_with_group(UndoEntryId::new(), "b2", "i3".into(), Some(group_b));
+
+        let range = stack.group_undo_range().expect("can undo");
+        assert_eq!(range, 1..3, "only the group_b run");
+    }
+
+    #[test]
+    fn group_redo_range_mirrors_undo() {
+        let mut stack = UndoStack::new();
+        let group = UndoEntryId::new();
+        stack.push_with_group(UndoEntryId::new(), "g1", "i1".into(), Some(group));
+        stack.push_with_group(UndoEntryId::new(), "g2", "i2".into(), Some(group));
+        stack.record_undo_n(2);
+        assert_eq!(stack.pointer, 0);
+
+        let range = stack.group_redo_range().expect("can redo");
+        assert_eq!(range, 0..2);
+    }
+
+    #[test]
+    fn record_undo_n_saturates_at_zero() {
+        let mut stack = UndoStack::new();
+        stack.push(UndoEntryId::new(), "op1", "i1".into());
+        stack.record_undo_n(99);
+        assert_eq!(stack.pointer, 0);
+        assert!(!stack.can_undo());
+    }
+
+    #[test]
+    fn record_redo_n_clamps_to_entries_len() {
+        let mut stack = UndoStack::new();
+        stack.push(UndoEntryId::new(), "op1", "i1".into());
+        stack.record_undo();
+        stack.record_redo_n(99);
+        assert_eq!(stack.pointer, 1);
+        assert!(!stack.can_redo());
+    }
+
+    #[test]
+    fn group_id_survives_yaml_round_trip() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("undo_stack.yaml");
+
+        let mut stack = UndoStack::new();
+        let group = UndoEntryId::new();
+        stack.push_with_group(UndoEntryId::new(), "g1", "i1".into(), Some(group));
+        stack.push_with_group(UndoEntryId::new(), "g2", "i2".into(), Some(group));
+        stack.save(&path).unwrap();
+
+        let loaded = UndoStack::load(&path).unwrap();
+        assert_eq!(loaded.entries[0].group_id, Some(group));
+        assert_eq!(loaded.entries[1].group_id, Some(group));
+        let range = loaded.group_undo_range().expect("can undo");
+        assert_eq!(range, 0..2);
     }
 }

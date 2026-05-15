@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffba80
+position_ordinal: ffffffffc980
 title: Merge shell skill into tool description
 ---
 Replace `execute/description.md` with the full content from `.skills/shell/SKILL.md` (minus the YAML frontmatter). This makes the tool self-describing — the MCP tool description carries all behavioral guidance (operation docs, usage patterns, timeout/max_lines advice, search vs grep). The current `description.md` is 17 lines; the merged version will include all operation documentation and guidance from the SKILL.md.

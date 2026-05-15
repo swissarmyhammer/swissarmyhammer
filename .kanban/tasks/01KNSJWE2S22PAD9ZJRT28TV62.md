@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffa780
+position_ordinal: ffffffffffffffffffffffffffffeb80
 title: 'Verify end-to-end implicit AND filter: #paper #READY must require both tags'
 ---
 ## What

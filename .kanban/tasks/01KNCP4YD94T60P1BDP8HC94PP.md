@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffe380
+position_ordinal: ffffffffffffffffffffffffb980
 title: Add row-level entity FocusScope to DataTable grid rows
 ---
 ## What

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffcf80
+position_ordinal: fffffffff080
 title: Overhaul README with GSD-inspired structure
 ---
 Rewrite the project README using lessons from get-shit-done's viral 34k-star README.
