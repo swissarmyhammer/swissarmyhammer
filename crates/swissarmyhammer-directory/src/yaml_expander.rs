@@ -286,6 +286,7 @@ mod tests {
     use crate::config::SwissarmyhammerConfig;
     use serial_test::serial;
     use std::fs;
+    use swissarmyhammer_common::test_utils::CurrentDirGuard;
     use tempfile::TempDir;
 
     #[test]
@@ -636,17 +637,16 @@ files:
         std::env::set_var("XDG_DATA_HOME", temp_dir.path());
         std::env::set_var("HOME", temp_dir.path());
         // Change cwd to the empty temp dir so the VFS does not discover
-        // project-level files from the real working directory.
-        let old_cwd = std::env::current_dir().ok();
-        let _ = std::env::set_current_dir(temp_dir.path());
+        // project-level files from the real working directory. The RAII guard
+        // restores the original working directory on drop, even on panic.
+        let cwd_guard = CurrentDirGuard::new(temp_dir.path())
+            .expect("Failed to pin working directory to the isolated temp dir");
 
         let mut expander = YamlExpander::<SwissarmyhammerConfig>::new();
         let result = expander.load_all();
 
         // Restore env
-        if let Some(cwd) = old_cwd {
-            let _ = std::env::set_current_dir(cwd);
-        }
+        drop(cwd_guard);
         match old_home {
             Some(v) => std::env::set_var("HOME", v),
             None => std::env::remove_var("HOME"),

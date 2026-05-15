@@ -244,6 +244,7 @@ impl Default for ConfigurationDiscovery {
 mod tests {
     use super::*;
     use std::fs;
+    use swissarmyhammer_common::test_utils::CurrentDirGuard;
     use tempfile::TempDir;
 
     #[test]
@@ -533,16 +534,18 @@ mod tests {
         let sah_dir = base.join(".sah");
         fs::create_dir_all(&sah_dir).unwrap();
 
-        let original_dir = std::env::current_dir().unwrap();
         let original_home = std::env::var("HOME").ok();
 
-        std::env::set_current_dir(&base).unwrap();
-        std::env::set_var("HOME", base.as_os_str());
-
-        let (global_dir, project_dirs) = ConfigurationDiscovery::resolve_directories();
+        // The RAII guard pins cwd to the temp dir while discovery runs and
+        // restores the original working directory on drop, even on panic.
+        let (global_dir, project_dirs) = {
+            let _cwd_guard = CurrentDirGuard::new(&base)
+                .expect("Failed to pin working directory to the isolated temp dir");
+            std::env::set_var("HOME", base.as_os_str());
+            ConfigurationDiscovery::resolve_directories()
+        };
 
         // Restore environment
-        std::env::set_current_dir(&original_dir).unwrap();
         match &original_home {
             Some(home) => std::env::set_var("HOME", home),
             None => std::env::remove_var("HOME"),
@@ -575,14 +578,13 @@ mod tests {
         fs::create_dir_all(&root_sah).unwrap();
         fs::create_dir_all(&workspace_sah).unwrap();
 
-        // Set CWD to the innermost directory
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&project).unwrap();
-
-        let dirs = ConfigurationDiscovery::resolve_project_dirs();
-
-        // Restore CWD before any assertions
-        std::env::set_current_dir(&original_dir).unwrap();
+        // Set CWD to the innermost directory. The RAII guard restores the
+        // original working directory on drop, even if the test body panics.
+        let dirs = {
+            let _cwd_guard = CurrentDirGuard::new(&project)
+                .expect("Failed to pin working directory to the isolated temp dir");
+            ConfigurationDiscovery::resolve_project_dirs()
+        };
 
         // Should include .sah/ dirs for git root, workspace, and project
         // (even though project/.sah/ does not exist on disk yet -- resolve_project_dirs

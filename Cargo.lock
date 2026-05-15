@@ -8771,6 +8771,7 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "swissarmyhammer-code-context",
+ "swissarmyhammer-common",
  "swissarmyhammer-directory",
  "swissarmyhammer-kanban",
  "swissarmyhammer-lsp",

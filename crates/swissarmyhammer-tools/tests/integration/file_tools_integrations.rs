@@ -9,7 +9,7 @@ use std::fs;
 
 use std::sync::Arc;
 
-use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
 use swissarmyhammer_config::ModelConfig;
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
@@ -919,6 +919,11 @@ async fn test_read_tool_missing_file_error() {
 
 #[tokio::test]
 async fn test_read_tool_relative_path_support() {
+    // Pin the working directory to an isolated temp dir so the relative path
+    // below resolves there instead of polluting the crate directory.
+    let env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let _cwd_guard = CurrentDirGuard::new(env.temp_dir())
+        .expect("Failed to pin working directory to the isolated temp dir");
     let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files").unwrap();
@@ -2300,6 +2305,7 @@ async fn test_write_tool_empty_content() {
 
 #[tokio::test]
 async fn test_write_tool_error_handling() {
+    let env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files").unwrap();
@@ -2310,7 +2316,11 @@ async fn test_write_tool_error_handling() {
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_err(), "Empty file path should fail");
 
-    // Test relative path (should be accepted but may fail due to parent directory)
+    // Test relative path (should be accepted but may fail due to parent directory).
+    // Pin the working directory to the isolated temp dir so the relative path
+    // resolves there instead of polluting the crate directory.
+    let _cwd_guard = CurrentDirGuard::new(env.temp_dir())
+        .expect("Failed to pin working directory to the isolated temp dir");
     let arguments = write_args("relative/path/file.txt", "test content");
 
     let result = tool.execute(arguments, &context).await;

@@ -362,6 +362,7 @@ mod tests {
     use super::*;
     use crate::config::SwissarmyhammerConfig;
     use serial_test::serial;
+    use swissarmyhammer_common::test_utils::CurrentDirGuard;
     use tempfile::TempDir;
 
     #[test]
@@ -723,13 +724,13 @@ mod tests {
         let git_dir = temp_canonical.join(".git");
         fs::create_dir_all(&git_dir).unwrap();
 
-        // Save and restore CWD to avoid affecting other tests.
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&temp_canonical).unwrap();
-
-        let result = ManagedDirectory::<SwissarmyhammerConfig>::from_git_root();
-
-        std::env::set_current_dir(&original_dir).unwrap();
+        // The RAII guard pins cwd to the temp dir while from_git_root runs and
+        // restores the original working directory on drop, even on panic.
+        let result = {
+            let _cwd_guard = CurrentDirGuard::new(&temp_canonical)
+                .expect("Failed to pin working directory to the isolated temp dir");
+            ManagedDirectory::<SwissarmyhammerConfig>::from_git_root()
+        };
 
         let dir = result.unwrap();
         assert!(dir.root().exists());

@@ -198,6 +198,7 @@ pub mod utils {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use swissarmyhammer_common::test_utils::CurrentDirGuard;
     use tempfile::TempDir;
 
     fn setup_test_repo() -> (TempDir, GitRepository) {
@@ -364,13 +365,12 @@ mod tests {
         // Change to a temp directory that is not a git repository and verify
         // find_from_current_dir returns an error.
         let temp_dir = TempDir::new().unwrap();
-        let original = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
+        // The RAII guard pins cwd to the temp dir and restores the original
+        // working directory on drop, even if the test body panics.
+        let _cwd_guard = CurrentDirGuard::new(temp_dir.path())
+            .expect("Failed to pin working directory to the isolated temp dir");
 
         let result = GitRepository::find_from_current_dir();
-
-        // Restore cwd before asserting so a test failure doesn't leave a bad cwd.
-        std::env::set_current_dir(original).unwrap();
 
         assert!(result.is_err());
     }

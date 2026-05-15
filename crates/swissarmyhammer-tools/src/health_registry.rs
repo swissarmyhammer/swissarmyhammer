@@ -237,17 +237,16 @@ mod tests {
         fs::write(prompts_dir.join("a.md"), "# Title\n\nSome content.").unwrap();
         fs::write(prompts_dir.join("b.md"), "# Another\n\nMore content.").unwrap();
 
-        // Run with the temp dir as working directory so the local `.prompts` path resolves.
-        let original_dir = std::env::current_dir().ok();
-        std::env::set_current_dir(tmp.path()).unwrap();
-
-        let checker = PromptHealthChecker;
-        let checks = checker.run_health_checks();
-
-        // Restore original directory.
-        if let Some(dir) = original_dir {
-            let _ = std::env::set_current_dir(dir);
-        }
+        // Run with the temp dir as working directory so the local `.prompts`
+        // path resolves. The RAII guard restores the original working directory
+        // on drop, even if an assertion below panics.
+        let checks = {
+            use swissarmyhammer_common::test_utils::CurrentDirGuard;
+            let _cwd_guard = CurrentDirGuard::new(tmp.path())
+                .expect("Failed to pin working directory to the isolated temp dir");
+            let checker = PromptHealthChecker;
+            checker.run_health_checks()
+        };
 
         // All checks should succeed (plain markdown, no YAML errors).
         for check in &checks {
@@ -290,15 +289,15 @@ mod tests {
         )
         .unwrap();
 
-        let original_dir = std::env::current_dir().ok();
-        std::env::set_current_dir(tmp.path()).unwrap();
-
-        let checker = PromptHealthChecker;
-        let checks = checker.run_health_checks();
-
-        if let Some(dir) = original_dir {
-            let _ = std::env::set_current_dir(dir);
-        }
+        // The RAII guard restores the original working directory on drop,
+        // even if an assertion below panics.
+        let checks = {
+            use swissarmyhammer_common::test_utils::CurrentDirGuard;
+            let _cwd_guard = CurrentDirGuard::new(tmp.path())
+                .expect("Failed to pin working directory to the isolated temp dir");
+            let checker = PromptHealthChecker;
+            checker.run_health_checks()
+        };
 
         // Should have at least one error check for the bad YAML.
         let error_checks: Vec<_> = checks

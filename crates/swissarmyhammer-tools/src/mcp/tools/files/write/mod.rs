@@ -375,9 +375,13 @@ mod tests {
     #[tokio::test]
     #[serial(cwd)]
     async fn test_write_relative_path_acceptance() {
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
         let temp_dir = TempDir::new().unwrap();
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
+        // The RAII guard pins cwd to the temp dir for the whole test and
+        // restores the original working directory on drop, even on panic.
+        let _cwd_guard = CurrentDirGuard::new(temp_dir.path())
+            .expect("Failed to pin working directory to the isolated temp dir");
 
         let context = crate::test_utils::create_test_context().await;
         let args = create_test_arguments("relative_file.txt", "test content");
@@ -391,8 +395,6 @@ mod tests {
 
         let content = std::fs::read_to_string(&file_path).unwrap();
         assert_eq!(content, "test content");
-
-        std::env::set_current_dir(original_dir).unwrap();
     }
 
     #[tokio::test]

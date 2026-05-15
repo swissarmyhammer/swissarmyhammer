@@ -27,6 +27,7 @@ use agent_client_protocol_extras::PlaybackAgent;
 use avp_common::chain::ChainFactory;
 use avp_common::context::AvpContext;
 use avp_common::validator::{ValidatorLoader, ValidatorSource};
+use swissarmyhammer_common::test_utils::CurrentDirGuard;
 use tempfile::TempDir;
 use test_helpers::{
     build_stop_input, create_playback_context, recording_fixture_path,
@@ -243,8 +244,10 @@ async fn recording_directory_is_populated_unconditionally() {
     let temp = TempDir::new().expect("tempdir");
     std::fs::create_dir_all(temp.path().join(".git")).expect("create .git");
 
-    let original_cwd = std::env::current_dir().expect("cwd");
-    std::env::set_current_dir(temp.path()).expect("chdir");
+    // The RAII guard pins cwd to the temp dir for the whole test (the chain
+    // resolves the git root from cwd) and restores it on drop, even on panic.
+    let _cwd_guard = CurrentDirGuard::new(temp.path())
+        .expect("Failed to pin working directory to the isolated temp dir");
     std::env::set_var("AVP_SESSION_ID", "rec-session");
 
     let record_dir = temp.path().join(".avp").join("recordings");
@@ -352,5 +355,4 @@ async fn recording_directory_is_populated_unconditionally() {
     );
 
     std::env::remove_var("AVP_SESSION_ID");
-    std::env::set_current_dir(original_cwd).expect("restore cwd");
 }

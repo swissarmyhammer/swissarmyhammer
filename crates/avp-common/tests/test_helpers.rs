@@ -107,6 +107,7 @@ use avp_common::validator::ExecutedValidator;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use swissarmyhammer_common::test_utils::CurrentDirGuard;
 use tempfile::TempDir;
 
 /// Create a test context in a temporary git repository.
@@ -120,12 +121,13 @@ pub fn create_test_context() -> (TempDir, AvpContext) {
     let temp = TempDir::new().unwrap();
     fs::create_dir_all(temp.path().join(".git")).unwrap();
 
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp.path()).unwrap();
-
-    let context = AvpContext::init().unwrap();
-
-    std::env::set_current_dir(&original_dir).unwrap();
+    // The RAII guard pins cwd to the temp dir while the context is built and
+    // restores the original directory on drop, even if construction panics.
+    let context = {
+        let _cwd_guard = CurrentDirGuard::new(temp.path())
+            .expect("Failed to pin working directory to the isolated temp dir");
+        AvpContext::init().unwrap()
+    };
 
     (temp, context)
 }
@@ -154,13 +156,12 @@ pub fn create_context_with_playback(temp: &TempDir, fixture_name: &str) -> AvpCo
     let fixture_path = fixtures_dir().join(fixture_name);
     let agent = PlaybackAgent::new(fixture_path, "claude");
 
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp.path()).unwrap();
+    // The RAII guard pins cwd to the temp dir while the context is built and
+    // restores the original directory on drop, even if construction panics.
+    let _cwd_guard = CurrentDirGuard::new(temp.path())
+        .expect("Failed to pin working directory to the isolated temp dir");
 
-    let context = AvpContext::with_agent(agent).expect("Should create context with playback agent");
-
-    std::env::set_current_dir(&original_dir).unwrap();
-    context
+    AvpContext::with_agent(agent).expect("Should create context with playback agent")
 }
 
 /// Builder for hook input JSON values.
@@ -424,14 +425,16 @@ pub fn create_test_chain_factory(
 ) -> ChainFactory {
     std::env::set_var("AVP_SKIP_AGENT", "1");
 
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp.path()).unwrap();
+    // The RAII guard pins cwd to the temp dir while the context is built and
+    // restores the original directory on drop, even if construction panics.
+    let context = {
+        let _cwd_guard = CurrentDirGuard::new(temp.path())
+            .expect("Failed to pin working directory to the isolated temp dir");
+        Arc::new(AvpContext::init().unwrap())
+    };
 
-    let context = Arc::new(AvpContext::init().unwrap());
     let mut loader = ValidatorLoader::new();
     avp_common::load_builtins(&mut loader);
-
-    std::env::set_current_dir(original_dir).unwrap();
 
     ChainFactory::new(context, Arc::new(loader), turn_state)
 }
@@ -635,13 +638,15 @@ pub fn create_playback_context(fixture: &Path) -> (TempDir, AvpContext) {
     let temp = TempDir::new().expect("tempdir");
     fs::create_dir_all(temp.path().join(".git")).expect("create .git");
 
-    let original_cwd = std::env::current_dir().expect("cwd");
-    std::env::set_current_dir(temp.path()).expect("chdir to temp");
-
     let agent = PlaybackAgent::new(fixture.to_path_buf(), "claude");
-    let ctx = AvpContext::with_agent(agent).expect("with_agent");
 
-    std::env::set_current_dir(original_cwd).expect("restore cwd");
+    // The RAII guard pins cwd to the temp dir while the context is built and
+    // restores the original directory on drop, even if construction panics.
+    let ctx = {
+        let _cwd_guard = CurrentDirGuard::new(temp.path())
+            .expect("Failed to pin working directory to the isolated temp dir");
+        AvpContext::with_agent(agent).expect("with_agent")
+    };
 
     (temp, ctx)
 }

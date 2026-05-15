@@ -965,11 +965,14 @@ mod tests {
     #[serial(cwd)]
     fn test_validate_file_path_relative() {
         use std::fs;
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
         use tempfile::TempDir;
 
         let temp_dir = TempDir::new().unwrap();
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
+        // The RAII guard pins cwd to the temp dir for the whole test and
+        // restores the original working directory on drop, even on panic.
+        let _cwd_guard = CurrentDirGuard::new(temp_dir.path())
+            .expect("Failed to pin working directory to the isolated temp dir");
 
         // Create test files
         fs::create_dir_all("relative").unwrap();
@@ -1003,9 +1006,6 @@ mod tests {
             result.is_err(),
             "Parent directory traversal should still be blocked"
         );
-
-        // Restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
     }
 
     #[test]
@@ -1133,6 +1133,8 @@ mod tests {
     #[test]
     #[serial(cwd)]
     fn test_file_path_validator_relative_paths() {
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
         // Use validator without workspace restrictions for basic testing
         let validator = FilePathValidator::new();
         let temp_dir = TempDir::new().unwrap();
@@ -1141,9 +1143,10 @@ mod tests {
         let test_file = temp_dir.path().join("test_file.txt");
         fs::write(&test_file, "test content").unwrap();
 
-        // Change to the temp directory for relative path testing
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
+        // Change to the temp directory for relative path testing. The RAII
+        // guard restores the original working directory on drop, even on panic.
+        let _cwd_guard = CurrentDirGuard::new(temp_dir.path())
+            .expect("Failed to pin working directory to the isolated temp dir");
 
         // Test basic relative path resolution
         let result = validator.validate_path("test_file.txt");
@@ -1171,14 +1174,13 @@ mod tests {
 
         let result = validator.validate_path("nested/nested_file.txt");
         assert!(result.is_ok(), "Should accept nested relative path");
-
-        // Restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
     }
 
     #[test]
     #[serial(cwd)]
     fn test_file_path_validator_relative_with_workspace() {
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
         let temp_dir = TempDir::new().unwrap();
         let workspace_root = temp_dir.path().to_path_buf();
         let validator = FilePathValidator::with_workspace_root(workspace_root.clone());
@@ -1187,16 +1189,19 @@ mod tests {
         let test_file = workspace_root.join("workspace_file.txt");
         fs::write(&test_file, "workspace content").unwrap();
 
-        // Change to workspace directory
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&workspace_root).unwrap();
+        // Change to workspace directory. The scoped RAII guard restores the
+        // original working directory on drop, even on panic.
+        {
+            let _cwd_guard = CurrentDirGuard::new(&workspace_root)
+                .expect("Failed to pin working directory to the workspace temp dir");
 
-        // Test relative path within workspace
-        let result = validator.validate_path("workspace_file.txt");
-        assert!(
-            result.is_ok(),
-            "Should accept relative path within workspace"
-        );
+            // Test relative path within workspace
+            let result = validator.validate_path("workspace_file.txt");
+            assert!(
+                result.is_ok(),
+                "Should accept relative path within workspace"
+            );
+        }
 
         // Create and try to access file outside workspace
         let outside_dir = TempDir::new().unwrap();
@@ -1205,7 +1210,8 @@ mod tests {
 
         // Change to outside directory and try relative path (should fail workspace check)
         if outside_dir.path().exists() {
-            std::env::set_current_dir(&outside_dir).unwrap();
+            let _cwd_guard = CurrentDirGuard::new(outside_dir.path())
+                .expect("Failed to pin working directory to the outside temp dir");
             let result = validator.validate_path("outside_file.txt");
             assert!(
                 result.is_err(),
@@ -1214,9 +1220,6 @@ mod tests {
         } else {
             println!("Outside directory doesn't exist, skipping outside workspace test");
         }
-
-        // Restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
     }
 
     #[test]
@@ -1387,6 +1390,8 @@ mod tests {
     #[test]
     #[serial(cwd)]
     fn test_secure_file_access_read_relative_paths() {
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
         // Use default secure access without workspace restrictions for simple testing
         let secure_access = SecureFileAccess::default_secure();
 
@@ -1398,9 +1403,10 @@ mod tests {
         let content = "Relative path content";
         fs::write(&test_file, content).unwrap();
 
-        // Change to temp directory to test relative paths
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&workspace_root).unwrap();
+        // Change to temp directory to test relative paths. The RAII guard
+        // restores the original working directory on drop, even on panic.
+        let _cwd_guard = CurrentDirGuard::new(&workspace_root)
+            .expect("Failed to pin working directory to the isolated temp dir");
 
         // Test read with relative path
         let result = secure_access.read("relative_test.txt", None, None);
@@ -1431,9 +1437,6 @@ mod tests {
             "Should be able to read nested file with relative path"
         );
         assert_eq!(result.unwrap(), nested_content);
-
-        // Restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
     }
 
     #[test]

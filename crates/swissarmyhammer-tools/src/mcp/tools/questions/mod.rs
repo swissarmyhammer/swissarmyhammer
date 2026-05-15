@@ -267,9 +267,13 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(cwd)]
     async fn test_question_tool_infer_summary_from_empty() {
-        // Use a temp dir so load_all_questions() has a valid CWD
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
+        // Use a temp dir so load_all_questions() has a valid CWD. The RAII
+        // guard restores the original working directory on drop, even on panic.
         let temp_dir = tempfile::TempDir::new().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
+        let _cwd_guard = CurrentDirGuard::new(temp_dir.path())
+            .expect("Failed to pin working directory to the isolated temp dir");
 
         let tool = QuestionTool::new();
         let context = crate::test_utils::create_test_context().await;

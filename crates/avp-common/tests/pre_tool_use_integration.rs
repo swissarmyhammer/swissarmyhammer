@@ -22,6 +22,7 @@ use avp_common::{
 };
 use std::fs;
 use std::sync::Arc;
+use swissarmyhammer_common::test_utils::CurrentDirGuard;
 use tempfile::TempDir;
 // ============================================================================
 // PreToolUse Output Format Tests (Unit Tests)
@@ -127,12 +128,13 @@ async fn test_pre_tool_use_chain_success_path() {
 
     std::env::set_var("AVP_SKIP_AGENT", "1");
 
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp.path()).unwrap();
-
-    let context = Arc::new(AvpContext::init().unwrap());
-
-    std::env::set_current_dir(original_dir).unwrap();
+    // The RAII guard pins cwd to the temp dir while the context is built and
+    // restores the original directory on drop, even if construction panics.
+    let context = {
+        let _cwd_guard = CurrentDirGuard::new(temp.path())
+            .expect("Failed to pin working directory to the isolated temp dir");
+        Arc::new(AvpContext::init().unwrap())
+    };
 
     // Use empty loader - no validators to execute
     let loader = Arc::new(ValidatorLoader::new());

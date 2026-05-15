@@ -7,13 +7,19 @@ use serde_json::json;
 use std::env;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use swissarmyhammer_common::test_utils::CurrentDirGuard;
 use swissarmyhammer_common::IsolatedTestEnvironment;
 use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_config::TemplateContext;
 use tempfile::TempDir;
 
-/// Helper to create a project config directory for testing with proper isolation
-fn create_project_config_dir() -> std::path::PathBuf {
+/// Helper to create a project config directory for testing with proper isolation.
+///
+/// Returns the config directory plus a [`CurrentDirGuard`] that pins the process
+/// working directory to the temp directory; the caller must keep the guard alive
+/// for the duration of the test so the working directory is restored on drop
+/// (even on panic).
+fn create_project_config_dir() -> (std::path::PathBuf, CurrentDirGuard) {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let config_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
     fs::create_dir_all(&config_dir).expect("Failed to create project config dir");
@@ -21,20 +27,22 @@ fn create_project_config_dir() -> std::path::PathBuf {
     // Create .git marker to prevent config discovery from walking up to real repo
     fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
 
-    // Change to the temp directory so config discovery works
-    env::set_current_dir(temp_dir.path()).expect("Failed to set current dir");
+    // Change to the temp directory so config discovery works. The RAII guard
+    // restores the original working directory when dropped, even on panic.
+    let cwd_guard = CurrentDirGuard::new(temp_dir.path())
+        .expect("Failed to pin working directory to the isolated temp dir");
 
     // Keep temp dir alive by leaking it - IsolatedTestEnvironment will handle proper cleanup
     std::mem::forget(temp_dir);
 
-    config_dir
+    (config_dir, cwd_guard)
 }
 
 #[test]
 #[serial_test::serial(cwd)]
 fn test_malformed_toml_config_error() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let config_dir = create_project_config_dir();
+    let (config_dir, _cwd_guard) = create_project_config_dir();
 
     // Test 1: Verify we can load a valid config
     let valid_toml = r#"app_name = "ValidTestApp""#;
@@ -89,7 +97,7 @@ fn test_malformed_toml_config_error() {
 #[serial_test::serial(cwd)]
 fn test_malformed_yaml_config_error() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let config_dir = create_project_config_dir();
+    let (config_dir, _cwd_guard) = create_project_config_dir();
 
     // Test 1: Verify we can load a valid YAML config
     let valid_yaml = r#"app_name: "ValidTestApp""#;
@@ -144,7 +152,7 @@ fn test_malformed_yaml_config_error() {
 #[test]
 fn test_malformed_json_config_error() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let config_dir = create_project_config_dir();
+    let (config_dir, _cwd_guard) = create_project_config_dir();
 
     // Create malformed JSON files with the correct names that the config system will load
     let malformed_configs = vec![
@@ -187,7 +195,7 @@ fn test_malformed_json_config_error() {
 #[test]
 fn test_unsupported_file_extension_error() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let config_dir = create_project_config_dir();
+    let (config_dir, _cwd_guard) = create_project_config_dir();
 
     // Create config files with unsupported extensions
     let unsupported_files = vec![
@@ -227,7 +235,7 @@ fn test_unsupported_file_extension_error() {
 #[test]
 fn test_file_permission_errors() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let config_dir = create_project_config_dir();
+    let (config_dir, _cwd_guard) = create_project_config_dir();
 
     // Create a valid config file
     let config_content = r#"
@@ -271,7 +279,7 @@ port = 8080
 #[test]
 fn test_directory_permission_errors() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let config_dir = create_project_config_dir();
+    let (config_dir, _cwd_guard) = create_project_config_dir();
 
     // Create a valid config file
     let config_content = r#"app_name = "TestApp""#;
@@ -424,7 +432,7 @@ fn test_invalid_environment_variable_substitution() {
 #[test]
 fn test_configuration_with_extremely_large_values() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let config_dir = create_project_config_dir();
+    let (config_dir, _cwd_guard) = create_project_config_dir();
 
     // Create config with very large values
     let large_string = "x".repeat(1_000_000); // 1MB string
@@ -469,7 +477,7 @@ large_number = 999999999999999999999999999999
 #[test]
 fn test_deeply_nested_configuration_errors() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let config_dir = create_project_config_dir();
+    let (config_dir, _cwd_guard) = create_project_config_dir();
 
     // Create deeply nested configuration that might cause parsing issues
     let mut nested_config = String::from("app_name = \"TestApp\"\n");
@@ -512,7 +520,7 @@ fn test_deeply_nested_configuration_errors() {
 #[test]
 fn test_config_with_unicode_and_special_characters() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let config_dir = create_project_config_dir();
+    let (config_dir, _cwd_guard) = create_project_config_dir();
 
     // Create config with various Unicode and special characters
     let config_content = r#"
@@ -571,7 +579,7 @@ value_测试 = "nested unicode"
 #[test]
 fn test_empty_and_whitespace_only_files() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let config_dir = create_project_config_dir();
+    let (config_dir, _cwd_guard) = create_project_config_dir();
 
     // Test empty files with correct config names that will be loaded
     let test_files = vec![
@@ -626,7 +634,7 @@ fn test_empty_and_whitespace_only_files() {
 #[test]
 fn test_helpful_error_messages_contain_context() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let config_dir = create_project_config_dir();
+    let (config_dir, _cwd_guard) = create_project_config_dir();
 
     // Create a config file with a clear error
     let config_content = r#"

@@ -36,6 +36,7 @@ use avp_common::context::AvpContext;
 use avp_common::turn::FileDiff;
 use avp_common::types::HookType;
 use avp_common::validator::{ValidatorLoader, ValidatorSource};
+use swissarmyhammer_common::test_utils::CurrentDirGuard;
 use tempfile::TempDir;
 
 /// Path to the playback fixture used by this test.
@@ -184,8 +185,10 @@ async fn stop_hook_rule_prompt_contains_changed_files_and_diffs() {
     let temp = TempDir::new().expect("tempdir");
     std::fs::create_dir_all(temp.path().join(".git")).expect("create .git");
 
-    let original_cwd = std::env::current_dir().expect("cwd");
-    std::env::set_current_dir(temp.path()).expect("chdir to temp");
+    // The RAII guard pins cwd to the temp dir for the whole test (the runner
+    // resolves the git root from cwd) and restores it on drop, even on panic.
+    let _cwd_guard = CurrentDirGuard::new(temp.path())
+        .expect("Failed to pin working directory to the isolated temp dir");
 
     // Wrap the playback fixture in a capturing tee.
     let playback = PlaybackAgent::new(fixture_path(), "claude");
@@ -269,7 +272,6 @@ async fn stop_hook_rule_prompt_contains_changed_files_and_diffs() {
     if let Some(val) = saved_claude_acp {
         std::env::set_var("CLAUDE_ACP", val);
     }
-    std::env::set_current_dir(&original_cwd).expect("restore cwd");
 
     // The capturing tee should have seen exactly one prompt (one rule).
     let prompts = captured.lock().unwrap().clone();

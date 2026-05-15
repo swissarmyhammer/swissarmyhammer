@@ -158,6 +158,7 @@ mod tests {
     use super::*;
     use serial_test::serial;
     use std::fs;
+    use swissarmyhammer_common::test_utils::CurrentDirGuard;
     use tempfile::TempDir;
 
     #[test]
@@ -220,19 +221,14 @@ mod tests {
         let mut resolver = PromptResolver::new();
         let mut library = PromptLibrary::new();
 
-        // Change to the temp directory to simulate local prompts
-        let original_dir = match std::env::current_dir() {
-            Ok(dir) => dir,
-            Err(_) => return, // Skip test if current directory is not accessible
-        };
-        if std::env::set_current_dir(&temp_dir).is_err() {
-            return; // Skip test if can't change directory
+        // Change to the temp directory to simulate local prompts. The RAII
+        // guard restores the original working directory on drop, even on panic.
+        {
+            let _cwd_guard = CurrentDirGuard::new(temp_dir.path())
+                .expect("Failed to pin working directory to the isolated temp dir");
+
+            resolver.load_all_prompts(&mut library).unwrap();
         }
-
-        resolver.load_all_prompts(&mut library).unwrap();
-
-        // Restore original directory
-        let _ = std::env::set_current_dir(original_dir);
 
         // Check that our test prompt was loaded
         let prompt = library.get("local_prompt").unwrap();

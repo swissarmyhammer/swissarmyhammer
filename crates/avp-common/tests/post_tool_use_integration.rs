@@ -20,6 +20,7 @@ use avp_common::{
 };
 use std::fs;
 use std::sync::Arc;
+use swissarmyhammer_common::test_utils::CurrentDirGuard;
 use tempfile::TempDir;
 use test_helpers::create_context_with_playback;
 
@@ -294,12 +295,13 @@ async fn test_post_tool_use_chain_success_path() {
 
     std::env::set_var("AVP_SKIP_AGENT", "1");
 
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp.path()).unwrap();
-
-    let context = Arc::new(AvpContext::init().unwrap());
-
-    std::env::set_current_dir(original_dir).unwrap();
+    // The RAII guard pins cwd to the temp dir while the context is built and
+    // restores the original directory on drop, even if construction panics.
+    let context = {
+        let _cwd_guard = CurrentDirGuard::new(temp.path())
+            .expect("Failed to pin working directory to the isolated temp dir");
+        Arc::new(AvpContext::init().unwrap())
+    };
 
     // Use empty loader - no validators to execute
     let loader = Arc::new(ValidatorLoader::new());
@@ -356,15 +358,16 @@ async fn test_post_tool_use_chain_structure_with_skipped_agent() {
 
     std::env::set_var("AVP_SKIP_AGENT", "1");
 
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp.path()).unwrap();
-
-    let context = Arc::new(AvpContext::init().unwrap());
+    // The RAII guard pins cwd to the temp dir while the context is built and
+    // restores the original directory on drop, even if construction panics.
+    let context = {
+        let _cwd_guard = CurrentDirGuard::new(temp.path())
+            .expect("Failed to pin working directory to the isolated temp dir");
+        Arc::new(AvpContext::init().unwrap())
+    };
     let mut loader = ValidatorLoader::new();
     avp_common::load_builtins(&mut loader);
     let turn_state = Arc::new(TurnStateManager::new(temp.path()));
-
-    std::env::set_current_dir(original_dir).unwrap();
 
     let factory = ChainFactory::new(context, Arc::new(loader), turn_state);
     let mut chain = factory.post_tool_use_chain();

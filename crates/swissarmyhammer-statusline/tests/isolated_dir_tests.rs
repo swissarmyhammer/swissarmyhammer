@@ -2,23 +2,23 @@
 //! error paths in statusline modules.
 //!
 //! These tests change the process-wide current directory and MUST run serially.
-//! The `serial` module below uses a mutex to enforce this.
+//! [`CurrentDirGuard`] holds a process-global mutex to enforce this and restores
+//! the original working directory on drop, even if the test body panics.
 
-use std::sync::Mutex;
-
+use swissarmyhammer_common::test_utils::CurrentDirGuard;
 use swissarmyhammer_statusline::config::StatuslineConfig;
 use swissarmyhammer_statusline::input::StatuslineInput;
 use swissarmyhammer_statusline::module::ModuleContext;
 
-static DIR_LOCK: Mutex<()> = Mutex::new(());
-
 /// Run `f` with the working directory set to `dir`, restoring afterwards.
+///
+/// Uses [`CurrentDirGuard`], which serializes all cwd-mutating tests against a
+/// process-global mutex and restores the original working directory on drop —
+/// even on panic — so a panicking test never leaks the wrong cwd to later tests.
 fn with_dir<F: FnOnce()>(dir: &std::path::Path, f: F) {
-    let _guard = DIR_LOCK.lock().unwrap();
-    let original = std::env::current_dir().unwrap();
-    std::env::set_current_dir(dir).unwrap();
+    let _guard = CurrentDirGuard::new(dir)
+        .expect("Failed to pin working directory to the isolated temp dir");
     f();
-    std::env::set_current_dir(original).unwrap();
 }
 
 fn default_ctx<'a>(input: &'a StatuslineInput, config: &'a StatuslineConfig) -> ModuleContext<'a> {

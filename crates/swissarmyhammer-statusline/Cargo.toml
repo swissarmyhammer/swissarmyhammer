@@ -27,3 +27,4 @@ swissarmyhammer-treesitter = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+swissarmyhammer-common = { workspace = true }

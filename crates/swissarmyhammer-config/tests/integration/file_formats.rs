@@ -4,15 +4,17 @@
 //! with various content structures and edge cases.
 
 use serde_json::json;
-use std::env;
 use std::fs;
-use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
 use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_config::TemplateContext;
 
 /// Test helper to create isolated test environments
 struct IsolatedConfigTest {
     _env: IsolatedTestEnvironment,
+    // RAII guard: pins the working directory to the isolated temp dir and
+    // restores the original directory on drop, even on panic.
+    _cwd_guard: CurrentDirGuard,
 }
 
 impl IsolatedConfigTest {
@@ -22,10 +24,14 @@ impl IsolatedConfigTest {
         // Create .git marker to prevent config discovery from walking up to real repo
         fs::create_dir(env.temp_dir().join(".git")).expect("Failed to create .git marker");
 
-        // Set current directory to temp dir for these tests
-        env::set_current_dir(env.temp_dir()).expect("Failed to set current dir");
+        // Set current directory to temp dir for these tests, restored on drop.
+        let cwd_guard = CurrentDirGuard::new(env.temp_dir())
+            .expect("Failed to pin working directory to the isolated temp dir");
 
-        Self { _env: env }
+        Self {
+            _env: env,
+            _cwd_guard: cwd_guard,
+        }
     }
 
     fn project_config_dir(&self) -> std::path::PathBuf {
