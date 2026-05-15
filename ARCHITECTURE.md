@@ -544,6 +544,7 @@ The Tauri backend is a thin wiring layer:
 - **`dispatch_command`** is the single mutation entry point. All other `#[tauri::command]` functions are read-only queries.
 - **File watcher** monitors `.kanban/` directories for external changes. SHA-256 content hashing avoids double-firing on its own writes.
 - **Menu** is built dynamically from the CommandsRegistry and rebuilds on keymap changes, board switches, and focus changes.
+- **Bundled CLI** — the standalone `kanban` CLI is co-packaged inside `Kanban.app` as a Tauri sidecar (`Contents/MacOS/kanban`), so installing the app also provides the command-line tool. `cli_install` self-installs the CLI onto `PATH` at launch when no package manager (e.g. the Homebrew cask) already did. See `apps/kanban-app/README.md`.
 
 #### Frontend
 

@@ -7,12 +7,12 @@
     "frontendDist": "./ui/dist",
     "devUrl": "http://localhost:5173",
     "beforeDevCommand": {
-      "script": "npm install && npm run dev",
-      "cwd": "./ui"
+      "script": "bash ./scripts/before-dev.sh",
+      "cwd": "."
     },
     "beforeBuildCommand": {
-      "script": "npm install && npm run build",
-      "cwd": "./ui"
+      "script": "bash ./scripts/before-build.sh",
+      "cwd": "."
     }
   },
   "app": {
@@ -44,6 +44,9 @@
     "targets": [
       "dmg",
       "nsis"
+    ],
+    "externalBin": [
+      "binaries/kanban"
     ],
     "icon": [
       "icons/32x32.png",
