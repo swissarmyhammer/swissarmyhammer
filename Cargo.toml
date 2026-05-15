@@ -4,72 +4,72 @@
 
 [workspace]
 members = [
-    "swissarmyhammer",
+    "crates/swissarmyhammer",
     "swissarmyhammer-cli",
-    "swissarmyhammer-tools",
-    "swissarmyhammer-config",
-    "swissarmyhammer-common",
-    "swissarmyhammer-directory",
-    "swissarmyhammer-build",
-    "swissarmyhammer-git",
-    "swissarmyhammer-shell",
-    "swissarmyhammer-templating",
-    "swissarmyhammer-prompts",
-    "swissarmyhammer-modes",
+    "crates/swissarmyhammer-tools",
+    "crates/swissarmyhammer-config",
+    "crates/swissarmyhammer-common",
+    "crates/swissarmyhammer-directory",
+    "crates/swissarmyhammer-build",
+    "crates/swissarmyhammer-git",
+    "crates/swissarmyhammer-shell",
+    "crates/swissarmyhammer-templating",
+    "crates/swissarmyhammer-prompts",
+    "crates/swissarmyhammer-modes",
 
-    "swissarmyhammer-agent",
-    "swissarmyhammer-mcp-proxy",
-    "swissarmyhammer-js",
-    "markdowndown",
-    "llama-agent",
-    "llama-common",
-    "llama-embedding",
-    "model-loader",
-    "model-embedding",
-    "ane-embedding",
-    "swissarmyhammer-embedding",
+    "crates/swissarmyhammer-agent",
+    "crates/swissarmyhammer-mcp-proxy",
+    "crates/swissarmyhammer-js",
+    "crates/markdowndown",
+    "crates/llama-agent",
+    "crates/llama-common",
+    "crates/llama-embedding",
+    "crates/model-loader",
+    "crates/model-embedding",
+    "crates/ane-embedding",
+    "crates/swissarmyhammer-embedding",
     # "onnxruntime-coreml-sys",  # excluded: builds onnxruntime from source via CMake, not yet used
 
-    "acp-conformance",
-    "claude-agent",
-    "agent-client-protocol-extras",
-    "model-context-protocol-extras",
-    "swissarmyhammer-project-detection",
-    "avp-common",
+    "crates/acp-conformance",
+    "crates/claude-agent",
+    "crates/agent-client-protocol-extras",
+    "crates/model-context-protocol-extras",
+    "crates/swissarmyhammer-project-detection",
+    "crates/avp-common",
     "avp-cli",
-    "swissarmyhammer-doctor",
-    "swissarmyhammer-treesitter",
-    "swissarmyhammer-leader-election",
-    "swissarmyhammer-focus",
-    "swissarmyhammer-kanban",
-    "swissarmyhammer-lsp",
-    "swissarmyhammer-code-context",
-    "swissarmyhammer-statusline",
-    "swissarmyhammer-operations",
-    "swissarmyhammer-operations-macros",
-    "swissarmyhammer-skills",
-    "swissarmyhammer-agents",
-    "swissarmyhammer-web",
-    "mirdan",
+    "crates/swissarmyhammer-doctor",
+    "crates/swissarmyhammer-treesitter",
+    "crates/swissarmyhammer-leader-election",
+    "crates/swissarmyhammer-focus",
+    "crates/swissarmyhammer-kanban",
+    "crates/swissarmyhammer-lsp",
+    "crates/swissarmyhammer-code-context",
+    "crates/swissarmyhammer-statusline",
+    "crates/swissarmyhammer-operations",
+    "crates/swissarmyhammer-operations-macros",
+    "crates/swissarmyhammer-skills",
+    "crates/swissarmyhammer-agents",
+    "crates/swissarmyhammer-web",
+    "crates/mirdan",
     "mirdan-cli",
     "mirdan-app",
     "kanban-app",
     "kanban-cli",
-    "swissarmyhammer-fields",
-    "swissarmyhammer-entity",
-    "swissarmyhammer-entity-search",
-    "swissarmyhammer-views",
-    "swissarmyhammer-perspectives",
-    "swissarmyhammer-filter-expr",
-    "swissarmyhammer-merge",
-    "swissarmyhammer-store",
-    "swissarmyhammer-commands",
+    "crates/swissarmyhammer-fields",
+    "crates/swissarmyhammer-entity",
+    "crates/swissarmyhammer-entity-search",
+    "crates/swissarmyhammer-views",
+    "crates/swissarmyhammer-perspectives",
+    "crates/swissarmyhammer-filter-expr",
+    "crates/swissarmyhammer-merge",
+    "crates/swissarmyhammer-store",
+    "crates/swissarmyhammer-commands",
     "benches/embedding_benchmark",
     "crates/swissarmyhammer-sem",
-    "heb",
+    "crates/heb",
     "shelltool-cli",
     "code-context-cli",
-    "swissarmyhammer-cli-completions",
+    "crates/swissarmyhammer-cli-completions",
 ]
 resolver = "2"
 
@@ -215,75 +215,75 @@ tower-http = "0.5"
 hyper = "1.0"
 
 # Web fetch dependencies
-markdowndown = { path = "markdowndown" }
+markdowndown = { path = "crates/markdowndown" }
 
 # Llama-agent dependencies
 llama-cpp-2 = { git = "https://github.com/swissarmyhammer/llama-cpp-rs", features = ["metal", "sampler"] }
-llama-agent = { path = "llama-agent" }
-llama-common = { path = "llama-common" }
-llama-embedding = { path = "llama-embedding" }
-model-loader = { path = "model-loader" }
-model-embedding = { path = "model-embedding" }
-ane-embedding = { path = "ane-embedding" }
+llama-agent = { path = "crates/llama-agent" }
+llama-common = { path = "crates/llama-common" }
+llama-embedding = { path = "crates/llama-embedding" }
+model-loader = { path = "crates/model-loader" }
+model-embedding = { path = "crates/model-embedding" }
+ane-embedding = { path = "crates/ane-embedding" }
 
 # Leader election
-swissarmyhammer-leader-election = { path = "swissarmyhammer-leader-election" }
+swissarmyhammer-leader-election = { path = "crates/swissarmyhammer-leader-election" }
 
 # ZMQ for pub/sub bus
 zmq = "0.10"
 
 # LSP
-swissarmyhammer-lsp = { path = "swissarmyhammer-lsp" }
+swissarmyhammer-lsp = { path = "crates/swissarmyhammer-lsp" }
 lsp-types = "0.97"
 
 # Semantic diff
 swissarmyhammer-sem = { path = "crates/swissarmyhammer-sem" }
 
 # Operations
-swissarmyhammer-operations = { path = "swissarmyhammer-operations" }
-swissarmyhammer-operations-macros = { path = "swissarmyhammer-operations-macros" }
+swissarmyhammer-operations = { path = "crates/swissarmyhammer-operations" }
+swissarmyhammer-operations-macros = { path = "crates/swissarmyhammer-operations-macros" }
 
 # Workspace crate cross-references
-agent-client-protocol-extras = { path = "agent-client-protocol-extras" }
-avp-common = { path = "avp-common" }
-claude-agent = { path = "claude-agent" }
-mirdan = { path = "mirdan" }
-model-context-protocol-extras = { path = "model-context-protocol-extras" }
-swissarmyhammer-agent = { path = "swissarmyhammer-agent" }
-swissarmyhammer-agents = { path = "swissarmyhammer-agents" }
-swissarmyhammer-build = { path = "swissarmyhammer-build" }
-swissarmyhammer-cli-completions = { path = "swissarmyhammer-cli-completions" }
-swissarmyhammer-code-context = { path = "swissarmyhammer-code-context" }
-swissarmyhammer-commands = { path = "swissarmyhammer-commands" }
-swissarmyhammer-common = { path = "swissarmyhammer-common" }
-swissarmyhammer-config = { path = "swissarmyhammer-config" }
-swissarmyhammer-directory = { path = "swissarmyhammer-directory" }
-swissarmyhammer-doctor = { path = "swissarmyhammer-doctor" }
-swissarmyhammer-embedding = { path = "swissarmyhammer-embedding" }
-swissarmyhammer-entity = { path = "swissarmyhammer-entity" }
-swissarmyhammer-entity-search = { path = "swissarmyhammer-entity-search" }
-swissarmyhammer-fields = { path = "swissarmyhammer-fields" }
-swissarmyhammer-filter-expr = { path = "swissarmyhammer-filter-expr" }
-swissarmyhammer-focus = { path = "swissarmyhammer-focus" }
-swissarmyhammer-git = { path = "swissarmyhammer-git" }
-swissarmyhammer-js = { path = "swissarmyhammer-js" }
-swissarmyhammer-kanban = { path = "swissarmyhammer-kanban" }
-swissarmyhammer-mcp-proxy = { path = "swissarmyhammer-mcp-proxy" }
-swissarmyhammer-merge = { path = "swissarmyhammer-merge" }
-swissarmyhammer-modes = { path = "swissarmyhammer-modes" }
-swissarmyhammer-perspectives = { path = "swissarmyhammer-perspectives" }
-swissarmyhammer-project-detection = { path = "swissarmyhammer-project-detection" }
-swissarmyhammer-prompts = { path = "swissarmyhammer-prompts" }
-swissarmyhammer-shell = { path = "swissarmyhammer-shell" }
-swissarmyhammer-skills = { path = "swissarmyhammer-skills" }
-swissarmyhammer-statusline = { path = "swissarmyhammer-statusline" }
-swissarmyhammer-store = { path = "swissarmyhammer-store" }
-swissarmyhammer-templating = { path = "swissarmyhammer-templating" }
-swissarmyhammer-tools = { path = "swissarmyhammer-tools" }
-swissarmyhammer-treesitter = { path = "swissarmyhammer-treesitter" }
-swissarmyhammer-views = { path = "swissarmyhammer-views" }
-swissarmyhammer-web = { path = "swissarmyhammer-web" }
-swissarmyhammer = { path = "swissarmyhammer" }
+agent-client-protocol-extras = { path = "crates/agent-client-protocol-extras" }
+avp-common = { path = "crates/avp-common" }
+claude-agent = { path = "crates/claude-agent" }
+mirdan = { path = "crates/mirdan" }
+model-context-protocol-extras = { path = "crates/model-context-protocol-extras" }
+swissarmyhammer-agent = { path = "crates/swissarmyhammer-agent" }
+swissarmyhammer-agents = { path = "crates/swissarmyhammer-agents" }
+swissarmyhammer-build = { path = "crates/swissarmyhammer-build" }
+swissarmyhammer-cli-completions = { path = "crates/swissarmyhammer-cli-completions" }
+swissarmyhammer-code-context = { path = "crates/swissarmyhammer-code-context" }
+swissarmyhammer-commands = { path = "crates/swissarmyhammer-commands" }
+swissarmyhammer-common = { path = "crates/swissarmyhammer-common" }
+swissarmyhammer-config = { path = "crates/swissarmyhammer-config" }
+swissarmyhammer-directory = { path = "crates/swissarmyhammer-directory" }
+swissarmyhammer-doctor = { path = "crates/swissarmyhammer-doctor" }
+swissarmyhammer-embedding = { path = "crates/swissarmyhammer-embedding" }
+swissarmyhammer-entity = { path = "crates/swissarmyhammer-entity" }
+swissarmyhammer-entity-search = { path = "crates/swissarmyhammer-entity-search" }
+swissarmyhammer-fields = { path = "crates/swissarmyhammer-fields" }
+swissarmyhammer-filter-expr = { path = "crates/swissarmyhammer-filter-expr" }
+swissarmyhammer-focus = { path = "crates/swissarmyhammer-focus" }
+swissarmyhammer-git = { path = "crates/swissarmyhammer-git" }
+swissarmyhammer-js = { path = "crates/swissarmyhammer-js" }
+swissarmyhammer-kanban = { path = "crates/swissarmyhammer-kanban" }
+swissarmyhammer-mcp-proxy = { path = "crates/swissarmyhammer-mcp-proxy" }
+swissarmyhammer-merge = { path = "crates/swissarmyhammer-merge" }
+swissarmyhammer-modes = { path = "crates/swissarmyhammer-modes" }
+swissarmyhammer-perspectives = { path = "crates/swissarmyhammer-perspectives" }
+swissarmyhammer-project-detection = { path = "crates/swissarmyhammer-project-detection" }
+swissarmyhammer-prompts = { path = "crates/swissarmyhammer-prompts" }
+swissarmyhammer-shell = { path = "crates/swissarmyhammer-shell" }
+swissarmyhammer-skills = { path = "crates/swissarmyhammer-skills" }
+swissarmyhammer-statusline = { path = "crates/swissarmyhammer-statusline" }
+swissarmyhammer-store = { path = "crates/swissarmyhammer-store" }
+swissarmyhammer-templating = { path = "crates/swissarmyhammer-templating" }
+swissarmyhammer-tools = { path = "crates/swissarmyhammer-tools" }
+swissarmyhammer-treesitter = { path = "crates/swissarmyhammer-treesitter" }
+swissarmyhammer-views = { path = "crates/swissarmyhammer-views" }
+swissarmyhammer-web = { path = "crates/swissarmyhammer-web" }
+swissarmyhammer = { path = "crates/swissarmyhammer" }
 num_cpus = "1.0"
 process-wrap = "8.0"
 hf-hub = { version = "0.4.3", default-features = false, features = ["tokio", "rustls-tls"] }

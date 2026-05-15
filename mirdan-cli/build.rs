@@ -11,7 +11,7 @@ use std::path::Path;
 
 use clap::CommandFactory;
 
-#[path = "../mirdan/src/cli.rs"]
+#[path = "../crates/mirdan/src/cli.rs"]
 mod cli;
 
 #[path = "../build-support/doc_gen.rs"]
