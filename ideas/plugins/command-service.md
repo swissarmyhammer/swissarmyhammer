@@ -2,7 +2,7 @@
 
 The Command service is an MCP server that ships with the platform. It is built on top of the [plugin architecture](./plugin-architecture.md) — the platform itself has no concept of "the command service"; it is a registered server like any other.
 
-The service exists for two reasons: it is needed by the host UI (command palette, hotkey dispatch, menus), and it doubles as a worked example of building a non-trivial service on the platform. Every pattern it uses — operation-mode dispatch, callbacks across the host/plugin boundary, structured per-verb metadata, override stacks — is available to any other service.
+The service exists for two reasons: it is needed by the host UI (command palette, hotkey dispatch, menus), and it doubles as a worked example of building a non-trivial service on the platform. Every pattern it uses — an operation tool with `op` dispatch, callbacks across the host/plugin boundary, the `_meta` operations tree, override stacks — is available to any other service.
 
 ## What the service does
 
@@ -13,81 +13,108 @@ Commands lets clients (plugins, the user via UI, external agents) register named
 
 The command palette, hotkey dispatch, menu system, and agent integrations all invoke commands through this server. Override semantics let plugins replace built-ins.
 
-## MCP surface (operation-based)
+## MCP surface
 
-Commands is an **operation-based** server. It declares the operations capability in its `ServerCapabilities` at initialize time:
+The Command service exposes a single **operation tool**, `command`. A
+plugin (or the host) registers the server under the name `commands`, so
+it is reached as `this.commands`. The tool bundles one noun — `command`
+— with the verbs register, list, execute, available, unregister, and
+schema.
 
-```json
+Like every operation tool, it describes itself in the tool's `_meta`
+under `io.swissarmyhammer/operations` — the noun → verb → parameters
+tree (see *Service Consumption* and *Operation tools and
+`swissarmyhammer-operations`* in the
+[plugin architecture](./plugin-architecture.md)):
+
+```jsonc
 {
-  "capabilities": {
-    "experimental": {
-      "io.swissarmyhammer/operations": { "version": "1" }
-    },
-    "tools": { "listChanged": false }
+  "name": "command",
+  "_meta": {
+    "io.swissarmyhammer/operations": {
+      "command": {
+        "register":   { "op": "register command",
+                        "description": "Add a command to the registry",
+                        "parameters": { "id":   { "type": "string", "required": true },
+                                        "name": { "type": "string", "required": true } /* … */ } },
+        "list":       { "op": "list command",
+                        "description": "Enumerate active commands",
+                        "parameters": { /* optional filters */ } },
+        "execute":    { "op": "execute command",
+                        "description": "Run a command",
+                        "parameters": { "id":    { "type": "string",  "required": true },
+                                        "ctx":   { "type": "object",  "required": true },
+                                        "force": { "type": "boolean", "required": false } } },
+        "available":  { "op": "available command",
+                        "description": "Check whether a command can run",
+                        "parameters": { "id":  { "type": "string", "required": true },
+                                        "ctx": { "type": "object", "required": true } } },
+        "unregister": { "op": "unregister command",
+                        "description": "Remove a command",
+                        "parameters": { "id": { "type": "string", "required": true } } },
+        "schema":     { "op": "schema command",
+                        "description": "Return a command's input schema",
+                        "parameters": { "id": { "type": "string", "required": true } } }
+      }
+    }
   }
 }
 ```
 
-It exposes one tool — `command` (the noun class) — with a verb set that
-covers both collection-wide operations (register, list) and operations
-on a specific command id (execute, available, schema, unregister).
-Verbs that act on a specific command take `id` as a required property
-of their input, like any other parameter.
+| Verb         | Required parameters      | Purpose                          |
+| ------------ | ------------------------ | -------------------------------- |
+| `register`   | full command definition  | Add a command to the registry    |
+| `list`       | — (optional filters)     | Enumerate active commands        |
+| `execute`    | `id`, `ctx` (`force?`)   | Run a command                    |
+| `available`  | `id`, `ctx`              | Check whether a command can run  |
+| `unregister` | `id`                     | Remove a command                 |
+| `schema`     | `id`                     | Return a command's input schema  |
 
-| Verb         | Input (required fields)              | Output           | Purpose                               |
-| ------------ | ------------------------------------ | ---------------- | ------------------------------------- |
-| `register`   | full command definition (incl. `id`) | `RegisterOutput` | Add a command to the registry         |
-| `list`       | optional filters                     | `[CommandSummary]` | Enumerate active commands           |
-| `unregister` | `{ id }`                             | `void`           | Remove a command                      |
-| `available`  | `{ id, ctx }`                        | `AvailableOutput` | Check whether a command can run      |
-| `execute`    | `{ id, ctx, force? }`                | `ExecuteOutput`  | Run a command                         |
-| `schema`     | `{ id }`                             | JSON schema      | Return the input schema for a command |
+Calls are plain `tools/call` with an `op` selector — `"<verb> command"`:
 
-TS surface:
-
-```ts
-await this.commands.command.register({ id: "my.foo", name: "Foo", /* … */ });
-const all = await this.commands.command.list({});
-
-await this.commands.command.execute({ id: "my.foo", ctx });
-await this.commands.command.unregister({ id: "my.foo" });
-const ok = await this.commands.command.available({ id: "my.foo", ctx });
-const schema = await this.commands.command.schema({ id: "my.foo" });
+```text
+tools/call("command", { op: "register command", id: "my.foo", name: "Foo", … })
+tools/call("command", { op: "execute command",  id: "my.foo", ctx })
 ```
 
-Command ids commonly contain dots (`myplugin.archive_stale`), but
-that's irrelevant here — the id is a string property in the args
-object, never a JS path segment.
+The TS surface — the direct `op` form is always available; the SDK also
+offers the `<noun>.<verb>` path sugar built from the `_meta` tree:
 
-Dispatch:
-- `register`: `call("commands", "command", verb="register", { id: "my.foo", … })`
-- `execute`:  `call("commands", "command", verb="execute",  { id: "my.foo", ctx })`
+```ts
+// direct op form:
+await this.commands.command({ op: "register command", id: "my.foo", name: "Foo" /* … */ });
+await this.commands.command({ op: "execute command",  id: "my.foo", ctx });
 
-Wire (the verb folds into the arguments map at the MCP boundary because
-MCP itself has no verb concept; every other parameter is already a
-property of the arguments map):
-- `tools/call("command", { verb: "register", id: "my.foo", … })`
-- `tools/call("command", { verb: "execute",  id: "my.foo", ctx })`
+// path-sugar form — server "commands", tool "command", noun "command":
+await this.commands.command.command.execute({ id: "my.foo", ctx });
+```
 
-Registry changes notify via `notifications/commands/changed`, debounced ~100ms and flushed on plugin load/unload boundaries. The shape of `tools/list` does not change — `notifications/tools/list_changed` is never fired for command registration.
+`id` is an ordinary parameter; command ids freely contain dots
+(`myplugin.archive_stale`) because they are string values, never path
+segments.
 
-## Why operation-based
+Registry changes notify via `notifications/commands/changed`, debounced ~100ms and flushed on plugin load/unload boundaries. The tool list itself does not change — `notifications/tools/list_changed` is never fired for command registration.
 
-Commands fits the operation pattern naturally:
+## Why an operation tool
 
-- All verbs work on the same noun class (a command), so they share the
-  same tool entry and the metadata stays grouped by purpose.
-- Adding a new verb (say, `disable`) is one new entry in the tool's
-  verb map; the tool list itself doesn't grow.
-- The structured per-verb metadata makes for clean codegen and CLI
-  generation: each verb is a typed `(input, output)` pair end-to-end.
+Commands fits the operation-tool shape naturally:
 
-A flat alternative — `commands.register`, `commands.execute`, etc., each as its own MCP tool — would work and the SDK would dispatch it fine, but the surface grows linearly with verbs and tool-list bookkeeping has more ceremony. Operation-based is the right shape when there's one noun and many verbs.
+- All verbs work on the same noun (a command), so they live in one
+  tool and one `_meta` subtree; the tool list does not grow as verbs
+  are added.
+- Adding a verb (say, `disable`) is one new operation struct — one new
+  `(verb, noun)` pair — picked up by `generate_mcp_schema` and the
+  `_meta` generator automatically.
+- The `_meta` noun → verb → parameters tree gives clean codegen and
+  CLI generation with no per-verb bookkeeping.
+
+A flat alternative — `register`, `execute`, etc. each as its own MCP tool — would work and the SDK would dispatch it fine, but the tool list grows linearly with verbs. An operation tool is the right shape when there is one noun and many verbs.
 
 ## Registration pattern (callbacks across the boundary)
 
 ```ts
-this.commands.command.register({
+this.commands.command({
+  op: "register command",
   id: "stale.archive",
   name: "Archive stale cards on this board",
   category: "Cleanup",
@@ -99,7 +126,7 @@ this.commands.command.register({
 });
 ```
 
-`available` and `execute` are functions in the registration payload. The SDK's callback primitive strips them, registers ids locally, sends opaque markers in the registration call. When `commands.command.execute({ id: "stale.archive", ctx })` is invoked later, the server emits callback invocations back to the registering plugin's isolate to run `available` then `execute`.
+`available` and `execute` are functions in the registration payload. The SDK's callback primitive strips them, registers ids locally, sends opaque markers in the registration call. When `execute command` is later invoked for `stale.archive`, the server emits callback invocations back to the registering plugin's isolate to run `available` then `execute`.
 
 ## Synchronous `available`
 
@@ -128,7 +155,7 @@ This is a service-specific design — the platform doesn't require it. Other ser
 
 ## Invocation is open
 
-`commands.command.execute({ id, ... })` is callable by anyone with access to the `commands` server. The invoker doesn't gain capabilities by invoking, since the command runs in the *registering* plugin's isolate. The integrity concern (a malicious plugin synthesizing a context to invoke a destructive command) is local to the command's effects, which is the command author's responsibility.
+The `execute command` operation is callable by anyone with access to the `commands` server. The invoker doesn't gain capabilities by invoking, since the command runs in the *registering* plugin's isolate. The integrity concern (a malicious plugin synthesizing a context to invoke a destructive command) is local to the command's effects, which is the command author's responsibility.
 
 ## Context
 
@@ -153,9 +180,9 @@ By convention, commands are id'd with the registering plugin's name as a prefix 
 
 Every non-trivial behavior of the Command service is built on platform primitives:
 
-- A fixed MCP tool surface with structured per-verb operation metadata — declared via attributes on the Rust impl, consumed directly for codegen and dispatch.
+- A single operation tool whose `_meta` operations tree is generated from `#[operation]` structs by `swissarmyhammer-operations` — consumed directly for codegen, CLI generation, and SDK path sugar.
 - Callbacks across the boundary for `available` / `execute` — the universal callback primitive.
 - Override stack semantics — internal data structure in the service's Rust impl.
 - Soft latency budgets — service-internal concern.
 
-None of it requires platform changes. The same toolkit is available to any service the host or a plugin wants to build.
+None of it requires plugin-platform changes. The one piece that is new work — generating the `_meta` operations tree and auto-attaching it to operation tools — lands in `swissarmyhammer-operations`, and benefits every operation tool, not just this service. The same toolkit is available to any service the host or a plugin wants to build.

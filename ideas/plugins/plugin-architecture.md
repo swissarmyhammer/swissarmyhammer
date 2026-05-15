@@ -18,6 +18,56 @@ dispatcher to them.
 This commitment makes the architecture small. The architecture doc is
 small as a result.
 
+The platform ships as one new workspace crate plus changes to four
+existing ones — see *Crates* immediately below.
+
+## Crates
+
+Building this platform is **one new crate and changes to four existing
+crates**. Every claim in this section is reflected in the relevant
+detailed section, cross-referenced below.
+
+### New crate
+
+- **`swissarmyhammer-plugin`** — the plugin platform itself. Owns the
+  `Plugin` base class and SDK, the `ServerRegistry`, the `Dispatcher`,
+  the `McpServer` trait and its three transport implementations
+  (`InProcessServer` wrapping `rmcp` handlers, `CliServer`,
+  `UrlServer`), the deno_core runtime integration, the per-plugin
+  ledger, the `TypesEmitter` codegen, and the hot-reload machinery. It
+  depends on `swissarmyhammer-directory` for plugin discovery. Host
+  binaries (the Tauri kanban app, the TUI, headless) gain a dependency
+  on it; nothing else is asked of them.
+
+### Modified crates
+
+- **`swissarmyhammer-operations`** — gains a `_meta`-tree generator
+  that builds the `io.swissarmyhammer/operations` noun → verb →
+  parameters value from a `&[&dyn Operation]` slice, alongside the
+  existing `generate_mcp_schema`. This is the only place operation
+  discovery metadata is produced. (See *Operation tools and
+  `swissarmyhammer-operations`*.)
+- **`swissarmyhammer-operations-macros`** — gains the operation-tool
+  macro that declares an MCP tool from its operation set and
+  auto-attaches the generated `_meta` to the tool definition, so
+  operation tools are self-describing by construction and the `_meta`
+  cannot drift from the operation structs. (The existing `#[operation]`
+  and `#[param]` macros already live here.)
+- **`swissarmyhammer-tools`** — its MCP server bootstrap
+  (`crates/swissarmyhammer-tools/src/mcp/server.rs`) gains the
+  `expose_rust_module` calls that hand the existing in-process tools
+  (`files`, `kanban`, `code_context`, `git`, `shell`, …) to the plugin
+  registry. The tools keep their `McpTool` / `ToolRegistry` home in
+  this crate; only the exposure glue is new. (See *Rust — in-process
+  Rust module*.)
+- **`swissarmyhammer-directory`** — gains the stack-aware `Watcher<C>`
+  (plus a shared `async-watcher` plumbing helper) that drives plugin
+  discovery and hot reload across the builtin → user → project layers.
+  (See *Plugin Discovery*.)
+
+No other crate changes. The platform deliberately consumes the
+existing operation infrastructure rather than forking it.
+
 ## Principles
 
 1. **The plugin base class is register/unregister + generic dispatch.**
@@ -30,15 +80,19 @@ small as a result.
    tool metadata by calling `tools/list` on the connected server.
    Schemas, descriptions, verb enumerations live on the server, once.
 3. **No hard-coded service or tool list.** The base class, SDK, and
-   dispatcher know nothing about specific server, tool, or verb names.
-   Two dispatch shapes are supported, distinguished by whether the server
-   declared an `experimental.operations` capability at initialize time
-   (per [MCP `ServerCapabilities`](https://modelcontextprotocol.io/specification/2025-11-25/schema#servercapabilities)):
-   - **Flat server:** `this.foo.bar(args)` → `call(server: "foo", tool: "bar", args)`.
-   - **Operation server:** `this.foo.<noun>.<verb>(args)` → tool name is the
-     noun class, verb identifies the operation, args carry every parameter
-     including any instance id. The platform folds `verb` into the args
-     map at the MCP wire boundary, since MCP itself has no verb concept.
+   dispatcher know nothing about specific server or tool names. Every
+   call is a plain MCP `tools/call(tool, arguments)` — one tool name,
+   one arguments map. The platform never parses `arguments`.
+   - **Flat tool:** one tool, one operation. `this.foo.bar(args)` →
+     `tools/call("bar", args)`.
+   - **Operation tool:** one tool bundling many `(verb, noun)`
+     operations behind an `op` argument — the pattern
+     `swissarmyhammer-operations` already generates for `files`,
+     `kanban`, `code_context`, etc. `this.foo.bar.<noun>.<verb>(args)`
+     → `tools/call("bar", { op: "<verb> <noun>", ...args })`. `op` is
+     an ordinary argument key; the tool's own handler reads it. The
+     SDK builds the `op` string from the path purely as ergonomic
+     sugar (see *Service Consumption*).
 4. **One contract, one runtime.** All plugins run in deno_core embedded
    in the host's main Rust process — same engine across hosts. Plugin
    source is portable.
@@ -67,10 +121,11 @@ export abstract class Plugin {
   register(name: string, source: ServerSource): void;
   unregister(name: string): void;
 
-  // Dynamic dispatch for any registered server. Shape depends on whether
-  // the server declared the operations capability at initialize time:
-  //   Flat server:       this.foo.bar(input)
-  //   Operation server:  this.foo.<noun>.<verb>(input)   // input includes any id
+  // Dynamic dispatch for any registered server. Every leaf call is a
+  // plain MCP tools/call:
+  //   Flat tool:       this.foo.bar(input)        → tools/call("bar", input)
+  //   Operation tool:  this.foo.bar.task.add(input)
+  //                      → tools/call("bar", { op: "add task", ...input })
   readonly [server: string]: ServerDispatcher;
 
   // Convenience: scoped logger and mid-session disposable tracker
@@ -96,14 +151,15 @@ callbacks, anything that lives across calls) and auto-disposes on unload.
 ## Service Consumption
 
 Once a server is registered, plugins call its tools through `this`. Tools
-come in two shapes — flat and operation-based — and the SDK supports both
+come in two shapes — flat and operation tools — and the SDK supports both
 through the same generic Proxy. Which shape applies to a given tool is
-determined by the tool's schema, never by anything baked into the SDK.
+determined by the tool's own `inputSchema`, never by anything baked into
+the SDK.
 
 ### Flat tools
 
-One MCP tool per operation. TS surface is `this.<server>.<tool>(args)`.
-Args is always a single object.
+One MCP tool, one operation. TS surface is `this.<server>.<tool>(args)`,
+`args` a single object.
 
 ```ts
 // Server "weather" exposes flat tools "current" and "forecast":
@@ -111,130 +167,169 @@ const now    = await this.weather.current({ city: "Austin" });
 const next3  = await this.weather.forecast({ city: "Austin", days: 3 });
 ```
 
-Dispatch: `call(server: "weather", tool: "current", args: { city: "Austin" })`.
-Wire (MCP): `tools/call("weather", "current", { city: "Austin" })`.
+Wire (MCP): `tools/call("current", { city: "Austin" })` on the
+`weather` connection — the platform passes the tool name and the
+arguments map straight through.
 
-### Operation-based tools
+### Operation tools
 
-One MCP tool per noun class; verbs are part of the call. The TS surface
-is `this.<server>.<noun>.<verb>(args)` where `args` is a single object
-carrying every parameter the verb takes — including any instance
-identifier:
+Most tools the host ships are **operation tools**: a single MCP tool
+that bundles many `(verb, noun)` operations behind an `op` argument.
+This is the shape `swissarmyhammer-operations` already produces for
+`files`, `kanban`, `code_context`, `git`, `shell`, and the rest — one
+tool name, an `op` string like `"add task"`, and the operation's
+parameters flat alongside it. The plugin platform inherits that shape;
+it does not define a new one.
 
-```ts
-// Server "entities" exposes an operation-based tool "cards":
+An operation tool describes itself through the **`_meta`** field on its
+`Tool` definition. `_meta` is the MCP-standard extension point
+([MCP 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25/basic/index#_meta)):
+a reserved key/value map for metadata, where each key is a
+reverse-DNS-prefixed name. The operation metadata lives under the key
+`io.swissarmyhammer/operations` — a valid, non-reserved `_meta` key
+(reserved keys are only those whose second prefix label is
+`modelcontextprotocol` or `mcp`).
 
-// Verbs that operate on the collection take no id:
-const card  = await this.entities.cards.create({ data: { title: "..." } });
-const all   = await this.entities.cards.list({});
+The value under that key is a **noun → verb → parameters** tree — the
+structure that actually reflects how operations are organized:
 
-// Verbs that operate on a specific instance take id as a normal arg:
-const got   = await this.entities.cards.read({ id: "card_123" });
-await         this.entities.cards.update({ id: "card_123", data: { title: "new" } });
-await         this.entities.cards.delete({ id: "card_123" });
-
-// Instance ids are just string values; characters like dots, hyphens,
-// and slashes need no special treatment because the id never appears in
-// the JS path:
-await         this.entities.cards.update({ id: "card.with.dots", data: {...} });
-```
-
-Dispatch:
-`call(server: "entities", tool: "cards", verb: "update", args: { id: "card_123", data: {...} })`.
-
-Wire (MCP): `tools/call("cards", { verb: "update", id: "card_123", data: {...} })`.
-The verb rides in the arguments map, since MCP's wire format has no
-verb concept. The SDK rolls/unrolls it at the boundary. Every other
-parameter — including any instance id — is just a normal property in
-the arguments map.
-
-Why operation-based: schema sharing (all verbs on `cards` share the
-Card shape), discoverability (operations grouped by noun), and
-structured metadata for clean codegen and CLI generation — the
-`(verb, noun, args)` triple maps directly to `<bin> <noun> <verb> --args`
-on the command line and to `this.server.<noun>.<verb>(args)` in
-TypeScript with no presentation-layer rewriting. The
-[Command service](./command-service.md) is a worked example built on
-top of the platform.
-
-### How the SDK knows which shape to use
-
-The platform reads the server's `ServerCapabilities` from the MCP
-`initialize` handshake. A server declares operation-mode by including
-the experimental capability:
-
-```json
+```jsonc
 {
-  "capabilities": {
-    "experimental": {
-      "io.swissarmyhammer/operations": { "version": "1" }
+  "name": "kanban",
+  "description": "Kanban board operations",
+  "inputSchema": {
+    // Plain JSON Schema, kept flat for validation and Claude API
+    // compatibility: the `op` selector plus the union of all parameters.
+    "type": "object",
+    "additionalProperties": true,
+    "properties": {
+      "op":     { "type": "string",
+                  "enum": ["add task", "move task", "init board" /* … */] },
+      "title":  { "type": "string" },
+      "id":     { "type": "string" },
+      "column": { "type": "string" }
+      // …
+    }
+  },
+  "_meta": {
+    "io.swissarmyhammer/operations": {
+      // noun → verb → { op string, description, parameters }
+      "task": {
+        "add": {
+          "op": "add task",
+          "description": "Create a new task",
+          "parameters": {
+            "title":       { "type": "string",  "required": true,  "description": "Task title" },
+            "description": { "type": "string",  "required": false, "description": "Task body" }
+          }
+        },
+        "move": {
+          "op": "move task",
+          "description": "Move a task to a column",
+          "parameters": {
+            "id":     { "type": "string", "required": true, "description": "Task id" },
+            "column": { "type": "string", "required": true, "description": "Target column" }
+          }
+        }
+        // … one entry per verb on `task` …
+      },
+      "board": {
+        "init": {
+          "op": "init board",
+          "description": "Initialize a new board",
+          "parameters": { "name": { "type": "string", "required": true, "description": "Board name" } }
+        }
+        // …
+      }
+      // … one entry per noun …
     }
   }
 }
 ```
 
-Per the [MCP 2025-11-25 schema](https://modelcontextprotocol.io/specification/2025-11-25/schema#servercapabilities),
-`ServerCapabilities.experimental` is an open `{ [key: string]: object }`
-map for non-standard capabilities. This is the standard hook for
-declaring server-side extensions.
+A tool is an operation tool **iff its `_meta` carries the
+`io.swissarmyhammer/operations` key**. The three levels — noun, then
+verb, then parameters — are exactly what a CLI generator, the SDK
+sugar, and codegen each need, with no flattening to undo.
 
-For operation servers, each operation tool reports its **structured verb
-metadata** in the tool's `_meta` field on the `tools/list` response:
+This `_meta` does not exist in the workspace yet. Producing it is a
+change to `swissarmyhammer-operations` and its macros — see *Operation
+tools and `swissarmyhammer-operations`*.
 
-```jsonc
-{
-  "tools": [
-    {
-      "name": "command",
-      "description": "Command registry operations",
-      "inputSchema": { "type": "object" },          // generic; the verbs are the real schemas
-      "_meta": {
-        "io.swissarmyhammer/operations": {
-          "verbs": {
-            "register":   { "input": { /* JSON schema */ }, "output": { /* … */ }, "description": "..." },
-            "list":       { "input": { /* … */ },           "output": { /* … */ }, "description": "..." },
-            "execute":    { "input": { /* … */ },           "output": { /* … */ }, "description": "..." },
-            "available":  { "input": { /* … */ },           "output": { /* … */ }, "description": "..." },
-            "unregister": { "input": { /* … */ },           "output": { /* … */ }, "description": "..." },
-            "schema":     { "input": { /* … */ },           "output": { /* … */ }, "description": "..." }
-          }
-        }
-      }
-    }
-  ]
-}
+### Calling an operation tool
+
+The wire call is an ordinary `tools/call`: the tool name, and an
+arguments map whose `op` key selects the operation. Every other
+parameter is a flat sibling of `op` — there is no separate verb field
+and no noun in the tool name. This is how operation tools are invoked
+today (`FilesTool::execute` reads `arguments["op"]` and matches it);
+the plugin platform does not change it.
+
+```text
+tools/call("kanban", { op: "add task",  title: "Fix login bug" })
+tools/call("kanban", { op: "move task", id: "t_12", column: "doing" })
 ```
 
-The metadata is explicit and structured:
-- The **tool name** is the noun class (`command`, `cards`, `task`).
-- `verbs` — the verb set this tool supports.
-- Each verb has `input` and `output` JSON schemas derived from the Rust
-  method signature, plus a `description` from the doc comment.
+The TS surface is sugar over that single call. The SDK reads the
+`io.swissarmyhammer/operations` `_meta` tree and lets the plugin author
+spell the operation as a `noun.verb` path:
 
-Verbs that operate on a specific instance carry the instance identifier
-as a normal required property in their `input` schema (commonly `id`).
-There is no separate scope axis, no path-vs-args distinction at the
-metadata level — every parameter is just a property.
+```ts
+// server "board" exposes the operation tool "kanban":
+await this.board.kanban.task.add({ title: "Fix login bug" });
+await this.board.kanban.task.move({ id: "t_12", column: "doing" });
+await this.board.kanban.board.init({ name: "My Project" });
+const all = await this.board.kanban.task.list({});
+```
 
-The metadata is a faithful reflection of the `(verb, noun, args)` model
-the operation infrastructure already uses (see
-`swissarmyhammer-operations/src/schema.rs` and the CLI generator in
-`kanban-cli/src/cli_gen.rs`). The same triple drives the SDK proxy,
-the wire format, the codegen, and the CLI surface.
+`this.<server>.<tool>.<noun>.<verb>(args)` compiles to
+`tools/call("<tool>", { op: "<verb> <noun>", ...args })` — the SDK
+looks up `_meta…[noun][verb].op` for the exact `op` string and folds
+`args` in flat. The path sugar is optional: a plugin can pass `op`
+itself with `this.board.kanban({ op: "add task", title: "…" })`. The
+`op` form is the ground truth; the path is a convenience the SDK
+derives from `_meta`.
 
-The SDK Proxy on `this.<server>...` uses this cached metadata directly:
+The instance identifier (`id`, `task_id`, …) is just one of the flat
+parameters — it has no special place in the path or on the wire. `op`
+strings and id values freely contain dots, hyphens, and slashes; they
+are string values, never JS path segments.
 
-- **Operations not declared:** flat dispatch. `path[0]` is the tool
-  name. `this.weather.current(...)` → tool=`current`, args=`{...}`.
-- **Operations declared:** path is exactly two segments —
-  `<noun>.<verb>`. `this.entities.cards.update(...)` →
-  tool=`cards`, verb=`update`, args carry every parameter including
-  any instance id.
-- **Verb not in the tool's metadata:** runtime error
-  (`UnknownVerb`), with the valid verb set pulled from `_meta` so the
-  message can list alternatives.
-- **More than two segments under an operation server:** runtime
-  error (`UnexpectedPath`). The metadata defines no path sugar.
+### Why operation tools
+
+`swissarmyhammer-operations` already uses the one-tool-many-operations
+shape across the workspace, so the plugin platform consumes it rather
+than inventing a parallel one:
+
+- One MCP tool covers a whole domain; the tool list stays small as
+  operations grow.
+- The `_meta` tree gives noun-grouped, verb-nested, parameter-typed
+  metadata in one structure — the CLI generator
+  (`<bin> <noun> <verb> --args`), the host's own callers, the plugin
+  SDK path sugar, and codegen all read the same tree.
+- `op` stays the single wire selector, so the call is a plain
+  `tools/call` no matter how rich the discovery metadata gets.
+
+The [Command service](./command-service.md) is a worked example.
+
+### How the SDK reads `_meta`
+
+The SDK caches each tool's `Tool` definition from `tools/list`. A tool
+whose `_meta` has `io.swissarmyhammer/operations` is an operation tool;
+without it, flat. The Proxy on `this.<server>...` resolves a call path
+against that cached tree:
+
+- **Flat tool:** `this.weather.current(args)` → path `[current]` →
+  `tools/call("current", args)`.
+- **Operation tool, path form:** `this.board.kanban.task.add(args)` →
+  path `[kanban, task, add]` → the SDK reads
+  `_meta…operations["task"]["add"].op` → `"add task"` →
+  `tools/call("kanban", { op: "add task", ...args })`.
+- **Operation tool, direct form:** `this.board.kanban({ op: "add task", ...})`
+  → path `[kanban]`, `op` already in args → `tools/call("kanban", args)`.
+- **Unknown noun/verb:** the `noun`/`verb` segment is not in the
+  `_meta` tree → runtime error (`UnknownOperation`) listing the valid
+  verbs for that noun straight from `_meta`.
 
 ```ts
 // Generic dispatcher used for both shapes; capability awareness is
@@ -263,17 +358,22 @@ function makePluginThis(transport: Transport, base: PluginBase): Plugin {
 }
 ```
 
-`transport.callPath(server, path, args)` consults the cached metadata
-for the path's tool (if any):
-- flat tool (no operation metadata): `path[0]` is the tool name,
-  dispatch `(server, tool, args)`.
-- operation tool: `path[0]` is the noun-class tool name, `path[1]` is
-  the verb (validated against the cached verb list); dispatch
-  `(server, tool, verb, args)`. Any instance id is already a property
-  in `args`.
+`transport.callPath(server, path, args)` consults the cached `Tool`
+definition for `path[0]` (the tool):
+- **flat tool** (no `io.swissarmyhammer/operations` in `_meta`): the
+  path is `[tool]`; dispatch `tools/call(tool, args)`.
+- **operation tool**, path `[tool, noun, verb]`: look up
+  `_meta…operations[noun][verb].op` for the `op` string, dispatch
+  `tools/call(tool, { op, ...args })`.
+- **operation tool**, path `[tool]` with `op` already in `args`:
+  dispatch `tools/call(tool, args)` unchanged — the direct form.
 
-`RESERVED` covers SDK-handled verbs (`on`, `off`, `once`, `subscribe`,
-`unsubscribe`, `schema`) rather than forwarding as tool or verb names.
+Either way the wire call is a plain `tools/call`; `op` is just an
+argument. The platform never invents a noun/verb wire axis.
+
+`RESERVED` covers SDK-handled names (`on`, `off`, `once`, `subscribe`,
+`unsubscribe`) rather than forwarding them as tool, noun, or verb
+segments.
 
 ### Parameters are always passed as `{}`
 
@@ -318,6 +418,16 @@ For Rust modules to be available, the host build must compile them in
 and call `host.exposeRustModule(id, server)` at startup. After that,
 plugins (or the host itself) can register them under any name they
 choose.
+
+The host modules worth exposing are the existing in-process MCP tools —
+`files`, `kanban`, `code_context`, `git`, `shell`, and the rest — which
+all live in **`swissarmyhammer-tools`**. Wiring them up is therefore a
+change to `swissarmyhammer-tools`: its MCP server bootstrap
+(`crates/swissarmyhammer-tools/src/mcp/server.rs`) gains the
+`exposeRustModule` calls that hand each tool to the plugin platform's
+registry. `swissarmyhammer-tools` already owns the `McpTool` trait and
+`ToolRegistry`; exposing those tools to `swissarmyhammer-plugin` is new
+glue in that crate, not a new home for the tools.
 
 ### URL — external HTTP-served server
 
@@ -367,19 +477,25 @@ async load() {
 }
 ```
 
-The host's startup code is what makes Rust modules available:
+The host's startup code is what makes Rust modules available. For this
+host that startup code is `swissarmyhammer-tools`' MCP server bootstrap
+(`crates/swissarmyhammer-tools/src/mcp/server.rs`), extended to hand
+its existing tools to the plugin platform:
 
 ```rust
-// host startup
-host.expose_rust_module("kanban_core", KanbanServer::new(state.clone()));
-host.expose_rust_module("entities",    EntitiesServer::new(state.clone()));
-// …
+// swissarmyhammer-tools MCP bootstrap — new wiring
+host.expose_rust_module("files",        FilesTool::new());
+host.expose_rust_module("kanban",       KanbanTool::new(state.clone()));
+host.expose_rust_module("code_context", CodeContextTool::new(db.clone()));
+// … one per tool already in swissarmyhammer-tools …
 ```
 
-`expose_rust_module` registers the rmcp handler in a separate "available
+`expose_rust_module` registers the handler in a separate "available
 modules" table; it doesn't put the server into the live registry. A
 subsequent `register(name, { rust: id })` call (from the host itself or
-from a plugin) activates it under the chosen name.
+from a plugin) activates it under the chosen name. The tools are not
+moved or rewritten — they keep their `McpTool`/`ToolRegistry` home in
+`swissarmyhammer-tools`; only the `expose_rust_module` glue is new.
 
 This decouples *which Rust code the host has compiled in* from *which
 servers are live and under what names*. The host can ship a library of
@@ -390,33 +506,28 @@ below for how the Rust modules themselves are written.
 This is the only source that bypasses serialization. URL and CLI sources
 always pay one MCP-protocol round-trip per call.
 
-### Schemas and capabilities come from `initialize` + `tools/list`. Always.
+### Schemas come from `initialize` + `tools/list`. Always.
 
 For every source, the platform's flow is identical:
 
 1. Establish connection (HTTP request, spawn subprocess, or attach to
    in-process handler).
-2. Send MCP `initialize`. The server returns `ServerCapabilities` in
-   its response, including any `experimental` extensions.
-3. Send `tools/list`. The server returns its tool metadata with full
-   input/output schemas.
-4. Cache both the capability set and the tool list. Subscribe to
-   `notifications/tools/list_changed` so the tool-list cache stays
-   current. Capabilities are fixed for the lifetime of the connection.
+2. Send MCP `initialize`. The server returns `ServerCapabilities`.
+3. Send `tools/list`. The server returns each tool's `name`,
+   `description`, and `inputSchema`.
+4. Cache the tool list. Subscribe to `notifications/tools/list_changed`
+   so the cache stays current.
 5. Make the server available as `this.<name>` on plugin `this`.
 
-Operation-based servers are identified by the
-`experimental.operations` capability returned at step 2. Per the
-[MCP 2025-11-25 schema](https://modelcontextprotocol.io/specification/2025-11-25/schema#servercapabilities),
-`ServerCapabilities.experimental` is an open `{ [key: string]: object }`
-map for non-standard capabilities — this is the standard hook for an
-extension like operation-mode dispatch.
-
-A server that declares operations gets `<noun>.<verb>(args)` ergonomics
-in the SDK Proxy and the emitted types — the tool name is the noun
-class. A server without the capability gets `<tool>(args)` (flat). The
-plugin author never declares anything; the right shape comes from the
-cached capability set.
+Operation tools are identified per-tool, not per-server: a tool whose
+`Tool._meta` carries the `io.swissarmyhammer/operations` key is an
+operation tool, and the SDK offers `<tool>.<noun>.<verb>(args)` path
+sugar over the noun → verb → parameters tree under that key. A tool
+without it is flat — `<tool>(args)`. One server can expose a mix.
+There is no server capability flag; the operation metadata travels in
+each tool's own `_meta` (see *Service Consumption*). The plugin author
+never declares anything; the shape comes from the cached `Tool`
+definition.
 
 ### Name collisions
 
@@ -552,16 +663,12 @@ impl<S: ServerHandler + Send + Sync + 'static> McpServer for InProcessServer<S> 
         &self,
         caller: CallerId,
         tool: &str,
-        verb: Option<&str>,
-        mut input: Value,
+        input: Value,
     ) -> Result<Value> {
-        // Operation servers: fold `verb` into the args map so the rmcp
-        // handler sees it as a normal input field. Every other parameter
-        // — including any instance id — is already a property of `input`.
-        // The wire shape is the same for in-process, stdio, and HTTP.
-        if let (Some(v), Some(obj)) = (verb, input.as_object_mut()) {
-            obj.insert("verb".into(), Value::String(v.into()));
-        }
+        // A call is just a tool name and an arguments map. For an
+        // operation tool the `op` selector is already a key inside
+        // `input` — the SDK put it there. The adapter does not parse
+        // or special-case it; that is the tool handler's job.
         let request = CallToolRequestParam {
             name: tool.into(),
             arguments: input.as_object().cloned(),
@@ -574,142 +681,107 @@ impl<S: ServerHandler + Send + Sync + 'static> McpServer for InProcessServer<S> 
 }
 ```
 
-No transport, no JSON-RPC. Calls to `this.kanban.cards.update({ id: "card-123", ... })`
-from a plugin land in the host's V8 dispatch path → `Dispatcher::call` →
-`InProcessServer::invoke` → `rmcp::ServerHandler::call_tool` → the Rust
-function body. The whole thing is async function composition.
+No transport, no JSON-RPC. Calls to
+`this.board.kanban.task.move({ id: "t_12", column: "doing" })` from a
+plugin become `tools/call("kanban", { op: "move task", id: "t_12",
+column: "doing" })` and land in the host's V8 dispatch path →
+`Dispatcher::call` → `InProcessServer::invoke` →
+`rmcp::ServerHandler::call_tool` → the tool's `op` match → the Rust
+operation body. The whole thing is async function composition.
 
-### Declaring operation-mode
+### Operation tools and `swissarmyhammer-operations`
 
-Operation servers don't write a manual dispatcher that switches on
-`(verb, noun)`. The `#[operation_server]` and `#[verb]` attribute macros
-generate the wire dispatch, the experimental capability declaration, the
-tool's `_meta` metadata, and the JSON schemas — all from the method
-signatures.
+An operation tool's metadata is **not hand-written and not invented by
+the plugin platform** — it is generated from the operation definitions
+by the `swissarmyhammer-operations` crate. Part of that generation
+exists today; the `_meta` tree this design depends on does not, and is
+new work in `swissarmyhammer-operations` and its macros, called out
+explicitly below.
 
-The example below sketches the registry server for the
-[Command service](./command-service.md) (specified in detail in that
-file) to illustrate the macro mechanics:
+**What exists today.** An operation is a struct. The `#[operation]`
+attribute (from `swissarmyhammer-operations`) carries the verb, noun,
+and description; the struct's fields *are* the parameters, their doc
+comments the parameter descriptions:
 
 ```rust
-use swissarmyhammer_rmcp::{operation_server, verb};
-use schemars::JsonSchema;
+use swissarmyhammer_operations::{operation, Execute, ExecutionResult, async_trait, Value};
+use serde::Deserialize;
 
-#[derive(Clone)]
-pub struct CommandsServer {
-    state: Arc<CommandRegistry>,
+/// Register a new command in the registry.
+#[operation(verb = "register", noun = "command",
+            description = "Register a new command in the registry")]
+#[derive(Default, Deserialize)]
+pub struct RegisterCommand {
+    /// The command id (e.g. "myplugin.archive_stale").
+    pub id: String,
+    /// Human-readable name shown in the palette.
+    pub name: String,
+    /// Optional grouping category.
+    pub category: Option<String>,
 }
 
-#[derive(Deserialize, JsonSchema)] pub struct RegisterArgs    { /* full command definition */ }
-#[derive(Serialize,   JsonSchema)] pub struct RegisterOutput  { /* … */ }
-#[derive(Deserialize, JsonSchema)] pub struct ListArgs        { /* optional filters */ }
-#[derive(Deserialize, JsonSchema)] pub struct ExecuteArgs     { id: String, ctx: Context, force: Option<bool> }
-#[derive(Serialize,   JsonSchema)] pub struct ExecuteOutput   { /* … */ }
-#[derive(Deserialize, JsonSchema)] pub struct AvailableArgs   { id: String, ctx: Context }
-#[derive(Serialize,   JsonSchema)] pub struct AvailableOutput { /* … */ }
-#[derive(Deserialize, JsonSchema)] pub struct UnregisterArgs  { id: String }
-#[derive(Deserialize, JsonSchema)] pub struct SchemaArgs      { id: String }
+/// Run the command identified by `id`.
+#[operation(verb = "execute", noun = "command",
+            description = "Run a command in the given context")]
+#[derive(Default, Deserialize)]
+pub struct ExecuteCommand {
+    /// The command id to run.
+    pub id: String,
+    /// Skip the availability re-check.
+    pub force: Option<bool>,
+}
 
-#[operation_server(noun = "command")]
-impl CommandsServer {
-    pub fn new(state: Arc<CommandRegistry>) -> Self { Self { state } }
+// … one struct per operation: ListCommand, AvailableCommand,
+//   UnregisterCommand, SchemaCommand …
 
-    /// Register a new command in the registry.
-    #[verb]
-    async fn register(&self, args: RegisterArgs) -> Result<RegisterOutput, ErrorData> {
-        self.state.register(args).await
-    }
-
-    /// List all active commands.
-    #[verb]
-    async fn list(&self, args: ListArgs) -> Result<Vec<CommandSummary>, ErrorData> {
-        self.state.list(args).await
-    }
-
-    /// Execute the command identified by `id` in the given context.
-    #[verb]
-    async fn execute(&self, args: ExecuteArgs) -> Result<ExecuteOutput, ErrorData> {
-        self.state.execute(&args.id, args.ctx, args.force).await
-    }
-
-    /// Check whether the command can run in the given context.
-    #[verb]
-    async fn available(&self, args: AvailableArgs) -> Result<AvailableOutput, ErrorData> {
-        self.state.available(&args.id, args.ctx).await
-    }
-
-    /// Remove a command from the registry.
-    #[verb]
-    async fn unregister(&self, args: UnregisterArgs) -> Result<(), ErrorData> {
-        self.state.unregister(&args.id).await
-    }
-
-    /// Return the input schema for a command.
-    #[verb]
-    async fn schema(&self, args: SchemaArgs) -> Result<Value, ErrorData> {
-        self.state.schema(&args.id).await
+#[async_trait]
+impl Execute<CommandContext, CommandError> for ExecuteCommand {
+    async fn execute(&self, ctx: &CommandContext) -> ExecutionResult<Value, CommandError> {
+        // self.id and self.force are the already-parsed parameters
     }
 }
 ```
 
-Every verb takes one `args` struct; if the verb operates on a specific
-instance, the struct includes an `id: String` field like any other
-parameter. There is no separate id-in-path channel and no `collection`
-vs `on_noun` distinction — the args struct is the entire input.
+The `#[operation]` macro generates the `Operation` trait impl —
+`verb()`, `noun()`, `description()`, and `parameters()` (field metadata
+derived from the struct fields and their doc comments). `op_string()`
+is `format!("{verb} {noun}")`, e.g. `"execute command"`. A tool
+collects its operations as `&[&dyn Operation]` and calls
+`generate_mcp_schema` to build the `inputSchema` it advertises in
+`tools/list` — the flat `op` enum plus the parameter union, kept free
+of `oneOf`/`anyOf` for Claude API compatibility. Its `tools/call`
+handler is an `op` match (read `arguments["op"]`, strip it, deserialize
+the rest into the matching operation struct, run its `Execute` impl) —
+exactly how `FilesTool::execute` works today.
 
-What the macros emit:
+**What this design adds.** Nothing above produces the noun → verb →
+parameters `_meta` tree that *Service Consumption* depends on. Two
+changes are required, both in `swissarmyhammer-operations`:
 
-1. **`rmcp::ServerHandler` impl** with `get_info()` declaring
-   `experimental.operations` and `tools/list` returning one Tool whose
-   name is the noun class (`command`) with structured `_meta`.
-2. **The Tool's `_meta["io.swissarmyhammer/operations"]`** populated
-   from the attributes:
-   ```jsonc
-   {
-     "verbs": {
-       "register":   { "input": <RegisterArgs schema>,   "output": <RegisterOutput schema>,   "description": "Register a new command in the registry." },
-       "list":       { "input": <ListArgs schema>,       "output": <[CommandSummary] schema>, "description": "List all active commands." },
-       "execute":    { "input": <ExecuteArgs schema>,    "output": <ExecuteOutput schema>,    "description": "Execute the command identified by `id` in the given context." },
-       "available":  { "input": <AvailableArgs schema>,  "output": <AvailableOutput schema>,  "description": "Check whether the command can run in the given context." },
-       "unregister": { "input": <UnregisterArgs schema>, "output": {},                        "description": "Remove a command from the registry." },
-       "schema":     { "input": <SchemaArgs schema>,     "output": <Value schema>,            "description": "Return the input schema for a command." }
-     }
-   }
-   ```
-   Doc comments become the verb descriptions; the args struct's schema
-   becomes the per-verb `input` (with `id` showing up as a required
-   property when the verb operates on a specific instance); return
-   types become output schemas via `schemars::JsonSchema`.
-3. **A `call_tool` dispatcher** that:
-   - reads `verb` from the wire args,
-   - validates it against the metadata,
-   - deserializes the remainder of `arguments` into the matching
-     verb's args struct,
-   - calls the matching method and serializes the result.
+1. **A `_meta`-tree generator.** Alongside `generate_mcp_schema`,
+   `swissarmyhammer-operations` gains a generator that builds the
+   `io.swissarmyhammer/operations` value — `{ noun: { verb: { op,
+   description, parameters } } }` — from the same `&[&dyn Operation]`
+   slice. Every level is derived from data the `Operation` trait
+   already exposes: `noun()`, `verb()`, `op_string()`, `description()`,
+   and `parameters()`. Nothing new is asked of the operation author.
 
-This is the same attribute-driven metadata approach already used for
-the CLI surface in the workspace — derive structured information once
-from the source of truth (the method signatures + attributes), use it
-everywhere it's needed.
+2. **Macro code that auto-attaches it.** An operation tool must not
+   hand-assemble its `Tool._meta`. New macro support — the
+   operation-tool analogue of `#[operation]` — declares a tool from
+   its operation set and emits the `_meta` key onto the tool
+   definition automatically, next to the generated `inputSchema`. The
+   result: every operation tool the host (or a plugin) builds is
+   self-describing by construction, and the `_meta` can never drift
+   from the operation structs.
 
-### Why structured metadata, not discriminated unions
-
-An earlier draft of this design had operation tools declare one giant
-JSON schema discriminated union on `verb`, with codegen splitting the
-union to recover per-verb shapes. That's strictly worse:
-
-- The server's source of truth becomes a union type spanning multiple
-  verbs, instead of cleanly separated method signatures.
-- Codegen has to perform schema archaeology to recover what the server
-  already knows.
-- Generic MCP clients see a confusing union and can't tell which
-  parameters belong to which verb from the schema alone.
-- Adding a verb requires editing the union; with metadata, you just
-  add a new `#[verb]` method.
-
-Structured per-verb metadata in `_meta` is the right shape. Each verb is
-its own typed entity from end to end: Rust signature → JSON schema →
-TypeScript method type. No reconstruction.
+The wire call format does not change — `op` stays the single selector
+argument and the `tools/call` handler stays an `op` match. Only the
+discovery metadata gains the structured `_meta` tree. Because that
+tree is noun-grouped, verb-nested, and parameter-typed, a generic MCP
+client, the CLI generator, the plugin SDK, and codegen all read the
+operations and their parameters straight off it — no discriminated
+union to disassemble, no schema archaeology.
 
 ### Propagating `CallerId`
 
@@ -788,41 +860,38 @@ impl Dispatcher {
         &self,
         caller: CallerId,
         server: &str,
-        tool: &str,           // for operation servers, this is the noun class
-        verb: Option<&str>,   // None for flat tools, Some for operation servers
-        input: Value,         // all parameters including any instance id
+        tool: &str,    // the MCP tool name
+        input: Value,  // the arguments map — `op` is just a key when present
     ) -> Result<Value> {
         let server = self.registry.get(server).ok_or(Error::UnknownServer)?;
-        server.invoke(caller, tool, verb, input).await
+        server.invoke(caller, tool, input).await
     }
 }
 ```
 
-The dispatcher routes by `(server, tool)`. For operation servers (those
-that declared the `experimental.operations` capability at initialize),
-`tool` is the noun-class name and `verb` identifies the operation.
-Every other parameter — including any instance id — rides in `input`.
-The `McpServer` trait impl decides how the call is fulfilled:
+The dispatcher routes by `(server, tool)` and forwards one arguments
+map. It is a plain MCP `tools/call`: there is no verb or noun axis in
+the dispatch signature. For an operation tool the `op` selector is
+already a key inside `input` — the SDK's path sugar put it there
+before the call reached the dispatcher (see *Service Consumption*).
+The platform never reads `input`. The `McpServer` trait impl decides
+how the call is fulfilled:
 
-- **Host-implemented Rust servers (rmcp)** receive `verb` folded into
-  the rmcp `CallToolRequestParam.arguments` map under the `verb` key,
-  since MCP's wire format has no verb concept. The rmcp handler reads
-  it from its typed input and dispatches internally. No serialization,
-  no IPC.
-- **CLI-sourced servers** receive the call as a JSON-RPC `tools/call`
-  over stdin to the subprocess, with `verb` folded into the arguments
-  map the same way.
-- **URL-sourced servers** receive the call as a JSON-RPC `tools/call`
-  over HTTP, with `verb` folded into the arguments map the same way.
-- **External MCP transport** (agents calling into the host) sees the
-  same wire shape going the other direction: one tool name (the noun
-  class), one arguments map with `verb` as a regular field alongside
-  every other parameter.
+- **Host-implemented Rust servers (rmcp)** receive the call as an rmcp
+  `CallToolRequestParam` — the tool name and the arguments map,
+  unmodified. The tool's own handler reads `op` from the arguments.
+  No serialization, no IPC.
+- **CLI-sourced servers** receive a JSON-RPC `tools/call` over the
+  subprocess's stdin — same tool name, same arguments map.
+- **URL-sourced servers** receive a JSON-RPC `tools/call` over HTTP —
+  same tool name, same arguments map.
+- **External MCP transport** (agents calling into the host) uses the
+  identical shape: one tool name, one arguments map.
 
-`verb` is a first-class dispatch axis in our Rust types and our SDK
-ergonomics; it's a JSON field on the wire. Both sides agree on
-operation semantics through the experimental capability declaration —
-they know to look for the `verb` field when the capability is present.
+There is no platform-level noun/verb concept — operation structure
+lives entirely in the tool's `_meta` (for discovery) and the `op`
+argument (for invocation). Every transport carries a plain
+`tools/call`.
 
 `CallerId` distinguishes host-internal, plugin-id, and external-agent
 callers and is propagated to handlers so they can audit, log, or apply
@@ -884,39 +953,41 @@ inside the active plugin development directory.
 
 ### What gets emitted
 
-For each registered server, one nested namespace on the `App` interface.
-The emitter inspects the cached `ServerCapabilities` to choose shape:
+For each registered server, one nested namespace on the `App`
+interface. The emitter walks each tool's `Tool` definition from
+`tools/list`:
 
-- **Flat server** (no `experimental.operations` capability): for each
-  tool in `tools/list`, one method with that tool's `inputSchema` →
+- **Flat tool** (no `io.swissarmyhammer/operations` in `_meta`): one
+  method named for the tool, with the tool's `inputSchema` →
   TypeScript input type.
-- **Operation server** (capability declared): for each tool, read its
-  `_meta["io.swissarmyhammer/operations"].verbs` map. Each verb entry
-  has `input`, `output`, `description` — emit one method per verb
-  under the tool namespace, using `input`/`output` directly as the TS
-  types. Tool name = noun class; method name = verb; the `input` type
-  carries every parameter the verb takes (including any `id`).
+- **Operation tool** (`_meta` carries the operations tree): walk the
+  noun → verb → parameters tree. Emit `tool.<noun>.<verb>(input)` for
+  every leaf, where the `input` type is built from that verb's
+  `parameters` map. The structure of the emitted types mirrors the
+  `_meta` structure exactly — noun namespace, verb method, parameter
+  object.
 
 ```ts
 // .swissarmyhammer/types/app.d.ts — written by the host, not by you
 interface App {
-  // Flat server (no experimental.operations capability):
+  // Flat tool — no operations _meta:
   weather: {
     current(input: { city: string }): Promise<{ tempC: number; conditions: string }>;
     forecast(input: { city: string; days: number }): Promise<Forecast>;
   };
 
-  // Operation server — tool name is the noun class; every verb is a
-  // method on it. Verbs that operate on a specific instance take `id`
-  // as a normal property of their input type.
-  commands: {
-    command: {
-      register(input: RegisterArgs): Promise<RegisterOutput>;
-      list(input: ListArgs): Promise<CommandSummary[]>;
-      execute(input: ExecuteArgs): Promise<ExecuteOutput>;     // ExecuteArgs.id: string
-      available(input: AvailableArgs): Promise<AvailableOutput>; // AvailableArgs.id: string
-      unregister(input: UnregisterArgs): Promise<void>;        // UnregisterArgs.id: string
-      schema(input: SchemaArgs): Promise<unknown>;             // SchemaArgs.id: string
+  // Operation tool — emitted from _meta["io.swissarmyhammer/operations"]:
+  //   server "board", tool "kanban", nouns "task" / "board".
+  board: {
+    kanban: {
+      task: {
+        add(input: { title: string; description?: string }): Promise<Task>;
+        move(input: { id: string; column: string }): Promise<Task>;
+        list(input: {}): Promise<Task[]>;
+      };
+      board: {
+        init(input: { name: string }): Promise<Board>;
+      };
     };
   };
 
@@ -931,11 +1002,11 @@ declare global {
 }
 ```
 
-Every method takes one args object and returns a promise of the verb's
-output type. The emitter is pure metadata → types — no schema
-analysis, no inference, no special handling for instance ids. The same
-metadata feeds the CLI generator (`<bin> <noun> <verb> --args`) and
-the runtime proxy.
+The emitter is pure metadata → types — it copies the `_meta` tree's
+shape into the namespace shape, with each verb's `parameters` map
+becoming the input object type. No schema analysis, no inference. The
+same `_meta` tree feeds the CLI generator (`<bin> <noun> <verb>
+--args`) and the runtime proxy.
 
 ### How plugin authors consume it
 
@@ -970,9 +1041,9 @@ runtime since the host runs TS directly. In production:
 
 Generated types are decoupled from runtime. Out-of-date types degrade
 to runtime errors with clean messages (`UnknownServer`, `UnknownTool`,
-`UnknownVerb`), never crashes. The worst case from a stale `.d.ts` is
-missing autocomplete or a spurious red squiggle — never a corrupted
-call.
+`UnknownOperation`), never crashes. The worst case from a stale
+`.d.ts` is missing autocomplete or a spurious red squiggle — never a
+corrupted call.
 
 ## Manifest
 
@@ -997,10 +1068,11 @@ queries each provided server via `tools/list` after registration to
 discover its tools — that's the only place tool metadata lives.
 
 The plugin's set of *consumed* servers is not declared in the manifest.
-A plugin can call any registered server at runtime. The dispatcher only
-fails calls when the named server isn't registered (`UnknownServer`),
-the tool isn't on that server (`UnknownTool`), or the verb isn't in
-that tool's `_meta` (`UnknownVerb`).
+A plugin can call any registered server at runtime. A call fails when
+the named server isn't registered (`UnknownServer`) or the tool isn't
+on that server (`UnknownTool`); the SDK additionally raises
+`UnknownOperation` when a `noun.verb` path is not in the tool's
+operations `_meta`.
 
 `provides` expansions trigger a re-approval prompt on upgrade so users
 can see what new servers a plugin will add to the registry.
@@ -1301,15 +1373,15 @@ In prose:
 4. The test triggers discovery. The host transpiles the plugin,
    creates a fresh isolate, and runs `load()`.
 5. The test asserts both probe files exist in the temp dir with their
-   expected contents. The first file proves dispatch reached the real
-   rmcp handler. The second file proves the return value crossed back
-   through the dispatcher into the isolate. If any stage of the
-   pipeline is broken, at least one assertion fails.
+   expected contents. The first file proves the `op` dispatch reached
+   the real `files` tool handler. The second file proves the return
+   value crossed back through the dispatcher into the isolate. If any
+   stage of the pipeline is broken, at least one assertion fails.
 
 This test exercises the whole pipeline — manifest load, TS transpile,
-isolate creation, server lookup, operation-mode dispatch, return-value
-marshalling — using only platform primitives. No `cwd` field on the
-Plugin base class, no test-only reporter hook, no fakes.
+isolate creation, server lookup, operation-tool `op` dispatch,
+return-value marshalling — using only platform primitives. No `cwd`
+field on the Plugin base class, no test-only reporter hook, no fakes.
 
 ### What each kind of test must exercise
 
@@ -1319,10 +1391,10 @@ server, observe an effect that only happens if the platform works.
 
 | Capability                       | What the test proves                                       |
 | -------------------------------- | ---------------------------------------------------------- |
-| **In-process server dispatch**   | `this.files.write({...})` from a plugin writes a real file (the case above) |
+| **In-process server dispatch**   | A plugin call into the real `files` operation tool writes a real file (the case above) |
 | **CLI subprocess server**        | Plugin registers `{ cli: [...] }`; host spawns it; calls go through stdio and return |
 | **URL server**                   | Plugin registers `{ url: ... }`; host calls it; mock HTTP endpoint records the request shape |
-| **Operation-mode metadata**      | Operation server's `_meta.verbs` round-trips: plugin calls `this.<server>.<noun>.<verb>({...})`, server receives the right `(tool, verb, args)` |
+| **Operation `_meta` round-trip** | An operation tool's `io.swissarmyhammer/operations` `_meta` tree is read by the SDK; `this.<server>.<tool>.<noun>.<verb>({...})` reaches the tool as `tools/call("<tool>", { op: "<verb> <noun>", ... })` |
 | **Callback round-trip**          | Plugin passes a function; host invokes it; return value flows back to where it's awaited |
 | **Plugin discovery & layering**  | Same plugin id in user + project layers: project wins; remove project, user re-emerges |
 | **Hot reload**                   | Write source, observe behavior; rewrite source, watcher fires, observe new behavior in same `PluginHost` |
@@ -1353,11 +1425,10 @@ server, observe an effect that only happens if the platform works.
 ### Test layout in the workspace
 
 Plugin platform integration tests live in
-`swissarmyhammer-plugins/tests/integration/` (or wherever the plugin
-host crate lands), with one file per capability. The `files`
-reference test is `files_dispatch_e2e.rs`. The naming convention
-matches the existing `*_e2e.rs` pattern already used by the code-context
-and skill suites.
+`swissarmyhammer-plugin/tests/integration/`, with one file per
+capability. The `files` reference test is `files_dispatch_e2e.rs`.
+The naming convention matches the existing `*_e2e.rs` pattern already
+used by the code-context and skill suites.
 
 ## Implementation Notes
 
@@ -1393,49 +1464,44 @@ runs.
 #[async_trait]
 pub trait McpServer: Send + Sync {
     fn tools(&self) -> Vec<ToolMetadata>;
-    fn capabilities(&self) -> &ServerCapabilities;     // cached from initialize
     async fn invoke(
         &self,
         caller: CallerId,
-        tool: &str,           // for operation servers, the noun class
-        verb: Option<&str>,   // None for flat tools, Some for operation servers
-        input: Value,         // all parameters including any instance id
+        tool: &str,    // the MCP tool name
+        input: Value,  // the arguments map, passed through untouched
     ) -> Result<Value>;
 }
 ```
 
-`capabilities()` exposes the cached `ServerCapabilities` from the
-`initialize` handshake. The dispatcher checks
-`capabilities.experimental` for `io.swissarmyhammer/operations` to know
-whether to pass `verb` or leave it `None`. The codegen reads the same
-flag when emitting types.
+`invoke` is a plain `tools/call`: a tool name and an arguments map. The
+platform does not read `input`; for an operation tool the `op` selector
+is one of its keys, placed there by the SDK, and parsed only by the
+tool's own handler.
 
-`ToolMetadata` includes the per-tool `_meta` (with the verb table for
-operation tools) returned by the server's `tools/list`, from which the
-codegen and CLI generator both derive per-verb input shapes.
+`ToolMetadata` is the tool's `Tool` definition from `tools/list` —
+`name`, `description`, `inputSchema`, and `_meta`. An operation tool
+carries the noun → verb → parameters tree under
+`_meta["io.swissarmyhammer/operations"]`; the codegen, CLI generator,
+and SDK path sugar all read it from there.
 
 Three production implementations, one per source kind:
 
 - **`InProcessServer<S: rmcp::ServerHandler>`** — wraps an rmcp handler.
-  `invoke` folds `verb` (when present) into the `arguments` map under
-  that key and calls `S::call_tool` directly. No serialization, no
-  IPC. This is the path for host Rust code (see *In-Process Host
-  Servers*).
+  `invoke` forwards the tool name and arguments map to `S::call_tool`
+  directly. No serialization, no IPC. This is the path for host Rust
+  code (see *In-Process Host Servers*).
 - **`CliServer`** — wraps a spawned subprocess. `invoke` sends a JSON-RPC
-  `tools/call` over the subprocess's stdin (with `verb` folded into
-  arguments) and awaits the response on stdout. The platform manages
-  the subprocess lifecycle (spawn on register, kill on unregister,
-  restart on crash if configured).
+  `tools/call` over the subprocess's stdin and awaits the response on
+  stdout. The platform manages the subprocess lifecycle (spawn on
+  register, kill on unregister, restart on crash if configured).
 - **`UrlServer`** — wraps an HTTP MCP transport. `invoke` sends a
-  JSON-RPC `tools/call` to the configured URL (with `verb` folded into
-  arguments) and awaits the response. Authentication headers from the
-  registration are reused on every call.
+  JSON-RPC `tools/call` to the configured URL and awaits the response.
+  Authentication headers from the registration are reused on every
+  call.
 
-Each backend implements `tools()` by caching the response of the
-server's `tools/list` at connection time, refreshed on
-`notifications/tools/list_changed`. Each implements `capabilities()` by
-caching the `ServerCapabilities` returned from `initialize`, fixed for
-the lifetime of the connection.
+Each backend implements `tools()` by caching the server's `tools/list`
+response at connection time, refreshed on
+`notifications/tools/list_changed`.
 
 The dispatcher routes to any backend uniformly. Adding a fourth — a
 WebSocket MCP transport, an in-process Python interpreter, whatever — is
