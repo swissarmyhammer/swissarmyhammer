@@ -14,12 +14,12 @@ use clap::CommandFactory;
 #[path = "src/cli.rs"]
 mod cli;
 
-#[path = "../build-support/doc_gen.rs"]
+#[path = "../../build-support/doc_gen.rs"]
 mod doc_gen;
 
 fn main() -> std::io::Result<()> {
     let cmd = cli::Cli::command();
-    let repo_root = Path::new("..");
+    let repo_root = Path::new("../..");
 
     doc_gen::generate_markdown_with_brew(
         &cmd,

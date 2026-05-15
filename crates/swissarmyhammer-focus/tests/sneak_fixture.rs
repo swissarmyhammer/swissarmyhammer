@@ -66,7 +66,7 @@ fn fixture_path() -> PathBuf {
         .and_then(|p| p.parent())
         .expect("CARGO_MANIFEST_DIR must have a workspace-root grandparent");
     workspace_root
-        .join("kanban-app")
+        .join("apps/kanban-app")
         .join("ui")
         .join("src")
         .join("test")

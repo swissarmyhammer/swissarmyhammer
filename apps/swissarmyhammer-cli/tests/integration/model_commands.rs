@@ -19,7 +19,7 @@ async fn run_model_command(args: &[&str]) -> Result<std::process::Output> {
     } else {
         format!(
             "{}/target/debug/sah",
-            env!("CARGO_MANIFEST_DIR").replace("/swissarmyhammer-cli", "")
+            env!("CARGO_MANIFEST_DIR").replace("/apps/swissarmyhammer-cli", "")
         )
     };
 
@@ -42,7 +42,7 @@ async fn run_model_command_in_dir(
     } else {
         format!(
             "{}/target/debug/sah",
-            env!("CARGO_MANIFEST_DIR").replace("/swissarmyhammer-cli", "")
+            env!("CARGO_MANIFEST_DIR").replace("/apps/swissarmyhammer-cli", "")
         )
     };
 

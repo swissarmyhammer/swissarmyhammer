@@ -7,9 +7,9 @@
 //! paths in `build.rs` drifted from what consumers expect), and this test
 //! should fail loudly.
 //!
-//! Paths are resolved relative to `CARGO_MANIFEST_DIR` (the `kanban-cli/`
-//! crate root) with `..` to reach the repository root, matching the
-//! `Path::new("..")` base used in `build.rs`.
+//! Paths are resolved relative to `CARGO_MANIFEST_DIR` (the
+//! `apps/kanban-cli/` crate root) with `../..` to reach the repository
+//! root, matching the `Path::new("../..")` base used in `build.rs`.
 
 use std::path::{Path, PathBuf};
 
@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
+        .and_then(|p| p.parent())
         .expect("kanban-cli must live inside the workspace")
         .to_path_buf()
 }

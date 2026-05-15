@@ -1,4 +1,4 @@
-//! Build script for code-context-cli.
+//! Build script for mirdan-cli.
 //!
 //! Generates CLI documentation, man pages, and shell completions from the
 //! clap derive definitions in `src/cli.rs`. Output locations:
@@ -11,26 +11,24 @@ use std::path::Path;
 
 use clap::CommandFactory;
 
-#[path = "src/cli.rs"]
+#[path = "../../crates/mirdan/src/cli.rs"]
 mod cli;
 
-#[path = "../build-support/doc_gen.rs"]
+#[path = "../../build-support/doc_gen.rs"]
 mod doc_gen;
 
 fn main() -> std::io::Result<()> {
     let cmd = cli::Cli::command();
-    let repo_root = Path::new("..");
+    let repo_root = Path::new("../..");
 
     doc_gen::generate_markdown_with_brew(
         &cmd,
         &repo_root.join("doc/src/reference"),
-        "code-context",
-        Some("swissarmyhammer/tap/code-context-cli"),
+        "mirdan",
+        Some("swissarmyhammer/tap/mirdan-cli"),
     )?;
-
-    doc_gen::generate_manpage(&cmd, &repo_root.join("docs"), "code-context")?;
-
-    doc_gen::generate_completions(cmd, &repo_root.join("completions"), "code-context")?;
+    doc_gen::generate_manpage(&cmd, &repo_root.join("docs"), "mirdan")?;
+    doc_gen::generate_completions(cmd, &repo_root.join("completions"), "mirdan")?;
 
     Ok(())
 }

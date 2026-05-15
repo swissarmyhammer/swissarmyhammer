@@ -57,7 +57,7 @@
       "entitlements": "./entitlements.plist",
       "signingIdentity": "Developer ID Application: Will Ballard (S675BK92KH)",
       "files": {
-        "Resources/Assets.car": "assets.car/Assets.car"
+        "Resources/Assets.car": "icons/assets.car/Assets.car"
       }
     }
   },

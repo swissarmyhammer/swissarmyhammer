@@ -1,17 +1,17 @@
 # Install all CLI binaries
 install:
-    cargo install --path swissarmyhammer-cli
-    cargo install --path avp-cli
-    cargo install --path mirdan-cli
-    cargo install --path kanban-cli
-    cargo install --path shelltool-cli
-    cargo install --path code-context-cli
+    cargo install --path apps/swissarmyhammer-cli
+    cargo install --path apps/avp-cli
+    cargo install --path apps/mirdan-cli
+    cargo install --path apps/kanban-cli
+    cargo install --path apps/shelltool-cli
+    cargo install --path apps/code-context-cli
     just mirdan-build
     just kanban-build
 
 # Build the Mirdan tray app (debug) and install to /Applications for deep link testing
 mirdan-build:
-    cd mirdan-app && cargo tauri build --debug
+    cd apps/mirdan-app && cargo tauri build --debug
     rm -rf /Applications/Mirdan.app
     hdiutil attach target/debug/bundle/dmg/Mirdan_*.dmg -nobrowse -quiet
     cp -r /Volumes/Mirdan/Mirdan.app /Applications/
@@ -21,7 +21,7 @@ mirdan-build:
 
 # Build the Kanban app (debug) and install to /Applications
 kanban-build:
-    cd kanban-app && cargo tauri build --debug
+    cd apps/kanban-app && cargo tauri build --debug
     rm -rf /Applications/Kanban.app
     hdiutil attach target/debug/bundle/dmg/Kanban_*.dmg -nobrowse -quiet
     cp -r /Volumes/Kanban/Kanban.app /Applications/
@@ -39,11 +39,11 @@ kanban-run: kanban-build
 
 # Run Mirdan in development mode (with Cargo)
 mirdan-dev:
-    cd mirdan-app && cargo tauri dev
+    cd apps/mirdan-app && cargo tauri dev
 
 # Run Kanban in development mode (with Cargo)
 kanban-dev:
-    cd kanban-app && cargo tauri dev
+    cd apps/kanban-app && cargo tauri dev
 
 # Tail Mirdan logs in Console (os_log)
 mirdan-logs:

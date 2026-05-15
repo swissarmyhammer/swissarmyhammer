@@ -40,7 +40,7 @@ jobs:
     runs-on: self-hosted
     strategy:
       matrix:
-        app: [kanban-app, mirdan-app]
+        app: [apps/kanban-app, apps/mirdan-app]
     steps:
       - uses: actions/checkout@v4
         with:

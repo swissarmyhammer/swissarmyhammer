@@ -8,7 +8,7 @@ use walkdir::WalkDir;
 #[test]
 fn test_builtin_prompts_validate_directly() -> Result<()> {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")?;
-    let project_root = Path::new(&manifest_dir).parent().unwrap();
+    let project_root = Path::new(&manifest_dir).parent().unwrap().parent().unwrap();
 
     let mut result = ValidationResult::new();
     let loader = PromptLoader::new();

@@ -157,17 +157,3 @@ ane-embedding/convert/output/
 **/.shell/
 .claude/worktrees
 .swissarmyhammer
-
-# Per-crate skill/agent deploy artifacts produced by `<cli> init`.
-# code-context-cli and kanban-cli commit their deploy as the install baseline;
-# sah-cli's `sah init` deploys every workspace skill — too bulky to track.
-# shelltool-cli's deploy dirs are empty in practice and would just churn.
-/swissarmyhammer-cli/.agents/
-/swissarmyhammer-cli/.claude/
-/swissarmyhammer-cli/.github/copilot/
-/swissarmyhammer-cli/.skills/
-/swissarmyhammer-cli/.zed/
-/shelltool-cli/.claude/
-/shelltool-cli/.github/copilot/
-/shelltool-cli/.skills/
-/shelltool-cli/.zed/

@@ -32,10 +32,10 @@ jobs:
       matrix:
         app:
           - name: mirdan
-            dir: mirdan-app
+            dir: apps/mirdan-app
             product: Mirdan
           - name: kanban
-            dir: kanban-app
+            dir: apps/kanban-app
             product: Kanban
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

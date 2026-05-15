@@ -5,7 +5,7 @@
 [workspace]
 members = [
     "crates/swissarmyhammer",
-    "swissarmyhammer-cli",
+    "apps/swissarmyhammer-cli",
     "crates/swissarmyhammer-tools",
     "crates/swissarmyhammer-config",
     "crates/swissarmyhammer-common",
@@ -36,7 +36,7 @@ members = [
     "crates/model-context-protocol-extras",
     "crates/swissarmyhammer-project-detection",
     "crates/avp-common",
-    "avp-cli",
+    "apps/avp-cli",
     "crates/swissarmyhammer-doctor",
     "crates/swissarmyhammer-treesitter",
     "crates/swissarmyhammer-leader-election",
@@ -51,10 +51,10 @@ members = [
     "crates/swissarmyhammer-agents",
     "crates/swissarmyhammer-web",
     "crates/mirdan",
-    "mirdan-cli",
-    "mirdan-app",
-    "kanban-app",
-    "kanban-cli",
+    "apps/mirdan-cli",
+    "apps/mirdan-app",
+    "apps/kanban-app",
+    "apps/kanban-cli",
     "crates/swissarmyhammer-fields",
     "crates/swissarmyhammer-entity",
     "crates/swissarmyhammer-entity-search",
@@ -67,8 +67,8 @@ members = [
     "benches/embedding_benchmark",
     "crates/swissarmyhammer-sem",
     "crates/heb",
-    "shelltool-cli",
-    "code-context-cli",
+    "apps/shelltool-cli",
+    "apps/code-context-cli",
     "crates/swissarmyhammer-cli-completions",
 ]
 resolver = "2"

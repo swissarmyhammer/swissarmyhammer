@@ -25,7 +25,7 @@ async fn run_sah_command_with_timeout(
     } else {
         format!(
             "{}/target/debug/sah",
-            env!("CARGO_MANIFEST_DIR").replace("/swissarmyhammer-cli", "")
+            env!("CARGO_MANIFEST_DIR").replace("/apps/swissarmyhammer-cli", "")
         )
     };
 

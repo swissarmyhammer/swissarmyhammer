@@ -106,7 +106,7 @@ fn get_sah_binary_path() -> String {
     // Fallback to the correct binary location
     format!(
         "{}/target/debug/sah",
-        env!("CARGO_MANIFEST_DIR").replace("/swissarmyhammer-cli", "")
+        env!("CARGO_MANIFEST_DIR").replace("/apps/swissarmyhammer-cli", "")
     )
 }
 
@@ -200,7 +200,7 @@ fn is_prompt_command(args: &[&str]) -> bool {
 fn determine_working_dir(args: &[&str], default_dir: &std::path::Path) -> std::path::PathBuf {
     if is_prompt_command(args) {
         let repo_root = env!("CARGO_MANIFEST_DIR")
-            .replace("/swissarmyhammer-cli", "")
+            .replace("/apps/swissarmyhammer-cli", "")
             .to_string();
         std::path::PathBuf::from(repo_root)
     } else {
