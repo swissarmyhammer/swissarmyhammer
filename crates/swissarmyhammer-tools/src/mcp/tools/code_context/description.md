@@ -1,5 +1,7 @@
 Code context operations for symbol lookup, search, grep, call graph, and blast radius analysis.
 
+This is the primary tool for **exploring and understanding a codebase**: locate symbols, trace how code connects, and measure the impact of a change — without reading whole files top to bottom. Reach for it before planning or modifying code, and whenever you need to answer "how does this work", "what calls this", or "what would a change here affect".
+
 ## Operations
 
 - **get symbol**: Get symbol locations and source text from both LSP and tree-sitter indices with multi-tier fuzzy matching
