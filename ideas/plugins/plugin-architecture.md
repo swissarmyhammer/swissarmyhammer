@@ -18,12 +18,12 @@ dispatcher to them.
 This commitment makes the architecture small. The architecture doc is
 small as a result.
 
-The platform ships as one new workspace crate plus changes to four
+The platform ships as one new workspace crate plus changes to five
 existing ones — see *Crates* immediately below.
 
 ## Crates
 
-Building this platform is **one new crate and changes to four existing
+Building this platform is **one new crate and changes to five existing
 crates**. Every claim in this section is reflected in the relevant
 detailed section, cross-referenced below.
 
@@ -64,6 +64,13 @@ detailed section, cross-referenced below.
   (plus a shared `async-watcher` plumbing helper) that drives plugin
   discovery and hot reload across the builtin → user → project layers.
   (See *Plugin Discovery*.)
+- **`swissarmyhammer-js`** — converted from `rquickjs` (QuickJS-NG) to
+  `deno_core`, so the workspace has exactly one JavaScript engine. Its
+  public API (`JsState::global()`, `set` / `get`) is preserved, so its
+  one consumer — `swissarmyhammer-fields`' `ValidationEngine` — is
+  unchanged. The existing dedicated-worker-thread + mpsc-channel model
+  carries over directly: `deno_core::JsRuntime` is single-threaded and
+  wants exactly that pattern. (See *Runtime: deno_core*.)
 
 No other crate changes. The platform deliberately consumes the
 existing operation infrastructure rather than forking it.
@@ -1196,6 +1203,13 @@ inside the host's main Rust process. The same runtime is used across all
 host kinds (Tauri kanban app, TUI, headless). Plugin source, dispatch
 path, and debugger story are identical.
 
+deno_core is the workspace's **single JavaScript engine**. The
+`swissarmyhammer-js` crate — today built on `rquickjs` (QuickJS-NG) and
+used only for entity field-validation functions — is converted to
+deno_core as part of this work, so field validation and plugins share
+one engine, one async model, and one debugger story. See *Why
+deno_core, not rquickjs* below.
+
 **Per-plugin isolates.** Each plugin gets its own V8 isolate for fault
 isolation and clean teardown.
 
@@ -1253,6 +1267,40 @@ without bundling:
   built-ins: the plugin SDK (`@swissarmyhammer/plugin`), generated app
   types (`@swissarmyhammer/app` → `.swissarmyhammer/types/app.d.ts`),
   etc. These are virtual modules served from memory.
+
+### Why deno_core, not rquickjs
+
+The workspace already embeds a JavaScript engine: `swissarmyhammer-js`
+wraps `rquickjs` (QuickJS-NG) and runs the `validate` function bodies
+on entity fields. The plugin platform could be built on rquickjs too —
+QuickJS-NG supports ES classes, `Proxy`, ES modules, and async, so the
+`Plugin` class model and the SDK Proxy would all work — and that would
+avoid pulling V8 into the binary. We choose deno_core anyway, and
+convert `swissarmyhammer-js` to match:
+
+- **Plugin debugging.** deno_core exposes the V8 Inspector — real
+  Chrome DevTools with breakpoints, source maps, and stepping
+  (`--inspect`). QuickJS has no comparable inspector; plugin authors
+  would be left with `console.log` and stack traces. For a surface
+  authored by third parties, this is decisive.
+- **One engine, not two.** Settling on deno_core means converting
+  `swissarmyhammer-js`; the alternative — plugins on deno_core,
+  validation on rquickjs — links both V8 and QuickJS and maintains two
+  runtime models, two async stories, two debuggers. The conversion is
+  cheap: `swissarmyhammer-js` has a single consumer
+  (`swissarmyhammer-fields`), its public API (`JsState`, `set`/`get`)
+  is preserved, and its dedicated-worker-thread + channel structure
+  carries straight over to `deno_core::JsRuntime`.
+- **TypeScript and tooling.** The `deno_core` + `deno_ast` pairing
+  gives transpilation, source maps, and the module loader as one
+  coherent toolchain (see *TypeScript is built in*). On rquickjs the
+  host would assemble that itself.
+
+The cost is real and accepted: ~15–25 MB of binary from V8, a slower
+link, and a multi-MB per-isolate memory floor — paid even by hosts
+that only run field validation and never load a plugin. QuickJS would
+have been lighter. We trade that footprint for first-class plugin
+debugging and a single engine across the workspace.
 
 ### Why not Bun
 
