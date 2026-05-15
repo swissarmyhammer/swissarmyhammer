@@ -22,16 +22,16 @@ import yaml from "js-yaml";
 import type { BrowserCommand } from "vitest/node";
 
 // Resolve the kanban CLI binary from the project's debug build
-const KANBAN_BIN = resolve(__dirname, "../../../../target/debug/kanban");
+const KANBAN_BIN = resolve(__dirname, "../../../../../target/debug/kanban");
 
 // Resolve builtin YAML directories relative to this file
 const DEFINITIONS_DIR = resolve(
   __dirname,
-  "../../../../swissarmyhammer-kanban/builtin/definitions",
+  "../../../../../crates/swissarmyhammer-kanban/builtin/definitions",
 );
 const BUILTIN_ENTITIES_DIR = resolve(
   __dirname,
-  "../../../../swissarmyhammer-kanban/builtin/entities",
+  "../../../../../crates/swissarmyhammer-kanban/builtin/entities",
 );
 
 /** Run a kanban CLI command in the given directory. */

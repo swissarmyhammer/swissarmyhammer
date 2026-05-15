@@ -21,7 +21,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 /** Absolute path to the shared parity corpus. */
 const CORPUS_PATH = resolve(
   __dirname,
-  "../../../..",
+  "../../../../..",
+  "crates",
   "swissarmyhammer-common",
   "tests",
   "slug_parity_corpus.txt",
