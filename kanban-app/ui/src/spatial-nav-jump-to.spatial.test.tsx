@@ -287,7 +287,8 @@ async function bootstrapInvokeImpl(
   if (cmd === "dispatch_command") {
     const a = (args ?? {}) as Record<string, unknown>;
     if (a.cmd === "perspective.list") return perspectiveListDispatchResponse();
-    if (a.cmd === "perspective.set") return { result: null, undoable: false };
+    if (a.cmd === "perspective.switch")
+      return { result: null, undoable: false };
     if (a.cmd === "perspective.save") return { result: null, undoable: false };
     if (a.cmd === "perspective.rename") return { result: null, undoable: true };
     if (a.cmd === "view.set") return { result: null, undoable: false };
@@ -402,7 +403,10 @@ async function waitForJumpOverlay(): Promise<HTMLElement> {
   });
   const overlay = await waitFor(() => {
     const el = document.querySelector('[data-testid="jump-to-overlay"]');
-    expect(el, "jump-to overlay must mount after the trigger keystroke").not.toBeNull();
+    expect(
+      el,
+      "jump-to overlay must mount after the trigger keystroke",
+    ).not.toBeNull();
     return el as HTMLElement;
   });
   return overlay;
@@ -410,9 +414,7 @@ async function waitForJumpOverlay(): Promise<HTMLElement> {
 
 /** Read every code pill currently rendered. */
 function jumpPills(): HTMLElement[] {
-  return Array.from(
-    document.querySelectorAll<HTMLElement>("[data-jump-code]"),
-  );
+  return Array.from(document.querySelectorAll<HTMLElement>("[data-jump-code]"));
 }
 
 /**
@@ -766,7 +768,9 @@ describe("End-to-end spatial test for Jump-To overlay — full <App/>", () => {
     // codes first, so the LAST pill is guaranteed to carry a 2-letter
     // code when the count is > 23.
     const pills = jumpPills();
-    const twoLetterPill = pills.find((p) => (p.dataset.jumpCode ?? "").length === 2);
+    const twoLetterPill = pills.find(
+      (p) => (p.dataset.jumpCode ?? "").length === 2,
+    );
     expect(
       twoLetterPill,
       "with >23 scopes the sneak generator must emit at least one 2-letter code",

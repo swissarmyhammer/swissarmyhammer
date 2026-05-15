@@ -41,32 +41,22 @@ vi.mock("@/lib/perspective-context", () => ({
   usePerspectives: () => mockUsePerspectives(),
 }));
 
-// Mock ui-state-context for transitive dependencies. `rust-engine-container`
-// is pulled in via `PerspectiveContainer` → `useRefreshEntities`, and it
-// imports `UIStateProvider` directly, so the mock must expose a stub for it
-// as well.
+// Mock ui-state-context for transitive dependencies. `UIStateProvider` is
+// referenced through the rust-engine container in test wrappers.
 vi.mock("@/lib/ui-state-context", () => ({
   useUIState: () => ({ windows: {} }),
   UIStateProvider: ({ children }: { children: unknown }) => children,
 }));
 
-// `PerspectiveContainer` now calls `useRefreshEntities`; stub it so the test
-// does not need a live rust-engine provider tree.
+// Spy on `useRefreshEntities` so we can prove `PerspectiveContainer` does
+// NOT call it on perspective change after 01KP3ERHEDP86C2JYYR7NM1593 — the
+// backend's `perspective.switch` now owns filter evaluation and writes the
+// matching task ids straight into `UIState.filtered_task_ids`. Returning a
+// `vi.fn()` here gives the regression test below a stable spy handle.
+const mockRefreshEntities = vi.fn(() => Promise.resolve({ entities: {} }));
 vi.mock("@/components/rust-engine-container", () => ({
-  useRefreshEntities: () => () => Promise.resolve({ entities: {} }),
+  useRefreshEntities: () => mockRefreshEntities,
 }));
-
-// `PerspectiveContainer` also reads the active board path via
-// `useActiveBoardPath`; stub it so no board context is required.
-vi.mock("@/lib/command-scope", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/command-scope")>(
-    "@/lib/command-scope",
-  );
-  return {
-    ...actual,
-    useActiveBoardPath: () => undefined,
-  };
-});
 
 // Import after mocks
 import {
@@ -232,6 +222,69 @@ describe("PerspectiveContainer", () => {
 
     // Sort by Title asc: A before B
     expect(screen.getByTestId("result").textContent).toBe("t2,t1");
+  });
+
+  // Regression guard for 01KP3ERHEDP86C2JYYR7NM1593: the old container
+  // chased perspective changes with a `refreshEntities(boardPath,
+  // activeFilter)` roundtrip in a `useEffect`. That two-step dance is
+  // gone — `perspective.switch` (dispatched from `perspective-context`)
+  // now writes the filtered task ids into UIState atomically, and the
+  // view layer reads them from there. So no matter how the active
+  // perspective (or its filter) changes, PerspectiveContainer must
+  // NEVER reach for `refreshEntities`.
+  it("does not call refreshEntities on perspective change", () => {
+    const before: PerspectiveDef = {
+      id: "p1",
+      name: "Bugs",
+      view: "board",
+      filter: "#bug",
+    };
+    mockUsePerspectives.mockReturnValue({
+      perspectives: [before],
+      activePerspective: before,
+      setActivePerspectiveId: vi.fn(),
+      refresh: vi.fn(),
+    });
+
+    const { rerender } = render(
+      <EntityFocusProvider>
+        <PerspectiveContainer>
+          <span data-testid="child">hi</span>
+        </PerspectiveContainer>
+      </EntityFocusProvider>,
+    );
+
+    // Mount must not trigger a refresh — the UIState snapshot already
+    // carries the correct filtered_task_ids for the active perspective.
+    expect(mockRefreshEntities).not.toHaveBeenCalled();
+
+    // Now flip the active perspective (and its filter). The container
+    // must STILL not call refresh — only the dispatch from
+    // perspective-context's `setActivePerspectiveId` does any work, and
+    // that path goes through `perspective.switch`, not through
+    // `refreshEntities`.
+    const after: PerspectiveDef = {
+      id: "p2",
+      name: "Features",
+      view: "board",
+      filter: "#feature",
+    };
+    mockUsePerspectives.mockReturnValue({
+      perspectives: [after],
+      activePerspective: after,
+      setActivePerspectiveId: vi.fn(),
+      refresh: vi.fn(),
+    });
+
+    rerender(
+      <EntityFocusProvider>
+        <PerspectiveContainer>
+          <span data-testid="child">hi</span>
+        </PerspectiveContainer>
+      </EntityFocusProvider>,
+    );
+
+    expect(mockRefreshEntities).not.toHaveBeenCalled();
   });
 
   it("provides groupField from the active perspective", () => {

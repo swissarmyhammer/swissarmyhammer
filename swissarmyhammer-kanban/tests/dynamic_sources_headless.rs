@@ -14,9 +14,9 @@
 //! The test then pipes the resulting `DynamicSources` through
 //! `commands_for_scope` and asserts the downstream dynamic-command rows
 //! (`view.set` + args, `board.switch:*`, `window.focus:*`,
-//! `perspective.set` + args, `entity.add:*`) are emitted exactly as
+//! `perspective.switch` + args, `entity.add:*`) are emitted exactly as
 //! production would emit them. View/perspective navigation rows ship as
-//! the canonical `view.set` / `perspective.set` command with pre-filled
+//! the canonical `view.set` / `perspective.switch` command with pre-filled
 //! `args` since task 01KPZMXXEXKVE3RNPA4XJP0105 retired the legacy
 //! `view.switch:{id}` / `perspective.goto:{id}` indirection.
 
@@ -251,13 +251,13 @@ async fn build_dynamic_sources_assembles_views_boards_perspectives_headless() {
         "window.focus from the supplied windows list must be emitted; ids={:?}",
         ids
     );
-    // Perspective navigation: `perspective.set` row carrying the added
+    // Perspective navigation: `perspective.switch` row carrying the added
     // perspective's id in args.
     assert!(
-        cmds.iter().any(|c| c.id == "perspective.set"
+        cmds.iter().any(|c| c.id == "perspective.switch"
             && c.args.as_ref().and_then(|v| v.get("perspective_id"))
                 == Some(&serde_json::Value::String(persp_id.clone()))),
-        "perspective.set with args.perspective_id={persp_id} must be emitted \
+        "perspective.switch with args.perspective_id={persp_id} must be emitted \
          for the added perspective; cmds={:?}",
         cmds.iter().map(|c| (&c.id, &c.args)).collect::<Vec<_>>()
     );

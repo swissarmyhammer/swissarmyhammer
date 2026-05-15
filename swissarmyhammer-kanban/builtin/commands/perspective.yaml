@@ -322,23 +322,26 @@
   name: List Perspectives
   visible: false
 
-- id: perspective.set
+- id: perspective.switch
   name: Switch Perspective
   # Hidden from the palette: requires a `perspective_id` arg the palette has
   # no generic UI for collecting. User-facing palette entries are emitted
-  # by `scope_commands::emit_perspective_goto` — one `perspective.set` row
-  # per known perspective with `perspective_id` pre-filled in `args`. The
-  # dispatcher takes those rows verbatim; there is no suffix indirection.
+  # by `scope_commands::emit_perspective_goto` — one `perspective.switch`
+  # row per known perspective with `perspective_id` pre-filled in `args`.
+  # The dispatcher takes those rows verbatim; there is no suffix
+  # indirection.
   #
-  # Before 01KPZMXXEXKVE3RNPA4XJP0105 the palette emitted
-  # `perspective.goto:{id}` rows that `match_dynamic_prefix` rewrote back
-  # to `perspective.set`; that indirection is gone.
-  #
-  # Relocated from `ui.perspective.set` in 01KPY02X405QTP5ACH67THHSN8 —
-  # "perspective" is a kanban concept (defined in
-  # `swissarmyhammer-perspectives`), not a generic UI primitive, so the
-  # command lives in the kanban domain alongside every other `perspective.*`
-  # entry.
+  # Replaces `perspective.set` (and its predecessor `ui.perspective.set`).
+  # The old command only mutated `UIState.active_perspective_id` and the
+  # frontend chased the change with a follow-up `list_entities(filter=...)`
+  # roundtrip in a `useEffect`. `perspective.switch` collapses that into
+  # one backend command: the handler loads the perspective, evaluates its
+  # filter DSL against the board's tasks, and atomically writes BOTH the
+  # new `active_perspective_id` AND a per-window `filtered_task_ids` list
+  # in a single `UIStateChange::PerspectiveSwitch` — so exactly one
+  # `ui-state-changed` event fires per click and the indeterminate
+  # progress bar tied to `inflightCount` covers the real filter work
+  # naturally. See 01KP3ERHEDP86C2JYYR7NM1593.
   visible: false
   params:
     - name: perspective_id

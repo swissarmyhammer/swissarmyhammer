@@ -774,7 +774,7 @@ interface ScopedPerspectiveTabProps {
  * `swissarmyhammer-commands/builtin/commands/ui.yaml`. The execute path:
  *
  *   - On the active tab: trigger rename on the active perspective.
- *   - On an inactive tab: dispatch `perspective.set` to activate the tab,
+ *   - On an inactive tab: dispatch `perspective.switch` to activate the tab,
  *     then trigger rename targeted at this tab's id. The broadcaster
  *     accepts an explicit id so the rename is independent of the
  *     async UI-state propagation that would otherwise leave the
@@ -790,7 +790,7 @@ function ScopedPerspectiveTab({
   onRenameCancel,
 }: ScopedPerspectiveTabProps) {
   const isActive = activePerspectiveId === perspective.id;
-  const dispatchPerspectiveSet = useDispatchCommand("perspective.set");
+  const dispatchPerspectiveSwitch = useDispatchCommand("perspective.switch");
   const startRenameCommands = useMemo<readonly CommandDef[]>(() => {
     return [
       {
@@ -802,7 +802,7 @@ function ScopedPerspectiveTab({
             // Activate the focused tab before mounting the rename editor —
             // the user's mental model is "Enter edits the name of the tab
             // I am on", which implies the tab also becomes active.
-            await dispatchPerspectiveSet({
+            await dispatchPerspectiveSwitch({
               args: { perspective_id: perspective.id },
             });
           }
@@ -813,7 +813,7 @@ function ScopedPerspectiveTab({
         },
       },
     ];
-  }, [isActive, perspective.id, dispatchPerspectiveSet]);
+  }, [isActive, perspective.id, dispatchPerspectiveSwitch]);
   return (
     <CommandScopeProvider
       moniker={moniker("perspective", perspective.id)}

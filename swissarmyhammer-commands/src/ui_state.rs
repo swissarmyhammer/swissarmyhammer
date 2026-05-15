@@ -164,6 +164,15 @@ pub struct WindowState {
     pub active_view_id: String,
     /// The active perspective ID for this window. Empty string means no perspective selected.
     pub active_perspective_id: String,
+    /// IDs of tasks visible under the active perspective's filter.
+    ///
+    /// Written atomically with `active_perspective_id` by
+    /// [`UIState::switch_perspective`] so the frontend sees both fields land
+    /// in a single `ui-state-changed` event. Transient — not persisted: a
+    /// fresh window restart will repopulate this on the next perspective
+    /// switch.
+    #[serde(skip)]
+    pub filtered_task_ids: Vec<String>,
     /// Whether the command palette is open in this window. Transient — not persisted.
     #[serde(skip)]
     pub palette_open: bool,
@@ -199,6 +208,7 @@ impl Default for WindowState {
             inspector_stack: Vec::new(),
             active_view_id: String::new(),
             active_perspective_id: String::new(),
+            filtered_task_ids: Vec::new(),
             palette_open: false,
             palette_mode: "command".to_string(),
             app_mode: "normal".to_string(),
@@ -255,6 +265,22 @@ pub enum UIStateChange {
         window_label: String,
         /// The new width in CSS pixels.
         width: u32,
+    },
+    /// The active perspective and its filtered task id list changed in one
+    /// atomic update.
+    ///
+    /// Emitted by [`UIState::switch_perspective`] so the frontend sees both
+    /// fields land in a single `ui-state-changed` event. Replaces the
+    /// previous pair of (`ActivePerspective` + frontend-side filter fetch)
+    /// roundtrips — backend now owns the filter evaluation and pushes the
+    /// resulting id list to the window's `filtered_task_ids`.
+    PerspectiveSwitch {
+        /// The new active perspective id for the window.
+        perspective_id: String,
+        /// IDs of tasks that match the new perspective's filter.
+        ///
+        /// Empty when the perspective has no filter or no tasks match.
+        filtered_task_ids: Vec<String>,
     },
 }
 
@@ -520,6 +546,43 @@ impl UIState {
             }
             ws.active_perspective_id = id.to_string();
             Some(UIStateChange::ActivePerspective(id.to_string()))
+        };
+        self.try_save();
+        change
+    }
+
+    /// Atomically set both the active perspective id and the filtered task
+    /// id list for a specific window.
+    ///
+    /// Emits a single [`UIStateChange::PerspectiveSwitch`] event so the
+    /// frontend sees both fields land in one `ui-state-changed` payload —
+    /// no transitional render shows the new perspective with the old
+    /// filtered list (or vice versa). When neither field is actually
+    /// changing, returns `None` and skips the save / event.
+    ///
+    /// `filtered_task_ids` is transient (`#[serde(skip)]`) so this method
+    /// does not auto-save when only the id list changes. The perspective
+    /// id mutation is still persisted via [`Self::try_save`].
+    pub fn switch_perspective(
+        &self,
+        window_label: &str,
+        perspective_id: &str,
+        filtered_task_ids: Vec<String>,
+    ) -> Option<UIStateChange> {
+        let change = {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            let ws = inner.windows.entry(window_label.to_string()).or_default();
+            let id_changed = ws.active_perspective_id != perspective_id;
+            let ids_changed = ws.filtered_task_ids != filtered_task_ids;
+            if !id_changed && !ids_changed {
+                return None;
+            }
+            ws.active_perspective_id = perspective_id.to_string();
+            ws.filtered_task_ids = filtered_task_ids.clone();
+            Some(UIStateChange::PerspectiveSwitch {
+                perspective_id: perspective_id.to_string(),
+                filtered_task_ids,
+            })
         };
         self.try_save();
         change
@@ -975,6 +1038,21 @@ impl UIState {
             .unwrap_or_default()
     }
 
+    /// Get the filtered task id list for a specific window.
+    ///
+    /// Populated by [`Self::switch_perspective`]. Returns an empty vec when
+    /// the window has not switched perspective yet (or after a restart —
+    /// the field is transient).
+    pub fn filtered_task_ids(&self, window_label: &str) -> Vec<String> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .windows
+            .get(window_label)
+            .map(|ws| ws.filtered_task_ids.clone())
+            .unwrap_or_default()
+    }
+
     /// Get whether the palette is open for a specific window.
     pub fn palette_open(&self, window_label: &str) -> bool {
         self.inner
@@ -1130,6 +1208,10 @@ impl UIState {
                         serde_json::json!(ws.palette_mode),
                     );
                     map.insert("app_mode".to_string(), serde_json::json!(ws.app_mode));
+                    map.insert(
+                        "filtered_task_ids".to_string(),
+                        serde_json::json!(ws.filtered_task_ids),
+                    );
                 }
                 (label.clone(), obj)
             })
@@ -2507,5 +2589,108 @@ mod tests {
         assert!(win_b["maximized"].as_bool().unwrap());
         let stack = win_b["inspector_stack"].as_array().unwrap();
         assert_eq!(stack[0].as_str(), Some("task:01Z"));
+    }
+
+    // -----------------------------------------------------------------------
+    // switch_perspective tests — atomic id + filtered_task_ids update
+    // -----------------------------------------------------------------------
+
+    /// Switching to a new perspective with a fresh filtered list must:
+    /// - update `active_perspective_id`
+    /// - update `filtered_task_ids`
+    /// - return exactly one `UIStateChange::PerspectiveSwitch` carrying both
+    #[test]
+    fn switch_perspective_sets_both_fields_atomically() {
+        let state = UIState::new();
+        let change =
+            state.switch_perspective("main", "p1", vec!["t1".to_string(), "t2".to_string()]);
+        assert!(change.is_some(), "first switch should produce a change");
+        match change.unwrap() {
+            UIStateChange::PerspectiveSwitch {
+                perspective_id,
+                filtered_task_ids,
+            } => {
+                assert_eq!(perspective_id, "p1");
+                assert_eq!(filtered_task_ids, vec!["t1", "t2"]);
+            }
+            other => panic!("expected PerspectiveSwitch, got: {other:?}"),
+        }
+        assert_eq!(state.active_perspective_id("main"), "p1");
+        assert_eq!(state.filtered_task_ids("main"), vec!["t1", "t2"]);
+    }
+
+    /// A no-op switch (same id, same filtered list) returns `None` so the
+    /// caller does not emit a redundant `ui-state-changed` event.
+    #[test]
+    fn switch_perspective_noop_returns_none() {
+        let state = UIState::new();
+        state.switch_perspective("main", "p1", vec!["t1".to_string()]);
+        let change = state.switch_perspective("main", "p1", vec!["t1".to_string()]);
+        assert!(change.is_none(), "identical switch must not emit a change",);
+    }
+
+    /// Changing only the filtered_task_ids (perspective id unchanged) still
+    /// produces a change — e.g. tasks were added under the same active
+    /// perspective and the caller is re-evaluating the filter.
+    #[test]
+    fn switch_perspective_emits_change_when_only_ids_change() {
+        let state = UIState::new();
+        state.switch_perspective("main", "p1", vec!["t1".to_string()]);
+        let change =
+            state.switch_perspective("main", "p1", vec!["t1".to_string(), "t2".to_string()]);
+        assert!(change.is_some());
+        assert_eq!(state.filtered_task_ids("main"), vec!["t1", "t2"]);
+    }
+
+    /// switch_perspective is per-window: a switch on `main` must not touch
+    /// `secondary`'s slot.
+    #[test]
+    fn switch_perspective_isolates_windows() {
+        let state = UIState::new();
+        state.switch_perspective("main", "p1", vec!["t1".to_string()]);
+        state.switch_perspective("secondary", "p2", vec!["t9".to_string()]);
+        assert_eq!(state.active_perspective_id("main"), "p1");
+        assert_eq!(state.filtered_task_ids("main"), vec!["t1"]);
+        assert_eq!(state.active_perspective_id("secondary"), "p2");
+        assert_eq!(state.filtered_task_ids("secondary"), vec!["t9"]);
+    }
+
+    /// `to_json` exposes `filtered_task_ids` on each window so the frontend
+    /// can read it without a separate fetch. The field is `#[serde(skip)]`
+    /// for YAML persistence but must be injected on the wire.
+    #[test]
+    fn switch_perspective_appears_in_to_json() {
+        let state = UIState::new();
+        state.switch_perspective("main", "p1", vec!["t1".to_string(), "t2".to_string()]);
+        let json = state.to_json();
+        let main_win = &json["windows"]["main"];
+        assert_eq!(main_win["active_perspective_id"], "p1");
+        assert_eq!(
+            main_win["filtered_task_ids"],
+            serde_json::json!(["t1", "t2"])
+        );
+    }
+
+    /// `filtered_task_ids` must be `#[serde(skip)]` — round-tripping through
+    /// the YAML persistence layer must drop the field (next launch starts
+    /// fresh and recomputes on the first perspective switch).
+    #[test]
+    fn filtered_task_ids_not_persisted() {
+        let path = temp_yaml_path("filtered_task_ids_transient");
+        let _ = fs::remove_file(&path);
+        {
+            let state = UIState::load(&path);
+            state.switch_perspective("main", "p1", vec!["t1".to_string(), "t2".to_string()]);
+            state.save().unwrap();
+        }
+        {
+            let state = UIState::load(&path);
+            assert_eq!(state.active_perspective_id("main"), "p1");
+            assert!(
+                state.filtered_task_ids("main").is_empty(),
+                "filtered_task_ids must be transient",
+            );
+        }
+        let _ = fs::remove_file(&path);
     }
 }

@@ -31,7 +31,7 @@
 //!   4. **dynamic** — runtime-generated rows such as per-view "Switch to X"
 //!      entries (emitted as the canonical `view.set` command with a
 //!      pre-filled `args.view_id`), per-perspective "Go to Perspective: X"
-//!      entries (emitted as `perspective.set` with `args.perspective_id`),
+//!      entries (emitted as `perspective.switch` with `args.perspective_id`),
 //!      plus the prefix-id rows `board.switch:{path}` and
 //!      `entity.add:{type}`.
 //!
@@ -74,7 +74,7 @@ pub struct DynamicSources {
     pub boards: Vec<BoardInfo>,
     /// Open windows — each generates a `window.focus:{label}` command.
     pub windows: Vec<WindowInfo>,
-    /// Perspectives — each generates a `perspective.set` palette row with
+    /// Perspectives — each generates a `perspective.switch` palette row with
     /// `args.perspective_id` pre-filled.
     pub perspectives: Vec<PerspectiveInfo>,
 }
@@ -259,7 +259,7 @@ fn push_dedup(
 ///
 /// Always marked `context_menu: false` — view switching is a palette-only
 /// navigation action, alongside `board.switch`, `window.focus`, and the
-/// sibling `perspective.set` fan-out. Right-clicking a view button never
+/// sibling `perspective.switch` fan-out. Right-clicking a view button never
 /// surfaces a "Switch to <ViewName>" entry; the palette
 /// (`context_menu_only == false`) still lists one row per view.
 ///
@@ -371,19 +371,22 @@ fn emit_window_focus(
 }
 
 /// Emit one "Go to Perspective: <Name>" palette row per known perspective,
-/// each dispatching the canonical `perspective.set` command with its
+/// each dispatching the canonical `perspective.switch` command with its
 /// `perspective_id` pre-filled in `args`.
 ///
 /// Marked `context_menu: false` (palette-only). Shares `seen` with the other
 /// emit_* helpers so cross-emitter dedup works. Every emitted row has
-/// `id == "perspective.set"` and `target == None`; the distinguishing
+/// `id == "perspective.switch"` and `target == None`; the distinguishing
 /// information lives in `args["perspective_id"]`, which is why
 /// `push_dedup`'s [`SeenKey`] includes the args serialization.
 ///
 /// The wire format change retires the legacy `perspective.goto:{id}` id in
-/// favour of the canonical `perspective.set` command with pre-filled args,
-/// removing the dispatcher-side rewrite that previously translated the
-/// former into the latter (PR #40, task 01KPZMXXEXKVE3RNPA4XJP0105).
+/// favour of the canonical `perspective.switch` command with pre-filled
+/// args, removing the dispatcher-side rewrite that previously translated
+/// the former into the latter (PR #40, task 01KPZMXXEXKVE3RNPA4XJP0105).
+/// 01KP3ERHEDP86C2JYYR7NM1593 then replaced `perspective.set` with
+/// `perspective.switch`, which collapses the prior two-step (set id +
+/// frontend filter fetch) into one atomic backend command.
 fn emit_perspective_goto(
     perspectives: &[PerspectiveInfo],
     seen: &mut HashSet<SeenKey>,
@@ -394,7 +397,7 @@ fn emit_perspective_goto(
             seen,
             result,
             ResolvedCommand {
-                id: "perspective.set".into(),
+                id: "perspective.switch".into(),
                 name: format!("Go to Perspective: {}", perspective.name),
                 menu_name: None,
                 target: None,
@@ -504,7 +507,7 @@ fn emit_entity_add(
 /// Emit dynamic commands from runtime data into the result list.
 ///
 /// Generates per-view and per-perspective palette rows (dispatching
-/// `view.set` / `perspective.set` directly with pre-filled args),
+/// `view.set` / `perspective.switch` directly with pre-filled args),
 /// `board.switch:{path}`, `window.focus:{label}`, and `entity.add:{type}`
 /// commands from the dynamic sources. Skips commands already in the
 /// `seen` set.
@@ -2923,13 +2926,13 @@ mod tests {
     // Dynamic perspective goto commands
     // =========================================================================
 
-    /// The palette surfaces one `perspective.set` row per known perspective,
+    /// The palette surfaces one `perspective.switch` row per known perspective,
     /// each carrying the matching `perspective_id` pre-filled in its `args`.
     /// The dispatcher takes these rows verbatim — no suffix rewriting — so
-    /// the wire format must match the canonical `perspective.set` command's
+    /// the wire format must match the canonical `perspective.switch` command's
     /// param contract.
     #[test]
-    fn perspective_goto_commands_emit_canonical_perspective_set_with_args() {
+    fn perspective_goto_commands_emit_canonical_perspective_switch_with_args() {
         let (registry, impls, fields, ui) = setup();
         let scope = vec!["board:my-board".into()];
         let dynamic = DynamicSources {
@@ -2969,11 +2972,11 @@ mod tests {
             ids
         );
 
-        // One `perspective.set` row per perspective, distinguished by
+        // One `perspective.switch` row per perspective, distinguished by
         // args.perspective_id.
         let args_ids: Vec<&str> = cmds
             .iter()
-            .filter(|c| c.id == "perspective.set")
+            .filter(|c| c.id == "perspective.switch")
             .filter_map(|c| {
                 c.args
                     .as_ref()
@@ -2983,30 +2986,30 @@ mod tests {
             .collect();
         assert!(
             args_ids.contains(&"p1"),
-            "should have perspective.set row for p1: {:?}",
+            "should have perspective.switch row for p1: {:?}",
             args_ids
         );
         assert!(
             args_ids.contains(&"p2"),
-            "should have perspective.set row for p2: {:?}",
+            "should have perspective.switch row for p2: {:?}",
             args_ids
         );
 
         let p1 = cmds
             .iter()
             .find(|c| {
-                c.id == "perspective.set"
+                c.id == "perspective.switch"
                     && c.args.as_ref().and_then(|v| v.get("perspective_id"))
                         == Some(&serde_json::Value::String("p1".into()))
             })
-            .expect("perspective.set row for p1 must exist");
+            .expect("perspective.switch row for p1 must exist");
         assert_eq!(p1.name, "Go to Perspective: Alpha");
         assert_eq!(p1.group, "perspective");
     }
 
     /// Right-click must not surface any perspective-navigation commands —
     /// "Go to Perspective: X" is a palette-only action. After
-    /// 01KPZMXXEXKVE3RNPA4XJP0105 the rows emit as `perspective.set` with
+    /// 01KPZMXXEXKVE3RNPA4XJP0105 the rows emit as `perspective.switch` with
     /// args, so the guard checks both the legacy `perspective.goto:*` prefix
     /// (must not reappear) and the "perspective" group (must not leak into
     /// the context menu).
@@ -3044,8 +3047,8 @@ mod tests {
         assert!(
             !cmds
                 .iter()
-                .any(|c| c.id == "perspective.set" && c.group == "perspective"),
-            "perspective.set navigation rows should not appear in context menu: {:?}",
+                .any(|c| c.id == "perspective.switch" && c.group == "perspective"),
+            "perspective.switch navigation rows should not appear in context menu: {:?}",
             cmds.iter().map(|c| (&c.id, &c.group)).collect::<Vec<_>>()
         );
     }
@@ -3053,7 +3056,7 @@ mod tests {
     /// Without `DynamicSources`, no perspective navigation rows are emitted.
     /// Guards against a regression where the dynamic emitter runs on stale
     /// or missing runtime data and accidentally leaks a naked
-    /// `perspective.set` row (without args) into the palette.
+    /// `perspective.switch` row (without args) into the palette.
     #[test]
     fn no_perspective_commands_without_dynamic_sources() {
         let (registry, impls, fields, ui) = setup();
@@ -3074,13 +3077,13 @@ mod tests {
             !ids.iter().any(|id| id.starts_with("perspective.goto:")),
             "legacy perspective.goto:* prefix must never appear"
         );
-        // With no dynamic sources, the only way a `perspective.set` row could
+        // With no dynamic sources, the only way a `perspective.switch` row could
         // sneak through is the registry itself — which should not happen in
         // `context_menu_only == false` without a perspective in scope.
         assert!(
             !cmds
                 .iter()
-                .any(|c| c.id == "perspective.set" && c.group == "perspective"),
+                .any(|c| c.id == "perspective.switch" && c.group == "perspective"),
             "no perspective navigation rows without dynamic sources"
         );
     }

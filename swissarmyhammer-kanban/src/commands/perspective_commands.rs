@@ -9,6 +9,8 @@ use crate::perspective::{
     AddPerspective, DeletePerspective, GetPerspective, ListPerspectives, Perspective,
     RenamePerspective, SortDirection, SortEntry, UpdatePerspective,
 };
+use crate::task_helpers::{enrich_all_task_entities, filter_task_ids, EntitySlugRegistry};
+use crate::virtual_tags::default_virtual_tag_registry;
 use async_trait::async_trait;
 use serde_json::Value;
 use swissarmyhammer_commands::{Command, CommandContext, CommandError};
@@ -883,6 +885,118 @@ impl Command for GotoPerspectiveCmd {
         let change = ui.set_active_perspective(window_label, id);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
+}
+
+/// Switch to a perspective AND evaluate its filter in one backend command.
+///
+/// Replaces the prior `perspective.set` (and its predecessor
+/// `ui.perspective.set`) which only mutated `UIState.active_perspective_id`.
+/// That left filter evaluation to a follow-up `list_entities(filter=...)`
+/// roundtrip driven by a frontend `useEffect`; clicking a tab dispatched a
+/// command with no backend work, so the indeterminate progress bar tied to
+/// `inflightCount` never fired for the real filtering cost.
+///
+/// `SwitchPerspectiveCmd` collapses that into one atomic step:
+///
+/// 1. Look up the perspective by id (errors cleanly when unknown).
+/// 2. Load the board's tasks, enrich them (filter_tags + progress), and
+///    evaluate the perspective's filter DSL against them via the local
+///    [`evaluate_perspective_filter`] helper, which in turn delegates to
+///    `filter_task_ids` in `task_helpers` so the DSL evaluator is the
+///    same one `list_entities` uses — no duplication.
+/// 3. Atomically write BOTH `active_perspective_id` and `filtered_task_ids`
+///    on the window via [`UIState::switch_perspective`], producing exactly
+///    one `UIStateChange::PerspectiveSwitch`. The frontend renders the
+///    filtered task list directly out of UIState.
+///
+/// Required arg: `perspective_id`. Returns the [`UIStateChange`] as JSON,
+/// or `Value::Null` when the switch is a no-op (id and filtered id list
+/// both already match).
+pub struct SwitchPerspectiveCmd;
+
+#[async_trait]
+impl Command for SwitchPerspectiveCmd {
+    fn available(&self, _ctx: &CommandContext) -> bool {
+        true
+    }
+
+    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        let kanban = ctx.require_extension::<KanbanContext>()?;
+        let ui = ctx
+            .ui_state
+            .as_ref()
+            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+
+        let perspective_id = ctx.require_arg_str("perspective_id")?;
+        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+
+        // Look up the perspective + capture its filter. Drop the read guard
+        // before doing the (potentially long) filter evaluation so a
+        // concurrent perspective mutation does not block on us.
+        let filter = {
+            let pctx = kanban
+                .perspective_context()
+                .await
+                .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+            let pctx = pctx.read().await;
+            let perspective = pctx.get_by_id(perspective_id).ok_or_else(|| {
+                CommandError::ExecutionFailed(format!("perspective not found: {perspective_id}"))
+            })?;
+            perspective.filter.clone().unwrap_or_default()
+        };
+
+        let filtered_task_ids = evaluate_perspective_filter(&kanban, filter.as_str()).await?;
+
+        let change = ui.switch_perspective(window_label, perspective_id, filtered_task_ids);
+        Ok(serde_json::to_value(change).unwrap_or(Value::Null))
+    }
+}
+
+/// Evaluate a perspective's filter DSL against the board's tasks and return
+/// the matching task ids.
+///
+/// Reuses the same shared filter pipeline `list_entities` and `list_tasks`
+/// drive — load tasks + columns + projects + actors, enrich tasks so
+/// `#tag` / `@user` predicates resolve, build the slug registry, then
+/// delegate to [`filter_task_ids`]. An empty / whitespace-only filter
+/// returns every task id (no filter).
+async fn evaluate_perspective_filter(
+    kanban: &KanbanContext,
+    filter: &str,
+) -> swissarmyhammer_commands::Result<Vec<String>> {
+    let ectx = kanban
+        .entity_context()
+        .await
+        .map_err(|e| CommandError::ExecutionFailed(format!("entity_context: {e}")))?;
+
+    let mut tasks = ectx
+        .list("task")
+        .await
+        .map_err(|e| CommandError::ExecutionFailed(format!("list(task): {e}")))?;
+    let columns = ectx
+        .list("column")
+        .await
+        .map_err(|e| CommandError::ExecutionFailed(format!("list(column): {e}")))?;
+    let projects = ectx
+        .list("project")
+        .await
+        .map_err(|e| CommandError::ExecutionFailed(format!("list(project): {e}")))?;
+    let actors = ectx
+        .list("actor")
+        .await
+        .map_err(|e| CommandError::ExecutionFailed(format!("list(actor): {e}")))?;
+
+    let terminal_column = columns
+        .iter()
+        .max_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
+        .map(|c| c.id.as_str())
+        .unwrap_or("done");
+
+    let virtual_tag_registry = default_virtual_tag_registry();
+    enrich_all_task_entities(&mut tasks, terminal_column, virtual_tag_registry);
+
+    let slug_registry = EntitySlugRegistry::build(&projects, &actors, &tasks);
+    filter_task_ids(&tasks, filter, &slug_registry).map_err(CommandError::ExecutionFailed)
 }
 
 /// List all perspectives on the board.
@@ -2490,5 +2604,263 @@ mod tests {
     fn focus_filter_command_is_always_available() {
         let ctx = CommandContext::new("perspective.filter.focus", vec![], None, HashMap::new());
         assert!(FocusFilterCmd.available(&ctx));
+    }
+
+    // =========================================================================
+    // SwitchPerspectiveCmd tests
+    //
+    // Covers the four contracts called out in 01KP3ERHEDP86C2JYYR7NM1593:
+    //   (a) sets `active_perspective_id`
+    //   (b) writes `filtered_task_ids` matching the perspective's filter
+    //   (c) both changes land in one `UIStateChange::PerspectiveSwitch`
+    //   (d) unknown perspective id surfaces as a clean `ExecutionFailed`
+    // =========================================================================
+
+    /// Build a CommandContext with KanbanContext + UIState + a single
+    /// `perspective_id` arg — the minimal shape every `perspective.switch`
+    /// test needs.
+    fn switch_ctx(
+        kanban: Arc<KanbanContext>,
+        ui: Arc<swissarmyhammer_commands::UIState>,
+        perspective_id: &str,
+    ) -> CommandContext {
+        let mut args = HashMap::new();
+        args.insert(
+            "perspective_id".into(),
+            Value::String(perspective_id.into()),
+        );
+        let mut ctx = CommandContext::new("perspective.switch", vec![], None, args);
+        ctx.set_extension(kanban);
+        ctx.ui_state = Some(ui);
+        ctx
+    }
+
+    /// Add a task with a body — body carries `#tag` markers the
+    /// `enrich_*` pipeline lifts into `filter_tags`, which is what the
+    /// DSL evaluator reads on `#bug` / `#feature` queries.
+    async fn add_task_with_body(kanban: &Arc<KanbanContext>, title: &str, body: &str) -> String {
+        let task = crate::task::AddTask::new(title)
+            .with_description(body)
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+        task["id"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn switch_perspective_unknown_id_returns_execution_failed() {
+        // Contract (d): an unknown perspective id must surface as a
+        // clean `ExecutionFailed` error so the dispatcher can log it
+        // and the frontend's `.catch(console.error)` can record it.
+        // Crucially, it must NOT silently mutate UIState.
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+
+        let cmd_ctx = switch_ctx(Arc::clone(&kanban), Arc::clone(&ui), "does-not-exist");
+        let err = SwitchPerspectiveCmd
+            .execute(&cmd_ctx)
+            .await
+            .expect_err("unknown perspective id must error");
+        match err {
+            CommandError::ExecutionFailed(msg) => {
+                assert!(
+                    msg.contains("perspective not found"),
+                    "error message should mention perspective not found, got: {msg}",
+                );
+            }
+            other => panic!("expected ExecutionFailed, got: {other:?}"),
+        }
+        // UIState must be untouched.
+        assert!(ui.active_perspective_id("main").is_empty());
+        assert!(ui.filtered_task_ids("main").is_empty());
+    }
+
+    #[tokio::test]
+    async fn switch_perspective_sets_active_id_with_no_filter() {
+        // Contract (a): the resolved id lands in `active_perspective_id`.
+        // With no filter on the perspective, the filtered list is every
+        // task on the board (filter empty → no-filter).
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+
+        // Two tasks; no filter on the perspective.
+        let t1 = add_task_with_body(&kanban, "Bug task", "#bug fix this").await;
+        let t2 = add_task_with_body(&kanban, "Feature task", "#feature add that").await;
+        let pid = create_perspective_with_view(&kanban, "All", "board").await;
+
+        let cmd_ctx = switch_ctx(Arc::clone(&kanban), Arc::clone(&ui), &pid);
+        let result = SwitchPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+        assert!(!result.is_null(), "switch should produce a UIStateChange");
+
+        assert_eq!(ui.active_perspective_id("main"), pid);
+        let filtered = ui.filtered_task_ids("main");
+        assert_eq!(filtered.len(), 2, "no-filter must include every task");
+        assert!(filtered.contains(&t1));
+        assert!(filtered.contains(&t2));
+    }
+
+    #[tokio::test]
+    async fn switch_perspective_writes_filtered_ids_matching_filter() {
+        // Contract (b): the filter DSL is evaluated server-side and only
+        // matching task ids land in `filtered_task_ids`. Uses `#bug` —
+        // the simplest tag predicate — to keep the test focused on the
+        // wiring (the DSL evaluator itself is covered by
+        // `task_helpers::tests`).
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+
+        let t_bug = add_task_with_body(&kanban, "Bug", "#bug top of body").await;
+        let _t_feat = add_task_with_body(&kanban, "Feature", "#feature pretty").await;
+
+        // Save a perspective whose filter narrows to `#bug`.
+        let mut args = HashMap::new();
+        args.insert("name".into(), Value::String("Bugs".into()));
+        args.insert("view".into(), Value::String("board".into()));
+        args.insert("filter".into(), Value::String("#bug".into()));
+        let save_ctx = make_ctx(Arc::clone(&kanban), args);
+        let saved = SavePerspectiveCmd.execute(&save_ctx).await.unwrap();
+        let pid = saved["id"].as_str().unwrap().to_string();
+
+        let cmd_ctx = switch_ctx(Arc::clone(&kanban), Arc::clone(&ui), &pid);
+        SwitchPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+
+        let filtered = ui.filtered_task_ids("main");
+        assert_eq!(filtered, vec![t_bug], "only `#bug` tasks should survive");
+    }
+
+    #[tokio::test]
+    async fn switch_perspective_emits_single_atomic_change() {
+        // Contract (c): both `active_perspective_id` and
+        // `filtered_task_ids` arrive in ONE `UIStateChange::PerspectiveSwitch`.
+        // The frontend's `ui-state-changed` subscriber gets exactly one
+        // event per click — never two.
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+
+        let t = add_task_with_body(&kanban, "Bug", "#bug oops").await;
+        let mut args = HashMap::new();
+        args.insert("name".into(), Value::String("Bugs".into()));
+        args.insert("view".into(), Value::String("board".into()));
+        args.insert("filter".into(), Value::String("#bug".into()));
+        let save_ctx = make_ctx(Arc::clone(&kanban), args);
+        let pid = SavePerspectiveCmd.execute(&save_ctx).await.unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let cmd_ctx = switch_ctx(Arc::clone(&kanban), Arc::clone(&ui), &pid);
+        let result = SwitchPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+
+        // The result must deserialize as `PerspectiveSwitch` — not a pair
+        // of `ActivePerspective` + something-else, and not as a tuple of
+        // two changes.
+        let change: swissarmyhammer_commands::UIStateChange =
+            serde_json::from_value(result).expect("result must be a single UIStateChange");
+        match change {
+            swissarmyhammer_commands::UIStateChange::PerspectiveSwitch {
+                perspective_id,
+                filtered_task_ids,
+            } => {
+                assert_eq!(perspective_id, pid);
+                assert_eq!(filtered_task_ids, vec![t]);
+            }
+            other => panic!("expected PerspectiveSwitch, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn switch_perspective_is_per_window() {
+        // Window isolation guard: switching on `window:secondary` must
+        // not bleed into the main window's slots. Drives the same
+        // window_label_from_scope path the production app uses.
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+
+        add_task_with_body(&kanban, "Bug", "#bug").await;
+        let pid = create_perspective_with_view(&kanban, "All", "board").await;
+
+        let mut args = HashMap::new();
+        args.insert("perspective_id".into(), Value::String(pid.clone()));
+        let mut cmd_ctx = CommandContext::new(
+            "perspective.switch",
+            vec!["window:secondary".into()],
+            None,
+            args,
+        );
+        cmd_ctx.set_extension(Arc::clone(&kanban));
+        cmd_ctx.ui_state = Some(Arc::clone(&ui));
+
+        SwitchPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+
+        assert_eq!(ui.active_perspective_id("secondary"), pid);
+        assert_eq!(ui.filtered_task_ids("secondary").len(), 1);
+        // Main window must be untouched.
+        assert!(ui.active_perspective_id("main").is_empty());
+        assert!(ui.filtered_task_ids("main").is_empty());
+    }
+
+    #[tokio::test]
+    async fn switch_perspective_dispatches_via_registry_end_to_end() {
+        // Integration: drive the command through the `register_commands()`
+        // map exactly the way the production dispatcher does. Pins that
+        // the YAML id → Rust handler wire is intact (no missing
+        // registration, no name typo).
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+
+        let t = add_task_with_body(&kanban, "Bug", "#bug oops").await;
+        let mut args = HashMap::new();
+        args.insert("name".into(), Value::String("Bugs".into()));
+        args.insert("view".into(), Value::String("board".into()));
+        args.insert("filter".into(), Value::String("#bug".into()));
+        let save_ctx = make_ctx(Arc::clone(&kanban), args);
+        let pid = SavePerspectiveCmd.execute(&save_ctx).await.unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Pull the command from the registry — the same lookup path the
+        // dispatcher uses at runtime.
+        let registry = crate::commands::register_commands();
+        let cmd = registry
+            .get("perspective.switch")
+            .expect("perspective.switch must be in the registry");
+
+        let cmd_ctx = switch_ctx(Arc::clone(&kanban), Arc::clone(&ui), &pid);
+        cmd.execute(&cmd_ctx).await.unwrap();
+
+        assert_eq!(ui.active_perspective_id("main"), pid);
+        assert_eq!(ui.filtered_task_ids("main"), vec![t]);
+    }
+
+    #[tokio::test]
+    async fn switch_perspective_missing_arg_returns_missing_arg_error() {
+        // Calling the command with no `perspective_id` arg must error
+        // cleanly — the YAML declares the param as required, but the
+        // handler itself enforces it too so a programmatic dispatch
+        // can't silently pass an empty switch.
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+
+        let mut cmd_ctx = CommandContext::new("perspective.switch", vec![], None, HashMap::new());
+        cmd_ctx.set_extension(Arc::clone(&kanban));
+        cmd_ctx.ui_state = Some(Arc::clone(&ui));
+
+        let err = SwitchPerspectiveCmd
+            .execute(&cmd_ctx)
+            .await
+            .expect_err("missing arg must error");
+        match err {
+            CommandError::MissingArg(name) => assert_eq!(name, "perspective_id"),
+            other => panic!("expected MissingArg(perspective_id), got: {other:?}"),
+        }
     }
 }

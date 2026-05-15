@@ -29,6 +29,7 @@ import { GroupedBoardView } from "@/components/grouped-board-view";
 import { GridView } from "@/components/grid-view";
 import { useBoardData } from "@/components/window-container";
 import { useEntitiesByType } from "@/components/rust-engine-container";
+import { useFilteredEntities } from "@/lib/use-filtered-tasks";
 import type { BoardData, Entity } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
@@ -55,12 +56,19 @@ export function ViewContainer({ children }: ViewContainerProps) {
   const viewId = activeView?.id ?? "default";
   const moniker = useMemo(() => `view:${viewId}`, [viewId]);
 
+  // Intersect tasks with the per-window perspective filter via the
+  // shared `useFilteredEntities` selector. The selector also feeds the
+  // GridView path (see `grid-view.tsx::useGridData`) so both views
+  // respect the active perspective without duplicating the intersection
+  // logic. See `useFilteredEntities` for the tri-state contract.
+  const tasks = useFilteredEntities(entitiesByType.task ?? [], "task");
+
   return (
     <CommandScopeProvider moniker={moniker}>
       <ActiveViewRenderer
         activeView={activeView}
         board={board!}
-        tasks={entitiesByType.task ?? []}
+        tasks={tasks}
       />
       {children}
     </CommandScopeProvider>

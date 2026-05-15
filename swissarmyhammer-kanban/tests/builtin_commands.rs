@@ -42,9 +42,11 @@ const KANBAN_COMMAND_IDS: &[&str] = &[
     // 01KPY02X405QTP5ACH67THHSN8. "View" is a kanban concept, not a generic
     // UI primitive, so the declaration lives in the kanban domain.
     "view.set",
-    // perspective.yaml (17) — `perspective.set` relocated from
-    // `ui.perspective.set` in 01KPY02X405QTP5ACH67THHSN8 for the same
-    // reason as `view.set`; `perspective.filter.focus` added by
+    // perspective.yaml (17) — `perspective.set` (originally relocated from
+    // `ui.perspective.set` in 01KPY02X405QTP5ACH67THHSN8) was replaced by
+    // `perspective.switch` in 01KP3ERHEDP86C2JYYR7NM1593 — the new command
+    // owns BOTH the active_perspective_id mutation AND the filter
+    // evaluation, atomically. `perspective.filter.focus` was added by
     // 01KRE1YA65MMG29RDQDQ0VPJQG as the first command-driven tab button.
     "perspective.load",
     "perspective.save",
@@ -62,7 +64,7 @@ const KANBAN_COMMAND_IDS: &[&str] = &[
     "perspective.prev",
     "perspective.goto",
     "perspective.list",
-    "perspective.set",
+    "perspective.switch",
 ];
 
 /// Build a registry from the kanban crate's YAMLs alone and assert every
@@ -122,15 +124,15 @@ fn perspective_yaml_retains_scope_and_visibility() {
     //   - perspective.rename: requires `id` + `new_name` args and has no
     //     palette args UI; the user-facing entry is
     //     `ui.entity.startRename`
-    //   - perspective.set: requires a `perspective_id` arg the palette has
-    //     no generic UI for; the user-facing palette rows for it are
+    //   - perspective.switch: requires a `perspective_id` arg the palette
+    //     has no generic UI for; the user-facing palette rows for it are
     //     fan-out entries emitted by `scope_commands::emit_perspective_goto`
     //     with `perspective_id` pre-filled, one per perspective
     let hidden = [
         "perspective.list",
         "perspective.goto",
         "perspective.rename",
-        "perspective.set",
+        "perspective.switch",
     ];
     for cmd in registry.all_commands() {
         if !cmd.id.starts_with("perspective.") {
@@ -214,22 +216,24 @@ fn composed_builtins_register_all_seventy_one_commands() {
     assert!(registry.get("file.closeBoard").is_some(), "kanban crate");
 }
 
-/// Verify the relocated `view.set` and `perspective.set` commands are
-/// registered with `visible: false` and each accepts the expected single
+/// Verify the relocated `view.set` and the new `perspective.switch` commands
+/// are registered with `visible: false` and each accepts the expected single
 /// `*_id` arg pulled from `args`.
 ///
-/// These two commands were moved out of the generic `ui.yaml` into the
-/// kanban domain in 01KPY02X405QTP5ACH67THHSN8 because "view" and
-/// "perspective" are kanban concepts, not generic UI primitives. The
-/// palette-facing entries are dynamic rows emitted by
-/// `scope_commands::emit_view_switch` / `emit_perspective_goto` that now
-/// dispatch `view.set` / `perspective.set` directly with pre-filled args —
-/// 01KPZMXXEXKVE3RNPA4XJP0105 retired the old `view.switch:{id}` /
+/// `view.set` was moved out of the generic `ui.yaml` into the kanban domain
+/// in 01KPY02X405QTP5ACH67THHSN8 because "view" is a kanban concept, not a
+/// generic UI primitive. `perspective.switch` (replacing the prior
+/// `perspective.set`) was added in 01KP3ERHEDP86C2JYYR7NM1593 — the new
+/// command owns BOTH the active_perspective_id mutation AND the filter
+/// evaluation, atomically. The palette-facing entries are dynamic rows
+/// emitted by `scope_commands::emit_view_switch` / `emit_perspective_goto`
+/// that dispatch `view.set` / `perspective.switch` directly with pre-filled
+/// args — 01KPZMXXEXKVE3RNPA4XJP0105 retired the old `view.switch:{id}` /
 /// `perspective.goto:{id}` rewrite indirection — so the canonical
 /// definitions must stay hidden from the palette (each row is only
 /// reachable via its dynamic-emission counterpart with args attached).
 #[test]
-fn view_set_and_perspective_set_registered_hidden() {
+fn view_set_and_perspective_switch_registered_hidden() {
     let sources = swissarmyhammer_kanban::builtin_yaml_sources();
     let sources_ref: Vec<(&str, &str)> = sources.iter().map(|(n, c)| (*n, *c)).collect();
     let registry = CommandsRegistry::from_yaml_sources(&sources_ref);
@@ -250,19 +254,31 @@ fn view_set_and_perspective_set_registered_hidden() {
     );
     assert_eq!(view_set.params[0].name, "view_id");
 
-    // perspective.set — single `perspective_id` arg, hidden.
-    let perspective_set = registry
-        .get("perspective.set")
-        .expect("perspective.set must be registered by perspective.yaml");
+    // perspective.switch — single `perspective_id` arg, hidden.
+    let perspective_switch = registry
+        .get("perspective.switch")
+        .expect("perspective.switch must be registered by perspective.yaml");
     assert!(
-        !perspective_set.visible,
-        "perspective.set requires a perspective_id arg the palette cannot \
+        !perspective_switch.visible,
+        "perspective.switch requires a perspective_id arg the palette cannot \
          provide — must be visible: false"
     );
     assert_eq!(
-        perspective_set.params.len(),
+        perspective_switch.params.len(),
         1,
-        "perspective.set must accept exactly one param (perspective_id from args)",
+        "perspective.switch must accept exactly one param (perspective_id from args)",
     );
-    assert_eq!(perspective_set.params[0].name, "perspective_id");
+    assert_eq!(perspective_switch.params[0].name, "perspective_id");
+
+    // The deprecated `perspective.set` (and its predecessor
+    // `ui.perspective.set`) must NOT be present — they were replaced by
+    // `perspective.switch` in 01KP3ERHEDP86C2JYYR7NM1593.
+    assert!(
+        registry.get("perspective.set").is_none(),
+        "perspective.set must be removed in favour of perspective.switch",
+    );
+    assert!(
+        registry.get("ui.perspective.set").is_none(),
+        "ui.perspective.set must not be re-introduced",
+    );
 }

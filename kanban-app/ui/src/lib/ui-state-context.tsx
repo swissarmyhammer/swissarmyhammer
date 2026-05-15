@@ -17,6 +17,27 @@ export interface WindowStateSnapshot {
   active_view_id: string;
   /** The active perspective ID for this window. Empty string means no perspective selected. */
   active_perspective_id: string;
+  /**
+   * IDs of tasks visible under the active perspective's filter.
+   *
+   * Written atomically with `active_perspective_id` by the backend
+   * `perspective.switch` command — both fields land in a single
+   * `ui-state-changed` event so the frontend never paints a frame
+   * where the perspective and its filter results are out of sync.
+   *
+   * Tri-state semantics (see `view-container.tsx`):
+   *   * `undefined` — no `perspective.switch` has fired for this
+   *     window yet (fresh launch, legacy snapshot). Treated as
+   *     "no filter active": views show every task.
+   *   * `[]` — switch has fired but the active filter matched no
+   *     tasks. Views show zero rows. (Conflating with `undefined`
+   *     would silently disable filters that matched nothing.)
+   *   * non-empty array — views intersect with this id list.
+   *
+   * Transient on the backend (`#[serde(skip)]`): a window restart
+   * starts undefined and the next switch repopulates the field.
+   */
+  filtered_task_ids?: string[];
   /** Whether the command palette is open in this window. */
   palette_open: boolean;
   /** Palette mode for this window: "command" or "search". */
@@ -83,6 +104,7 @@ export type UIStateChangeKind =
   | "active_perspective"
   | "app_mode"
   | "inspector_width"
+  | "perspective_switch"
   | "board_switch"
   | "board_close";
 

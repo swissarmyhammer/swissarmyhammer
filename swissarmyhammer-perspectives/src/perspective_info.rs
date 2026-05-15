@@ -36,7 +36,7 @@ pub struct PerspectiveFieldInfo {
 /// Lightweight perspective descriptor for dynamic command generation.
 ///
 /// Only carries the fields needed to produce a palette row that
-/// dispatches `perspective.set` with a pre-filled `perspective_id`.
+/// dispatches `perspective.switch` with a pre-filled `perspective_id`.
 /// Intentionally decoupled from the heavyweight
 /// [`crate::types::Perspective`] so the dispatch path does not need
 /// to load the entire perspective for every emit.

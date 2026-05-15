@@ -30,9 +30,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use swissarmyhammer_entity::Entity;
-use swissarmyhammer_filter_expr::FilterContext;
 use swissarmyhammer_kanban::task_helpers::{
-    enrich_all_task_entities, enrich_task_entity, EntitySlugRegistry,
+    enrich_all_task_entities, enrich_task_entity, retain_filtered_tasks, EntitySlugRegistry,
 };
 use swissarmyhammer_kanban::virtual_tags::default_virtual_tag_registry;
 use tauri::menu::{ContextMenu, MenuBuilder};
@@ -242,88 +241,6 @@ pub async fn list_entity_types(
     Ok(json!(names))
 }
 
-/// Adapter that maps filter DSL atoms to entity fields.
-///
-/// Uses `filter_tags` (union of body tags + virtual tags) for `#tag` lookups,
-/// `assignees` for `@user` lookups, `depends_on` + `id` for `^ref` lookups,
-/// and the single-value `project` field for `$project` lookups.
-///
-/// When a `registry` is provided, `$project` / `@user` / `^task` predicates
-/// ALSO match the slug of the referenced entity's display name (project
-/// `name`, actor `name`, task `title`). This keeps backend filter semantics
-/// aligned with the frontend autocomplete, which offers name-slugs. Without
-/// a registry, only the stored id is compared — preserving backwards
-/// compatibility for callers that don't have the registry loaded.
-struct EntityFilterAdapter<'a> {
-    entity: &'a Entity,
-    registry: Option<&'a EntitySlugRegistry>,
-}
-
-impl<'a> FilterContext for EntityFilterAdapter<'a> {
-    fn has_tag(&self, tag: &str) -> bool {
-        self.entity
-            .get_string_list("filter_tags")
-            .iter()
-            .any(|t| t.eq_ignore_ascii_case(tag))
-    }
-
-    fn has_assignee(&self, user: &str) -> bool {
-        let assignees = self.entity.get_string_list("assignees");
-        if assignees.iter().any(|a| a.eq_ignore_ascii_case(user)) {
-            return true;
-        }
-        if let Some(registry) = self.registry {
-            if let Some(resolved_id) = registry.actor_id_for_slug(user) {
-                if assignees
-                    .iter()
-                    .any(|a| a.eq_ignore_ascii_case(resolved_id))
-                {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
-    fn has_ref(&self, id: &str) -> bool {
-        if self.entity.id.as_ref() == id {
-            return true;
-        }
-        let depends_on = self.entity.get_string_list("depends_on");
-        if depends_on.iter().any(|r| r == id) {
-            return true;
-        }
-        if let Some(registry) = self.registry {
-            if let Some(resolved_id) = registry.task_id_for_slug(id) {
-                if self.entity.id.as_ref() == resolved_id {
-                    return true;
-                }
-                if depends_on.iter().any(|r| r == resolved_id) {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
-    fn has_project(&self, project: &str) -> bool {
-        let Some(stored) = self.entity.get_str("project") else {
-            return false;
-        };
-        if stored.eq_ignore_ascii_case(project) {
-            return true;
-        }
-        if let Some(registry) = self.registry {
-            if let Some(resolved_id) = registry.project_id_for_slug(project) {
-                if stored.eq_ignore_ascii_case(resolved_id) {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-}
-
 /// Enrich task entities with computed fields and sort by position.
 ///
 /// Loads columns to determine the terminal column, then batch-enriches tasks
@@ -354,31 +271,6 @@ async fn enrich_and_sort_tasks(
             let ord_a = a.get_str("position_ordinal").unwrap_or("a0");
             let ord_b = b.get_str("position_ordinal").unwrap_or("a0");
             ord_a.cmp(ord_b)
-        })
-    });
-    Ok(())
-}
-
-/// Apply a filter DSL expression to an entity list, retaining only matches.
-///
-/// Parses the filter string and evaluates it against each entity via
-/// `EntityFilterAdapter`. The `registry` carries project/actor/task display
-/// name slugs so `$project`, `@user`, and `^task` predicates can match on
-/// id OR slug-of-name — keeping backend filter semantics aligned with the
-/// frontend autocomplete. Returns an error if the expression is invalid.
-fn apply_filter(
-    entities: &mut Vec<Entity>,
-    filter_str: &str,
-    registry: &EntitySlugRegistry,
-) -> Result<(), String> {
-    let expr = swissarmyhammer_filter_expr::parse(filter_str).map_err(|errors| {
-        let msgs: Vec<String> = errors.iter().map(|e| e.message.clone()).collect();
-        format!("invalid filter expression: {}", msgs.join("; "))
-    })?;
-    entities.retain(|e| {
-        expr.matches(&EntityFilterAdapter {
-            entity: e,
-            registry: Some(registry),
         })
     });
     Ok(())
@@ -442,7 +334,7 @@ pub async fn list_entities(
         };
         let task_slice: &[Entity] = tasks.as_deref().unwrap_or(&entities);
         let registry = EntitySlugRegistry::build(&projects, &actors, task_slice);
-        apply_filter(&mut entities, filter_str, &registry)?;
+        retain_filtered_tasks(&mut entities, filter_str, &registry)?;
     }
 
     let json_entities: Vec<Value> = entities.iter().map(|e| e.to_json()).collect();
@@ -1207,7 +1099,7 @@ fn handle_window_focus(app: &AppHandle, label: &str) -> Value {
 /// `view.switch:{id}` and `perspective.goto:{id}` were retired in
 /// 01KPZMXXEXKVE3RNPA4XJP0105 — the emit_* helpers in
 /// `swissarmyhammer_kanban::scope_commands` now produce `view.set` /
-/// `perspective.set` rows directly with the view / perspective id
+/// `perspective.switch` rows directly with the view / perspective id
 /// pre-filled in `args`, so no rewrite hop is needed.
 fn match_dynamic_prefix(
     cmd: &str,
@@ -1241,7 +1133,7 @@ fn match_dynamic_prefix(
 ///
 /// `view.switch:{id}` and `perspective.goto:{id}` were retired in
 /// 01KPZMXXEXKVE3RNPA4XJP0105 — the palette now emits `view.set` /
-/// `perspective.set` directly with args pre-filled, so no rewrite is
+/// `perspective.switch` directly with args pre-filled, so no rewrite is
 /// needed.
 fn rewrite_dynamic_prefix(
     app: &AppHandle,
@@ -1352,7 +1244,7 @@ fn apply_prefix_rewrite(
 ///
 /// `view.switch:{id}` and `perspective.goto:{id}` used to travel this path
 /// and were retired in 01KPZMXXEXKVE3RNPA4XJP0105 — the palette now emits
-/// `view.set` / `perspective.set` directly with args pre-filled.
+/// `view.set` / `perspective.switch` directly with args pre-filled.
 ///
 /// The `window.focus:*` prefix is a pure side-effect (unminimize + focus) that
 /// returns early without entering the standard result-processing pipeline.
@@ -1379,7 +1271,7 @@ pub(crate) async fn dispatch_command_internal(
     // Rewrite the remaining dynamic prefixes (`window.focus:*`,
     // `board.switch:*`, `entity.add:*`) to canonical commands with merged
     // args. Also validates command ID. `view.switch:*` /
-    // `perspective.goto:*` are emitted as `view.set` / `perspective.set`
+    // `perspective.goto:*` are emitted as `view.set` / `perspective.switch`
     // directly (see 01KPZMXXEXKVE3RNPA4XJP0105) so no rewrite hop applies.
     let rw = rewrite_dynamic_prefix(app, cmd, args, board_path, &target, &scope_chain)?;
     if let Some(result) = rw.early_return {
@@ -1880,7 +1772,8 @@ fn emit_ui_state_change_if_needed(app: &AppHandle, state: &AppState, result: &Va
 /// Returns the `kind` string used on the wire:
 /// - One per `UIStateChange` variant (`scope_chain`, `palette_open`,
 ///   `keymap_mode`, `inspector_stack`, `active_view`,
-///   `active_perspective`, `app_mode`, `inspector_width`).
+///   `active_perspective`, `app_mode`, `inspector_width`,
+///   `perspective_switch`).
 /// - `board_switch` / `board_close` for the two board result shapes,
 ///   which are not typed as `UIStateChange` but still mutate what the
 ///   `UIStateProvider` renders.
@@ -1897,6 +1790,14 @@ fn ui_state_change_kind(result: &Value) -> Option<&'static str> {
             swissarmyhammer_commands::UIStateChange::ActivePerspective(_) => "active_perspective",
             swissarmyhammer_commands::UIStateChange::AppMode(_) => "app_mode",
             swissarmyhammer_commands::UIStateChange::InspectorWidth { .. } => "inspector_width",
+            // `PerspectiveSwitch` is the atomic id+filtered-ids update emitted
+            // by `perspective.switch`. We classify it as `perspective_switch`
+            // so the frontend can register its own debounce/skip policy
+            // independently of the legacy `active_perspective` kind (which
+            // covered id-only mutations).
+            swissarmyhammer_commands::UIStateChange::PerspectiveSwitch { .. } => {
+                "perspective_switch"
+            }
         });
     }
     if result.get("BoardSwitch").is_some() {
@@ -2668,11 +2569,21 @@ mod tests {
         assert!(id.is_empty());
     }
 
-    // ── EntityFilterAdapter tests ──────────────────────────────────
+    // ── retain_filtered_tasks delegation test ─────────────────────
+    //
+    // Filter DSL evaluation (`#tag`, `@user`, `^ref`, `$project`) lives in
+    // `swissarmyhammer_kanban::task_helpers` as `TaskFilterAdapter` /
+    // `retain_filtered_tasks`. The kanban-app crate consumes the shared
+    // implementation via `retain_filtered_tasks` in `list_entities` so a
+    // single DSL evaluator backs both `list_entities` and the
+    // `perspective.switch` command. Full adapter coverage (tag / assignee /
+    // ref / project, slug fallback, every operator) lives in
+    // `swissarmyhammer-kanban/src/task_helpers.rs` — this test only pins the
+    // delegation so a future refactor cannot silently re-introduce a
+    // duplicate evaluator in this crate.
 
-    use super::EntityFilterAdapter;
     use swissarmyhammer_entity::Entity;
-    use swissarmyhammer_filter_expr::FilterContext;
+    use swissarmyhammer_kanban::task_helpers::{retain_filtered_tasks, EntitySlugRegistry};
 
     /// Build a task entity with the given filter_tags, assignees, and depends_on.
     fn make_entity(
@@ -2689,152 +2600,17 @@ mod tests {
     }
 
     #[test]
-    fn adapter_has_tag_matches_filter_tags() {
-        let e = make_entity("t1", &["bug", "READY"], &[], &[]);
-        let adapter = EntityFilterAdapter {
-            entity: &e,
-            registry: None,
-        };
-        assert!(adapter.has_tag("bug"));
-        assert!(adapter.has_tag("READY"));
-        assert!(!adapter.has_tag("feature"));
-    }
-
-    #[test]
-    fn adapter_has_tag_case_insensitive() {
-        let e = make_entity("t1", &["READY"], &[], &[]);
-        let adapter = EntityFilterAdapter {
-            entity: &e,
-            registry: None,
-        };
-        assert!(adapter.has_tag("ready"));
-        assert!(adapter.has_tag("Ready"));
-    }
-
-    #[test]
-    fn adapter_has_assignee() {
-        let e = make_entity("t1", &[], &["alice", "bob"], &[]);
-        let adapter = EntityFilterAdapter {
-            entity: &e,
-            registry: None,
-        };
-        assert!(adapter.has_assignee("alice"));
-        assert!(adapter.has_assignee("bob"));
-        assert!(!adapter.has_assignee("carol"));
-    }
-
-    #[test]
-    fn adapter_has_assignee_case_insensitive() {
-        let e = make_entity("t1", &[], &["Alice"], &[]);
-        let adapter = EntityFilterAdapter {
-            entity: &e,
-            registry: None,
-        };
-        assert!(adapter.has_assignee("alice"));
-    }
-
-    #[test]
-    fn adapter_has_ref_matches_depends_on() {
-        let e = make_entity("t1", &[], &[], &["dep1", "dep2"]);
-        let adapter = EntityFilterAdapter {
-            entity: &e,
-            registry: None,
-        };
-        assert!(adapter.has_ref("dep1"));
-        assert!(adapter.has_ref("dep2"));
-        assert!(!adapter.has_ref("dep3"));
-    }
-
-    #[test]
-    fn adapter_has_ref_matches_own_id() {
-        let e = make_entity("t1", &[], &[], &[]);
-        let adapter = EntityFilterAdapter {
-            entity: &e,
-            registry: None,
-        };
-        assert!(adapter.has_ref("t1"));
-    }
-
-    #[test]
-    fn adapter_end_to_end_with_filter_expr() {
-        let e = make_entity("t1", &["bug", "READY"], &["will"], &["dep1"]);
-        let adapter = EntityFilterAdapter {
-            entity: &e,
-            registry: None,
-        };
-
-        let expr = swissarmyhammer_filter_expr::parse("#bug && @will").unwrap();
-        assert!(expr.matches(&adapter));
-
-        let expr = swissarmyhammer_filter_expr::parse("#bug && @alice").unwrap();
-        assert!(!expr.matches(&adapter));
-
-        let expr = swissarmyhammer_filter_expr::parse("#READY").unwrap();
-        assert!(expr.matches(&adapter));
-
-        let expr = swissarmyhammer_filter_expr::parse("!#done").unwrap();
-        assert!(expr.matches(&adapter));
-
-        let expr = swissarmyhammer_filter_expr::parse("^dep1").unwrap();
-        assert!(expr.matches(&adapter));
-    }
-
-    /// Build a task entity with a `project` field set.
-    fn make_entity_with_project(id: &str, project: &str) -> Entity {
-        let mut e = Entity::new("task", id);
-        e.set("project", serde_json::json!(project));
-        e
-    }
-
-    #[test]
-    fn adapter_has_project_matches_project_field() {
-        let e = make_entity_with_project("t1", "auth-migration");
-        let adapter = EntityFilterAdapter {
-            entity: &e,
-            registry: None,
-        };
-        assert!(adapter.has_project("auth-migration"));
-        assert!(!adapter.has_project("frontend"));
-    }
-
-    #[test]
-    fn adapter_has_project_case_insensitive() {
-        let e = make_entity_with_project("t1", "auth-migration");
-        let adapter = EntityFilterAdapter {
-            entity: &e,
-            registry: None,
-        };
-        assert!(adapter.has_project("AUTH-MIGRATION"));
-        assert!(adapter.has_project("Auth-Migration"));
-    }
-
-    #[test]
-    fn adapter_has_project_absent_field_is_false() {
-        // Entity with no `project` field set — should never match a `$project` filter.
-        let e = make_entity("t1", &[], &[], &[]);
-        let adapter = EntityFilterAdapter {
-            entity: &e,
-            registry: None,
-        };
-        assert!(!adapter.has_project("anything"));
-    }
-
-    #[test]
-    fn adapter_has_project_with_filter_expr() {
-        let e = make_entity_with_project("t1", "auth");
-        let adapter = EntityFilterAdapter {
-            entity: &e,
-            registry: None,
-        };
-
-        let expr = swissarmyhammer_filter_expr::parse("$auth").unwrap();
-        assert!(expr.matches(&adapter));
-
-        let expr = swissarmyhammer_filter_expr::parse("$frontend").unwrap();
-        assert!(!expr.matches(&adapter));
-
-        let expr = swissarmyhammer_filter_expr::parse("$AUTH").unwrap();
-        assert!(expr.matches(&adapter));
+    fn list_entities_filter_path_delegates_to_kanban_crate() {
+        // Two tasks, one tagged `#bug`. The shared `retain_filtered_tasks`
+        // must keep only the bug-tagged entity.
+        let mut entities = vec![
+            make_entity("t1", &["bug", "READY"], &["will"], &[]),
+            make_entity("t2", &["feature"], &["alice"], &[]),
+        ];
+        let registry = EntitySlugRegistry::empty();
+        retain_filtered_tasks(&mut entities, "#bug", &registry).unwrap();
+        assert_eq!(entities.len(), 1);
+        assert_eq!(entities[0].id.as_ref(), "t1");
     }
 
     // ── filter_mention_candidates tests ────────────────────────────
@@ -2921,7 +2697,7 @@ mod tests {
     }
 
     /// Regression guard for 01KPZMXXEXKVE3RNPA4XJP0105: the palette emits
-    /// `view.set` / `perspective.set` directly with pre-filled `args` —
+    /// `view.set` / `perspective.switch` directly with pre-filled `args` —
     /// there is no longer a `view.switch:*` or `perspective.goto:*` rewrite
     /// branch. If an input string still carries one of the legacy prefixes
     /// it must fall through to `Ok(None)` so the dispatcher surfaces it as
@@ -3025,6 +2801,21 @@ mod tests {
         })
         .unwrap();
         assert_eq!(ui_state_change_kind(&value), Some("inspector_width"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_perspective_switch() {
+        // Pinned for the `perspective.switch` command introduced in
+        // 01KP3ERHEDP86C2JYYR7NM1593. The atomic id + filtered_task_ids
+        // update must serialize to the `perspective_switch` wire kind so
+        // the frontend can apply its own debounce/skip policy
+        // independently of the legacy `active_perspective` id-only kind.
+        let value = serde_json::to_value(UIStateChange::PerspectiveSwitch {
+            perspective_id: "p1".into(),
+            filtered_task_ids: vec!["t1".into(), "t2".into()],
+        })
+        .unwrap();
+        assert_eq!(ui_state_change_kind(&value), Some("perspective_switch"));
     }
 
     #[test]

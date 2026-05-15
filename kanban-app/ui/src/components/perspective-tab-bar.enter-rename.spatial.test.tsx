@@ -18,7 +18,7 @@
  *
  * Card 01KQAXPRTCNH8ARTYJJEBTYWW0 then extended the binding to every tab
  * (not just the active one). Inactive tabs now also claim Enter; their
- * execute closure first dispatches `perspective.set` to activate the
+ * execute closure first dispatches `perspective.switch` to activate the
  * focused tab, then calls `triggerStartRename(perspective.id)` so the
  * rename editor mounts on the focused tab regardless of which perspective
  * is currently active. The broadcaster carries an explicit id so the
@@ -32,7 +32,7 @@
  *    `.cm-editor`) inside the active tab's button.
  * 2. **Enter on inactive tab activates then starts rename** — focusing a
  *    perspective tab whose `id !== activePerspective.id` and pressing
- *    Enter dispatches `perspective.set` for that tab AND mounts the
+ *    Enter dispatches `perspective.switch` for that tab AND mounts the
  *    inline rename editor on that same tab. (Card 01KQAXPRTCNH8ARTYJJEBTYWW0
  *    extended the per-tab `ui.entity.startRename: Enter` binding to every
  *    tab, not just the active one, with an activate-then-rename execute.)
@@ -500,11 +500,11 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
 
     // The scope-pinned `ui.entity.startRename` on the inactive tab fires
     // its execute closure, which (per card 01KQAXPRTCNH8ARTYJJEBTYWW0):
-    //   1. Dispatches `perspective.set` for the focused (inactive) tab.
+    //   1. Dispatches `perspective.switch` for the focused (inactive) tab.
     //   2. Calls `triggerStartRename(p2.id)` so the rename editor mounts
     //      on this tab even before the activate's UI-state event has
     //      propagated.
-    const setDispatch = findDispatch("perspective.set");
+    const setDispatch = findDispatch("perspective.switch");
     expect(setDispatch).toBeTruthy();
     expect(setDispatch!.args).toEqual(
       expect.objectContaining({ perspective_id: "p2" }),

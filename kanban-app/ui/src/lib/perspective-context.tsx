@@ -160,13 +160,31 @@ function useAutoCreateDefaultPerspective(
 
 /**
  * Keep `UIState.active_perspective_id` in sync with a real perspective for
- * the current view kind.
+ * the current view kind, and recover from stale boot state.
  *
  * The invariant: whenever at least one perspective exists for the active
  * view kind, `UIState.active_perspective_id(window_label)` refers to one
- * of them. If the stored id is empty or names a perspective that doesn't
- * exist (deleted, or for a different view kind), dispatch
- * `perspective.set` for the first matching perspective.
+ * of them AND `filtered_task_ids` has been populated by a
+ * `perspective.switch` call. If either invariant is violated, dispatch
+ * `perspective.switch` to repair it.
+ *
+ * Three repair paths:
+ *
+ * 1. **Empty / unknown id** — stored id is "" or names a perspective that
+ *    doesn't exist for this view kind (deleted, or wrong kind). Dispatch
+ *    `perspective.switch` for the first matching perspective.
+ *
+ * 2. **Valid id but stale filter** — stored id IS valid for this view kind
+ *    but `filtered_task_ids` is `undefined` (no switch fired yet — fresh
+ *    boot with a persisted perspective id; the field is `#[serde(skip)]`
+ *    on the backend so it doesn't load from disk). Dispatch
+ *    `perspective.switch` for the stored id so the backend recomputes the
+ *    filter and pushes both fields back atomically. Without this, the very
+ *    first frame after a restart with a persisted `active_perspective_id`
+ *    would show an empty board because the tri-state in `view-container.tsx`
+ *    interprets the empty filter result as "filter matched zero tasks".
+ *
+ * 3. **Valid id and populated filter** — invariant holds, no-op.
  *
  * Runs in tandem with [`useAutoCreateDefaultPerspective`]. When no
  * perspectives exist for the current view kind, that hook creates a
@@ -181,6 +199,7 @@ function useAutoSelectActivePerspective(
   loaded: boolean,
   perspectives: PerspectiveDef[],
   active_perspective_id: string,
+  filtered_task_ids_defined: boolean,
   viewKind: string,
   dispatchRef: React.MutableRefObject<DispatchFn>,
 ) {
@@ -193,15 +212,37 @@ function useAutoSelectActivePerspective(
       return;
     }
     const stillValid = matching.some((p) => p.id === active_perspective_id);
-    if (stillValid) return;
-    dispatchRef
-      .current("perspective.set", {
-        args: { perspective_id: matching[0].id },
-      })
-      .catch(console.error);
+    if (!stillValid) {
+      // Repair path 1: stored id is empty or invalid for this view kind.
+      dispatchRef
+        .current("perspective.switch", {
+          args: { perspective_id: matching[0].id },
+        })
+        .catch(console.error);
+      return;
+    }
+    if (!filtered_task_ids_defined) {
+      // Repair path 2: stored id is valid but the per-window
+      // `filtered_task_ids` slot has never been populated (boot with
+      // a persisted `active_perspective_id`; the field is transient
+      // on the backend). Redispatch for the stored id to recompute.
+      dispatchRef
+        .current("perspective.switch", {
+          args: { perspective_id: active_perspective_id },
+        })
+        .catch(console.error);
+    }
     // dispatchRef is a stable object; its `.current` is read lazily. The real
-    // re-entry signals are loaded / perspectives / active id / viewKind.
-  }, [loaded, perspectives, active_perspective_id, viewKind, dispatchRef]);
+    // re-entry signals are loaded / perspectives / active id / viewKind /
+    // whether the filter slot has been populated.
+  }, [
+    loaded,
+    perspectives,
+    active_perspective_id,
+    filtered_task_ids_defined,
+    viewKind,
+    dispatchRef,
+  ]);
 }
 
 /**
@@ -247,6 +288,13 @@ export function PerspectiveProvider({ children }: { children: ReactNode }) {
   const uiState = useUIState();
   const active_perspective_id =
     uiState.windows?.[WINDOW_LABEL]?.active_perspective_id ?? "";
+  // Tri-state: `undefined` means no `perspective.switch` has fired for this
+  // window yet (e.g. boot with a persisted `active_perspective_id` whose
+  // `filtered_task_ids` did not load from disk because the field is
+  // `#[serde(skip)]`). The auto-select hook treats that as "stale" and
+  // redispatches `perspective.switch` for the stored id to recompute.
+  const filtered_task_ids_defined =
+    uiState.windows?.[WINDOW_LABEL]?.filtered_task_ids !== undefined;
   const { activeView } = useViews();
   const viewKind = activeView?.kind ?? "board";
   const dispatch = useDispatchCommand();
@@ -263,6 +311,7 @@ export function PerspectiveProvider({ children }: { children: ReactNode }) {
     loaded,
     perspectives,
     active_perspective_id,
+    filtered_task_ids_defined,
     viewKind,
     dispatchRef,
   );
@@ -270,8 +319,17 @@ export function PerspectiveProvider({ children }: { children: ReactNode }) {
 
   const setActivePerspectiveId = useCallback(
     (id: string) => {
+      // `perspective.switch` (introduced in 01KP3ERHEDP86C2JYYR7NM1593)
+      // atomically updates BOTH `active_perspective_id` AND the per-
+      // window `filtered_task_ids` slot in one `UIStateChange`. This
+      // replaces the prior two-step dance (`perspective.set` mutated
+      // only the id; a follow-up frontend `useEffect` then called
+      // `list_entities(filter=...)`). Because the dispatch IS the real
+      // filter work, `CommandBusyProvider.inflightCount` increments
+      // for the filter-evaluation window — so the indeterminate
+      // progress bar in `NavBar` fires naturally on every tab click.
       dispatchRef
-        .current("perspective.set", {
+        .current("perspective.switch", {
           args: { perspective_id: id },
         })
         .catch(console.error);

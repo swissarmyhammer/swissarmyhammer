@@ -40,14 +40,21 @@ vi.mock("@tauri-apps/plugin-log", () => ({
   attachConsole: vi.fn(() => Promise.resolve()),
 }));
 
-// Mock UIState so we can control active_perspective_id.
+// Mock UIState so we can control active_perspective_id (and, optionally,
+// filtered_task_ids — see the boot-recovery test). The
+// `filtered_task_ids` slot is intentionally optional here to model the
+// tri-state contract: `undefined` means "no perspective.switch has fired
+// yet for this window".
 let mockUIState = {
   keymap_mode: "cua",
   scope_chain: [],
   open_boards: [],
   has_clipboard: false,
   clipboard_entity_type: null,
-  windows: {} as Record<string, { active_perspective_id: string }>,
+  windows: {} as Record<
+    string,
+    { active_perspective_id: string; filtered_task_ids?: string[] }
+  >,
   recent_boards: [],
 };
 
@@ -175,7 +182,12 @@ describe("PerspectiveProvider", () => {
     expect(result.current.activePerspective?.name).toBe("Second");
   });
 
-  it("setActivePerspectiveId dispatches perspective.set to backend", async () => {
+  it("setActivePerspectiveId dispatches perspective.switch to backend", async () => {
+    // After 01KP3ERHEDP86C2JYYR7NM1593, `setActivePerspectiveId` issues
+    // `perspective.switch` — the single backend command that atomically
+    // sets `active_perspective_id` AND `filtered_task_ids`. The legacy
+    // `perspective.set` (id-only) is gone. The args shape is unchanged:
+    // `{ perspective_id }` flows on `args`.
     mockInvoke.mockResolvedValue({
       result: { perspectives: [], count: 0 },
       undoable: false,
@@ -195,11 +207,19 @@ describe("PerspectiveProvider", () => {
     });
 
     expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
-      cmd: "perspective.set",
+      cmd: "perspective.switch",
       args: { perspective_id: "p1" },
       scopeChain: ["window:main"],
       boardPath: "/tmp/test/.kanban",
     });
+
+    // Regression guard: the legacy command name must NOT be dispatched.
+    const legacy = mockInvoke.mock.calls.find(
+      (call) =>
+        call[0] === "dispatch_command" &&
+        (call[1] as { cmd?: string })?.cmd === "perspective.set",
+    );
+    expect(legacy).toBeUndefined();
   });
 
   it("refresh re-fetches the perspectives list", async () => {
@@ -412,12 +432,12 @@ describe("PerspectiveProvider", () => {
   // useAutoSelectActivePerspective: enforce "always a selected perspective"
   // -----------------------------------------------------------------------
 
-  /** Collect every `perspective.set` dispatch recorded by the mock. */
-  function perspectiveSetCalls() {
+  /** Collect every `perspective.switch` dispatch recorded by the mock. */
+  function perspectiveSwitchCalls() {
     return mockInvoke.mock.calls.filter(
       (call) =>
         call[0] === "dispatch_command" &&
-        (call[1] as { cmd?: string })?.cmd === "perspective.set",
+        (call[1] as { cmd?: string })?.cmd === "perspective.switch",
     );
   }
 
@@ -436,10 +456,10 @@ describe("PerspectiveProvider", () => {
       await new Promise((r) => setTimeout(r, 0));
     });
 
-    const calls = perspectiveSetCalls();
+    const calls = perspectiveSwitchCalls();
     expect(calls.length).toBeGreaterThanOrEqual(1);
     expect(calls[0][1]).toMatchObject({
-      cmd: "perspective.set",
+      cmd: "perspective.switch",
       args: { perspective_id: "p1" },
     });
   });
@@ -462,10 +482,10 @@ describe("PerspectiveProvider", () => {
       await new Promise((r) => setTimeout(r, 0));
     });
 
-    const calls = perspectiveSetCalls();
+    const calls = perspectiveSwitchCalls();
     expect(calls.length).toBeGreaterThanOrEqual(1);
     expect(calls[0][1]).toMatchObject({
-      cmd: "perspective.set",
+      cmd: "perspective.switch",
       args: { perspective_id: "p1" },
     });
   });
@@ -491,17 +511,64 @@ describe("PerspectiveProvider", () => {
       await new Promise((r) => setTimeout(r, 0));
     });
 
-    const calls = perspectiveSetCalls();
+    const calls = perspectiveSwitchCalls();
     expect(calls.length).toBeGreaterThanOrEqual(1);
     expect(calls[0][1]).toMatchObject({
-      cmd: "perspective.set",
+      cmd: "perspective.switch",
       args: { perspective_id: "b1" },
     });
   });
 
-  it("does NOT auto-select when the active id is already a valid matching perspective", async () => {
+  it("does NOT auto-select when the active id is already a valid matching perspective AND filtered_task_ids is populated", async () => {
+    // Steady-state: the window has both a valid `active_perspective_id` AND
+    // a defined `filtered_task_ids` slot (i.e. a `perspective.switch` has
+    // already fired this session). The auto-select hook must NOT redispatch.
     mockUIState = {
       ...mockUIState,
+      windows: {
+        main: {
+          active_perspective_id: "p2",
+          filtered_task_ids: ["t1", "t2"],
+        },
+      },
+    };
+
+    const ps = [
+      makePerspective("p1", "First"),
+      makePerspective("p2", "Second"),
+    ];
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 2 },
+      undoable: false,
+    });
+
+    renderHook(() => usePerspectives(), { wrapper });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // Auto-selection must not fire when the stored id is already valid AND
+    // the filter has already been computed for it.
+    expect(perspectiveSwitchCalls().length).toBe(0);
+  });
+
+  it("auto-recovers stale boot state: persisted active_perspective_id with undefined filtered_task_ids redispatches perspective.switch for the persisted id", async () => {
+    // Boot-time regression scenario: `WindowState::filtered_task_ids` is
+    // `#[serde(skip)]` on the backend, so a restart with a persisted
+    // `active_perspective_id` lands here with `filtered_task_ids` not yet
+    // populated (undefined). The tri-state contract in `view-container.tsx`
+    // treats `undefined` as "no filter — show all", but the persisted id
+    // means the user DOES expect a filter; without redispatch they would
+    // see all tasks unfiltered.
+    //
+    // The auto-select hook treats this as stale state and redispatches
+    // `perspective.switch` for the persisted id (not the first matching
+    // perspective — we honor the user's prior selection). The backend then
+    // recomputes and pushes both `active_perspective_id` and
+    // `filtered_task_ids` back atomically.
+    mockUIState = {
+      ...mockUIState,
+      // Note: no `filtered_task_ids` key → undefined on the snapshot.
       windows: { main: { active_perspective_id: "p2" } },
     };
 
@@ -519,8 +586,12 @@ describe("PerspectiveProvider", () => {
       await new Promise((r) => setTimeout(r, 0));
     });
 
-    // Auto-selection must not fire when the stored id is already valid.
-    expect(perspectiveSetCalls().length).toBe(0);
+    const calls = perspectiveSwitchCalls();
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    expect(calls[0][1]).toMatchObject({
+      cmd: "perspective.switch",
+      args: { perspective_id: "p2" }, // The persisted id, not "p1".
+    });
   });
 
   it("does NOT auto-select when no perspectives exist for the view kind (let auto-create handle it)", async () => {
@@ -536,9 +607,9 @@ describe("PerspectiveProvider", () => {
       await new Promise((r) => setTimeout(r, 0));
     });
 
-    // No perspective.set — only perspective.save would be dispatched by
+    // No perspective.switch — only perspective.save would be dispatched by
     // the sibling hook (not asserted here; covered elsewhere).
-    expect(perspectiveSetCalls().length).toBe(0);
+    expect(perspectiveSwitchCalls().length).toBe(0);
   });
 
   // -----------------------------------------------------------------------
@@ -781,7 +852,7 @@ describe("PerspectiveProvider", () => {
       await new Promise((r) => setTimeout(r, 0));
     });
 
-    const setCallsBefore = invokeCallsFor("perspective.set");
+    const setCallsBefore = invokeCallsFor("perspective.switch");
     expect(setCallsBefore).toBeGreaterThanOrEqual(1);
 
     await act(async () => {
@@ -793,9 +864,9 @@ describe("PerspectiveProvider", () => {
       await new Promise((r) => setTimeout(r, 0));
     });
 
-    // Focus changes must not redispatch `perspective.set`. The stored id is
-    // unchanged, the view kind is unchanged, and the perspectives list is
-    // unchanged — there is nothing to reconcile.
-    expect(invokeCallsFor("perspective.set")).toBe(setCallsBefore);
+    // Focus changes must not redispatch `perspective.switch`. The stored id
+    // is unchanged, the view kind is unchanged, and the perspectives list
+    // is unchanged — there is nothing to reconcile.
+    expect(invokeCallsFor("perspective.switch")).toBe(setCallsBefore);
   });
 });

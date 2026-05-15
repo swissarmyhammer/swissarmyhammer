@@ -257,14 +257,15 @@ fn register_perspective(map: &mut CmdMap) {
         "perspective.goto".into(),
         Arc::new(perspective_commands::GotoPerspectiveCmd),
     );
-    // `perspective.set` — the impl lives in `ui_commands.rs` (it mutates
-    // `UIState::active_perspective_id`, a UI-surface concern) but the
-    // YAML/id belong in the kanban `perspective.*` namespace because
-    // "perspective" is a kanban concept. Relocated from
-    // `ui.perspective.set` in 01KPY02X405QTP5ACH67THHSN8.
+    // `perspective.switch` — replaces the prior `perspective.set` (and its
+    // predecessor `ui.perspective.set`). The handler loads the perspective,
+    // evaluates its filter DSL against the board's tasks, and writes BOTH
+    // `active_perspective_id` and a per-window `filtered_task_ids` list in
+    // one atomic `UIStateChange::PerspectiveSwitch`. See
+    // `SwitchPerspectiveCmd` in `perspective_commands.rs`.
     map.insert(
-        "perspective.set".into(),
-        Arc::new(ui_commands::SetActivePerspectiveCmd),
+        "perspective.switch".into(),
+        Arc::new(perspective_commands::SwitchPerspectiveCmd),
     );
 }
 
@@ -379,7 +380,9 @@ mod tests {
         // + 17 perspective (load, save, delete, rename, filter, filter.focus,
         //                   clearFilter, group, clearGroup, sort.set,
         //                   sort.clear, sort.toggle, next, prev, goto, list,
-        //                   set — perspective.set relocated from ui.perspective.set;
+        //                   switch — `perspective.switch` replaced
+        //                   `perspective.set` in 01KP3ERHEDP86C2JYYR7NM1593
+        //                   (which itself relocated from `ui.perspective.set`);
         //                   perspective.filter.focus added by 01KRE1YA65MMG29RDQDQ0VPJQG
         //                   as the first tab-button-driven command).
         // + 2 attachment (open, reveal) — attachment.delete retired, folded

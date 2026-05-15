@@ -314,7 +314,8 @@ function makeBootstrapInvokeImpl(
       const a = (args ?? {}) as Record<string, unknown>;
       if (a.cmd === "perspective.list")
         return perspectiveListDispatchResponse();
-      if (a.cmd === "perspective.set") return { result: null, undoable: false };
+      if (a.cmd === "perspective.switch")
+        return { result: null, undoable: false };
       if (a.cmd === "perspective.save")
         return { result: null, undoable: false };
       if (a.cmd === "perspective.rename")

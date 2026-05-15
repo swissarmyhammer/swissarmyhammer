@@ -6,6 +6,7 @@ import { useContextMenu } from "@/lib/context-menu";
 import { useGrid } from "@/hooks/use-grid";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
+import { useFilteredEntities } from "@/lib/use-filtered-tasks";
 import {
   useFocusedMoniker,
   useFocusBySegmentPath,
@@ -121,7 +122,13 @@ function useGridData(view: ViewDef) {
   const { getEntities } = useEntityStore();
   const rawEntityType = view.entity_type ?? "";
   const entityType = VALID_ENTITY_TYPE.test(rawEntityType) ? rawEntityType : "";
-  const rawEntities = getEntities(entityType);
+  const storeEntities = getEntities(entityType);
+  // Apply the per-window perspective filter BEFORE sort/group. The shared
+  // selector intersects with `UIState.filtered_task_ids` when the entity
+  // type is `task` and is a no-op pass-through otherwise. Without this,
+  // GridView would silently bypass the active perspective filter (see
+  // 01KP3ERHEDP86C2JYYR7NM1593 review findings).
+  const rawEntities = useFilteredEntities(storeEntities, entityType);
   const { getSchema } = useSchema();
   const schema = getSchema(entityType);
   const fields = schema?.fields ?? [];
