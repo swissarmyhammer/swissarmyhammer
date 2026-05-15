@@ -34,9 +34,13 @@ jobs:
           - name: mirdan
             dir: apps/mirdan-app
             product: Mirdan
+          # `cli` is only set on apps that bundle a CLI sidecar. When true,
+          # verify-app-bundle.sh is invoked with --require-cli so the release
+          # is gated on the bundled `kanban` CLI being present and runnable.
           - name: kanban
             dir: apps/kanban-app
             product: Kanban
+            cli: true
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
@@ -108,6 +112,24 @@ jobs:
         run: |
           cargo tauri build --target aarch64-apple-darwin
 
+      - name: Verify app bundle
+        run: |
+          # Gate the release on a healthy .app: the bundled `kanban` CLI must
+          # be present, executable, and version-reporting (--require-cli), and
+          # the bundle must pass codesign verification. A failure here fails
+          # the release before the DMG is uploaded.
+          APP=$(find target/aarch64-apple-darwin/release/bundle/macos -name "*.app" | head -1)
+          echo "Found app bundle: $APP"
+
+          # --require-cli is only passed for apps that bundle the kanban CLI
+          # sidecar; apps without a CLI (e.g. mirdan) omit it.
+          VERIFY_ARGS=("$APP")
+          if [ "${{ matrix.app.cli }}" = "true" ]; then
+            VERIFY_ARGS+=(--require-cli)
+          fi
+
+          bash build-support/verify-app-bundle.sh "${VERIFY_ARGS[@]}"
+
       - name: Find DMG
         id: find-dmg
         run: |
@@ -150,10 +172,14 @@ jobs:
             product: Mirdan
             desc: "Universal package manager for AI coding agents"
             homepage: "https://mirdan.ai"
+          # `cli` is only set on apps that bundle a CLI binary. When true,
+          # gen-cask.sh is invoked with --cli-binary so the cask gets a
+          # `binary` stanza (CLI on PATH) plus `conflicts_with formula`.
           - name: kanban
             product: Kanban
             desc: "Kanban board for SwissArmyHammer"
             homepage: "https://github.com/swissarmyhammer/swissarmyhammer"
+            cli: true
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
@@ -183,6 +209,13 @@ jobs:
           echo "dmg_name=$NAME" >> "$GITHUB_OUTPUT"
           echo "SHA256: $SHA for $NAME"
 
+      - name: Checkout swissarmyhammer
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ steps.tag.outputs.value }}
+          path: swissarmyhammer
+
       - name: Checkout homebrew-tap
         uses: actions/checkout@v4
         with:
@@ -196,28 +229,35 @@ jobs:
           VERSION: ${{ steps.tag.outputs.value }}
           SHA256: ${{ steps.sha.outputs.sha256 }}
         run: |
-          # Strip leading 'v' from tag for version
+          # Strip leading 'v' from tag for the cask version.
           CASK_VERSION="${VERSION#v}"
           STABLE_NAME="${{ matrix.app.product }}_aarch64.dmg"
 
           mkdir -p homebrew-tap/Casks
 
-          cat > homebrew-tap/Casks/${{ matrix.app.name }}.rb << EOF
-          cask "${{ matrix.app.name }}" do
-            version "${CASK_VERSION}"
-            sha256 "${SHA256}"
+          # Build the full argument list in one array. The base args are
+          # always present, so the array is never empty -- this stays safe
+          # under bash 3.2 (the macOS runner default) where expanding an
+          # empty "${arr[@]}" trips `set -u`.
+          GEN_ARGS=(
+            --name "${{ matrix.app.name }}"
+            --product "${{ matrix.app.product }}"
+            --version "${CASK_VERSION}"
+            --sha256 "${SHA256}"
+            --dmg-name "${STABLE_NAME}"
+            --desc "${{ matrix.app.desc }}"
+            --homepage "${{ matrix.app.homepage }}"
+          )
 
-            url "https://github.com/swissarmyhammer/swissarmyhammer/releases/download/${VERSION}/${STABLE_NAME}"
-            name "${{ matrix.app.product }}"
-            desc "${{ matrix.app.desc }}"
-            homepage "${{ matrix.app.homepage }}"
+          # The kanban app bundles a `kanban` CLI as a Tauri sidecar at
+          # Contents/MacOS/kanban; --cli-binary makes gen-cask.sh add the
+          # `binary` and `conflicts_with` stanzas. Apps without a CLI omit it.
+          if [ "${{ matrix.app.cli }}" = "true" ]; then
+            GEN_ARGS+=(--cli-binary "Contents/MacOS/kanban")
+          fi
 
-            app "${{ matrix.app.product }}.app"
-          end
-          EOF
-
-          # Remove leading whitespace from heredoc
-          sed -i '' 's/^          //' homebrew-tap/Casks/${{ matrix.app.name }}.rb
+          bash swissarmyhammer/build-support/gen-cask.sh "${GEN_ARGS[@]}" \
+            > homebrew-tap/Casks/${{ matrix.app.name }}.rb
 
       - name: Push cask
         working-directory: homebrew-tap

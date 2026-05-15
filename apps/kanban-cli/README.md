@@ -60,13 +60,17 @@ This registers the MCP server with your agent, deploys the builtin `kanban` skil
 
 </div>
 
-The kanban desktop app is a separate Tauri-based GUI for browsing and editing the same `.kanban/` board the CLI and MCP server use. The CLI's `kanban open .` command launches it. Install it alongside the CLI:
+The kanban desktop app is a Tauri-based GUI for browsing and editing the same `.kanban/` board the CLI and MCP server use. The CLI's `kanban open .` command launches it.
+
+**Installing the app also gives you the `kanban` CLI** — the standalone CLI is bundled inside `Kanban.app` (at `Contents/MacOS/kanban`, signed and notarized with the bundle). You do not have to install the CLI separately on macOS; pick whichever install method you prefer below and you get both the app and the command.
 
 ### macOS (Homebrew cask)
 
 ```bash
 brew install --cask swissarmyhammer/tap/kanban
 ```
+
+The cask carries a `binary` stanza, so Homebrew links the bundled `kanban` CLI onto your `PATH` automatically. No further action — open a terminal and run `kanban`. (The cask also declares `conflicts_with formula: "kanban"` so it never collides with the standalone CLI formula below.)
 
 ### macOS (direct download)
 
@@ -76,19 +80,25 @@ Grab the signed, notarized DMG from the latest GitHub release:
 https://github.com/swissarmyhammer/swissarmyhammer/releases/latest/download/Kanban_aarch64.dmg
 ```
 
+When you drag `Kanban.app` to `/Applications` from a DMG, there is no package manager to link the CLI. Instead, the app self-installs the `kanban` CLI onto your `PATH` on first launch: it creates a `kanban` symlink in a directory that is both user-writable and on the default `PATH` (preferring your Homebrew `bin`). If no user-writable `PATH` directory exists, the app falls back to `/usr/local/bin` and shows a single one-time macOS admin password prompt to create the symlink there. The prompt appears at most once — whether you accept or decline, the app does not ask again on later launches.
+
 ### From source
 
 Requires the [Tauri prerequisites](https://tauri.app/start/prerequisites/) and Node.js 22+:
 
 ```bash
 git clone https://github.com/swissarmyhammer/swissarmyhammer
-cd swissarmyhammer/kanban-app
+cd swissarmyhammer/apps/kanban-app
 cargo tauri build
 ```
 
-The built `.app` lands under `target/release/bundle/`.
+The built `.app` lands under `target/release/bundle/` and bundles the `kanban` CLI inside it.
 
 > macOS (Apple Silicon) is the only platform with prebuilt binaries today. On other platforms, build from source.
+
+### Installing just the CLI
+
+You do not need the desktop app to use the CLI. The standalone `kanban` CLI installs are listed under [Install](#install) above (`brew install swissarmyhammer/tap/kanban`, the Linux installer script, or `cargo install`), and remain the right choice for headless, Linux, and CI environments where a GUI app is not wanted. On macOS, the cask's `conflicts_with formula: "kanban"` ensures the standalone formula and the app-bundled CLI never both try to own `kanban` on your `PATH`.
 
 ## Commands
 

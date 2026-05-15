@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod cli;
+mod cli_install;
 mod commands;
 mod deeplink;
 mod menu;
@@ -127,6 +128,12 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     }
     configure_quick_capture(app);
     register_quick_capture_hotkey(app)?;
+
+    // Make the bundled `kanban` CLI reachable on the user's PATH. This is
+    // silent, idempotent, and self-healing; it runs on a detached background
+    // thread so `brew --prefix`, filesystem probes, or an `osascript` password
+    // dialog never delay the GUI becoming interactive.
+    cli_install::spawn();
     Ok(())
 }
 
