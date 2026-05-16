@@ -4084,6 +4084,7 @@ dependencies = [
  "clap",
  "dirs",
  "objc2",
+ "objc2-foundation",
  "serde",
  "serde_json",
  "swissarmyhammer-commands",

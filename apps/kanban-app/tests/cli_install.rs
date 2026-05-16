@@ -6,10 +6,13 @@
 //! same independent-compilation pattern `build.rs` files use across this
 //! workspace for binary-crate modules.
 //!
-//! Scope: only the filesystem-symlink functions are covered here. The
-//! privilege-escalation (`osascript`) branch lives behind `pick_target_dir`'s
-//! writability result and is deliberately not unit-tested — see the comment on
-//! `pick_target_dir` in the module source.
+//! Scope: the filesystem-symlink functions and the pure AppleScript-source
+//! builder are covered here. The privilege-escalation step itself —
+//! constructing an `NSAppleScript` and calling `executeAndReturnError` — lives
+//! behind `pick_target_dir`'s writability result and is deliberately not
+//! unit-tested; see the comment on `pick_target_dir` in the module source.
+//! Everything testable about the escalation is isolated in
+//! `build_install_applescript`, which is platform-neutral and exercised below.
 
 // The module's launch-time entry points (`run`, `spawn`) and the
 // privilege-escalation helpers are exercised by the real binary, not by these
@@ -19,7 +22,10 @@
 #[allow(dead_code)]
 mod cli_install;
 
-use cli_install::{already_installed, install_cli_symlink, resolve_bundled_cli, InstallOutcome};
+use cli_install::{
+    already_installed, build_install_applescript, install_cli_symlink, resolve_bundled_cli,
+    InstallOutcome,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -166,22 +172,61 @@ fn resolve_bundled_cli_returns_none_when_absent() {
 }
 
 #[test]
-fn already_installed_is_true_for_a_kanban_bundle_link() {
+fn already_installed_is_true_for_a_link_to_the_running_apps_cli() {
     let bundle_root = tempfile::tempdir().expect("temp bundle root");
     let path_dir = tempfile::tempdir().expect("temp PATH dir");
-    let our_bundled = make_bundled_cli(bundle_root.path());
+    let bundled = make_bundled_cli(bundle_root.path());
 
-    // A second Kanban.app whose CLI is already linked onto PATH — e.g. the
-    // Homebrew cask already made this link.
-    let cask_root = tempfile::tempdir().expect("temp cask bundle root");
-    let cask_bundled = make_bundled_cli(cask_root.path());
+    // The `kanban` link on PATH points at exactly the running app's bundled
+    // CLI — this is our symlink, so nothing needs to be done.
     let link = path_dir.path().join("kanban");
     #[cfg(unix)]
-    std::os::unix::fs::symlink(&cask_bundled, &link).expect("seed cask symlink");
+    std::os::unix::fs::symlink(&bundled, &link).expect("seed our symlink");
 
     assert!(
-        already_installed(path_dir.path(), &our_bundled),
-        "a `kanban` link into any Kanban.app bundle counts as already installed"
+        already_installed(path_dir.path(), &bundled),
+        "a `kanban` link pointing exactly at the running app's CLI counts as installed"
+    );
+}
+
+#[test]
+fn already_installed_is_false_for_a_link_into_a_different_kanban_bundle() {
+    let path_dir = tempfile::tempdir().expect("temp PATH dir");
+
+    // The running app's bundled CLI.
+    let our_root = tempfile::tempdir().expect("temp our bundle root");
+    let our_bundled = make_bundled_cli(our_root.path());
+
+    // A `kanban` link into a *different* Kanban.app — same bundle shape, but a
+    // stale/moved/replaced bundle. This is NOT our symlink, so the install
+    // must proceed to repair it.
+    let other_root = tempfile::tempdir().expect("temp other bundle root");
+    let other_bundled = make_bundled_cli(other_root.path());
+    let link = path_dir.path().join("kanban");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&other_bundled, &link).expect("seed stale-bundle symlink");
+
+    assert!(
+        !already_installed(path_dir.path(), &our_bundled),
+        "a `kanban` link into a different Kanban bundle is not our install"
+    );
+}
+
+#[test]
+fn already_installed_is_false_for_a_real_non_symlink_file() {
+    let bundle_root = tempfile::tempdir().expect("temp bundle root");
+    let path_dir = tempfile::tempdir().expect("temp PATH dir");
+    let bundled = make_bundled_cli(bundle_root.path());
+
+    // A real (non-symlink) `kanban` file on PATH — e.g. a `cargo install`-ed
+    // `kanban` binary. It is not our symlink, so it must not be mistaken for
+    // an existing install.
+    let real_file = path_dir.path().join("kanban");
+    fs::write(&real_file, b"cargo-installed kanban binary").expect("seed real file");
+
+    assert!(
+        !already_installed(path_dir.path(), &bundled),
+        "a real (non-symlink) `kanban` file is not our managed symlink install"
     );
 }
 
@@ -214,5 +259,89 @@ fn already_installed_is_false_for_a_non_kanban_link() {
     assert!(
         !already_installed(path_dir.path(), &bundled),
         "a `kanban` link outside any Kanban bundle is not an existing install"
+    );
+}
+
+#[test]
+fn build_install_applescript_explains_the_cli_tool_purpose() {
+    let bundled = PathBuf::from("/Applications/Kanban.app/Contents/MacOS/kanban");
+    let link = PathBuf::from("/usr/local/bin/kanban");
+
+    let script = build_install_applescript(&bundled, &link);
+
+    // The explanatory dialog must name the `kanban` command-line tool so the
+    // user understands what the upcoming password prompt is for.
+    assert!(
+        script.contains("display dialog"),
+        "the script should open an explanatory dialog before the password prompt:\n{script}"
+    );
+    assert!(
+        script.contains("command-line tool"),
+        "the dialog text should identify the kanban command-line tool:\n{script}"
+    );
+    assert!(
+        script.contains("kanban"),
+        "the dialog text should name the `kanban` tool:\n{script}"
+    );
+}
+
+#[test]
+fn build_install_applescript_offers_an_explicit_install_choice() {
+    let bundled = PathBuf::from("/Applications/Kanban.app/Contents/MacOS/kanban");
+    let link = PathBuf::from("/usr/local/bin/kanban");
+
+    let script = build_install_applescript(&bundled, &link);
+
+    // `Install` is the default button and `Not Now` the cancel button — a
+    // cancel raises AppleScript error -128 and short-circuits before the
+    // privileged step, exactly like a declined password prompt.
+    assert!(
+        script.contains("default button \"Install\""),
+        "`Install` should be the default button:\n{script}"
+    );
+    assert!(
+        script.contains("cancel button \"Not Now\""),
+        "`Not Now` should be the cancel button:\n{script}"
+    );
+}
+
+#[test]
+fn build_install_applescript_links_bundled_to_link_with_admin_privileges() {
+    let bundled = PathBuf::from("/Applications/Kanban.app/Contents/MacOS/kanban");
+    let link = PathBuf::from("/usr/local/bin/kanban");
+
+    let script = build_install_applescript(&bundled, &link);
+
+    assert!(
+        script.contains("with administrator privileges"),
+        "the privileged step must request administrator privileges:\n{script}"
+    );
+    assert!(
+        script.contains(
+            "ln -sf '/Applications/Kanban.app/Contents/MacOS/kanban' '/usr/local/bin/kanban'"
+        ),
+        "the script should `ln -sf` the bundled CLI to the link path:\n{script}"
+    );
+}
+
+#[test]
+fn build_install_applescript_escapes_quotes_and_backslashes_in_paths() {
+    // A path with both a double quote and a backslash — every such character
+    // must be escaped for the AppleScript string literal, never emitted raw.
+    let bundled = PathBuf::from("/Applications/Weird\"Kan\\ban.app/Contents/MacOS/kanban");
+    let link = PathBuf::from("/usr/local/bin/kanban");
+
+    let script = build_install_applescript(&bundled, &link);
+
+    // The raw quote/backslash sequence must not appear unescaped inside the
+    // `do shell script` string literal.
+    assert!(
+        !script.contains("Weird\"Kan\\ban.app"),
+        "raw unescaped quote/backslash path must not appear in the script:\n{script}"
+    );
+    // Each `"` becomes `\"` and each `\` becomes `\\` in the AppleScript literal.
+    assert!(
+        script.contains("Weird\\\"Kan\\\\ban.app"),
+        "quote and backslash in the path must be AppleScript-escaped:\n{script}"
     );
 }
