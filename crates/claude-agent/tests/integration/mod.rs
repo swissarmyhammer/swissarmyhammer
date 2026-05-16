@@ -3,6 +3,7 @@
 mod concurrent_session;
 mod coverage_tests;
 mod integrations;
+mod mcp_http_session;
 mod session_persistence;
 mod terminal_rate_limiting;
 mod tool_call_permissions;

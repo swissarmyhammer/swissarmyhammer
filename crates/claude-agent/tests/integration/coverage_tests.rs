@@ -58,7 +58,7 @@ async fn test_mcp_server_manager_list_available_prompts_empty() {
 
 #[tokio::test]
 async fn test_mcp_server_manager_connect_servers_empty() {
-    let mut manager = McpServerManager::new();
+    let manager = McpServerManager::new();
     let result = manager.connect_servers(vec![]).await;
     assert!(result.is_ok());
 }

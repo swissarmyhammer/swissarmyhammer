@@ -91,8 +91,15 @@ impl McpServerManager {
         }
     }
 
-    /// Connect to all configured MCP servers
-    pub async fn connect_servers(&mut self, configs: Vec<McpServerConfig>) -> crate::Result<()> {
+    /// Connect to all configured MCP servers.
+    ///
+    /// Takes `&self` rather than `&mut self` because the connection map is
+    /// behind an `Arc<RwLock<..>>`; this lets the agent connect per-session
+    /// MCP servers through the shared `Arc<McpServerManager>` it holds.
+    ///
+    /// Failures connecting an individual server are logged and skipped so the
+    /// remaining servers still connect.
+    pub async fn connect_servers(&self, configs: Vec<McpServerConfig>) -> crate::Result<()> {
         for config in configs {
             let config_name = config.name().to_string();
             match self.connect_server(config).await {
@@ -1733,7 +1740,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mcp_manager_connect_empty_servers() {
-        let mut manager = McpServerManager::new();
+        let manager = McpServerManager::new();
         let result = manager.connect_servers(vec![]).await;
         assert!(result.is_ok());
 
@@ -1743,7 +1750,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mcp_manager_connect_invalid_server() {
-        let mut manager = McpServerManager::new();
+        let manager = McpServerManager::new();
 
         let invalid_config = McpServerConfig::Stdio(crate::config::StdioTransport {
             name: "invalid_server".to_string(),
@@ -2021,7 +2028,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_stdio_transport_connection_invalid_command() {
-        let mut manager = McpServerManager::new();
+        let manager = McpServerManager::new();
 
         let stdio_config = McpServerConfig::Stdio(crate::config::StdioTransport {
             name: "invalid_server".to_string(),
@@ -2219,7 +2226,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mixed_transport_configurations() {
-        let mut manager = McpServerManager::new();
+        let manager = McpServerManager::new();
 
         let configs = vec![
             McpServerConfig::Stdio(crate::config::StdioTransport {

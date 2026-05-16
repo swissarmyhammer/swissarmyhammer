@@ -664,6 +664,21 @@ impl ClaudeAgent {
         Arc::clone(&self.tool_handler)
     }
 
+    /// Get a reference to the MCP server manager.
+    ///
+    /// Returns the manager that holds connections to MCP servers connected for
+    /// this agent — including any HTTP/SSE/stdio servers supplied per session
+    /// via `session/new`'s `mcpServers`. The manager exposes those servers'
+    /// tools to the [`ToolCallHandler`] and routes tool calls to them.
+    ///
+    /// # Returns
+    ///
+    /// `Some` with the shared [`crate::mcp::McpServerManager`] when the agent
+    /// was built with MCP support (the default), or `None` otherwise.
+    pub fn mcp_manager(&self) -> Option<Arc<crate::mcp::McpServerManager>> {
+        self.mcp_manager.clone()
+    }
+
     /// Parse and validate a session ID from a SessionId wrapper
     pub(crate) fn parse_session_id(
         &self,
@@ -1265,6 +1280,50 @@ impl ClaudeAgent {
                     .collect();
             })
             .map_err(|_e| agent_client_protocol::Error::internal_error())
+    }
+
+    /// Connect the MCP servers supplied in a `session/new` request.
+    ///
+    /// Each ACP `McpServer` (stdio, HTTP, or SSE) is converted to the internal
+    /// [`crate::config::McpServerConfig`] and connected through the agent's
+    /// shared `mcp_manager`. Once connected, the servers' tools become visible
+    /// to the [`ToolCallHandler`] via `mcp_manager.list_available_tools()` and
+    /// tool calls are routed to them.
+    ///
+    /// Individual connection failures are logged and skipped by the manager so
+    /// a single bad server does not abort session creation; this method is a
+    /// no-op when no MCP servers were requested or the agent has no manager.
+    pub(crate) async fn connect_new_session_mcp_servers(&self, request: &NewSessionRequest) {
+        if request.mcp_servers.is_empty() {
+            return;
+        }
+
+        let Some(mcp_manager) = &self.mcp_manager else {
+            tracing::warn!(
+                "Session requested {} MCP server(s) but the agent has no MCP manager; skipping",
+                request.mcp_servers.len()
+            );
+            return;
+        };
+
+        let internal_mcp_servers: Vec<crate::config::McpServerConfig> = request
+            .mcp_servers
+            .iter()
+            .filter_map(|server| self.convert_acp_to_internal_mcp_config(server))
+            .collect();
+
+        if internal_mcp_servers.is_empty() {
+            return;
+        }
+
+        tracing::info!(
+            "Connecting {} MCP server(s) from session/new request",
+            internal_mcp_servers.len()
+        );
+
+        if let Err(e) = mcp_manager.connect_servers(internal_mcp_servers).await {
+            tracing::error!("Failed to connect session MCP servers: {}", e);
+        }
     }
 
     /// Spawn Claude process and handle init response for new session.
