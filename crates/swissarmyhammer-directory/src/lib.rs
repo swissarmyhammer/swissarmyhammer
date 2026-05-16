@@ -59,10 +59,12 @@
 //! // let dir = ManagedDirectory::<MyToolConfig>::from_git_root()?;
 //! ```
 
+mod async_watch;
 mod config;
 mod directory;
 mod error;
 mod file_loader;
+mod watcher;
 mod yaml_expander;
 
 // Re-export main types
@@ -75,4 +77,5 @@ pub use directory::{
 };
 pub use error::{DirectoryError, Result};
 pub use file_loader::{FileEntry, FileSource, SearchPath, VirtualFileSystem};
+pub use watcher::{LayerChange, StackedEvent, Watcher};
 pub use yaml_expander::YamlExpander;

@@ -9086,6 +9086,7 @@ dependencies = [
 name = "swissarmyhammer-directory"
 version = "0.12.11"
 dependencies = [
+ "async-watcher",
  "dirs",
  "serde",
  "serde_yaml_ng",
@@ -9093,6 +9094,7 @@ dependencies = [
  "swissarmyhammer-common",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
  "tracing",
  "walkdir",
 ]
