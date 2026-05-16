@@ -44,6 +44,11 @@ urlencoding = { workspace = true }
 whoami = "1"
 base64 = { workspace = true }
 ulid = { workspace = true }
+swissarmyhammer-agent = { workspace = true }
+swissarmyhammer-config = { workspace = true }
+agent-client-protocol = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
@@ -54,3 +59,6 @@ tauri-build = { version = "2", features = [] }
 [dev-dependencies]
 tempfile = { workspace = true }
 swissarmyhammer-entity = { workspace = true, features = ["test-support"] }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+serde_json = { workspace = true }
