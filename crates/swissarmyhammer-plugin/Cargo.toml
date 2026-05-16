@@ -1,0 +1,36 @@
+[package]
+name = "swissarmyhammer-plugin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Plugin platform for SwissArmyHammer: registers MCP servers and dispatches operations to them"
+
+[dependencies]
+# JS runtime used to host plugin code
+deno_core = { workspace = true }
+deno_ast = { workspace = true }
+
+# MCP server/client protocol
+rmcp = { workspace = true }
+
+# Async runtime and utilities
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling and diagnostics
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# Directory stacking for plugin discovery
+swissarmyhammer-directory = { workspace = true }
+
+[lints]
+workspace = true

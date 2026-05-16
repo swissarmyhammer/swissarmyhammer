@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffef80
 project: plugin-arch
 title: 'plugin: scaffold the swissarmyhammer-plugin crate'
 ---
@@ -16,13 +16,16 @@ Create the new `swissarmyhammer-plugin` workspace crate — the plugin platform 
 - `tests/` directory created with an `integration/` subdir placeholder.
 
 ## Acceptance Criteria
-- [ ] `swissarmyhammer-plugin` is a workspace member; `cargo build -p swissarmyhammer-plugin` succeeds.
-- [ ] `Error` enum and `Result` alias exist and are exported from `lib.rs`.
-- [ ] Stub module files exist and are declared; crate has no feature flags.
+- [x] `swissarmyhammer-plugin` is a workspace member; `cargo build -p swissarmyhammer-plugin` succeeds.
+- [x] `Error` enum and `Result` alias exist and are exported from `lib.rs`.
+- [x] Stub module files exist and are declared; crate has no feature flags.
 
 ## Tests
-- [ ] `cargo build -p swissarmyhammer-plugin` and `cargo build --workspace` succeed.
-- [ ] A trivial `#[test]` in `error.rs` asserting `Error::ServerNameTaken("x".into())` Displays a non-empty message — proves the crate compiles and links.
+- [x] `cargo build -p swissarmyhammer-plugin` and `cargo build --workspace` succeed.
+- [x] A trivial `#[test]` in `error.rs` asserting `Error::ServerNameTaken("x".into())` Displays a non-empty message — proves the crate compiles and links.
 
 ## Workflow
 - Use `/tdd` for the error-Display test; the scaffold itself is verified by a clean workspace build.
+
+## Implementation Notes
+- `deno_ast` was added to the root `[workspace.dependencies]` as `deno_ast = "0.53"`; it resolved to `0.53.2`, the line `deno_core 0.400` builds against. All other deps reuse existing workspace inheritance.

@@ -70,6 +70,7 @@ members = [
     "apps/shelltool-cli",
     "apps/code-context-cli",
     "crates/swissarmyhammer-cli-completions",
+    "crates/swissarmyhammer-plugin",
 ]
 resolver = "2"
 
@@ -272,6 +273,7 @@ swissarmyhammer-mcp-proxy = { path = "crates/swissarmyhammer-mcp-proxy" }
 swissarmyhammer-merge = { path = "crates/swissarmyhammer-merge" }
 swissarmyhammer-modes = { path = "crates/swissarmyhammer-modes" }
 swissarmyhammer-perspectives = { path = "crates/swissarmyhammer-perspectives" }
+swissarmyhammer-plugin = { path = "crates/swissarmyhammer-plugin" }
 swissarmyhammer-project-detection = { path = "crates/swissarmyhammer-project-detection" }
 swissarmyhammer-prompts = { path = "crates/swissarmyhammer-prompts" }
 swissarmyhammer-shell = { path = "crates/swissarmyhammer-shell" }
@@ -313,6 +315,9 @@ deno_core = "0.400"
 # trait uses (ModuleLoaderError = JsErrorBox). Pinned to deno_core's exact
 # requirement so a single version resolves.
 deno_error = "=0.7.1"
+# deno_ast supplies source-text parsing/transpiling. 0.53 is the line
+# deno_core 0.400 builds against.
+deno_ast = "0.53"
 diffy = "0.4.2"
 similar = "2"
 zstd = "0.13"
