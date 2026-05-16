@@ -273,6 +273,8 @@ impl BoardHandle {
     /// Does NOT start the bridge task — call `start_watcher` after the
     /// Tauri `AppHandle` is available so the bridge can emit events.
     pub async fn open(kanban_path: PathBuf) -> Result<Self, String> {
+        ensure_sah_workspace(&kanban_path);
+
         let ctx = KanbanContext::open(&kanban_path)
             .await
             .map_err(|e| format!("Failed to open board context: {e}"))?;
@@ -954,6 +956,51 @@ pub fn resolve_kanban_path(path: &Path) -> Result<PathBuf, std::io::Error> {
     Ok(child)
 }
 
+/// Make the board folder a SwissArmyHammer workspace via in-process init.
+///
+/// Runs the root-explicit [`swissarmyhammer_workspace_init`] components rooted
+/// at the board folder (the parent of the `.kanban` directory), at project
+/// scope, so the in-process agent has the same `.sah/` workspace and builtin
+/// skills that `sah init` would produce. This never shells out to `sah` and
+/// never mutates the process working directory — the components are rooted at
+/// the explicit board path, which is essential in a multi-board desktop
+/// process.
+///
+/// The operation is idempotent, so it is safe to call on every board open.
+/// Failures are logged and swallowed: a board must still open even if skill
+/// deployment hits a filesystem problem.
+fn ensure_sah_workspace(kanban_path: &Path) {
+    use swissarmyhammer_common::lifecycle::{InitScope, InitStatus};
+    use swissarmyhammer_common::reporter::NullReporter;
+
+    // The board folder is the parent of the `.kanban` directory; `.sah/` is
+    // created as its sibling.
+    let Some(board_dir) = kanban_path.parent() else {
+        tracing::warn!(
+            path = %kanban_path.display(),
+            "cannot initialize SAH workspace: .kanban path has no parent"
+        );
+        return;
+    };
+
+    let results = swissarmyhammer_workspace_init::run_workspace_init(
+        board_dir,
+        &InitScope::Project,
+        &NullReporter,
+    );
+    for r in results.iter().filter(|r| r.status == InitStatus::Error) {
+        tracing::warn!(
+            component = %r.name,
+            error = %r.message,
+            "SAH workspace init component failed"
+        );
+    }
+    tracing::info!(
+        path = %board_dir.display(),
+        "ensured SAH workspace for board folder"
+    );
+}
+
 /// Curated palette of visually distinct colors for actor avatars.
 const ACTOR_COLORS: &[&str] = &[
     "e53e3e", "dd6b20", "d69e2e", "38a169", "319795", "3182ce", "5a67d8", "805ad5", "d53f8c",
@@ -1241,6 +1288,52 @@ mod tests {
         // boards map should contain the handle
         let boards = state.boards.read().await;
         assert!(boards.contains_key(&canonical));
+    }
+
+    #[tokio::test]
+    async fn test_open_board_creates_sah_workspace_at_board_folder() {
+        // Drives the real production entry point — `AppState::open_board`
+        // delegates to `BoardHandle::open`, which calls `ensure_sah_workspace`
+        // with the resolved `.kanban` path and roots the workspace init at
+        // `kanban_path.parent()` (the board folder).
+        //
+        // This test fails if either piece of the production wiring regresses:
+        //   - if `ensure_sah_workspace` is removed from `BoardHandle::open`,
+        //     nothing creates `.sah/` and the assertion below fails;
+        //   - if the `.parent()` board-folder math is wrong (e.g. rooting at
+        //     `.kanban/` itself), `.sah/` lands inside `.kanban/` rather than
+        //     beside it, so `<board>/.sah/skills/plan/SKILL.md` is absent.
+        let tmp = TempDir::new().unwrap();
+        create_board_at(tmp.path(), "Workspace Board");
+
+        let state = AppState::new_for_test();
+        let result = state.open_board(tmp.path(), None).await;
+        assert!(result.is_ok(), "open_board failed: {:?}", result.err());
+
+        // The board folder is the parent of `.kanban/`; the SAH workspace must
+        // land there, beside `.kanban/`, not inside it.
+        let board_dir = tmp.path().canonicalize().unwrap();
+        assert!(
+            board_dir.join(".sah").is_dir(),
+            ".sah/ must be created at the board folder by BoardHandle::open"
+        );
+        let plan_skill = board_dir
+            .join(".sah")
+            .join("skills")
+            .join("plan")
+            .join("SKILL.md");
+        assert!(
+            plan_skill.is_file(),
+            "builtin `plan` skill must be deployed at {} via the open_board production path",
+            plan_skill.display()
+        );
+
+        // `.sah/` must be a sibling of `.kanban/`, never nested inside it —
+        // this is what proves the `kanban_path.parent()` math is correct.
+        assert!(
+            !board_dir.join(".kanban").join(".sah").exists(),
+            ".sah/ must not be created inside .kanban/ — board-folder math is wrong"
+        );
     }
 
     #[tokio::test]

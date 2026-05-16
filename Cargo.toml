@@ -48,6 +48,7 @@ members = [
     "crates/swissarmyhammer-operations",
     "crates/swissarmyhammer-operations-macros",
     "crates/swissarmyhammer-skills",
+    "crates/swissarmyhammer-workspace-init",
     "crates/swissarmyhammer-agents",
     "crates/swissarmyhammer-web",
     "crates/mirdan",
@@ -283,6 +284,7 @@ swissarmyhammer-tools = { path = "crates/swissarmyhammer-tools" }
 swissarmyhammer-treesitter = { path = "crates/swissarmyhammer-treesitter" }
 swissarmyhammer-views = { path = "crates/swissarmyhammer-views" }
 swissarmyhammer-web = { path = "crates/swissarmyhammer-web" }
+swissarmyhammer-workspace-init = { path = "crates/swissarmyhammer-workspace-init" }
 swissarmyhammer = { path = "crates/swissarmyhammer" }
 num_cpus = "1.0"
 process-wrap = "8.0"

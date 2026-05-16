@@ -4101,6 +4101,7 @@ dependencies = [
  "swissarmyhammer-perspectives",
  "swissarmyhammer-store",
  "swissarmyhammer-views",
+ "swissarmyhammer-workspace-init",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",
@@ -8307,6 +8308,7 @@ dependencies = [
  "swissarmyhammer-statusline",
  "swissarmyhammer-templating",
  "swissarmyhammer-tools",
+ "swissarmyhammer-workspace-init",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -9088,6 +9090,21 @@ dependencies = [
  "url",
  "urlencoding",
  "wiremock",
+]
+
+[[package]]
+name = "swissarmyhammer-workspace-init"
+version = "0.12.11"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "swissarmyhammer-common",
+ "swissarmyhammer-config",
+ "swissarmyhammer-prompts",
+ "swissarmyhammer-skills",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]

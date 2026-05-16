@@ -19,12 +19,23 @@ use swissarmyhammer_common::lifecycle::InitRegistry;
 /// - priority 10: `McpRegistration` (MCP server config for detected agents)
 /// - priority 11: `ClaudeLocalScope` (`~/.claude.json` local scope)
 /// - priority 15: `DenyBash` (deny built-in Bash tool in Claude Code settings)
-/// - priority 20: `ProjectStructure` (`.sah/`, `.prompts/` directory management)
+/// - priority 20: `ProjectStructure` (`.sah/`, `.prompts/` workspace layout —
+///   `init` delegates to the root-explicit `swissarmyhammer-workspace-init`
+///   crate; `deinit` removes the directories)
 /// - priority 22: `ClaudeMd` (`CLAUDE.md` preamble management)
-/// - priority 30: `SkillDeployment` (builtin skill deployment via mirdan)
+/// - priority 30: `SkillDeployment` (builtin skill deployment to detected
+///   coding-agent directories via mirdan)
 /// - priority 31: `AgentDeployment` (builtin agent deployment via mirdan)
 /// - priority 32: `LockfileCleanup` (lockfile entry cleanup on deinit)
 /// - default:     `KanbanTool` (kanban tool lifecycle, no-op for init/deinit)
+///
+/// The `.sah/` + `.prompts/` workspace-structure logic is **not** forked: the
+/// `ProjectStructure` component's `init` delegates to the root-explicit
+/// [`swissarmyhammer_workspace_init`] crate — the same crate the kanban-app
+/// runs in-process on board open — so `sah init` and the in-process agent
+/// produce an identical workspace layout. The CLI's `SkillDeployment` deploys
+/// builtin skills to detected coding-agent directories (a distinct target from
+/// the workspace-local `.sah/skills/` the workspace-init crate produces).
 ///
 /// The `remove_directory` parameter controls whether `ProjectStructure::deinit`
 /// deletes `.sah/` and `.prompts/` directories. Pass `false` for `init`.
