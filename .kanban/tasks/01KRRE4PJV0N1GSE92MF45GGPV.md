@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KRRE3C4RDD999B43BRWJMA3J
-position_column: todo
-position_ordinal: '8580'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffff280
 project: plugin-arch
 title: 'plugin: McpServer trait, ToolMetadata, and ServerRegistry'
 ---
@@ -20,13 +20,13 @@ In `crates/swissarmyhammer-plugin/src/registry.rs`:
 - `pub struct ServerRegistry { servers: HashMap<ServerName, Arc<dyn McpServer>> }` with `register(name, Arc<dyn McpServer>) -> Result<()>` (vacant → insert, occupied → `Err(ServerNameTaken)`), `unregister(&str) -> Option<Arc<dyn McpServer>>`, and `get(&str) -> Option<Arc<dyn McpServer>>`. Single global namespace; first registration wins.
 
 ## Acceptance Criteria
-- [ ] `McpServer` trait, `ToolMetadata`, `CallerId`, `ServerRegistry` exist and are exported.
-- [ ] `ServerRegistry::register` returns `Err(ServerNameTaken)` on a duplicate name and `Ok` on a fresh name.
-- [ ] `unregister` removes and returns the server; `get` returns `None` after unregister.
+- [x] `McpServer` trait, `ToolMetadata`, `CallerId`, `ServerRegistry` exist and are exported.
+- [x] `ServerRegistry::register` returns `Err(ServerNameTaken)` on a duplicate name and `Ok` on a fresh name.
+- [x] `unregister` removes and returns the server; `get` returns `None` after unregister.
 
 ## Tests
-- [ ] Unit tests with a trivial in-test `McpServer` impl (a fake that returns a fixed `tools()` and echoes `invoke`): register two distinct names succeeds; registering a taken name errors with `ServerNameTaken`; unregister-then-get yields `None`.
-- [ ] Run: `cargo test -p swissarmyhammer-plugin` — all green.
+- [x] Unit tests with a trivial in-test `McpServer` impl (a fake that returns a fixed `tools()` and echoes `invoke`): register two distinct names succeeds; registering a taken name errors with `ServerNameTaken`; unregister-then-get yields `None`.
+- [x] Run: `cargo test -p swissarmyhammer-plugin` — all green.
 
 ## Workflow
 - Use `/tdd` — registry behavior tests first, then implement.
