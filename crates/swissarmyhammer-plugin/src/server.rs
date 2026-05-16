@@ -12,6 +12,10 @@ use serde_json::Value;
 
 use crate::error::Result;
 
+mod in_process;
+
+pub use in_process::InProcessServer;
+
 /// A registered MCP server the platform can dispatch work to.
 ///
 /// Every transport — an in-process server backed by a JavaScript plugin, a
