@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffed80
 project: plugin-arch
 title: 'operations: generate the io.swissarmyhammer/operations _meta tree'
 ---
@@ -17,15 +17,15 @@ Add a `_meta`-tree generator to `swissarmyhammer-operations` alongside the exist
 Do NOT change `generate_mcp_schema` or the wire format — `op` stays the single selector. This task only adds discovery metadata.
 
 ## Acceptance Criteria
-- [ ] `generate_operations_meta` exists, is `pub`, exported from `swissarmyhammer-operations` lib.
-- [ ] Output is a JSON object keyed by noun; each noun maps verbs to `{op, description, parameters}`; each parameter carries `type`, `required` (bool), and `description`.
-- [ ] Two verbs on the same noun land under one noun key; two nouns produce two top-level keys.
-- [ ] Empty parameter descriptions are omitted (matches `collect_all_parameters` behavior).
+- [x] `generate_operations_meta` exists, is `pub`, exported from `swissarmyhammer-operations` lib.
+- [x] Output is a JSON object keyed by noun; each noun maps verbs to `{op, description, parameters}`; each parameter carries `type`, `required` (bool), and `description`.
+- [x] Two verbs on the same noun land under one noun key; two nouns produce two top-level keys.
+- [x] Empty parameter descriptions are omitted (matches `collect_all_parameters` behavior).
 
 ## Tests
-- [ ] In `schema.rs` `#[cfg(test)]`, reuse the existing `MockAddTask`/`MockGetTask`/`MockListTasks` mocks: assert the tree has `task.add.op == "add task"`, `task.add.parameters.title.required == true`, `task.add.parameters.description.required == false`, and a separate `tasks` noun key for `MockListTasks`.
-- [ ] Add a test asserting array params (`MockWithArrayParam`) emit `type: "array"` with `items.type: "string"`.
-- [ ] Run: `cargo test -p swissarmyhammer-operations` — all green.
+- [x] In `schema.rs` `#[cfg(test)]`, reuse the existing `MockAddTask`/`MockGetTask`/`MockListTasks` mocks: assert the tree has `task.add.op == "add task"`, `task.add.parameters.title.required == true`, `task.add.parameters.description.required == false`, and a separate `tasks` noun key for `MockListTasks`.
+- [x] Add a test asserting array params (`MockWithArrayParam`) emit `type: "array"` with `items.type: "string"`.
+- [x] Run: `cargo test -p swissarmyhammer-operations` — all green.
 
 ## Workflow
 - Use `/tdd` — write failing tests first, then implement to make them pass.

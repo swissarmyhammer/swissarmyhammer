@@ -129,6 +129,96 @@ pub fn generate_mcp_schema(operations: &[&dyn Operation], config: SchemaConfig) 
     schema
 }
 
+/// Generate the `io.swissarmyhammer/operations` discovery `_meta` tree
+///
+/// Builds a **noun → verb → { op, description, parameters }** JSON tree that
+/// the plugin SDK consumes for operation discovery. This is the value that
+/// belongs under the `_meta` key `io.swissarmyhammer/operations` on a Tool
+/// definition; this function returns only the value — attaching it to a Tool
+/// is the caller's responsibility.
+///
+/// Operations sharing a noun are grouped under one noun key, with each verb as
+/// a nested key. This does not affect [`generate_mcp_schema`] or the wire
+/// format — `op` remains the single selector; this is additive discovery
+/// metadata.
+///
+/// # Arguments
+///
+/// * `operations` - Slice of operation trait objects
+///
+/// # Returns
+///
+/// A JSON object keyed by noun. Each noun maps verbs to a leaf object with:
+/// - `op` - the canonical op string from [`Operation::op_string`]
+/// - `description` - the operation description from [`Operation::description`]
+/// - `parameters` - a map of parameter name → `{ type, required, description }`
+///   derived from [`Operation::parameters`]. Array parameters additionally
+///   carry `items: {type: string}`. Empty parameter descriptions are omitted,
+///   matching the behavior of the wire-schema generator.
+///
+/// # Example
+///
+/// ```ignore
+/// let meta = generate_operations_meta(&MY_OPERATIONS);
+/// // meta["task"]["add"]["op"] == "add task"
+/// ```
+pub fn generate_operations_meta(operations: &[&dyn Operation]) -> Value {
+    let mut tree: Map<String, Value> = Map::new();
+
+    for op in operations {
+        let leaf = json!({
+            "op": op.op_string(),
+            "description": op.description(),
+            "parameters": parameters_to_meta(*op),
+        });
+
+        let noun_entry = tree
+            .entry(op.noun().to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+
+        if let Value::Object(verbs) = noun_entry {
+            verbs.insert(op.verb().to_string(), leaf);
+        }
+    }
+
+    Value::Object(tree)
+}
+
+/// Build the `parameters` map for a single operation's `_meta` leaf
+///
+/// # Arguments
+///
+/// * `op` - The operation whose parameters are described
+///
+/// # Returns
+///
+/// A JSON object keyed by parameter name. Each parameter carries `type`,
+/// `required` (bool), and — when non-empty — `description`. Array parameters
+/// additionally carry `items: {type: string}`.
+fn parameters_to_meta(op: &dyn Operation) -> Value {
+    let mut params = Map::new();
+
+    for param in op.parameters() {
+        let json_type = param_type_to_json_schema_type(param.param_type);
+
+        let mut entry = Map::new();
+        entry.insert("type".to_string(), json!(json_type));
+        entry.insert("required".to_string(), json!(param.required));
+
+        if !param.description.is_empty() {
+            entry.insert("description".to_string(), json!(param.description));
+        }
+
+        if param.param_type == ParamType::Array {
+            entry.insert("items".to_string(), json!({"type": "string"}));
+        }
+
+        params.insert(param.name.to_string(), Value::Object(entry));
+    }
+
+    Value::Object(params)
+}
+
 /// Collect all unique parameters across all operations
 ///
 /// Returns a properties object with all parameters that appear in any operation.
@@ -554,6 +644,68 @@ mod tests {
         // Silent is not required
         let required = schema["required"].as_array().unwrap();
         assert!(!required.contains(&json!("silent")));
+    }
+
+    #[test]
+    fn test_generate_operations_meta_noun_verb_tree() {
+        let ops: Vec<&dyn Operation> = vec![&MockAddTask, &MockGetTask, &MockListTasks];
+        let meta = generate_operations_meta(&ops);
+
+        // Two verbs on the "task" noun land under one noun key
+        assert!(meta["task"].is_object());
+        assert!(meta["task"]["add"].is_object());
+        assert!(meta["task"]["get"].is_object());
+
+        // A separate noun key exists for MockListTasks ("tasks")
+        assert!(meta["tasks"].is_object());
+        assert!(meta["tasks"]["list"].is_object());
+
+        // Leaf carries the op string and description
+        assert_eq!(meta["task"]["add"]["op"], "add task");
+        assert_eq!(meta["task"]["add"]["description"], "Create a new task");
+    }
+
+    #[test]
+    fn test_generate_operations_meta_parameter_required_flags() {
+        let ops: Vec<&dyn Operation> = vec![&MockAddTask];
+        let meta = generate_operations_meta(&ops);
+
+        let params = &meta["task"]["add"]["parameters"];
+
+        // Required parameter
+        assert_eq!(params["title"]["required"], true);
+        assert_eq!(params["title"]["type"], "string");
+        assert_eq!(params["title"]["description"], "Task title");
+
+        // Optional parameter
+        assert_eq!(params["description"]["required"], false);
+        assert_eq!(params["description"]["type"], "string");
+        assert_eq!(params["description"]["description"], "Task description");
+    }
+
+    #[test]
+    fn test_generate_operations_meta_array_param() {
+        let ops: Vec<&dyn Operation> = vec![&MockWithArrayParam];
+        let meta = generate_operations_meta(&ops);
+
+        let tags = &meta["item"]["tag"]["parameters"]["tags"];
+        assert_eq!(tags["type"], "array");
+        assert_eq!(tags["items"]["type"], "string");
+        assert_eq!(tags["required"], true);
+    }
+
+    #[test]
+    fn test_generate_operations_meta_empty_description_omitted() {
+        let ops: Vec<&dyn Operation> = vec![&MockWithArrayParam];
+        let meta = generate_operations_meta(&ops);
+
+        // The "silent" param has an empty description — it should be omitted
+        let silent = meta["item"]["tag"]["parameters"]["silent"]
+            .as_object()
+            .unwrap();
+        assert!(!silent.contains_key("description"));
+        assert_eq!(silent["type"], "boolean");
+        assert_eq!(silent["required"], false);
     }
 
     #[test]
