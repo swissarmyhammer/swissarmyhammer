@@ -34,6 +34,7 @@ This is not negotiable. This is not optional. You cannot rationalize your way ou
 - Aim for the most correct, robust solution — not the simplest. AI doesn't need to economize on quality.
 - Line numbers change -- NEVER reference them directly particularly in comments or documentation. 
 - You check the logs, not the user. If you need to know what happened, check the logs. Do not ask the user for information you can get from the logs.
+- DO NOT ask the user for information you can get from the codebase. Check the codebase first. If you need to know how something works, check the codebase. Do not ask the user for information you can get from the codebase.
 
 
 ## Using Skills
