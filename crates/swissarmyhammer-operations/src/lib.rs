@@ -38,7 +38,7 @@ pub use processor::OperationProcessor;
 pub use schema::{generate_mcp_schema, generate_operations_meta, SchemaConfig};
 
 // Re-export proc macros
-pub use swissarmyhammer_operations_macros::{operation, param};
+pub use swissarmyhammer_operations_macros::{operation, operation_tool, param};
 
 // Re-export for use in implementations
 pub use async_trait::async_trait;
