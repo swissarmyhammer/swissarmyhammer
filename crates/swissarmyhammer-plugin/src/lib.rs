@@ -31,6 +31,7 @@ pub mod registry;
 pub mod runtime;
 pub mod server;
 
+pub use dispatcher::Dispatcher;
 pub use error::{Error, Result};
 pub use registry::{ServerName, ServerRegistry};
 pub use server::{CallerId, McpServer, PluginId, ToolMetadata};

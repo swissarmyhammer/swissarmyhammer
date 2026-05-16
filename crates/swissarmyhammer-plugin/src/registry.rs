@@ -7,6 +7,7 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 
 use crate::error::{Error, Result};
@@ -28,6 +29,19 @@ pub type ServerName = String;
 pub struct ServerRegistry {
     /// The registered servers, keyed by their unique [`ServerName`].
     servers: HashMap<ServerName, Arc<dyn McpServer>>,
+}
+
+/// `Debug` is written by hand because the registered server values are
+/// `Arc<dyn McpServer>`, and the [`McpServer`] trait deliberately carries no
+/// `Debug` supertrait bound — adding one would burden every transport impl.
+/// The trait objects are therefore not printable, so this impl reports the
+/// registered server names instead, which is the registry's meaningful state.
+impl fmt::Debug for ServerRegistry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ServerRegistry")
+            .field("servers", &self.servers.keys())
+            .finish()
+    }
 }
 
 impl ServerRegistry {
