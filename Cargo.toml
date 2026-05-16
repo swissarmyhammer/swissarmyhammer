@@ -308,7 +308,11 @@ typed-builder = "0.20"
 nix = { version = "0.29", features = ["signal", "process"] }
 include_dir = "0.7"
 lru = "0.12"
-rquickjs = { version = "0.11", features = ["futures", "loader"] }
+deno_core = "0.400"
+# deno_error supplies JsErrorBox, the error type deno_core's ModuleLoader
+# trait uses (ModuleLoaderError = JsErrorBox). Pinned to deno_core's exact
+# requirement so a single version resolves.
+deno_error = "=0.7.1"
 diffy = "0.4.2"
 similar = "2"
 zstd = "0.13"
