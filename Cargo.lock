@@ -9418,8 +9418,10 @@ name = "swissarmyhammer-plugin"
 version = "0.12.11"
 dependencies = [
  "async-trait",
+ "axum",
  "deno_ast",
  "deno_core",
+ "http",
  "libc",
  "rmcp",
  "serde",

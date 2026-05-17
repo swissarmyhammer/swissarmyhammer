@@ -17,6 +17,9 @@ deno_ast = { workspace = true }
 # MCP server/client protocol
 rmcp = { workspace = true }
 
+# HTTP header types for the UrlServer transport's custom headers
+http = { workspace = true }
+
 # Async runtime and utilities
 tokio = { workspace = true }
 async-trait = { workspace = true }
@@ -36,6 +39,12 @@ swissarmyhammer-directory = { workspace = true }
 # Used by the cli_server integration test to probe whether a spawned
 # subprocess is still alive via kill(2) with signal 0.
 libc = { workspace = true }
+
+# Used by the url_server integration test to stand up a real HTTP MCP
+# endpoint: `axum` mounts the rmcp `StreamableHttpService` on a loopback
+# port. The `http` types the test also needs come in through the crate's
+# own dependency on `http`.
+axum = { workspace = true }
 
 [lints]
 workspace = true

@@ -3,9 +3,9 @@
 //! Defines the [`McpServer`] trait the platform dispatches against, the
 //! [`ToolMetadata`] description it advertises, and the [`CallerId`] that
 //! identifies who issued a request. The concrete transports implement this
-//! trait: [`InProcessServer`] wraps an in-memory `rmcp` handler and
-//! [`CliServer`] drives a spawned subprocess over stdio. The remaining
-//! transport (`UrlServer`) is filled in by a later task.
+//! trait: [`InProcessServer`] wraps an in-memory `rmcp` handler, [`CliServer`]
+//! drives a spawned subprocess over stdio, and [`UrlServer`] reaches an MCP
+//! endpoint served over HTTP.
 
 use async_trait::async_trait;
 use rmcp::model::Tool;
@@ -15,9 +15,11 @@ use crate::error::Result;
 
 mod cli;
 mod in_process;
+mod url;
 
 pub use cli::CliServer;
 pub use in_process::InProcessServer;
+pub use url::UrlServer;
 
 /// A registered MCP server the platform can dispatch work to.
 ///
