@@ -23,10 +23,11 @@
 //!   specific error rather than a panic or a silent empty module.
 //! - **`@swissarmyhammer/*` imports** resolve to host-provided **virtual
 //!   modules** served from memory — never from disk. `@swissarmyhammer/plugin`
-//!   is the plugin SDK and `@swissarmyhammer/app` is generated app-binding
-//!   code. Their real contents are filled in by later tasks; this loader
-//!   provides the resolution and in-memory serving plumbing and ships minimal
-//!   stub contents until then.
+//!   is the plugin SDK — its real source is embedded in [`crate::sdk`] and
+//!   transpiled into the virtual-module table when the loader is built.
+//!   `@swissarmyhammer/app` is generated app-binding code, still a no-op stub
+//!   until app codegen lands. This loader provides the resolution and
+//!   in-memory serving plumbing for both.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -83,8 +84,10 @@ pub struct PluginModuleLoader {
     /// URL string.
     ///
     /// Populated once at construction by [`virtual_modules`]; immutable
-    /// thereafter. A `@swissarmyhammer/*` import resolves into this table.
-    virtual_modules: HashMap<String, &'static str>,
+    /// thereafter. A `@swissarmyhammer/*` import resolves into this table. The
+    /// values are JavaScript ready for V8 — the `@swissarmyhammer/plugin` entry
+    /// is the SDK source transpiled from TypeScript at construction time.
+    virtual_modules: HashMap<String, String>,
 }
 
 impl PluginModuleLoader {
@@ -199,7 +202,7 @@ impl PluginModuleLoader {
             })?;
         Ok(ModuleSource::new(
             ModuleType::JavaScript,
-            ModuleSourceCode::String(FastString::from_static(code)),
+            ModuleSourceCode::String(FastString::from(code.clone())),
             specifier,
             None,
         ))
@@ -369,35 +372,45 @@ fn virtual_module_name(specifier: &str) -> Option<&str> {
 ///
 /// Two modules are provided:
 ///
-/// - `@swissarmyhammer/plugin` — the plugin SDK. The real SDK surface is
-///   delivered by a later task; until then this is a minimal but valid module
-///   so a plugin that imports the SDK loads and links.
+/// - `@swissarmyhammer/plugin` — the plugin SDK. Its source is embedded in
+///   [`crate::sdk`] as TypeScript; it is transpiled to JavaScript here so the
+///   table holds V8-ready code.
 /// - `@swissarmyhammer/app` — generated app-binding types. Codegen is a
 ///   separate task; this is a deliberate no-op stub.
-fn virtual_modules() -> HashMap<String, &'static str> {
+///
+/// # Panics
+///
+/// Panics if the embedded SDK source fails to transpile. The SDK source is
+/// compiled into the binary, so a transpile failure is a build-time bug in the
+/// crate, not a recoverable runtime condition.
+fn virtual_modules() -> HashMap<String, String> {
     let mut modules = HashMap::new();
-    modules.insert(
-        format!("{VIRTUAL_SCHEME}:plugin"),
-        SDK_PLUGIN_STUB as &'static str,
-    );
+    modules.insert(format!("{VIRTUAL_SCHEME}:plugin"), transpiled_sdk());
     modules.insert(
         format!("{VIRTUAL_SCHEME}:app"),
-        APP_BINDINGS_STUB as &'static str,
+        APP_BINDINGS_STUB.to_string(),
     );
     modules
 }
 
-/// Stub body for the `@swissarmyhammer/plugin` SDK virtual module.
+/// Transpile the embedded `@swissarmyhammer/plugin` SDK source to JavaScript.
 ///
-/// A valid, importable ES module with no real SDK surface yet. The TS SDK task
-/// replaces this body with the actual SDK; the resolution and serving plumbing
-/// around it does not change.
-const SDK_PLUGIN_STUB: &str = "\
-// @swissarmyhammer/plugin — SDK stub.
-// The real SDK surface is provided by a later task. This stub exists so a
-// plugin that imports the SDK resolves and links today.
-export const __sdkStub = true;
-";
+/// The SDK ([`crate::sdk::SDK_PLUGIN_SOURCE`]) is TypeScript; the virtual
+/// module table must hold JavaScript V8 can evaluate directly. The transpiled
+/// code carries an inline source map so plugin stack traces that pass through
+/// the SDK report original TypeScript positions.
+///
+/// # Panics
+///
+/// Panics if the embedded SDK source cannot be transpiled — that is a
+/// build-time bug in this crate, since the source ships inside the binary.
+fn transpiled_sdk() -> String {
+    let specifier = ModuleSpecifier::parse(&format!("{VIRTUAL_SCHEME}:plugin"))
+        .expect("the SDK virtual-module URL must be a valid specifier");
+    transpile_typescript(&specifier, crate::sdk::SDK_PLUGIN_SOURCE)
+        .expect("the embedded @swissarmyhammer/plugin SDK source must transpile")
+        .code
+}
 
 /// Stub body for the `@swissarmyhammer/app` generated-bindings virtual module.
 ///

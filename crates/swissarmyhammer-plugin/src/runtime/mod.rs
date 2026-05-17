@@ -85,7 +85,7 @@ const HEAP_MAX_BYTES: usize = 64 * 1024 * 1024;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Configuration for a [`PluginRuntime`].
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct RuntimeConfig {
     /// TCP port for the V8 Inspector, or `None` to disable it.
     ///
@@ -98,6 +98,27 @@ pub struct RuntimeConfig {
     /// server that DevTools connects to on this port is the embedder's
     /// responsibility and is wired by a later task.
     pub inspect_port: Option<u16>,
+
+    /// The host-side handler bound to the isolate's SDK-to-host bridge op.
+    ///
+    /// When `None`, the bridge installs [`UnboundHostDispatcher`], which
+    /// rejects every call — the default for a runtime with no host wired in.
+    /// When `Some`, the given dispatcher answers the calls the plugin SDK
+    /// makes (`tools/list`, `tools/call`, `register`, …). The full
+    /// `PluginHost` dispatcher is a later task; this seam lets tests — and
+    /// eventually the host — bind a real handler.
+    pub dispatcher: Option<Arc<dyn HostDispatcher>>,
+}
+
+/// `RuntimeConfig` holds an `Arc<dyn HostDispatcher>`, which is not `Debug`;
+/// a hand-written impl keeps the type printable without that bound.
+impl std::fmt::Debug for RuntimeConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RuntimeConfig")
+            .field("inspect_port", &self.inspect_port)
+            .field("dispatcher", &self.dispatcher.as_ref().map(|_| "<bound>"))
+            .finish()
+    }
 }
 
 /// A handle to one plugin's JavaScript runtime.
@@ -511,14 +532,19 @@ fn worker_loop(
     // each `LoadPlugin` command points it at that plugin's bundle directory.
     let module_loader = Rc::new(PluginModuleLoader::new());
 
+    // The SDK-to-host bridge op is installed for every plugin isolate. A
+    // runtime configured with a dispatcher binds it here; otherwise the
+    // bridge installs `UnboundHostDispatcher`, which rejects every call until
+    // a host wires one in.
+    let dispatcher: Arc<dyn HostDispatcher> = config
+        .dispatcher
+        .clone()
+        .unwrap_or_else(|| Arc::new(UnboundHostDispatcher));
+
     let mut runtime = JsRuntime::new(RuntimeOptions {
         module_loader: Some(module_loader.clone()),
         create_params: Some(create_params),
-        // The SDK-to-host bridge op is installed for every plugin isolate.
-        // The dispatcher starts unbound; the host binds a real one later.
-        extensions: vec![bridge::host_bridge::init(
-            Arc::new(UnboundHostDispatcher) as Arc<dyn HostDispatcher>
-        )],
+        extensions: vec![bridge::host_bridge::init(dispatcher)],
         // Inspector support is gated to dev mode via `inspect_port`.
         inspector: config.inspect_port.is_some(),
         ..Default::default()
@@ -955,6 +981,7 @@ mod tests {
     async fn inspector_enabled_runtime_runs_modules() {
         let config = RuntimeConfig {
             inspect_port: Some(9229),
+            ..Default::default()
         };
         let runtime = PluginRuntime::new(config).expect("inspector runtime should start");
 

@@ -1,0 +1,378 @@
+//! Integration tests for the `@swissarmyhammer/plugin` TypeScript SDK.
+//!
+//! These tests load a real plugin bundle into a real V8 isolate and exercise
+//! the SDK's generic dispatch Proxy end to end. A recording [`HostDispatcher`]
+//! stands in for the host: it answers `tools/list` with a canned `_meta` tree
+//! and records every `tools/call` so the test can assert the exact wire-call
+//! shape the transport produced.
+//!
+//! The point of these tests is the **wire-call shape** — the tool name and the
+//! arguments map the SDK hands to the host — for both an operation-tool path
+//! call and a flat-tool call, plus the `UnknownOperation` / `UnknownServer`
+//! failure modes and the `RESERVED`-name rule.
+//!
+//! Every runtime interaction is wrapped in a timeout so a wedged isolate fails
+//! the test fast instead of hanging CI.
+
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use serde_json::{json, Value};
+use swissarmyhammer_plugin::{HostDispatcher, PluginRuntime, RuntimeConfig};
+
+/// A generous upper bound on any single runtime interaction.
+const TIMEOUT: Duration = Duration::from_secs(20);
+
+/// One `tools/call` the SDK dispatched, captured for assertion.
+#[derive(Debug, Clone, PartialEq)]
+struct RecordedCall {
+    /// The MCP tool name addressed by the call.
+    tool: String,
+    /// The `tools/call` arguments map the SDK produced.
+    arguments: Value,
+}
+
+/// A [`HostDispatcher`] that serves a canned tool list and records calls.
+///
+/// `tools/list` for the `srv` server returns one operation tool (`kanban`)
+/// and one flat tool (`current`); every other server is unknown. Each
+/// `tools/call` is appended to `calls` so a test can assert the wire shape.
+#[derive(Debug, Default)]
+struct RecordingDispatcher {
+    /// Every `tools/call` the SDK has dispatched, in order.
+    calls: Mutex<Vec<RecordedCall>>,
+}
+
+impl RecordingDispatcher {
+    /// Returns the recorded `tools/call`s so far.
+    fn calls(&self) -> Vec<RecordedCall> {
+        self.calls.lock().expect("calls mutex").clone()
+    }
+
+    /// The canned `tools/list` payload for the `srv` server.
+    ///
+    /// `kanban` is an operation tool — it carries an
+    /// `io.swissarmyhammer/operations` `_meta` tree with a `task` noun whose
+    /// `add` verb maps to the `"add task"` op string. `current` is a flat tool
+    /// — no operations `_meta`, so it dispatches verbatim.
+    fn srv_tools() -> Value {
+        json!({
+            "tools": [
+                {
+                    "name": "kanban",
+                    "description": "Kanban board operations",
+                    "inputSchema": {
+                        "type": "object",
+                        "additionalProperties": true,
+                        "properties": { "op": { "type": "string" } }
+                    },
+                    "_meta": {
+                        "io.swissarmyhammer/operations": {
+                            "task": {
+                                "add": {
+                                    "op": "add task",
+                                    "description": "Create a new task",
+                                    "parameters": {
+                                        "title": { "type": "string", "required": true }
+                                    }
+                                },
+                                "move": {
+                                    "op": "move task",
+                                    "description": "Move a task to a column",
+                                    "parameters": {
+                                        "id": { "type": "string", "required": true }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "current",
+                    "description": "Current weather",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": { "city": { "type": "string" } }
+                    }
+                }
+            ]
+        })
+    }
+}
+
+impl HostDispatcher for RecordingDispatcher {
+    fn dispatch(&self, payload: Value) -> Result<Value, String> {
+        let kind = payload
+            .get("kind")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "bridge payload missing 'kind'".to_string())?;
+        match kind {
+            "toolsList" => {
+                let server = payload.get("server").and_then(Value::as_str).unwrap_or("");
+                if server == "srv" {
+                    Ok(Self::srv_tools())
+                } else {
+                    Err(format!("unknown server '{server}'"))
+                }
+            }
+            "toolsCall" => {
+                let server = payload.get("server").and_then(Value::as_str).unwrap_or("");
+                if server != "srv" {
+                    return Err(format!("unknown server '{server}'"));
+                }
+                let tool = payload
+                    .get("tool")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "toolsCall payload missing 'tool'".to_string())?
+                    .to_string();
+                let arguments = payload.get("arguments").cloned().unwrap_or(json!({}));
+                self.calls
+                    .lock()
+                    .expect("calls mutex")
+                    .push(RecordedCall { tool, arguments });
+                Ok(json!({ "ok": true }))
+            }
+            other => Err(format!("unsupported bridge kind '{other}'")),
+        }
+    }
+}
+
+/// Build a [`RuntimeConfig`] whose host bridge is the given dispatcher.
+fn config_with(dispatcher: Arc<dyn HostDispatcher>) -> RuntimeConfig {
+    RuntimeConfig {
+        dispatcher: Some(dispatcher),
+        ..Default::default()
+    }
+}
+
+/// Write a one-file plugin bundle whose `load` export runs `body`.
+///
+/// The entry imports the SDK, declares a `Plugin` subclass whose `load`
+/// contains `body`, and exports a `load` lifecycle function that constructs
+/// the subclass — wrapped in the SDK's plugin Proxy — and awaits its `load`.
+fn write_plugin(dir: &std::path::Path, body: &str) {
+    let entry = format!(
+        "import {{ Plugin, makePluginThis }} from '@swissarmyhammer/plugin';\n\
+         class P extends Plugin {{\n\
+           async load(): Promise<void> {{\n{body}\n}}\n\
+         }}\n\
+         export async function load(): Promise<unknown> {{\n\
+           const p = makePluginThis(new P()) as P;\n\
+           await p.load();\n\
+           return globalThis.__result ?? null;\n\
+         }}\n"
+    );
+    std::fs::write(dir.join("entry.ts"), entry).expect("entry.ts should be written");
+}
+
+/// A path-form operation call compiles to `tools/call(tool, {op, ...args})`.
+///
+/// `this.srv.kanban.task.add({title})` must reach the host as a `tools/call`
+/// on the `kanban` tool with `{ op: "add task", title }` — the `op` string
+/// looked up from the operation tool's `_meta` tree.
+#[tokio::test]
+async fn operation_path_call_produces_op_wire_shape() {
+    let bundle = tempfile::TempDir::new().expect("temp dir");
+    write_plugin(
+        bundle.path(),
+        "await this.srv.kanban.task.add({ title: 'Fix login bug' });",
+    );
+
+    let dispatcher = Arc::new(RecordingDispatcher::default());
+    let runtime = PluginRuntime::new(config_with(dispatcher.clone())).expect("runtime starts");
+
+    tokio::time::timeout(
+        TIMEOUT,
+        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", "load"),
+    )
+    .await
+    .expect("loading the plugin should not hang")
+    .expect("the plugin's load should succeed");
+
+    let calls = dispatcher.calls();
+    assert_eq!(calls.len(), 1, "exactly one tools/call expected");
+    assert_eq!(
+        calls[0],
+        RecordedCall {
+            tool: "kanban".to_string(),
+            arguments: json!({ "op": "add task", "title": "Fix login bug" }),
+        },
+        "a path-form operation call must dispatch as tools/call(tool, {{op, ...args}})"
+    );
+}
+
+/// A flat-tool call compiles to `tools/call(tool, args)` verbatim.
+///
+/// `this.srv.current({city})` reaches the host as a `tools/call` on the
+/// `current` tool with the arguments passed straight through — no `op` key,
+/// because `current` has no operations `_meta`.
+#[tokio::test]
+async fn flat_tool_call_produces_verbatim_wire_shape() {
+    let bundle = tempfile::TempDir::new().expect("temp dir");
+    write_plugin(bundle.path(), "await this.srv.current({ city: 'Austin' });");
+
+    let dispatcher = Arc::new(RecordingDispatcher::default());
+    let runtime = PluginRuntime::new(config_with(dispatcher.clone())).expect("runtime starts");
+
+    tokio::time::timeout(
+        TIMEOUT,
+        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", "load"),
+    )
+    .await
+    .expect("loading the plugin should not hang")
+    .expect("the plugin's load should succeed");
+
+    let calls = dispatcher.calls();
+    assert_eq!(calls.len(), 1, "exactly one tools/call expected");
+    assert_eq!(
+        calls[0],
+        RecordedCall {
+            tool: "current".to_string(),
+            arguments: json!({ "city": "Austin" }),
+        },
+        "a flat-tool call must dispatch as tools/call(tool, args) with no op key"
+    );
+}
+
+/// The direct form — `op` already in args — passes through unchanged.
+#[tokio::test]
+async fn operation_direct_form_passes_op_through() {
+    let bundle = tempfile::TempDir::new().expect("temp dir");
+    write_plugin(
+        bundle.path(),
+        "await this.srv.kanban({ op: 'move task', id: 't_12' });",
+    );
+
+    let dispatcher = Arc::new(RecordingDispatcher::default());
+    let runtime = PluginRuntime::new(config_with(dispatcher.clone())).expect("runtime starts");
+
+    tokio::time::timeout(
+        TIMEOUT,
+        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", "load"),
+    )
+    .await
+    .expect("loading the plugin should not hang")
+    .expect("the plugin's load should succeed");
+
+    let calls = dispatcher.calls();
+    assert_eq!(calls.len(), 1, "exactly one tools/call expected");
+    assert_eq!(
+        calls[0],
+        RecordedCall {
+            tool: "kanban".to_string(),
+            arguments: json!({ "op": "move task", "id": "t_12" }),
+        },
+        "the direct form must pass {{op, ...}} straight through"
+    );
+}
+
+/// An unknown verb path raises `UnknownOperation`, and the error lists the
+/// valid verbs for that noun straight from `_meta`.
+#[tokio::test]
+async fn unknown_verb_raises_unknown_operation_listing_verbs() {
+    let bundle = tempfile::TempDir::new().expect("temp dir");
+    // `task.delete` is not in the canned `_meta` tree — only `add` and `move`.
+    write_plugin(
+        bundle.path(),
+        "try {\n\
+           await this.srv.kanban.task.delete({ id: 't_9' });\n\
+           globalThis.__result = 'no-error';\n\
+         } catch (e) {\n\
+           globalThis.__result = { name: (e as Error).name, message: (e as Error).message };\n\
+         }",
+    );
+
+    let dispatcher = Arc::new(RecordingDispatcher::default());
+    let runtime = PluginRuntime::new(config_with(dispatcher.clone())).expect("runtime starts");
+
+    let result = tokio::time::timeout(
+        TIMEOUT,
+        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", "load"),
+    )
+    .await
+    .expect("loading the plugin should not hang")
+    .expect("the plugin's load should succeed");
+
+    let name = result.get("name").and_then(Value::as_str).unwrap_or("");
+    let message = result.get("message").and_then(Value::as_str).unwrap_or("");
+    assert_eq!(
+        name, "UnknownOperation",
+        "an unknown verb must raise UnknownOperation, got result: {result}"
+    );
+    assert!(
+        message.contains("add") && message.contains("move"),
+        "the UnknownOperation message must list the valid verbs, got: {message}"
+    );
+    assert!(
+        dispatcher.calls().is_empty(),
+        "an unknown verb must not produce a tools/call"
+    );
+}
+
+/// An unknown server raises `UnknownServer` at dispatch time.
+#[tokio::test]
+async fn unknown_server_raises_unknown_server() {
+    let bundle = tempfile::TempDir::new().expect("temp dir");
+    write_plugin(
+        bundle.path(),
+        "try {\n\
+           await this.nope.whatever({});\n\
+           globalThis.__result = 'no-error';\n\
+         } catch (e) {\n\
+           globalThis.__result = { name: (e as Error).name };\n\
+         }",
+    );
+
+    let dispatcher = Arc::new(RecordingDispatcher::default());
+    let runtime = PluginRuntime::new(config_with(dispatcher.clone())).expect("runtime starts");
+
+    let result = tokio::time::timeout(
+        TIMEOUT,
+        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", "load"),
+    )
+    .await
+    .expect("loading the plugin should not hang")
+    .expect("the plugin's load should succeed");
+
+    assert_eq!(
+        result.get("name").and_then(Value::as_str),
+        Some("UnknownServer"),
+        "a call to an unregistered server must raise UnknownServer, got: {result}"
+    );
+}
+
+/// `RESERVED` names are not treated as path segments.
+///
+/// Accessing `this.srv.kanban.on` must yield the reserved-name handler, not a
+/// dispatcher extending the path with `on` — so calling through it does not
+/// produce a `tools/call` on a phantom `on` tool/noun/verb.
+#[tokio::test]
+async fn reserved_names_are_not_path_segments() {
+    let bundle = tempfile::TempDir::new().expect("temp dir");
+    write_plugin(
+        bundle.path(),
+        "const onHandler = this.srv.kanban.on;\n\
+         globalThis.__result = { onType: typeof onHandler };",
+    );
+
+    let dispatcher = Arc::new(RecordingDispatcher::default());
+    let runtime = PluginRuntime::new(config_with(dispatcher.clone())).expect("runtime starts");
+
+    let result = tokio::time::timeout(
+        TIMEOUT,
+        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", "load"),
+    )
+    .await
+    .expect("loading the plugin should not hang")
+    .expect("the plugin's load should succeed");
+
+    assert_eq!(
+        result.get("onType").and_then(Value::as_str),
+        Some("function"),
+        "a RESERVED name must resolve to the reserved handler, got: {result}"
+    );
+    assert!(
+        dispatcher.calls().is_empty(),
+        "accessing a RESERVED name must not produce a tools/call"
+    );
+}

@@ -15,6 +15,7 @@
 //! - [`dispatcher`] — routes generic operation requests to a registered server.
 //! - [`server`] — the MCP server abstraction and its transports.
 //! - [`runtime`] — the JavaScript runtime that hosts plugin code.
+//! - [`sdk`] — the `@swissarmyhammer/plugin` TypeScript SDK, embedded.
 //! - [`host`] — host-side bindings exposed to plugins.
 //! - [`ledger`] — records of registration and dispatch activity.
 //! - [`codegen`] — code generation for plugin scaffolding and bindings.
@@ -29,6 +30,7 @@ pub mod host;
 pub mod ledger;
 pub mod registry;
 pub mod runtime;
+pub mod sdk;
 pub mod server;
 
 pub use dispatcher::Dispatcher;
