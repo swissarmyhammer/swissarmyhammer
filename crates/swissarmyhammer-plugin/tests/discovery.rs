@@ -310,7 +310,13 @@ async fn register_of_a_name_absent_from_provides_is_rejected() {
 
 /// A discovery scan is atomic: when one discovered plugin fails to load, every
 /// plugin the scan loaded earlier is rolled back, so a failed scan leaves the
-/// host with no plugin from that scan live.
+/// host with no plugin from that scan live — and no stale hot-reload state.
+///
+/// `discover_and_load_all` records a `ReloadStatus::Healthy` for every plugin
+/// it loads. The rollback after a mid-scan failure must drop that status too,
+/// not just the loaded isolate: otherwise `reload_status` would report a
+/// plugin as `Healthy` that is not loaded at all. The test asserts the
+/// rolled-back plugin's `reload_status` is `None`.
 #[tokio::test]
 async fn a_failed_discovery_scan_rolls_back_already_loaded_plugins() {
     let user = tempfile::TempDir::new().expect("user root temp dir");
@@ -390,6 +396,16 @@ async fn a_failed_discovery_scan_rolls_back_already_loaded_plugins() {
     assert!(
         debug.contains("loaded_plugins: 0"),
         "a failed scan must leave the host with no loaded plugins, got: {debug}"
+    );
+
+    // Hot-reload state is clean too: the rolled-back `aaa-good` plugin must
+    // not be left reporting `Healthy` from `reload_status`. `record_active`
+    // had inserted a `Healthy` status when the plugin first loaded; the
+    // rollback must have removed it, so the status is now `None`.
+    let good_status = host.reload_status("aaa-good").await;
+    assert!(
+        good_status.is_none(),
+        "a rolled-back plugin must leave no reload status, got: {good_status:?}"
     );
 }
 
