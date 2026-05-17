@@ -5,7 +5,7 @@ license: MIT OR Apache-2.0
 compatibility: Requires the `kanban` MCP tool for all board, column, and task operations.
 metadata:
   author: swissarmyhammer
-  version: 0.12.11
+  version: 0.13.1
 ---
 
 {% include "_partials/review-column" %}

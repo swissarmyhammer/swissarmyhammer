@@ -90,18 +90,18 @@ homepage = "https://github.com/swissarmyhammer/swissarmyhammer/blob/main/README.
 
 [workspace.dependencies]
 # Core dependencies
-tokio = { version = "1.46", features = ["full"] }
+tokio = { version = "1.52", features = ["full"] }
 tokio-util = "0.7"
 tokio-stream = "0.1"
 tokio-tungstenite = "0.28"
-serde = { version = "1.0.219", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive"] }
 serde_yaml_ng = "0.10"
 serde_json = "1"
 anyhow = "1"
 thiserror = "2"
 tracing = { version = "0.1", features = ["log"] }
 tracing-log = "0.2"
-test-log = {version = "0.2.18" , features = ["trace"]}
+test-log = {version = "0.2.20" , features = ["trace"]}
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"
 base64 = "0.22"
@@ -120,8 +120,8 @@ async-watcher = "0.3"
 glob = "0.3"
 ignore = "0.4"
 ulid = { version = "1.2.1", features = ["serde"] }
-uuid = { version = "1.10", features = ["v4", "serde"] }
-toml = "1.0"
+uuid = { version = "1.23", features = ["v4", "serde"] }
+toml = "1.1"
 schemars = "0.8"
 governor = "0.7"
 nonzero_ext = "0.3"
@@ -171,7 +171,7 @@ owo-colors = "4"
 is-terminal = "0.4"
 which = "8.0"
 
-rmcp = { version = "1.5", features = [
+rmcp = { version = "1.7", features = [
     "server",
     "client",
     "macros",
@@ -188,7 +188,7 @@ dirs = "6.0"
 comfy-table = "7"
 crossterm = "0.29"
 dialoguer = { version = "0.11", features = ["fuzzy-select"] }
-arboard = "3.4"
+arboard = "3.6"
 atty = "0.2"
 zip = "0.6"
 reqwest = { version = "0.13", features = ["json", "stream", "gzip", "cookies", "rustls", "multipart"] }
@@ -197,22 +197,22 @@ url = "2.5"
 indicatif = "0.17"
 sha2 = "0.10"
 futures-util = "0.3"
-tempfile = "3.0"
+tempfile = "3.27"
 pathdiff = "0.2"
-serial_test = "3.0"
+serial_test = "3.4"
 rand = "0.9"
-syntect = "5.2"
-once_cell = "1.20"
+syntect = "5.3"
+once_cell = "1.21"
 rusqlite = { version = "0.38", features = ["bundled"] }
 html2text = "0.16"
-bytes = "1.0"
+bytes = "1.11"
 futures = "0.3"
 
 # HTTP server dependencies
 axum = "0.7"
 tower = "0.5"
 tower-http = "0.5"
-hyper = "1.0"
+hyper = "1.9"
 
 # Web fetch dependencies
 markdowndown = { path = "crates/markdowndown" }
@@ -284,8 +284,8 @@ swissarmyhammer-treesitter = { path = "crates/swissarmyhammer-treesitter" }
 swissarmyhammer-views = { path = "crates/swissarmyhammer-views" }
 swissarmyhammer-web = { path = "crates/swissarmyhammer-web" }
 swissarmyhammer = { path = "crates/swissarmyhammer" }
-num_cpus = "1.0"
-process-wrap = "8.0"
+num_cpus = "1.17"
+process-wrap = "8.2"
 hf-hub = { version = "0.4.3", default-features = false, features = ["tokio", "rustls-tls"] }
 jsonschema = "0.28"
 
@@ -313,23 +313,23 @@ diffy = "0.4.2"
 similar = "2"
 zstd = "0.13"
 memmap2 = "0.9"
-rayon = "1.8"
+rayon = "1.12"
 tracing-test = { version = "0.2", features = ["no-env-filter"] }
 criterion = "0.5"
-http = "1.1"
+http = "1.4"
 piper = "0.2"
 tokio-test = "0.4"
 derive_builder = "0.20"
 scopeguard = "1.2"
 wiremock = "0.6"
-mockito = "1.2"
-byte-unit = "5.1"
+mockito = "1.7"
+byte-unit = "5.2"
 figment = { version = "0.10", features = ["toml", "yaml", "json", "env"] }
 
 # Dev dependencies
-assert_cmd = "2.0"
-predicates = "3.0"
-proptest = "1.0"
+assert_cmd = "2.2"
+predicates = "3.1"
+proptest = "1.11"
 sysinfo = "0.38"
 rstest = "0.26.1"
 
