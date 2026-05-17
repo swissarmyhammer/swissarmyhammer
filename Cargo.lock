@@ -9420,6 +9420,7 @@ dependencies = [
  "async-trait",
  "deno_ast",
  "deno_core",
+ "libc",
  "rmcp",
  "serde",
  "serde_json",

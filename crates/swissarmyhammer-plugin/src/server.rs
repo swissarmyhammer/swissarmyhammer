@@ -2,9 +2,10 @@
 //!
 //! Defines the [`McpServer`] trait the platform dispatches against, the
 //! [`ToolMetadata`] description it advertises, and the [`CallerId`] that
-//! identifies who issued a request. The concrete transports
-//! (`InProcessServer`, `CliServer`, `UrlServer`) that implement this trait
-//! are filled in by later tasks.
+//! identifies who issued a request. The concrete transports implement this
+//! trait: [`InProcessServer`] wraps an in-memory `rmcp` handler and
+//! [`CliServer`] drives a spawned subprocess over stdio. The remaining
+//! transport (`UrlServer`) is filled in by a later task.
 
 use async_trait::async_trait;
 use rmcp::model::Tool;
@@ -12,8 +13,10 @@ use serde_json::Value;
 
 use crate::error::Result;
 
+mod cli;
 mod in_process;
 
+pub use cli::CliServer;
 pub use in_process::InProcessServer;
 
 /// A registered MCP server the platform can dispatch work to.

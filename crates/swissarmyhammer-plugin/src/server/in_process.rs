@@ -7,7 +7,6 @@
 //! handler with no serialization and no inter-process traffic, so this is the
 //! transport host Rust code uses to register its own tools with the platform.
 
-use std::borrow::Cow;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -214,7 +213,7 @@ where
             return Err(Error::UnknownTool);
         }
 
-        let mut request = CallToolRequestParams::new(Cow::Owned(tool.to_string()));
+        let mut request = CallToolRequestParams::new(tool.to_string());
         request.arguments = input.as_object().cloned();
 
         let context = self.request_context(caller);

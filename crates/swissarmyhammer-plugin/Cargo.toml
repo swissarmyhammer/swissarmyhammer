@@ -32,5 +32,19 @@ tracing = { workspace = true }
 # Directory stacking for plugin discovery
 swissarmyhammer-directory = { workspace = true }
 
+[dev-dependencies]
+# Used by the cli_server integration test to probe whether a spawned
+# subprocess is still alive via kill(2) with signal 0.
+libc = { workspace = true }
+
 [lints]
 workspace = true
+
+# A minimal stdio MCP server used purely as a test fixture for the `CliServer`
+# transport. The `cli_server` integration test spawns it as a child process and
+# locates it through the `CARGO_BIN_EXE_cli_server_fixture` environment variable
+# that Cargo sets for integration tests. It is not part of the platform's
+# public surface.
+[[bin]]
+name = "cli_server_fixture"
+path = "src/bin/cli_server_fixture.rs"

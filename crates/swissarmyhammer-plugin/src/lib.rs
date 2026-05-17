@@ -34,4 +34,4 @@ pub mod server;
 pub use dispatcher::Dispatcher;
 pub use error::{Error, Result};
 pub use registry::{ServerName, ServerRegistry};
-pub use server::{CallerId, InProcessServer, McpServer, PluginId, ToolMetadata};
+pub use server::{CallerId, CliServer, InProcessServer, McpServer, PluginId, ToolMetadata};
