@@ -27,6 +27,7 @@ swissarmyhammer-views = { workspace = true }
 swissarmyhammer-store = { workspace = true }
 swissarmyhammer-filter-expr = { workspace = true }
 swissarmyhammer-workspace-init = { workspace = true }
+swissarmyhammer-tools = { workspace = true }
 tauri = { version = "2", features = ["macos-private-api", "devtools"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-log = { version = "2", features = ["tracing"] }
@@ -63,3 +64,5 @@ swissarmyhammer-entity = { workspace = true, features = ["test-support"] }
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
 serde_json = { workspace = true }
+rmcp = { workspace = true }
+reqwest = { workspace = true }

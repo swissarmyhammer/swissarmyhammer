@@ -10,6 +10,9 @@ use swissarmyhammer_entity_search::EntitySearchIndex;
 use swissarmyhammer_focus::{SpatialRegistry, SpatialState};
 use swissarmyhammer_kanban::clipboard::ClipboardProvider;
 use swissarmyhammer_kanban::KanbanContext;
+use swissarmyhammer_tools::mcp::unified_server::{
+    start_mcp_server_with_options, McpServerHandle, McpServerMode,
+};
 use tauri::menu::{CheckMenuItem, MenuItem};
 use tokio::sync::{Mutex as TokioMutex, RwLock};
 
@@ -91,12 +94,49 @@ pub(crate) struct BoardHandle {
     /// Tauri events. Aborted when the handle is dropped so the bridge
     /// doesn't outlive the board.
     bridge_task: Option<tokio::task::JoinHandle<()>>,
+    /// In-process MCP server exposing the full SwissArmyHammer toolset
+    /// (kanban, skills/prompts, code-context, files, …) for this board.
+    ///
+    /// The server is rooted at the board folder, so its `kanban` tool operates
+    /// on this board's `.kanban` and its skills/prompts resolve from the
+    /// board's `.sah/` workspace. It binds a random loopback HTTP port; the AI
+    /// backend reaches it via [`BoardHandle::mcp_url`].
+    ///
+    /// `Option` so the handle can be taken in `Drop` to drive an async
+    /// `shutdown()`. It is always `Some` for a board returned by
+    /// [`BoardHandle::open`].
+    mcp_server: Option<McpServerHandle>,
 }
 
 impl Drop for BoardHandle {
     fn drop(&mut self) {
         if let Some(task) = self.bridge_task.take() {
             task.abort();
+        }
+
+        // Shut the per-board MCP server down so closing a board never leaks a
+        // bound loopback port. `McpServerHandle::shutdown` is async and `Drop`
+        // is sync, so spawn the graceful shutdown onto the current Tokio
+        // runtime when one is available. If no runtime is reachable (e.g. the
+        // process is already tearing down), dropping the handle still fires
+        // `Drop for McpServerHandle`, which best-effort sends the same
+        // shutdown signal — so the server stops either way.
+        if let Some(mut server) = self.mcp_server.take() {
+            match tokio::runtime::Handle::try_current() {
+                Ok(rt) => {
+                    rt.spawn(async move {
+                        if let Err(e) = server.shutdown().await {
+                            tracing::warn!(error = %e, "per-board MCP server shutdown failed");
+                        }
+                    });
+                }
+                Err(_) => {
+                    tracing::debug!(
+                        "no Tokio runtime in BoardHandle::drop — relying on \
+                         McpServerHandle::drop to signal shutdown"
+                    );
+                }
+            }
         }
     }
 }
@@ -311,13 +351,33 @@ impl BoardHandle {
 
         let search_index = Arc::new(RwLock::new(load_search_index(&ctx).await));
 
+        let mcp_server = start_board_mcp_server(&kanban_path).await;
+
         Ok(Self {
             ctx: Arc::new(ctx),
             store_context,
             entity_cache,
             search_index,
             bridge_task: None,
+            mcp_server,
         })
+    }
+
+    /// The board's in-process MCP server URL, e.g.
+    /// `http://127.0.0.1:<port>/mcp`.
+    ///
+    /// The AI backend hands this URL to the in-process agent so the agent
+    /// gets the full SwissArmyHammer toolset scoped to this board. Returns
+    /// `None` only if the server failed to start at board-open time.
+    ///
+    /// `#[allow(dead_code)]`: this accessor is the exposure point the AI
+    /// backend will read, but the call site lives in the follow-up task
+    /// `01KRRN3SP5D1H63TQ8HM7SQZ1F` that wires `ai_start_agent` to consume
+    /// this URL. The board-lifecycle integration test already exercises it.
+    /// This mirrors the `#![allow(dead_code)]` rationale on `ai/mod.rs`.
+    #[allow(dead_code)]
+    pub fn mcp_url(&self) -> Option<&str> {
+        self.mcp_server.as_ref().map(|s| s.url())
     }
 
     /// Ensure an actor entity exists for the current OS user.
@@ -1001,6 +1061,72 @@ fn ensure_sah_workspace(kanban_path: &Path) {
     );
 }
 
+/// Start the per-board in-process MCP server, rooted at the board folder.
+///
+/// Serves the **full** SwissArmyHammer toolset over a random loopback HTTP port.
+/// The transport mode is `McpServerMode::Http { port: None }`:
+/// `start_mcp_server_with_options` only asks the OS for an ephemeral free port
+/// when the port is `None` — passing `Some(0)` would leave the reported
+/// `connection_url` literally at port `0`, so `None` is the variant that
+/// actually yields a usable `http://127.0.0.1:<port>/mcp` URL.
+///
+/// `agent_mode` is `true`: this registers the agent-only tools (`skill`,
+/// `web`, the full-access `files`) on top of the always-on domain tools
+/// (`kanban`, `git`, `code_context`, `shell`, …). The task requires the
+/// **full** toolset — explicitly "kanban, skills/prompts, code-context,
+/// files, etc." With `agent_mode = false`, `register_all_tools` calls
+/// `remove_agent_tools()`, which strips `skill`/`web`/full-`files`; that
+/// would contradict the full-toolset requirement and leave the board-folder
+/// rooting (whose purpose is so "skills/prompts resolve from that board's
+/// SAH directory") without the `skill` tool that consumes it. So
+/// `start_mcp_server_with_options(.., agent_mode = true)` is used.
+///
+/// The server's working directory is the board folder — the parent of the
+/// `.kanban` directory — so its `kanban` tool operates on this board's
+/// `.kanban` and its skills/prompts resolve from the board's `.sah/`
+/// workspace (created by [`ensure_sah_workspace`]).
+///
+/// Returns `None` when the `.kanban` path has no parent or the server fails
+/// to bind; failures are logged and swallowed so a filesystem or port problem
+/// never blocks a board from opening. The board simply has no AI MCP endpoint
+/// in that case, and [`BoardHandle::mcp_url`] returns `None`.
+async fn start_board_mcp_server(kanban_path: &Path) -> Option<McpServerHandle> {
+    let Some(board_dir) = kanban_path.parent() else {
+        tracing::warn!(
+            path = %kanban_path.display(),
+            "cannot start board MCP server: .kanban path has no parent"
+        );
+        return None;
+    };
+
+    match start_mcp_server_with_options(
+        McpServerMode::Http { port: None },
+        None,
+        None,
+        Some(board_dir.to_path_buf()),
+        true,
+    )
+    .await
+    {
+        Ok(handle) => {
+            tracing::info!(
+                board = %board_dir.display(),
+                url = %handle.url(),
+                "started in-process MCP server for board"
+            );
+            Some(handle)
+        }
+        Err(e) => {
+            tracing::warn!(
+                board = %board_dir.display(),
+                error = %e,
+                "failed to start in-process MCP server for board"
+            );
+            None
+        }
+    }
+}
+
 /// Curated palette of visually distinct colors for actor avatars.
 const ACTOR_COLORS: &[&str] = &[
     "e53e3e", "dd6b20", "d69e2e", "38a169", "319795", "3182ce", "5a67d8", "805ad5", "d53f8c",
@@ -1502,5 +1628,154 @@ mod tests {
         assert!(label.starts_with("board-"));
         // ULID is 26 chars, so label is "board-" (6) + 26 = 32
         assert_eq!(label.len(), 32);
+    }
+
+    // =========================================================================
+    // Per-board in-process MCP server tests
+    // =========================================================================
+
+    /// Build an rmcp streamable-HTTP client connected to a per-board MCP URL.
+    ///
+    /// Mirrors the canonical client pattern from
+    /// `swissarmyhammer-tools/tests/integration/final_http.rs`.
+    #[cfg(test)]
+    async fn connect_mcp_client(
+        url: &str,
+    ) -> rmcp::service::RunningService<rmcp::RoleClient, rmcp::model::ClientInfo> {
+        use rmcp::transport::streamable_http_client::{
+            StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
+        };
+        use rmcp::ServiceExt;
+
+        let mut config = StreamableHttpClientTransportConfig::default();
+        config.uri = url.to_string().into();
+        config.auth_header = None;
+        let transport =
+            StreamableHttpClientTransport::with_client(reqwest::Client::default(), config);
+
+        let client_info = rmcp::model::ClientInfo::new(
+            rmcp::model::ClientCapabilities::default(),
+            rmcp::model::Implementation::new("kanban-app board mcp test", "0.0.1"),
+        );
+        client_info
+            .serve(transport)
+            .await
+            .expect("MCP client should connect to the board's loopback URL")
+    }
+
+    /// Opening a board starts an in-process full-SAH-toolset MCP server rooted
+    /// at the board folder. An MCP client connected to the board's URL sees
+    /// `tools/list` carrying `kanban` plus other SAH tools, a `kanban`
+    /// `add task` call mutates that board's `.kanban`, and closing the board
+    /// shuts the server down so its URL stops answering.
+    #[tokio::test]
+    async fn test_open_board_serves_full_sah_mcp_toolset() {
+        let tmp = TempDir::new().unwrap();
+        let state = AppState::new_for_test();
+        let canonical = state
+            .open_board(tmp.path(), None)
+            .await
+            .expect("open_board should succeed");
+
+        // The board folder is the parent of `.kanban/`; the MCP server is
+        // rooted there so its `kanban` tool operates on this board.
+        let board_dir = tmp.path().canonicalize().unwrap();
+
+        // The board exposes a loopback MCP URL for the AI backend to consume.
+        let mcp_url = {
+            let boards = state.boards.read().await;
+            let handle = boards.get(&canonical).expect("board must be open");
+            handle
+                .mcp_url()
+                .expect("an open board must expose an MCP URL")
+                .to_string()
+        };
+        assert!(
+            mcp_url.starts_with("http://127.0.0.1:") && mcp_url.ends_with("/mcp"),
+            "MCP URL must be a loopback /mcp endpoint, got {mcp_url}"
+        );
+
+        // `tools/list` must carry the FULL SAH toolset — not just `kanban`.
+        // Assert the specific tools the task requires so a regression in tool
+        // registration (or a flip back to `agent_mode = false`, which would
+        // strip `skill`/`web`/full-`files`) is actually caught. The expected
+        // names are the `McpTool::name()` strings the server registers:
+        //   - `kanban`, `git`, `code_context` — always-on domain tools
+        //   - `skill`, `files`, `web` — agent tools, present only because the
+        //     board server runs with `agent_mode = true`
+        let client = connect_mcp_client(&mcp_url).await;
+        let tools = client
+            .list_tools(Default::default())
+            .await
+            .expect("tools/list should succeed");
+        let tool_names: Vec<String> = tools.tools.iter().map(|t| t.name.to_string()).collect();
+        for expected in ["kanban", "git", "code_context", "skill", "files", "web"] {
+            assert!(
+                tool_names.iter().any(|n| n == expected),
+                "tools/list must include the full SAH tool `{expected}` \
+                 (agent_mode = true serves the agent tools), got {tool_names:?}"
+            );
+        }
+
+        // A `kanban` call routed through this server must mutate THIS board.
+        // Init the board first, then add a task.
+        let kanban_call = |args: serde_json::Value| {
+            rmcp::model::CallToolRequestParams::new("kanban").with_arguments(
+                args.as_object()
+                    .cloned()
+                    .expect("call arguments must be a JSON object"),
+            )
+        };
+        client
+            .call_tool(kanban_call(
+                serde_json::json!({ "op": "init board", "name": "MCP Board" }),
+            ))
+            .await
+            .expect("kanban init board should succeed over MCP");
+        client
+            .call_tool(kanban_call(
+                serde_json::json!({ "op": "add task", "title": "Served via MCP" }),
+            ))
+            .await
+            .expect("kanban add task should succeed over MCP");
+
+        // The mutation landed in this board's `.kanban/tasks/` directory.
+        let tasks_dir = board_dir.join(".kanban").join("tasks");
+        let task_files: Vec<_> = std::fs::read_dir(&tasks_dir)
+            .expect("tasks dir must exist after add task")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
+            .collect();
+        assert!(
+            !task_files.is_empty(),
+            "the MCP `add task` call must have written a task file under {}",
+            tasks_dir.display()
+        );
+
+        client.cancel().await.unwrap();
+
+        // Closing the board shuts the MCP server down — its URL must stop
+        // answering. `close_board` keys on the canonical `.kanban` path that
+        // `open_board` returned.
+        state
+            .close_board(&canonical)
+            .await
+            .expect("close_board should succeed");
+
+        // Closing drops the `BoardHandle`, which spawns the async MCP-server
+        // shutdown onto the runtime. Give that spawned task a moment to take
+        // the listener down before probing the URL.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        let probe = reqwest::Client::default()
+            .get(&mcp_url)
+            .timeout(std::time::Duration::from_secs(2))
+            .send()
+            .await;
+        assert!(
+            probe.is_err(),
+            "the board's MCP server must be stopped after the board closes — \
+             {mcp_url} should no longer answer, got {probe:?}"
+        );
     }
 }
