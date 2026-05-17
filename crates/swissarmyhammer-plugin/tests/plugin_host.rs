@@ -300,11 +300,19 @@ async fn new_constructor_takes_explicit_layer_roots() {
     let bundle = tempfile::TempDir::new().expect("bundle temp dir");
     write_plugin(bundle.path(), "this.register('svc', { rust: 'svc-mod' });");
 
-    // `new` takes the builtin plugin set plus the writable layer roots; the
-    // platform hardcodes no host-specific directory config.
+    // `new` takes the builtin plugin set, the writable layer roots, the
+    // generated-types dev-mode flag, and the types output directory; the
+    // platform hardcodes no host-specific directory config. Dev-mode off here:
+    // this test only exercises the lifecycle, not the types emitter.
     let host = tokio::time::timeout(
         TIMEOUT,
-        PluginHost::new(Vec::new(), user_root.path().to_path_buf(), None),
+        PluginHost::new(
+            Vec::new(),
+            user_root.path().to_path_buf(),
+            None,
+            false,
+            user_root.path().to_path_buf(),
+        ),
     )
     .await
     .expect("constructing the host should not hang")
@@ -397,6 +405,116 @@ async fn callbacks_passed_to_the_host_are_tracked_in_the_ledger_and_disposed() {
     assert!(
         ledger_after.is_none(),
         "an unloaded plugin must have no ledger entry, got {ledger_after:?}"
+    );
+}
+
+/// A dev-mode host wires its [`TypesEmitter`](swissarmyhammer_plugin::codegen::TypesEmitter)
+/// into the registry: loading a plugin that registers a server writes the
+/// generated `app.d.ts`, and the file carries that server's namespace.
+///
+/// This proves the host integration the `register` → emitter path is supposed
+/// to perform: without the wiring the emitter is dead code and no file is ever
+/// written. The probe plugin registers a real in-process `rmcp` server, so the
+/// `app.d.ts` reflects a genuine `tools()` snapshot, not a fixture.
+#[tokio::test]
+async fn dev_mode_host_writes_generated_types_for_a_registered_server() {
+    let bundle = tempfile::TempDir::new().expect("bundle temp dir");
+    let types_dir = tempfile::TempDir::new().expect("types temp dir");
+    // The plugin registers the host-exposed `weather-mod` rust module under the
+    // name `weather`.
+    write_plugin(
+        bundle.path(),
+        "this.register('weather', { rust: 'weather-mod' });",
+    );
+
+    // A dev-mode host: its types emitter writes the declaration file under the
+    // supplied directory on every registry change.
+    let host = PluginHost::with_types_dev_mode(
+        bundle.path().to_path_buf(),
+        None,
+        types_dir.path().to_path_buf(),
+    );
+    let weather: Arc<dyn McpServer> = Arc::new(
+        InProcessServer::new(EchoServer::new())
+            .await
+            .expect("wrapping a real rmcp handler should succeed"),
+    );
+    tokio::time::timeout(TIMEOUT, host.expose_rust_module("weather-mod", weather))
+        .await
+        .expect("expose_rust_module should not hang")
+        .expect("exposing a rust module should succeed");
+
+    tokio::time::timeout(TIMEOUT, host.load(bundle.path()))
+        .await
+        .expect("loading the plugin should not hang")
+        .expect("the plugin's load should succeed");
+
+    // `load` flushes the emitter, so the declaration file is on disk the moment
+    // the load returns — at the emitter's default `.d.ts` path under the
+    // supplied types directory.
+    let types_path = types_dir
+        .path()
+        .join(swissarmyhammer_plugin::codegen::DEFAULT_TYPES_PATH);
+    let text = std::fs::read_to_string(&types_path).unwrap_or_else(|error| {
+        panic!(
+            "the dev-mode host must write the generated types to {}: {error}",
+            types_path.display()
+        )
+    });
+
+    // The registered server's namespace and its `echo` tool method are present
+    // — the registry event reached the emitter.
+    assert!(
+        text.contains("weather: {"),
+        "the registered server's namespace must appear in the generated types:\n{text}"
+    );
+    assert!(
+        text.contains("echo("),
+        "the registered server's `echo` tool must appear in the generated types:\n{text}"
+    );
+}
+
+/// A host with the types emitter in production posture (dev-mode off) drives
+/// the emitter on every registry event but writes no `app.d.ts` file.
+///
+/// This is the counterpart of the dev-mode test: it confirms the wiring is
+/// gated by the dev-mode flag, so a production host pays no disk cost for the
+/// developer-only generated types.
+#[tokio::test]
+async fn production_mode_host_writes_no_generated_types() {
+    let bundle = tempfile::TempDir::new().expect("bundle temp dir");
+    write_plugin(
+        bundle.path(),
+        "this.register('weather', { rust: 'weather-mod' });",
+    );
+
+    // `for_tests` builds the host with the types emitter in dev-mode OFF — the
+    // production posture.
+    let host = PluginHost::for_tests(bundle.path().to_path_buf(), None);
+    let weather: Arc<dyn McpServer> = Arc::new(
+        InProcessServer::new(EchoServer::new())
+            .await
+            .expect("wrapping a real rmcp handler should succeed"),
+    );
+    tokio::time::timeout(TIMEOUT, host.expose_rust_module("weather-mod", weather))
+        .await
+        .expect("expose_rust_module should not hang")
+        .expect("exposing a rust module should succeed");
+
+    tokio::time::timeout(TIMEOUT, host.load(bundle.path()))
+        .await
+        .expect("loading the plugin should not hang")
+        .expect("the plugin's load should succeed");
+
+    // `for_tests` resolves the emitter's default `.d.ts` path under the user
+    // root; a production-posture emitter must not have written it.
+    let types_path = bundle
+        .path()
+        .join(swissarmyhammer_plugin::codegen::DEFAULT_TYPES_PATH);
+    assert!(
+        !types_path.exists(),
+        "a production-posture host must write no generated types, found {}",
+        types_path.display()
     );
 }
 

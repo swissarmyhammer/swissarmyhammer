@@ -73,6 +73,7 @@ use serde_json::{Map, Value};
 use swissarmyhammer_directory::{DirectoryConfig, FileSource, StackedEvent, Watcher};
 use tokio::sync::mpsc;
 
+use crate::codegen::TypesEmitter;
 use crate::discovery::{discover_plugins, DiscoveredPlugin, LayerRoot, PLUGINS_SUBDIR};
 use crate::error::{Error, Result};
 use crate::ledger::{CallbackId, PluginLedger, RegistrationHandle};
@@ -171,6 +172,17 @@ struct HostInner {
     /// after construction without locking the rest of the host state.
     /// Defaults to [`ApproveAllReloads`].
     reload_policy: Mutex<Arc<dyn ReloadPolicy>>,
+
+    /// The emitter that keeps a generated `.d.ts` file in sync with the live
+    /// registry.
+    ///
+    /// The host drives it as servers register, unregister, and change their
+    /// tool sets, and flushes it at plugin load/unload boundaries. The emitter
+    /// carries its own dev-mode flag — set at construction — so a production
+    /// host (flag off) drives the emitter exactly the same way but writes no
+    /// file. It is [`Clone`] and internally synchronized, so it sits outside
+    /// the host mutex alongside the other immutable-after-construction fields.
+    types_emitter: TypesEmitter,
 
     /// The mutable host state guarded by one mutex.
     state: Mutex<HostState>,
@@ -402,13 +414,44 @@ impl PluginHost {
     /// The platform stays host-agnostic: a test supplies the roots it wants
     /// rather than the host reaching for global configuration.
     ///
+    /// The host's [`TypesEmitter`] is constructed with **dev-mode off**: a test
+    /// host drives the emitter on every registry event exactly as a production
+    /// host does, but writes no `.d.ts` file, so the test working directory
+    /// stays clean. A test that wants to observe the generated file uses
+    /// [`with_types_dev_mode`](Self::with_types_dev_mode) to point a dev-mode
+    /// emitter at a temp directory.
+    ///
     /// # Parameters
     ///
     /// - `user_root` — the writable user-layer plugin directory.
     /// - `project_root` — the writable project-layer plugin directory, or
     ///   `None` when the test models a host with no project layer.
     pub fn for_tests(user_root: PathBuf, project_root: Option<PathBuf>) -> Self {
-        Self::with_roots(user_root, project_root)
+        let types_emitter = TypesEmitter::new(&user_root, false);
+        Self::with_roots(user_root, project_root, types_emitter)
+    }
+
+    /// Creates a test host whose [`TypesEmitter`] writes to `types_dir`.
+    ///
+    /// Like [`for_tests`](Self::for_tests) but with the emitter in **dev mode**
+    /// and writing under the supplied directory, so a test can load a plugin
+    /// and then assert the generated declaration file on disk. Production hosts
+    /// reach the same posture through [`new`](Self::new)'s `dev_mode` argument.
+    ///
+    /// # Parameters
+    ///
+    /// - `user_root` — the writable user-layer plugin directory.
+    /// - `project_root` — the writable project-layer plugin directory, or
+    ///   `None` when the test models a host with no project layer.
+    /// - `types_dir` — the base directory the generated `.d.ts` is written
+    ///   under, joined with [`DEFAULT_TYPES_PATH`](crate::codegen::DEFAULT_TYPES_PATH).
+    pub fn with_types_dev_mode(
+        user_root: PathBuf,
+        project_root: Option<PathBuf>,
+        types_dir: PathBuf,
+    ) -> Self {
+        let types_emitter = TypesEmitter::new(&types_dir, true);
+        Self::with_roots(user_root, project_root, types_emitter)
     }
 
     /// Creates a production host from the builtin plugin set and the writable
@@ -419,6 +462,13 @@ impl PluginHost {
     /// builtin plugin directory is loaded immediately, in the given order, so a
     /// host built with `new` comes up with its builtins already running.
     ///
+    /// The host's [`TypesEmitter`] is constructed from the `dev_mode` flag and
+    /// the `types_dir` the embedder supplies: a development embedder passes
+    /// `dev_mode: true` so the generated `.d.ts` is kept in sync on disk; a
+    /// production embedder passes `false` so the host drives the emitter but
+    /// writes nothing. The host hardcodes neither — both are caller-supplied,
+    /// keeping the platform host-agnostic.
+    ///
     /// # Parameters
     ///
     /// - `builtins` — directories of plugins shipped with the embedder, loaded
@@ -426,6 +476,11 @@ impl PluginHost {
     /// - `user_root` — the writable user-layer plugin directory.
     /// - `project_root` — the writable project-layer plugin directory, when the
     ///   embedder has a project layer.
+    /// - `dev_mode` — `true` to write the generated plugin-types `.d.ts` on
+    ///   every registry change, `false` for the production posture (no file).
+    /// - `types_dir` — the base directory the generated `.d.ts` is written
+    ///   under, joined with [`DEFAULT_TYPES_PATH`](crate::codegen::DEFAULT_TYPES_PATH).
+    ///   Consulted only when `dev_mode` is `true`.
     ///
     /// # Errors
     ///
@@ -436,22 +491,30 @@ impl PluginHost {
         builtins: Vec<PathBuf>,
         user_root: PathBuf,
         project_root: Option<PathBuf>,
+        dev_mode: bool,
+        types_dir: PathBuf,
     ) -> Result<Self> {
-        let host = Self::with_roots(user_root, project_root);
+        let types_emitter = TypesEmitter::new(&types_dir, dev_mode);
+        let host = Self::with_roots(user_root, project_root, types_emitter);
         for builtin in builtins {
             host.load(&builtin).await?;
         }
         Ok(host)
     }
 
-    /// Builds a host with the given roots and empty state.
-    fn with_roots(user_root: PathBuf, project_root: Option<PathBuf>) -> Self {
+    /// Builds a host with the given roots, types emitter, and empty state.
+    fn with_roots(
+        user_root: PathBuf,
+        project_root: Option<PathBuf>,
+        types_emitter: TypesEmitter,
+    ) -> Self {
         Self {
             inner: Arc::new(HostInner {
                 user_root,
                 project_root,
                 next_plugin_seq: AtomicU64::new(0),
                 reload_policy: Mutex::new(Arc::new(ApproveAllReloads)),
+                types_emitter,
                 state: Mutex::new(HostState {
                     registry: ServerRegistry::new(),
                     ledger: PluginLedger::new(),
@@ -677,6 +740,11 @@ impl PluginHost {
                         bundle_dir: plugin_dir.to_path_buf(),
                     },
                 );
+                // A `load()` is a flush boundary for the types emitter: the
+                // plugin's burst of `register` calls debounced their writes,
+                // so flushing now settles the whole burst into one `.d.ts`
+                // write the moment the load completes.
+                self.inner.types_emitter.flush();
                 Ok(plugin_id)
             }
             Err(error) => {
@@ -934,6 +1002,12 @@ impl PluginHost {
         // isolate is still alive, so callback handles can be disposed on it
         // before it is torn down.
         self.dispose_registrations(plugin_id, &plugin.runtime).await;
+
+        // An `unload()` is a flush boundary for the types emitter: the
+        // disposal above debounced the `server_unregistered` calls for every
+        // server the plugin had registered, so flushing now settles them into
+        // one `.d.ts` write the moment the unload completes.
+        self.inner.types_emitter.flush();
 
         // The plugin's manifest is no longer needed once it is unloaded.
         self.lock().manifests.remove(plugin_id);
@@ -1377,6 +1451,13 @@ impl PluginHost {
                         "ledger server handle had no live registration to dispose"
                     );
                 }
+                // Disposing a ledger server handle removes the server from the
+                // registry — keep the generated `.d.ts` in sync. Driven after
+                // the host mutex is released; the unload that called this then
+                // flushes the emitter so the burst settles into one write.
+                if removed.is_some() {
+                    self.inner.types_emitter.server_unregistered(name);
+                }
             }
             RegistrationHandle::Callback(id) => {
                 // Drop the stored function from the isolate's callback table so
@@ -1647,17 +1728,29 @@ impl HostBridge {
     /// registration to dispose.
     fn unregister(&self, payload: &Value) -> std::result::Result<Value, String> {
         let name = envelope_str(payload, "name")?;
-        let mut state = self.host.lock();
-        let removed = state.registry.unregister(&name);
-        let consumed = state.ledger.consume_server(&self.plugin_id, &name);
-        if removed.is_none() || !consumed {
-            tracing::debug!(
-                plugin = %self.plugin_id.as_str(),
-                server = %name,
-                had_registration = removed.is_some(),
-                had_ledger_entry = consumed,
-                "plugin unregistered a server it did not have registered"
-            );
+        let removed_is_some;
+        {
+            let mut state = self.host.lock();
+            let removed = state.registry.unregister(&name);
+            let consumed = state.ledger.consume_server(&self.plugin_id, &name);
+            removed_is_some = removed.is_some();
+            if removed.is_none() || !consumed {
+                tracing::debug!(
+                    plugin = %self.plugin_id.as_str(),
+                    server = %name,
+                    had_registration = removed_is_some,
+                    had_ledger_entry = consumed,
+                    "plugin unregistered a server it did not have registered"
+                );
+            }
+        }
+
+        // The registry dropped a server: keep the generated `.d.ts` in sync.
+        // Driven for an absent name too — a no-op for the emitter, since its
+        // snapshot simply has nothing to remove — done after the host mutex is
+        // released so the emitter's own lock never nests under it.
+        if removed_is_some {
+            self.host.inner.types_emitter.server_unregistered(name);
         }
         Ok(Value::Object(Map::new()))
     }
@@ -1741,12 +1834,25 @@ impl PluginHost {
 
         let server = self.connect_source(&source).await?;
 
-        let mut state = self.lock();
-        state.registry.register(name.clone(), server)?;
-        // The plugin is tracked from `load`, so this append cannot be orphaned.
-        state
-            .ledger
-            .record(plugin_id, RegistrationHandle::Server(name));
+        // Snapshot the server's tools before it is moved into the registry so
+        // the types emitter can be told the new server's namespace — done
+        // outside the host mutex below.
+        let tools = server.tools();
+
+        {
+            let mut state = self.lock();
+            state.registry.register(name.clone(), server)?;
+            // The plugin is tracked from `load`, so this append cannot be orphaned.
+            state
+                .ledger
+                .record(plugin_id, RegistrationHandle::Server(name.clone()));
+        }
+
+        // The registry gained a server: keep the generated `.d.ts` in sync.
+        // The emitter is internally synchronized, so this is called after the
+        // host mutex is dropped — the debounce collapses a `load()` burst of
+        // registrations into a single write at the flush boundary.
+        self.inner.types_emitter.server_registered(name, tools);
         Ok(())
     }
 
