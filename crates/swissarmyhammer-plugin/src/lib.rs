@@ -35,8 +35,8 @@ pub use dispatcher::Dispatcher;
 pub use error::{Error, Result};
 pub use registry::{ServerName, ServerRegistry};
 pub use runtime::{
-    transpile_typescript, HostDispatcher, PluginRuntime, RuntimeConfig, TranspiledModule,
-    UnboundHostDispatcher,
+    transpile_typescript, HostDispatcher, PluginModuleLoader, PluginRuntime, RuntimeConfig,
+    TranspiledModule, UnboundHostDispatcher,
 };
 pub use server::{
     CallerId, CliServer, InProcessServer, McpServer, PluginId, ToolMetadata, UrlServer,

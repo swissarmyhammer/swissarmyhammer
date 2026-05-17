@@ -28,6 +28,15 @@
 //! stack traces and any attached inspector report original TypeScript
 //! positions.
 //!
+//! # Module loading
+//!
+//! Plugins are multi-file: an entry module imports helper modules and the host
+//! SDK. The [`module_loader`] submodule supplies a real
+//! [`deno_core::ModuleLoader`] — [`PluginModuleLoader`] — that resolves relative
+//! imports against the plugin's bundle directory (sandboxed to that directory),
+//! serves `@swissarmyhammer/*` host built-ins from in-memory virtual modules,
+//! and rejects bare npm specifiers.
+//!
 //! # The host bridge
 //!
 //! Plugin code calls back into the host through a single op installed by the
@@ -35,20 +44,21 @@
 //! `PluginHost` tasks wire a real dispatcher into it.
 
 mod bridge;
+mod module_loader;
 mod transpile;
 
 pub use bridge::{HostDispatcher, UnboundHostDispatcher};
+pub use module_loader::PluginModuleLoader;
 pub use transpile::{transpile_typescript, TranspiledModule};
 
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
 
 use deno_core::v8;
-use deno_core::{
-    JsRuntime, ModuleSpecifier, NoopModuleLoader, PollEventLoopOptions, RuntimeOptions,
-};
+use deno_core::{JsRuntime, ModuleSpecifier, PollEventLoopOptions, RuntimeOptions};
 use tokio::sync::oneshot;
 
 use crate::error::{Error, Result};
@@ -144,11 +154,31 @@ enum Command {
 
     /// Transpile a TypeScript module, evaluate it, and optionally call one of
     /// its exported lifecycle functions.
+    ///
+    /// The entry source is supplied directly; this variant does not use the
+    /// module loader, so the entry cannot import sibling modules.
     LoadModule {
         /// Module URL used in stack traces and the source map.
         specifier: String,
         /// TypeScript source of the plugin entry module.
         source: String,
+        /// Name of an exported function to call after evaluation, if any.
+        lifecycle_export: Option<String>,
+        /// Where the lifecycle return value (or an error) is delivered.
+        reply: oneshot::Sender<Result<serde_json::Value>>,
+    },
+
+    /// Load a multi-file plugin from a bundle directory through the module
+    /// loader, then optionally call one of its exported lifecycle functions.
+    ///
+    /// Unlike [`Command::LoadModule`], the entry module is loaded from disk via
+    /// [`PluginModuleLoader`], so it — and any module it imports — is resolved,
+    /// sandboxed, and transpiled by the loader.
+    LoadPlugin {
+        /// The plugin's bundle directory; relative imports are sandboxed here.
+        bundle_dir: PathBuf,
+        /// The entry module's filename, relative to `bundle_dir`.
+        entry_file: String,
         /// Name of an exported function to call after evaluation, if any.
         lifecycle_export: Option<String>,
         /// Where the lifecycle return value (or an error) is delivered.
@@ -294,6 +324,78 @@ impl PluginRuntime {
         await_reply(response).await
     }
 
+    /// Load a multi-file plugin's entry module from a bundle directory.
+    ///
+    /// The entry module is loaded through [`PluginModuleLoader`], so it may
+    /// import sibling `.ts` modules with relative specifiers and the host SDK
+    /// with `@swissarmyhammer/*` specifiers. Relative imports are sandboxed to
+    /// `bundle_dir`: a module that resolves outside it is rejected. Each loaded
+    /// module — the entry and every relative import — is transpiled the same
+    /// way. The plugin's exports are reached via
+    /// [`PluginRuntime::call_plugin_lifecycle`].
+    ///
+    /// # Arguments
+    ///
+    /// * `bundle_dir` - The plugin's bundle directory.
+    /// * `entry_file` - The entry module's filename, relative to `bundle_dir`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Transpile`] for a TypeScript syntax error in any loaded
+    /// module, [`Error::Runtime`] if a module throws while evaluating, if an
+    /// import cannot be resolved, or if it escapes the bundle directory, or a
+    /// worker-communication error.
+    pub async fn load_plugin(
+        &self,
+        bundle_dir: impl AsRef<Path>,
+        entry_file: impl Into<String>,
+    ) -> Result<()> {
+        let (reply, response) = oneshot::channel();
+        self.send(Command::LoadPlugin {
+            bundle_dir: bundle_dir.as_ref().to_path_buf(),
+            entry_file: entry_file.into(),
+            lifecycle_export: None,
+            reply,
+        })?;
+        await_reply(response).await.map(|_| ())
+    }
+
+    /// Load a multi-file plugin's entry module, then call one of its exports.
+    ///
+    /// This is the multi-file counterpart of [`PluginRuntime::call_lifecycle`]:
+    /// the entry module is loaded from `bundle_dir` through
+    /// [`PluginModuleLoader`] — with relative and `@swissarmyhammer/*` imports
+    /// resolved — and the named export is then invoked. If the export returns a
+    /// promise, the event loop runs until it settles.
+    ///
+    /// # Arguments
+    ///
+    /// * `bundle_dir` - The plugin's bundle directory.
+    /// * `entry_file` - The entry module's filename, relative to `bundle_dir`.
+    /// * `export` - Name of the exported function to call.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Transpile`] for a syntax error, [`Error::Runtime`] if a
+    /// module or the lifecycle function throws, if the export is missing or not
+    /// a function, if an import cannot be resolved or escapes the bundle
+    /// directory, or a worker-communication error.
+    pub async fn call_plugin_lifecycle(
+        &self,
+        bundle_dir: impl AsRef<Path>,
+        entry_file: impl Into<String>,
+        export: impl Into<String>,
+    ) -> Result<serde_json::Value> {
+        let (reply, response) = oneshot::channel();
+        self.send(Command::LoadPlugin {
+            bundle_dir: bundle_dir.as_ref().to_path_buf(),
+            entry_file: entry_file.into(),
+            lifecycle_export: Some(export.into()),
+            reply,
+        })?;
+        await_reply(response).await
+    }
+
     /// Shut the runtime down: stop the worker thread and tear down the isolate.
     ///
     /// Dropping the worker's command sender ends its receive loop and the
@@ -403,11 +505,14 @@ fn worker_loop(
     // callback registered below turns that into a per-isolate failure instead.
     let create_params = v8::CreateParams::default().heap_limits(HEAP_INITIAL_BYTES, HEAP_MAX_BYTES);
 
+    // The module loader resolves a plugin's relative imports, `@swissarmyhammer/*`
+    // host built-ins, and rejects bare npm specifiers. `deno_core` fixes the
+    // loader at construction time, so it is shared with the worker via `Rc`:
+    // each `LoadPlugin` command points it at that plugin's bundle directory.
+    let module_loader = Rc::new(PluginModuleLoader::new());
+
     let mut runtime = JsRuntime::new(RuntimeOptions {
-        // The real module loader (relative / bare / `@swissarmyhammer/*`
-        // resolution) is a separate task; a plugin entry module is supplied
-        // directly as source, so a no-op loader is sufficient here.
-        module_loader: Some(Rc::new(NoopModuleLoader)),
+        module_loader: Some(module_loader.clone()),
         create_params: Some(create_params),
         // The SDK-to-host bridge op is installed for every plugin isolate.
         // The dispatcher starts unbound; the host binds a real one later.
@@ -478,6 +583,22 @@ fn worker_loop(
                 );
                 let _ = reply.send(result);
             }
+            Command::LoadPlugin {
+                bundle_dir,
+                entry_file,
+                lifecycle_export,
+                reply,
+            } => {
+                let result = load_and_run_plugin(
+                    &mut runtime,
+                    &tokio_rt,
+                    &module_loader,
+                    &bundle_dir,
+                    &entry_file,
+                    lifecycle_export.as_deref(),
+                );
+                let _ = reply.send(result);
+            }
         }
 
         // If the just-finished command tripped the heap-limit callback (or any
@@ -511,9 +632,11 @@ fn eval_script(
 /// Transpile a TypeScript module, evaluate it, and optionally call an export.
 ///
 /// The module is loaded as the isolate's main module from transpiled source.
-/// When `lifecycle_export` is `Some`, the named export is fetched from the
-/// module namespace and called; its return value (awaited if it is a promise)
-/// is converted to JSON. When it is `None`, the function returns JSON `null`.
+/// The entry source is supplied directly, so it cannot import sibling modules;
+/// [`load_and_run_plugin`] is the multi-file counterpart. When
+/// `lifecycle_export` is `Some`, the named export is fetched from the module
+/// namespace and called; its return value (awaited if it is a promise) is
+/// converted to JSON. When it is `None`, the function returns JSON `null`.
 fn load_and_run_module(
     runtime: &mut JsRuntime,
     tokio_rt: &tokio::runtime::Runtime,
@@ -528,12 +651,67 @@ fn load_and_run_module(
     // error in `source` does not fail here.
     let transpiled = transpile::transpile_typescript(&module_specifier, source)?;
 
-    // Load and evaluate the module on the worker's Tokio runtime, then run the
-    // event loop so module-level promise jobs settle.
+    // Load the module as the isolate's main module from transpiled source.
     let module_id = tokio_rt
         .block_on(runtime.load_main_es_module_from_code(&module_specifier, transpiled.code))
         .map_err(|e| Error::Runtime(format!("failed to load module: {e}")))?;
 
+    evaluate_and_call(runtime, tokio_rt, module_id, lifecycle_export)
+}
+
+/// Load a multi-file plugin through the module loader and optionally call an
+/// export.
+///
+/// The loader is pointed at `bundle_dir` so the plugin's relative imports are
+/// resolved against — and sandboxed to — that directory. The entry module is
+/// loaded as the isolate's main module *from disk through the loader*, which
+/// means the entry and every module it imports (relative or `@swissarmyhammer/*`)
+/// are resolved and transpiled uniformly. When `lifecycle_export` is `Some`, the
+/// named export is then called.
+fn load_and_run_plugin(
+    runtime: &mut JsRuntime,
+    tokio_rt: &tokio::runtime::Runtime,
+    module_loader: &module_loader::PluginModuleLoader,
+    bundle_dir: &Path,
+    entry_file: &str,
+    lifecycle_export: Option<&str>,
+) -> Result<serde_json::Value> {
+    // Point the loader at this plugin's bundle directory before any import is
+    // resolved; relative imports are sandboxed to it.
+    module_loader
+        .set_bundle_root(bundle_dir)
+        .map_err(Error::Runtime)?;
+
+    // The entry module's `file://` URL. It must resolve inside the bundle root
+    // so its own relative imports resolve correctly against it.
+    let entry_path = bundle_dir.join(entry_file);
+    let entry_specifier = ModuleSpecifier::from_file_path(&entry_path).map_err(|()| {
+        Error::Runtime(format!(
+            "cannot build a module URL for plugin entry '{}'",
+            entry_path.display()
+        ))
+    })?;
+
+    // Load the entry as the isolate's main module. `deno_core` fetches it — and
+    // every module it imports — through the configured `PluginModuleLoader`.
+    let module_id = tokio_rt
+        .block_on(runtime.load_main_es_module(&entry_specifier))
+        .map_err(|e| Error::Runtime(format!("failed to load plugin: {e}")))?;
+
+    evaluate_and_call(runtime, tokio_rt, module_id, lifecycle_export)
+}
+
+/// Evaluate an already-loaded module and optionally call one of its exports.
+///
+/// Runs the isolate's event loop so module-level promise jobs settle, awaits
+/// the module evaluation, and — when `lifecycle_export` is `Some` — invokes the
+/// named export. Shared by [`load_and_run_module`] and [`load_and_run_plugin`].
+fn evaluate_and_call(
+    runtime: &mut JsRuntime,
+    tokio_rt: &tokio::runtime::Runtime,
+    module_id: deno_core::ModuleId,
+    lifecycle_export: Option<&str>,
+) -> Result<serde_json::Value> {
     let evaluation = runtime.mod_evaluate(module_id);
     tokio_rt
         .block_on(runtime.run_event_loop(PollEventLoopOptions::default()))

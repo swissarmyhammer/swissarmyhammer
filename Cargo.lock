@@ -9732,6 +9732,7 @@ dependencies = [
  "serde",
  "serde_json",
  "swissarmyhammer-directory",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

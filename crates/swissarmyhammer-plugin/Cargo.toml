@@ -55,6 +55,10 @@ libc = { workspace = true }
 # own dependency on `http`.
 axum = { workspace = true }
 
+# Used by the module_loader integration test to lay out real plugin bundles
+# (entry plus relative-import helpers) in throwaway directories on disk.
+tempfile = { workspace = true }
+
 [lints]
 workspace = true
 
