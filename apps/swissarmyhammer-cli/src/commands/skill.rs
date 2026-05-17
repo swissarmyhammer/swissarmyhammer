@@ -383,6 +383,20 @@ fn build_metadata_mapping(
 mod tests {
     use super::*;
     use swissarmyhammer_common::reporter::NullReporter;
+    use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
+    /// Deploying builtin skills writes the central `.skills/` store, the
+    /// per-agent `.claude/skills`, `.zed/skills`, etc. directories, and a
+    /// `mirdan-lock.json` — all relative to the process working directory.
+    /// During `cargo test` the working directory is the crate manifest dir,
+    /// so any test that runs real deployment must first chdir into an
+    /// isolated temp dir or it pollutes the source tree.
+    /// Returns the guard (restores cwd on drop) and the owning `TempDir`.
+    fn isolated_deploy_dir() -> (CurrentDirGuard, tempfile::TempDir) {
+        let temp = tempfile::tempdir().expect("create temp dir for skill deployment");
+        let guard = CurrentDirGuard::new(temp.path()).expect("chdir into isolated temp dir");
+        (guard, temp)
+    }
 
     #[test]
     fn test_skill_deployment_name_and_priority() {
@@ -599,9 +613,19 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_skill_deployment_init_returns_one_result() {
         // init() should return exactly one result, either Ok or Error depending
-        // on the environment (e.g., whether any agents are detected).
+        // on the environment (e.g., whether any agents are detected). It
+        // deploys builtin skills via mirdan into cwd-relative agent
+        // directories and writes a cwd-relative `mirdan-lock.json`, so isolate
+        // cwd to a temp dir to keep the crate source tree clean.
+        //
+        // Joins the crate-wide `cwd` serialization group: `isolated_deploy_dir()`
+        // mutates process-global CWD via `CurrentDirGuard`, and the group is the
+        // only thing that serializes against the raw `std::env::set_current_dir`
+        // tests in `doctor/checks.rs` and `model/use_command.rs`.
+        let (_guard, _temp) = isolated_deploy_dir();
         let component = SkillDeployment;
         let reporter = NullReporter;
         let results = component.init(&InitScope::Project, &reporter);
@@ -609,7 +633,14 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_skill_deployment_deinit_returns_one_result() {
+        // deinit() removes skill symlinks from cwd-relative agent directories;
+        // isolate cwd to a temp dir so the call targets the temp dir only.
+        //
+        // Joins the crate-wide `cwd` serialization group (see
+        // `test_skill_deployment_init_returns_one_result`).
+        let (_guard, _temp) = isolated_deploy_dir();
         let component = SkillDeployment;
         let reporter = NullReporter;
         let results = component.deinit(&InitScope::Project, &reporter);

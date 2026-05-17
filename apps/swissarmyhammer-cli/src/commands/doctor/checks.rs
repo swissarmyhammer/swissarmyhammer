@@ -593,7 +593,15 @@ mod tests {
             .contains("Claude Code command not found in PATH"));
     }
 
+    /// `check_lsp_servers` reads process-global CWD (`std::env::current_dir`)
+    /// and runs project detection against it, so this test only holds when CWD
+    /// is the real Rust workspace. `#[serial_test::serial(cwd)]` joins the
+    /// crate-wide `cwd` group so it cannot run while a CWD-mutating test (e.g.
+    /// `test_lsp_servers_check_empty_dir`, which chdir's into an empty tempdir)
+    /// is active — otherwise project detection would observe the tempdir and
+    /// the `rust-analyzer` check assertion below would spuriously fail.
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_lsp_servers_check() {
         let mut checks = Vec::new();
         let result = check_lsp_servers(&mut checks);

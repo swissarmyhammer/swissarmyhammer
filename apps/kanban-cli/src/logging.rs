@@ -66,7 +66,6 @@ pub fn init_tracing(debug: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
     use swissarmyhammer_common::logging::{open_log_file, LOG_FILE_NAME};
     use swissarmyhammer_common::test_utils::CurrentDirGuard;
     use tempfile::TempDir;
@@ -76,15 +75,16 @@ mod tests {
     /// `init_tracing` installs a global subscriber via `.init()`, which can only
     /// succeed once per test binary — subsequent calls panic. This test therefore
     /// exercises the `.kanban/`-present path (the more interesting branch) in a
-    /// single call and uses `#[serial]` to keep the `CurrentDirGuard`'s CWD
-    /// change from racing with other tests in this crate.
+    /// single call and uses `#[serial_test::serial(cwd)]` — the crate-wide `cwd`
+    /// group — to keep the `CurrentDirGuard`'s CWD change from racing with any
+    /// other CWD-touching test in this crate.
     ///
     /// The "no auto-create when `.kanban/` is absent" invariant is covered
     /// by the shared helper's unit tests in `swissarmyhammer-common`, which
     /// exercise the same `open_log_file` that `init_tracing` delegates to via
     /// `DirPolicy::MustExist`.
     #[test]
-    #[serial]
+    #[serial_test::serial(cwd)]
     fn init_tracing_creates_mcp_log_when_kanban_dir_exists() {
         let tmp = TempDir::new().unwrap();
         let kanban_dir = tmp.path().join(KANBAN_DIR_NAME);
@@ -93,7 +93,7 @@ mod tests {
         let _cwd_guard = CurrentDirGuard::new(tmp.path()).unwrap();
 
         // `init_tracing` may only be called once per test binary. Running this
-        // under `#[serial]` ensures it's the single authoritative call.
+        // under the `cwd` serial group ensures it's the single authoritative call.
         init_tracing(false);
 
         assert!(

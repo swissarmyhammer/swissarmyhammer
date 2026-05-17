@@ -94,6 +94,21 @@ pub fn run_skill() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
+    /// Deploying a skill writes the central `.skills/` store and per-agent
+    /// `.claude/skills`, `.zed/skills`, etc. directories relative to the
+    /// process working directory. During `cargo test` the working directory
+    /// is the crate manifest dir, so any test that runs real deployment must
+    /// first chdir into an isolated temp dir or it pollutes the source tree
+    /// (in particular it would overwrite the tracked `.skills/*/SKILL.md`
+    /// files committed under this crate).
+    /// Returns the guard (restores cwd on drop) and the owning `TempDir`.
+    fn isolated_deploy_dir() -> (CurrentDirGuard, tempfile::TempDir) {
+        let temp = tempfile::tempdir().expect("create temp dir for skill deployment");
+        let guard = CurrentDirGuard::new(temp.path()).expect("chdir into isolated temp dir");
+        (guard, temp)
+    }
 
     #[test]
     fn test_skill_exists_in_builtins() {
@@ -218,9 +233,20 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_run_skill_returns_valid_exit_code() {
         // run_skill() may fail if there are no agent directories detected,
-        // but it should never panic -- it returns 0 or 1.
+        // but it should never panic -- it returns 0 or 1. Run it inside an
+        // isolated temp dir so the deployed `.skills/code-context/SKILL.md`,
+        // `.skills/lsp/SKILL.md`, `.claude/skills`, etc. land there instead of
+        // overwriting the tracked source files in this crate.
+        //
+        // `#[serial_test::serial(cwd)]` joins the crate-wide `cwd` serialization
+        // group — the single mutex shared by EVERY CWD-touching test in this
+        // crate, including the `serial(cwd)` tests in `ops.rs` and the
+        // `CurrentDirGuard` test in `logging.rs`. A bare `#[serial]` would be a
+        // SEPARATE group and would NOT serialize against `ops.rs`.
+        let (_guard, _temp) = isolated_deploy_dir();
         let exit_code = run_skill();
         assert!(
             exit_code == 0 || exit_code == 1,

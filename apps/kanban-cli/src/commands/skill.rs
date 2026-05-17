@@ -146,6 +146,19 @@ impl Initializable for KanbanSkillDeployment {
 mod tests {
     use super::*;
     use swissarmyhammer_common::reporter::NullReporter;
+    use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
+    /// Deploying a skill writes the central `.skills/` store and per-agent
+    /// `.claude/skills`, `.zed/skills`, etc. directories relative to the
+    /// process working directory. During `cargo test` the working directory
+    /// is the crate manifest dir, so any test that runs real deployment must
+    /// first chdir into an isolated temp dir or it pollutes the source tree.
+    /// Returns the guard (restores cwd on drop) and the owning `TempDir`.
+    fn isolated_deploy_dir() -> (CurrentDirGuard, tempfile::TempDir) {
+        let temp = tempfile::tempdir().expect("create temp dir for skill deployment");
+        let guard = CurrentDirGuard::new(temp.path()).expect("chdir into isolated temp dir");
+        (guard, temp)
+    }
 
     #[test]
     fn test_skill_exists_in_builtins() {
@@ -211,9 +224,19 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_deploy_kanban_skill_returns_valid_result() {
         // deploy_kanban_skill() may fail if there are no agent directories detected,
-        // but it should never panic.
+        // but it should never panic. Run it inside an isolated temp dir so the
+        // deployed `.skills/`, `.claude/skills`, etc. land there, not in the
+        // real crate source tree.
+        //
+        // `#[serial_test::serial(cwd)]` joins the crate-wide `cwd` serialization
+        // group — the single mutex shared by EVERY CWD-touching test in this
+        // crate (`doctor.rs`, `logging.rs`, `serve.rs`). `isolated_deploy_dir()`
+        // mutates process-global CWD via `CurrentDirGuard`, so it must not run
+        // concurrently with any other test that reads or mutates CWD.
+        let (_guard, _temp) = isolated_deploy_dir();
         let _result = deploy_kanban_skill();
     }
 
@@ -234,7 +257,13 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_kanban_skill_deployment_init() {
+        // init() deploys the kanban skill via mirdan into cwd-relative agent
+        // directories — isolate cwd to a temp dir so it does not pollute the
+        // crate source tree. `#[serial_test::serial(cwd)]` joins the crate-wide
+        // `cwd` group (see `test_deploy_kanban_skill_returns_valid_result`).
+        let (_guard, _temp) = isolated_deploy_dir();
         let component = KanbanSkillDeployment;
         let reporter = NullReporter;
         let results = component.init(&InitScope::Project, &reporter);
@@ -243,7 +272,13 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_kanban_skill_deployment_deinit() {
+        // deinit() removes skill symlinks from cwd-relative agent directories;
+        // isolate cwd to a temp dir so the call targets the temp dir only.
+        // `#[serial_test::serial(cwd)]` joins the crate-wide `cwd` group (see
+        // `test_deploy_kanban_skill_returns_valid_result`).
+        let (_guard, _temp) = isolated_deploy_dir();
         let component = KanbanSkillDeployment;
         let reporter = NullReporter;
         let results = component.deinit(&InitScope::Project, &reporter);

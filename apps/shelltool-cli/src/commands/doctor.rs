@@ -210,7 +210,12 @@ mod tests {
         assert!(doctor.checks().is_empty());
     }
 
+    /// `run_diagnostics` runs `check_git_repository`, which walks ancestors
+    /// from process-global CWD via `find_git_repository_root()`.
+    /// `#[serial(cwd)]` joins the crate-wide `cwd` group so this test cannot
+    /// run concurrently with any CWD-mutating test.
     #[tokio::test]
+    #[serial(cwd)]
     async fn test_run_diagnostics() {
         let mut doctor = ShelltoolDoctor::new();
         let exit_code = doctor.run_diagnostics();
@@ -223,7 +228,10 @@ mod tests {
         assert!(exit_code <= 2);
     }
 
+    /// `run_doctor` drives `run_diagnostics`, which reads process-global CWD;
+    /// joins the crate-wide `cwd` serialization group.
     #[tokio::test]
+    #[serial(cwd)]
     async fn test_run_doctor() {
         // This will print to stdout, but we just verify it doesn't panic
         // and returns a valid exit code
@@ -231,7 +239,9 @@ mod tests {
         assert!(exit_code <= 2);
     }
 
+    /// Joins the crate-wide `cwd` serialization group (see `test_run_doctor`).
     #[tokio::test]
+    #[serial(cwd)]
     async fn test_run_doctor_verbose() {
         // Test verbose mode
         let exit_code = run_doctor(true);
@@ -244,7 +254,10 @@ mod tests {
         assert!(doctor.checks().is_empty());
     }
 
+    /// `check_git_repository` walks ancestors from process-global CWD via
+    /// `find_git_repository_root()`; joins the crate-wide `cwd` group.
     #[test]
+    #[serial(cwd)]
     fn test_check_git_repository() {
         let mut doctor = ShelltoolDoctor::new();
         doctor.check_git_repository();
@@ -282,8 +295,14 @@ mod tests {
 
     /// Exercises the `None` arm of `check_git_repository` by running the
     /// check from a tempdir with no `.git` in any ancestor.
+    ///
+    /// Mutates process-global CWD via `env::set_current_dir`, so it joins
+    /// the crate-wide `cwd` serialization group — the single mutex shared by
+    /// EVERY CWD-touching test in this crate (`skill.rs`, `logging.rs`,
+    /// `main.rs`, `registry.rs`). It touches no env var, so it is NOT in the
+    /// `env` group.
     #[test]
-    #[serial(env)]
+    #[serial(cwd)]
     fn test_check_git_repository_not_in_git() {
         let _cwd = CwdGuard::capture();
 

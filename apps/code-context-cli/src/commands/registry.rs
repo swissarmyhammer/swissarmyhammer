@@ -153,6 +153,27 @@ impl Initializable for CodeContextMcpRegistration {
 mod tests {
     use super::*;
     use swissarmyhammer_common::reporter::NullReporter;
+    use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
+
+    /// Isolate a test from the real source tree before it runs `init`/`deinit`.
+    ///
+    /// `CodeContextMcpRegistration::init`/`deinit` resolve each detected
+    /// agent's MCP config from a CWD-relative path (e.g. `.mcp.json`) and the
+    /// global config from a HOME-relative path. During `cargo test` the CWD is
+    /// the crate manifest dir, which contains a committed
+    /// `apps/code-context-cli/.mcp.json` — so an unisolated `deinit` would
+    /// strip the `code-context` entry straight out of that tracked file.
+    ///
+    /// This helper pins HOME to a fresh isolated env and chdir's into that
+    /// env's temp dir, so both project- and global-scope writes land in a
+    /// throwaway location. Callers must also carry `#[serial_test::serial(cwd)]`
+    /// so the CWD change is mutually exclusive with every other CWD-touching
+    /// test in this crate (`ops.rs`, `skill.rs`, `logging.rs`).
+    fn isolated_init_env() -> (IsolatedTestEnvironment, CurrentDirGuard) {
+        let env = IsolatedTestEnvironment::new().expect("create isolated test env");
+        let guard = CurrentDirGuard::new(env.temp_dir()).expect("chdir into isolated temp dir");
+        (env, guard)
+    }
 
     #[test]
     fn test_code_context_mcp_registration_name_and_priority() {
@@ -170,7 +191,12 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_init_returns_ok_result() {
+        // `init` writes each detected agent's project `.mcp.json` relative to
+        // CWD — isolate CWD (and HOME) to a temp dir so it cannot strip or
+        // rewrite the committed `apps/code-context-cli/.mcp.json`.
+        let (_env, _cwd) = isolated_init_env();
         let component = CodeContextMcpRegistration;
         let reporter = NullReporter;
         let results = component.init(&InitScope::Project, &reporter);
@@ -179,7 +205,12 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_deinit_returns_ok_result() {
+        // `deinit` removes the `code-context` entry from each detected agent's
+        // CWD-relative `.mcp.json`. Without isolation this strips the entry
+        // from the tracked `apps/code-context-cli/.mcp.json` — isolate CWD here.
+        let (_env, _cwd) = isolated_init_env();
         let component = CodeContextMcpRegistration;
         let reporter = NullReporter;
         let results = component.deinit(&InitScope::Project, &reporter);

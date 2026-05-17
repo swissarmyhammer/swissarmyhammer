@@ -503,7 +503,13 @@ mod tests {
         assert!(doctor.checks().is_empty());
     }
 
+    /// `run_diagnostics` runs `check_git_repository`, `check_index_directory`,
+    /// `check_lsp_status`, and `check_semantic_search_status` — every one of
+    /// which reads process-global CWD. `#[serial_test::serial(cwd)]` joins the
+    /// crate-wide `cwd` group so this test cannot run concurrently with any
+    /// CWD-mutating test (`ops.rs`, `skill.rs`, `logging.rs`, `registry.rs`).
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_run_diagnostics() {
         let mut doctor = CodeContextDoctor::new();
         let exit_code = doctor.run_diagnostics().await;
@@ -520,7 +526,10 @@ mod tests {
         assert!(exit_code <= 2, "exit code was {}", exit_code);
     }
 
+    /// `check_git_repository` walks ancestors from process-global CWD via
+    /// `find_git_repository_root()`; joins the crate-wide `cwd` group.
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_check_git_repository() {
         let mut doctor = CodeContextDoctor::new();
         doctor.check_git_repository();
@@ -547,7 +556,10 @@ mod tests {
         assert!(check.status == CheckStatus::Ok || check.status == CheckStatus::Warning);
     }
 
+    /// `check_index_directory` resolves `.code-context` against process-global
+    /// CWD; joins the crate-wide `cwd` group.
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_check_index_directory() {
         let mut doctor = CodeContextDoctor::new();
         doctor.check_index_directory();
@@ -560,7 +572,10 @@ mod tests {
         assert!(check.status == CheckStatus::Ok || check.status == CheckStatus::Warning);
     }
 
+    /// `check_lsp_status` reads process-global CWD and runs project detection
+    /// against it; joins the crate-wide `cwd` group.
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_check_lsp_status() {
         let mut doctor = CodeContextDoctor::new();
         doctor.check_lsp_status();
@@ -591,13 +606,18 @@ mod tests {
         assert!(doctor.checks().is_empty());
     }
 
+    /// `run_doctor` drives `run_diagnostics`, which reads process-global CWD;
+    /// joins the crate-wide `cwd` serialization group.
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_run_doctor() {
         let exit_code = run_doctor(false).await;
         assert!(exit_code <= 2);
     }
 
+    /// Joins the crate-wide `cwd` serialization group (see `test_run_doctor`).
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_run_doctor_verbose() {
         let exit_code = run_doctor(true).await;
         assert!(exit_code <= 2);

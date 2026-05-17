@@ -359,7 +359,12 @@ mod tests {
         assert!(path.is_absolute());
     }
 
+    /// `project_key()` falls back to `std::env::current_dir()` when not in a
+    /// git repo, so it reads process-global CWD. `#[serial_test::serial(cwd)]`
+    /// joins the crate-wide `cwd` group so it cannot run while a CWD-mutating
+    /// test has chdir'd into a tempdir that may be mid-removal.
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_project_key_returns_nonempty() {
         let key = project_key().unwrap();
         assert!(!key.is_empty());
