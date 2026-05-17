@@ -4,9 +4,16 @@
 //! has a single global server namespace: the first registration of a name
 //! wins, and a later attempt to reuse that name is rejected until the name
 //! is freed by [`ServerRegistry::unregister`].
+//!
+//! Unregistering a name does not erase it: the registry keeps a *tombstone* —
+//! a record that the name was once live and has since been disposed. A call
+//! that resolves a tombstoned name learns the server was disposed out from
+//! under it ([`ServerStatus::Disposed`]) rather than that the name never
+//! existed ([`ServerStatus::Unknown`]). Re-registering the name clears its
+//! tombstone.
 
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
@@ -20,15 +27,44 @@ use crate::server::McpServer;
 /// throughout the registry API.
 pub type ServerName = String;
 
+/// The outcome of resolving a name against the [`ServerRegistry`].
+///
+/// Resolution distinguishes three cases so a caller can return the accurate
+/// error: a name that resolves to a [`Live`](Self::Live) server, a name whose
+/// server was registered and later [`Disposed`](Self::Disposed) — the
+/// tombstone case — and a name the registry has never seen
+/// ([`Unknown`](Self::Unknown)).
+pub enum ServerStatus {
+    /// The name resolves to a live, callable server.
+    Live(Arc<dyn McpServer>),
+
+    /// The name was registered and has since been unregistered. A consumer
+    /// holding this name learns its server was disposed out from under it.
+    Disposed,
+
+    /// The registry has no record of the name — it was never registered.
+    Unknown,
+}
+
 /// Tracks the MCP servers registered with the platform, keyed by name.
 ///
 /// The registry owns the shared handles to every registered server. Callers
 /// register a server under a name, look it up by name to dispatch work, and
 /// unregister it when the backing plugin goes away.
+///
+/// Unregistering leaves a tombstone in [`disposed`](Self::disposed) so a later
+/// resolution of the freed name reports [`ServerStatus::Disposed`] rather than
+/// [`ServerStatus::Unknown`]. Re-registering the name clears its tombstone.
 #[derive(Default)]
 pub struct ServerRegistry {
     /// The registered servers, keyed by their unique [`ServerName`].
     servers: HashMap<ServerName, Arc<dyn McpServer>>,
+
+    /// Tombstones: names that were registered and have since been
+    /// unregistered. A name is in exactly one of `servers` or `disposed` —
+    /// registering moves it into `servers` and clears any tombstone;
+    /// unregistering moves it the other way.
+    disposed: HashSet<ServerName>,
 }
 
 /// `Debug` is written by hand because the registered server values are
@@ -40,6 +76,7 @@ impl fmt::Debug for ServerRegistry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ServerRegistry")
             .field("servers", &self.servers.keys())
+            .field("disposed", &self.disposed)
             .finish()
     }
 }
@@ -63,6 +100,8 @@ impl ServerRegistry {
     /// # Returns
     ///
     /// `Ok(())` when `name` was free and the server is now registered.
+    /// Registering a name that carried a tombstone succeeds and clears that
+    /// tombstone — the name is live again.
     ///
     /// # Errors
     ///
@@ -72,6 +111,9 @@ impl ServerRegistry {
     pub fn register(&mut self, name: ServerName, server: Arc<dyn McpServer>) -> Result<()> {
         match self.servers.entry(name) {
             Entry::Vacant(slot) => {
+                // A re-registration revives the name: clear any tombstone so
+                // it resolves as live rather than disposed.
+                self.disposed.remove(slot.key());
                 slot.insert(server);
                 Ok(())
             }
@@ -79,7 +121,11 @@ impl ServerRegistry {
         }
     }
 
-    /// Removes the server registered under `name`.
+    /// Removes the server registered under `name`, leaving a tombstone.
+    ///
+    /// The name is freed for re-registration, but the registry remembers it
+    /// was once live: a later [`resolve`](Self::resolve) of the freed name
+    /// reports [`ServerStatus::Disposed`] until the name is registered again.
     ///
     /// # Parameters
     ///
@@ -90,7 +136,13 @@ impl ServerRegistry {
     /// `Some` shared handle to the removed server when `name` was registered,
     /// freeing the name for reuse; `None` when no server held that name.
     pub fn unregister(&mut self, name: &str) -> Option<Arc<dyn McpServer>> {
-        self.servers.remove(name)
+        let removed = self.servers.remove(name);
+        if removed.is_some() {
+            // Leave a tombstone only for a name that was actually live, so a
+            // never-registered name keeps resolving as `Unknown`.
+            self.disposed.insert(name.to_string());
+        }
+        removed
     }
 
     /// Looks up the server registered under `name`.
@@ -102,9 +154,38 @@ impl ServerRegistry {
     /// # Returns
     ///
     /// `Some` clone of the shared handle when a server is registered under
-    /// `name`; `None` otherwise.
+    /// `name`; `None` otherwise. This does not distinguish a disposed name
+    /// from one that never existed — use [`resolve`](Self::resolve) when that
+    /// distinction matters.
     pub fn get(&self, name: &str) -> Option<Arc<dyn McpServer>> {
         self.servers.get(name).cloned()
+    }
+
+    /// Resolves `name` to its registration status.
+    ///
+    /// Unlike [`get`](Self::get), this distinguishes a live server from a name
+    /// whose server was disposed (tombstoned) and from a name the registry has
+    /// never seen — so a router can return [`Error::ServerUnavailable`] for the
+    /// disposed case and [`Error::UnknownServer`] only for the never-registered
+    /// case.
+    ///
+    /// # Parameters
+    ///
+    /// - `name` — the name of the server to resolve.
+    ///
+    /// # Returns
+    ///
+    /// [`ServerStatus::Live`] carrying the server handle when `name` is live,
+    /// [`ServerStatus::Disposed`] when `name` carries a tombstone, and
+    /// [`ServerStatus::Unknown`] when the registry has no record of `name`.
+    pub fn resolve(&self, name: &str) -> ServerStatus {
+        if let Some(server) = self.servers.get(name) {
+            return ServerStatus::Live(server.clone());
+        }
+        if self.disposed.contains(name) {
+            return ServerStatus::Disposed;
+        }
+        ServerStatus::Unknown
     }
 }
 
@@ -191,6 +272,75 @@ mod tests {
         assert!(
             registry.get("alpha").is_none(),
             "get should yield None after unregister"
+        );
+    }
+
+    #[test]
+    fn resolve_distinguishes_live_disposed_and_unknown() {
+        let mut registry = ServerRegistry::new();
+
+        // A name the registry has never seen resolves as Unknown.
+        assert!(
+            matches!(registry.resolve("never"), ServerStatus::Unknown),
+            "a never-registered name must resolve as Unknown"
+        );
+
+        let server: Arc<dyn McpServer> = Arc::new(FakeServer { tool_name: "alpha" });
+        registry
+            .register("alpha".to_string(), server)
+            .expect("registration of a fresh name should succeed");
+
+        // A live registration resolves to a callable server.
+        assert!(
+            matches!(registry.resolve("alpha"), ServerStatus::Live(_)),
+            "a registered name must resolve as Live"
+        );
+
+        registry.unregister("alpha");
+
+        // After unregister the name carries a tombstone: Disposed, not Unknown.
+        assert!(
+            matches!(registry.resolve("alpha"), ServerStatus::Disposed),
+            "an unregistered name must resolve as Disposed, not Unknown"
+        );
+    }
+
+    #[test]
+    fn re_registering_a_disposed_name_clears_its_tombstone() {
+        let mut registry = ServerRegistry::new();
+
+        let first: Arc<dyn McpServer> = Arc::new(FakeServer { tool_name: "alpha" });
+        registry
+            .register("alpha".to_string(), first)
+            .expect("registration of a fresh name should succeed");
+        registry.unregister("alpha");
+        assert!(
+            matches!(registry.resolve("alpha"), ServerStatus::Disposed),
+            "the name should be tombstoned after unregister"
+        );
+
+        let second: Arc<dyn McpServer> = Arc::new(FakeServer { tool_name: "beta" });
+        registry
+            .register("alpha".to_string(), second)
+            .expect("re-registering a tombstoned name should succeed");
+        assert!(
+            matches!(registry.resolve("alpha"), ServerStatus::Live(_)),
+            "re-registration must clear the tombstone and resolve as Live"
+        );
+    }
+
+    #[test]
+    fn unregister_of_a_never_registered_name_leaves_no_tombstone() {
+        let mut registry = ServerRegistry::new();
+
+        let removed = registry.unregister("ghost");
+        assert!(
+            removed.is_none(),
+            "unregister of an unknown name returns None"
+        );
+        assert!(
+            matches!(registry.resolve("ghost"), ServerStatus::Unknown),
+            "a name that was never live must not gain a tombstone"
         );
     }
 }

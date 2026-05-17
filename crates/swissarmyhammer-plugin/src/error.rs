@@ -15,7 +15,14 @@ use thiserror::Error;
 /// dispatch.
 #[derive(Debug, Error)]
 pub enum Error {
-    /// The named MCP server is not present in the registry.
+    /// The named MCP server was never registered.
+    ///
+    /// Raised when a call names a server the registry has no record of —
+    /// neither live nor disposed. A server that *was* registered and has since
+    /// been disposed surfaces as [`ServerUnavailable`] instead, so this variant
+    /// is reserved for a name that never existed.
+    ///
+    /// [`ServerUnavailable`]: Self::ServerUnavailable
     #[error("unknown server")]
     UnknownServer,
 
@@ -32,12 +39,32 @@ pub enum Error {
     ServerNameTaken(String),
 
     /// The server is registered but is currently not able to serve requests.
+    ///
+    /// Raised when a call names a server that *was* registered but has since
+    /// been disposed — its backing plugin was unloaded, or the plugin
+    /// unregistered it. This is deliberately distinct from [`UnknownServer`]:
+    /// it lets a consumer tell "the server I was using was disposed out from
+    /// under me" apart from "I named a server that never existed".
+    ///
+    /// [`UnknownServer`]: Self::UnknownServer
     #[error("server is unavailable")]
     ServerUnavailable,
 
     /// The plugin backing this server was reloaded; the request must be retried.
     #[error("plugin was reloaded; retry the request")]
     PluginReloaded,
+
+    /// No plugin is loaded under the named plugin id.
+    ///
+    /// Raised when an operation — such as [`unload`] — names a plugin that the
+    /// host never loaded, or has already unloaded. Distinct from
+    /// [`UnknownServer`], which names a missing *server* rather than a missing
+    /// *plugin*.
+    ///
+    /// [`unload`]: crate::PluginHost::unload
+    /// [`UnknownServer`]: Self::UnknownServer
+    #[error("unknown plugin")]
+    UnknownPlugin,
 
     /// A plugin runtime could not be started.
     ///

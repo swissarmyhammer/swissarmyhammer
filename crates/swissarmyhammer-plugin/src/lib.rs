@@ -35,6 +35,8 @@ pub mod server;
 
 pub use dispatcher::Dispatcher;
 pub use error::{Error, Result};
+pub use host::PluginHost;
+pub use ledger::{CallbackId, PluginLedger, RegistrationHandle};
 pub use registry::{ServerName, ServerRegistry};
 pub use runtime::{
     transpile_typescript, HostDispatcher, PluginModuleLoader, PluginRuntime, RuntimeConfig,
