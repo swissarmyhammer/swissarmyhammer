@@ -12,7 +12,12 @@ description = "Plugin platform for SwissArmyHammer: registers MCP servers and di
 [dependencies]
 # JS runtime used to host plugin code
 deno_core = { workspace = true }
-deno_ast = { workspace = true }
+# `transpiling` pulls in the swc-backed TypeScript-to-JavaScript transform and
+# the source-map emitter; the bare crate exposes only parsing. The workspace
+# pin carries no features, so the feature is opted into here.
+deno_ast = { workspace = true, features = ["transpiling"] }
+# Supplies JsErrorBox, the error type deno_core ops surface to JavaScript.
+deno_error = { workspace = true }
 
 # MCP server/client protocol
 rmcp = { workspace = true }
@@ -27,6 +32,10 @@ async-trait = { workspace = true }
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+# Encodes the transpiled source map as the base64 payload of the inline
+# `//# sourceMappingURL=data:...` trailer V8 reads for stack traces.
+base64 = { workspace = true }
 
 # Error handling and diagnostics
 thiserror = { workspace = true }

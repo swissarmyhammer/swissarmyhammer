@@ -38,6 +38,42 @@ pub enum Error {
     /// The plugin backing this server was reloaded; the request must be retried.
     #[error("plugin was reloaded; retry the request")]
     PluginReloaded,
+
+    /// A plugin runtime could not be started.
+    ///
+    /// Raised when the dedicated worker thread or its supporting Tokio runtime
+    /// cannot be created.
+    #[error("failed to start plugin runtime: {0}")]
+    RuntimeStartup(String),
+
+    /// The plugin runtime's worker thread is no longer running.
+    ///
+    /// Raised when a command is sent to a runtime whose worker has stopped, or
+    /// when that worker panicked during teardown.
+    #[error("plugin runtime has stopped")]
+    RuntimeStopped,
+
+    /// A plugin runtime command exceeded its time budget.
+    ///
+    /// Raised when the worker does not answer within the command timeout —
+    /// typically a plugin stuck in an infinite loop or an unsettled promise.
+    #[error("plugin runtime command timed out")]
+    RuntimeTimeout,
+
+    /// JavaScript executing in a plugin isolate failed.
+    ///
+    /// Carries the V8 exception message: a thrown error, a syntax error in an
+    /// evaluated snippet, or a missing or non-callable lifecycle export.
+    #[error("plugin runtime error: {0}")]
+    Runtime(String),
+
+    /// TypeScript source could not be transpiled to JavaScript.
+    ///
+    /// Raised for a genuine *syntax* error in a `.ts` module. Type errors are
+    /// not transpilation failures: a type-incorrect but syntactically valid
+    /// module transpiles cleanly.
+    #[error("plugin transpilation error: {0}")]
+    Transpile(String),
 }
 
 /// Convenience alias for results produced by the plugin platform.
