@@ -69,6 +69,30 @@ jobs:
         working-directory: ${{ matrix.app }}/ui
         run: npm test --if-present
 
+  apps:
+    name: Tauri Apps
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "swissarmyhammer-ci"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked || true
+      - uses: taiki-e/install-action@just
+      - name: Build Tauri apps
+        # Runs the same just recipes developers use, so a broken app build
+        # (e.g. mismatched tauri / @tauri-apps/api versions) fails CI instead
+        # of slipping through to release. The build-only recipes skip the
+        # local /Applications install step.
+        run: just mirdan-build kanban-build
+
   fmt:
     name: Rustfmt
     runs-on: self-hosted
