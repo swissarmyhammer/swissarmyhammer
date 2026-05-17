@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KRRE967SBZ5TH2JPDMSV21BY
-position_column: todo
-position_ordinal: 8f80
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffc80
 project: plugin-arch
 title: 'plugin: manifest parsing and stacked discovery via swissarmyhammer-directory'
 ---
@@ -21,20 +21,29 @@ In `crates/swissarmyhammer-plugin/src/` (a `discovery.rs` + `manifest.rs`):
 Scope boundary: reacting to file changes (hot reload) is the next task; this task is point-in-time discovery + stacking + manifest.
 
 ## Acceptance Criteria
-- [ ] `Manifest` parses a real `plugin.json`; missing required fields error clearly.
-- [ ] Discovery finds plugin dirs across the supplied layer roots (builtin + user, optionally project); the highest-precedence copy wins when an id exists in multiple layers.
-- [ ] Discovery is generic over `C: DirectoryConfig` — no host-specific directory name or path is hardcoded in the platform.
-- [ ] `this.register` for a name not in `provides` is rejected; a `provides` name colliding with a reserved host name is rejected.
-- [ ] The disk directory name not matching `id` still resolves correctly by `id`.
+- [x] `Manifest` parses a real `plugin.json`; missing required fields error clearly.
+- [x] Discovery finds plugin dirs across the supplied layer roots (builtin + user, optionally project); the highest-precedence copy wins when an id exists in multiple layers.
+- [x] Discovery is generic over `C: DirectoryConfig` — no host-specific directory name or path is hardcoded in the platform.
+- [x] `this.register` for a name not in `provides` is rejected; a `provides` name colliding with a reserved host name is rejected.
+- [x] The disk directory name not matching `id` still resolves correctly by `id`.
 
 ## Tests
-- [ ] Integration test with `PluginHost::for_tests`: a temp project/user layer with `plugins/probe/plugin.json` + entry `.ts`; `discover_and_load_all()` loads it and `load()` runs.
-- [ ] Layering test: same `id` in two temp layers; assert the higher-precedence copy is active (observe a behavior difference between the two copies).
-- [ ] Test: a plugin whose `load()` registers a server name absent from `provides` fails with a clear error.
-- [ ] Run: `cargo test -p swissarmyhammer-plugin` — all green.
+- [x] Integration test with `PluginHost::for_tests`: a temp project/user layer with `plugins/probe/plugin.json` + entry `.ts`; `discover_and_load_all()` loads it and `load()` runs.
+- [x] Layering test: same `id` in two temp layers; assert the higher-precedence copy is active (observe a behavior difference between the two copies).
+- [x] Test: a plugin whose `load()` registers a server name absent from `provides` fails with a clear error.
+- [x] Run: `cargo test -p swissarmyhammer-plugin` — all green.
 
 ## Workflow
 - Use `/tdd` — write the manifest + stacked-discovery + provides-validation tests first, then implement.
 
 ## Depends on
 PluginHost lifecycle.
+
+## Review Findings (2026-05-17 13:00)
+
+### Warnings
+- [x] `crates/swissarmyhammer-plugin/src/host.rs:472-485` — `discover_and_load_all` loops over discovered plugins calling `load_resolved(...).await?`; if the Nth plugin fails to load, the `?` returns `Err` while plugins 1..N-1 remain loaded and live in the registry. The returned `Err` carries no list of what *did* load, so the caller cannot unload them — a partially-initialized host. This silently contradicts `PluginHost::new`, whose docs explicitly state "A host whose builtins fail to load is not returned, because a partially initialized host would silently miss tools the embedder shipped." Either roll back already-loaded plugins on a mid-scan failure (mirroring `new`), or return the successfully-loaded ids alongside the error so the caller can decide. At minimum, document the current partial-success behavior on `discover_and_load_all` so it is a deliberate, stated contract rather than an accident, and add a test covering the multi-plugin-with-one-failure path.
+- [x] `crates/swissarmyhammer-plugin/src/manifest.rs:67-72` and `crates/swissarmyhammer-plugin/src/host.rs:385-388` — the manifest's `entry` field is plugin-authored and is joined onto the bundle directory with no containment check (`bundle_dir.join(entry_file)`), then handed to the runtime. `runtime/module_loader.rs:216-218` documents that the entry/main module URL is "returned unchecked because the entry path is host-derived ... and trusted, not plugin-chosen" — but with this change `entry` *is* plugin-chosen. A manifest with `"entry": "../../../etc/passwd"` (or any traversal) escapes the bundle root and bypasses the sandbox containment check by design. Validate that the resolved `entry` path stays within the plugin directory (reject `..` components / canonicalize-and-check) before loading, or update the module_loader's trust comment to reflect that `entry` is now manifest-supplied and must be contained.
+
+### Nits
+- [x] `crates/swissarmyhammer-plugin/src/discovery.rs:181-189` — `scan_layer` silently skips any immediate subdirectory of `plugins/` that lacks a `plugin.json`. This is the documented and intended behavior, but a directory that looks like a plugin (e.g. has an `entry.ts` but a missing/misnamed `plugin.json`) is dropped with no diagnostic. Consider a `tracing::debug!` when a `plugins/` subdirectory is skipped for want of a manifest, so a misconfigured bundle is observable rather than invisible.

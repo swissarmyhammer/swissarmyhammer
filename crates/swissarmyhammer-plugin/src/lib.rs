@@ -18,25 +18,31 @@
 //! - [`sdk`] — the `@swissarmyhammer/plugin` TypeScript SDK, embedded.
 //! - [`host`] — host-side bindings exposed to plugins.
 //! - [`ledger`] — records of registration and dispatch activity.
+//! - [`manifest`] — the `plugin.json` manifest a plugin bundle ships.
+//! - [`discovery`] — stacked, point-in-time discovery of plugins on disk.
 //! - [`codegen`] — code generation for plugin scaffolding and bindings.
 //! - [`error`] — the platform [`Error`] type and [`Result`] alias.
 //!
 //! This is the scaffold crate; the module bodies are filled in by later work.
 
 pub mod codegen;
+pub mod discovery;
 pub mod dispatcher;
 pub mod error;
 pub mod host;
 pub mod ledger;
+pub mod manifest;
 pub mod registry;
 pub mod runtime;
 pub mod sdk;
 pub mod server;
 
+pub use discovery::{discover_plugins, DiscoveredPlugin, LayerRoot, PLUGINS_SUBDIR};
 pub use dispatcher::Dispatcher;
 pub use error::{Error, Result};
 pub use host::PluginHost;
 pub use ledger::{CallbackId, PluginLedger, RegistrationHandle};
+pub use manifest::{Manifest, MANIFEST_FILE};
 pub use registry::{ServerName, ServerRegistry};
 pub use runtime::{
     transpile_typescript, HostDispatcher, PluginModuleLoader, PluginRuntime, RuntimeConfig,

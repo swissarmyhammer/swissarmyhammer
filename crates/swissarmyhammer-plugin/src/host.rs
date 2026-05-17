@@ -39,10 +39,22 @@
 //! [`new`](PluginHost::new) for production embedders, each of which computes
 //! its own roots and passes them in.
 //!
-//! Scope: this module delivers explicit [`load`](PluginHost::load) /
-//! [`unload`](PluginHost::unload) APIs. Discovering plugins by scanning the
-//! layer roots, and triggering reloads from a filesystem watcher, are separate
-//! later tasks.
+//! # Discovery and the manifest
+//!
+//! On top of explicit `load` / `unload`, the host scans its layer roots for
+//! plugins on disk: [`discover_and_load_all`](PluginHost::discover_and_load_all)
+//! is a point-in-time scan that resolves, per plugin id, the highest-precedence
+//! copy across layers (project shadows user) and loads it. The scan is
+//! all-or-nothing: a mid-scan load failure rolls back every plugin the scan
+//! already loaded, so a failed scan leaves the host unchanged. Each plugin
+//! bundle carries a [`Manifest`] (`plugin.json`); the host retains the manifest
+//! of a loaded plugin so the bridge's `register` handler can enforce the
+//! manifest's `provides` contract — a plugin may register only the server names
+//! it declared.
+//!
+//! Scope: this module delivers explicit `load` / `unload` plus point-in-time
+//! discovery. Triggering reloads from a filesystem watcher is a separate later
+//! task.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -51,9 +63,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{Map, Value};
+use swissarmyhammer_directory::{DirectoryConfig, FileSource};
 
+use crate::discovery::{discover_plugins, DiscoveredPlugin, LayerRoot};
 use crate::error::{Error, Result};
 use crate::ledger::{CallbackId, PluginLedger, RegistrationHandle};
+use crate::manifest::{Manifest, MANIFEST_FILE};
 use crate::registry::{ServerName, ServerRegistry, ServerStatus};
 use crate::runtime::{HostDispatcher, PluginRuntime, RuntimeConfig};
 use crate::server::{CallerId, CliServer, McpServer, PluginId, ToolMetadata, UrlServer};
@@ -162,6 +177,16 @@ struct HostState {
 
     /// The loaded plugins, keyed by plugin id.
     plugins: HashMap<PluginId, LoadedPlugin>,
+
+    /// The manifest of each plugin that was loaded with one, keyed by plugin id.
+    ///
+    /// A plugin loaded from a bundle that has a `plugin.json` has its parsed
+    /// [`Manifest`] recorded here for the duration of the load. The bridge's
+    /// `register` handler consults it to enforce the manifest's `provides`
+    /// contract. A plugin loaded from a bundle with no manifest — the legacy
+    /// bare-`entry.ts` shape — has no entry here, and its registrations are not
+    /// `provides`-checked.
+    manifests: HashMap<PluginId, Manifest>,
 }
 
 /// A plugin the host has loaded: its isolate plus where its bundle lives.
@@ -237,6 +262,7 @@ impl PluginHost {
                     ledger: PluginLedger::new(),
                     modules: HashMap::new(),
                     plugins: HashMap::new(),
+                    manifests: HashMap::new(),
                 }),
             }),
         }
@@ -288,15 +314,29 @@ impl PluginHost {
     ///
     /// Creates a fresh [`PluginRuntime`] isolate for the plugin, wires its SDK
     /// bridge to a host dispatcher scoped to the new plugin's id, loads the
-    /// bundle's `entry.ts` through the module loader, and runs the exported
+    /// bundle's entry module through the module loader, and runs the exported
     /// `load` lifecycle function. Every server the plugin registers during
     /// `load()` is inserted into the live registry and recorded in the plugin's
     /// ledger.
     ///
+    /// # The manifest
+    ///
+    /// When `plugin_dir` contains a [`MANIFEST_FILE`] the host parses it: the
+    /// manifest's `entry` names the module to evaluate, and the host retains
+    /// the manifest so the bridge's `register` handler can enforce the
+    /// manifest's `provides` contract. Because `entry` is plugin-authored, it
+    /// is resolved through [`Manifest::resolve_entry`], which rejects an `entry`
+    /// that is absolute or escapes the bundle directory — so the module the
+    /// runtime evaluates is always contained within the bundle. Before the
+    /// isolate is created, every `provides` name is checked against the host's
+    /// reserved server names; a collision fails the load up front. A bundle
+    /// with no manifest — the legacy bare-`entry.ts` shape — loads `entry.ts`
+    /// directly and is not `provides`-checked.
+    ///
     /// # Parameters
     ///
-    /// - `plugin_dir` — the plugin's bundle directory; it must contain an
-    ///   `entry.ts` entry module.
+    /// - `plugin_dir` — the plugin's bundle directory; it must contain either a
+    ///   `plugin.json` naming an entry module, or a bare `entry.ts`.
     ///
     /// # Returns
     ///
@@ -304,13 +344,64 @@ impl PluginHost {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::RuntimeStartup`] when the isolate cannot be created,
-    /// [`Error::Transpile`] or [`Error::Runtime`] when the bundle fails to load
-    /// or its `load()` throws, or any error a `register` made during `load()`
-    /// surfaced. A plugin that fails to load is removed from the host, so a
-    /// failed load leaves no half-initialized plugin behind.
+    /// Returns [`Error::Manifest`] when a present `plugin.json` is invalid or
+    /// when its `entry` is absolute or escapes the bundle directory,
+    /// [`Error::ProvidesViolation`] when a `provides` name collides with a
+    /// reserved host server, [`Error::RuntimeStartup`] when the isolate cannot
+    /// be created, [`Error::Transpile`] or [`Error::Runtime`] when the bundle
+    /// fails to load or its `load()` throws, or any error a `register` made
+    /// during `load()` surfaced. A plugin that fails to load is removed from
+    /// the host, so a failed load leaves no half-initialized plugin behind.
     pub async fn load(&self, plugin_dir: impl AsRef<Path>) -> Result<PluginId> {
         let plugin_dir = plugin_dir.as_ref().to_path_buf();
+
+        // A bundle with a `plugin.json` carries a manifest; a legacy bundle
+        // with a bare `entry.ts` does not. The manifest, when present, names
+        // the entry module and is the source of the `provides` contract.
+        let manifest = if plugin_dir.join(MANIFEST_FILE).is_file() {
+            Some(Manifest::load(&plugin_dir)?)
+        } else {
+            None
+        };
+        self.load_resolved(&plugin_dir, manifest).await
+    }
+
+    /// Loads a plugin whose manifest — if any — has already been parsed.
+    ///
+    /// Shared by [`load`](Self::load), which parses a bundle's manifest from
+    /// disk, and [`discover_and_load_all`](Self::discover_and_load_all), which
+    /// already holds the manifest from the discovery scan. A `Some(manifest)`
+    /// has its `provides` validated against reserved host names before the
+    /// isolate is created, and its plugin-authored `entry` resolved through
+    /// [`Manifest::resolve_entry`] — both checks happen before an isolate is
+    /// spent on a plugin that cannot legally load. The manifest is retained so
+    /// the bridge can enforce `provides` during `load()`.
+    async fn load_resolved(
+        &self,
+        plugin_dir: &Path,
+        manifest: Option<Manifest>,
+    ) -> Result<PluginId> {
+        // A manifest's `provides` must not collide with a reserved host server
+        // name — reject before spending an isolate on a plugin that cannot
+        // legally register what it promised.
+        if let Some(manifest) = &manifest {
+            self.check_provides_against_reserved(manifest)?;
+        }
+
+        // The entry module is the manifest's `entry` when present, or the
+        // legacy bare `entry.ts` otherwise. A manifest `entry` is plugin-
+        // authored, so it is resolved — and sandbox-checked — through
+        // `Manifest::resolve_entry`: the validated absolute path it returns is
+        // proven contained within the bundle directory before it is handed to
+        // the runtime.
+        let entry_file = match &manifest {
+            Some(manifest) => manifest
+                .resolve_entry(plugin_dir)?
+                .to_string_lossy()
+                .into_owned(),
+            None => ENTRY_FILE.to_string(),
+        };
+
         let plugin_id = self.mint_plugin_id();
 
         // The bridge dispatcher is scoped to this plugin's id: every call it
@@ -323,14 +414,21 @@ impl PluginHost {
 
         // Track the plugin before running its `load()` so the `register` calls
         // that `load()` makes — which arrive over the bridge while the call
-        // below is awaiting — have a ledger vec to append to.
-        self.lock().ledger.track(plugin_id.clone());
+        // below is awaiting — have a ledger vec to append to, and the manifest
+        // is in place for the bridge's `provides` check.
+        {
+            let mut state = self.lock();
+            state.ledger.track(plugin_id.clone());
+            if let Some(manifest) = &manifest {
+                state.manifests.insert(plugin_id.clone(), manifest.clone());
+            }
+        }
 
         // Drive the plugin's lifecycle on its own isolate. `PluginRuntime` is
         // not `Sync`, so the handle is held in this local — never across the
         // host mutex — while `load()` runs.
         let load_result = runtime
-            .call_plugin_lifecycle(&plugin_dir, ENTRY_FILE, LOAD_EXPORT)
+            .call_plugin_lifecycle(plugin_dir, entry_file, LOAD_EXPORT)
             .await;
 
         match load_result {
@@ -342,20 +440,155 @@ impl PluginHost {
                     plugin_id.clone(),
                     LoadedPlugin {
                         runtime,
-                        bundle_dir: plugin_dir,
+                        bundle_dir: plugin_dir.to_path_buf(),
                     },
                 );
                 Ok(plugin_id)
             }
             Err(error) => {
                 // A failed load must not leave a half-initialized plugin: undo
-                // every registration it managed to make. The isolate is still
-                // alive here — it is torn down as `runtime` drops at the end of
-                // this scope — so callback handles can be disposed on it.
+                // every registration it managed to make, and drop the manifest
+                // it never finished using. The isolate is still alive here — it
+                // is torn down as `runtime` drops at the end of this scope — so
+                // callback handles can be disposed on it.
                 self.dispose_registrations(&plugin_id, &runtime).await;
+                self.lock().manifests.remove(&plugin_id);
                 Err(error)
             }
         }
+    }
+
+    /// Discovers every plugin on disk across the host's layer roots and loads
+    /// the highest-precedence copy of each.
+    ///
+    /// This is the point-in-time counterpart to [`load`](Self::load): rather
+    /// than naming one bundle, it scans the host's writable layer roots — the
+    /// user layer and, when the host has one, the project layer — for plugin
+    /// bundles under each layer's `plugins/` subdirectory. When a plugin `id`
+    /// appears in more than one layer, the project copy shadows the user copy;
+    /// the winning copy is the one loaded.
+    ///
+    /// # Type Parameters
+    ///
+    /// - `C` — the host's [`DirectoryConfig`]. It parameterizes the directory
+    ///   resolution so the platform stays host-agnostic: the config names where
+    ///   a host's layers live; no `.sah`-specific path is baked in.
+    ///
+    /// # Atomicity
+    ///
+    /// The scan is all-or-nothing. If any discovered plugin fails to load, the
+    /// host unloads every plugin this call already loaded — in reverse order,
+    /// the same discipline [`unload`](Self::unload) uses for a single plugin's
+    /// ledger — and then returns the `Err`. So a failed scan leaves the host
+    /// exactly as it found it, with none of the partially-loaded plugins live.
+    /// This mirrors the contract of [`new`](Self::new): a host is never left
+    /// silently half-populated, because a caller that got an `Err` has no way
+    /// to know what loaded or to unload it.
+    ///
+    /// # Returns
+    ///
+    /// The [`PluginId`] of every plugin loaded, in the order discovery resolved
+    /// them — one per distinct plugin id. Returned only when *every* discovered
+    /// plugin loaded.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Manifest`] when a discovered bundle's `plugin.json` is
+    /// invalid, or any error [`load`](Self::load) surfaces for a plugin that
+    /// fails to load. On any such error every plugin loaded earlier in the scan
+    /// has already been unloaded, so no plugin from a failed scan stays live.
+    pub async fn discover_and_load_all<C: DirectoryConfig>(&self) -> Result<Vec<PluginId>> {
+        let discovered = discover_plugins::<C>(&self.discovery_layers())?;
+
+        let mut loaded = Vec::with_capacity(discovered.len());
+        for DiscoveredPlugin {
+            manifest,
+            directory,
+            ..
+        } in discovered
+        {
+            match self.load_resolved(&directory, Some(manifest)).await {
+                Ok(plugin_id) => loaded.push(plugin_id),
+                Err(error) => {
+                    // A mid-scan failure must not leave a partially populated
+                    // host: unload everything this call loaded, newest first,
+                    // before surfacing the error. `load_resolved` already
+                    // cleaned up the plugin that failed, so only the earlier
+                    // successes need rolling back.
+                    self.rollback_loaded(&loaded).await;
+                    return Err(error);
+                }
+            }
+        }
+        Ok(loaded)
+    }
+
+    /// Unloads, newest first, every plugin a failed discovery scan had loaded.
+    ///
+    /// Called only from [`discover_and_load_all`](Self::discover_and_load_all)
+    /// when a discovered plugin fails to load: it undoes the scan's earlier
+    /// successes so the host is left exactly as the scan found it. An
+    /// individual [`unload`](Self::unload) failure is logged rather than
+    /// propagated — the scan's outcome is the original load error, and the
+    /// rollback proceeds to the remaining plugins regardless so none is left
+    /// behind.
+    async fn rollback_loaded(&self, loaded: &[PluginId]) {
+        for plugin_id in loaded.iter().rev() {
+            if let Err(error) = self.unload(plugin_id).await {
+                tracing::warn!(
+                    plugin = %plugin_id.as_str(),
+                    %error,
+                    "rolling back a plugin after a failed discovery scan failed"
+                );
+            }
+        }
+    }
+
+    /// The host's writable layer roots, lowest precedence first.
+    ///
+    /// Discovery scans these in order: the user layer, then the project layer
+    /// when the host has one. A later layer shadows an earlier one, so this
+    /// order encodes "project shadows user".
+    fn discovery_layers(&self) -> Vec<LayerRoot> {
+        let mut layers = vec![LayerRoot::new(
+            self.inner.user_root.clone(),
+            FileSource::User,
+        )];
+        if let Some(project_root) = &self.inner.project_root {
+            layers.push(LayerRoot::new(project_root.clone(), FileSource::Local));
+        }
+        layers
+    }
+
+    /// Rejects a manifest whose `provides` collides with a reserved host name.
+    ///
+    /// The host reserves the server names it has exposed as Rust modules and
+    /// the names currently live in the registry. A plugin may not promise — in
+    /// its manifest's `provides` — a name the host already owns, because the
+    /// registry's single global namespace would reject the registration
+    /// anyway; catching it here turns a mid-load failure into a clear up-front
+    /// one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ProvidesViolation`] naming the first `provides` entry
+    /// that collides with a reserved host server name.
+    fn check_provides_against_reserved(&self, manifest: &Manifest) -> Result<()> {
+        let state = self.lock();
+        for server in &manifest.provides {
+            let reserved_module = state.modules.contains_key(server);
+            let reserved_live = matches!(state.registry.resolve(server), ServerStatus::Live(_));
+            if reserved_module || reserved_live {
+                return Err(Error::ProvidesViolation {
+                    plugin: manifest.id.clone(),
+                    server: server.clone(),
+                    reason: "the manifest's provides list claims a server name \
+                             already reserved by the host"
+                        .to_string(),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Unloads the plugin identified by `plugin_id`.
@@ -394,6 +627,9 @@ impl PluginHost {
         // isolate is still alive, so callback handles can be disposed on it
         // before it is torn down.
         self.dispose_registrations(plugin_id, &plugin.runtime).await;
+
+        // The plugin's manifest is no longer needed once it is unloaded.
+        self.lock().manifests.remove(plugin_id);
 
         // Dropping the runtime tears the isolate's worker thread down.
         drop(plugin);
@@ -796,18 +1032,32 @@ impl PluginHost {
     /// into the live registry under `name` and a [`RegistrationHandle::Server`]
     /// is appended to the plugin's ledger.
     ///
+    /// # The `provides` contract
+    ///
+    /// When the registering plugin was loaded with a manifest, `name` must
+    /// appear in that manifest's `provides` list. A plugin registering a name
+    /// it did not declare is rejected before the server is even connected — the
+    /// manifest is the authoritative statement of what a plugin will register.
+    /// A plugin loaded from a legacy bundle with no manifest is not checked.
+    ///
     /// # Errors
     ///
-    /// Returns [`Error::ServerNameTaken`] when `name` is already registered,
-    /// [`Error::UnknownServer`] when a `rust` id names no exposed module, or
-    /// [`Error::ServerUnavailable`] when a `cli` or `url` source cannot be
-    /// connected or the source shape is not one of the three kinds.
+    /// Returns [`Error::ProvidesViolation`] when `name` is absent from the
+    /// plugin's manifest `provides`, [`Error::ServerNameTaken`] when `name` is
+    /// already registered, [`Error::UnknownServer`] when a `rust` id names no
+    /// exposed module, or [`Error::ServerUnavailable`] when a `cli` or `url`
+    /// source cannot be connected or the source shape is not one of the three
+    /// kinds.
     async fn connect_and_register(
         &self,
         plugin_id: &PluginId,
         name: ServerName,
         source: Value,
     ) -> Result<()> {
+        // Enforce the manifest's `provides` contract before connecting: a
+        // plugin may register only the server names it declared.
+        self.check_register_allowed(plugin_id, &name)?;
+
         let server = self.connect_source(&source).await?;
 
         let mut state = self.lock();
@@ -817,6 +1067,35 @@ impl PluginHost {
             .ledger
             .record(plugin_id, RegistrationHandle::Server(name));
         Ok(())
+    }
+
+    /// Rejects a `register` for a name absent from the plugin's `provides`.
+    ///
+    /// Looks up the registering plugin's retained [`Manifest`]: when one is
+    /// present, `name` must be one of its `provides` entries. A plugin loaded
+    /// without a manifest — the legacy bare-`entry.ts` shape — has no `provides`
+    /// declaration and so passes unchecked.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ProvidesViolation`] when the plugin has a manifest and
+    /// `name` is not listed in its `provides`.
+    fn check_register_allowed(&self, plugin_id: &PluginId, name: &str) -> Result<()> {
+        let state = self.lock();
+        let Some(manifest) = state.manifests.get(plugin_id) else {
+            // No manifest — a legacy bundle — so nothing to enforce.
+            return Ok(());
+        };
+        if manifest.provides.iter().any(|provided| provided == name) {
+            return Ok(());
+        }
+        Err(Error::ProvidesViolation {
+            plugin: manifest.id.clone(),
+            server: name.to_string(),
+            reason: "the manifest's provides list does not declare this server \
+                     name"
+                .to_string(),
+        })
     }
 
     /// Connects the [`McpServer`] a [`ServerSource`] describes.

@@ -1,0 +1,504 @@
+//! Integration tests for plugin discovery, manifest parsing, layer stacking,
+//! and `provides` validation.
+//!
+//! These tests drive [`PluginHost`] end to end: real plugin bundles — a real
+//! `plugin.json` manifest plus a real entry `.ts` file — are written into
+//! temporary layer roots, discovered through `swissarmyhammer-directory`'s
+//! stacked `plugins/` subdirectory, and loaded into real V8 isolates. The
+//! probe plugins register *real* in-process `rmcp` servers, so an assertion
+//! observes a genuine round-trip rather than a mock.
+//!
+//! Every cross-thread interaction is bounded by a timeout so a wedged isolate
+//! fails the test fast instead of hanging CI.
+
+use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
+
+use rmcp::handler::server::router::tool::ToolRouter;
+use rmcp::handler::server::wrapper::Parameters;
+use rmcp::schemars::{self, JsonSchema};
+use rmcp::{tool, tool_handler, tool_router, ServerHandler};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use swissarmyhammer_directory::SwissarmyhammerConfig;
+use swissarmyhammer_plugin::{CallerId, InProcessServer, McpServer, PluginHost};
+
+/// A generous upper bound on any single host interaction.
+const TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Arguments for the probe `rmcp` server's `echo` tool.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct EchoArgs {
+    /// The payload echoed straight back to the caller.
+    message: String,
+}
+
+/// A real `rmcp` server handler exposing a single flat `echo` tool that
+/// returns its `message` argument verbatim.
+#[derive(Clone)]
+struct EchoServer {
+    /// The macro-generated tool router for this handler.
+    tool_router: ToolRouter<Self>,
+}
+
+#[tool_router(router = tool_router)]
+impl EchoServer {
+    /// Builds an [`EchoServer`] with its tool router wired up.
+    fn new() -> Self {
+        Self {
+            tool_router: Self::tool_router(),
+        }
+    }
+
+    /// Echoes the `message` argument straight back to the caller.
+    #[tool(name = "echo", description = "Echoes its message argument back.")]
+    async fn echo(&self, Parameters(args): Parameters<EchoArgs>) -> String {
+        args.message
+    }
+}
+
+#[tool_handler(router = self.tool_router)]
+impl ServerHandler for EchoServer {}
+
+/// Renders a `tools/call` result to a string for substring assertions.
+fn rendered(value: &Value) -> String {
+    serde_json::to_string(value).expect("a tools/call result is serializable")
+}
+
+/// Writes a plugin bundle — `plugin.json` plus an `entry.ts` — into
+/// `layer_root/plugins/<dir_name>/`.
+///
+/// The on-disk directory name (`dir_name`) is deliberately separate from the
+/// manifest `id` so tests can prove that identity follows the manifest, not
+/// the directory name. The entry imports the SDK, declares a `Plugin` subclass
+/// whose `load` runs `body`, and exports a `load` lifecycle function.
+fn write_plugin_in_layer(
+    layer_root: &Path,
+    dir_name: &str,
+    manifest_id: &str,
+    provides: &[&str],
+    entry: &str,
+    body: &str,
+) {
+    let plugin_dir = layer_root.join("plugins").join(dir_name);
+    std::fs::create_dir_all(&plugin_dir).expect("plugin directory should be created");
+
+    let provides_json = serde_json::to_string(provides).expect("provides serializes");
+    let manifest = format!(
+        "{{\n  \"id\": \"{manifest_id}\",\n  \"name\": \"{manifest_id} plugin\",\n  \
+         \"version\": \"1.0.0\",\n  \"entry\": \"{entry}\",\n  \"provides\": {provides_json}\n}}\n"
+    );
+    std::fs::write(plugin_dir.join("plugin.json"), manifest)
+        .expect("plugin.json should be written");
+
+    let source = format!(
+        "import {{ Plugin, makePluginThis }} from '@swissarmyhammer/plugin';\n\
+         class P extends Plugin {{\n\
+           async load(): Promise<void> {{\n{body}\n}}\n\
+         }}\n\
+         export async function load(): Promise<unknown> {{\n\
+           const p = makePluginThis(new P()) as P;\n\
+           await p.load();\n\
+           return null;\n\
+         }}\n"
+    );
+    // `entry` may name a nested path (e.g. `src/plugin.ts`); create parents.
+    let entry_path = plugin_dir.join(entry);
+    if let Some(parent) = entry_path.parent() {
+        std::fs::create_dir_all(parent).expect("entry parent dir should be created");
+    }
+    std::fs::write(&entry_path, source).expect("entry file should be written");
+}
+
+/// A probe plugin discovered in the project layer is loaded by
+/// `discover_and_load_all`, and its `load()` runs — observed by a real
+/// `tools/call` round-trip into the server it registered.
+#[tokio::test]
+async fn discover_and_load_all_loads_a_discovered_plugin() {
+    let user = tempfile::TempDir::new().expect("user root temp dir");
+    let project = tempfile::TempDir::new().expect("project root temp dir");
+    write_plugin_in_layer(
+        project.path(),
+        // The disk directory name differs from the manifest id on purpose.
+        "probe-dir",
+        "probe",
+        &["probe-server"],
+        "entry.ts",
+        "this.register('probe-server', { rust: 'probe-mod' });",
+    );
+
+    let host = PluginHost::for_tests(
+        user.path().to_path_buf(),
+        Some(project.path().to_path_buf()),
+    );
+    let probe_mod: Arc<dyn McpServer> = Arc::new(
+        InProcessServer::new(EchoServer::new())
+            .await
+            .expect("wrapping a real rmcp handler should succeed"),
+    );
+    tokio::time::timeout(TIMEOUT, host.expose_rust_module("probe-mod", probe_mod))
+        .await
+        .expect("expose_rust_module should not hang")
+        .expect("exposing a rust module should succeed");
+
+    let loaded = tokio::time::timeout(
+        TIMEOUT,
+        host.discover_and_load_all::<SwissarmyhammerConfig>(),
+    )
+    .await
+    .expect("discovery should not hang")
+    .expect("discovery should succeed");
+    assert_eq!(loaded.len(), 1, "exactly one plugin should be discovered");
+
+    // The plugin's `load()` ran its `register`, so the server it provided is
+    // live and serves a real rmcp tool call.
+    let result = tokio::time::timeout(
+        TIMEOUT,
+        host.call(
+            CallerId::HostInternal,
+            "probe-server",
+            "echo",
+            json!({ "message": "discovered" }),
+        ),
+    )
+    .await
+    .expect("the dispatch call should not hang")
+    .expect("a call into the discovered plugin's server should succeed");
+    assert!(
+        rendered(&result).contains("discovered"),
+        "the discovered plugin's load() must have registered a working server, got {}",
+        rendered(&result)
+    );
+}
+
+/// When the same plugin `id` exists in two layers, the higher-precedence
+/// (project) copy is the one that loads — observed by which copy's distinct
+/// behavior runs.
+#[tokio::test]
+async fn layering_picks_the_higher_precedence_copy() {
+    let user = tempfile::TempDir::new().expect("user root temp dir");
+    let project = tempfile::TempDir::new().expect("project root temp dir");
+
+    // Both layers carry id `shared`; the user copy registers `from-user`, the
+    // project copy registers `from-project`. The active copy decides which
+    // server name becomes live.
+    write_plugin_in_layer(
+        user.path(),
+        "shared",
+        "shared",
+        &["from-user"],
+        "entry.ts",
+        "this.register('from-user', { rust: 'shared-mod' });",
+    );
+    write_plugin_in_layer(
+        project.path(),
+        "shared",
+        "shared",
+        &["from-project"],
+        "entry.ts",
+        "this.register('from-project', { rust: 'shared-mod' });",
+    );
+
+    let host = PluginHost::for_tests(
+        user.path().to_path_buf(),
+        Some(project.path().to_path_buf()),
+    );
+    let shared_mod: Arc<dyn McpServer> = Arc::new(
+        InProcessServer::new(EchoServer::new())
+            .await
+            .expect("wrapping a real rmcp handler should succeed"),
+    );
+    tokio::time::timeout(TIMEOUT, host.expose_rust_module("shared-mod", shared_mod))
+        .await
+        .expect("expose_rust_module should not hang")
+        .expect("exposing a rust module should succeed");
+
+    let loaded = tokio::time::timeout(
+        TIMEOUT,
+        host.discover_and_load_all::<SwissarmyhammerConfig>(),
+    )
+    .await
+    .expect("discovery should not hang")
+    .expect("discovery should succeed");
+    assert_eq!(
+        loaded.len(),
+        1,
+        "a shadowed id resolves to one active copy, not two"
+    );
+
+    // The project copy won: `from-project` is live, `from-user` was never
+    // registered because the user copy did not load.
+    let project_result = tokio::time::timeout(
+        TIMEOUT,
+        host.call(
+            CallerId::HostInternal,
+            "from-project",
+            "echo",
+            json!({ "message": "project wins" }),
+        ),
+    )
+    .await
+    .expect("the dispatch call should not hang")
+    .expect("the project-layer copy should be the active one");
+    assert!(
+        rendered(&project_result).contains("project wins"),
+        "the project-layer copy must be the one that loaded, got {}",
+        rendered(&project_result)
+    );
+
+    let user_err = tokio::time::timeout(
+        TIMEOUT,
+        host.call(CallerId::HostInternal, "from-user", "echo", json!({})),
+    )
+    .await
+    .expect("the dispatch call should not hang")
+    .expect_err("the shadowed user-layer copy must not have loaded");
+    assert!(
+        matches!(user_err, swissarmyhammer_plugin::Error::UnknownServer),
+        "the shadowed copy's server must never become live, got {user_err:?}"
+    );
+}
+
+/// A plugin whose `load()` registers a server name absent from its manifest's
+/// `provides` fails to load with a clear error naming the offending name.
+#[tokio::test]
+async fn register_of_a_name_absent_from_provides_is_rejected() {
+    let user = tempfile::TempDir::new().expect("user root temp dir");
+    let project = tempfile::TempDir::new().expect("project root temp dir");
+    // The manifest promises `declared` but `load()` registers `sneaky`.
+    write_plugin_in_layer(
+        project.path(),
+        "liar",
+        "liar",
+        &["declared"],
+        "entry.ts",
+        "this.register('sneaky', { rust: 'liar-mod' });",
+    );
+
+    let host = PluginHost::for_tests(
+        user.path().to_path_buf(),
+        Some(project.path().to_path_buf()),
+    );
+    let liar_mod: Arc<dyn McpServer> = Arc::new(
+        InProcessServer::new(EchoServer::new())
+            .await
+            .expect("wrapping a real rmcp handler should succeed"),
+    );
+    tokio::time::timeout(TIMEOUT, host.expose_rust_module("liar-mod", liar_mod))
+        .await
+        .expect("expose_rust_module should not hang")
+        .expect("exposing a rust module should succeed");
+
+    let err = tokio::time::timeout(
+        TIMEOUT,
+        host.discover_and_load_all::<SwissarmyhammerConfig>(),
+    )
+    .await
+    .expect("discovery should not hang")
+    .expect_err("a plugin registering an undeclared name must fail to load");
+    let message = err.to_string();
+    assert!(
+        message.contains("sneaky"),
+        "the error must name the undeclared server, got: {message}"
+    );
+    assert!(
+        message.contains("provides"),
+        "the error must mention the manifest's provides list, got: {message}"
+    );
+}
+
+/// A discovery scan is atomic: when one discovered plugin fails to load, every
+/// plugin the scan loaded earlier is rolled back, so a failed scan leaves the
+/// host with no plugin from that scan live.
+#[tokio::test]
+async fn a_failed_discovery_scan_rolls_back_already_loaded_plugins() {
+    let user = tempfile::TempDir::new().expect("user root temp dir");
+    let project = tempfile::TempDir::new().expect("project root temp dir");
+
+    // `aaa-good` loads cleanly and registers a working server. Discovery sorts
+    // by id, so it is resolved before `zzz-bad` and is loaded first.
+    write_plugin_in_layer(
+        project.path(),
+        "good-dir",
+        "aaa-good",
+        &["good-server"],
+        "entry.ts",
+        "this.register('good-server', { rust: 'good-mod' });",
+    );
+    // `zzz-bad`'s manifest promises `declared` but its `load()` registers
+    // `undeclared`, so its load fails mid-scan.
+    write_plugin_in_layer(
+        project.path(),
+        "bad-dir",
+        "zzz-bad",
+        &["declared"],
+        "entry.ts",
+        "this.register('undeclared', { rust: 'bad-mod' });",
+    );
+
+    let host = PluginHost::for_tests(
+        user.path().to_path_buf(),
+        Some(project.path().to_path_buf()),
+    );
+    let good_mod: Arc<dyn McpServer> = Arc::new(
+        InProcessServer::new(EchoServer::new())
+            .await
+            .expect("wrapping a real rmcp handler should succeed"),
+    );
+    tokio::time::timeout(TIMEOUT, host.expose_rust_module("good-mod", good_mod))
+        .await
+        .expect("expose_rust_module should not hang")
+        .expect("exposing a rust module should succeed");
+
+    let err = tokio::time::timeout(
+        TIMEOUT,
+        host.discover_and_load_all::<SwissarmyhammerConfig>(),
+    )
+    .await
+    .expect("discovery should not hang")
+    .expect_err("a scan with a plugin that fails to load must return Err");
+    assert!(
+        err.to_string().contains("undeclared"),
+        "the surfaced error must be the failing plugin's load error, got: {err}"
+    );
+
+    // The first plugin loaded fine, but the atomic scan rolled it back: the
+    // server it had registered is no longer live, so a call to it fails. The
+    // rollback unregisters the server, which leaves a registry tombstone, so
+    // the call fails as `ServerUnavailable` (registered, then disposed) — what
+    // matters is that it is no longer serving, not which non-live status it is.
+    let good_err = tokio::time::timeout(
+        TIMEOUT,
+        host.call(CallerId::HostInternal, "good-server", "echo", json!({})),
+    )
+    .await
+    .expect("the dispatch call should not hang")
+    .expect_err("the rolled-back plugin's server must not be left live");
+    assert!(
+        matches!(
+            good_err,
+            swissarmyhammer_plugin::Error::UnknownServer
+                | swissarmyhammer_plugin::Error::ServerUnavailable
+        ),
+        "a failed scan must leave no plugin from it serving, got: {good_err:?}"
+    );
+
+    // The host's own loaded-plugin count is also clean: nothing from the
+    // failed scan remains tracked.
+    let debug = format!("{host:?}");
+    assert!(
+        debug.contains("loaded_plugins: 0"),
+        "a failed scan must leave the host with no loaded plugins, got: {debug}"
+    );
+}
+
+/// A manifest whose plugin-authored `entry` traverses out of the bundle with
+/// `..` is rejected with a clear manifest error, and no isolate is spent on it.
+#[tokio::test]
+async fn a_manifest_entry_escaping_the_bundle_is_rejected() {
+    let user = tempfile::TempDir::new().expect("user root temp dir");
+    let project = tempfile::TempDir::new().expect("project root temp dir");
+
+    // Lay out a normal bundle, then overwrite its manifest with one whose
+    // `entry` points at a sibling file outside the bundle directory.
+    write_plugin_in_layer(
+        project.path(),
+        "escapee-dir",
+        "escapee",
+        &["escapee-server"],
+        "entry.ts",
+        "this.register('escapee-server', { rust: 'escapee-mod' });",
+    );
+    let plugins_dir = project.path().join("plugins");
+    // A file one level above the bundle directory — the escape target.
+    std::fs::write(plugins_dir.join("escape.ts"), "// outside the bundle")
+        .expect("escape target should be written");
+    let escaping_manifest = "{\n  \"id\": \"escapee\",\n  \"name\": \"escapee plugin\",\n  \
+         \"version\": \"1.0.0\",\n  \"entry\": \"../escape.ts\",\n  \
+         \"provides\": [\"escapee-server\"]\n}\n";
+    std::fs::write(
+        plugins_dir.join("escapee-dir").join("plugin.json"),
+        escaping_manifest,
+    )
+    .expect("escaping plugin.json should be written");
+
+    let host = PluginHost::for_tests(
+        user.path().to_path_buf(),
+        Some(project.path().to_path_buf()),
+    );
+
+    let err = tokio::time::timeout(
+        TIMEOUT,
+        host.discover_and_load_all::<SwissarmyhammerConfig>(),
+    )
+    .await
+    .expect("discovery should not hang")
+    .expect_err("a manifest entry escaping the bundle must be rejected");
+    assert!(
+        matches!(err, swissarmyhammer_plugin::Error::Manifest(_)),
+        "an escaping entry must surface as Error::Manifest, got: {err:?}"
+    );
+    let message = err.to_string();
+    assert!(
+        message.contains("escapes the plugin bundle"),
+        "the error must explain the escape, got: {message}"
+    );
+    assert!(
+        message.contains("escapee"),
+        "the error must name the offending plugin, got: {message}"
+    );
+
+    // Nothing loaded: the rejection happened before any isolate was created.
+    let debug = format!("{host:?}");
+    assert!(
+        debug.contains("loaded_plugins: 0"),
+        "a rejected manifest entry must leave the host with no loaded plugins, got: {debug}"
+    );
+}
+
+/// A `provides` entry that collides with a reserved host server name is
+/// rejected at discovery time, before the plugin's isolate is even created.
+#[tokio::test]
+async fn provides_colliding_with_a_reserved_host_name_is_rejected() {
+    let user = tempfile::TempDir::new().expect("user root temp dir");
+    let project = tempfile::TempDir::new().expect("project root temp dir");
+    // `host-reserved` is exposed by the host below, so a plugin may not claim
+    // it in `provides`.
+    write_plugin_in_layer(
+        project.path(),
+        "greedy",
+        "greedy",
+        &["host-reserved"],
+        "entry.ts",
+        "this.register('host-reserved', { rust: 'greedy-mod' });",
+    );
+
+    let host = PluginHost::for_tests(
+        user.path().to_path_buf(),
+        Some(project.path().to_path_buf()),
+    );
+    // The host reserves `host-reserved` by exposing a module under that name.
+    let reserved: Arc<dyn McpServer> = Arc::new(
+        InProcessServer::new(EchoServer::new())
+            .await
+            .expect("wrapping a real rmcp handler should succeed"),
+    );
+    tokio::time::timeout(TIMEOUT, host.expose_rust_module("host-reserved", reserved))
+        .await
+        .expect("expose_rust_module should not hang")
+        .expect("exposing a rust module should succeed");
+
+    let err = tokio::time::timeout(
+        TIMEOUT,
+        host.discover_and_load_all::<SwissarmyhammerConfig>(),
+    )
+    .await
+    .expect("discovery should not hang")
+    .expect_err("a provides name colliding with a reserved host name must be rejected");
+    let message = err.to_string();
+    assert!(
+        message.contains("host-reserved"),
+        "the error must name the colliding server, got: {message}"
+    );
+}
