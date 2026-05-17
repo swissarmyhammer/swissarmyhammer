@@ -117,6 +117,265 @@ export class UnknownOperation extends Error {
 }
 
 // ---------------------------------------------------------------------------
+// The callback primitive
+// ---------------------------------------------------------------------------
+
+/**
+ * A function a plugin handed the host, addressable by an opaque callback id.
+ *
+ * A callback may return a value (or a promise of one) or nothing; the host
+ * decides per seam whether it awaits a result.
+ */
+type Callback = (...args: unknown[]) => unknown;
+
+/**
+ * The marker a function is replaced with in a callback-bearing payload.
+ *
+ * Functions cannot cross the host/plugin boundary. {@link marshalCallbacks}
+ * swaps each function for one of these — an opaque, JSON-safe handle — and the
+ * host invokes the function later by sending that id back in a
+ * `notifications/callbacks/invoke` notification.
+ */
+interface CallbackMarker {
+  /** The opaque, isolate-local id of the stored function. */
+  $callback: string;
+}
+
+/**
+ * The isolate-local `{ id → function }` table.
+ *
+ * Functions never leave the isolate; only their ids do. This `Map` is the
+ * single store the callback primitive keeps — one per isolate, because each
+ * plugin runs in its own isolate. {@link invokeStoredCallback} looks a function
+ * up here when the host invokes it, and {@link disposeCallback} drops it.
+ */
+const callbackTable = new Map<string, Callback>();
+
+/** Monotonic counter making each minted callback id unique within the isolate. */
+let callbackSequence = 0;
+
+/**
+ * Mints a fresh, isolate-unique callback id.
+ *
+ * The id is `cb_`-prefixed so a marker is recognizable on sight, and combines a
+ * monotonic counter with a random suffix so ids are unique even across the
+ * (host-opaque) lifetime of the isolate.
+ */
+function mintCallbackId(): string {
+  callbackSequence += 1;
+  const random = Math.random().toString(36).slice(2, 10);
+  return `cb_${callbackSequence.toString(36)}${random}`;
+}
+
+/**
+ * Marks a node in {@link marshalCallbacks}'s `seen` map as still being walked.
+ *
+ * A node mapped to this sentinel has been entered but not finished. Re-reaching
+ * it is therefore a back-edge that closes a cycle — distinct from re-reaching a
+ * node already mapped to a finished marshalled value (a shared, acyclic node).
+ */
+const MARSHAL_IN_PROGRESS = Symbol("marshalCallbacks/in-progress");
+
+/**
+ * Recursively replaces every function in `value` with a {@link CallbackMarker}.
+ *
+ * This is the marshalling half of the callback primitive. It walks the whole
+ * value — into arrays and plain objects, to arbitrary depth — so a function is
+ * caught wherever it appears in a payload. Each function found is stored in
+ * {@link callbackTable} under a fresh id and replaced with `{ $callback: id }`.
+ * Non-function values are returned structurally unchanged.
+ *
+ * The walk is sharing-faithful and cycle-rejecting. A plugin payload may reach
+ * the same sub-object by two acyclic paths, or contain a true cycle
+ * (`const a = {}; a.self = a`). Each array/object is recorded in a `Map` keyed
+ * by the *original* node before its children are walked:
+ *
+ * - A node shared by two acyclic paths is marshalled exactly once; the second
+ *   path returns the recorded marshalled copy. A function inside a shared
+ *   subtree is therefore still caught, and the subtree is not re-walked.
+ * - A node re-reached *while still being walked* is a back-edge closing a
+ *   cycle. A cyclic value has no JSON encoding, so it cannot cross the
+ *   host/plugin boundary at all; rather than build a cyclic result that would
+ *   overflow a downstream serializer, {@link marshalCallbacks} throws a
+ *   {@link TypeError} naming the offending key. The throw is bounded — it
+ *   happens on the first back-edge — so a cyclic payload fails fast and
+ *   cleanly instead of overflowing the V8 stack.
+ *
+ * Every function on the way *in* to a node is still marshalled — the guard only
+ * suppresses re-walking an already-seen node, never a first visit.
+ *
+ * @param value - the payload (or sub-value) to marshal.
+ * @param seen  - original→marshalled node map (or the in-progress sentinel);
+ *   callers pass the default empty map and recursion threads it through.
+ * @returns a value with functions swapped for markers; shared acyclic nodes
+ *   stay shared in the result.
+ * @throws {TypeError} when `value` contains a cycle — it cannot be marshalled.
+ */
+function marshalCallbacks(
+  value: unknown,
+  seen: Map<object, unknown> = new Map<object, unknown>(),
+): unknown {
+  if (typeof value === "function") {
+    const id = mintCallbackId();
+    callbackTable.set(id, value as Callback);
+    return { $callback: id } satisfies CallbackMarker;
+  }
+  if (Array.isArray(value)) {
+    return marshalContainer(value, seen, () => {
+      const out: unknown[] = [];
+      for (const inner of value) {
+        out.push(marshalCallbacks(inner, seen));
+      }
+      return out;
+    });
+  }
+  // Only plain objects are walked; class instances, `Date`, etc. cross as-is.
+  if (value !== null && typeof value === "object" &&
+    Object.getPrototypeOf(value) === Object.prototype) {
+    return marshalContainer(value, seen, () => {
+      const out: Record<string, unknown> = {};
+      for (const [key, inner] of Object.entries(value as Record<string, unknown>)) {
+        out[key] = marshalCallbacks(inner, seen);
+      }
+      return out;
+    });
+  }
+  return value;
+}
+
+/**
+ * Shared cycle/sharing bookkeeping for {@link marshalCallbacks}'s containers.
+ *
+ * Resolves `node` against the `seen` map: a node already mapped to a finished
+ * marshalled value is returned as-is (a shared, acyclic node); a node mapped to
+ * {@link MARSHAL_IN_PROGRESS} is a back-edge and throws; an unseen node is
+ * marked in-progress, walked, then mapped to its finished marshalled value.
+ *
+ * The in-progress sentinel stays in place for the whole of `walk`, so a child
+ * that refers back to `node` sees the sentinel and is recognized as a cycle.
+ * Only once `walk` returns is the finished value recorded, so a *later* shared
+ * (acyclic) reference to `node` resolves to it.
+ *
+ * @param node - the original array/object being marshalled.
+ * @param seen - the original→marshalled node map threaded through the walk.
+ * @param walk - marshals `node`'s children into the marshalled node.
+ * @returns the marshalled node.
+ * @throws {TypeError} when `node` is re-reached mid-walk (a cycle).
+ */
+function marshalContainer(
+  node: object,
+  seen: Map<object, unknown>,
+  walk: () => unknown,
+): unknown {
+  const already = seen.get(node);
+  if (already === MARSHAL_IN_PROGRESS) {
+    throw new TypeError(
+      "callback payload contains a cycle and cannot be marshalled",
+    );
+  }
+  if (already !== undefined) {
+    return already;
+  }
+  seen.set(node, MARSHAL_IN_PROGRESS);
+  const marshalled = walk();
+  seen.set(node, marshalled);
+  return marshalled;
+}
+
+/**
+ * Runs the stored callback `id` with `args` and returns its (awaited) result.
+ *
+ * This is the receiving half of the primitive: the host delivers a
+ * `notifications/callbacks/invoke { id, args }` into the isolate, the runtime
+ * calls this function, and it looks the function up in {@link callbackTable}
+ * and runs it. A function that returns a promise is awaited so the host always
+ * sees a settled value.
+ *
+ * @param id   - the callback id the host is invoking.
+ * @param args - the positional arguments to pass the stored function.
+ * @returns the function's return value, awaited if it was a promise.
+ * @throws if no function is registered under `id`.
+ */
+async function invokeStoredCallback(
+  id: string,
+  args: unknown[],
+): Promise<unknown> {
+  const fn = callbackTable.get(id);
+  if (fn === undefined) {
+    throw new Error(`no callback registered under id '${id}'`);
+  }
+  return await fn(...args);
+}
+
+/**
+ * Drops the stored callback `id` from the isolate-local table.
+ *
+ * Disposing a callback handle on the host side ends with this: the function is
+ * removed so it can be garbage-collected and a stale id no longer resolves.
+ *
+ * @param id - the callback id to dispose.
+ * @returns `true` when a function was removed; `false` when `id` was unknown.
+ */
+function disposeCallback(id: string): boolean {
+  return callbackTable.delete(id);
+}
+
+/**
+ * The `notifications/callbacks/invoke` entry point the host calls into.
+ *
+ * Functions cannot cross the boundary, so the host→isolate direction of the
+ * callback primitive is delivered as a runtime command rather than an op: the
+ * runtime invokes this global, which the SDK installs on `globalThis`. The
+ * request and the response are JSON strings so exactly one V8 value crosses in
+ * each direction.
+ *
+ * - Request: a JSON string `{ "id": string, "args": unknown[] }`.
+ * - Response: a JSON string `{ "ok": true, "result": unknown }` on success or
+ *   `{ "ok": false, "error": string }` when the stored function threw or the
+ *   id was unknown.
+ *
+ * `result` is omitted when the callback returned `undefined`, so a void
+ * callback marshals back as the absence of a value rather than a stray `null`.
+ *
+ * @param requestJson - the JSON-encoded `{ id, args }` request.
+ * @returns a JSON-encoded `{ ok, result? , error? }` response.
+ */
+async function hostCallbackInvoke(requestJson: string): Promise<string> {
+  try {
+    const request = JSON.parse(requestJson) as { id: string; args?: unknown[] };
+    const result = await invokeStoredCallback(request.id, request.args ?? []);
+    return JSON.stringify(
+      result === undefined ? { ok: true } : { ok: true, result },
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return JSON.stringify({ ok: false, error: message });
+  }
+}
+
+/**
+ * The `callbacks/dispose` entry point the host calls into.
+ *
+ * When the host disposes a callback handle — at plugin unload, or mid-session —
+ * it drives this global to drop the stored function from {@link callbackTable}
+ * so it can be garbage-collected and a stale id no longer resolves. The
+ * argument is the bare callback id; the return value is the JSON `"true"` /
+ * `"false"` of whether a function was actually removed.
+ *
+ * @param id - the callback id to dispose.
+ * @returns the JSON-encoded boolean result of {@link disposeCallback}.
+ */
+function hostCallbackDispose(id: string): string {
+  return JSON.stringify(disposeCallback(id));
+}
+
+// Install the host→isolate callback entry points. The runtime's
+// `Command::InvokeCallback` and `Command::DisposeCallback` reach the stored
+// functions through these globals.
+(globalThis as Record<string, unknown>).__sahInvokeCallback = hostCallbackInvoke;
+(globalThis as Record<string, unknown>).__sahDisposeCallback = hostCallbackDispose;
+
+// ---------------------------------------------------------------------------
 // The host bridge
 // ---------------------------------------------------------------------------
 
@@ -171,12 +430,32 @@ export interface Transport {
   /**
    * Resolve a dispatch `path` against `server`'s cached tool definitions and
    * issue the corresponding `tools/call`.
+   *
+   * `tools/call` payloads cross to URL- and CLI-sourced MCP servers as real
+   * JSON-RPC; they are dispatched **verbatim** and are never scanned for
+   * function values — the callback primitive does not touch this path.
    */
   callPath(
     server: string,
     path: string[],
     args: Record<string, unknown>,
   ): Promise<unknown>;
+  /**
+   * Dispatch a callback-bearing `payload` to the host.
+   *
+   * This is the one transport path the callback primitive marshals: any
+   * function value anywhere inside `payload` is replaced with a
+   * `{ "$callback": "cb_xxxx" }` marker (see {@link marshalCallbacks}) before
+   * the payload crosses to the host, and the function is stored in the
+   * isolate-local callback table so a later `notifications/callbacks/invoke`
+   * can run it. Every host seam where a plugin hands the host a function —
+   * command handlers, view renderers, event subscriptions, elicitation — is
+   * built on this method.
+   *
+   * @param payload - the call input, which may carry function values.
+   * @returns the host's JSON response to the marshalled call.
+   */
+  callbackDispatch(payload: Record<string, unknown>): unknown;
 }
 
 /**
@@ -320,12 +599,23 @@ class HostBridge implements Transport {
     tool: string,
     args: Record<string, unknown>,
   ): unknown {
+    // A `tools/call` payload crosses verbatim — it reaches a URL- or
+    // CLI-sourced MCP server as real JSON-RPC and must carry no `$callback`
+    // machinery. The callback primitive is deliberately not applied here.
     return this.dispatch({
       kind: "toolsCall",
       server,
       tool,
       arguments: args,
     });
+  }
+
+  /** {@inheritDoc Transport.callbackDispatch} */
+  callbackDispatch(payload: Record<string, unknown>): unknown {
+    // The callback-bearing path: marshal functions to `$callback` markers so
+    // the host receives opaque handles, never function values.
+    const marshalled = marshalCallbacks(payload);
+    return this.dispatch({ kind: "callbackDispatch", payload: marshalled });
   }
 }
 
@@ -400,8 +690,9 @@ const RESERVED = new Set<string>([
  *
  * The event surface (`on`, `subscribe`, …) is not part of this SDK task, so
  * the handler is an inert no-op: it exists only to keep a `RESERVED` name
- * from being treated as a tool/noun/verb segment. The callback/event
- * primitive is wired by a later task.
+ * from being treated as a tool/noun/verb segment. The callback primitive
+ * itself is already wired (see {@link marshalCallbacks}); only the event API
+ * that would be built on top of it is wired by a later task.
  */
 function reservedHandler(): () => void {
   return () => {

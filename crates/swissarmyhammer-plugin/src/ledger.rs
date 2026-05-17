@@ -28,11 +28,12 @@ use crate::server::PluginId;
 
 /// Identifier for a host-side callback registered on behalf of a plugin.
 ///
-/// A newtype over `String`. The callback primitive — the seam by which a
-/// plugin hands the host a function reference — is built by a later task; this
-/// type exists now so the [`RegistrationHandle::Callback`] variant has a
-/// concrete payload and the ledger's disposal contract is complete from the
-/// start. Nothing in this crate produces a `Callback` handle yet.
+/// A newtype over `String`. This is the live id type the callback primitive
+/// uses: the seam by which a plugin hands the host a function reference. When
+/// the SDK marshals a function it mints a `cb_`-prefixed id; the host receives
+/// that id as a `$callback` marker and [`crate::host`]'s `callback_dispatch`
+/// records it as a [`RegistrationHandle::Callback`] so unload can dispose the
+/// stored function.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CallbackId(pub String);
 
@@ -67,8 +68,9 @@ pub enum RegistrationHandle {
     /// A host-side callback registered on the plugin's behalf, identified by
     /// its [`CallbackId`]. Disposed by dropping the stored function.
     ///
-    /// The callback primitive is a later task; no handle of this variant is
-    /// produced yet, but the variant exists so the disposal contract is total.
+    /// This variant is live: [`crate::host`]'s `callback_dispatch` produces one
+    /// on every `callbackDispatch` envelope, recording one handle per
+    /// `$callback` marker the SDK marshalled.
     Callback(CallbackId),
 
     /// An arbitrary disposable: a boxed closure run once at unload time.

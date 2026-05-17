@@ -53,7 +53,7 @@ use std::time::Duration;
 use serde_json::{Map, Value};
 
 use crate::error::{Error, Result};
-use crate::ledger::{PluginLedger, RegistrationHandle};
+use crate::ledger::{CallbackId, PluginLedger, RegistrationHandle};
 use crate::registry::{ServerName, ServerRegistry, ServerStatus};
 use crate::runtime::{HostDispatcher, PluginRuntime, RuntimeConfig};
 use crate::server::{CallerId, CliServer, McpServer, PluginId, ToolMetadata, UrlServer};
@@ -349,9 +349,10 @@ impl PluginHost {
             }
             Err(error) => {
                 // A failed load must not leave a half-initialized plugin: undo
-                // every registration it managed to make. The isolate is torn
-                // down as `runtime` drops at the end of this scope.
-                self.dispose_registrations(&plugin_id);
+                // every registration it managed to make. The isolate is still
+                // alive here — it is torn down as `runtime` drops at the end of
+                // this scope — so callback handles can be disposed on it.
+                self.dispose_registrations(&plugin_id, &runtime).await;
                 Err(error)
             }
         }
@@ -389,8 +390,10 @@ impl PluginHost {
         // external side effects before the host disposes its registrations.
         self.run_plugin_unload(plugin_id, &plugin).await;
 
-        // Authoritative cleanup: undo every registration the plugin made.
-        self.dispose_registrations(plugin_id);
+        // Authoritative cleanup: undo every registration the plugin made. The
+        // isolate is still alive, so callback handles can be disposed on it
+        // before it is torn down.
+        self.dispose_registrations(plugin_id, &plugin.runtime).await;
 
         // Dropping the runtime tears the isolate's worker thread down.
         drop(plugin);
@@ -422,20 +425,31 @@ impl PluginHost {
     ///
     /// Drains the plugin's ledger vec in reverse and disposes each handle —
     /// the host's authoritative cleanup, run whether or not the plugin's own
-    /// `unload()` did anything. Tearing the isolate down is the caller's job;
-    /// this method only undoes the host-side state.
-    fn dispose_registrations(&self, plugin_id: &PluginId) {
+    /// `unload()` did anything. A [`RegistrationHandle::Callback`] is disposed
+    /// against the still-alive `runtime`, so the stored function is dropped
+    /// from the isolate's callback table. Tearing the isolate down is the
+    /// caller's job; this method only undoes the host-side and isolate-side
+    /// registration state.
+    async fn dispose_registrations(&self, plugin_id: &PluginId, runtime: &PluginRuntime) {
         let handles = self.lock().ledger.drain(plugin_id).unwrap_or_default();
 
         // Handles are already reversed by `PluginLedger::drain`: the last
         // registration is disposed first.
         for handle in handles {
-            self.dispose_handle(plugin_id, handle);
+            self.dispose_handle(plugin_id, runtime, handle).await;
         }
     }
 
     /// Disposes one [`RegistrationHandle`] drained from a plugin's ledger.
-    fn dispose_handle(&self, plugin_id: &PluginId, handle: RegistrationHandle) {
+    ///
+    /// `runtime` is the disposed plugin's still-alive isolate: a `Callback`
+    /// handle is disposed by driving the isolate to drop the stored function.
+    async fn dispose_handle(
+        &self,
+        plugin_id: &PluginId,
+        runtime: &PluginRuntime,
+        handle: RegistrationHandle,
+    ) {
         match handle {
             RegistrationHandle::Server(name) => {
                 let removed = self.lock().registry.unregister(&name);
@@ -447,9 +461,18 @@ impl PluginHost {
                     );
                 }
             }
-            RegistrationHandle::Callback(_) => {
-                // The callback primitive is a later task; no handle of this
-                // variant is produced yet. Dropping it here is the disposal.
+            RegistrationHandle::Callback(id) => {
+                // Drop the stored function from the isolate's callback table so
+                // the id no longer resolves. A failure is logged, not fatal —
+                // the isolate is torn down right after this regardless.
+                if let Err(error) = runtime.dispose_callback(id.as_str()).await {
+                    tracing::debug!(
+                        plugin = %plugin_id.as_str(),
+                        callback = %id.as_str(),
+                        %error,
+                        "disposing a callback handle on the isolate failed"
+                    );
+                }
             }
             RegistrationHandle::Opaque(dispose) => dispose(),
         }
@@ -649,6 +672,38 @@ impl HostBridge {
             .map_err(|error| error.to_string())
     }
 
+    /// Handles a `callbackDispatch` envelope: records the plugin's callbacks.
+    ///
+    /// A `callbackDispatch` is the callback-bearing transport path: the SDK has
+    /// already marshalled every function in the payload into a
+    /// `{ "$callback": id }` marker. The host treats those markers as opaque
+    /// handles — it does not invoke them here — but every callback id is
+    /// recorded as a [`RegistrationHandle::Callback`] in the plugin's ledger so
+    /// that [`PluginHost::unload`] disposes the stored functions. The payload is
+    /// otherwise returned to the SDK unchanged so a future service layer can
+    /// consume it.
+    ///
+    /// `tools/call` payloads never reach this handler — they cross verbatim via
+    /// the `toolsCall` envelope — so no tool call is ever scanned for markers.
+    fn callback_dispatch(&self, payload: &Value) -> std::result::Result<Value, String> {
+        let inner = payload
+            .get("payload")
+            .ok_or_else(|| "callbackDispatch envelope missing 'payload'".to_string())?;
+
+        let mut ids = Vec::new();
+        collect_callback_ids(inner, &mut ids);
+
+        let mut state = self.host.lock();
+        for id in ids {
+            // The plugin is tracked from `load`, so this append cannot orphan.
+            state.ledger.record(
+                &self.plugin_id,
+                RegistrationHandle::Callback(CallbackId::new(id)),
+            );
+        }
+        Ok(Value::Object(Map::new()))
+    }
+
     /// Handles a `register` envelope: connects a server source and registers
     /// it under the chosen name, recording it in the plugin's ledger.
     fn register(&self, payload: &Value) -> std::result::Result<Value, String> {
@@ -723,6 +778,7 @@ impl HostDispatcher for HostBridge {
         match kind {
             "toolsList" => self.tools_list(&payload),
             "toolsCall" => self.tools_call(&payload),
+            "callbackDispatch" => self.callback_dispatch(&payload),
             "register" => self.register(&payload),
             "unregister" => self.unregister(&payload),
             "log" => self.log(&payload),
@@ -808,6 +864,43 @@ impl PluginHost {
     }
 }
 
+/// Collects every `$callback` marker id reachable in `value` into `ids`.
+///
+/// The SDK marshals a function anywhere in a callback-bearing payload into a
+/// `{ "$callback": "cb_xxxx" }` marker. This walks `value` to any depth — into
+/// arrays and object fields — so a marker is found in any payload position,
+/// and appends each marker's id to `ids` in document order.
+///
+/// The walk is iterative: it uses an explicit heap-allocated work-stack rather
+/// than recursion, so a hostile-depth payload — legal but deeply nested JSON
+/// from a compromised isolate — costs heap, not call frames, and cannot
+/// overflow the host worker thread's stack regardless of nesting depth.
+/// Children are pushed in reverse so the LIFO stack still pops them in document
+/// order, keeping the appended ids in the same order a depth-first recursion
+/// would have produced.
+fn collect_callback_ids(value: &Value, ids: &mut Vec<String>) {
+    let mut stack: Vec<&Value> = vec![value];
+    while let Some(node) = stack.pop() {
+        match node {
+            Value::Object(map) => {
+                // A single-key `{ "$callback": "<id>" }` object is a marker;
+                // its id is collected and its (only) field is not descended.
+                if map.len() == 1 {
+                    if let Some(Value::String(id)) = map.get("$callback") {
+                        ids.push(id.clone());
+                        continue;
+                    }
+                }
+                stack.extend(map.values().rev());
+            }
+            Value::Array(items) => {
+                stack.extend(items.iter().rev());
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Reads a required string field from a bridge envelope.
 fn envelope_str(payload: &Value, field: &str) -> std::result::Result<String, String> {
     payload
@@ -853,4 +946,118 @@ fn tools_to_json(tools: &[ToolMetadata]) -> Value {
             })
             .collect(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::collect_callback_ids;
+    use serde_json::{json, Map, Value};
+
+    /// `collect_callback_ids` appends every `$callback` id in document order,
+    /// descending through both objects and arrays.
+    #[test]
+    fn collects_callback_ids_in_document_order() {
+        let payload = json!({
+            "first": { "$callback": "cb_one" },
+            "list": [
+                { "$callback": "cb_two" },
+                { "nested": { "$callback": "cb_three" } },
+            ],
+            "plain": "not a marker",
+        });
+
+        let mut ids = Vec::new();
+        collect_callback_ids(&payload, &mut ids);
+
+        assert_eq!(
+            ids,
+            vec![
+                "cb_one".to_string(),
+                "cb_two".to_string(),
+                "cb_three".to_string(),
+            ],
+            "ids must be appended in document order"
+        );
+    }
+
+    /// A multi-key object whose extra key happens to be `$callback` is not a
+    /// marker: its fields are descended instead of the object being collected.
+    #[test]
+    fn a_multi_key_object_is_not_treated_as_a_marker() {
+        let payload = json!({
+            "$callback": "cb_decoy",
+            "also": { "$callback": "cb_real" },
+        });
+
+        let mut ids = Vec::new();
+        collect_callback_ids(&payload, &mut ids);
+
+        assert_eq!(
+            ids,
+            vec!["cb_real".to_string()],
+            "only the single-key marker nested under `also` is a real callback"
+        );
+    }
+
+    /// Builds `{"n":{"n":{ … {"$callback":"cb_deep"} … }}}` nested `depth`
+    /// levels deep, one level per loop iteration so construction itself never
+    /// recurses.
+    fn deeply_nested_marker(depth: usize) -> Value {
+        let mut node = json!({ "$callback": "cb_deep" });
+        for _ in 0..depth {
+            let mut wrapper = Map::with_capacity(1);
+            wrapper.insert("n".to_string(), node);
+            node = Value::Object(wrapper);
+        }
+        node
+    }
+
+    /// Dismantles a `{"n":{"n":{ … }}}` chain iteratively so the value's
+    /// recursive `Drop` never has to unwind the whole nesting at once.
+    fn unnest(mut node: Value) {
+        while let Value::Object(mut map) = node {
+            match map.remove("n") {
+                Some(inner) => node = inner,
+                None => break,
+            }
+        }
+    }
+
+    /// A hostile-depth payload — legal JSON nested far past any sane recursion
+    /// limit — is walked without overflowing the worker thread's stack.
+    ///
+    /// The walk runs on a thread with a deliberately small (256 KiB) stack:
+    /// the iterative work-stack keeps depth on the heap, so it passes, whereas
+    /// the recursive predecessor of `collect_callback_ids` — one call frame per
+    /// level — would overflow a stack this size. The nested value is built and
+    /// torn down iteratively (see {@link unnest}) so neither construction nor
+    /// `Drop` recursion can mask the property under test.
+    #[test]
+    fn a_deeply_nested_payload_does_not_overflow_the_stack() {
+        // Far deeper than 256 KiB of recursive `collect_callback_ids` frames
+        // could survive, but the iterative walk costs only heap.
+        const DEPTH: usize = 100_000;
+        const SMALL_STACK: usize = 256 * 1024;
+
+        let walker = std::thread::Builder::new()
+            .name("deep-callback-walk".to_string())
+            .stack_size(SMALL_STACK)
+            .spawn(|| {
+                let payload = deeply_nested_marker(DEPTH);
+                let mut ids = Vec::new();
+                collect_callback_ids(&payload, &mut ids);
+                unnest(payload);
+                ids
+            })
+            .expect("the walker thread should spawn");
+
+        let ids = walker
+            .join()
+            .expect("the iterative walk must not overflow a 256 KiB stack");
+        assert_eq!(
+            ids,
+            vec!["cb_deep".to_string()],
+            "the marker buried {DEPTH} levels deep must still be collected"
+        );
+    }
 }

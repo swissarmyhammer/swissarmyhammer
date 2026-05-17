@@ -42,4 +42,18 @@ mod tests {
             "the SDK must export makePluginThis"
         );
     }
+
+    /// The embedded SDK source carries the callback primitive: the host→isolate
+    /// invoke entry point and the function-marshalling transport method.
+    #[test]
+    fn sdk_source_carries_the_callback_primitive() {
+        assert!(
+            SDK_PLUGIN_SOURCE.contains("__sahInvokeCallback"),
+            "the SDK must install the host→isolate callback-invoke global"
+        );
+        assert!(
+            SDK_PLUGIN_SOURCE.contains("callbackDispatch"),
+            "the SDK must expose the callback-bearing transport method"
+        );
+    }
 }

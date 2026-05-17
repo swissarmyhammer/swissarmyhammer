@@ -347,6 +347,59 @@ async fn new_constructor_takes_explicit_layer_roots() {
     );
 }
 
+/// A plugin that hands the host functions over the callback-bearing transport
+/// path has each function recorded as a ledger `Callback` handle, and `unload`
+/// disposes every one of them.
+///
+/// The probe plugin sends a `callbackDispatch` carrying two functions; the
+/// host marshalled them into `$callback` markers and the bridge recorded one
+/// ledger handle per marker. After `unload` the plugin has no ledger entry —
+/// the callback handles were drained and disposed alongside the isolate.
+#[tokio::test]
+async fn callbacks_passed_to_the_host_are_tracked_in_the_ledger_and_disposed() {
+    let bundle = tempfile::TempDir::new().expect("temp dir");
+    // The plugin hands the host two functions in one callback-bearing payload.
+    write_plugin(
+        bundle.path(),
+        "this.__transport.callbackDispatch({\n\
+           onAdd: () => 'added',\n\
+           onMove: () => 'moved',\n\
+         });",
+    );
+
+    let host = PluginHost::for_tests(bundle.path().to_path_buf(), None);
+    let plugin_id = tokio::time::timeout(TIMEOUT, host.load(bundle.path()))
+        .await
+        .expect("loading the plugin should not hang")
+        .expect("the plugin's load should succeed");
+
+    // Each function the plugin passed was marshalled to a `$callback` marker
+    // and recorded as one ledger handle.
+    let ledger_len = tokio::time::timeout(TIMEOUT, host.ledger_len(&plugin_id))
+        .await
+        .expect("ledger_len should not hang")
+        .expect("the loaded plugin should have a ledger");
+    assert_eq!(
+        ledger_len, 2,
+        "each callback the plugin passed must be recorded as a ledger handle"
+    );
+
+    tokio::time::timeout(TIMEOUT, host.unload(&plugin_id))
+        .await
+        .expect("unload should not hang")
+        .expect("unloading the plugin should succeed");
+
+    // After unload the plugin's ledger is gone — its callback handles were
+    // drained and disposed.
+    let ledger_after = tokio::time::timeout(TIMEOUT, host.ledger_len(&plugin_id))
+        .await
+        .expect("ledger_len should not hang");
+    assert!(
+        ledger_after.is_none(),
+        "an unloaded plugin must have no ledger entry, got {ledger_after:?}"
+    );
+}
+
 /// `unload` of a plugin id the host never loaded fails with
 /// [`Error::UnknownPlugin`] — distinct from a missing-server failure.
 #[tokio::test]

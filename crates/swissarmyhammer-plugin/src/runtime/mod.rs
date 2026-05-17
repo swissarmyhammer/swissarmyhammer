@@ -205,6 +205,36 @@ enum Command {
         /// Where the lifecycle return value (or an error) is delivered.
         reply: oneshot::Sender<Result<serde_json::Value>>,
     },
+
+    /// Invoke a callback the plugin earlier handed the host by reference.
+    ///
+    /// This is the host→isolate direction of the callback primitive. Functions
+    /// cannot cross the boundary, so a function in a callback-bearing dispatch
+    /// payload is stored in an isolate-local table by the SDK and replaced with
+    /// a `{ "$callback": id }` marker. This command delivers a
+    /// `notifications/callbacks/invoke` into the isolate: the SDK looks the
+    /// stored function up by `id`, runs it, and the result is delivered back.
+    InvokeCallback {
+        /// The callback id the SDK minted for the stored function.
+        id: String,
+        /// The positional arguments to pass the stored function.
+        args: serde_json::Value,
+        /// Where the callback's (settled) return value or error is delivered.
+        reply: oneshot::Sender<Result<serde_json::Value>>,
+    },
+
+    /// Dispose a callback the plugin earlier handed the host by reference.
+    ///
+    /// Drops the stored function from the isolate-local callback table so it
+    /// can be garbage-collected and a stale id no longer resolves. This is how
+    /// a [`RegistrationHandle::Callback`](crate::ledger::RegistrationHandle)
+    /// drained from a plugin's ledger is disposed.
+    DisposeCallback {
+        /// The callback id to dispose.
+        id: String,
+        /// Where the disposal outcome (whether a function was removed) lands.
+        reply: oneshot::Sender<Result<serde_json::Value>>,
+    },
 }
 
 impl PluginRuntime {
@@ -412,6 +442,75 @@ impl PluginRuntime {
             bundle_dir: bundle_dir.as_ref().to_path_buf(),
             entry_file: entry_file.into(),
             lifecycle_export: Some(export.into()),
+            reply,
+        })?;
+        await_reply(response).await
+    }
+
+    /// Invoke a callback the plugin earlier handed the host by reference.
+    ///
+    /// This is the host→isolate direction of the callback primitive. A function
+    /// a plugin passed in a callback-bearing dispatch payload was stored in the
+    /// isolate's callback table under `id`; this delivers a
+    /// `notifications/callbacks/invoke` into the isolate so the SDK runs that
+    /// stored function. If the function returns a promise, the isolate's event
+    /// loop runs until it settles, so the returned value is always settled.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - the callback id the SDK minted when it marshalled the function.
+    /// * `args` - the positional arguments, a JSON array, passed to the
+    ///   function.
+    ///
+    /// # Returns
+    ///
+    /// The callback's return value as JSON, or JSON `null` when it returned
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Runtime`] when no callback is registered under `id` or
+    /// the stored function throws, or [`Error::RuntimeTimeout`] /
+    /// [`Error::RuntimeStopped`] if the worker does not answer.
+    pub async fn invoke_callback(
+        &self,
+        id: impl Into<String>,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let (reply, response) = oneshot::channel();
+        self.send(Command::InvokeCallback {
+            id: id.into(),
+            args,
+            reply,
+        })?;
+        await_reply(response).await
+    }
+
+    /// Dispose a callback the plugin earlier handed the host by reference.
+    ///
+    /// Drops the stored function from the isolate's callback table so it can be
+    /// garbage-collected and the `id` no longer resolves. This is the seam the
+    /// host uses to dispose a `Callback` registration handle drained from a
+    /// plugin's ledger.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - the callback id to dispose.
+    ///
+    /// # Returns
+    ///
+    /// JSON `true` when a function was removed, JSON `false` when `id` was not
+    /// registered.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeTimeout`] / [`Error::RuntimeStopped`] if the
+    /// worker does not answer, or [`Error::Runtime`] if the isolate cannot run
+    /// the disposal.
+    pub async fn dispose_callback(&self, id: impl Into<String>) -> Result<serde_json::Value> {
+        let (reply, response) = oneshot::channel();
+        self.send(Command::DisposeCallback {
+            id: id.into(),
             reply,
         })?;
         await_reply(response).await
@@ -625,6 +724,14 @@ fn worker_loop(
                 );
                 let _ = reply.send(result);
             }
+            Command::InvokeCallback { id, args, reply } => {
+                let result = invoke_callback(&mut runtime, &tokio_rt, &id, &args);
+                let _ = reply.send(result);
+            }
+            Command::DisposeCallback { id, reply } => {
+                let result = dispose_callback(&mut runtime, &tokio_rt, &id);
+                let _ = reply.send(result);
+            }
         }
 
         // If the just-finished command tripped the heap-limit callback (or any
@@ -786,6 +893,122 @@ fn call_module_export(
         .map_err(|e| Error::Runtime(format!("lifecycle function '{export}' failed: {e}")))?;
 
     global_to_json(runtime, &result)
+}
+
+/// The SDK global the host calls to invoke a stored callback by id.
+const INVOKE_CALLBACK_GLOBAL: &str = "__sahInvokeCallback";
+
+/// The SDK global the host calls to dispose a stored callback by id.
+const DISPOSE_CALLBACK_GLOBAL: &str = "__sahDisposeCallback";
+
+/// Invoke a stored callback by id and return its (settled) JSON result.
+///
+/// This is the worker-side handler for [`Command::InvokeCallback`]: the
+/// host→isolate direction of the callback primitive. It calls the SDK's
+/// `__sahInvokeCallback` global with a JSON-encoded `{ id, args }` request,
+/// runs the event loop so the (async) call settles, and decodes the SDK's
+/// `{ ok, result?, error? }` JSON response — surfacing an SDK-side `ok: false`
+/// (an unknown id, or a callback that threw) as [`Error::Runtime`].
+fn invoke_callback(
+    runtime: &mut JsRuntime,
+    tokio_rt: &tokio::runtime::Runtime,
+    id: &str,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    let request = serde_json::json!({ "id": id, "args": args }).to_string();
+    let response = call_string_global(runtime, tokio_rt, INVOKE_CALLBACK_GLOBAL, &request)?;
+    decode_callback_response(&response)
+}
+
+/// Dispose a stored callback by id, returning whether a function was removed.
+///
+/// The worker-side handler for [`Command::DisposeCallback`]: it calls the SDK's
+/// `__sahDisposeCallback` global with the bare id and returns the JSON boolean
+/// it reports.
+fn dispose_callback(
+    runtime: &mut JsRuntime,
+    tokio_rt: &tokio::runtime::Runtime,
+    id: &str,
+) -> Result<serde_json::Value> {
+    let response = call_string_global(runtime, tokio_rt, DISPOSE_CALLBACK_GLOBAL, id)?;
+    serde_json::from_str(&response)
+        .map_err(|e| Error::Runtime(format!("callback disposal returned invalid JSON: {e}")))
+}
+
+/// Decode the SDK's `{ ok, result?, error? }` callback-invoke response.
+///
+/// A response with `ok: true` yields its `result` (JSON `null` when the
+/// callback returned nothing); `ok: false` carries the SDK-side error message,
+/// surfaced as [`Error::Runtime`].
+fn decode_callback_response(response: &str) -> Result<serde_json::Value> {
+    let parsed: serde_json::Value = serde_json::from_str(response)
+        .map_err(|e| Error::Runtime(format!("callback invocation returned invalid JSON: {e}")))?;
+    if parsed.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
+        return Ok(parsed
+            .get("result")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null));
+    }
+    let message = parsed
+        .get("error")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("callback invocation failed");
+    Err(Error::Runtime(message.to_string()))
+}
+
+/// Call a `globalThis` function that takes one string and returns a string.
+///
+/// The two host→isolate callback entry points the SDK installs —
+/// `__sahInvokeCallback` and `__sahDisposeCallback` — both have this shape: one
+/// JSON string crosses in, one JSON string crosses back. This helper fetches
+/// the named global, calls it with `argument`, runs the event loop so an
+/// `async` global's returned promise settles, and reads the result back as a
+/// Rust string.
+fn call_string_global(
+    runtime: &mut JsRuntime,
+    tokio_rt: &tokio::runtime::Runtime,
+    global_name: &str,
+    argument: &str,
+) -> Result<String> {
+    // Fetch the global function and build the single string argument, both as
+    // detached `Global` handles so the scope can be dropped before the call.
+    let (function, arg) = {
+        deno_core::scope!(scope, runtime);
+        let context = scope.get_current_context();
+        let global = context.global(scope);
+        let key = v8::String::new(scope, global_name).ok_or_else(|| {
+            Error::Runtime(format!("cannot allocate global name '{global_name}'"))
+        })?;
+        let value = global
+            .get(scope, key.into())
+            .ok_or_else(|| Error::Runtime(format!("the isolate has no '{global_name}' global")))?;
+        let function = v8::Local::<v8::Function>::try_from(value).map_err(|_| {
+            Error::Runtime(format!("isolate global '{global_name}' is not a function"))
+        })?;
+        let arg = v8::String::new(scope, argument)
+            .ok_or_else(|| Error::Runtime("cannot allocate callback argument".to_string()))?;
+        (
+            v8::Global::new(scope, function),
+            v8::Global::new(scope, v8::Local::<v8::Value>::from(arg)),
+        )
+    };
+
+    // Call the function, running the event loop so an async global's promise
+    // settles before the result is read.
+    let call = runtime.call_with_args(&function, &[arg]);
+    let result = tokio_rt
+        .block_on(runtime.with_event_loop_promise(call, PollEventLoopOptions::default()))
+        .map_err(|e| Error::Runtime(format!("callback global '{global_name}' failed: {e}")))?;
+
+    // The global returns a JSON string; read it back as a Rust string.
+    deno_core::scope!(scope, runtime);
+    let local = v8::Local::new(scope, &result);
+    let string = v8::Local::<v8::String>::try_from(local).map_err(|_| {
+        Error::Runtime(format!(
+            "callback global '{global_name}' did not return a string"
+        ))
+    })?;
+    Ok(string.to_rust_string_lossy(scope))
 }
 
 /// Convert a V8 value handle to a `serde_json::Value`.
