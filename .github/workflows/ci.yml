@@ -87,11 +87,11 @@ jobs:
         run: cargo install tauri-cli --version "^2" --locked || true
       - uses: taiki-e/install-action@just
       - name: Build Tauri apps
-        # Runs the same just recipes developers use, so a broken app build
+        # Runs the same just recipe developers use, so a broken app build
         # (e.g. mismatched tauri / @tauri-apps/api versions) fails CI instead
-        # of slipping through to release. The build-only recipes skip the
-        # local /Applications install step.
-        run: just mirdan-build kanban-build
+        # of slipping through to release. The justfile owns the app list --
+        # adding an app there is enough, no CI edit needed.
+        run: just build
 
   fmt:
     name: Rustfmt

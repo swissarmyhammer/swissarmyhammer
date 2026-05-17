@@ -9,6 +9,9 @@ install:
     just mirdan-install
     just kanban-install
 
+# Build all Tauri apps (debug)
+build: mirdan-build kanban-build
+
 # Build the Mirdan tray app (debug)
 mirdan-build:
     cd apps/mirdan-app && cargo tauri build --debug
@@ -62,3 +65,7 @@ kanban-logs:
 # Tail all app logs (both Mirdan and Kanban)
 logs:
     log stream --style compact --predicate 'subsystem == "ai.mirdan.app" OR subsystem == "com.swissarmyhammer.kanban"' --level debug
+
+outdated:
+    cargo install cargo-edit
+    cargo upgrade --dry-run
