@@ -541,6 +541,12 @@ pub(crate) struct AppState {
     /// spatial commands routinely take both `spatial_registry` and
     /// `spatial_state` for the duration of a single transaction.
     pub(crate) spatial_state: TokioMutex<SpatialState>,
+    /// Running in-process AI agent endpoints, keyed by board path.
+    ///
+    /// `ai_start_agent` registers one endpoint per board here; `close_board`
+    /// stops the matching endpoint and app teardown stops all of them, so an
+    /// agent's WebSocket server never outlives its board or the process.
+    pub(crate) running_agents: crate::ai::models::RunningAgents,
 }
 
 impl AppState {
@@ -593,6 +599,7 @@ impl AppState {
             deep_link_handled: AtomicBool::new(false),
             spatial_registry: TokioMutex::new(SpatialRegistry::new()),
             spatial_state: TokioMutex::new(SpatialState::new()),
+            running_agents: crate::ai::models::RunningAgents::new(),
         }
     }
 
@@ -900,6 +907,11 @@ impl AppState {
         // Update UIState board tracking so it stays in sync.
         self.ui_state
             .remove_open_board(&canonical.display().to_string());
+
+        // Stop the board's in-process AI agent endpoint, if one was started
+        // via `ai_start_agent`, so its WebSocket server does not outlive the
+        // board.
+        self.running_agents.stop(&canonical).await;
 
         tracing::info!(path = %canonical.display(), "closed board");
         Ok(())

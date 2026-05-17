@@ -72,10 +72,28 @@ impl AgentWebSocketServer {
     ///
     /// Returns an [`io::Error`] if binding the loopback TCP socket fails.
     pub async fn bind() -> io::Result<Self> {
+        Self::bind_with(ModelConfig::default()).await
+    }
+
+    /// Bind a loopback WebSocket server on an ephemeral port for a specific
+    /// model configuration.
+    ///
+    /// This is the constructor the model-selection command surface uses: the
+    /// webview picks a model, the backend resolves its [`ModelConfig`], and
+    /// hands it here. Every connection accepted by [`run`](Self::run) builds
+    /// its agent from this configuration, and `create_agent` dispatches on the
+    /// configuration's executor type (Claude Code vs. local llama) at runtime.
+    ///
+    /// The OS assigns the port; [`local_addr`](Self::local_addr) reports it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`io::Error`] if binding the loopback TCP socket fails.
+    pub async fn bind_with(model_config: ModelConfig) -> io::Result<Self> {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
         Ok(Self {
             listener,
-            model_config: ModelConfig::default(),
+            model_config,
         })
     }
 
@@ -101,14 +119,17 @@ impl AgentWebSocketServer {
     /// the realistic fan-out is one. A bounded connection pool would add
     /// machinery for a contention case that does not arise here.
     ///
-    /// The loopback socket has no origin or auth check, so any local process
-    /// that discovers the ephemeral port could connect and drive an in-process
-    /// agent. Loopback binding keeps this off the network and matches a
-    /// single-user desktop-app threat model. The follow-up task that wires
-    /// this server into Tauri startup (`01KRRN3SP5D1H63TQ8HM7SQZ1F`) should
-    /// mint a per-launch token, embed it in the `ws://` URL handed to the
-    /// webview, and reject connections that do not present it — so only the
-    /// app's own webview can connect.
+    /// The loopback socket has no per-connection auth: there is no origin
+    /// check and no token handshake, so any local process that discovers the
+    /// OS-assigned ephemeral port could connect and drive an in-process agent.
+    /// The accepted risk is exactly that — a co-resident local process. It is
+    /// mitigated only by loopback-only binding, which keeps the server off the
+    /// network and matches a single-user desktop-app threat model.
+    ///
+    /// Hardening this with a per-launch auth token (mint a secret, embed it in
+    /// the `ws://` URL handed to the webview, and reject connections that do
+    /// not present it) is deferred, real work tracked separately as kanban
+    /// task `01KRV7GFHKD1FFGNY8C6X8BZZ4`.
     pub async fn run(self) {
         let Self {
             listener,

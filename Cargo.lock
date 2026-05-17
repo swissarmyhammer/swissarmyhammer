@@ -4120,6 +4120,7 @@ dependencies = [
  "tracing-subscriber",
  "ulid",
  "urlencoding",
+ "which",
  "whoami",
 ]
 

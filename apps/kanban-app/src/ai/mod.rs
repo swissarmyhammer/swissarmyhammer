@@ -5,11 +5,15 @@
 //! webview's TypeScript ACP client connects to that WebSocket. Tauri IPC is
 //! not on the ACP data path — the data path is a plain WebSocket.
 //!
-//! The [`agent_ws::AgentWebSocketServer`] entry point is built here but not
-//! yet started from the Tauri setup hook — wiring it into app startup (and
-//! handing the bound port to the webview) is a follow-up task. Until then the
-//! server type reads as unused in the binary build, hence the module-wide
-//! `dead_code` allowance.
+//! Model selection and the agent-endpoint command surface live in
+//! [`models`]: [`models::ai_list_models`] enumerates the selectable models and
+//! [`models::ai_start_agent`] prepares an [`agent_ws::AgentWebSocketServer`]
+//! for the chosen model, handing the webview its `ws://` and `mcp` URLs.
+//!
+//! Some accessors here (e.g. [`models::RunningAgent::ws_url`]) are part of the
+//! AI backend's public surface but are not yet read by the binary, hence the
+//! module-wide `dead_code` allowance.
 #![allow(dead_code)]
 
 pub mod agent_ws;
+pub mod models;

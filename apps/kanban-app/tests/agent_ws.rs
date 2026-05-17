@@ -5,19 +5,27 @@
 //! `#[path]` — the same independent-compilation pattern used by
 //! `tests/cli_install.rs` and `build.rs` files across this workspace.
 //!
+//! Only `agent_ws.rs` is pulled in here, not the whole `ai/mod.rs`: the
+//! sibling `ai::models` module references `crate::state::AppState` (a Tauri
+//! command needs the managed state), which only resolves when compiled as
+//! part of the full binary. The `ai::models` agent-registry logic has its
+//! own inline tests in `src/ai/models.rs`.
+//!
 //! Scope: these tests exercise the loopback WebSocket transport and the ACP
 //! `initialize` round-trip against an agent built in-process by
 //! `swissarmyhammer_agent::create_agent`. No external agent subprocess is
 //! involved — claude-agent answers `initialize` purely from capability
 //! negotiation, without spawning the `claude` CLI.
 
-// `ai/mod.rs` carries its own module-wide `#![allow(dead_code)]` (the
-// WebSocket server is built but not yet started from Tauri setup), so no
-// extra allowance is needed at this `mod` site.
-#[path = "../src/ai/mod.rs"]
-mod ai;
+// `agent_ws.rs` is pulled in directly. It has no `crate::`-relative
+// references, so it compiles standalone in this test binary. Its module-wide
+// `dead_code` allowance lives in `ai/mod.rs`, which is not included here, so
+// it is re-stated at this `mod` site.
+#[allow(dead_code)]
+#[path = "../src/ai/agent_ws.rs"]
+mod agent_ws;
 
-use ai::agent_ws::AgentWebSocketServer;
+use agent_ws::AgentWebSocketServer;
 use futures_util::{SinkExt, StreamExt};
 use std::time::Duration;
 use tokio_tungstenite::tungstenite::Message;
