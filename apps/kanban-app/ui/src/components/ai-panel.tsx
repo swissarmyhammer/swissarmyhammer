@@ -28,7 +28,13 @@
  * client and session and starts a brand-new stateless one for the new model —
  * exactly the "fresh session per model" the task requires.
  */
-import { useCallback, useEffect, useMemo, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import type {
   ContentBlock,
   PlanEntry,
@@ -37,14 +43,22 @@ import type {
 } from "@agentclientprotocol/sdk";
 import type { DynamicToolUIPart, ToolUIPart } from "ai";
 import {
+  CheckIcon,
   ChevronDownIcon,
   CircleCheckIcon,
   CircleDotIcon,
   CircleIcon,
+  CopyIcon,
   PlusIcon,
+  RotateCcwIcon,
   SparklesIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  AiPanelFocusScope,
+  AiPanelPressable,
+} from "@/components/ai-panel-focus";
+import { asSegment } from "@/types/spatial";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -72,6 +86,7 @@ import {
 import { Loader } from "@/components/ai-elements/loader";
 import {
   Message,
+  MessageActions,
   MessageContent,
   MessageResponse,
 } from "@/components/ai-elements/message";
@@ -215,29 +230,47 @@ export function AiPanel({
   );
 
   return (
-    <div
+    // The panel body is a spatial-nav ZONE — `ui:ai-panel`, a child of the
+    // window-root `<FocusLayer>` (see `App.tsx`). Its FQM is the path
+    // `/window/ui:ai-panel`; the header selector, the conversation
+    // scrollback, the composer, and the per-message action buttons each
+    // register a `<FocusScope>` leaf one level deeper. `showFocus={false}`
+    // because a focus rectangle around the whole panel is visual noise —
+    // the inner leaves render their own indicator. See `ai-panel-focus.tsx`
+    // for the path-monikers rationale and the zone-vs-layer decision.
+    <AiPanelFocusScope
+      moniker={asSegment("ui:ai-panel")}
+      showFocus={false}
       className="flex h-full min-h-0 flex-col bg-background"
-      data-slot="ai-panel"
     >
-      <AiPanelHeader
-        models={models}
-        selectedModel={selectedModel}
-        onSelectModel={onSelectModel}
-      />
-      {modelId === null ? (
-        <NoModelState hasModels={(models?.length ?? 0) > 0} />
-      ) : (
-        <AiPanelConversation
-          // Keying on the model id remounts the conversation on a model
-          // switch — tearing down the prior ACP session and starting a
-          // fresh, stateless one for the newly selected model.
-          key={modelId}
-          modelId={modelId}
-          modelReady={selectedModel?.available ?? false}
-          createConnect={createConnect}
+      {/* The inner `data-slot='ai-panel'` div fills the zone wrapper. When
+          the spatial stack is absent (standalone unit test) the zone wrapper
+          collapses to a fragment and this div is the panel root, so it
+          carries the full `h-full` layout chain either way. */}
+      <div
+        className="flex h-full min-h-0 flex-1 flex-col bg-background"
+        data-slot="ai-panel"
+      >
+        <AiPanelHeader
+          models={models}
+          selectedModel={selectedModel}
+          onSelectModel={onSelectModel}
         />
-      )}
-    </div>
+        {modelId === null ? (
+          <NoModelState hasModels={(models?.length ?? 0) > 0} />
+        ) : (
+          <AiPanelConversation
+            // Keying on the model id remounts the conversation on a model
+            // switch — tearing down the prior ACP session and starting a
+            // fresh, stateless one for the newly selected model.
+            key={modelId}
+            modelId={modelId}
+            modelReady={selectedModel?.available ?? false}
+            createConnect={createConnect}
+          />
+        )}
+      </div>
+    </AiPanelFocusScope>
   );
 }
 
@@ -269,16 +302,38 @@ function AiPanelHeader({
         <span>AI</span>
       </div>
       <DropdownMenu>
+        {/* The model selector is a focusable spatial-nav leaf:
+            `ui:ai-panel.model-selector`, composed under the `ui:ai-panel`
+            zone. `<AiPanelPressable asChild>` mounts the leaf and the
+            Enter / Space keyboard-activation CommandDefs; the
+            `DropdownMenuTrigger`'s slot becomes the host `<button>` so the
+            chain renders exactly one button. `onPress` is a no-op — Radix's
+            own trigger handler opens the menu; the Pressable is here purely
+            for the focus leaf + keyboard activation, and a `<button>`
+            press toggles the dropdown natively.
+
+            `ariaLabel` is the trigger's visible label (the model name, or
+            "Select a model"): the button already shows that text, so the
+            accessible name must match it rather than introduce a competing
+            label. */}
         <DropdownMenuTrigger asChild>
-          <Button
-            className="gap-1.5"
+          <AiPanelPressable
+            asChild
+            moniker={asSegment("ui:ai-panel.model-selector")}
+            ariaLabel={triggerLabel}
+            onPress={() => {}}
             disabled={!models || models.length === 0}
-            size="sm"
-            variant="outline"
           >
-            {triggerLabel}
-            <ChevronDownIcon className="size-4 opacity-60" />
-          </Button>
+            <Button
+              className="gap-1.5"
+              disabled={!models || models.length === 0}
+              size="sm"
+              variant="outline"
+            >
+              {triggerLabel}
+              <ChevronDownIcon className="size-4 opacity-60" />
+            </Button>
+          </AiPanelPressable>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-64">
           <DropdownMenuLabel>Model</DropdownMenuLabel>
@@ -449,6 +504,20 @@ function AiPanelConversation({
     void cancel();
   }, [cancel]);
 
+  // Resend a user message's text as a fresh prompt — the per-message
+  // retry action. A no-op while a turn is streaming, mirroring the
+  // composer being inert mid-turn.
+  const handleRetry = useCallback(
+    (text: string) => {
+      const trimmed = text.trim();
+      if (trimmed.length === 0 || status === "streaming") {
+        return;
+      }
+      void sendPrompt([{ type: "text", text: trimmed }]);
+    },
+    [sendPrompt, status],
+  );
+
   // `ChatStatus` has no "idle" — the composer is `ready` between turns, and
   // `error` after a failed turn so the submit button shows the error glyph.
   const composerStatus: "streaming" | "ready" | "error" =
@@ -456,34 +525,50 @@ function AiPanelConversation({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <Conversation>
-        <ConversationContent>
-          {messages.length === 0 ? (
-            <ConversationEmptyState
-              description="Send a message to start the conversation."
-              icon={<SparklesIcon className="size-6" />}
-              title="New conversation"
-            />
-          ) : (
-            messages.map((message) => (
-              <ConversationMessageView key={message.id} message={message} />
-            ))
-          )}
-          {status === "streaming" && (
-            <div className="flex items-center gap-2 text-muted-foreground text-sm">
-              <Loader size={16} />
-              <span>Thinking...</span>
-            </div>
-          )}
-          {permissionRequest && (
-            <PermissionPrompt
-              request={permissionRequest}
-              onRespond={respondPermission}
-            />
-          )}
-        </ConversationContent>
-        <ConversationScrollButton />
-      </Conversation>
+      {/* The conversation scrollback is its own focus scope —
+          `ui:ai-panel.scrollback` under the panel zone — so jump-to and
+          arrow-nav can land on the transcript region. `showFocus={false}`:
+          the scrollback is a large bounded region, and a focus rectangle
+          framing the whole transcript would be noise; the per-message
+          action leaves render their own indicators. */}
+      <AiPanelFocusScope
+        moniker={asSegment("ui:ai-panel.scrollback")}
+        showFocus={false}
+        className="flex min-h-0 flex-1 flex-col"
+      >
+        <Conversation>
+          <ConversationContent>
+            {messages.length === 0 ? (
+              <ConversationEmptyState
+                description="Send a message to start the conversation."
+                icon={<SparklesIcon className="size-6" />}
+                title="New conversation"
+              />
+            ) : (
+              messages.map((message) => (
+                <ConversationMessageView
+                  key={message.id}
+                  message={message}
+                  onRetry={handleRetry}
+                />
+              ))
+            )}
+            {status === "streaming" && (
+              <div className="flex items-center gap-2 text-muted-foreground text-sm">
+                <Loader size={16} />
+                <span>Thinking...</span>
+              </div>
+            )}
+            {permissionRequest && (
+              <PermissionPrompt
+                request={permissionRequest}
+                onRespond={respondPermission}
+              />
+            )}
+          </ConversationContent>
+          <ConversationScrollButton />
+        </Conversation>
+      </AiPanelFocusScope>
       <ComposerArea
         disabled={!modelReady}
         placeholder="Ask the AI agent..."
@@ -496,13 +581,37 @@ function AiPanelConversation({
   );
 }
 
+/**
+ * Concatenate a message's plain-text parts into one copyable string.
+ *
+ * Only `text` parts carry user-visible prose; reasoning, tool, and plan
+ * parts are structured chrome and are skipped. Returns the empty string
+ * when the message has no text parts.
+ */
+function messagePlainText(message: ConversationMessage): string {
+  return message.parts
+    .filter(
+      (part): part is Extract<typeof part, { type: "text" }> =>
+        part.type === "text",
+    )
+    .map((part) => part.text)
+    .join("\n\n");
+}
+
 /** Props for {@link ConversationMessageView}. */
 interface ConversationMessageViewProps {
   message: ConversationMessage;
+  /**
+   * Resend the given user message's text as a fresh prompt — wired to the
+   * per-message retry action. `undefined` for assistant messages, which
+   * have no retry affordance.
+   */
+  onRetry?: (text: string) => void;
 }
 
 /**
- * Render one conversation message — every part, in order.
+ * Render one conversation message — every part, in order — plus the
+ * per-message action bar (copy, and retry for user messages).
  *
  * Dispatches each {@link ConversationMessage} part to the matching AI Elements
  * component: `text` -> {@link MessageResponse}, `reasoning` -> {@link Reasoning},
@@ -510,6 +619,7 @@ interface ConversationMessageViewProps {
  */
 function ConversationMessageView({
   message,
+  onRetry,
 }: ConversationMessageViewProps): ReactNode {
   return (
     <Message from={message.role}>
@@ -523,7 +633,94 @@ function ConversationMessageView({
           />
         ))}
       </MessageContent>
+      <MessageActionBar message={message} onRetry={onRetry} />
     </Message>
+  );
+}
+
+/**
+ * Shared Tailwind class string for a per-message action icon button —
+ * a small ghost button mirroring the AI Elements `MessageAction` look so
+ * the copy / retry controls stay visually consistent with the rest of
+ * the conversation chrome.
+ */
+const MESSAGE_ACTION_BUTTON_CLASS =
+  "inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground";
+
+/** Props for {@link MessageActionBar}. */
+interface MessageActionBarProps {
+  message: ConversationMessage;
+  onRetry?: (text: string) => void;
+}
+
+/**
+ * The per-message action bar: a copy button on every message and a retry
+ * button on user messages.
+ *
+ * Each button is an `<AiPanelPressable>` leaf — moniker
+ * `ui:ai-panel.message-action:{messageId}:{kind}` — so jump-to and arrow
+ * navigation reach the action exactly like any other panel control. The
+ * leaf composes under the `ui:ai-panel` zone, keeping the per-message
+ * action a path-addressable spatial target.
+ *
+ * The bar renders nothing for a message with no copyable text (e.g. an
+ * assistant turn that produced only tool calls) — there is nothing to
+ * copy and no user prompt to retry.
+ */
+function MessageActionBar({
+  message,
+  onRetry,
+}: MessageActionBarProps): ReactNode {
+  const text = useMemo(() => messagePlainText(message), [message]);
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(() => {
+    void navigator.clipboard
+      .writeText(text)
+      .then(() => {
+        setCopied(true);
+        // Revert the checkmark to the copy glyph after a short beat so the
+        // button is ready for the next copy.
+        window.setTimeout(() => setCopied(false), 1500);
+      })
+      .catch((err) => {
+        console.error("[AiPanel] copy to clipboard failed", err);
+      });
+  }, [text]);
+
+  if (text.length === 0) {
+    return null;
+  }
+
+  const isUser = message.role === "user";
+
+  return (
+    <MessageActions>
+      <AiPanelPressable
+        moniker={asSegment(`ui:ai-panel.message-action:${message.id}:copy`)}
+        ariaLabel="Copy message"
+        onPress={handleCopy}
+        className={MESSAGE_ACTION_BUTTON_CLASS}
+        title={copied ? "Copied" : "Copy"}
+      >
+        {copied ? (
+          <CheckIcon className="size-3.5" />
+        ) : (
+          <CopyIcon className="size-3.5" />
+        )}
+      </AiPanelPressable>
+      {isUser && onRetry && (
+        <AiPanelPressable
+          moniker={asSegment(`ui:ai-panel.message-action:${message.id}:retry`)}
+          ariaLabel="Retry message"
+          onPress={() => onRetry(text)}
+          className={MESSAGE_ACTION_BUTTON_CLASS}
+          title="Retry"
+        >
+          <RotateCcwIcon className="size-3.5" />
+        </AiPanelPressable>
+      )}
+    </MessageActions>
   );
 }
 
@@ -779,25 +976,33 @@ function ComposerArea({
           New conversation
         </Button>
       </div>
-      <PromptInput onSubmit={handleSubmit}>
-        <PromptInputBody>
-          <PromptInputTextarea
-            aria-label="Message the AI agent"
-            disabled={disabled}
-            placeholder={placeholder}
-          />
-        </PromptInputBody>
-        <PromptInputFooter>
-          <span className="text-muted-foreground text-xs">
-            {streaming ? "Streaming - click to stop" : ""}
-          </span>
-          <PromptInputSubmit
-            aria-label={streaming ? "Stop" : "Submit"}
-            disabled={disabled}
-            status={status}
-          />
-        </PromptInputFooter>
-      </PromptInput>
+      {/* The composer is a focus scope — `ui:ai-panel.composer` under the
+          panel zone — so jump-to lands directly on the prompt box and
+          arrow-nav reaches it. `<FocusScope>` deliberately does NOT steal a
+          click that lands on a `<textarea>`, so caret placement inside the
+          prompt is untouched; the scope just registers the leaf and paints
+          its focus indicator. */}
+      <AiPanelFocusScope moniker={asSegment("ui:ai-panel.composer")}>
+        <PromptInput onSubmit={handleSubmit}>
+          <PromptInputBody>
+            <PromptInputTextarea
+              aria-label="Message the AI agent"
+              disabled={disabled}
+              placeholder={placeholder}
+            />
+          </PromptInputBody>
+          <PromptInputFooter>
+            <span className="text-muted-foreground text-xs">
+              {streaming ? "Streaming - click to stop" : ""}
+            </span>
+            <PromptInputSubmit
+              aria-label={streaming ? "Stop" : "Submit"}
+              disabled={disabled}
+              status={status}
+            />
+          </PromptInputFooter>
+        </PromptInput>
+      </AiPanelFocusScope>
     </div>
   );
 }

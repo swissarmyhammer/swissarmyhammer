@@ -47,7 +47,17 @@ import {
 } from "@/ai/commands";
 
 // ---------------------------------------------------------------------------
-// Tauri `invoke` mock — the container's only backend seam is `ai_list_models`.
+// Tauri API mocks.
+//
+// The container's own backend seam is `ai_list_models` (via `invoke`). The
+// hosted `AiPanel` View now wires its controls into the spatial-nav graph
+// (`FocusScope` / `Pressable`), so its module graph transitively imports
+// `@tauri-apps/api/event` / `@tauri-apps/api/window` and `@tauri-apps/plugin-log`.
+// Those are stubbed here so the real modules never load — the real
+// `@tauri-apps/api/event` reaches back into `core` for `transformCallback`,
+// which the `core` mock below intentionally does not provide. The container
+// itself mounts no `<FocusLayer>`, so the panel's spatial primitives take
+// their no-layer fallback path; these mocks just keep the import graph clean.
 // ---------------------------------------------------------------------------
 
 const mockInvoke = vi.hoisted(() =>
@@ -56,6 +66,27 @@ const mockInvoke = vi.hoisted(() =>
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => mockInvoke(...(args as [string, unknown?])),
+}));
+
+vi.mock("@tauri-apps/api/event", () => ({
+  emit: vi.fn(() => Promise.resolve()),
+  listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({
+    label: "main",
+    listen: vi.fn(() => Promise.resolve(() => {})),
+  }),
+}));
+
+vi.mock("@tauri-apps/plugin-log", () => ({
+  error: vi.fn(),
+  warn: vi.fn(),
+  info: vi.fn(),
+  debug: vi.fn(),
+  trace: vi.fn(),
+  attachConsole: vi.fn(() => Promise.resolve()),
 }));
 
 // ---------------------------------------------------------------------------
