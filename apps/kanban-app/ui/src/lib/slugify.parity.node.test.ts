@@ -1,9 +1,9 @@
 /**
  * Parity test: the TypeScript `slugify()` in `./slugify.ts` MUST produce
  * byte-identical output to the Rust `slug()` function in
- * `swissarmyhammer-common/src/slug.rs`. The two implementations are kept
+ * `crates/swissarmyhammer-common/src/slug.rs`. The two implementations are kept
  * in lockstep via the shared corpus at
- * `swissarmyhammer-common/tests/slug_parity_corpus.txt` — both sides run
+ * `crates/swissarmyhammer-common/tests/slug_parity_corpus.txt` — both sides run
  * over the same input list and assert idempotency plus stable rules.
  *
  * This test is node-only (uses `fs`, `path`, `url`) and therefore lives
@@ -21,7 +21,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 /** Absolute path to the shared parity corpus. */
 const CORPUS_PATH = resolve(
   __dirname,
-  "../../../..",
+  "../../../../..",
+  "crates",
   "swissarmyhammer-common",
   "tests",
   "slug_parity_corpus.txt",
