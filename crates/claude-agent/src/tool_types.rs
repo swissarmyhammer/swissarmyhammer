@@ -62,8 +62,12 @@ pub enum ToolCallStatus {
 pub enum ToolCallContent {
     /// Standard content blocks like text, images, or resources
     Content {
-        /// The actual content block
-        content: agent_client_protocol::schema::ContentBlock,
+        /// The actual content block.
+        ///
+        /// Boxed because `ContentBlock` is large; an inline copy would make
+        /// `ToolCallContent::Content` dwarf the other variants and bloat the
+        /// whole enum (see `clippy::large_enum_variant`).
+        content: Box<agent_client_protocol::schema::ContentBlock>,
     },
     /// File modifications shown as diffs
     Diff {
@@ -535,7 +539,7 @@ impl ToolCallContent {
         match self {
             ToolCallContent::Content { content } => {
                 // ToolCallContent::Content is a tuple variant wrapping a Content struct
-                let content_block = content.clone();
+                let content_block = (**content).clone();
                 agent_client_protocol::schema::ToolCallContent::from(content_block)
             }
             ToolCallContent::Diff {
@@ -784,9 +788,9 @@ mod tests {
     #[test]
     fn test_tool_call_content_serialization_content_variant() {
         let content = ToolCallContent::Content {
-            content: agent_client_protocol::schema::ContentBlock::Text(
+            content: Box::new(agent_client_protocol::schema::ContentBlock::Text(
                 agent_client_protocol::schema::TextContent::new("Test content"),
-            ),
+            )),
         };
 
         let json = serde_json::to_value(&content).expect("Should serialize");
@@ -848,7 +852,7 @@ mod tests {
         let content: ToolCallContent = serde_json::from_value(json).expect("Should deserialize");
         match content {
             ToolCallContent::Content { content } => {
-                if let agent_client_protocol::schema::ContentBlock::Text(text) = content {
+                if let agent_client_protocol::schema::ContentBlock::Text(text) = *content {
                     assert_eq!(text.text, "Deserialized content");
                 } else {
                     panic!("Expected text content");
@@ -901,9 +905,9 @@ mod tests {
     #[test]
     fn test_tool_call_content_to_acp_content_variant() {
         let content = ToolCallContent::Content {
-            content: agent_client_protocol::schema::ContentBlock::Text(
+            content: Box::new(agent_client_protocol::schema::ContentBlock::Text(
                 agent_client_protocol::schema::TextContent::new("ACP test"),
-            ),
+            )),
         };
 
         let acp_content = content.to_acp_content();
@@ -965,9 +969,9 @@ mod tests {
         );
 
         report.add_content(ToolCallContent::Content {
-            content: agent_client_protocol::schema::ContentBlock::Text(
+            content: Box::new(agent_client_protocol::schema::ContentBlock::Text(
                 agent_client_protocol::schema::TextContent::new("Starting operation"),
-            ),
+            )),
         });
 
         report.add_content(ToolCallContent::Diff {
@@ -1135,9 +1139,9 @@ mod tests {
 
         // Now add content
         report.add_content(ToolCallContent::Content {
-            content: agent_client_protocol::schema::ContentBlock::Text(
+            content: Box::new(agent_client_protocol::schema::ContentBlock::Text(
                 agent_client_protocol::schema::TextContent::new("Progress update"),
-            ),
+            )),
         });
 
         let update = report.to_acp_tool_call_update();
@@ -1171,9 +1175,9 @@ mod tests {
         // Change multiple fields
         report.update_status(ToolCallStatus::Completed);
         report.add_content(ToolCallContent::Content {
-            content: agent_client_protocol::schema::ContentBlock::Text(
+            content: Box::new(agent_client_protocol::schema::ContentBlock::Text(
                 agent_client_protocol::schema::TextContent::new("Done"),
-            ),
+            )),
         });
         report.set_raw_output(serde_json::json!({"result": "success"}));
 

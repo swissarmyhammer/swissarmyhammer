@@ -272,8 +272,8 @@ pub fn apply_changes(entity: &mut Entity, changes: &[(String, FieldChange)]) -> 
                     if current != old_value {
                         return Err(crate::error::EntityError::StaleChange {
                             field: key.clone(),
-                            expected: old_value.clone(),
-                            actual: current.clone(),
+                            expected: Box::new(old_value.clone()),
+                            actual: Box::new(current.clone()),
                         });
                     }
                 }

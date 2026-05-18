@@ -3809,11 +3809,11 @@ mod tests {
             .update_tool_call_report(&session_id, &report.tool_call_id, |r| {
                 r.update_status(ToolCallStatus::InProgress);
                 r.add_content(ToolCallContent::Content {
-                    content: agent_client_protocol::schema::ContentBlock::Text(
+                    content: Box::new(agent_client_protocol::schema::ContentBlock::Text(
                         agent_client_protocol::schema::TextContent::new(
                             "Reading file...".to_string(),
                         ),
-                    ),
+                    )),
                 });
             })
             .await;
@@ -3909,9 +3909,9 @@ mod tests {
 
         // Add different types of content
         report.add_content(ToolCallContent::Content {
-            content: agent_client_protocol::schema::ContentBlock::Text(
+            content: Box::new(agent_client_protocol::schema::ContentBlock::Text(
                 agent_client_protocol::schema::TextContent::new("Operation completed".to_string()),
-            ),
+            )),
         });
 
         report.add_content(ToolCallContent::Diff {
@@ -3932,7 +3932,7 @@ mod tests {
         // Test content types
         match &report.content[0] {
             ToolCallContent::Content { content } => {
-                if let agent_client_protocol::schema::ContentBlock::Text(text) = content {
+                if let agent_client_protocol::schema::ContentBlock::Text(text) = content.as_ref() {
                     assert_eq!(text.text, "Operation completed");
                 } else {
                     panic!("Expected text content");
