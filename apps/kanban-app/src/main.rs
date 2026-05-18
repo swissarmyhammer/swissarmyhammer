@@ -6,6 +6,7 @@ mod cli_install;
 mod commands;
 mod deeplink;
 mod menu;
+mod plugins;
 mod state;
 mod tauri_reporter;
 mod watcher;
@@ -41,7 +42,11 @@ fn main() {
     // Tauri app exists. Session restore is driven from inside `setup_app`,
     // after the deep-link handler has had its chance to set
     // `AppState::deep_link_handled`.
-    let app_state = AppState::new();
+    //
+    // `AppState::new()` is async because it constructs the embedded plugin
+    // platform (the `PluginHost` with its builtin and user-layer plugins), so
+    // it is driven to completion on the runtime before the Tauri app is built.
+    let app_state = rt.block_on(AppState::new());
     run_app(app_state);
 }
 
@@ -119,6 +124,11 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     let app_handle = app.handle().clone();
     tauri::async_runtime::block_on(state.start_watchers(app_handle));
+
+    // Start the plugin hot-reload watcher now that the app is up — the same
+    // discover-early, watch-once-up pattern board watchers follow. The plugin
+    // platform was already discovered and loaded during `AppState::new`.
+    tauri::async_runtime::block_on(state.start_plugin_watcher());
 
     // Skip session window restore when the user deep-linked — otherwise the
     // previous session's windows pile up on top of the one the deep-link

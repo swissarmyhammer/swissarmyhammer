@@ -16,6 +16,7 @@ use tokio::sync::{Mutex as TokioMutex, RwLock};
 use swissarmyhammer_kanban::actor::AddActor;
 use swissarmyhammer_kanban::Execute;
 
+use crate::plugins::PluginPlatform;
 use crate::watcher;
 use swissarmyhammer_entity::EntityCache;
 
@@ -479,6 +480,14 @@ pub(crate) struct AppState {
     /// spatial commands routinely take both `spatial_registry` and
     /// `spatial_state` for the duration of a single transaction.
     pub(crate) spatial_state: TokioMutex<SpatialState>,
+    /// The embedded plugin platform — the [`swissarmyhammer_plugin::PluginHost`]
+    /// loaded with the builtin and user-layer plugins, plus the hot-reload
+    /// watcher. Joins `commands_registry`, `ui_state`, and `boards` as another
+    /// piece of shared application context. Held under `tokio::sync::Mutex`
+    /// because the hot-reload watcher is started after construction (from the
+    /// Tauri `setup` hook, via [`Self::start_plugin_watcher`]), which mutates
+    /// the platform.
+    pub(crate) plugin_platform: TokioMutex<PluginPlatform>,
 }
 
 impl AppState {
@@ -492,31 +501,71 @@ impl AppState {
     /// contributor crates the app pulls in. This struct does not know
     /// the config file format or the default path — it just wires the
     /// pieces together.
-    pub fn new() -> Self {
-        Self::with_ui_state(swissarmyhammer_kanban::default_ui_state(CONFIG_APP_SUBDIR))
+    ///
+    /// Async because it constructs the embedded plugin platform — the
+    /// [`swissarmyhammer_plugin::PluginHost`] loaded with the builtin and
+    /// user-layer plugins. The user layer is `$XDG_CONFIG_HOME/kanban/plugins`
+    /// (resolved via [`swissarmyhammer_directory::KanbanConfig`]); the builtin
+    /// layer is the bundle tree compiled into the binary.
+    pub async fn new() -> Self {
+        let ui_state = swissarmyhammer_kanban::default_ui_state(CONFIG_APP_SUBDIR);
+        let platform = build_plugin_platform().await;
+        Self::with_ui_state(ui_state, platform)
     }
 
     /// Create AppState with a freshly loaded UIState written to a
     /// per-test temp path, so unit tests don't clobber the developer's
     /// real config. Still goes through [`UIState::load`] to exercise the
     /// same loader the production path uses.
+    ///
+    /// Synchronous, and the plugin platform it wires is the empty
+    /// [`PluginPlatform::for_tests_empty`] — the kanban app's plain `#[test]`
+    /// units (drag sessions, MRU, path resolution) do not exercise plugins.
+    /// Tests that *do* drive the plugin platform use
+    /// [`new_for_test_with_plugins`](Self::new_for_test_with_plugins).
     #[cfg(test)]
     pub fn new_for_test() -> Self {
         let path = std::env::temp_dir().join(format!("kanban-test-{}.yaml", ulid::Ulid::new()));
-        Self::with_ui_state(UIState::load(path))
+        Self::with_ui_state(UIState::load(path), PluginPlatform::for_tests_empty())
     }
 
-    /// Internal constructor that takes an already-loaded [`UIState`].
+    /// Create AppState whose plugin platform is built over caller-supplied
+    /// temp roots, so a `#[tokio::test]` can exercise the real plugin host
+    /// without touching the developer's `~/.config/kanban`.
+    ///
+    /// # Parameters
+    ///
+    /// - `user_root` — the temp `~/.config/kanban` equivalent; the user plugin
+    ///   layer is its `plugins/` subdirectory.
+    /// - `builtin_cache` — the temp directory the bundled builtin plugins are
+    ///   extracted into.
+    /// - `tool_working_dir` — the working directory the exposed `kanban` tool
+    ///   resolves its `.kanban` board against.
+    #[cfg(test)]
+    pub async fn new_for_test_with_plugins(
+        user_root: PathBuf,
+        builtin_cache: PathBuf,
+        tool_working_dir: PathBuf,
+    ) -> Result<Self, String> {
+        let path = std::env::temp_dir().join(format!("kanban-test-{}.yaml", ulid::Ulid::new()));
+        let platform = PluginPlatform::build(user_root, builtin_cache, tool_working_dir).await?;
+        Ok(Self::with_ui_state(UIState::load(path), platform))
+    }
+
+    /// Internal constructor that takes an already-loaded [`UIState`] and a
+    /// fully-built [`PluginPlatform`].
     ///
     /// Every other constructor funnels through here so the wiring (MRU,
-    /// window bookkeeping, command registry) sits in exactly one place.
-    /// The command registry is composed via
+    /// window bookkeeping, command registry, plugin platform) sits in exactly
+    /// one place. The command registry is composed via
     /// [`swissarmyhammer_commands::compose_registry!`] over the
     /// contributor crates this app pulls in (generic UI commands from
     /// `swissarmyhammer_commands`, then domain commands from
     /// `swissarmyhammer_kanban`). User overrides from `.kanban/commands/`
-    /// layer on top later via [`Self::reload_command_overrides`].
-    fn with_ui_state(ui_state: UIState) -> Self {
+    /// layer on top later via [`Self::reload_command_overrides`]. The plugin
+    /// platform is built by the caller because its construction is async,
+    /// while this funnel stays synchronous.
+    fn with_ui_state(ui_state: UIState, plugin_platform: PluginPlatform) -> Self {
         Self {
             boards: RwLock::new(HashMap::new()),
             ui_state: Arc::new(ui_state),
@@ -531,7 +580,17 @@ impl AppState {
             deep_link_handled: AtomicBool::new(false),
             spatial_registry: TokioMutex::new(SpatialRegistry::new()),
             spatial_state: TokioMutex::new(SpatialState::new()),
+            plugin_platform: TokioMutex::new(plugin_platform),
         }
+    }
+
+    /// Start the plugin hot-reload watcher.
+    ///
+    /// Call this from the Tauri `setup` hook alongside [`Self::start_watchers`]
+    /// once the `AppHandle` is available. The watcher reacts to plugin files
+    /// changing under `$XDG_CONFIG_HOME/kanban/plugins`. Idempotent.
+    pub async fn start_plugin_watcher(&self) {
+        self.plugin_platform.lock().await.start_watcher().await;
     }
 
     /// Open a board at the given path, resolving to its .kanban directory.
@@ -854,9 +913,45 @@ impl AppState {
     }
 }
 
-impl Default for AppState {
-    fn default() -> Self {
-        Self::new()
+/// Builds the production plugin platform, falling back to an inert one.
+///
+/// The user plugin layer lives under `$XDG_CONFIG_HOME/kanban` (resolved via
+/// [`swissarmyhammer_directory::KanbanConfig`]); the builtin plugins are
+/// extracted into the XDG cache directory; the exposed `kanban` tool resolves
+/// its board against the current working directory — the same directory
+/// `auto_open_board` discovers boards from.
+///
+/// A failure to resolve the directories or to load a plugin is logged and the
+/// app continues with an empty [`PluginPlatform`]: a broken plugin layer must
+/// not stop the kanban app from opening boards.
+async fn build_plugin_platform() -> PluginPlatform {
+    use swissarmyhammer_directory::{KanbanConfig, ManagedDirectory};
+
+    let user_root = match ManagedDirectory::<KanbanConfig>::xdg_config() {
+        Ok(dir) => dir.root().to_path_buf(),
+        Err(e) => {
+            tracing::warn!(error = %e, "could not resolve kanban config dir; plugins disabled");
+            return PluginPlatform::empty(std::env::temp_dir().join("kanban-plugins-disabled"));
+        }
+    };
+    let builtin_cache = match ManagedDirectory::<KanbanConfig>::xdg_cache() {
+        Ok(dir) => dir.root().join("builtin-plugins"),
+        Err(e) => {
+            tracing::warn!(error = %e, "could not resolve kanban cache dir; plugins disabled");
+            return PluginPlatform::empty(user_root);
+        }
+    };
+    let tool_working_dir = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
+
+    match PluginPlatform::build(user_root.clone(), builtin_cache, tool_working_dir).await {
+        Ok(platform) => {
+            tracing::info!(user_root = %user_root.display(), "kanban plugin platform ready");
+            platform
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to build kanban plugin platform; plugins disabled");
+            PluginPlatform::empty(user_root)
+        }
     }
 }
 

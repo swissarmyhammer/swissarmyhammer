@@ -26,6 +26,12 @@ swissarmyhammer-perspectives = { workspace = true }
 swissarmyhammer-views = { workspace = true }
 swissarmyhammer-store = { workspace = true }
 swissarmyhammer-filter-expr = { workspace = true }
+swissarmyhammer-directory = { workspace = true }
+swissarmyhammer-plugin = { workspace = true }
+swissarmyhammer-tools = { workspace = true }
+swissarmyhammer-git = { workspace = true }
+swissarmyhammer-config = { workspace = true }
+include_dir = { workspace = true }
 tauri = { version = "2", features = ["macos-private-api", "devtools"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-log = { version = "2", features = ["tracing"] }

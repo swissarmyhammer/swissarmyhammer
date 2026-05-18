@@ -360,7 +360,7 @@ pub fn find_git_repository_root_from(start_dir: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::SwissarmyhammerConfig;
+    use crate::config::{KanbanConfig, SwissarmyhammerConfig};
     use serial_test::serial;
     use swissarmyhammer_common::test_utils::CurrentDirGuard;
     use tempfile::TempDir;
@@ -566,6 +566,28 @@ mod tests {
         assert_eq!(dir.root(), xdg_config.join("sah"));
         assert_eq!(*dir.root_type(), DirectoryRootType::XdgConfig);
         assert!(dir.root().exists());
+    }
+
+    /// `KanbanConfig` resolves its XDG config directory to `<base>/kanban`, so
+    /// the kanban app's user plugin layer lives under `~/.config/kanban/`.
+    #[test]
+    #[serial]
+    fn test_kanban_config_xdg_config_resolves_to_kanban_dir() {
+        let temp = TempDir::new().unwrap();
+        let xdg_config = temp.path().join("config");
+
+        std::env::set_var("XDG_CONFIG_HOME", &xdg_config);
+        let result = ManagedDirectory::<KanbanConfig>::xdg_config();
+        std::env::remove_var("XDG_CONFIG_HOME");
+
+        let dir = result.unwrap();
+        assert_eq!(dir.root(), xdg_config.join("kanban"));
+        assert_eq!(
+            dir.root().file_name().and_then(|n| n.to_str()),
+            Some("kanban"),
+            "the resolved config dir must end in `kanban`"
+        );
+        assert_eq!(*dir.root_type(), DirectoryRootType::XdgConfig);
     }
 
     #[test]

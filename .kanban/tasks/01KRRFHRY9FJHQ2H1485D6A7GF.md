@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KRREAHF4FXQY5PC2GYEJWWJV
 - 01KRREBGRC9WTBRRXB7KS8WQT8
-position_column: todo
-position_ordinal: '9780'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffff8780
 project: plugin-arch
 title: 'kanban-app: integrate PluginHost into AppState with builtin + user-layer plugins'
 ---
@@ -20,21 +20,26 @@ Wire the plugin platform into the kanban app so plugins load as part of the appl
 - **Expose in-process servers** — expose the kanban app's in-process tool rust modules to its `PluginHost` via `expose_rust_module` so plugins can call them — at minimum the `kanban` operation tool — reusing the `swissarmyhammer-tools` rmcp-`ServerHandler` adapters.
 
 ## Acceptance Criteria
-- [ ] `KanbanConfig` exists in `swissarmyhammer-directory`; resolves `~/.config/kanban`; the plugin user layer is `~/.config/kanban/plugins/`.
-- [ ] Builtin plugins are `include_dir!`-bundled into the kanban-app binary from `builtin/plugins/` as the read-only builtin layer.
-- [ ] `apps/kanban-app` depends on `swissarmyhammer-tools` and exposes its tool rust modules through that dependency.
-- [ ] `AppState` has a `plugin_host` field constructed with builtin + user layers; no project layer.
-- [ ] At startup the kanban app discovers and loads plugins from both layers and starts the hot-reload watcher on `~/.config/kanban/plugins`.
-- [ ] At least the `kanban` operation tool is exposed to plugins via `expose_rust_module`.
+- [x] `KanbanConfig` exists in `swissarmyhammer-directory`; resolves `~/.config/kanban`; the plugin user layer is `~/.config/kanban/plugins/`.
+- [x] Builtin plugins are `include_dir!`-bundled into the kanban-app binary from `builtin/plugins/` as the read-only builtin layer.
+- [x] `apps/kanban-app` depends on `swissarmyhammer-tools` and exposes its tool rust modules through that dependency.
+- [x] `AppState` has a `plugin_host` field constructed with builtin + user layers; no project layer.
+- [x] At startup the kanban app discovers and loads plugins from both layers and starts the hot-reload watcher on `~/.config/kanban/plugins`.
+- [x] At least the `kanban` operation tool is exposed to plugins via `expose_rust_module`.
 
 ## Tests
-- [ ] Integration test (extend `apps/kanban-app` tests, `AppState::new_for_test` pattern — parameterize it to accept temp `~/.config/kanban` + temp builtin roots): construct `AppState`, assert a builtin probe plugin and a user-layer probe plugin both load, and a plugin can call the exposed `kanban` server (observe a real kanban effect).
-- [ ] Test: a plugin dropped into the temp user `plugins/` dir is picked up by the watcher and loaded (reuse the hot-reload e2e harness).
-- [ ] `KanbanConfig` unit test in `swissarmyhammer-directory`: asserts the resolved config dir ends in `kanban`.
-- [ ] Run: `cargo test -p kanban-app -p swissarmyhammer-directory` — all green; existing kanban-app tests still pass.
+- [x] Integration test (extend `apps/kanban-app` tests, `AppState::new_for_test` pattern — parameterize it to accept temp `~/.config/kanban` + temp builtin roots): construct `AppState`, assert a builtin probe plugin and a user-layer probe plugin both load, and a plugin can call the exposed `kanban` server (observe a real kanban effect).
+- [x] Test: a plugin dropped into the temp user `plugins/` dir is picked up by the watcher and loaded (reuse the hot-reload e2e harness).
+- [x] `KanbanConfig` unit test in `swissarmyhammer-directory`: asserts the resolved config dir ends in `kanban`.
+- [x] Run: `cargo test -p kanban-app -p swissarmyhammer-directory` — all green; existing kanban-app tests still pass.
 
 ## Workflow
 - Use `/tdd` — write the AppState-loads-builtin-and-user-plugins test first, then implement.
 
 ## Depends on
 Hot reload (watcher-driven load/reload) + the swissarmyhammer-tools tool-exposure adapters.
+
+## Implementation Notes
+- `PluginHost::new`'s builtin-loading happens *inside* the async constructor, before `expose_rust_module` can run. Since a builtin plugin that activates `{ rust: "kanban" }` must find the module already exposed, the kanban app constructs the host with an empty builtin set, exposes the `kanban` tool module, then loads the builtin bundles explicitly and runs `discover_and_load_all` for the user layer. The builtin layer is still real and exercised.
+- A `rust` module is single-activation (`activate_rust_module` does `modules.remove`). Only one plugin can register `{ rust: "kanban" }`; the builtin probe does. The user/dropped probes are genuine plugins (real `plugin.json` + `entry.ts`, real `load()` running in a V8 isolate) verified via `PluginHost::reload_status`.
+- `AppState::new` is now async (builds the plugin platform); `main.rs` drives it with `rt.block_on`. The sync `new_for_test` is preserved for the existing plain `#[test]` suite via `PluginPlatform::for_tests_empty`; a new async `new_for_test_with_plugins` parameterizes temp roots for the plugin integration tests.

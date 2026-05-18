@@ -203,6 +203,31 @@ impl DirectoryConfig for RalphConfig {
     }
 }
 
+/// Configuration for `.kanban` directories.
+///
+/// The kanban desktop app uses this configuration to resolve its user-level
+/// config directory — `$XDG_CONFIG_HOME/kanban/` (i.e. `~/.config/kanban/`).
+/// The plugin platform's user layer is the `plugins/` subdirectory of that
+/// directory: `~/.config/kanban/plugins/<plugin-id>/`.
+#[derive(Debug, Clone, Copy)]
+pub struct KanbanConfig;
+
+impl DirectoryConfig for KanbanConfig {
+    const DIR_NAME: &'static str = ".kanban";
+    const XDG_NAME: &'static str = "kanban";
+    const GITIGNORE_CONTENT: &'static str = r#"# Kanban app runtime data
+# This file is automatically created by swissarmyhammer-directory
+
+# Ignore everything except this gitignore
+*
+!.gitignore
+"#;
+
+    fn init_subdirs() -> &'static [&'static str] {
+        &[]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,5 +279,13 @@ mod tests {
         assert_eq!(RalphConfig::XDG_NAME, "ralph");
         assert!(RalphConfig::GITIGNORE_CONTENT.contains("*"));
         assert!(RalphConfig::init_subdirs().is_empty());
+    }
+
+    #[test]
+    fn test_kanban_config() {
+        assert_eq!(KanbanConfig::DIR_NAME, ".kanban");
+        assert_eq!(KanbanConfig::XDG_NAME, "kanban");
+        assert!(KanbanConfig::GITIGNORE_CONTENT.contains("!.gitignore"));
+        assert!(KanbanConfig::init_subdirs().is_empty());
     }
 }
