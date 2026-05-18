@@ -13,6 +13,7 @@ import { AppModeContainer } from "@/components/app-mode-container";
 import { InspectorsContainer } from "@/components/inspectors-container";
 import { ViewsContainer } from "@/components/views-container";
 import { ViewContainer } from "@/components/view-container";
+import { AiPanelContainer } from "@/components/ai-panel-container";
 import { CommandBusyProvider } from "@/lib/command-scope";
 import { FocusDebugProvider } from "@/lib/focus-debug-context";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
@@ -79,15 +80,23 @@ function App() {
                     <BoardContainer>
                       <div className="h-screen bg-background text-foreground flex flex-col overflow-hidden">
                         <NavBar />
-                        <ViewsContainer>
-                          <PerspectivesContainer>
-                            <PerspectiveContainer>
-                              <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
-                                <ViewContainer />
-                              </div>
-                            </PerspectiveContainer>
-                          </PerspectivesContainer>
-                        </ViewsContainer>
+                        {/* The view area and the AI panel sit side by side on
+                            the main (window) layer. `AiPanelContainer` is the
+                            right dock — a sibling of `ViewsContainer`, inside
+                            `WindowContainer`, and outside the inspector stack
+                            (`InspectorsContainer` below). */}
+                        <div className="flex-1 min-h-0 flex overflow-hidden">
+                          <ViewsContainer>
+                            <PerspectivesContainer>
+                              <PerspectiveContainer>
+                                <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
+                                  <ViewContainer />
+                                </div>
+                              </PerspectiveContainer>
+                            </PerspectivesContainer>
+                          </ViewsContainer>
+                          <AiPanelContainer />
+                        </div>
                         <ModeIndicator />
                       </div>
                       <InspectorsContainer />
