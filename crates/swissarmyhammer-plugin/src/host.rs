@@ -184,8 +184,126 @@ struct HostInner {
     /// the host mutex alongside the other immutable-after-construction fields.
     types_emitter: TypesEmitter,
 
+    /// The one long-lived Tokio runtime every bridge call's host-async work
+    /// runs on.
+    ///
+    /// A bridge call ([`HostBridge::dispatch`]) runs synchronously on a
+    /// plugin's isolate worker thread, which is itself already inside that
+    /// worker's own `block_on` — so the host's async work cannot nest there
+    /// and needs a separate runtime. This runtime is that separate runtime,
+    /// created **once**, at host construction, and alive for the host's whole
+    /// lifetime.
+    ///
+    /// The lifetime is what makes the `cli`/`url` transports correct. A
+    /// [`CliServer`]/[`UrlServer`] connected during a `register` bridge call
+    /// holds an `rmcp` `RunningService` whose background service loop is a task
+    /// spawned on whatever runtime drove the `connect`. Because every bridge
+    /// call — `register`, `toolsCall`, `unregister`, callbacks — is routed onto
+    /// *this* runtime rather than a per-call throwaway, that service loop keeps
+    /// running between calls, so a `toolsCall` after a `register` still reaches
+    /// a live peer instead of one whose loop was torn down with an ephemeral
+    /// runtime.
+    bridge_runtime: BridgeRuntime,
+
     /// The mutable host state guarded by one mutex.
     state: Mutex<HostState>,
+}
+
+/// The host's one long-lived bridge runtime, owned on a dedicated thread.
+///
+/// Every bridge call routes its host-async work onto this runtime — see
+/// [`HostBridge::block_on`] and [`bridge_runtime`](HostInner::bridge_runtime)
+/// for why a single persistent runtime is what keeps the `cli`/`url`
+/// transports' `rmcp` `RunningService` loops alive between calls.
+///
+/// # Why the runtime lives on its own thread
+///
+/// A multi-thread [`tokio::runtime::Runtime`] must not be *dropped* from inside
+/// an async context: its drop blocks to shut the worker pool down, and Tokio
+/// panics if that blocking drop runs on a thread already inside a runtime.
+/// Because [`PluginHost`] is freely cloned and the last clone is commonly
+/// dropped inside the embedder's own `async fn` (every `#[tokio::test]` does
+/// exactly this), storing a bare `Runtime` here would be a latent panic.
+///
+/// So the `Runtime` is *moved onto a dedicated parked thread* and only its
+/// [`Handle`](tokio::runtime::Handle) is kept for spawning. On drop, this type
+/// signals that thread to wake and drop the `Runtime` there — on a plain OS
+/// thread that is never inside any runtime — so the blocking shutdown is
+/// always sound.
+struct BridgeRuntime {
+    /// A spawn handle into the runtime, used by every bridge call.
+    handle: tokio::runtime::Handle,
+
+    /// Signals the owner thread to drop the `Runtime`. `Some` until [`Drop`]
+    /// takes it; sending (or dropping the sender) wakes the owner thread.
+    shutdown: Option<std::sync::mpsc::Sender<()>>,
+
+    /// Join handle for the owner thread, taken and joined in [`Drop`] so the
+    /// runtime's shutdown completes before the host is fully gone.
+    owner: Option<std::thread::JoinHandle<()>>,
+}
+
+impl BridgeRuntime {
+    /// Builds the bridge runtime and parks it on its own dedicated thread.
+    ///
+    /// The runtime is a multi-thread runtime so a bridge call that itself
+    /// triggers another bridge call — a host operation that routes back
+    /// through a plugin — does not starve on a single worker thread.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the Tokio runtime cannot be built or its owner thread cannot
+    /// be spawned. The host cannot function without its bridge runtime, so a
+    /// failure here is unrecoverable — like a poisoned host mutex. In practice
+    /// neither step fails: each only allocates threads.
+    fn new() -> Self {
+        let (handle_tx, handle_rx) = std::sync::mpsc::channel();
+        let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel();
+        let owner = std::thread::Builder::new()
+            .name("plugin-host-bridge-rt".to_string())
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .thread_name("plugin-host-bridge")
+                    .build()
+                    .expect("the plugin host's bridge runtime must build");
+                // Hand the spawn handle back, then park until shutdown. The
+                // `Runtime` is dropped here, on this plain OS thread, so its
+                // blocking shutdown never runs inside another runtime.
+                let _ = handle_tx.send(runtime.handle().clone());
+                let _ = shutdown_rx.recv();
+            })
+            .expect("the plugin host's bridge runtime thread must spawn");
+        let handle = handle_rx
+            .recv()
+            .expect("the bridge runtime thread must report its handle");
+        Self {
+            handle,
+            shutdown: Some(shutdown_tx),
+            owner: Some(owner),
+        }
+    }
+
+    /// The spawn handle every bridge call submits its future to.
+    fn handle(&self) -> &tokio::runtime::Handle {
+        &self.handle
+    }
+}
+
+impl Drop for BridgeRuntime {
+    /// Shuts the bridge runtime down on its own owner thread.
+    ///
+    /// Dropping the shutdown sender wakes the parked owner thread, which drops
+    /// the `Runtime` there — on a plain OS thread, never inside another
+    /// runtime — and exits. Joining that thread makes host teardown wait for
+    /// the runtime's shutdown to finish.
+    fn drop(&mut self) {
+        // Drop the sender to wake the owner thread out of `recv()`.
+        self.shutdown.take();
+        if let Some(owner) = self.owner.take() {
+            let _ = owner.join();
+        }
+    }
 }
 
 /// The mutable core of the host, guarded by [`HostInner`]'s mutex.
@@ -503,11 +621,18 @@ impl PluginHost {
     }
 
     /// Builds a host with the given roots, types emitter, and empty state.
+    ///
+    /// This is also where the host's one long-lived
+    /// [`bridge_runtime`](HostInner::bridge_runtime) is created — once, here,
+    /// for the host's whole lifetime — so every bridge call routes its
+    /// host-async work onto the same persistent runtime and the `cli`/`url`
+    /// transports' background service loops survive between calls.
     fn with_roots(
         user_root: PathBuf,
         project_root: Option<PathBuf>,
         types_emitter: TypesEmitter,
     ) -> Self {
+        let bridge_runtime = BridgeRuntime::new();
         Self {
             inner: Arc::new(HostInner {
                 user_root,
@@ -515,6 +640,7 @@ impl PluginHost {
                 next_plugin_seq: AtomicU64::new(0),
                 reload_policy: Mutex::new(Arc::new(ApproveAllReloads)),
                 types_emitter,
+                bridge_runtime,
                 state: Mutex::new(HostState {
                     registry: ServerRegistry::new(),
                     ledger: PluginLedger::new(),
@@ -1581,8 +1707,17 @@ impl PluginHost {
 ///
 /// The `dispatch` method runs synchronously on the plugin's isolate worker
 /// thread. Calls that need async work — a `tools/call`, connecting a `cli` or
-/// `url` server — are sent to a fresh task on the host's runtime and the worker
-/// blocks, with a [`BRIDGE_TIMEOUT`] bound, for the reply.
+/// `url` server — are spawned as a task on the host's one long-lived
+/// [`bridge_runtime`](HostInner::bridge_runtime) and the worker blocks, with a
+/// [`BRIDGE_TIMEOUT`] bound, for the reply.
+///
+/// Routing every bridge call onto that single persistent runtime — rather than
+/// a per-call throwaway — is what keeps the `cli`/`url` transports alive: a
+/// [`CliServer`]/[`UrlServer`] connected during a `register` call holds an
+/// `rmcp` `RunningService` whose background service loop is a task on the
+/// runtime that drove the `connect`. Because that runtime is the host's own
+/// and outlives every bridge call, the service loop is still running when a
+/// later `toolsCall` reaches the peer.
 struct HostBridge {
     /// The host this bridge routes calls into.
     host: PluginHost,
@@ -1599,48 +1734,45 @@ impl HostBridge {
 
     /// Runs an async host operation to completion from the sync bridge op.
     ///
-    /// The bridge op runs on the plugin's isolate worker thread, which has no
-    /// async context of its own. The operation is spawned on a fresh
-    /// current-thread Tokio runtime on a scratch thread and joined with a
-    /// [`BRIDGE_TIMEOUT`] bound, so a host that never answers fails the call
-    /// rather than wedging the isolate worker.
-    fn block_on<F, T>(future: F) -> std::result::Result<T, String>
+    /// The bridge op runs on the plugin's isolate worker thread, which is
+    /// itself already inside that worker's own `block_on` — so the host's
+    /// async work can neither nest there nor make the op async without a
+    /// `deno_core` seam change. Instead the future is spawned as a task on the
+    /// host's one long-lived [`bridge_runtime`](HostInner::bridge_runtime) and
+    /// its result is sent back over a channel; the worker thread blocks on that
+    /// channel with a [`BRIDGE_TIMEOUT`] bound, so a host that never answers
+    /// fails the call rather than wedging the isolate worker forever.
+    ///
+    /// Because the runtime is the host's own — created once at construction
+    /// and never dropped per call — any `rmcp` `RunningService` background loop
+    /// a `cli`/`url` transport spawns on it survives across bridge calls.
+    fn block_on<F, T>(&self, future: F) -> std::result::Result<T, String>
     where
         F: std::future::Future<Output = T> + Send + 'static,
         T: Send + 'static,
     {
         let (tx, rx) = std::sync::mpsc::channel();
-        // A scratch thread with its own runtime: the isolate worker's runtime
-        // is already inside a `block_on`, so the host work cannot nest there.
-        let join = std::thread::Builder::new()
-            .name("plugin-host-bridge".to_string())
-            .spawn(move || {
-                let runtime = match tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
-                    Ok(runtime) => runtime,
-                    Err(error) => {
-                        let _ = tx.send(Err(format!("bridge runtime unavailable: {error}")));
-                        return;
-                    }
-                };
-                let _ = tx.send(Ok(runtime.block_on(future)));
-            })
-            .map_err(|error| format!("could not start bridge worker: {error}"))?;
+        // Spawn onto the host's persistent runtime — never a per-call runtime
+        // — so transport service loops spawned by this future keep running
+        // after the call returns. The worker thread is the receiver below.
+        self.host.inner.bridge_runtime.handle().spawn(async move {
+            let _ = tx.send(future.await);
+        });
 
-        let outcome = rx
-            .recv_timeout(BRIDGE_TIMEOUT)
-            .map_err(|_| "host did not answer the plugin's bridge call in time".to_string());
-        let _ = join.join();
-        outcome?
+        // The isolate worker thread blocks here, but bounded: a host task that
+        // never answers — a wedged future, a dropped sender — becomes a prompt
+        // error instead of a hung worker. The spawned task is detached; on a
+        // timeout it keeps running on the bridge runtime and simply finds the
+        // receiver gone when it finally tries to send.
+        rx.recv_timeout(BRIDGE_TIMEOUT)
+            .map_err(|_| "host did not answer the plugin's bridge call in time".to_string())
     }
 
     /// Handles a `toolsList` envelope: lists a registered server's tools.
     fn tools_list(&self, payload: &Value) -> std::result::Result<Value, String> {
         let server = envelope_str(payload, "server")?;
         let host = self.host.clone();
-        let tools = Self::block_on(async move {
+        let tools = self.block_on(async move {
             host.lock()
                 .registry
                 .get(&server)
@@ -1666,7 +1798,7 @@ impl HostBridge {
         let caller = CallerId::Plugin(self.plugin_id.clone());
         // The call is routed at the live registry and attributed to the plugin
         // this bridge is scoped to.
-        Self::block_on(async move { host.route(caller, &server, &tool, arguments).await })?
+        self.block_on(async move { host.route(caller, &server, &tool, arguments).await })?
             .map_err(|error| error.to_string())
     }
 
@@ -1713,7 +1845,7 @@ impl HostBridge {
 
         let host = self.host.clone();
         let plugin_id = self.plugin_id.clone();
-        Self::block_on(async move { host.connect_and_register(&plugin_id, name, source).await })?
+        self.block_on(async move { host.connect_and_register(&plugin_id, name, source).await })?
             .map_err(|error| error.to_string())?;
         Ok(Value::Object(Map::new()))
     }
@@ -2160,6 +2292,62 @@ mod tests {
             ids,
             vec!["cb_deep".to_string()],
             "the marker buried {DEPTH} levels deep must still be collected"
+        );
+    }
+
+    /// A background task spawned on the host's bridge runtime during one
+    /// `HostBridge::block_on` call is still running for a *later* `block_on`
+    /// call — the long-lived-runtime invariant the `cli`/`url` transports
+    /// depend on.
+    ///
+    /// This is the unit-level analogue of the T21 e2e tests: a `cli`/`url`
+    /// transport's `rmcp` `RunningService` loop is exactly such a background
+    /// task, spawned during a `register` call's `block_on`. If the runtime
+    /// were per-call — the bug this fixes — the task would die when the
+    /// `register` call returned and the second `block_on` would observe a
+    /// counter that never advanced. Routing both calls onto the host's one
+    /// persistent runtime keeps the task running, so the counter climbs.
+    #[test]
+    fn a_task_spawned_in_one_bridge_call_outlives_it() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::Arc;
+
+        let host = super::PluginHost::for_tests(
+            std::env::temp_dir().join("plugin-host-runtime-invariant-user"),
+            None,
+        );
+        let bridge = super::HostBridge::new(host.clone(), super::PluginId::new("test-plugin"));
+
+        // First bridge call: spawn a detached background task on the host's
+        // runtime that ticks a shared counter forever. A per-call runtime
+        // would be dropped the instant this `block_on` returns, killing it.
+        let ticks = Arc::new(AtomicU64::new(0));
+        let task_ticks = Arc::clone(&ticks);
+        bridge
+            .block_on(async move {
+                tokio::spawn(async move {
+                    loop {
+                        task_ticks.fetch_add(1, Ordering::SeqCst);
+                        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                    }
+                });
+            })
+            .expect("the first bridge call must run on the host runtime");
+
+        // A second, independent bridge call. It only has to reach the same
+        // live runtime; sleeping inside it gives the background task time to
+        // tick. If the runtime had been torn down with the first call, the
+        // task would be gone and the counter frozen at its first-call value.
+        bridge
+            .block_on(async {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            })
+            .expect("the second bridge call must run on the same host runtime");
+
+        assert!(
+            ticks.load(Ordering::SeqCst) > 0,
+            "a task spawned during the first bridge call must still be \
+             running for the second — the host runtime outlives every call"
         );
     }
 }
