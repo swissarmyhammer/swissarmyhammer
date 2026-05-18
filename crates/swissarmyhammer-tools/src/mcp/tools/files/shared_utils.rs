@@ -1698,7 +1698,7 @@ mod tests {
     #[test]
     fn test_file_path_validator_long_path() {
         let validator = FilePathValidator::new();
-        let long_path = "/".to_string() + &"a".repeat(4097);
+        let long_path = format!("/{}", "a".repeat(4097));
 
         let result = validator.validate_path(&long_path);
         assert!(result.is_err());

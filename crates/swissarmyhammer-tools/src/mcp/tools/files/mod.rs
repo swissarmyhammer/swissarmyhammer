@@ -123,6 +123,19 @@ impl McpTool for FilesTool {
         }
     }
 
+    fn operations(&self) -> &'static [&'static dyn Operation] {
+        // The same operation slice `schema()` is derived from, so any consumer
+        // generating discovery `_meta` from `operations()` stays consistent
+        // with the wire schema. Mirrors the pattern in the git/shell tools.
+        let ops: &[&'static dyn Operation] = match self.operations {
+            FileOperationSubset::All => &FILE_OPERATIONS,
+            FileOperationSubset::ReadOnly => &READ_ONLY_OPERATIONS,
+        };
+        // SAFETY: FILE_OPERATIONS and READ_ONLY_OPERATIONS are static
+        // `Lazy<Vec<...>>` values initialized once and living for `'static`.
+        unsafe { std::mem::transmute::<&[&dyn Operation], &'static [&'static dyn Operation]>(ops) }
+    }
+
     fn cli_category(&self) -> Option<&'static str> {
         Some("files")
     }

@@ -107,6 +107,9 @@ swissarmyhammer-lsp = { workspace = true }
 # Operations pattern
 swissarmyhammer-operations = { workspace = true }
 
+# Plugin platform — the in-process tools are exposed to it as Rust modules
+swissarmyhammer-plugin = { workspace = true }
+
 # Semantic diffing
 swissarmyhammer-sem = { workspace = true }
 

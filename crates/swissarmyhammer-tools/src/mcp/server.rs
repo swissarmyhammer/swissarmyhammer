@@ -827,6 +827,59 @@ impl McpServer {
         self.tool_registry.clone()
     }
 
+    /// Build one plugin-platform module server per registered in-process tool.
+    ///
+    /// Each in-process [`McpTool`](crate::mcp::tool_registry::McpTool) is
+    /// wrapped in a thin adapter that satisfies the plugin platform's
+    /// `McpServer` contract, paired with the tool's name as the module id a
+    /// plugin addresses with `register(name, { rust: id })`. The pairs are
+    /// returned rather than registered so a caller can either expose them with
+    /// [`expose_tools_to_plugin_host`](Self::expose_tools_to_plugin_host) or
+    /// inspect a module's published tool definition directly.
+    ///
+    /// # Returns
+    ///
+    /// `(module id, module server)` pairs, one per currently-enabled tool.
+    pub async fn plugin_tool_modules(
+        &self,
+    ) -> Vec<(String, Arc<dyn swissarmyhammer_plugin::McpServer>)> {
+        super::plugin_bridge::build_tool_modules(
+            self.tool_registry.clone(),
+            self.tool_context.clone(),
+        )
+        .await
+    }
+
+    /// Expose every in-process tool to `host` as an addressable Rust module.
+    ///
+    /// After the MCP server's [`ToolRegistry`] is built, this hands each tool
+    /// to the plugin platform via
+    /// [`expose_rust_module`](swissarmyhammer_plugin::PluginHost::expose_rust_module)
+    /// — one call per tool, keyed by the tool's name (`files`, `kanban`,
+    /// `code_context`, `git`, `shell`, and the rest). Exposure only records
+    /// the modules in the host's available-modules table; a module is not
+    /// live until a later `register(name, { rust: id })` activates it.
+    ///
+    /// # Parameters
+    ///
+    /// - `host` — the plugin host whose available-modules table the tools are
+    ///   recorded in.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error `expose_rust_module` reports — in practice
+    /// [`Error::ServerNameTaken`](swissarmyhammer_plugin::Error::ServerNameTaken)
+    /// when a module id is already exposed on `host`.
+    pub async fn expose_tools_to_plugin_host(
+        &self,
+        host: &swissarmyhammer_plugin::PluginHost,
+    ) -> std::result::Result<(), swissarmyhammer_plugin::Error> {
+        for (id, module) in self.plugin_tool_modules().await {
+            host.expose_rust_module(id, module).await?;
+        }
+        Ok(())
+    }
+
     /// Get a tool by name for execution.
     ///
     /// # Arguments

@@ -9959,6 +9959,7 @@ dependencies = [
  "swissarmyhammer-lsp",
  "swissarmyhammer-mcp-proxy",
  "swissarmyhammer-operations",
+ "swissarmyhammer-plugin",
  "swissarmyhammer-project-detection",
  "swissarmyhammer-prompts",
  "swissarmyhammer-sem",

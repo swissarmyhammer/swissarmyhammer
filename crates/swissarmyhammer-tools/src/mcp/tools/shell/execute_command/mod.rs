@@ -661,7 +661,7 @@ mod tests {
     #[tokio::test]
     async fn test_command_too_long_security_validation() {
         // Test command that's too long
-        let long_command = "echo ".to_string() + &"a".repeat(5000); // exceeds limit
+        let long_command = format!("echo {}", "a".repeat(5000)); // exceeds limit
 
         let result = TestCommandBuilder::new(&long_command).execute().await;
         assert!(result.is_err(), "Command that's too long should be blocked");
