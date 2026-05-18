@@ -1,0 +1,27 @@
+---
+assignees:
+- claude-code
+depends_on:
+- 01KRXHBJ21JY1B71BFHB44BY9W
+position_column: todo
+position_ordinal: '8280'
+title: Migrate claude-agent to shared per-session transcript manager
+---
+Switch `claude-agent` to the shared `RawMessageManager` from `agent-client-protocol-extras` and delete its local copy.
+
+## Remove
+- `crates/claude-agent/src/agent_raw_messages.rs` (manager + `RAW_MESSAGE_MANAGERS` registry — now owned by the shared crate).
+- `pub mod agent_raw_messages;` in `lib.rs` and the `pub use ... RawMessageManager` re-export in `agent.rs`.
+- `get_raw_message_path()` / `create_new_raw_message_manager()` / `ensure_parent_dir_exists()` in `agent.rs` — path resolution now lives in the shared manager.
+
+## Lifecycle change
+Currently the manager is created at agent construction (`new_with_raw_message_manager` → `resolve_raw_message_manager`), so the path can't include a session ULID. Move manager creation to `new_session` handling:
+- On `new_session`, allocate the session ULID, create a shared `RawMessageManager` for that ULID (writes `<acp-session-dir>/raw.jsonl`), register it in the shared registry keyed by the root session ULID.
+- Subagents call `RawMessageManager::lookup(root_session_id)` to share the root file (existing `new_with_raw_message_manager` sharing path, repointed at the shared crate).
+- `ClaudeProcess`/`claude.rs` `set_raw_message_manager` + `record_raw_message` wiring stays, just sourced from the per-session manager.
+
+## Verify
+- Subagent traffic still lands in the root session's `<root-ulid>/raw.jsonl`.
+- `crates/claude-agent` test suite green, including `tests/acp_integration.rs`.
+
+Depends on the shared-manager card.
