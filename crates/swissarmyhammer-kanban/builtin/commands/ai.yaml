@@ -1,0 +1,68 @@
+# AI panel command scope — window-layer commands that drive the right-docked
+# `AiPanelContainer` and its live ACP conversation.
+#
+# These commands are declared here so they surface in the command palette,
+# carry keybinding hints, and pass the YAML <-> Rust completeness guard. Their
+# behaviour, however, is purely webview-side: the AI panel's open-state,
+# conversation, and ACP session all live in the React tree (per board, in
+# `localStorage` / `useConversation` — there is no backend store for them).
+# So the Rust `Command` impls (`crate::commands::ai_commands`) are deliberate
+# no-ops — the frontend resolves a local `execute` handler before any dispatch
+# reaches the backend, exactly like `ui.entity.startRename`.
+#
+# `ai.cancel` is the one command with a real backend `available()` gate: it is
+# available only while the conversation is streaming. The frontend reports the
+# streaming flag into `UIState` (a transient global flag, the `can_undo`
+# precedent) so `AiCancelCmd::available()` keeps the palette entry hidden when
+# the conversation is idle.
+
+- id: ai.toggle
+  name: Toggle AI Panel
+  undoable: false
+  keys:
+    cua: Mod+J
+    vim: Mod+J
+    emacs: Mod+J
+
+- id: ai.focus
+  name: Focus AI Panel
+  undoable: false
+  keys:
+    cua: Mod+I
+    vim: Mod+I
+    emacs: Mod+I
+
+- id: ai.newChat
+  name: New AI Chat
+  undoable: false
+  keys:
+    cua: Mod+Shift+J
+    vim: Mod+Shift+J
+    emacs: Mod+Shift+J
+
+- id: ai.model
+  name: Set AI Model
+  # `model` is an enum-shaped picker param: the command palette renders a
+  # `<CommandPopover>` whose options are filled at `commands_for_scope`
+  # emission time by the `ai.models` backend resolver
+  # (`AiModelsResolver` in `crate::commands::options_resolvers`). The
+  # resolver projects the configured AI models — discovered by the GUI
+  # runtime's `ai_list_models` and threaded in via
+  # `DynamicSources.ai_models` — onto the picker, exactly the pattern
+  # `perspective.sort.set`'s `field` param uses with `perspective.fields`.
+  # This satisfies the "autocomplete from `ai_list_models`" requirement:
+  # the user picks a known model id instead of typing a raw string.
+  undoable: false
+  params:
+    - name: model
+      from: args
+      shape: enum
+      options_from: "ai.models"
+
+- id: ai.cancel
+  name: Stop AI Generation
+  undoable: false
+  keys:
+    cua: Mod+.
+    vim: Mod+.
+    emacs: Mod+.

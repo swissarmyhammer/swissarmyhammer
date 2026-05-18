@@ -1,5 +1,5 @@
 {
-  "command_count": 29,
+  "command_count": 33,
   "commands": [
     {
       "available": true,
@@ -80,6 +80,58 @@
       "menu_name": null,
       "name": "Inspect Attachment",
       "target": "attachment:/tmp/x.png"
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "ai.focus",
+      "keys": {
+        "cua": "Mod+I",
+        "emacs": "Mod+I",
+        "vim": "Mod+I"
+      },
+      "menu_name": null,
+      "name": "Focus AI Panel",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "ai.model",
+      "keys": null,
+      "menu_name": null,
+      "name": "Set AI Model",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "ai.newChat",
+      "keys": {
+        "cua": "Mod+Shift+J",
+        "emacs": "Mod+Shift+J",
+        "vim": "Mod+Shift+J"
+      },
+      "menu_name": null,
+      "name": "New AI Chat",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "ai.toggle",
+      "keys": {
+        "cua": "Mod+J",
+        "emacs": "Mod+J",
+        "vim": "Mod+J"
+      },
+      "menu_name": null,
+      "name": "Toggle AI Panel",
+      "target": null
     },
     {
       "available": true,

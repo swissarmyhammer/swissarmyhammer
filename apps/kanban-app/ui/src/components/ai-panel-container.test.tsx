@@ -40,6 +40,11 @@ import {
   aiPanelStateStorageKey,
 } from "./ai-panel-container";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
+import {
+  resetAiCommandsForTest,
+  triggerAiFocus,
+  triggerAiToggle,
+} from "@/ai/commands";
 
 // ---------------------------------------------------------------------------
 // Tauri `invoke` mock — the container's only backend seam is `ai_list_models`.
@@ -116,6 +121,7 @@ describe("AiPanelContainer", () => {
     });
     localStorage.clear();
     setViewportWidth(1600); // upper resize clamp = 800
+    resetAiCommandsForTest();
   });
 
   it("renders AiPanel right-docked with the model selector", async () => {
@@ -242,6 +248,66 @@ describe("AiPanelContainer", () => {
     expect(document.querySelector("[data-slot='ai-panel']")).toBeNull();
     // The container must not even reach for the model list.
     expect(mockInvoke).not.toHaveBeenCalledWith("ai_list_models");
+  });
+
+  it("the ai.toggle command handler flips the panel open-state", async () => {
+    await renderContainer();
+
+    // Open by default — the panel body is visible.
+    await screen.findByTestId("ai-panel-container");
+    expect(document.querySelector("[data-slot='ai-panel']")).not.toBeNull();
+
+    // The container registered its `toggle` handler into the AI command
+    // registry; firing it (as the window-layer `ai.toggle` command does)
+    // collapses the panel.
+    await act(async () => {
+      triggerAiToggle();
+    });
+    await waitFor(() => {
+      expect(document.querySelector("[data-slot='ai-panel']")).toBeNull();
+    });
+    // The collapsed state is persisted per board, exactly like the in-header
+    // toggle control.
+    expect(
+      JSON.parse(localStorage.getItem(aiPanelStateStorageKey(BOARD))!).open,
+    ).toBe(false);
+
+    // Firing it again expands the panel back.
+    await act(async () => {
+      triggerAiToggle();
+    });
+    await waitFor(() => {
+      expect(document.querySelector("[data-slot='ai-panel']")).not.toBeNull();
+    });
+  });
+
+  it("the ai.focus command handler expands a collapsed panel and focuses the prompt", async () => {
+    // Seed the board with a chosen model (so the prompt textarea is enabled
+    // and focusable) and collapsed (so `ai.focus` must expand it first).
+    localStorage.setItem(
+      aiPanelStateStorageKey(BOARD),
+      JSON.stringify({ open: false, modelId: "claude-code" }),
+    );
+    await renderContainer();
+    await screen.findByTestId("ai-panel-container");
+    expect(document.querySelector("[data-slot='ai-panel']")).toBeNull();
+
+    // Firing the registered `ai.focus` handler expands the panel and moves
+    // focus into the prompt textarea.
+    await act(async () => {
+      triggerAiFocus();
+    });
+    await waitFor(() => {
+      expect(document.querySelector("[data-slot='ai-panel']")).not.toBeNull();
+    });
+    await waitFor(() => {
+      const input = document.querySelector(
+        "[data-slot='ai-panel'] textarea[aria-label='Message the AI agent']",
+      );
+      expect(input).not.toBeNull();
+      expect(input).not.toBeDisabled();
+      expect(document.activeElement).toBe(input);
+    });
   });
 
   it("persists and reapplies the per-board model choice", async () => {

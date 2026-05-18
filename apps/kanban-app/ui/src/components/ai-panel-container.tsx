@@ -28,13 +28,15 @@
  * time. The conversation transcript is deliberately NOT persisted — the chat
  * is stateless (see `ideas/kanban/ai_panel.md`).
  *
- * # Collapsible — the toggle command comes later
+ * # Collapsible — driven by the `ai.toggle` window-layer command
  *
  * The panel is collapsible: this Container owns the open-state and renders an
- * in-header collapse/expand control. The dedicated `ai.toggle` command and
- * keybinding are a later task (`01KRRN69YDB2B03RB1N9G6RR3J`); this Container
- * already exposes an `onToggle` prop and `open` so that command can drive it
- * without further plumbing.
+ * in-header collapse/expand control. The window-layer `ai.toggle` / `ai.focus`
+ * / `ai.model` commands (registered in `AppShell`'s global scope) drive it
+ * through the `ai/commands.ts` module registry — this Container registers
+ * `handleToggle`, `handleFocus`, and `handleSelectModel` as their handlers.
+ * `ai.newChat` / `ai.cancel` and the streaming flag are owned by the
+ * conversation, which registers them itself.
  *
  * # Quick-capture never shows the panel
  *
@@ -49,6 +51,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -65,6 +68,11 @@ import {
   type AiModel,
   type AiPanelConnectFactory,
 } from "@/components/ai-panel";
+import {
+  aiStreaming,
+  registerAiCommandHandlers,
+  subscribeAiStreaming,
+} from "@/ai/commands";
 
 /** Detect if this window instance is the quick-capture popup. */
 const IS_QUICK_CAPTURE =
@@ -304,6 +312,57 @@ function AiPanelContainerBody({
     },
     [boardPath],
   );
+
+  /**
+   * Expand the panel (if collapsed) and move keyboard focus into its prompt
+   * input — the `ai.focus` window-layer command's handler.
+   *
+   * The panel is expanded first so focus has a rendered target; the prompt
+   * `<textarea>` is located by its accessible label. The focus is deferred a
+   * frame so the expand has committed to the DOM before the lookup runs.
+   */
+  const handleFocus = useCallback(() => {
+    setOpen((prev) => {
+      if (!prev) saveAiPanelState(boardPath, { open: true });
+      return true;
+    });
+    requestAnimationFrame(() => {
+      const input = document.querySelector<HTMLTextAreaElement>(
+        "[data-slot='ai-panel'] textarea[aria-label='Message the AI agent']",
+      );
+      input?.focus();
+    });
+  }, [boardPath]);
+
+  // Register the Container-owned `ai.*` command handlers into the
+  // `ai/commands.ts` registry so the window-layer `ai.toggle` / `ai.focus` /
+  // `ai.model` commands (in `AppShell`'s global scope) can drive the panel.
+  // `ai.newChat` / `ai.cancel` and the streaming flag are owned by
+  // `AiPanelConversation`, which registers them itself.
+  useEffect(() => {
+    return registerAiCommandHandlers({
+      toggle: handleToggle,
+      focus: handleFocus,
+      setModel: handleSelectModel,
+    });
+  }, [handleToggle, handleFocus, handleSelectModel]);
+
+  // Mirror the conversation's streaming flag to the backend `UIState` so the
+  // `ai.cancel` palette entry is gated server-side too. `AiPanelConversation`
+  // (a View) reports streaming into the `ai/commands.ts` registry; the
+  // Container — which owns every backend seam — pushes it to `UIState` via
+  // the `ai_set_streaming` Tauri command. Keeping the `invoke` here, not in
+  // the View, preserves the Container/View split.
+  const streaming = useSyncExternalStore(
+    subscribeAiStreaming,
+    aiStreaming,
+    aiStreaming,
+  );
+  useEffect(() => {
+    invoke("ai_set_streaming", { streaming }).catch((err) => {
+      console.error("ai_set_streaming failed:", err);
+    });
+  }, [streaming]);
 
   /** Live drag: update the width without a persistence write. */
   const handleResize = useCallback((next: number) => {

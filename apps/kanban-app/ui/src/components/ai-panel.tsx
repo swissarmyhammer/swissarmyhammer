@@ -28,7 +28,7 @@
  * client and session and starts a brand-new stateless one for the new model —
  * exactly the "fresh session per model" the task requires.
  */
-import { useCallback, useMemo, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, type ReactNode } from "react";
 import type {
   ContentBlock,
   PlanEntry,
@@ -62,6 +62,7 @@ import {
   type ConversationMessage,
   type PlanPartData,
 } from "@/ai/conversation";
+import { registerAiCommandHandlers, setAiStreaming } from "@/ai/commands";
 import {
   Conversation,
   ConversationContent,
@@ -402,6 +403,35 @@ function AiPanelConversation({
     permissionRequest,
     respondPermission,
   } = conversation;
+
+  // Register the conversation-owned `ai.*` command handlers into the
+  // `ai/commands.ts` registry so the window-layer `ai.newChat` / `ai.cancel`
+  // commands (in `AppShell`'s global scope) can drive this conversation.
+  // `cancel` and `newConversation` are stable `useCallback`s, so the registry
+  // slot is rewritten only when the conversation hook re-mints them.
+  useEffect(() => {
+    return registerAiCommandHandlers({
+      newChat: newConversation,
+      cancel: () => {
+        void cancel();
+      },
+    });
+  }, [newConversation, cancel]);
+
+  // Mirror the ACP turn status into the AI command registry so `ai.cancel`'s
+  // `available` gate (and the backend `UIState.ai_streaming` flag) track the
+  // live conversation. `setAiStreaming` is a no-op on an unchanged value.
+  useEffect(() => {
+    setAiStreaming(status === "streaming");
+  }, [status]);
+
+  // Leaving streaming behind on unmount avoids a stuck "available" `ai.cancel`
+  // if the panel is torn down mid-turn.
+  useEffect(() => {
+    return () => {
+      setAiStreaming(false);
+    };
+  }, []);
 
   const handleSend = useCallback(
     (message: PromptInputMessage) => {

@@ -86,6 +86,7 @@ fn run_app(app_state: AppState) {
             commands::generate_jump_codes,
             ai::models::ai_list_models,
             ai::models::ai_start_agent,
+            ai::models::ai_set_streaming,
         ])
         .setup(setup_app)
         .on_window_event(handle_window_event)

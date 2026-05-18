@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
@@ -39,6 +40,15 @@ import {
 } from "@/types/spatial";
 import { triggerStartRename } from "@/components/perspective-tab-bar";
 import { runNavWithScrollOnEdge } from "@/lib/scroll-on-edge";
+import {
+  aiStreaming,
+  subscribeAiStreaming,
+  triggerAiCancel,
+  triggerAiFocus,
+  triggerAiModel,
+  triggerAiNewChat,
+  triggerAiToggle,
+} from "@/ai/commands";
 
 /**
  * Identity-stable `SegmentMoniker` for the command-palette overlay layer.
@@ -528,6 +538,100 @@ function buildDynamicGlobalCommands(
   ];
 }
 
+/**
+ * Build the window-layer `ai.*` commands that drive the AI panel.
+ *
+ * These are registered in `AppShell`'s global command scope — the window
+ * layer — so their keybindings fire app-wide, even when focus is on a board
+ * card outside the AI panel (matching `ARCHITECTURE.md`'s scope model). Each
+ * `execute` closure calls into the `ai/commands.ts` module registry, where the
+ * AI panel components have registered the live handlers; a command fired
+ * before the panel mounts is a silent no-op.
+ *
+ * `ai.cancel` is the one availability-gated command: a generation can only be
+ * stopped while it is in flight, so its `available` flag tracks the
+ * `streaming` argument. When `streaming` is `false` the `CommandDef` is
+ * `available: false`, which both hides it from the palette
+ * (`collectAvailableCommands`) and makes its keybinding a no-op
+ * (`resolveCommand` returns `null` on a blocked command).
+ *
+ * The `ai.*` `keys` blocks here mirror `swissarmyhammer-kanban`'s
+ * `builtin/commands/ai.yaml` — the YAML side feeds the palette's keybinding
+ * hints and the backend completeness guard; this React side feeds
+ * `extractScopeBindings`. The static `BINDING_TABLES` entries cover the
+ * no-focus case where the scope walk yields nothing.
+ *
+ * @param streaming - Whether the AI conversation is currently streaming.
+ * @returns The five `ai.*` command definitions.
+ */
+function buildAiCommands(streaming: boolean): CommandDef[] {
+  return [
+    {
+      // `keys` use the canonical lowercase form `normalizeKeyEvent`
+      // emits for a non-shifted letter (e.g. `Mod+j`), matching the
+      // `BINDING_TABLES` entries and the rest of `STATIC_GLOBAL_COMMANDS`
+      // (`file.closeBoard` is `Mod+w`). The YAML mirror keeps `Mod+J`
+      // uppercase — that side feeds menu accelerators / palette hints.
+      id: "ai.toggle",
+      name: "Toggle AI Panel",
+      keys: { vim: "Mod+j", cua: "Mod+j", emacs: "Mod+j" },
+      execute: () => {
+        triggerAiToggle();
+      },
+    },
+    {
+      id: "ai.focus",
+      name: "Focus AI Panel",
+      keys: { vim: "Mod+i", cua: "Mod+i", emacs: "Mod+i" },
+      execute: () => {
+        triggerAiFocus();
+      },
+    },
+    {
+      id: "ai.newChat",
+      name: "New AI Chat",
+      keys: { vim: "Mod+Shift+J", cua: "Mod+Shift+J", emacs: "Mod+Shift+J" },
+      execute: () => {
+        triggerAiNewChat();
+      },
+    },
+    {
+      id: "ai.model",
+      name: "Set AI Model",
+      // The `model` id rides in `opts.args` — palette rows that select a
+      // model dispatch `ai.model` with `{ args: { model } }`.
+      execute: (opts) => {
+        const model = opts?.args?.model;
+        triggerAiModel(typeof model === "string" ? model : undefined);
+      },
+    },
+    {
+      id: "ai.cancel",
+      name: "Stop AI Generation",
+      keys: { vim: "Mod+.", cua: "Mod+.", emacs: "Mod+." },
+      // Available only mid-stream — `available: false` blocks both the
+      // palette entry and the keybinding when the conversation is idle.
+      available: streaming,
+      execute: () => {
+        triggerAiCancel();
+      },
+    },
+  ];
+}
+
+/**
+ * Subscribe to the AI conversation's streaming flag.
+ *
+ * A `useSyncExternalStore` binding over the `ai/commands.ts` registry: when
+ * the conversation enters or leaves the streaming state, `AppShell` re-renders
+ * and rebuilds `ai.cancel` with the fresh `available` flag.
+ *
+ * @returns `true` while the AI conversation is streaming a turn.
+ */
+function useAiStreaming(): boolean {
+  return useSyncExternalStore(subscribeAiStreaming, aiStreaming, aiStreaming);
+}
+
 // `nav.focus` is registered in `<EntityFocusProvider>` rather than here.
 // The command wraps the entity-focus `setFocus` primitive, and tests
 // commonly mount `<EntityFocusProvider>` without `<AppShell>`. Colocating
@@ -596,6 +700,9 @@ interface AppShellProps {
 
 export function AppShell({ children, onSwitchBoard }: AppShellProps) {
   const { paletteOpen, paletteMode, keymapMode } = useAppShellUIState();
+  // Tracks the AI conversation's streaming flag so `ai.cancel`'s `available`
+  // is rebuilt whenever a turn starts or ends.
+  const aiIsStreaming = useAiStreaming();
   const { setFocus } = useFocusActions();
   const spatialActions = useSpatialFocusActions();
   const dismiss = useDispatchCommand("app.dismiss");
@@ -678,9 +785,13 @@ export function AppShell({ children, onSwitchBoard }: AppShellProps) {
           setJumpOpen(true);
         },
       },
+      // The window-layer `ai.*` commands — registered here so their
+      // keybindings fire app-wide. Rebuilt when `aiIsStreaming` flips
+      // so `ai.cancel`'s `available` tracks the live conversation.
+      ...buildAiCommands(aiIsStreaming),
       ...STATIC_GLOBAL_COMMANDS,
     ],
-    [],
+    [aiIsStreaming],
   );
 
   /** Close the command palette (dispatch to backend) and return to normal mode. */

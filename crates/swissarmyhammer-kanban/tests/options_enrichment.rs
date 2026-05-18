@@ -646,6 +646,7 @@ async fn perspective_group_command_drops_non_groupable_fields_end_to_end() {
         open_board_ctxs: &open_boards,
         active_window_label: Some("main"),
         windows,
+        ai_models: vec![],
     };
     let dynamic = build_dynamic_sources(inputs).await;
 
@@ -812,6 +813,7 @@ async fn perspective_group_command_emits_groupable_fields_from_live_field_loader
         open_board_ctxs: &open_boards,
         active_window_label: Some("main"),
         windows,
+        ai_models: vec![],
     };
     let dynamic = build_dynamic_sources(inputs).await;
 
@@ -983,6 +985,7 @@ async fn perspective_group_options_include_assignees_and_tags_for_board_task_per
         open_board_ctxs: &open_boards,
         active_window_label: Some("main"),
         windows,
+        ai_models: vec![],
     };
     let dynamic = build_dynamic_sources(inputs).await;
 
@@ -1204,6 +1207,7 @@ async fn perspective_group_options_use_active_view_when_perspective_view_id_is_n
         open_board_ctxs: &open_boards,
         active_window_label: Some("main"),
         windows,
+        ai_models: vec![],
     };
     let dynamic = build_dynamic_sources(inputs).await;
 
@@ -1460,4 +1464,157 @@ fn perspective_sort_set_command_carries_field_and_direction_options() {
     assert_eq!(direction_options[0].label, "Ascending");
     assert_eq!(direction_options[1].value, "desc");
     assert_eq!(direction_options[1].label, "Descending");
+}
+
+/// End-to-end pin for the `ai.model` model-picker resolver (task
+/// 01KRRN69YDB2B03RB1N9G6RR3J, review finding): emit the REAL `ai.model`
+/// command (from the kanban builtin `ai.yaml`) through
+/// `commands_for_scope` with two AI models supplied in
+/// `DynamicSources.ai_models`, and assert:
+///
+///   * The `model` param carries `shape: enum` — so the palette renders
+///     a `<CommandPopover>` picker rather than a free-text input.
+///   * The `model` param carries `options_from: "ai.models"` — the YAML
+///     annotation that wires it to the backend `AiModelsResolver`.
+///   * The param's `options` are populated by the resolver with EXACTLY
+///     the two supplied models, in enumeration order, with
+///     `value = model id` and `label = model label`.
+///
+/// This is the picker-pipeline contract the frontend `<CommandPopover>`
+/// consumes — the same path `perspective.sort.set`'s `field` param uses
+/// (see `perspective_sort_set_command_carries_field_and_direction_options`
+/// above). A YAML regression that drops `options_from` or flips `shape`
+/// back to `text` — re-introducing the raw-model-id-typing UX the review
+/// flagged — surfaces here.
+#[test]
+fn ai_model_command_carries_model_options_from_resolver() {
+    use swissarmyhammer_kanban::commands::options_resolvers::AiModelInfo;
+
+    let sources = swissarmyhammer_kanban::builtin_yaml_sources();
+    let sources_ref: Vec<(&str, &str)> = sources.iter().map(|(n, c)| (*n, *c)).collect();
+    let registry = CommandsRegistry::from_yaml_sources(&sources_ref);
+
+    let impls: HashMap<String, Arc<dyn Command>> = HashMap::new();
+    let ui_state = Arc::new(UIState::new());
+
+    // Two models in the dynamic source — `ai.model` is a window-layer
+    // command with no `scope:` pin, so it resolves under a bare board
+    // scope. The `ai.models` resolver is scope-independent: it reads the
+    // supplied `ai_models` list verbatim regardless of the scope chain.
+    let dynamic = DynamicSources {
+        ai_models: vec![
+            AiModelInfo {
+                id: "claude-code".into(),
+                label: "Claude Code".into(),
+            },
+            AiModelInfo {
+                id: "qwen-coder".into(),
+                label: "Qwen Coder".into(),
+            },
+        ],
+        ..Default::default()
+    };
+
+    let scope = vec!["board:my-board".to_string()];
+    let opts_registry = default_options_registry();
+    let cmds = commands_for_scope(
+        &scope,
+        &registry,
+        &impls,
+        None,
+        &ui_state,
+        false,
+        Some(&dynamic),
+        Some(&opts_registry),
+    );
+
+    let cmd = find_cmd(&cmds, "ai.model");
+
+    // The `model` enum param is the picker target. Find it by name so a
+    // future YAML reorder doesn't shift the assertion.
+    let model_param = cmd
+        .params
+        .iter()
+        .find(|p| p.name == "model")
+        .expect("ai.model YAML must declare a `model` param");
+    assert_eq!(
+        model_param.shape,
+        Some(swissarmyhammer_commands::ParamShape::Enum),
+        "the `model` param must carry shape: enum so the palette renders a \
+         picker, not a free-text box"
+    );
+    assert_eq!(
+        model_param.options_from.as_deref(),
+        Some("ai.models"),
+        "the `model` param must wire `options_from: ai.models` so the \
+         backend resolver fills the picker options at emit time"
+    );
+
+    let options = model_param
+        .options
+        .as_ref()
+        .expect("ai.models resolved against the two-model fixture — `options` must be Some");
+    assert_eq!(
+        options.len(),
+        2,
+        "two supplied models must project to two ParamOption entries; got: {options:?}"
+    );
+    // `value` carries the model id — the wire value the dispatched
+    // `ai.model` arg lands on and the frontend's per-board model-selection
+    // handler applies. Enumeration order is preserved.
+    assert_eq!(options[0].value, "claude-code");
+    assert_eq!(options[0].label, "Claude Code");
+    assert_eq!(options[1].value, "qwen-coder");
+    assert_eq!(options[1].label, "Qwen Coder");
+}
+
+/// Companion negative case: when no AI models are supplied (an empty
+/// `DynamicSources.ai_models`), the `ai.model` command's `model` param
+/// resolves to an empty `options` list — `Some(vec![])`, NOT `None`.
+///
+/// The registered `AiModelsResolver` always *answers* the `ai.models`
+/// key; an empty answer means "this machine has no selectable models"
+/// (e.g. agent discovery failed and the GUI threaded an empty list).
+/// The frontend distinguishes that from "no resolver registered"
+/// (`options: None`). Pins the resolver's empty-answer contract through
+/// the real `ai.yaml` end to end.
+#[test]
+fn ai_model_command_resolves_to_empty_options_when_no_models_configured() {
+    let sources = swissarmyhammer_kanban::builtin_yaml_sources();
+    let sources_ref: Vec<(&str, &str)> = sources.iter().map(|(n, c)| (*n, *c)).collect();
+    let registry = CommandsRegistry::from_yaml_sources(&sources_ref);
+
+    let impls: HashMap<String, Arc<dyn Command>> = HashMap::new();
+    let ui_state = Arc::new(UIState::new());
+
+    // Empty `ai_models` — the resolver still answers, with an empty list.
+    let dynamic = DynamicSources::default();
+
+    let scope = vec!["board:my-board".to_string()];
+    let opts_registry = default_options_registry();
+    let cmds = commands_for_scope(
+        &scope,
+        &registry,
+        &impls,
+        None,
+        &ui_state,
+        false,
+        Some(&dynamic),
+        Some(&opts_registry),
+    );
+
+    let cmd = find_cmd(&cmds, "ai.model");
+    let model_param = cmd
+        .params
+        .iter()
+        .find(|p| p.name == "model")
+        .expect("ai.model YAML must declare a `model` param");
+    let options = model_param
+        .options
+        .as_ref()
+        .expect("registered resolver always answers Some, even when the answer is empty");
+    assert!(
+        options.is_empty(),
+        "no configured models → an empty option list; got {options:?}"
+    );
 }

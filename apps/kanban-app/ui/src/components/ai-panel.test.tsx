@@ -13,7 +13,7 @@
  * `acp-client.node.test.ts` / `conversation.test.tsx`; this file covers the
  * panel's own wiring on top of {@link useConversation}.
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "vitest/browser";
 import type {
@@ -31,6 +31,12 @@ import type {
   SessionUpdateHandler,
 } from "@/ai/acp-client";
 import type { ConversationConnect } from "@/ai/conversation";
+import {
+  aiStreaming,
+  resetAiCommandsForTest,
+  triggerAiCancel,
+  triggerAiNewChat,
+} from "@/ai/commands";
 import { AiPanel, type AiModel, type AiPanelConnectFactory } from "./ai-panel";
 
 /** A plain ACP text content block. */
@@ -537,6 +543,122 @@ describe("AiPanel: permission prompt", () => {
       expect(
         screen.queryByRole("button", { name: /allow for session/i }),
       ).toBeNull();
+    });
+  });
+});
+
+/**
+ * The AI panel command scope — `AiPanelConversation` registers `ai.newChat`
+ * and `ai.cancel` handlers into the `ai/commands.ts` module registry and
+ * mirrors the ACP turn status into the registry's streaming flag. These tests
+ * drive the registered handlers (the same way the window-layer `ai.*` commands
+ * do) and the streaming flag, with no `AppShell` in the tree.
+ */
+describe("AiPanel: ai.* command integration", () => {
+  beforeEach(() => {
+    resetAiCommandsForTest();
+  });
+
+  it("the ai.newChat handler clears the conversation/session", async () => {
+    const harness = mockHarness({
+      updates: [
+        { sessionUpdate: "agent_message_chunk", content: textBlock("a reply") },
+      ],
+    });
+
+    await renderInAct(
+      <AiPanel
+        boardDir="/tmp/board"
+        models={MODELS}
+        modelId="claude-code"
+        onSelectModel={() => {}}
+        createConnect={harness.createConnect}
+      />,
+    );
+
+    // Run a turn so there is a session and a message log to clear.
+    const textarea = screen.getByRole("textbox");
+    await act(async () => {
+      await userEvent.type(textarea, "hello there");
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /submit/i }));
+    });
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("a reply");
+    });
+
+    // Fire the registered `ai.newChat` handler — the conversation resets.
+    await act(async () => {
+      triggerAiNewChat();
+    });
+    await waitFor(() => {
+      expect(document.body.textContent).not.toContain("a reply");
+    });
+    expect(document.body.textContent).not.toContain("hello there");
+
+    // The next prompt opens a brand-new stateless session.
+    await act(async () => {
+      await userEvent.type(screen.getByRole("textbox"), "second");
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /submit/i }));
+    });
+    await waitFor(() => {
+      expect(harness.sessions().length).toBe(2);
+    });
+  });
+
+  it("ai.cancel availability tracks streaming, and the handler cancels the turn", async () => {
+    // A hanging turn keeps the conversation streaming until cancelled.
+    const sessions: HangingSession[] = [];
+    const createConnect: AiPanelConnectFactory = () => async () => ({
+      protocolVersion: 1,
+      initializeResponse: { protocolVersion: 1, agentCapabilities: {} },
+      async startSession(): Promise<AcpSession> {
+        const session = new HangingSession();
+        sessions.push(session);
+        return session;
+      },
+    });
+
+    await renderInAct(
+      <AiPanel
+        boardDir="/tmp/board"
+        models={MODELS}
+        modelId="claude-code"
+        onSelectModel={() => {}}
+        createConnect={createConnect}
+      />,
+    );
+
+    // Idle before any turn — the streaming flag (which gates `ai.cancel`'s
+    // availability) is false.
+    expect(aiStreaming()).toBe(false);
+
+    await act(async () => {
+      await userEvent.type(screen.getByRole("textbox"), "long task");
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /submit/i }));
+    });
+
+    // The turn is in flight — streaming is reported true, so `ai.cancel`
+    // becomes available.
+    await waitFor(() => {
+      expect(aiStreaming()).toBe(true);
+    });
+
+    // Fire the registered `ai.cancel` handler — the in-flight turn is
+    // cancelled and the conversation leaves the streaming state.
+    await act(async () => {
+      triggerAiCancel();
+    });
+    await waitFor(() => {
+      expect(sessions[0].cancelled).toBe(true);
+    });
+    await waitFor(() => {
+      expect(aiStreaming()).toBe(false);
     });
   });
 });

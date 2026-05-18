@@ -326,6 +326,13 @@ struct UIStateInner {
     /// Whether the undo stack has entries that can be redone. Transient — not persisted.
     #[serde(skip)]
     can_redo: bool,
+    /// Whether the AI panel conversation is currently streaming a turn.
+    /// Transient — not persisted. Mirrors the `can_undo` flag pattern: the
+    /// frontend reports the AI conversation status here so the synchronous
+    /// `Command::available()` check for `ai.cancel` can gate the command
+    /// (cancellable only mid-stream) without reaching into the webview.
+    #[serde(skip)]
+    ai_streaming: bool,
     /// Canonical paths of boards that are open.
     open_boards: Vec<String>,
     /// Per-window state: inspector stack, board assignment, and geometry.
@@ -354,6 +361,7 @@ impl Default for UIStateInner {
             clipboard_entity_type: None,
             can_undo: false,
             can_redo: false,
+            ai_streaming: false,
             open_boards: Vec::new(),
             windows: HashMap::new(),
             recent_boards: Vec::new(),
@@ -1161,6 +1169,28 @@ impl UIState {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         inner.can_undo = can_undo;
         inner.can_redo = can_redo;
+    }
+
+    /// Whether the AI panel conversation is currently streaming a turn.
+    ///
+    /// Gates the `ai.cancel` command's `available()`: a generation can only
+    /// be cancelled while it is in flight.
+    pub fn ai_streaming(&self) -> bool {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .ai_streaming
+    }
+
+    /// Update the cached AI-streaming flag.
+    ///
+    /// Called by the webview when the AI conversation enters or leaves the
+    /// `streaming` turn status, so synchronous `Command::available()` checks
+    /// for `ai.cancel` reflect the live conversation state. Transient — never
+    /// persisted (mirrors `set_undo_redo_state`).
+    pub fn set_ai_streaming(&self, streaming: bool) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.ai_streaming = streaming;
     }
 
     /// Get the current keymap mode.
@@ -2199,6 +2229,46 @@ mod tests {
         state.set_undo_redo_state(true, true);
         assert!(state.can_undo());
         assert!(state.can_redo());
+    }
+
+    // --- AI streaming state tests ---
+
+    #[test]
+    fn ai_streaming_defaults_to_false() {
+        let state = UIState::new();
+        assert!(
+            !state.ai_streaming(),
+            "ai_streaming must default to false — a fresh app is not mid-turn"
+        );
+    }
+
+    #[test]
+    fn set_ai_streaming_round_trips() {
+        // `set_ai_streaming` is the transient flag the webview keeps in sync
+        // with the ACP turn status; `AiCancelCmd::available()` reads it.
+        let state = UIState::new();
+        state.set_ai_streaming(true);
+        assert!(state.ai_streaming());
+        state.set_ai_streaming(false);
+        assert!(!state.ai_streaming());
+    }
+
+    #[test]
+    fn ai_streaming_is_not_persisted() {
+        // The flag is `#[serde(skip)]` — like `can_undo` — so it never lands
+        // in the YAML config and a reload starts a fresh (idle) app.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui-state.yaml");
+        {
+            let state = UIState::load(&path);
+            state.set_ai_streaming(true);
+            state.save().unwrap();
+        }
+        let reloaded = UIState::load(&path);
+        assert!(
+            !reloaded.ai_streaming(),
+            "ai_streaming is transient — it must not survive a save/reload"
+        );
     }
 
     // --- Debug impl tests ---

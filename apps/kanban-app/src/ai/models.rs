@@ -383,6 +383,28 @@ pub async fn ai_start_agent(
     Ok(AgentEndpoint { ws_url, mcp_url })
 }
 
+/// Report the AI conversation's streaming status into `UIState`.
+///
+/// The AI panel's conversation lifecycle lives entirely in the webview
+/// (`useConversation`). This command mirrors that transient turn status into
+/// the backend `UIState.ai_streaming` flag — exactly the role the `can_undo` /
+/// `can_redo` flags play for the undo stack — so the synchronous
+/// `Command::available()` check for `ai.cancel` can gate the palette entry
+/// (cancellable only mid-stream) without reaching into the webview.
+///
+/// This is transient-UI-state plumbing, not an entity mutation: it flips a
+/// `#[serde(skip)]` availability-cache flag, never persists, and emits no
+/// `ui-state-changed` event. It does not belong in `dispatch_command` for the
+/// same reason `set_undo_redo_state` is a direct backend call.
+#[tauri::command]
+pub fn ai_set_streaming(
+    streaming: bool,
+    state: tauri::State<'_, crate::state::AppState>,
+) -> Result<(), String> {
+    state.ui_state.set_ai_streaming(streaming);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

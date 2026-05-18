@@ -231,9 +231,18 @@ mod builtin_commands_tests {
     #[test]
     fn builtin_yaml_sources_has_kanban_specific_files() {
         let sources = builtin_yaml_sources();
-        // After the move, the six kanban-specific YAML files live here.
+        // The kanban-specific YAML files live here — the original six plus
+        // `view` and `ai` (the AI panel command scope).
         let names: Vec<&str> = sources.iter().map(|(n, _)| *n).collect();
-        for expected in ["task", "column", "tag", "attachment", "perspective", "file"] {
+        for expected in [
+            "task",
+            "column",
+            "tag",
+            "attachment",
+            "perspective",
+            "file",
+            "ai",
+        ] {
             assert!(
                 names.contains(&expected),
                 "kanban builtin commands missing `{expected}.yaml`: {names:?}",
