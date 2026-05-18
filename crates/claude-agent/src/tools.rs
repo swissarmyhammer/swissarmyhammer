@@ -1929,6 +1929,27 @@ mod tests {
         session_id("01ARZ3NDEKTSV4RRFFQ69G5FAV")
     }
 
+    /// Build a `TerminalManager` with client capabilities set for terminal operations.
+    ///
+    /// `create_terminal_with_command` (and `create_terminal`) call
+    /// `validate_terminal_capability` first, which rejects the request unless the
+    /// client has sent an initialize request advertising `terminal = true`. Tests
+    /// that drive `TerminalManager` directly must replicate that handshake; this
+    /// helper does so the same way `create_test_handler_with_permissions` sets up
+    /// capabilities for `ToolCallHandler`.
+    async fn create_test_terminal_manager() -> Arc<TerminalManager> {
+        let terminal_manager = Arc::new(TerminalManager::new());
+        let test_capabilities = agent_client_protocol::schema::ClientCapabilities::new()
+            .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(true);
+        terminal_manager
+            .set_client_capabilities(test_capabilities)
+            .await;
+        terminal_manager
+    }
+
     fn create_test_handler_with_session(
         permissions: ToolPermissions,
         session_manager: std::sync::Arc<crate::session::SessionManager>,
@@ -3030,7 +3051,7 @@ mod tests {
 
         let temp_dir = TempDir::new().unwrap();
         let session_manager = Arc::new(SessionManager::new());
-        let terminal_manager = Arc::new(TerminalManager::new());
+        let terminal_manager = create_test_terminal_manager().await;
 
         // Create test session
         let session_id = session_manager
@@ -3089,7 +3110,7 @@ mod tests {
 
         let temp_dir = TempDir::new().unwrap();
         let session_manager = Arc::new(SessionManager::new());
-        let terminal_manager = Arc::new(TerminalManager::new());
+        let terminal_manager = create_test_terminal_manager().await;
 
         // Create test session
         let session_id = session_manager
@@ -3126,7 +3147,7 @@ mod tests {
         use crate::session::SessionManager;
 
         let session_manager = Arc::new(SessionManager::new());
-        let terminal_manager = Arc::new(TerminalManager::new());
+        let terminal_manager = create_test_terminal_manager().await;
 
         let params = TerminalCreateParams {
             session_id: "invalid-session-id".to_string(),
@@ -3151,7 +3172,7 @@ mod tests {
         use crate::session::SessionManager;
 
         let session_manager = Arc::new(SessionManager::new());
-        let terminal_manager = Arc::new(TerminalManager::new());
+        let terminal_manager = create_test_terminal_manager().await;
 
         let params = TerminalCreateParams {
             session_id: ulid::Ulid::new().to_string(), // Valid ULID but non-existent
@@ -3301,7 +3322,7 @@ mod tests {
 
         let temp_dir = TempDir::new().unwrap();
         let session_manager = Arc::new(SessionManager::new());
-        let terminal_manager = Arc::new(TerminalManager::new());
+        let terminal_manager = create_test_terminal_manager().await;
         let handler = TerminalMethodHandler::new(terminal_manager.clone(), session_manager.clone());
 
         // Create test session
