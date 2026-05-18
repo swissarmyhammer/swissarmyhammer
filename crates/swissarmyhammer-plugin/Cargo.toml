@@ -59,6 +59,18 @@ axum = { workspace = true }
 # (entry plus relative-import helpers) in throwaway directories on disk.
 tempfile = { workspace = true }
 
+# Used by the files_dispatch_e2e integration test to obtain the REAL in-process
+# `files` MCP tool and expose it to a `PluginHost` exactly as the production
+# bootstrap does. `swissarmyhammer-tools` depends on `swissarmyhammer-plugin`
+# as a normal dependency; this reverse edge is a *dev-dependency only*, so the
+# pair forms a normal-dep + dev-dep cycle — which Cargo permits because the
+# dev-dependency is never compiled into the library itself.
+swissarmyhammer-tools = { workspace = true }
+
+# Supplies the empty `PromptLibrary` the `files_dispatch_e2e` test hands to the
+# MCP server bootstrap when building the real tool registry.
+swissarmyhammer-prompts = { workspace = true }
+
 [lints]
 workspace = true
 
