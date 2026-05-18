@@ -16,8 +16,14 @@ use swissarmyhammer_plugin::{CallerId, CliServer, McpServer};
 /// A generous upper bound on any single subprocess interaction.
 ///
 /// Every await in these tests is wrapped in this timeout: a real subprocess
-/// that hangs must fail the test fast rather than blocking CI indefinitely.
-const TIMEOUT: Duration = Duration::from_secs(20);
+/// that hangs must fail the test rather than blocking CI indefinitely. A
+/// genuine hang never completes, so this bound only needs to be large enough
+/// to never trip on a *slow* interaction — it is sized to survive a fully
+/// saturated machine, where the rest of the crate's suite (the V8-heavy
+/// `hot_reload` test, the SDK e2e tests) runs concurrently and can starve
+/// subprocess spawn plus the MCP handshake of CPU for far longer than a
+/// quiescent run would suggest.
+const TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Path to the fixture stdio MCP server binary.
 ///

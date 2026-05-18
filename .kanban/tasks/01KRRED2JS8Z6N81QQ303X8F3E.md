@@ -5,8 +5,8 @@ depends_on:
 - 01KRRE7WP7YY56R7MTBHJHZD12
 - 01KRRE8D4712C7785TRN3GGR4H
 - 01KRREC7YF5ENG2M2E7DQYSDGS
-position_column: todo
-position_ordinal: '9580'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffff8580
 project: plugin-arch
 title: 'plugin: SDK e2e tests — operation _meta round-trip and callbacks'
 ---
@@ -20,16 +20,22 @@ Capability integration tests for the SDK's operation-tool path sugar and the cal
 Each test: own `TempDir`, fresh `PluginHost`, no shared/`static` state.
 
 ## Acceptance Criteria
-- [ ] `operation_meta_e2e.rs` proves the `_meta` round-trip: path-form call → `tools/call(tool, {op, ...})`; direct form works; unknown verb → `UnknownOperation`.
-- [ ] `callback_e2e.rs` proves a plugin-supplied function is invoked by the host and its return value flows back.
-- [ ] Both follow the reference-test isolation model; no mocked dispatcher/registry.
+- [x] `operation_meta_e2e.rs` proves the `_meta` round-trip: path-form call → `tools/call(tool, {op, ...})`; direct form works; unknown verb → `UnknownOperation`.
+- [x] `callback_e2e.rs` proves a plugin-supplied function is invoked by the host and its return value flows back.
+- [x] Both follow the reference-test isolation model; no mocked dispatcher/registry.
 
 ## Tests
-- [ ] Run: `cargo test -p swissarmyhammer-plugin` — the two new `*_e2e.rs` tests and the whole suite green.
-- [ ] Each test must genuinely fail if the SDK `_meta` resolution or the callback primitive is broken.
+- [x] Run: `cargo test -p swissarmyhammer-plugin` — the two new `*_e2e.rs` tests and the whole suite green.
+- [x] Each test must genuinely fail if the SDK `_meta` resolution or the callback primitive is broken.
 
 ## Workflow
 - Tests are the deliverable; no `/tdd` cycle. Reuse the harness/helpers from `files_dispatch_e2e.rs`.
 
 ## Depends on
 TypeScript SDK, callback primitive, and the reference `files_dispatch_e2e.rs` harness.
+
+## Implementation notes
+- Tests are flat `tests/*.rs` files (`tests/operation_meta_e2e.rs`, `tests/callback_e2e.rs`) matching the crate convention — `tests/integration/` is not a crate convention here.
+- `operation_meta_e2e.rs` drives the real `files` operation tool (a genuine operation tool carrying `io.swissarmyhammer/operations` `_meta`) through `PluginHost::discover_and_load_all`, identical harness to `files_dispatch_e2e.rs`.
+- `callback_e2e.rs` loads a real multi-file plugin bundle from disk via `PluginRuntime::call_plugin_lifecycle` and invokes the plugin-supplied callback via `PluginRuntime::invoke_callback` (`notifications/callbacks/invoke`). Its `HostDispatcher` routes `toolsCall` into the real in-process `files` tool (obtained via `McpServer::plugin_tool_modules`) — no mocked registry/tool — and records `callbackDispatch` markers exactly as the production host's `callback_dispatch` does.
+- Verified both tests genuinely fail when the SDK behavior is broken: breaking `_meta` op resolution in `plugin.ts` fails `operation_meta_e2e`; breaking `invokeStoredCallback` in `plugin.ts` fails `callback_e2e`. SDK restored after.
