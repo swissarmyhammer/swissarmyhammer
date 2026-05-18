@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KRREAHF4FXQY5PC2GYEJWWJV
 - 01KRREC7YF5ENG2M2E7DQYSDGS
-position_column: todo
-position_ordinal: '9680'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffff8680
 project: plugin-arch
 title: 'plugin: lifecycle e2e tests — discovery/layering, hot reload, unload, failed load'
 ---
@@ -23,13 +23,13 @@ Each test: own `TempDir`, fresh `PluginHost`, no shared/`static` state — hot-r
 Note: the override-stack capability (two plugins registering the same command id) belongs to the Command service (separate `command-service.md`) and is out of scope here.
 
 ## Acceptance Criteria
-- [ ] Four `*_e2e.rs` files covering discovery/layering, hot reload, unload disposal, and failed load.
-- [ ] Each asserts observable effects only; each owns its `TempDir` + fresh `PluginHost`.
-- [ ] No mocked dispatcher/registry; real isolates and real registered servers.
+- [x] Four `*_e2e.rs` files covering discovery/layering, hot reload, unload disposal, and failed load.
+- [x] Each asserts observable effects only; each owns its `TempDir` + fresh `PluginHost`.
+- [x] No mocked dispatcher/registry; real isolates and real registered servers.
 
 ## Tests
-- [ ] Run: `cargo test -p swissarmyhammer-plugin` — the four new `*_e2e.rs` tests and the whole suite green.
-- [ ] Each test must genuinely fail if its lifecycle behavior is broken.
+- [x] Run: `cargo test -p swissarmyhammer-plugin` — the four new `*_e2e.rs` tests and the whole suite green.
+- [x] Each test must genuinely fail if its lifecycle behavior is broken.
 
 ## Workflow
 - Tests are the deliverable; no `/tdd` cycle. Reuse the harness/helpers from `files_dispatch_e2e.rs`.
