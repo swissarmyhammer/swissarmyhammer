@@ -318,8 +318,9 @@ function AiPanelContainerBody({
    * input — the `ai.focus` window-layer command's handler.
    *
    * The panel is expanded first so focus has a rendered target; the prompt
-   * `<textarea>` is located by its accessible label. The focus is deferred a
-   * frame so the expand has committed to the DOM before the lookup runs.
+   * editor is the AI composer's CodeMirror 6 content DOM, located by its
+   * `role="textbox"` + accessible label. The focus is deferred a frame so the
+   * expand has committed to the DOM before the lookup runs.
    */
   const handleFocus = useCallback(() => {
     setOpen((prev) => {
@@ -327,8 +328,8 @@ function AiPanelContainerBody({
       return true;
     });
     requestAnimationFrame(() => {
-      const input = document.querySelector<HTMLTextAreaElement>(
-        "[data-slot='ai-panel'] textarea[aria-label='Message the AI agent']",
+      const input = document.querySelector<HTMLElement>(
+        "[data-slot='ai-panel'] [role='textbox'][aria-label='Message the AI agent']",
       );
       input?.focus();
     });

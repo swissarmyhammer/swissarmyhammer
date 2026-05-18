@@ -550,13 +550,15 @@ describe("AiPanel — spatial-nav focus scopes", () => {
     await flushSetup();
 
     // Drive a turn so an assistant message renders with its action buttons.
-    const textarea = container.querySelector(
-      "textarea[aria-label='Message the AI agent']",
-    ) as HTMLTextAreaElement | null;
-    expect(textarea, "composer textarea must be present").not.toBeNull();
+    // The composer is a CM6 editor — type into its `role="textbox"` content
+    // DOM, not a plain `<textarea>`.
+    const composer = container.querySelector(
+      "[role='textbox'][aria-label='Message the AI agent']",
+    ) as HTMLElement | null;
+    expect(composer, "composer CM6 content DOM must be present").not.toBeNull();
     const { userEvent } = await import("vitest/browser");
     await act(async () => {
-      await userEvent.type(textarea!, "what is the answer?");
+      await userEvent.type(composer!, "what is the answer?");
     });
     await act(async () => {
       const submit = container.querySelector(

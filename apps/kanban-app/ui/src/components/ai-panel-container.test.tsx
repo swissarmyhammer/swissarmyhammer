@@ -324,7 +324,8 @@ describe("AiPanelContainer", () => {
     expect(document.querySelector("[data-slot='ai-panel']")).toBeNull();
 
     // Firing the registered `ai.focus` handler expands the panel and moves
-    // focus into the prompt textarea.
+    // focus into the prompt editor — the AI composer's CM6 content DOM,
+    // located by its `role="textbox"` + accessible label.
     await act(async () => {
       triggerAiFocus();
     });
@@ -333,10 +334,12 @@ describe("AiPanelContainer", () => {
     });
     await waitFor(() => {
       const input = document.querySelector(
-        "[data-slot='ai-panel'] textarea[aria-label='Message the AI agent']",
+        "[data-slot='ai-panel'] [role='textbox'][aria-label='Message the AI agent']",
       );
       expect(input).not.toBeNull();
-      expect(input).not.toBeDisabled();
+      // The CM6 content DOM is editable (not `contenteditable="false"`) once
+      // a model is selected.
+      expect(input!.getAttribute("contenteditable")).toBe("true");
       expect(document.activeElement).toBe(input);
     });
   });

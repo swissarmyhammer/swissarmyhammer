@@ -5,7 +5,8 @@
  * collapsible reasoning, tool-call cards, the agent's plan, and an inline
  * permission prompt — all on top of {@link useConversation}, which folds the
  * ACP `session/update` stream into renderable `UIMessage` state. A header
- * model selector and a {@link PromptInput} composer complete the surface.
+ * model selector and an {@link AiPromptComposer} CM6 composer complete the
+ * surface.
  *
  * # A View, not a Container
  *
@@ -76,7 +77,7 @@ import {
   type ConversationMessage,
   type PlanPartData,
 } from "@/ai/conversation";
-import { registerAiCommandHandlers, setAiStreaming } from "@/ai/commands";
+import { registerAiCommandHandlers, setAiStatus } from "@/ai/commands";
 import {
   Conversation,
   ConversationContent,
@@ -90,14 +91,7 @@ import {
   MessageContent,
   MessageResponse,
 } from "@/components/ai-elements/message";
-import {
-  PromptInput,
-  PromptInputBody,
-  PromptInputFooter,
-  PromptInputSubmit,
-  PromptInputTextarea,
-  type PromptInputMessage,
-} from "@/components/ai-elements/prompt-input";
+import { AiPromptComposer } from "@/components/ai-prompt-composer";
 import {
   Reasoning,
   ReasoningContent,
@@ -414,7 +408,7 @@ function NoModelState({ hasModels }: NoModelStateProps): ReactNode {
       <ComposerArea
         disabled
         placeholder="Select a model to start..."
-        status="ready"
+        streaming={false}
         onCancel={() => {}}
         onNewConversation={() => {}}
         onSend={() => {}}
@@ -473,28 +467,31 @@ function AiPanelConversation({
     });
   }, [newConversation, cancel]);
 
-  // Mirror the ACP turn status into the AI command registry so `ai.cancel`'s
-  // `available` gate (and the backend `UIState.ai_streaming` flag) track the
-  // live conversation. `setAiStreaming` is a no-op on an unchanged value.
+  // Mirror the full ACP turn status (idle / streaming / error) into the AI
+  // command registry. Two consumers read it back: `ai.cancel`'s `available`
+  // gate (plus the backend `UIState.ai_streaming` flag) tracks the streaming
+  // arm, and the bottom bar (`ModeIndicator`) shows the status. `setAiStatus`
+  // is a no-op on an unchanged value.
   useEffect(() => {
-    setAiStreaming(status === "streaming");
+    setAiStatus(status);
   }, [status]);
 
-  // Leaving streaming behind on unmount avoids a stuck "available" `ai.cancel`
-  // if the panel is torn down mid-turn.
+  // Resetting to idle on unmount avoids a stuck "available" `ai.cancel` (or a
+  // stale "streaming" / "error" bottom-bar indicator) if the panel is torn
+  // down mid-turn.
   useEffect(() => {
     return () => {
-      setAiStreaming(false);
+      setAiStatus("idle");
     };
   }, []);
 
   const handleSend = useCallback(
-    (message: PromptInputMessage) => {
-      const text = message.text.trim();
-      if (text.length === 0) {
+    (text: string) => {
+      const trimmed = text.trim();
+      if (trimmed.length === 0) {
         return;
       }
-      const blocks: ContentBlock[] = [{ type: "text", text }];
+      const blocks: ContentBlock[] = [{ type: "text", text: trimmed }];
       void sendPrompt(blocks);
     },
     [sendPrompt],
@@ -517,11 +514,6 @@ function AiPanelConversation({
     },
     [sendPrompt, status],
   );
-
-  // `ChatStatus` has no "idle" — the composer is `ready` between turns, and
-  // `error` after a failed turn so the submit button shows the error glyph.
-  const composerStatus: "streaming" | "ready" | "error" =
-    status === "idle" ? "ready" : status;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -572,7 +564,7 @@ function AiPanelConversation({
       <ComposerArea
         disabled={!modelReady}
         placeholder="Ask the AI agent..."
-        status={composerStatus}
+        streaming={status === "streaming"}
         onCancel={handleCancel}
         onNewConversation={newConversation}
         onSend={handleSend}
@@ -927,16 +919,20 @@ function PermissionPrompt({
 interface ComposerAreaProps {
   disabled: boolean;
   placeholder: string;
-  status: "submitted" | "streaming" | "ready" | "error";
-  onSend: (message: PromptInputMessage) => void;
+  /** Whether a prompt turn is currently streaming. */
+  streaming: boolean;
+  /** Submit the composed prompt — called with the trimmed buffer text. */
+  onSend: (text: string) => void;
   onCancel: () => void;
   onNewConversation: () => void;
 }
 
 /**
- * The composer: the prompt textarea, the submit/stop button, and the
- * "new conversation" action.
+ * The composer: the "new conversation" action above a CM6 prompt editor.
  *
+ * The prompt editor is {@link AiPromptComposer} — a CodeMirror 6 instance on
+ * the app's shared `TextEditor` primitive, so the active keymap (vim / emacs /
+ * CUA) works inside it ("CM6 everywhere", `ideas/kanban/app-architecture.md`).
  * Submitting calls `onSend`; while a turn streams the submit button becomes a
  * stop control that calls `onCancel`. "New conversation" tears the session
  * down and starts fresh.
@@ -944,25 +940,11 @@ interface ComposerAreaProps {
 function ComposerArea({
   disabled,
   placeholder,
-  status,
+  streaming,
   onSend,
   onCancel,
   onNewConversation,
 }: ComposerAreaProps): ReactNode {
-  const streaming = status === "streaming";
-
-  const handleSubmit = useCallback(
-    (message: PromptInputMessage) => {
-      // While streaming, the submit button is the stop control.
-      if (streaming) {
-        onCancel();
-        return;
-      }
-      onSend(message);
-    },
-    [streaming, onCancel, onSend],
-  );
-
   return (
     <div className="border-t p-2">
       <div className="mb-1 flex justify-end">
@@ -979,29 +961,17 @@ function ComposerArea({
       {/* The composer is a focus scope — `ui:ai-panel.composer` under the
           panel zone — so jump-to lands directly on the prompt box and
           arrow-nav reaches it. `<FocusScope>` deliberately does NOT steal a
-          click that lands on a `<textarea>`, so caret placement inside the
-          prompt is untouched; the scope just registers the leaf and paints
-          its focus indicator. */}
+          click that lands inside the CM6 editor, so caret placement inside
+          the prompt is untouched; the scope just registers the leaf and
+          paints its focus indicator. */}
       <AiPanelFocusScope moniker={asSegment("ui:ai-panel.composer")}>
-        <PromptInput onSubmit={handleSubmit}>
-          <PromptInputBody>
-            <PromptInputTextarea
-              aria-label="Message the AI agent"
-              disabled={disabled}
-              placeholder={placeholder}
-            />
-          </PromptInputBody>
-          <PromptInputFooter>
-            <span className="text-muted-foreground text-xs">
-              {streaming ? "Streaming - click to stop" : ""}
-            </span>
-            <PromptInputSubmit
-              aria-label={streaming ? "Stop" : "Submit"}
-              disabled={disabled}
-              status={status}
-            />
-          </PromptInputFooter>
-        </PromptInput>
+        <AiPromptComposer
+          disabled={disabled}
+          placeholder={placeholder}
+          streaming={streaming}
+          onSend={onSend}
+          onCancel={onCancel}
+        />
       </AiPanelFocusScope>
     </div>
   );

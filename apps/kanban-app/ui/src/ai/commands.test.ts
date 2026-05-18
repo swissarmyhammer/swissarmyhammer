@@ -13,10 +13,13 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
+  aiStatus,
   aiStreaming,
   registerAiCommandHandlers,
   resetAiCommandsForTest,
+  setAiStatus,
   setAiStreaming,
+  subscribeAiStatus,
   subscribeAiStreaming,
   triggerAiCancel,
   triggerAiFocus,
@@ -136,5 +139,66 @@ describe("ai command registry", () => {
     unsubscribe();
     setAiStreaming(true);
     expect(notify).toHaveBeenCalledTimes(2);
+  });
+
+  it("status defaults to idle and reflects setAiStatus across all three states", () => {
+    expect(aiStatus()).toBe("idle");
+    setAiStatus("streaming");
+    expect(aiStatus()).toBe("streaming");
+    // `error` is a distinct state the streaming boolean cannot express.
+    setAiStatus("error");
+    expect(aiStatus()).toBe("error");
+    setAiStatus("idle");
+    expect(aiStatus()).toBe("idle");
+  });
+
+  it("aiStreaming is the streaming-arm projection of the status", () => {
+    expect(aiStreaming()).toBe(false);
+    setAiStatus("streaming");
+    expect(aiStreaming()).toBe(true);
+    // The error state is not streaming.
+    setAiStatus("error");
+    expect(aiStreaming()).toBe(false);
+    setAiStatus("idle");
+    expect(aiStreaming()).toBe(false);
+  });
+
+  it("setAiStreaming maps the boolean onto the status store", () => {
+    setAiStreaming(true);
+    expect(aiStatus()).toBe("streaming");
+    setAiStreaming(false);
+    expect(aiStatus()).toBe("idle");
+  });
+
+  it("subscribeAiStatus notifies on a real status change, not on a no-op", () => {
+    const notify = vi.fn();
+    const unsubscribe = subscribeAiStatus(notify);
+
+    setAiStatus("streaming");
+    expect(notify).toHaveBeenCalledTimes(1);
+
+    // Re-asserting the same status is a no-op — no notification.
+    setAiStatus("streaming");
+    expect(notify).toHaveBeenCalledTimes(1);
+
+    setAiStatus("error");
+    expect(notify).toHaveBeenCalledTimes(2);
+
+    unsubscribe();
+    setAiStatus("idle");
+    expect(notify).toHaveBeenCalledTimes(2);
+  });
+
+  it("status subscribers and streaming subscribers share one notification set", () => {
+    const onStatus = vi.fn();
+    const onStreaming = vi.fn();
+    subscribeAiStatus(onStatus);
+    subscribeAiStreaming(onStreaming);
+
+    // A status change notifies both — the streaming boolean is a derived
+    // view of the same store.
+    setAiStatus("streaming");
+    expect(onStatus).toHaveBeenCalledTimes(1);
+    expect(onStreaming).toHaveBeenCalledTimes(1);
   });
 });

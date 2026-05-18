@@ -468,7 +468,12 @@ describe("AiPanel: model selector", () => {
       />,
     );
 
-    expect(screen.getByRole("textbox")).toBeDisabled();
+    // The composer is a CodeMirror 6 instance, not a `<textarea>`. A disabled
+    // composer's CM6 content DOM is non-editable (`contenteditable="false"`)
+    // rather than carrying the form-control `disabled` attribute.
+    expect(screen.getByRole("textbox").getAttribute("contenteditable")).toBe(
+      "false",
+    );
   });
 });
 

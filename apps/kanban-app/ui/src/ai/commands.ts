@@ -19,15 +19,28 @@
  * `triggerStartRename` module bus — the established pattern for a
  * window-layer command whose effect lives in a sibling subtree.
  *
- * # Streaming state gates `ai.cancel`
+ * # Turn status — gates `ai.cancel` and feeds the bottom bar
  *
- * `ai.cancel` is available only while the conversation is streaming. The
- * conversation reports its turn status here via {@link setAiStreaming}; the
- * window-layer command builder reads {@link aiStreaming} (and re-renders via
- * {@link subscribeAiStreaming}) so the command's `available` flag tracks the
- * live conversation. The same flag is mirrored into the backend `UIState` so
- * `commands_for_scope` keeps the palette entry hidden when idle.
+ * The conversation reports its full ACP turn status here via
+ * {@link setAiStatus} — `idle`, `streaming`, or `error`. Two consumers read
+ * it back:
+ *
+ * - `ai.cancel` is available only while the conversation is streaming. The
+ *   window-layer command builder reads {@link aiStreaming} (derived from the
+ *   status) and re-renders via {@link subscribeAiStreaming} so the command's
+ *   `available` flag tracks the live conversation. The same flag is mirrored
+ *   into the backend `UIState` so `commands_for_scope` keeps the palette
+ *   entry hidden when idle.
+ * - The app's bottom bar (`ModeIndicator`) reads {@link aiStatus} and
+ *   re-renders via {@link subscribeAiStatus} to show `idle` / `streaming` /
+ *   `error` next to the keymap mode.
+ *
+ * The status store is the single source of truth; the streaming boolean is a
+ * derived view of it (`status === "streaming"`). Both share one subscriber
+ * set, so a status change notifies streaming subscribers and vice versa.
  */
+
+import type { ConversationStatus } from "@/ai/conversation";
 
 /**
  * The live handlers the AI panel components register.
@@ -52,11 +65,22 @@ export interface AiCommandHandlers {
 /** The current handler set. Mutated in place by {@link registerAiCommandHandlers}. */
 const handlers: AiCommandHandlers = {};
 
-/** Whether the AI conversation is currently streaming a turn. */
-let streaming = false;
+/**
+ * The AI conversation's current turn status — `idle`, `streaming`, or
+ * `error`. The single source of truth for both the `ai.cancel` availability
+ * gate and the bottom-bar AI status indicator. Defaults to `idle`: no
+ * conversation has run a turn yet.
+ */
+let status: ConversationStatus = "idle";
 
-/** Subscribers notified whenever {@link streaming} changes. */
-const streamingSubscribers = new Set<() => void>();
+/**
+ * Subscribers notified whenever {@link status} changes.
+ *
+ * Shared by {@link subscribeAiStatus} and {@link subscribeAiStreaming}: the
+ * streaming boolean is a derived view of the status, so a status change is
+ * also a streaming change as far as subscribers are concerned.
+ */
+const statusSubscribers = new Set<() => void>();
 
 /**
  * Register (or update) the AI panel command handlers.
@@ -122,50 +146,90 @@ export function triggerAiModel(modelId: string | undefined): void {
   }
 }
 
+/**
+ * The AI conversation's current turn status — `idle`, `streaming`, or
+ * `error`.
+ *
+ * Read by the bottom bar (`ModeIndicator`) to render the AI status indicator.
+ * `useSyncExternalStore(subscribeAiStatus, aiStatus, aiStatus)` keeps a React
+ * component in sync with it.
+ */
+export function aiStatus(): ConversationStatus {
+  return status;
+}
+
 /** Whether the AI conversation is currently streaming a turn. */
 export function aiStreaming(): boolean {
-  return streaming;
+  return status === "streaming";
 }
 
 /**
- * Report the AI conversation's streaming status.
+ * Report the AI conversation's turn status.
  *
- * Called by `AiPanelConversation` whenever the ACP turn status crosses the
- * streaming boundary. Notifies every {@link subscribeAiStreaming} subscriber
- * on a real change so the window-layer command builder rebuilds `ai.cancel`
- * with the fresh `available` flag. A no-op when the value is unchanged.
+ * Called by `AiPanelConversation` whenever the ACP turn status changes.
+ * Notifies every {@link subscribeAiStatus} / {@link subscribeAiStreaming}
+ * subscriber on a real change so the window-layer command builder rebuilds
+ * `ai.cancel` with the fresh `available` flag and the bottom bar repaints the
+ * AI status indicator. A no-op when the status is unchanged.
  *
- * @param next - The new streaming flag.
+ * @param next - The new turn status.
+ */
+export function setAiStatus(next: ConversationStatus): void {
+  if (status === next) return;
+  status = next;
+  for (const notify of statusSubscribers) notify();
+}
+
+/**
+ * Report the AI conversation's streaming status as a boolean.
+ *
+ * A back-compat shim over {@link setAiStatus}: `true` maps to `streaming`,
+ * `false` to `idle`. Callers that have the full {@link ConversationStatus}
+ * (notably `AiPanelConversation`) should call {@link setAiStatus} directly so
+ * the `error` state is not flattened away.
+ *
+ * @param next - `true` for streaming, `false` for idle.
  */
 export function setAiStreaming(next: boolean): void {
-  if (streaming === next) return;
-  streaming = next;
-  for (const notify of streamingSubscribers) notify();
+  setAiStatus(next ? "streaming" : "idle");
+}
+
+/**
+ * Subscribe to {@link aiStatus} changes.
+ *
+ * @param onChange - Invoked after every real status change.
+ * @returns An unsubscribe function.
+ */
+export function subscribeAiStatus(onChange: () => void): () => void {
+  statusSubscribers.add(onChange);
+  return () => {
+    statusSubscribers.delete(onChange);
+  };
 }
 
 /**
  * Subscribe to {@link aiStreaming} changes.
  *
- * @param onChange - Invoked after every real streaming-flag change.
+ * The streaming boolean is derived from the status, so this is an alias of
+ * {@link subscribeAiStatus} — both register into the one subscriber set.
+ *
+ * @param onChange - Invoked after every real status change.
  * @returns An unsubscribe function.
  */
 export function subscribeAiStreaming(onChange: () => void): () => void {
-  streamingSubscribers.add(onChange);
-  return () => {
-    streamingSubscribers.delete(onChange);
-  };
+  return subscribeAiStatus(onChange);
 }
 
 /**
  * Reset the registry to its initial state.
  *
- * Test-only — clears every handler, the streaming flag, and all subscribers
- * so one test's registrations never leak into the next.
+ * Test-only — clears every handler, the turn status, and all subscribers so
+ * one test's registrations never leak into the next.
  */
 export function resetAiCommandsForTest(): void {
   for (const key of Object.keys(handlers)) {
     delete (handlers as Record<string, unknown>)[key];
   }
-  streaming = false;
-  streamingSubscribers.clear();
+  status = "idle";
+  statusSubscribers.clear();
 }
