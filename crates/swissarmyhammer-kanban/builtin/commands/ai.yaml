@@ -23,6 +23,10 @@
     cua: Mod+J
     vim: Mod+J
     emacs: Mod+J
+  menu:
+    path: [View]
+    group: 0
+    order: 0
 
 - id: ai.focus
   name: Focus AI Panel

@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KRRN69YDB2B03RB1N9G6RR3J
-position_column: todo
-position_ordinal: '9580'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffe80
 project: ai-panel
 title: View menu — native menu-bar "View" submenu, AI panel toggle wired in via YAML
 ---
@@ -32,20 +32,28 @@ Work:
 Scope note: this task establishes the View menu and places the AI panel toggle in it. Other view-related commands (inspector toggles, etc.) can later gain a `menu: { path: [View] }` block — out of scope here; one concern per task.
 
 ## Subtasks
-- [ ] Add the `menu: { path: [View], group: 0, order: 0 }` block to the `ai.toggle` command definition in its builtin YAML file.
-- [ ] In `menu.rs` `build_menu_from_commands`, build the `View` submenu via `build_grouped_submenu` and insert it into the `Menu::with_items` array between Edit and Navigation; update the function doc comment.
-- [ ] Add the `collect_menu_entries` unit test for the `View` group.
+- [x] Add the `menu: { path: [View], group: 0, order: 0 }` block to the `ai.toggle` command definition in its builtin YAML file.
+- [x] In `menu.rs` `build_menu_from_commands`, build the `View` submenu via `build_grouped_submenu` and insert it into the `Menu::with_items` array between Edit and Navigation; update the function doc comment.
+- [x] Add the `collect_menu_entries` unit test for the `View` group.
 
 ## Acceptance Criteria
-- [ ] `build_menu_from_commands` constructs a top-level "View" submenu and includes it in the menu bar between Edit and Navigation.
-- [ ] The `ai.toggle` command carries a `menu: { path: [View], ... }` block; `collect_menu_entries` collects it under the `"View"` key.
-- [ ] The View menu item dispatches `ai.toggle` through the existing `menu-command` → `executeCommand` path (no new event plumbing).
-- [ ] `cargo build -p kanban-app` is clean.
+- [x] `build_menu_from_commands` constructs a top-level "View" submenu and includes it in the menu bar between Edit and Navigation.
+- [x] The `ai.toggle` command carries a `menu: { path: [View], ... }` block; `collect_menu_entries` collects it under the `"View"` key.
+- [x] The View menu item dispatches `ai.toggle` through the existing `menu-command` → `executeCommand` path (no new event plumbing).
+- [x] `cargo build -p kanban-app` is clean.
 
 ## Tests
-- [ ] Unit test in `apps/kanban-app/src/menu.rs` `#[cfg(test)] mod tests`, modeled on the existing `navigation_submenu_contains_all_nine_nav_commands` test: compose the registry (`compose_registry![swissarmyhammer_commands, swissarmyhammer_focus, swissarmyhammer_kanban]`), call `collect_menu_entries(&registry, &UIState::new())`, assert `menus.get("View")` exists and contains an entry with id `ai.toggle`.
-- [ ] `cargo test -p kanban-app menu` is green.
-- [ ] `cargo build -p kanban-app` is clean.
+- [x] Unit test in `apps/kanban-app/src/menu.rs` `#[cfg(test)] mod tests`, modeled on the existing `navigation_submenu_contains_all_nine_nav_commands` test: compose the registry (`compose_registry![swissarmyhammer_commands, swissarmyhammer_focus, swissarmyhammer_kanban]`), call `collect_menu_entries(&registry, &UIState::new())`, assert `menus.get("View")` exists and contains an entry with id `ai.toggle`.
+- [x] `cargo test -p kanban-app menu` is green.
+- [x] `cargo build -p kanban-app` is clean.
 
 ## Workflow
 - Use `/tdd` — write the `collect_menu_entries` "View" test first (it fails until the YAML `menu:` block is added), then add the YAML block and the `menu.rs` submenu wiring.
+
+## Implementation Notes
+- **YAML** — `crates/swissarmyhammer-kanban/builtin/commands/ai.yaml`: added a `menu:` block to the `ai.toggle` command — `path: [View]`, `group: 0`, `order: 0`. No other command in `ai.yaml` changed. `ai.toggle` was located where the dependency task placed it (kanban crate, not the commands crate).
+- **Rust** — `apps/kanban-app/src/menu.rs` `build_menu_from_commands`: built `view_menu` via the existing generic helper `build_grouped_submenu(app, "View", menus.get("View"), &mut menu_items)?` and inserted `&view_menu` into the `Menu::with_items` array between `&edit_menu` and `&nav_menu` (final order: App, File, Edit, View, Navigation, Window). Updated the `build_menu_from_commands` doc comment to enumerate the six submenus; refreshed the inline comments around View and Navigation.
+- **Test** — `apps/kanban-app/src/menu.rs` `#[cfg(test)] mod tests`: added `view_submenu_contains_ai_toggle_command`, modeled on `navigation_submenu_contains_all_nine_nav_commands`. Composes `compose_registry![swissarmyhammer_commands, swissarmyhammer_focus, swissarmyhammer_kanban]`, calls `collect_menu_entries`, asserts `menus.get("View")` exists and contains an `ai.toggle` entry. Followed `/tdd`: the test was written first and observed to fail (no `View` key) before the YAML/menu wiring was added.
+- **No collector or frontend change** — `collect_menu_entries` already groups any `menu`-carrying command by `path.join("/")`, and `handle_menu_event` already emits `menu-command` → `executeCommand` for arbitrary ids. Confirmed: no event-plumbing change needed.
+- **No snapshot regeneration** — adding a `menu:` block does not change command counts or ids; `builtin_commands.rs` and `composed_commands_registry.rs` only assert id presence in lists. Both test files were re-run and pass unchanged (9 passed). The entity `*_full.json` snapshots matched `ai.toggle` only as unrelated substring data, not command definitions.
+- **Verification** (actual output): `cargo build -p kanban-app` — Finished, clean. `cargo test -p kanban-app --bin kanban-app menu` — 14 passed, 0 failed (incl. new `view_submenu_contains_ai_toggle_command`). `cargo clippy -p kanban-app --bins --tests -- -D warnings` — Finished, clean. `cargo test -p swissarmyhammer-kanban --test builtin_commands --test composed_commands_registry` — 9 passed, 0 failed.
