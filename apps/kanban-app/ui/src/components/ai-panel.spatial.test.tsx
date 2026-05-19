@@ -318,7 +318,7 @@ describe("AiPanel — spatial-nav focus scopes", () => {
   // panel zone — so each is path-addressable and a first-class beam target.
   // -------------------------------------------------------------------------
 
-  it("registers a focus scope for the composer, model selector, and scrollback parented at the panel zone", async () => {
+  it("registers a focus scope for the composer and scrollback parented at the panel zone", async () => {
     const { unmount } = await renderPanel();
     await flushSetup();
 
@@ -326,8 +326,9 @@ describe("AiPanel — spatial-nav focus scopes", () => {
     expect(zone).toBeTruthy();
     const zoneFq = zone!.fq as FullyQualifiedMoniker;
 
+    // The scrollback and the composer are each a `<FocusScope>` leaf parented
+    // directly at the panel zone.
     for (const segment of [
-      "ui:ai-panel.model-selector",
       "ui:ai-panel.scrollback",
       "ui:ai-panel.composer",
     ] as const) {
@@ -346,6 +347,50 @@ describe("AiPanel — spatial-nav focus scopes", () => {
         zone!.layerFq,
       );
     }
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // The model selector moved into the composer footer (the AI Elements
+  // `PromptInput` layout). Its `ui:ai-panel.model-selector` leaf is preserved
+  // — now nested under the `ui:ai-panel.composer` scope rather than directly
+  // under the panel zone — so it is still a path-addressable beam target.
+  // -------------------------------------------------------------------------
+
+  it("registers the model selector as a leaf nested under the composer scope", async () => {
+    const { unmount } = await renderPanel();
+    await flushSetup();
+
+    const zone = findRegisterRecord("ui:ai-panel");
+    const composer = findRegisterRecord("ui:ai-panel.composer");
+    expect(zone && composer).toBeTruthy();
+    const composerFq = composer!.fq as FullyQualifiedMoniker;
+
+    const selector = findRegisterRecord("ui:ai-panel.model-selector");
+    expect(
+      selector,
+      "the model selector must still register a FocusScope leaf",
+    ).toBeTruthy();
+    // The selector now lives in the composer footer — its FQM is composed
+    // under the composer scope, and the composer scope is its parent zone.
+    expect(
+      selector!.fq,
+      "the model selector FQM must be composed under the composer scope",
+    ).toBe(composeFq(composerFq, asSegment("ui:ai-panel.model-selector")));
+    expect(
+      selector!.parentZone,
+      "the model selector must be parented at the composer scope",
+    ).toBe(composerFq);
+    // Either way, the leaf FQM is still a path-descendant of the panel zone.
+    expect(
+      String(selector!.fq).startsWith(`${String(zone!.fq)}/`),
+      "the model selector FQM must remain a path-descendant of the panel zone",
+    ).toBe(true);
+    expect(
+      selector!.layerFq,
+      "the model selector must live in the window layer",
+    ).toBe(zone!.layerFq);
 
     unmount();
   });
@@ -415,12 +460,13 @@ describe("AiPanel — spatial-nav focus scopes", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Intra-panel spatial nav: ArrowDown from the model selector moves toward
-  // a lower control inside the panel (scrollback / composer), never out of
-  // the panel zone.
+  // Intra-panel spatial nav: the model selector now lives in the composer
+  // footer (the AI Elements `PromptInput` layout), so it sits LOW in the
+  // panel. ArrowUp from it moves toward a control higher in the panel (the
+  // composer body or the scrollback), never out of the panel zone.
   // -------------------------------------------------------------------------
 
-  it("ArrowDown from the model selector moves to a control lower in the panel", async () => {
+  it("ArrowUp from the model selector moves to a control higher in the panel", async () => {
     const { unmount } = await renderPanel();
     await flushSetup();
 
@@ -430,19 +476,19 @@ describe("AiPanel — spatial-nav focus scopes", () => {
     expect(selector && composer && scrollback).toBeTruthy();
     const selectorFq = selector!.fq as FullyQualifiedMoniker;
 
-    // Run the kernel's beam-nav port: Down from the selector.
+    // Run the kernel's beam-nav port: Up from the selector.
     const result = harness.registry.get(selectorFq);
     expect(result, "selector must be in the shadow registry").toBeTruthy();
 
     await act(async () => {
       await mockInvoke("spatial_navigate", {
         focusedFq: selectorFq,
-        direction: "down",
+        direction: "up",
       });
     });
     // The shadow navigator emits focus-changed on the resulting FQM; assert
-    // it landed on a panel control below the selector — the composer or the
-    // scrollback, both inside the ui:ai-panel zone.
+    // it landed on a panel control above the footer selector — the composer
+    // body or the scrollback, both inside the ui:ai-panel zone.
     await flushSetup();
 
     const panelControlFqs = new Set([
@@ -451,7 +497,7 @@ describe("AiPanel — spatial-nav focus scopes", () => {
     ]);
     expect(
       panelControlFqs.has(harness.currentFocus.fq as FullyQualifiedMoniker),
-      `ArrowDown from the model selector must land on a control inside the panel \
+      `ArrowUp from the model selector must land on a control inside the panel \
        (composer or scrollback); landed on ${String(harness.currentFocus.fq)}`,
     ).toBe(true);
 

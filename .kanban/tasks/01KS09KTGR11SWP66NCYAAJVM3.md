@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '9580'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffff8380
 project: ai-panel
 title: 'AI panel: rework the composer to the AI Elements PromptInput layout'
 ---
@@ -33,20 +33,24 @@ The composer (`AiPromptComposer`) is correctly a CodeMirror 6 editor — "CM6 ev
 Keep the submit/stop button behavior (`PromptInputSubmit`-style: send when idle, stop when streaming) and the Enter-submit / Shift-Enter-newline keymap unchanged.
 
 ## Acceptance Criteria
-- [ ] The model selector is rendered in the composer (input area), not in the panel header; `AiPanelHeader` no longer contains a model dropdown.
-- [ ] The model picker uses the AI Elements `PromptInputSelect*` components; unavailable models are disabled and show their hint.
-- [ ] Selecting a model still reports the choice via `onSelectModel` and starts a fresh ACP session (existing remount-on-`modelId` behavior preserved).
-- [ ] The composer has a single border around the input — no doubled/stacked border edge.
-- [ ] The CM6 editor expands to fill the composer's available vertical space; the footer toolbar stays pinned at the bottom.
-- [ ] The model-selector trigger is still a spatial-nav focus leaf (`ui:ai-panel.model-selector`).
-- [ ] Enter submits / Shift-Enter inserts a newline; the submit button becomes a stop control while streaming — all unchanged.
+- [x] The model selector is rendered in the composer (input area), not in the panel header; `AiPanelHeader` no longer contains a model dropdown.
+- [x] The model picker uses the AI Elements `PromptInputSelect*` components; unavailable models are disabled and show their hint.
+- [x] Selecting a model still reports the choice via `onSelectModel` and starts a fresh ACP session (existing remount-on-`modelId` behavior preserved).
+- [x] The composer has a single border around the input — no doubled/stacked border edge.
+- [x] The CM6 editor expands to fill the composer's available vertical space; the footer toolbar stays pinned at the bottom.
+- [x] The model-selector trigger is still a spatial-nav focus leaf (`ui:ai-panel.model-selector`).
+- [x] Enter submits / Shift-Enter inserts a newline; the submit button becomes a stop control while streaming — all unchanged.
 
 ## Tests
-- [ ] Update `apps/kanban-app/ui/src/components/ai-panel.test.tsx` "AiPanel: model selector" tests: the selector is now found in the composer, not the header — assert the picker lists models, disables unavailable ones with their hint, and that selecting one calls `onSelectModel`.
-- [ ] Add a test asserting the model picker is NOT inside the `<header>` / is within the composer region.
-- [ ] In `apps/kanban-app/ui/src/components/ai-prompt-composer.test.tsx`, add/extend tests for the footer model select and confirm the existing submit/stop and Enter-keymap tests still pass.
-- [ ] Add an assertion that the composer renders a single bordered container (no nested `border` element inside another `border` element for the input well).
-- [ ] Run `cd apps/kanban-app/ui && npx vitest run src/components/ai-panel.test.tsx src/components/ai-prompt-composer.test.tsx src/components/ai-panel.spatial.test.tsx` — all green.
+- [x] Update `apps/kanban-app/ui/src/components/ai-panel.test.tsx` "AiPanel: model selector" tests: the selector is now found in the composer, not the header — assert the picker lists models, disables unavailable ones with their hint, and that selecting one calls `onSelectModel`.
+- [x] Add a test asserting the model picker is NOT inside the `<header>` / is within the composer region.
+- [x] In `apps/kanban-app/ui/src/components/ai-prompt-composer.test.tsx`, add/extend tests for the footer model select and confirm the existing submit/stop and Enter-keymap tests still pass.
+- [x] Add an assertion that the composer renders a single bordered container (no nested `border` element inside another `border` element for the input well).
+- [x] Run `cd apps/kanban-app/ui && npx vitest run src/components/ai-panel.test.tsx src/components/ai-prompt-composer.test.tsx src/components/ai-panel.spatial.test.tsx` — all green.
 
 ## Workflow
 - Use `/tdd` — write the failing model-selector-location and single-border tests first, then implement.
+
+## Implementation notes
+- The model selector moved into `AiPromptComposer`'s footer; the `ui:ai-panel.model-selector` spatial leaf is preserved but is now nested under the `ui:ai-panel.composer` scope. `ai-panel.spatial.test.tsx` was updated to assert the new parentage (leaf parented at the composer scope, FQM still a path-descendant of the panel zone) and the intra-panel nav case became ArrowUp (the selector is now low in the footer).
+- `ai-panel-container.test.tsx` was updated: the model picker is now a `role="combobox"` / `listbox` / `option` (Radix `Select`), not the old `button` / `menu` / `menuitem` dropdown.

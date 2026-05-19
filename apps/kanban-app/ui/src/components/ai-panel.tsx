@@ -45,7 +45,6 @@ import type {
 import type { DynamicToolUIPart, ToolUIPart } from "ai";
 import {
   CheckIcon,
-  ChevronDownIcon,
   CircleCheckIcon,
   CircleDotIcon,
   CircleIcon,
@@ -61,15 +60,6 @@ import {
   AiPanelPressable,
 } from "@/components/ai-panel-focus";
 import { asSegment } from "@/types/spatial";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { cn } from "@/lib/utils";
 import { createKanbanClient } from "@/ai/acp-client";
 import { connectAcpStream } from "@/ai/acp-stream";
 import {
@@ -253,14 +243,13 @@ export function AiPanel({
         className="flex h-full min-h-0 flex-1 flex-col bg-background"
         data-slot="ai-panel"
       >
-        <AiPanelHeader
-          models={models}
-          selectedModel={selectedModel}
-          onSelectModel={onSelectModel}
-          onCollapse={onCollapse}
-        />
+        <AiPanelHeader onCollapse={onCollapse} />
         {modelId === null ? (
-          <NoModelState hasModels={(models?.length ?? 0) > 0} />
+          <NoModelState
+            models={models}
+            selectedModel={selectedModel}
+            onSelectModel={onSelectModel}
+          />
         ) : (
           <AiPanelConversation
             // Keying on the model id remounts the conversation on a model
@@ -269,6 +258,9 @@ export function AiPanel({
             key={modelId}
             modelId={modelId}
             modelReady={selectedModel?.available ?? false}
+            models={models}
+            selectedModel={selectedModel}
+            onSelectModel={onSelectModel}
             createConnect={createConnect}
           />
         )}
@@ -279,157 +271,67 @@ export function AiPanel({
 
 /** Props for {@link AiPanelHeader}. */
 interface AiPanelHeaderProps {
-  models: AiModel[] | undefined;
-  selectedModel: AiModel | null;
-  onSelectModel: (modelId: string) => void;
   /** Collapse the panel to its rail — wired to the header's collapse button. */
   onCollapse: () => void;
 }
 
 /**
- * The panel header: the title, the model selector dropdown, and the collapse
- * control.
+ * The panel header: the "AI" title and the collapse control.
  *
- * The selector lists every model from `ai_list_models`. An unavailable model
- * is a disabled menu item that still shows its hint (e.g. "install Claude
- * Code"); selecting an available one reports the choice upward. The collapse
- * button — to the right of the selector — folds the panel down to its rail
- * via `onCollapse`; the hosting container owns the open-state.
+ * The model selector no longer lives here — it moved into the composer footer
+ * (the AI Elements `PromptInput` layout puts model selection in the input
+ * area). The collapse button — to the right of the title — folds the panel
+ * down to its rail via `onCollapse`; the hosting container owns the
+ * open-state.
  */
-function AiPanelHeader({
-  models,
-  selectedModel,
-  onSelectModel,
-  onCollapse,
-}: AiPanelHeaderProps): ReactNode {
-  const triggerLabel = selectedModel?.label ?? "Select a model";
-
+function AiPanelHeader({ onCollapse }: AiPanelHeaderProps): ReactNode {
   return (
     <header className="flex items-center justify-between gap-2 border-b px-3 py-2">
       <div className="flex items-center gap-1.5 font-medium text-sm">
         <SparklesIcon className="size-4 text-muted-foreground" />
         <span>AI</span>
       </div>
-      {/* The model selector and the collapse control share the right side of
-          the single header row, while the "AI" title stays on the left. */}
-      <div className="flex items-center gap-2">
-        <DropdownMenu>
-          {/* The model selector is a focusable spatial-nav leaf:
-              `ui:ai-panel.model-selector`, composed under the `ui:ai-panel`
-              zone. `<AiPanelPressable asChild>` mounts the leaf and the
-              Enter / Space keyboard-activation CommandDefs; the
-              `DropdownMenuTrigger`'s slot becomes the host `<button>` so the
-              chain renders exactly one button. `onPress` is a no-op — Radix's
-              own trigger handler opens the menu; the Pressable is here purely
-              for the focus leaf + keyboard activation, and a `<button>`
-              press toggles the dropdown natively.
-
-              `ariaLabel` is the trigger's visible label (the model name, or
-              "Select a model"): the button already shows that text, so the
-              accessible name must match it rather than introduce a competing
-              label. */}
-          <DropdownMenuTrigger asChild>
-            <AiPanelPressable
-              asChild
-              moniker={asSegment("ui:ai-panel.model-selector")}
-              ariaLabel={triggerLabel}
-              onPress={() => {}}
-              disabled={!models || models.length === 0}
-            >
-              <Button
-                className="gap-1.5"
-                disabled={!models || models.length === 0}
-                size="sm"
-                variant="outline"
-              >
-                {triggerLabel}
-                <ChevronDownIcon className="size-4 opacity-60" />
-              </Button>
-            </AiPanelPressable>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-64">
-            <DropdownMenuLabel>Model</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            {(models ?? []).map((model) => (
-              <ModelMenuItem
-                key={model.id}
-                model={model}
-                selected={model.id === selectedModel?.id}
-                onSelect={onSelectModel}
-              />
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-        {/* The collapse control — folds the panel to its rail. The hosting
-            container owns the open-state; this button is wired straight to
-            the `onCollapse` callback. */}
-        <Button
-          aria-label="Collapse AI panel"
-          onClick={onCollapse}
-          size="icon"
-          variant="ghost"
-        >
-          <PanelRightCloseIcon className="size-4" />
-        </Button>
-      </div>
+      {/* The collapse control — folds the panel to its rail. The hosting
+          container owns the open-state; this button is wired straight to
+          the `onCollapse` callback. */}
+      <Button
+        aria-label="Collapse AI panel"
+        onClick={onCollapse}
+        size="icon"
+        variant="ghost"
+      >
+        <PanelRightCloseIcon className="size-4" />
+      </Button>
     </header>
-  );
-}
-
-/** Props for {@link ModelMenuItem}. */
-interface ModelMenuItemProps {
-  model: AiModel;
-  selected: boolean;
-  onSelect: (modelId: string) => void;
-}
-
-/**
- * One model entry in the selector dropdown.
- *
- * An unavailable model is disabled — it cannot be picked — but still shows its
- * hint so the user knows *why* (e.g. the Claude Code CLI was not found).
- */
-function ModelMenuItem({
-  model,
-  selected,
-  onSelect,
-}: ModelMenuItemProps): ReactNode {
-  return (
-    <DropdownMenuItem
-      className="flex flex-col items-start gap-0.5"
-      disabled={!model.available}
-      onSelect={() => onSelect(model.id)}
-      title={model.hint ?? undefined}
-    >
-      <span className={cn("text-sm", selected && "font-semibold")}>
-        {model.label}
-        {selected ? " (current)" : ""}
-      </span>
-      {model.hint && (
-        <span className="text-muted-foreground text-xs">{model.hint}</span>
-      )}
-    </DropdownMenuItem>
   );
 }
 
 /** Props for {@link NoModelState}. */
 interface NoModelStateProps {
-  hasModels: boolean;
+  models: AiModel[] | undefined;
+  selectedModel: AiModel | null;
+  onSelectModel: (modelId: string) => void;
 }
 
 /**
  * The empty state shown before a model is selected.
  *
  * Mirrors the disabled-composer affordance: the panel is inert until the user
- * picks a model from the header selector.
+ * picks a model from the composer's footer selector. The composer still
+ * renders (disabled) so its footer model picker is reachable — that is how the
+ * user chooses the first model.
  */
-function NoModelState({ hasModels }: NoModelStateProps): ReactNode {
+function NoModelState({
+  models,
+  selectedModel,
+  onSelectModel,
+}: NoModelStateProps): ReactNode {
   return (
-    <div className="flex flex-1 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       <ConversationEmptyState
         description={
-          hasModels
-            ? "Pick a model from the selector above to start chatting."
+          (models?.length ?? 0) > 0
+            ? "Pick a model from the composer's selector to start chatting."
             : "No AI models are configured."
         }
         icon={<SparklesIcon className="size-6" />}
@@ -440,6 +342,9 @@ function NoModelState({ hasModels }: NoModelStateProps): ReactNode {
         hasMessages={false}
         placeholder="Select a model to start..."
         streaming={false}
+        models={models}
+        selectedModel={selectedModel}
+        onSelectModel={onSelectModel}
         onCancel={() => {}}
         onNewConversation={() => {}}
         onSend={() => {}}
@@ -452,6 +357,12 @@ function NoModelState({ hasModels }: NoModelStateProps): ReactNode {
 interface AiPanelConversationProps {
   modelId: string;
   modelReady: boolean;
+  /** The selectable models — threaded down to the composer's model picker. */
+  models: AiModel[] | undefined;
+  /** The currently selected model — threaded down to the composer. */
+  selectedModel: AiModel | null;
+  /** Report the user's model choice — threaded down to the composer. */
+  onSelectModel: (modelId: string) => void;
   createConnect: AiPanelConnectFactory;
 }
 
@@ -467,6 +378,9 @@ interface AiPanelConversationProps {
 function AiPanelConversation({
   modelId,
   modelReady,
+  models,
+  selectedModel,
+  onSelectModel,
   createConnect,
 }: AiPanelConversationProps): ReactNode {
   const connect = useMemo(
@@ -597,6 +511,9 @@ function AiPanelConversation({
         hasMessages={messages.length > 0}
         placeholder="Ask the AI agent..."
         streaming={status === "streaming"}
+        models={models}
+        selectedModel={selectedModel}
+        onSelectModel={onSelectModel}
         onCancel={handleCancel}
         onNewConversation={newConversation}
         onSend={handleSend}
@@ -959,6 +876,12 @@ interface ComposerAreaProps {
   placeholder: string;
   /** Whether a prompt turn is currently streaming. */
   streaming: boolean;
+  /** The selectable models — threaded into the composer's footer picker. */
+  models: AiModel[] | undefined;
+  /** The currently selected model — threaded into the composer. */
+  selectedModel: AiModel | null;
+  /** Report the user's model choice — wired to the composer's footer picker. */
+  onSelectModel: (modelId: string) => void;
   /** Submit the composed prompt — called with the trimmed buffer text. */
   onSend: (text: string) => void;
   onCancel: () => void;
@@ -966,14 +889,20 @@ interface ComposerAreaProps {
 }
 
 /**
- * The composer: an optional "new conversation" action above a CM6 prompt
- * editor.
+ * The composer section: an optional "new conversation" action above the CM6
+ * prompt composer.
  *
- * The prompt editor is {@link AiPromptComposer} — a CodeMirror 6 instance on
+ * The prompt composer is {@link AiPromptComposer} — a CodeMirror 6 instance on
  * the app's shared `TextEditor` primitive, so the active keymap (vim / emacs /
  * CUA) works inside it ("CM6 everywhere", `ideas/kanban/app-architecture.md`).
  * Submitting calls `onSend`; while a turn streams the submit button becomes a
- * stop control that calls `onCancel`.
+ * stop control that calls `onCancel`. The model selector lives in the
+ * composer's own footer toolbar.
+ *
+ * This section adds NO border of its own — {@link AiPromptComposer} is a
+ * single bordered container (the AI Elements `PromptInput` shell), so a
+ * `border-t` here would read as a doubled edge. The section is `flex` /
+ * `min-h-0` so the composer flexes to fill the panel's available height.
  *
  * The "New conversation" button only *resets* an existing conversation, so it
  * renders only when `hasMessages` is true — an empty conversation has nothing
@@ -985,12 +914,15 @@ function ComposerArea({
   hasMessages,
   placeholder,
   streaming,
+  models,
+  selectedModel,
+  onSelectModel,
   onSend,
   onCancel,
   onNewConversation,
 }: ComposerAreaProps): ReactNode {
   return (
-    <div className="border-t p-2">
+    <div className="flex shrink-0 flex-col p-2">
       {hasMessages && (
         <div className="mb-1 flex justify-end">
           <Button
@@ -1009,12 +941,19 @@ function ComposerArea({
           arrow-nav reaches it. `<FocusScope>` deliberately does NOT steal a
           click that lands inside the CM6 editor, so caret placement inside
           the prompt is untouched; the scope just registers the leaf and
-          paints its focus indicator. */}
-      <AiPanelFocusScope moniker={asSegment("ui:ai-panel.composer")}>
+          paints its focus indicator. The `flex`/`min-h-0` chain lets the
+          composer's CM6 body flex to fill the available height. */}
+      <AiPanelFocusScope
+        moniker={asSegment("ui:ai-panel.composer")}
+        className="flex min-h-0 flex-1 flex-col"
+      >
         <AiPromptComposer
           disabled={disabled}
           placeholder={placeholder}
           streaming={streaming}
+          models={models}
+          selectedModel={selectedModel}
+          onSelectModel={onSelectModel}
           onSend={onSend}
           onCancel={onCancel}
         />

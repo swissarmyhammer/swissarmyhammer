@@ -165,19 +165,20 @@ describe("AiPanelContainer", () => {
     await waitFor(() => {
       expect(document.querySelector("[data-slot='ai-panel']")).not.toBeNull();
     });
-    // The selector is enabled once `ai_list_models` resolves — opening it
-    // surfaces the fetched Claude Code entry.
+    // The selector — now the AI Elements `PromptInputSelect` in the composer
+    // footer — is enabled once `ai_list_models` resolves; opening it surfaces
+    // the fetched Claude Code entry.
     const selector = await waitFor(() => {
-      const btn = screen.getByRole("button", { name: /select a model/i });
+      const btn = screen.getByRole("combobox", { name: /select a model/i });
       expect(btn).not.toBeDisabled();
       return btn;
     });
     await act(async () => {
       await userEvent.click(selector);
     });
-    const menu = await screen.findByRole("menu");
+    const listbox = await screen.findByRole("listbox");
     expect(
-      within(menu).getByRole("menuitem", { name: /claude code/i }),
+      within(listbox).getByRole("option", { name: /claude code/i }),
     ).not.toBeNull();
   });
 
@@ -352,20 +353,20 @@ describe("AiPanelContainer", () => {
     expect(localStorage.getItem(aiPanelStateStorageKey(BOARD))).toBeNull();
 
     // The container persists the choice when the View reports one. Drive
-    // `onSelectModel` through the selector dropdown: the trigger reads
-    // "Select a model" until a model is picked.
+    // `onSelectModel` through the composer's footer model select: the trigger
+    // reads "Select a model" until a model is picked.
     const selector = await waitFor(() => {
-      const btn = screen.getByRole("button", { name: /select a model/i });
+      const btn = screen.getByRole("combobox", { name: /select a model/i });
       expect(btn).not.toBeDisabled();
       return btn;
     });
     await act(async () => {
       await userEvent.click(selector);
     });
-    const menu = await screen.findByRole("menu");
+    const listbox = await screen.findByRole("listbox");
     await act(async () => {
       await userEvent.click(
-        within(menu).getByRole("menuitem", { name: /claude code/i }),
+        within(listbox).getByRole("option", { name: /claude code/i }),
       );
     });
 
@@ -380,7 +381,9 @@ describe("AiPanelContainer", () => {
     // A fresh mount reapplies the persisted model — the selector now shows it.
     await renderContainer();
     await waitFor(() => {
-      const triggers = screen.getAllByRole("button", { name: /claude code/i });
+      const triggers = screen.getAllByRole("combobox", {
+        name: /claude code/i,
+      });
       expect(triggers.length).toBeGreaterThan(0);
     });
   });

@@ -11,6 +11,23 @@
  * motions, emacs bindings, and CUA editing all work inside it. It is NOT a
  * plain `<textarea>`.
  *
+ * # AI Elements `PromptInput` layout
+ *
+ * The composer adopts the AI Elements `PromptInput` *layout*: one bordered
+ * container holding the CM6 editor body above a footer toolbar. The footer
+ * carries the model selector (left) and the submit/stop control (right). Only
+ * the *layout* is borrowed — the editor body stays the CM6 {@link TextEditor},
+ * not the AI Elements `PromptInputTextarea` (a plain `<textarea>`).
+ *
+ * The single bordered container is the only border around the input — the
+ * hosting `ComposerArea` (in `ai-panel.tsx`) no longer adds its own
+ * `border-t`, so there is no doubled edge.
+ *
+ * The CM6 editor body flexes to fill the panel's available vertical space:
+ * the body is `flex-1`/`min-h-0` and the CM6 `.cm-editor` / `.cm-scroller`
+ * fill it (`h-full`), so the prompt area grows with the panel. The footer
+ * toolbar stays pinned at the bottom of the container.
+ *
  * # Submit / stop policy
  *
  * The composer is a chat box: plain `Enter` submits the buffer, `Shift-Enter`
@@ -54,7 +71,17 @@ import {
   TextEditor,
   type TextEditorHandle,
 } from "@/components/fields/text-editor";
+import { AiPanelPressable } from "@/components/ai-panel-focus";
+import {
+  PromptInputSelect,
+  PromptInputSelectContent,
+  PromptInputSelectItem,
+  PromptInputSelectTrigger,
+  PromptInputSelectValue,
+} from "@/components/ai-elements/prompt-input";
+import { asSegment } from "@/types/spatial";
 import { cn } from "@/lib/utils";
+import type { AiModel } from "@/components/ai-panel";
 
 /** Props for {@link AiPromptComposer}. */
 export interface AiPromptComposerProps {
@@ -71,6 +98,18 @@ export interface AiPromptComposerProps {
   onSend: (text: string) => void;
   /** Stop the in-flight turn — wired to the stop button while streaming. */
   onCancel: () => void;
+  /**
+   * The selectable models, or `undefined` while the container is still
+   * fetching `ai_list_models`. Drives the footer model picker.
+   */
+  models: AiModel[] | undefined;
+  /** The currently selected model, or `null` when none is chosen yet. */
+  selectedModel: AiModel | null;
+  /**
+   * Report the user's model choice — wired to the footer model picker. The
+   * container persists it per board and feeds the new id back down.
+   */
+  onSelectModel: (modelId: string) => void;
 }
 
 /**
@@ -112,12 +151,86 @@ function buildEnterSubmitExtension(
   );
 }
 
+/** Props for {@link ComposerModelSelect}. */
+interface ComposerModelSelectProps {
+  models: AiModel[] | undefined;
+  selectedModel: AiModel | null;
+  onSelectModel: (modelId: string) => void;
+}
+
+/**
+ * The footer model picker — the AI Elements `PromptInputSelect*` family.
+ *
+ * Lists every model from `ai_list_models`; an unavailable model is a disabled
+ * option that still surfaces its hint (e.g. "install Claude Code"). Selecting
+ * an available one reports the choice via `onSelectModel`.
+ *
+ * The trigger is the `ui:ai-panel.model-selector` spatial-nav focus leaf:
+ * `<AiPanelPressable asChild>` mounts the leaf and the Enter / Space
+ * keyboard-activation CommandDefs, and the Radix `Select` trigger becomes the
+ * host `<button>`. `onPress` is a no-op — Radix's own trigger handler opens
+ * the listbox; the Pressable is here purely for the focus leaf and keyboard
+ * activation. `ariaLabel` is the trigger's visible label (the model name, or
+ * "Select a model") so the accessible name matches the text the button shows.
+ */
+function ComposerModelSelect({
+  models,
+  selectedModel,
+  onSelectModel,
+}: ComposerModelSelectProps): ReactNode {
+  const triggerLabel = selectedModel?.label ?? "Select a model";
+  const hasModels = !!models && models.length > 0;
+
+  return (
+    <PromptInputSelect
+      value={selectedModel?.id}
+      onValueChange={onSelectModel}
+      disabled={!hasModels}
+    >
+      <AiPanelPressable
+        asChild
+        moniker={asSegment("ui:ai-panel.model-selector")}
+        ariaLabel={triggerLabel}
+        onPress={() => {}}
+        disabled={!hasModels}
+      >
+        <PromptInputSelectTrigger size="sm">
+          <PromptInputSelectValue placeholder="Select a model" />
+        </PromptInputSelectTrigger>
+      </AiPanelPressable>
+      <PromptInputSelectContent align="start">
+        {(models ?? []).map((model) => (
+          <PromptInputSelectItem
+            key={model.id}
+            value={model.id}
+            // An unavailable model cannot be picked, but its hint stays
+            // visible so the user knows why (e.g. the Claude Code CLI was
+            // not found).
+            disabled={!model.available}
+            title={model.hint ?? undefined}
+            className="flex-col items-start gap-0.5"
+          >
+            <span>{model.label}</span>
+            {model.hint && (
+              <span className="text-muted-foreground text-xs">
+                {model.hint}
+              </span>
+            )}
+          </PromptInputSelectItem>
+        ))}
+      </PromptInputSelectContent>
+    </PromptInputSelect>
+  );
+}
+
 /**
  * The AI panel's prompt composer.
  *
- * Renders the CM6 editor and the submit/stop action button. The editor sits
- * in its own bordered well; while a turn streams the action button is a stop
- * control and a "Streaming — click to stop" hint shows below the editor.
+ * Renders the AI Elements `PromptInput`-style shell: a single bordered
+ * container with the CM6 editor body above a footer toolbar holding the model
+ * selector and the submit/stop action button. The CM6 body flexes to fill the
+ * available height; the footer stays pinned at the bottom. While a turn
+ * streams the action button is a stop control.
  *
  * This component is the inner editor surface; its hosting `ComposerArea`
  * (in `ai-panel.tsx`) owns the panel-section padding and the "New
@@ -129,6 +242,9 @@ export function AiPromptComposer({
   streaming,
   onSend,
   onCancel,
+  models,
+  selectedModel,
+  onSelectModel,
 }: AiPromptComposerProps): ReactNode {
   const editorRef = useRef<TextEditorHandle>(null);
 
@@ -171,15 +287,25 @@ export function AiPromptComposer({
   );
 
   return (
-    <div data-slot="ai-prompt-composer">
-      {/* The editor well — bordered to read as an input, mirroring the
-          inspector's CM6 field wells. */}
-      <div
-        className={cn(
-          "rounded-md border bg-background px-2 py-1.5",
-          disabled && "opacity-60",
-        )}
-      >
+    // The single bordered container — the AI Elements `PromptInput` shell.
+    // It is the only border around the input; `ComposerArea` no longer adds
+    // its own, so there is no doubled edge. `flex flex-col` stacks the CM6
+    // body above the footer toolbar; `min-h-0 flex-1` lets the shell flex to
+    // fill the height its `ComposerArea` section gives it.
+    <div
+      data-slot="ai-prompt-composer"
+      className={cn(
+        "flex min-h-0 flex-1 flex-col rounded-md border bg-background",
+        disabled && "opacity-60",
+      )}
+    >
+      {/* The CM6 editor body flexes to fill the container's available
+          height. `min-h-24` is a content-height floor so the prompt area
+          never collapses below a few lines; `flex-1` lets it grow past that
+          floor with the panel. The `[&_.cm-editor]` / `[&_.cm-scroller]`
+          arbitrary selectors make the CM6 surfaces themselves fill the body
+          so the prompt area grows rather than staying content-height. */}
+      <div className="min-h-24 flex-1 overflow-auto px-2 py-1.5 [&_.cm-editor]:h-full [&_.cm-scroller]:h-full">
         <TextEditor
           ref={editorRef}
           value=""
@@ -188,27 +314,37 @@ export function AiPromptComposer({
           autoFocus={false}
         />
       </div>
-      <div className="mt-1 flex items-center justify-between">
-        <span className="text-muted-foreground text-xs">
-          {streaming ? "Streaming - click to stop" : ""}
-        </span>
-        <button
-          type="button"
-          aria-label={streaming ? "Stop" : "Submit"}
-          disabled={disabled}
-          onClick={handleSubmit}
-          className={cn(
-            "inline-flex size-7 items-center justify-center rounded-md",
-            "bg-primary text-primary-foreground transition-colors",
-            "hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50",
-          )}
-        >
-          {streaming ? (
-            <SquareIcon className="size-4" />
-          ) : (
-            <CornerDownLeftIcon className="size-4" />
-          )}
-        </button>
+      {/* The footer toolbar — pinned at the bottom of the container. The
+          model selector sits on the left, the submit/stop control on the
+          right. */}
+      <div className="flex items-center justify-between gap-2 px-2 py-1.5">
+        <ComposerModelSelect
+          models={models}
+          selectedModel={selectedModel}
+          onSelectModel={onSelectModel}
+        />
+        <div className="flex items-center gap-2">
+          <span className="text-muted-foreground text-xs">
+            {streaming ? "Streaming - click to stop" : ""}
+          </span>
+          <button
+            type="button"
+            aria-label={streaming ? "Stop" : "Submit"}
+            disabled={disabled}
+            onClick={handleSubmit}
+            className={cn(
+              "inline-flex size-7 items-center justify-center rounded-md",
+              "bg-primary text-primary-foreground transition-colors",
+              "hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50",
+            )}
+          >
+            {streaming ? (
+              <SquareIcon className="size-4" />
+            ) : (
+              <CornerDownLeftIcon className="size-4" />
+            )}
+          </button>
+        </div>
       </div>
     </div>
   );

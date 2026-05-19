@@ -421,15 +421,16 @@ describe("AiPanel: model selector", () => {
       />,
     );
 
-    // Open the model selector in the header.
+    // The model selector now lives in the composer footer — its trigger is
+    // a `role="combobox"` showing the selected model's label.
     await act(async () => {
       await userEvent.click(
-        screen.getByRole("button", { name: /claude code/i }),
+        screen.getByRole("combobox", { name: /claude code/i }),
       );
     });
 
-    const menu = await screen.findByRole("menu");
-    const items = within(menu).getAllByRole("menuitem");
+    const listbox = await screen.findByRole("listbox");
+    const items = within(listbox).getAllByRole("option");
     expect(items).toHaveLength(2);
 
     const claude = items[0];
@@ -438,6 +439,46 @@ describe("AiPanel: model selector", () => {
     // The unavailable local model is disabled and surfaces its hint.
     expect(qwen.getAttribute("aria-disabled")).toBe("true");
     expect(qwen.textContent).toContain("Model weights unavailable");
+  });
+
+  it("renders the model selector in the composer, not the panel header", async () => {
+    const harness = mockHarness();
+
+    const { container } = await renderInAct(
+      <AiPanel
+        boardDir="/tmp/board"
+        models={MODELS}
+        modelId="claude-code"
+        onSelectModel={() => {}}
+        onCollapse={() => {}}
+        createConnect={harness.createConnect}
+      />,
+    );
+
+    const trigger = screen.getByRole("combobox", { name: /claude code/i });
+
+    // The selector trigger is NOT inside the `<header>` — the header keeps
+    // only the "AI" title and the collapse button.
+    const header = document.querySelector("header");
+    expect(header, "the panel header must be present").not.toBeNull();
+    expect(
+      within(header as HTMLElement).queryByRole("combobox"),
+      "the panel header must no longer contain a model selector",
+    ).toBeNull();
+    expect(
+      header!.contains(trigger),
+      "the model selector must not be inside the header",
+    ).toBe(false);
+
+    // It IS inside the composer region.
+    const composer = container.querySelector(
+      "[data-slot='ai-prompt-composer']",
+    ) as HTMLElement | null;
+    expect(composer, "the composer must be present").not.toBeNull();
+    expect(
+      composer!.contains(trigger),
+      "the model selector must live inside the composer",
+    ).toBe(true);
   });
 
   it("selecting a model reports the choice and starts a fresh ACP session", async () => {
@@ -467,13 +508,13 @@ describe("AiPanel: model selector", () => {
 
     await act(async () => {
       await userEvent.click(
-        screen.getByRole("button", { name: /claude code/i }),
+        screen.getByRole("combobox", { name: /claude code/i }),
       );
     });
-    const menu = await screen.findByRole("menu");
+    const listbox = await screen.findByRole("listbox");
     await act(async () => {
       await userEvent.click(
-        within(menu).getByRole("menuitem", { name: /qwen coder/i }),
+        within(listbox).getByRole("option", { name: /qwen coder/i }),
       );
     });
 

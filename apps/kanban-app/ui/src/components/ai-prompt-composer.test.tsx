@@ -16,7 +16,7 @@
  * Browser project (`*.test.tsx`) — CM6 mounts in real Chromium.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act } from "@testing-library/react";
+import { act, screen, within } from "@testing-library/react";
 import { userEvent } from "vitest/browser";
 import { renderInAct } from "@/test/act-render";
 
@@ -27,6 +27,25 @@ vi.mock("@/lib/ui-state-context", () => ({
 }));
 
 import { AiPromptComposer } from "./ai-prompt-composer";
+import type { AiModel } from "./ai-panel";
+
+/** The Claude Code + a disabled local model fixture for the footer select. */
+const MODELS: AiModel[] = [
+  {
+    id: "claude-code",
+    label: "Claude Code",
+    kind: "claude-code",
+    available: true,
+    hint: "Claude Code CLI: /usr/local/bin/claude",
+  },
+  {
+    id: "qwen-coder",
+    label: "Qwen Coder",
+    kind: "local-llama",
+    available: false,
+    hint: "Model weights unavailable on this machine.",
+  },
+];
 
 /** Resolve the live `EditorView` from a freshly rendered composer. */
 async function getView(container: HTMLElement) {
@@ -51,6 +70,9 @@ describe("AiPromptComposer — CM6 instance honoring the active keymap", () => {
         streaming={false}
         onSend={() => {}}
         onCancel={() => {}}
+        models={MODELS}
+        selectedModel={MODELS[0]}
+        onSelectModel={() => {}}
       />,
     );
 
@@ -78,6 +100,9 @@ describe("AiPromptComposer — CM6 instance honoring the active keymap", () => {
         streaming={false}
         onSend={() => {}}
         onCancel={() => {}}
+        models={MODELS}
+        selectedModel={MODELS[0]}
+        onSelectModel={() => {}}
       />,
     );
     const view = await getView(container);
@@ -114,6 +139,9 @@ describe("AiPromptComposer — CM6 instance honoring the active keymap", () => {
         streaming={false}
         onSend={() => {}}
         onCancel={() => {}}
+        models={MODELS}
+        selectedModel={MODELS[0]}
+        onSelectModel={() => {}}
       />,
     );
     const view = await getView(container);
@@ -143,6 +171,9 @@ describe("AiPromptComposer — CM6 instance honoring the active keymap", () => {
         streaming={false}
         onSend={onSend}
         onCancel={() => {}}
+        models={MODELS}
+        selectedModel={MODELS[0]}
+        onSelectModel={() => {}}
       />,
     );
     const view = await getView(container);
@@ -166,6 +197,9 @@ describe("AiPromptComposer — CM6 instance honoring the active keymap", () => {
         streaming={false}
         onSend={onSend}
         onCancel={() => {}}
+        models={MODELS}
+        selectedModel={MODELS[0]}
+        onSelectModel={() => {}}
       />,
     );
     const view = await getView(container);
@@ -190,6 +224,9 @@ describe("AiPromptComposer — CM6 instance honoring the active keymap", () => {
         streaming={false}
         onSend={onSend}
         onCancel={() => {}}
+        models={MODELS}
+        selectedModel={MODELS[0]}
+        onSelectModel={() => {}}
       />,
     );
     const view = await getView(container);
@@ -218,6 +255,9 @@ describe("AiPromptComposer — CM6 instance honoring the active keymap", () => {
         streaming={true}
         onSend={() => {}}
         onCancel={onCancel}
+        models={MODELS}
+        selectedModel={MODELS[0]}
+        onSelectModel={() => {}}
       />,
     );
 
@@ -240,11 +280,162 @@ describe("AiPromptComposer — CM6 instance honoring the active keymap", () => {
         streaming={false}
         onSend={() => {}}
         onCancel={() => {}}
+        models={MODELS}
+        selectedModel={MODELS[0]}
+        onSelectModel={() => {}}
       />,
     );
     const content = container.querySelector(".cm-content") as HTMLElement;
     expect(content, "the CM6 content DOM must be present").not.toBeNull();
     // A disabled composer's CM6 editor is not editable.
     expect(content.getAttribute("contenteditable")).toBe("false");
+  });
+});
+
+describe("AiPromptComposer — single bordered container", () => {
+  beforeEach(() => {
+    mockKeymapMode = "cua";
+  });
+
+  it("renders exactly one bordered container — no border nested inside a border", async () => {
+    const { container } = await renderInAct(
+      <AiPromptComposer
+        disabled={false}
+        placeholder="Ask the AI agent..."
+        streaming={false}
+        onSend={() => {}}
+        onCancel={() => {}}
+        models={MODELS}
+        selectedModel={MODELS[0]}
+        onSelectModel={() => {}}
+      />,
+    );
+
+    // The AI Elements `PromptInput` shell is a SINGLE bordered box that
+    // holds the CM6 body and the footer toolbar. The old composer stacked
+    // an inner `rounded-md border` editor well inside `ComposerArea`'s
+    // `border-t` section — a doubled edge. Assert the composer's own
+    // bordered element has no descendant that is also a bordered element.
+    const composer = container.querySelector(
+      "[data-slot='ai-prompt-composer']",
+    ) as HTMLElement | null;
+    expect(composer, "the composer root must be present").not.toBeNull();
+
+    const bordered = composer!.querySelectorAll(".border, .border-t");
+    expect(
+      bordered.length,
+      "the composer must render exactly one bordered container",
+    ).toBe(1);
+    // And that single bordered element has no bordered descendant — the
+    // structural definition of "no doubled border".
+    const nested = bordered[0].querySelectorAll(".border, .border-t");
+    expect(
+      nested.length,
+      "the composer's bordered container must not nest another border",
+    ).toBe(0);
+  });
+});
+
+describe("AiPromptComposer — footer model select", () => {
+  beforeEach(() => {
+    mockKeymapMode = "cua";
+  });
+
+  it("renders the model picker in the composer footer, listing every model", async () => {
+    const { container } = await renderInAct(
+      <AiPromptComposer
+        disabled={false}
+        placeholder="Ask the AI agent..."
+        streaming={false}
+        onSend={() => {}}
+        onCancel={() => {}}
+        models={MODELS}
+        selectedModel={MODELS[0]}
+        onSelectModel={() => {}}
+      />,
+    );
+
+    // The model select is part of the composer — its trigger is a
+    // `role="combobox"` button showing the selected model's label.
+    const trigger = screen.getByRole("combobox", { name: /claude code/i });
+    expect(
+      container
+        .querySelector("[data-slot='ai-prompt-composer']")
+        ?.contains(trigger),
+      "the model select trigger must live inside the composer",
+    ).toBe(true);
+
+    await act(async () => {
+      await userEvent.click(trigger);
+    });
+
+    const listbox = await screen.findByRole("listbox");
+    const options = within(listbox).getAllByRole("option");
+    expect(options).toHaveLength(2);
+    expect(options[0].textContent).toContain("Claude Code");
+    expect(options[1].textContent).toContain("Qwen Coder");
+  });
+
+  it("disables an unavailable model and surfaces its hint", async () => {
+    await renderInAct(
+      <AiPromptComposer
+        disabled={false}
+        placeholder="Ask the AI agent..."
+        streaming={false}
+        onSend={() => {}}
+        onCancel={() => {}}
+        models={MODELS}
+        selectedModel={MODELS[0]}
+        onSelectModel={() => {}}
+      />,
+    );
+
+    await act(async () => {
+      await userEvent.click(
+        screen.getByRole("combobox", { name: /claude code/i }),
+      );
+    });
+
+    const listbox = await screen.findByRole("listbox");
+    const qwen = within(listbox).getByRole("option", { name: /qwen coder/i });
+    // The unavailable local model cannot be picked and still shows its hint.
+    expect(qwen.getAttribute("aria-disabled")).toBe("true");
+    expect(qwen.textContent).toContain("Model weights unavailable");
+  });
+
+  it("selecting a model reports the choice via onSelectModel", async () => {
+    const onSelectModel = vi.fn();
+    // Two available models so a second one can be picked.
+    const bothAvailable: AiModel[] = [
+      { ...MODELS[0] },
+      { ...MODELS[1], available: true, hint: "Local model." },
+    ];
+
+    await renderInAct(
+      <AiPromptComposer
+        disabled={false}
+        placeholder="Ask the AI agent..."
+        streaming={false}
+        onSend={() => {}}
+        onCancel={() => {}}
+        models={bothAvailable}
+        selectedModel={bothAvailable[0]}
+        onSelectModel={onSelectModel}
+      />,
+    );
+
+    await act(async () => {
+      await userEvent.click(
+        screen.getByRole("combobox", { name: /claude code/i }),
+      );
+    });
+    const listbox = await screen.findByRole("listbox");
+    await act(async () => {
+      await userEvent.click(
+        within(listbox).getByRole("option", { name: /qwen coder/i }),
+      );
+    });
+
+    expect(onSelectModel).toHaveBeenCalledWith("qwen-coder");
   });
 });
