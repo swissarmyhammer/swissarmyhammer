@@ -332,6 +332,31 @@ Both values are memoized in the `EntityCache` when one is attached, so repeated 
 3. If an `EntityCache` is attached, add a cached loader path in `EntityCache::get_or_load_compute_inputs` alongside the existing `_changelog` / `_file_created` loaders.
 4. Update this section with the new name, source, value format, and error semantics.
 
+### Test Isolation
+
+Tests run in parallel by default — `cargo nextest` and multi-threaded `cargo test`. Two kinds of state are shared across every test in a process and will corrupt a parallel run if a test touches them directly:
+
+- **Process-global mutable state** — the current working directory and environment variables (`HOME`, `SWISSARMYHAMMER_SEMANTIC_DB_PATH`, …). There is exactly one of each per process; a test that mutates one races every other test in the binary.
+- **The real filesystem** — the developer's actual `$HOME`, the repository working tree, fixed paths and ports. A test that writes there pollutes the machine and collides with its siblings.
+
+**Any test that touches the filesystem, the working directory, or an environment variable must isolate that state.** This is not optional and it is not a per-test judgment call — if the test creates, reads, or writes a file, it isolates.
+
+The isolation primitives live in one place — `swissarmyhammer-common::test_utils` — and are **RAII guards**: each acquires a process-global mutex, mutates the shared state, and restores it on `Drop`, even when the test panics. Hold the guard for the whole test; never mutate the shared state by hand.
+
+| Primitive | Isolates | Use when a test… |
+|-----------|----------|------------------|
+| `IsolatedTestEnvironment` | `HOME` → a temp directory with a mock `.sah/` tree; serialized on the HOME lock. Does **not** change the working directory. | reads or writes anything resolved from `HOME` (`~/.sah/`, user-level config, prompts, issues) |
+| `CurrentDirGuard` | the process current directory; serialized on the CWD lock; restores on drop | must run inside a fixture or temp directory — e.g. project-level `.sah/`, `.kanban/`, or `.code-context/` discovery |
+| `create_temp_dir()` / `tempfile::TempDir` | a unique scratch directory, deleted on drop | needs to create, read, or write files — put them here, never in the repo tree or `$HOME` |
+| `ProcessGuard` | a spawned child process, killed on drop | spawns an MCP server, a CLI, or any other subprocess |
+| `acquire_semantic_db_lock()` | the `SWISSARMYHAMMER_SEMANTIC_DB_PATH` environment variable | sets that variable |
+
+When no RAII guard fits — a fixed TCP port, a shared on-disk resource — serialize the test instead with `#[serial_test::serial(<resource-name>)]` so conflicting tests never run concurrently. Name the resource so unrelated serial tests still parallelize.
+
+`IsolatedTestEnvironment` deliberately does **not** change the working directory, so a test that needs both an isolated `HOME` and an isolated CWD composes the two guards. Both guards retry transient filesystem failures and recover from a mutex left poisoned by an earlier panicking test.
+
+**The rule that does not bend:** test-environment problems are fixed in the test, with these guards — never by adding a parameter, a setter, or a "test mode" to production code. If a production type cannot be exercised without reaching real global state, that is a design smell in the production type; fix the seam, do not widen the API.
+
 ### Practices
 
 1. **No feature flags.** The Cargo workspace says explicitly: "NEVER add features or feature flags." The only exception is `test-support` for test utilities.
@@ -339,7 +364,7 @@ Both values are memoized in the `EntityCache` when one is attached, so repeated 
 3. **ULID for all new IDs.** Never use UUIDs, auto-increment, or random strings.
 4. **Builtin YAML is compiled in.** Changing a builtin YAML file requires recompilation.
 5. **Command registration is centralized.** All command impls are registered in one `register_commands()` function. Don't scatter registration.
-6. **CWD isolation via RAII.** Use `CurrentDirGuard` / `serial_test` for tests that touch the working directory. Never add production APIs to fix test environment problems.
+6. **Isolate test state via RAII.** Any test that touches the filesystem, the working directory, or an environment variable must use the guards in `swissarmyhammer-common::test_utils` (`IsolatedTestEnvironment`, `CurrentDirGuard`, `TempDir`, `ProcessGuard`) or `serial_test` — see **Test Isolation** above. Never touch the real `$HOME` or repo tree, and never add production APIs to fix test environment problems.
 7. **`.skills/` is generated.** Never edit files there directly. The source of truth is `builtin/skills/`.
 
 ---

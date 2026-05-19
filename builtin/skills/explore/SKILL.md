@@ -8,6 +8,8 @@ metadata:
   version: "{{version}}"
 ---
 
+{% include "_partials/code-context-checkpoints" %}
+{% include "_partials/architecture-awareness" %}
 
 # Explore
 
@@ -48,6 +50,8 @@ Always start here. `code_context` returns results from multiple layers (tree-sit
 ```
 
 Note which layers are active. If tree-sitter indexing is still in progress, live LSP ops (`get definition`, `get hover`, `search workspace_symbol`) work immediately — don't wait. If LSP is unavailable for a language, results come from tree-sitter only. Check `lsp status` if you need to know which languages have LSP support.
+
+If an `ARCHITECTURE.md` exists at the project root, read it now — per the **Architecture Awareness** guidance above, it gives you the system map before you start tracing individual symbols, so you can place what you find inside the documented structure.
 
 ### 2. Survey — find the territory
 
