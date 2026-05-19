@@ -26,6 +26,21 @@ test-group = "acp-conformance"
 # Slower tests: warn every 60s, kill after 5 periods (5 minutes)
 slow-timeout = { period = "60s", terminate-after = 5 }
 
+# swissarmyhammer-plugin embeds V8 through deno_core. The V8 platform spawns a
+# process-global background thread pool the first time any test builds a
+# JsRuntime, and neither deno_core nor rusty_v8 exposes an API to shut that
+# platform down or join those daemon threads. They keep the test process's
+# stdout/stderr pipe open for a short time after the test body returns, so under
+# parallel CPU contention a V8-using test process occasionally drains its output
+# slightly past nextest's default 100ms leak-timeout and is flagged LEAK. The
+# tests themselves still pass — every test-owned resource (the per-plugin worker
+# thread, the host bridge runtime, spawned CLI subprocesses) is joined or killed
+# in its Drop impl, verified by a clean single-threaded run. Widen the window so
+# the unavoidable V8 platform threads are not misreported as a leak.
+[[profile.default.overrides]]
+filter = "package(swissarmyhammer-plugin)"
+leak-timeout = "2s"
+
 # swissarmyhammer-treesitter tests default to embedding_enabled=true so almost
 # every test loads the qwen-embedding model. Nextest runs each test in its own
 # process, so there is no in-process cache — N parallel tests means N cold

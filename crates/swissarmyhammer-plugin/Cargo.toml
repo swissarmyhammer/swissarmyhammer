@@ -71,6 +71,22 @@ swissarmyhammer-tools = { workspace = true }
 # MCP server bootstrap when building the real tool registry.
 swissarmyhammer-prompts = { workspace = true }
 
+# Used by the `kanban_tasks_e2e` integration test's `support::expose_kanban_module`
+# helper to build a `ToolContext` for the in-process `kanban` operation tool:
+# `swissarmyhammer-config` supplies `ModelConfig` and `swissarmyhammer-git`
+# supplies `GitOperations`, the two types `ToolContext::new` requires. This
+# mirrors the production wiring in `apps/kanban-app/src/plugins.rs`.
+swissarmyhammer-config = { workspace = true }
+swissarmyhammer-git = { workspace = true }
+
+# Used by the `file_notes_e2e` integration test, whose `files`-tool example
+# resolves relative paths against the *process* current directory. The test
+# pins the process CWD to a temp dir with `swissarmyhammer-common`'s
+# `CurrentDirGuard` and serializes against every other CWD-touching test with
+# `serial_test` so the two never race.
+swissarmyhammer-common = { workspace = true }
+serial_test = { workspace = true }
+
 [lints]
 workspace = true
 

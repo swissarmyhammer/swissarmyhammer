@@ -7,8 +7,10 @@
 //!
 //! - **Builtin layer** — the `builtin/plugins/` tree under the repository root
 //!   is compiled into the binary via [`include_dir!`] and extracted to a cache
-//!   directory at startup, then loaded into the host as the read-only builtin
-//!   layer.
+//!   directory at startup. The cache directory is then handed to the host as
+//!   its read-only builtin layer root, so the builtin bundles are discovered
+//!   through `discover_and_load_all` — a first-class, lowest-precedence
+//!   discovery layer — rather than loaded one bundle at a time.
 //! - **User layer** — the host's writable user-layer root is
 //!   `$XDG_CONFIG_HOME/kanban` (resolved by
 //!   [`swissarmyhammer_directory::KanbanConfig`]); plugin bundles live under its
@@ -34,7 +36,7 @@ use swissarmyhammer_config::ModelConfig;
 use swissarmyhammer_directory::KanbanConfig;
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_plugin::host::PluginWatcher;
-use swissarmyhammer_plugin::PluginHost;
+use swissarmyhammer_plugin::{PluginHost, PLUGINS_SUBDIR};
 use swissarmyhammer_tools::mcp::plugin_bridge::build_tool_modules;
 use swissarmyhammer_tools::mcp::ToolHandlers;
 use swissarmyhammer_tools::{register_kanban_tools, ToolContext, ToolRegistry};
@@ -45,8 +47,10 @@ use tokio::sync::{Mutex as TokioMutex, RwLock};
 /// The repository's top-level `builtin/plugins/` tree is embedded into the
 /// binary at compile time — the same `include_dir!` convention the kanban crate
 /// uses for its builtin definitions, entities, and command YAML. At startup the
-/// tree is extracted to a cache directory ([`extract_builtin_plugins`]) so the
-/// host can load each bundle as a real on-disk plugin directory.
+/// tree is extracted ([`extract_builtin_plugins`]) into the `plugins/`
+/// subdirectory of a cache directory, and that cache directory is handed to the
+/// host as its read-only builtin layer root so `discover_and_load_all`
+/// discovers each bundle as a first-class builtin-layer plugin.
 static BUILTIN_PLUGINS: Dir = include_dir!("$CARGO_MANIFEST_DIR/../../builtin/plugins");
 
 /// The module id the in-process `kanban` operation tool is exposed under.
@@ -83,51 +87,59 @@ impl PluginPlatform {
     /// Builds the plugin platform: a host with the `kanban` tool exposed and
     /// every builtin and user-layer plugin loaded.
     ///
-    /// The host is constructed with **no builtins passed to
-    /// [`PluginHost::new`]** and **no project layer**, then the in-process
-    /// `kanban` tool is exposed before any plugin is loaded — a plugin that
-    /// activates `{ rust: "kanban" }` must find the module already exposed.
-    /// With the module in place, the builtin bundles are extracted and loaded,
-    /// and the user layer is discovered from `<user_root>/plugins/`.
+    /// The bundled builtin plugins are first extracted to `builtin_cache`, and
+    /// that cache directory is handed to [`PluginHost::new`] as the host's
+    /// read-only **builtin layer root** — the lowest-precedence discovery
+    /// layer. The in-process `kanban` tool is exposed *before* any plugin is
+    /// loaded, so a plugin that activates `{ rust: "kanban" }` always finds the
+    /// module already exposed. Only then is `discover_and_load_all` run: it
+    /// scans the builtin layer and the user layer in one pass, so the builtin
+    /// bundles are discovered as first-class builtin-layer plugins rather than
+    /// loaded one bundle at a time. There is **no project layer** — the kanban
+    /// app has only the builtin and user layers.
     ///
     /// # Parameters
     ///
     /// - `user_root` — the writable user-layer root (`$XDG_CONFIG_HOME/kanban`).
     /// - `builtin_cache` — the directory the bundled builtin plugins are
-    ///   extracted into.
+    ///   extracted into; it becomes the host's builtin layer root.
     /// - `tool_working_dir` — the working directory the exposed `kanban` tool
     ///   resolves its `.kanban` board against.
     ///
     /// # Errors
     ///
-    /// Returns the platform error string when the host cannot be constructed,
-    /// the `kanban` module cannot be exposed, a builtin bundle fails to load,
-    /// or user-layer discovery fails.
+    /// Returns the platform error string when the builtin plugins cannot be
+    /// extracted, the `kanban` module cannot be exposed, or discovery of the
+    /// builtin or user-layer plugins fails.
     pub(crate) async fn build(
         user_root: PathBuf,
         builtin_cache: PathBuf,
         tool_working_dir: PathBuf,
     ) -> Result<Self, String> {
-        // The host is built with an empty builtin set: builtins are loaded
-        // explicitly *after* the `kanban` module is exposed, so a builtin
-        // plugin that activates `{ rust: "kanban" }` never races a missing
-        // module. No project layer — the kanban app has only builtin + user.
+        // Extract the embedded builtin bundles into the cache, then build the
+        // host with that cache as its builtin layer root. The builtin layer is
+        // a first-class discovery layer: builtins are discovered, not loaded
+        // one by one. No project layer — the kanban app has only builtin +
+        // user.
+        extract_builtin_plugins(&builtin_cache)?;
         let host = PluginHost::new(
-            Vec::new(),
+            Some(builtin_cache),
             user_root.clone(),
             None,
             false,
             user_root.clone(),
-        )
-        .await
-        .map_err(|e| format!("failed to construct plugin host: {e}"))?;
+        );
 
+        // Expose the `kanban` module before discovery runs, so the builtin
+        // probe plugin's `{ rust: "kanban" }` activation never races a missing
+        // module.
         expose_kanban_module(&host, tool_working_dir).await?;
-        load_builtin_plugins(&host, &builtin_cache).await?;
 
+        // One discovery pass covers both layers: builtin bundles from the
+        // extracted cache and user-layer bundles from `<user_root>/plugins/`.
         host.discover_and_load_all::<KanbanConfig>()
             .await
-            .map_err(|e| format!("failed to discover user-layer plugins: {e}"))?;
+            .map_err(|e| format!("failed to discover builtin and user-layer plugins: {e}"))?;
 
         Ok(Self {
             host,
@@ -234,64 +246,35 @@ async fn expose_kanban_module(host: &PluginHost, tool_working_dir: PathBuf) -> R
     Ok(())
 }
 
-/// Extracts the bundled builtin plugins and loads each bundle into `host`.
+/// Extracts the compiled-in builtin plugins into `cache_dir` so it can serve
+/// as the host's read-only builtin layer root.
 ///
-/// The compiled-in `builtin/plugins/` tree is written to `builtin_cache`
-/// (cleared first so a stale extraction never shadows a newer binary), then
-/// every immediate subdirectory that carries a `plugin.json` is loaded as the
-/// host's read-only builtin layer.
-///
-/// # Errors
-///
-/// Returns the error string when the cache cannot be prepared, the bundled
-/// tree cannot be extracted, or a builtin bundle fails to load.
-async fn load_builtin_plugins(host: &PluginHost, builtin_cache: &Path) -> Result<(), String> {
-    let plugin_dirs = extract_builtin_plugins(builtin_cache)?;
-    for plugin_dir in plugin_dirs {
-        host.load(&plugin_dir).await.map_err(|e| {
-            format!(
-                "failed to load builtin plugin {}: {e}",
-                plugin_dir.display()
-            )
-        })?;
-    }
-    Ok(())
-}
-
-/// Extracts the compiled-in builtin plugins to `cache_dir` and returns the
-/// resolved plugin-bundle directories.
-///
-/// The cache directory is removed and recreated so a previous extraction from
-/// an older binary cannot leave a stale bundle behind. Each immediate
-/// subdirectory of the extracted tree that contains a `plugin.json` is a plugin
-/// bundle.
+/// Plugin discovery resolves bundles under `<root>/plugins/`, so the embedded
+/// `builtin/plugins/` tree is written into the `plugins/` subdirectory of
+/// `cache_dir` — handing `cache_dir` itself to the host as the builtin layer
+/// root then makes `discover_and_load_all` find each bundle. The cache
+/// directory is removed and recreated first, so a previous extraction from an
+/// older binary cannot leave a stale bundle behind.
 ///
 /// # Errors
 ///
 /// Returns the error string when the cache directory cannot be reset or the
 /// embedded tree cannot be written to disk.
-fn extract_builtin_plugins(cache_dir: &Path) -> Result<Vec<PathBuf>, String> {
+fn extract_builtin_plugins(cache_dir: &Path) -> Result<(), String> {
     if cache_dir.exists() {
         std::fs::remove_dir_all(cache_dir)
             .map_err(|e| format!("failed to clear builtin plugin cache: {e}"))?;
     }
-    std::fs::create_dir_all(cache_dir)
+    // The embedded tree is `builtin/plugins/`'s *contents* — the bundle
+    // directories — so it must land under the layer root's `plugins/`
+    // subdirectory for discovery to resolve it.
+    let plugins_dir = cache_dir.join(PLUGINS_SUBDIR);
+    std::fs::create_dir_all(&plugins_dir)
         .map_err(|e| format!("failed to create builtin plugin cache: {e}"))?;
     BUILTIN_PLUGINS
-        .extract(cache_dir)
+        .extract(&plugins_dir)
         .map_err(|e| format!("failed to extract builtin plugins: {e}"))?;
-
-    let mut bundles = Vec::new();
-    let entries = std::fs::read_dir(cache_dir)
-        .map_err(|e| format!("failed to read builtin plugin cache: {e}"))?;
-    for entry in entries.flatten() {
-        let dir = entry.path();
-        if dir.is_dir() && dir.join("plugin.json").is_file() {
-            bundles.push(dir);
-        }
-    }
-    bundles.sort();
-    Ok(bundles)
+    Ok(())
 }
 
 /// The module id the kanban operation tool is exposed under.

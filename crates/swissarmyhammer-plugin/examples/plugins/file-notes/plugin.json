@@ -1,0 +1,7 @@
+{
+  "id": "file-notes",
+  "name": "File Notes Example",
+  "version": "1.0.0",
+  "entry": "entry.ts",
+  "provides": ["fs"]
+}

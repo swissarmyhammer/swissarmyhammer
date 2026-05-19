@@ -1,0 +1,7 @@
+{
+  "id": "cli-echo",
+  "name": "CLI Echo Example",
+  "version": "1.0.0",
+  "entry": "entry.ts",
+  "provides": ["echo", "board"]
+}

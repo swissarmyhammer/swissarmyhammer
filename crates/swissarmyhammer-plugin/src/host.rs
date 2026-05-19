@@ -44,7 +44,10 @@
 //! On top of explicit `load` / `unload`, the host scans its layer roots for
 //! plugins on disk: [`discover_and_load_all`](PluginHost::discover_and_load_all)
 //! is a point-in-time scan that resolves, per plugin id, the highest-precedence
-//! copy across layers (project shadows user) and loads it. The scan is
+//! copy across layers (project shadows user shadows builtin) and loads it. The
+//! read-only builtin layer is the lowest-precedence floor — an embedder ships
+//! it via [`new`](PluginHost::new) — under the writable user and project
+//! layers. The scan is
 //! all-or-nothing: a mid-scan load failure rolls back every plugin the scan
 //! already loaded, so a failed scan leaves the host unchanged. Each plugin
 //! bundle carries a [`Manifest`] (`plugin.json`); the host retains the manifest
@@ -144,6 +147,7 @@ impl std::fmt::Debug for PluginHost {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let state = self.inner.state.lock().expect("host state mutex poisoned");
         f.debug_struct("PluginHost")
+            .field("builtin_root", &self.inner.builtin_root)
             .field("user_root", &self.inner.user_root)
             .field("project_root", &self.inner.project_root)
             .field("loaded_plugins", &state.plugins.len())
@@ -158,6 +162,18 @@ impl std::fmt::Debug for PluginHost {
 /// calls serialize. The layer roots are immutable after construction and so sit
 /// outside the mutex.
 struct HostInner {
+    /// The read-only builtin-layer plugin root, when the embedder ships one.
+    ///
+    /// This is the lowest-precedence discovery layer: the embedder owns
+    /// assembly extraction (the kanban app `include_dir!`-bundles
+    /// `builtin/plugins/` and extracts it to a cache), and hands the resulting
+    /// directory here. [`discovery_layers`](PluginHost::discovery_layers)
+    /// prepends it as a [`FileSource::Builtin`] layer, so
+    /// [`discover_and_load_all`](PluginHost::discover_and_load_all) scans
+    /// builtin → user → project. It is never watched for hot reload — the
+    /// builtin layer ships frozen with the binary.
+    builtin_root: Option<PathBuf>,
+
     /// The writable user-layer plugin root supplied at construction.
     user_root: PathBuf,
 
@@ -477,15 +493,30 @@ struct ActivePlugin {
 
 /// A plugin the host has loaded: its isolate plus where its bundle lives.
 ///
-/// The bundle directory is retained so [`PluginHost::unload`] can re-reach the
-/// bundle's optional `unload` export before the host disposes the plugin's
-/// registrations and tears the isolate down.
+/// The bundle directory and entry file are retained so [`PluginHost::unload`]
+/// can re-reach the bundle's optional `unload` export before the host disposes
+/// the plugin's registrations and tears the isolate down.
 struct LoadedPlugin {
     /// The plugin's V8 isolate, on its own worker thread.
     runtime: PluginRuntime,
 
     /// The plugin's bundle directory, as passed to [`PluginHost::load`].
     bundle_dir: PathBuf,
+
+    /// The plugin's entry file, exactly as it was passed to the runtime when
+    /// the plugin's `load` export was driven.
+    ///
+    /// Retained so [`PluginHost::unload`] re-resolves the `unload` export
+    /// against the **identical** entry path the `load` export used. The entry
+    /// is the resolved `Manifest::resolve_entry` path — which is canonicalized
+    /// — for a manifest-bearing bundle, so the isolate's module map keys the
+    /// entry's main module under that canonical URL. Re-deriving a bare
+    /// `entry.ts` for unload would join it onto a *non*-canonical bundle
+    /// directory and ask the isolate to create a second "main" module under a
+    /// URL that differs only by an unresolved symlink — which `deno_core`
+    /// rejects, silently skipping the `unload` hook. Reusing the stored entry
+    /// keeps the two lifecycle calls addressing the one module.
+    entry_file: String,
 }
 
 /// A live plugin watcher: hold it to keep hot reload running.
@@ -546,7 +577,36 @@ impl PluginHost {
     ///   `None` when the test models a host with no project layer.
     pub fn for_tests(user_root: PathBuf, project_root: Option<PathBuf>) -> Self {
         let types_emitter = TypesEmitter::new(&user_root, false);
-        Self::with_roots(user_root, project_root, types_emitter)
+        Self::with_roots(None, user_root, project_root, types_emitter)
+    }
+
+    /// Creates a test host with an explicit read-only builtin layer root.
+    ///
+    /// Like [`for_tests`](Self::for_tests) but with a builtin layer added
+    /// underneath the user and project layers — the lowest-precedence
+    /// discovery layer. A test points `builtin_root` at a fixture tree (the
+    /// committed `test/builtin/plugins/` tree, or a temp tree it staged) whose
+    /// `plugins/` subdirectory holds builtin bundles, so
+    /// [`discover_and_load_all`](Self::discover_and_load_all) discovers them
+    /// tagged [`FileSource::Builtin`], stacking below user and project.
+    ///
+    /// The [`TypesEmitter`] is constructed with dev-mode off, exactly as
+    /// [`for_tests`](Self::for_tests) does.
+    ///
+    /// # Parameters
+    ///
+    /// - `builtin_root` — the read-only builtin-layer plugin directory; its
+    ///   `plugins/` subdirectory holds the builtin bundles.
+    /// - `user_root` — the writable user-layer plugin directory.
+    /// - `project_root` — the writable project-layer plugin directory, or
+    ///   `None` when the test models a host with no project layer.
+    pub fn for_tests_with_builtin(
+        builtin_root: PathBuf,
+        user_root: PathBuf,
+        project_root: Option<PathBuf>,
+    ) -> Self {
+        let types_emitter = TypesEmitter::new(&user_root, false);
+        Self::with_roots(Some(builtin_root), user_root, project_root, types_emitter)
     }
 
     /// Creates a test host whose [`TypesEmitter`] writes to `types_dir`.
@@ -569,16 +629,21 @@ impl PluginHost {
         types_dir: PathBuf,
     ) -> Self {
         let types_emitter = TypesEmitter::new(&types_dir, true);
-        Self::with_roots(user_root, project_root, types_emitter)
+        Self::with_roots(None, user_root, project_root, types_emitter)
     }
 
-    /// Creates a production host from the builtin plugin set and the writable
-    /// layer roots.
+    /// Creates a production host from the read-only builtin layer root and the
+    /// writable layer roots.
     ///
     /// The embedder — the kanban app, the CLI, the TUI — computes its own
-    /// directories and passes them in; the platform hardcodes none. Each
-    /// builtin plugin directory is loaded immediately, in the given order, so a
-    /// host built with `new` comes up with its builtins already running.
+    /// directories and passes them in; the platform hardcodes none. The builtin
+    /// root is the lowest-precedence discovery layer: the embedder owns
+    /// assembly extraction (the kanban app `include_dir!`-bundles
+    /// `builtin/plugins/` and extracts it to a cache) and hands the resulting
+    /// directory in. Builtins are not loaded eagerly by `new` — a later
+    /// [`discover_and_load_all`](Self::discover_and_load_all) scans the builtin
+    /// layer alongside the user and project layers, so the embedder can expose
+    /// any host modules a builtin needs before discovery runs.
     ///
     /// The host's [`TypesEmitter`] is constructed from the `dev_mode` flag and
     /// the `types_dir` the embedder supplies: a development embedder passes
@@ -589,8 +654,9 @@ impl PluginHost {
     ///
     /// # Parameters
     ///
-    /// - `builtins` — directories of plugins shipped with the embedder, loaded
-    ///   at construction in order.
+    /// - `builtin_root` — the read-only builtin-layer plugin directory, or
+    ///   `None` when the embedder ships no builtins; its `plugins/`
+    ///   subdirectory holds the builtin bundles.
     /// - `user_root` — the writable user-layer plugin directory.
     /// - `project_root` — the writable project-layer plugin directory, when the
     ///   embedder has a project layer.
@@ -599,25 +665,15 @@ impl PluginHost {
     /// - `types_dir` — the base directory the generated `.d.ts` is written
     ///   under, joined with [`DEFAULT_TYPES_PATH`](crate::codegen::DEFAULT_TYPES_PATH).
     ///   Consulted only when `dev_mode` is `true`.
-    ///
-    /// # Errors
-    ///
-    /// Returns the first error encountered loading a builtin plugin. A host
-    /// whose builtins fail to load is not returned, because a partially
-    /// initialized host would silently miss tools the embedder shipped.
-    pub async fn new(
-        builtins: Vec<PathBuf>,
+    pub fn new(
+        builtin_root: Option<PathBuf>,
         user_root: PathBuf,
         project_root: Option<PathBuf>,
         dev_mode: bool,
         types_dir: PathBuf,
-    ) -> Result<Self> {
+    ) -> Self {
         let types_emitter = TypesEmitter::new(&types_dir, dev_mode);
-        let host = Self::with_roots(user_root, project_root, types_emitter);
-        for builtin in builtins {
-            host.load(&builtin).await?;
-        }
-        Ok(host)
+        Self::with_roots(builtin_root, user_root, project_root, types_emitter)
     }
 
     /// Builds a host with the given roots, types emitter, and empty state.
@@ -628,6 +684,7 @@ impl PluginHost {
     /// host-async work onto the same persistent runtime and the `cli`/`url`
     /// transports' background service loops survive between calls.
     fn with_roots(
+        builtin_root: Option<PathBuf>,
         user_root: PathBuf,
         project_root: Option<PathBuf>,
         types_emitter: TypesEmitter,
@@ -635,6 +692,7 @@ impl PluginHost {
         let bridge_runtime = BridgeRuntime::new();
         Self {
             inner: Arc::new(HostInner {
+                builtin_root,
                 user_root,
                 project_root,
                 next_plugin_seq: AtomicU64::new(0),
@@ -849,21 +907,24 @@ impl PluginHost {
 
         // Drive the plugin's lifecycle on its own isolate. `PluginRuntime` is
         // not `Sync`, so the handle is held in this local — never across the
-        // host mutex — while `load()` runs.
+        // host mutex — while `load()` runs. The entry path is retained so a
+        // later `unload` re-resolves the `unload` export against the identical
+        // module URL the `load` export used.
         let load_result = runtime
-            .call_plugin_lifecycle(plugin_dir, entry_file, LOAD_EXPORT)
+            .call_plugin_lifecycle(plugin_dir, entry_file.clone(), LOAD_EXPORT)
             .await;
 
         match load_result {
             Ok(_) => {
-                // The plugin is fully loaded: retain its isolate and bundle dir
-                // so a later `unload` can reach its `unload` export and tear
-                // the isolate down.
+                // The plugin is fully loaded: retain its isolate, bundle dir,
+                // and entry file so a later `unload` can reach its `unload`
+                // export and tear the isolate down.
                 self.lock().plugins.insert(
                     plugin_id.clone(),
                     LoadedPlugin {
                         runtime,
                         bundle_dir: plugin_dir.to_path_buf(),
+                        entry_file,
                     },
                 );
                 // A `load()` is a flush boundary for the types emitter: the
@@ -1045,16 +1106,22 @@ impl PluginHost {
         }
     }
 
-    /// The host's writable layer roots, lowest precedence first.
+    /// The host's discovery layer roots, lowest precedence first.
     ///
-    /// Discovery scans these in order: the user layer, then the project layer
-    /// when the host has one. A later layer shadows an earlier one, so this
-    /// order encodes "project shadows user".
+    /// Discovery scans these in order: the read-only builtin layer when the
+    /// embedder ships one, then the user layer, then the project layer when the
+    /// host has one. A later layer shadows an earlier one, so this order
+    /// encodes "project shadows user shadows builtin" — the builtin layer is
+    /// the floor every other layer stacks on top of.
     fn discovery_layers(&self) -> Vec<LayerRoot> {
-        let mut layers = vec![LayerRoot::new(
+        let mut layers = Vec::with_capacity(3);
+        if let Some(builtin_root) = &self.inner.builtin_root {
+            layers.push(LayerRoot::new(builtin_root.clone(), FileSource::Builtin));
+        }
+        layers.push(LayerRoot::new(
             self.inner.user_root.clone(),
             FileSource::User,
-        )];
+        ));
         if let Some(project_root) = &self.inner.project_root {
             layers.push(LayerRoot::new(project_root.clone(), FileSource::Local));
         }
@@ -1209,12 +1276,17 @@ impl PluginHost {
         })
     }
 
-    /// The writable layer *base* directories this host watches for hot reload.
+    /// The *writable* layer base directories this host watches for hot reload.
     ///
-    /// These are the host's own roots — the user root and, when present, the
-    /// project root — the same bases [`discovery_layers`](Self::discovery_layers)
-    /// resolves `plugins/` under. The watcher creates and watches the
-    /// `plugins/` subdirectory inside each.
+    /// These are the host's writable roots — the user root and, when present,
+    /// the project root. The watcher creates and watches the `plugins/`
+    /// subdirectory inside each. The read-only builtin layer is deliberately
+    /// *not* watched: it ships frozen with the binary and never changes on disk
+    /// under a running host, so watching it would only burn an OS watcher.
+    /// `discover_and_load_all` still scans the builtin layer (via
+    /// [`discovery_layers`](Self::discovery_layers)), and a watcher-driven
+    /// reconcile re-runs that full scan — so a builtin copy still participates
+    /// in layer precedence even though its directory is not itself watched.
     fn watch_roots(&self) -> Vec<PathBuf> {
         let mut roots = vec![self.inner.user_root.clone()];
         if let Some(project_root) = &self.inner.project_root {
@@ -1519,15 +1591,25 @@ impl PluginHost {
 
     /// Runs the plugin's optional `unload` lifecycle hook, ignoring failures.
     ///
-    /// The bundle's `entry.ts` exports an `unload` function only when the
+    /// The bundle's entry module exports an `unload` function only when the
     /// plugin author wrote one. A bundle with no such export surfaces as an
     /// [`Error::Runtime`] from `call_plugin_lifecycle`, which is the expected
     /// case and is logged at debug level rather than failing the unload —
     /// `unload()` is optional by contract.
+    ///
+    /// The lifecycle call reuses the entry path the `load` export was driven
+    /// with — [`LoadedPlugin::entry_file`] — so the `unload` export resolves
+    /// against the *same* main module the isolate already loaded, rather than a
+    /// re-derived path the isolate's module map would reject as a duplicate
+    /// "main" module.
     async fn run_plugin_unload(&self, plugin_id: &PluginId, plugin: &LoadedPlugin) {
         let result = plugin
             .runtime
-            .call_plugin_lifecycle(&plugin.bundle_dir, ENTRY_FILE, UNLOAD_EXPORT)
+            .call_plugin_lifecycle(
+                &plugin.bundle_dir,
+                plugin.entry_file.as_str(),
+                UNLOAD_EXPORT,
+            )
             .await;
         if let Err(error) = result {
             tracing::debug!(
@@ -2348,6 +2430,56 @@ mod tests {
             ticks.load(Ordering::SeqCst) > 0,
             "a task spawned during the first bridge call must still be \
              running for the second — the host runtime outlives every call"
+        );
+    }
+
+    /// A host built with a builtin layer root reports its discovery layers as
+    /// builtin → user → project: the read-only builtin layer is the
+    /// lowest-precedence floor, tagged [`FileSource::Builtin`], with the
+    /// writable user and project layers stacked on top.
+    #[test]
+    fn discovery_layers_stack_builtin_below_user_and_project() {
+        use swissarmyhammer_directory::FileSource;
+
+        let base = std::env::temp_dir().join("plugin-host-discovery-layers");
+        let host = super::PluginHost::for_tests_with_builtin(
+            base.join("builtin"),
+            base.join("user"),
+            Some(base.join("project")),
+        );
+
+        let layers = host.discovery_layers();
+        let sources: Vec<FileSource> = layers.iter().map(|l| l.source.clone()).collect();
+        assert_eq!(
+            sources,
+            vec![FileSource::Builtin, FileSource::User, FileSource::Local],
+            "discovery must scan builtin → user → project, lowest precedence first"
+        );
+        assert_eq!(
+            layers[0].root,
+            base.join("builtin"),
+            "the first (lowest-precedence) layer must be the builtin root"
+        );
+    }
+
+    /// A host built with [`for_tests`](super::PluginHost::for_tests) has no
+    /// builtin layer: `discovery_layers` reports only the user layer, so the
+    /// existing two-layer callers are unaffected.
+    #[test]
+    fn for_tests_host_has_no_builtin_layer() {
+        use swissarmyhammer_directory::FileSource;
+
+        let host = super::PluginHost::for_tests(
+            std::env::temp_dir().join("plugin-host-no-builtin-user"),
+            None,
+        );
+
+        let layers = host.discovery_layers();
+        let sources: Vec<FileSource> = layers.iter().map(|l| l.source.clone()).collect();
+        assert_eq!(
+            sources,
+            vec![FileSource::User],
+            "a `for_tests` host with no project layer discovers only the user layer"
         );
     }
 }

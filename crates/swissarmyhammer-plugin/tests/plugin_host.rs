@@ -300,23 +300,18 @@ async fn new_constructor_takes_explicit_layer_roots() {
     let bundle = tempfile::TempDir::new().expect("bundle temp dir");
     write_plugin(bundle.path(), "this.register('svc', { rust: 'svc-mod' });");
 
-    // `new` takes the builtin plugin set, the writable layer roots, the
-    // generated-types dev-mode flag, and the types output directory; the
-    // platform hardcodes no host-specific directory config. Dev-mode off here:
-    // this test only exercises the lifecycle, not the types emitter.
-    let host = tokio::time::timeout(
-        TIMEOUT,
-        PluginHost::new(
-            Vec::new(),
-            user_root.path().to_path_buf(),
-            None,
-            false,
-            user_root.path().to_path_buf(),
-        ),
-    )
-    .await
-    .expect("constructing the host should not hang")
-    .expect("a host with no builtins should construct cleanly");
+    // `new` takes the read-only builtin layer root, the writable layer roots,
+    // the generated-types dev-mode flag, and the types output directory; the
+    // platform hardcodes no host-specific directory config. `None` builtin
+    // root: this test exercises the explicit-`load` lifecycle, not discovery.
+    // Dev-mode off here: this test does not exercise the types emitter.
+    let host = PluginHost::new(
+        None,
+        user_root.path().to_path_buf(),
+        None,
+        false,
+        user_root.path().to_path_buf(),
+    );
     let svc: Arc<dyn McpServer> = Arc::new(
         InProcessServer::new(EchoServer::new())
             .await
