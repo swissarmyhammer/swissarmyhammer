@@ -63,30 +63,58 @@
  * (see its file docstring); this component supplies an Enter-submit keymap
  * via the `extensions` prop.
  *
- * # Why a bespoke keymap, not the shared `buildSubmitCancelExtensions`
+ * # Escape drills out — back to the composer scope
  *
- * `FilterEditor` and the markdown adapter route their submit/cancel through
- * the shared `buildSubmitCancelExtensions` helper (`@/lib/cm-submit-cancel.ts`).
- * The composer deliberately does NOT — that helper cannot express the chat
- * composer's policy:
- *   - The helper always wires an Escape→cancel binding. Inside the composer
- *     Escape must stay a plain vim insert→normal toggle; the composer's cancel
- *     is the stop button, not a key. There is no "cancel" callback to give it.
- *   - The helper's CUA/emacs Enter binding is gated on `singleLine`, not on
- *     `alwaysSubmitOnEnter`. A multi-line composer (`singleLine: false`) would
- *     therefore get NO Enter-submit binding in CUA/emacs mode, while
- *     `singleLine: true` would suppress vim insert-mode newline insertion and
- *     break multi-line prompts. No single flag combination yields
- *     "Enter always submits, Shift-Enter always inserts a newline".
- * So this component hand-rolls a `Prec.highest` Enter binding (see
- * {@link buildEnterSubmitExtension}). It intentionally omits the helper's
- * `completionStatus` autocomplete-yield guard because the composer has no
- * autocomplete (`TextEditor`'s `BASIC_SETUP` disables it and the composer adds
- * no mention extensions); a future maintainer adding autocomplete here must
- * re-introduce that guard.
+ * Once the CM6 prompt has DOM focus, Escape drills OUT: it blurs the
+ * contenteditable and dispatches `nav.focus` to return kernel spatial focus
+ * to the `ui:ai-panel.composer` scope, so the panel stops trapping keys and
+ * `s` (jump) works again. This is the exact `nav.drillOut` story the filter
+ * formula bar uses — see `FilterEditorDrillOutWiring` in
+ * `perspective-tab-bar.tsx`.
+ *
+ * The drill-out routes Escape through the SHARED
+ * `buildSubmitCancelExtensions` helper (`@/lib/cm-submit-cancel.ts`) — the
+ * exact same mechanism every other CM6 editor in the app (the filter formula
+ * bar, the inline rename, the markdown field, the date / single-select /
+ * multi-select editors, and the command palette) uses for its Escape policy.
+ * The helper's vim-mode Escape is a two-phase DOM capture listener that
+ * correctly preempts `@replit/codemirror-vim`'s insert-mode Escape (a
+ * `keymap.of` binding would lose the race to the vim plugin), so the
+ * composer's drill-out fires from vim insert mode too. The CUA / emacs
+ * branch is a `Prec.highest` keymap binding. The drill-out callback is
+ * composed inside the composer scope (where the scope's FQM is available) by
+ * {@link ComposerEditorDrillOutWiring} and handed to the CM6 editor body via
+ * {@link ComposerEditorEscapeContext}; the body passes it as
+ * `onCancelRef` to `buildSubmitCancelExtensions`. In the no-spatial-stack
+ * unit-test path the context value is `null`, so the cancel callback ref
+ * is `null` and the helper's Escape handler is an inert no-op, exactly like
+ * the filter editor mounted bare.
+ *
+ * # Why we still hand-roll the Enter-submit binding
+ *
+ * The composer's drill-out shares `buildSubmitCancelExtensions` with every
+ * other CM6 editor, but the Enter-submit policy is composer-specific: plain
+ * Enter must always submit (including in vim insert mode), Shift-Enter must
+ * always insert a newline. The helper's Enter binding is gated on
+ * `singleLine`, so neither flag combination expresses "Enter always submits,
+ * Shift-Enter always inserts a newline". So the composer calls
+ * `buildSubmitCancelExtensions` with `singleLine: false` — the helper then
+ * contributes only its Escape handling — and supplies its own `Prec.highest`
+ * Enter binding (see {@link buildEnterSubmitExtension}). The Enter binding
+ * intentionally omits the helper's `completionStatus` autocomplete-yield
+ * guard because the composer has no autocomplete (`TextEditor`'s
+ * `BASIC_SETUP` disables it and the composer adds no mention extensions); a
+ * future maintainer adding autocomplete here must re-introduce that guard.
  */
 
-import { useCallback, useMemo, useRef, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useRef,
+  type ReactNode,
+} from "react";
 import { EditorView, keymap } from "@codemirror/view";
 import { Prec, type Extension } from "@codemirror/state";
 import { SquareIcon, CornerDownLeftIcon } from "lucide-react";
@@ -98,7 +126,10 @@ import {
   AiPanelFocusScope,
   AiPanelPressable,
 } from "@/components/ai-panel-focus";
-import type { CommandDef } from "@/lib/command-scope";
+import { useOptionalFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
+import { useDispatchCommand, type CommandDef } from "@/lib/command-scope";
+import { useUIState } from "@/lib/ui-state-context";
+import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
 import {
   PromptInputSelect,
   PromptInputSelectContent,
@@ -178,6 +209,20 @@ function buildEnterSubmitExtension(
   );
 }
 
+/**
+ * Carries the composer scope's "Escape from inside CM6" drill-out handler
+ * down to the descendant CM6 editor body without prop-drilling.
+ *
+ * Provided by {@link ComposerEditorDrillOutWiring} (which sits inside the
+ * `ui:ai-panel.composer` `<FocusScope>` so it can compose the scope's FQM)
+ * and consumed by {@link ComposerEditorBody}, which wires it into the shared
+ * {@link buildSubmitCancelExtensions} helper as its `onCancelRef`. `null`
+ * when no spatial-nav stack is present (a standalone unit test) — the helper's
+ * Escape handler is then an inert no-op. Same shape as
+ * `FilterEditorEscapeContext` in `perspective-tab-bar.tsx`.
+ */
+const ComposerEditorEscapeContext = createContext<(() => void) | null>(null);
+
 /** Props for {@link ComposerModelSelect}. */
 interface ComposerModelSelectProps {
   models: AiModel[] | undefined;
@@ -195,10 +240,21 @@ interface ComposerModelSelectProps {
  * The trigger is the `ui:ai-panel.model-selector` spatial-nav focus leaf:
  * `<AiPanelPressable asChild>` mounts the leaf and the Enter / Space
  * keyboard-activation CommandDefs, and the Radix `Select` trigger becomes the
- * host `<button>`. `onPress` is a no-op — Radix's own trigger handler opens
- * the listbox; the Pressable is here purely for the focus leaf and keyboard
- * activation. `ariaLabel` is the trigger's visible label (the model name, or
- * "Select a model") so the accessible name matches the text the button shows.
+ * host `<button>`. `ariaLabel` is the trigger's visible label (the model
+ * name, or "Select a model") so the accessible name matches the text the
+ * button shows.
+ *
+ * # Keyboard hand-off to the Radix Select
+ *
+ * A Radix `Select` needs DOM focus on its trigger `<button>` for Space /
+ * Enter / ↑↓ to open and navigate the listbox. Spatial-nav focusing the leaf
+ * does NOT move DOM focus there, so `onPress` (the leaf's Enter / Space
+ * activation) calls `triggerRef.current?.focus()` — a real focus hand-off
+ * onto the trigger, mirroring the composer scope's CM6 `drillIn` command
+ * calling `editorRef.current?.focus()`. After the hand-off Radix's own
+ * trigger handler drives every subsequent keystroke. A pointer click is
+ * unaffected: Radix focuses the trigger and opens the listbox itself, and a
+ * redundant `.focus()` on the already-focused trigger is a no-op.
  */
 function ComposerModelSelect({
   models,
@@ -207,6 +263,11 @@ function ComposerModelSelect({
 }: ComposerModelSelectProps): ReactNode {
   const triggerLabel = selectedModel?.label ?? "Select a model";
   const hasModels = !!models && models.length > 0;
+
+  // The Radix select trigger `<button>`. Activating the model-picker leaf
+  // (drill-in / Enter / Space) hands DOM focus to it so the Radix Select's
+  // own keyboard interaction (Space/Enter/↑↓) becomes reachable.
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   return (
     <PromptInputSelect
@@ -218,10 +279,10 @@ function ComposerModelSelect({
         asChild
         moniker={asSegment("ui:ai-panel.model-selector")}
         ariaLabel={triggerLabel}
-        onPress={() => {}}
+        onPress={() => triggerRef.current?.focus()}
         disabled={!hasModels}
       >
-        <PromptInputSelectTrigger size="sm">
+        <PromptInputSelectTrigger ref={triggerRef} size="sm">
           <PromptInputSelectValue placeholder="Select a model" />
         </PromptInputSelectTrigger>
       </AiPanelPressable>
@@ -247,6 +308,154 @@ function ComposerModelSelect({
         ))}
       </PromptInputSelectContent>
     </PromptInputSelect>
+  );
+}
+
+/**
+ * Compose the composer scope's "Escape from inside CM6" drill-out handler
+ * and publish it to the descendant CM6 editor body via context.
+ *
+ * Rendered INSIDE the `ui:ai-panel.composer` `<FocusScope>` so it can read
+ * that scope's composed FQM. The drill-out handler blurs the CM6
+ * contenteditable (the kernel's spatial-focus update alone does not move DOM
+ * focus, so the caret would keep blinking) and dispatches `nav.focus` to
+ * return kernel spatial focus to the composer scope — after which the panel
+ * stops trapping keys and `s` (jump) works again. The handler body is the
+ * same shape as `FilterEditorDrillOutWiring` in `perspective-tab-bar.tsx`.
+ *
+ * One intentional simplification over the filter reference: there is no
+ * outer `FilterFormulaBarFocusable` guard checking the spatial-nav stack
+ * separately from FQM availability. Instead this single component reads
+ * `useOptionalFullyQualifiedMoniker()` directly — outside the spatial-nav
+ * stack (a standalone unit test) it returns `null`, the context is then
+ * provided as `null`, and the cancel callback ref in `ComposerEditorBody`
+ * stays `null` so the shared helper's Escape handler is an inert no-op,
+ * exactly like the filter editor mounted bare.
+ */
+function ComposerEditorDrillOutWiring({
+  children,
+}: {
+  children: ReactNode;
+}): ReactNode {
+  const composerFq = useOptionalFullyQualifiedMoniker();
+  // Focus claims flow through the single auditable `nav.focus` command (card
+  // `01KR7CDEFWWVF4WH0BCHE8Y21J`) — the same primitive the filter-editor
+  // drill-out uses.
+  const dispatchNavFocus = useDispatchCommand("nav.focus");
+
+  const onEditorEscape = useMemo<(() => void) | null>(() => {
+    if (!composerFq) return null;
+    return () => {
+      // Drop DOM focus from the CM6 contenteditable so the caret stops
+      // blinking — the kernel's spatial-focus update alone does not move
+      // DOM focus.
+      if (
+        typeof document !== "undefined" &&
+        document.activeElement instanceof HTMLElement
+      ) {
+        document.activeElement.blur();
+      }
+      void dispatchNavFocus({ args: { fq: composerFq } }).catch((err) =>
+        console.error(
+          "[ComposerEditorDrillOutWiring] nav.focus dispatch failed",
+          err,
+        ),
+      );
+    };
+  }, [composerFq, dispatchNavFocus]);
+
+  return (
+    <ComposerEditorEscapeContext.Provider value={onEditorEscape}>
+      {children}
+    </ComposerEditorEscapeContext.Provider>
+  );
+}
+
+/** Props for {@link ComposerEditorBody}. */
+interface ComposerEditorBodyProps {
+  /** Ref to the shared `TextEditor` primitive — drives drill-in `focus()`. */
+  editorRef: React.RefObject<TextEditorHandle | null>;
+  /**
+   * Base CM6 extensions from {@link AiPromptComposer} — the Enter-submit
+   * keymap, the read-only toggle, and the accessible-name content attribute.
+   * The shared `buildSubmitCancelExtensions` Escape handling is appended here
+   * because it needs the active keymap mode and the scope-provided
+   * drill-out callback, both of which are only available below the composer
+   * scope.
+   */
+  baseExtensions: Extension[];
+  /** Placeholder shown while the buffer is empty. */
+  placeholder: string;
+}
+
+/**
+ * The composer's CM6 editor body — the `<TextEditor>` and its extensions.
+ *
+ * Rendered inside the `ui:ai-panel.composer` `<FocusScope>` (below
+ * {@link ComposerEditorDrillOutWiring}) so it can consume the drill-out
+ * callback from {@link ComposerEditorEscapeContext} and route it through the
+ * shared {@link buildSubmitCancelExtensions} helper. The helper is invoked
+ * with `singleLine: false` so it contributes ONLY its Escape handling — the
+ * composer keeps its own Enter-submit binding (see {@link
+ * buildEnterSubmitExtension}). `onSubmitRef` is a no-op ref because the
+ * helper's Enter path is disabled by `singleLine: false`; `onCancelRef` is
+ * the drill-out callback. The cancel callback is read through a stable ref
+ * so the extension identity never churns.
+ *
+ * The helper's vim-mode Escape uses a two-phase DOM capture listener (see
+ * `cm-submit-cancel.ts`) so the drill-out preempts `@replit/codemirror-vim`'s
+ * insert-mode Escape and fires from vim insert mode too. Its CUA / emacs
+ * branch is a `Prec.highest` keymap binding.
+ */
+function ComposerEditorBody({
+  editorRef,
+  baseExtensions,
+  placeholder,
+}: ComposerEditorBodyProps): ReactNode {
+  // The scope-provided drill-out callback. `null` outside the spatial-nav
+  // stack — the helper's Escape handler is then an inert no-op (calls
+  // through `?.()` on a null ref).
+  const onEditorEscape = useContext(ComposerEditorEscapeContext);
+  const { keymap_mode: keymapMode } = useUIState();
+
+  // Stable ref to the drill-out callback — keeps the extension identity
+  // stable so the live `EditorView` is never reconfigured.
+  const cancelRef = useRef<(() => void) | null>(onEditorEscape);
+  cancelRef.current = onEditorEscape;
+
+  // The helper requires a submit ref even when `singleLine: false` (where
+  // its Enter binding is disabled). Hold a stable no-op ref so the helper
+  // can call `?.()` harmlessly if anything else ever wires to it.
+  const submitNoopRef = useRef<(() => void) | null>(null);
+
+  const submitCancelExts = useMemo(
+    () =>
+      buildSubmitCancelExtensions({
+        mode: keymapMode,
+        onSubmitRef: submitNoopRef,
+        onCancelRef: cancelRef,
+        // Enter is owned by the composer's own bespoke `Prec.highest`
+        // binding (plain Enter always submits, Shift-Enter always inserts a
+        // newline — a policy the helper's Enter binding cannot express).
+        // `singleLine: false` makes the helper contribute only Escape.
+        singleLine: false,
+      }),
+    [keymapMode],
+  );
+
+  const extensions = useMemo<Extension[]>(
+    () => [...baseExtensions, ...submitCancelExts],
+    [baseExtensions, submitCancelExts],
+  );
+
+  return (
+    <TextEditor
+      ref={editorRef}
+      value=""
+      extensions={extensions}
+      placeholder={placeholder}
+      autoFocus={false}
+    />
   );
 }
 
@@ -298,11 +507,13 @@ export function AiPromptComposer({
   const submitRef = useRef<(() => void) | null>(handleSubmit);
   submitRef.current = handleSubmit;
 
-  // CM6 extensions: the Enter-submit keymap, plus a read-only toggle and the
-  // accessible-name attribute on the content DOM. The content DOM keeps
+  // Base CM6 extensions: the Enter-submit keymap, plus a read-only toggle and
+  // the accessible-name attribute on the content DOM. The content DOM keeps
   // `aria-label="Message the AI agent"` so `ai.focus` and the panel tests can
-  // locate the prompt input by its accessible name.
-  const extensions = useMemo<Extension[]>(
+  // locate the prompt input by its accessible name. The Escape drill-out
+  // keymap is appended inside `ComposerEditorBody`, which can read the
+  // scope-provided drill-out callback.
+  const baseExtensions = useMemo<Extension[]>(
     () => [
       buildEnterSubmitExtension(submitRef),
       EditorView.editable.of(!disabled),
@@ -374,13 +585,17 @@ export function AiPromptComposer({
         commands={drillInCommands}
         className="min-h-24 flex-1 overflow-auto px-2 py-1.5 [&_.cm-editor]:h-full [&_.cm-scroller]:h-full"
       >
-        <TextEditor
-          ref={editorRef}
-          value=""
-          extensions={extensions}
-          placeholder={placeholder}
-          autoFocus={false}
-        />
+        {/* `ComposerEditorDrillOutWiring` sits INSIDE the composer scope so
+            it can compose the scope's FQM and publish the Escape drill-out
+            callback; `ComposerEditorBody` consumes it and wires the CM6
+            Escape keymap. */}
+        <ComposerEditorDrillOutWiring>
+          <ComposerEditorBody
+            editorRef={editorRef}
+            baseExtensions={baseExtensions}
+            placeholder={placeholder}
+          />
+        </ComposerEditorDrillOutWiring>
       </AiPanelFocusScope>
       {/* The footer toolbar — pinned at the bottom of the container. The
           model selector sits on the left, the submit/stop control on the

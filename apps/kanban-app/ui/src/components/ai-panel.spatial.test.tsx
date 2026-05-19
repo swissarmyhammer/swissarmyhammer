@@ -717,6 +717,144 @@ describe("AiPanel — spatial-nav focus scopes", () => {
   });
 
   // -------------------------------------------------------------------------
+  // Activating the model-picker leaf hands the keyboard to the Radix Select.
+  //
+  // The `ui:ai-panel.model-selector` leaf is a `<Pressable>`: pressing Enter
+  // on the focused leaf runs the `pressable.activate` CommandDef, which calls
+  // `onPress`. A bare `onPress` no-op leaves DOM focus on `document.body`, so
+  // a Radix `Select` — which needs DOM focus on its trigger `<button>` for
+  // Space/Enter/↑↓ to open and navigate the listbox — is unreachable by
+  // keyboard. The fix gives `ComposerModelSelect` a ref to the
+  // `PromptInputSelectTrigger` and has `onPress` call `triggerRef.focus()`.
+  // This test seeds spatial focus on the model-selector leaf, fires a real
+  // Enter keystroke through `<AppShell>`'s `<KeybindingHandler>`, and asserts
+  // DOM focus landed on the select trigger.
+  // -------------------------------------------------------------------------
+
+  it("Enter on the focused model-selector leaf lands DOM focus on the select trigger", async () => {
+    harness = setupSpatialHarness({ defaultInvokeImpl: appShellInvokeImpl });
+    const { container, unmount } = await renderPanelWithShell();
+    await flushSetup();
+
+    const selector = findRegisterRecord("ui:ai-panel.model-selector");
+    expect(selector, "the model-selector leaf must register").toBeTruthy();
+    const selectorFq = selector!.fq as FullyQualifiedMoniker;
+
+    // The model-select trigger is the `role="combobox"` button inside the
+    // model-selector leaf — the host element of the `<Pressable asChild>`.
+    const selectorNode = container.querySelector(
+      "[data-segment='ui:ai-panel.model-selector']",
+    ) as HTMLElement | null;
+    expect(selectorNode, "model-selector leaf must be in the DOM").not.toBeNull();
+    const trigger = selectorNode!.querySelector(
+      "button[role='combobox']",
+    ) as HTMLElement | null;
+    expect(
+      trigger,
+      "the Radix select trigger button must be inside the model-selector leaf",
+    ).not.toBeNull();
+
+    // Move DOM focus OFF the trigger first so the activation has a visible
+    // effect to assert.
+    await act(async () => {
+      (document.body as HTMLElement).focus();
+    });
+    expect(
+      document.activeElement,
+      "precondition: DOM focus must not already be on the select trigger",
+    ).not.toBe(trigger);
+
+    // Seed spatial focus onto the model-selector leaf.
+    await act(async () => {
+      await mockInvoke("spatial_focus", { fq: selectorFq });
+    });
+    await flushSetup();
+
+    // Press Enter — `<KeybindingHandler>` resolves it against the focused
+    // model-selector scope's `pressable.activate` CommandDef, which calls
+    // `onPress` → `triggerRef.current?.focus()`.
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
+      await Promise.resolve();
+    });
+    await flushSetup();
+
+    expect(
+      document.activeElement,
+      "Enter on the focused model-selector leaf must land DOM focus on the select trigger",
+    ).toBe(trigger);
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // Escape inside the CM6 prompt drills out of the composer.
+  //
+  // Once the CM6 prompt has DOM focus, Escape must release it: blur the
+  // contenteditable and return kernel spatial focus to the
+  // `ui:ai-panel.composer` scope so the user can press `s` to re-open the
+  // jump overlay. Without this the focus is trapped in the editor. The
+  // composer routes Escape through the SHARED `buildSubmitCancelExtensions`
+  // helper (`@/lib/cm-submit-cancel.ts`) — the same mechanism the filter
+  // formula bar, the markdown field, the command palette, and the field
+  // editors all use. Its `onCancelRef` callback is composed inside the
+  // composer scope by `ComposerEditorDrillOutWiring` and blurs the active
+  // element + dispatches `nav.focus` against the composer scope FQM.
+  // -------------------------------------------------------------------------
+
+  it("Escape inside the CM6 prompt blurs the editor and returns kernel focus to the composer scope", async () => {
+    harness = setupSpatialHarness({ defaultInvokeImpl: appShellInvokeImpl });
+    const { container, unmount } = await renderPanelWithShell();
+    await flushSetup();
+
+    const composer = findRegisterRecord("ui:ai-panel.composer");
+    expect(composer, "the composer leaf must register").toBeTruthy();
+    const composerFq = composer!.fq as FullyQualifiedMoniker;
+
+    const composerNode = container.querySelector(
+      "[data-segment='ui:ai-panel.composer']",
+    ) as HTMLElement | null;
+    expect(composerNode, "composer leaf must be in the DOM").not.toBeNull();
+    const prompt = composerNode!.querySelector(
+      "[role='textbox'][aria-label='Message the AI agent']",
+    ) as HTMLElement | null;
+    expect(prompt, "the CM6 prompt must be inside the composer leaf").not.toBeNull();
+
+    // Drill DOM focus into the CM6 prompt — the trapped state Escape escapes.
+    await act(async () => {
+      prompt!.focus();
+    });
+    expect(
+      document.activeElement,
+      "precondition: DOM focus must be on the CM6 prompt",
+    ).toBe(prompt);
+
+    // Press Escape inside the CM6 editor. `buildSubmitCancelExtensions`'s
+    // CUA Escape binding fires the composer's drill-out callback, which
+    // blurs the contenteditable and dispatches `nav.focus` against the
+    // composer scope FQM.
+    await act(async () => {
+      fireEvent.keyDown(prompt!, { key: "Escape", code: "Escape" });
+      await Promise.resolve();
+    });
+    await flushSetup();
+
+    // The editor lost DOM focus — the caret is no longer trapped.
+    expect(
+      document.activeElement,
+      "Escape inside the CM6 prompt must blur the editor",
+    ).not.toBe(prompt);
+
+    // Kernel spatial focus returned to the `ui:ai-panel.composer` scope.
+    expect(
+      harness.currentFocus.fq,
+      "Escape must return kernel spatial focus to the ui:ai-panel.composer scope",
+    ).toBe(composerFq);
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
   // Intra-panel spatial nav: the model selector now lives in the composer
   // footer (the AI Elements `PromptInput` layout), so it sits LOW in the
   // panel. ArrowUp from it moves toward a control higher in the panel (the
