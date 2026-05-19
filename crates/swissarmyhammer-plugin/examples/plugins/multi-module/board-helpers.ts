@@ -1,14 +1,14 @@
 // board-helpers.ts — the SIBLING MODULE of the multi-module example.
 //
 // This file is the whole point of the `multi-module` example: it is a second
-// source file in the same plugin bundle, imported by `entry.ts` with the
+// source file in the same plugin bundle, imported by `index.ts` with the
 // RELATIVE specifier `./board-helpers.ts`. The sandboxed module loader resolves
 // that specifier against the bundle directory, reads this file from disk,
 // transpiles it, and links it into the plugin's V8 isolate — exactly as it
 // does the entry module.
 //
-// A plugin bundle is not limited to a single `entry.ts`. Split helpers, types,
-// and shared logic across as many sibling files as you like; `entry.ts` (or
+// A plugin bundle is not limited to a single `index.ts`. Split helpers, types,
+// and shared logic across as many sibling files as you like; `index.ts` (or
 // any module it imports) pulls them in with ordinary relative imports. The one
 // hard rule the loader enforces: a relative import may not escape the bundle
 // directory — `../outside.ts` is rejected, so the bundle stays a sandbox.
@@ -44,7 +44,7 @@ export function normalizeTaskTitle(raw: string): string {
  * Adds one normalized, tagged task to a kanban board through a dispatcher.
  *
  * An async helper that takes a `board` server dispatcher — the same
- * `this.board` index `entry.ts` builds by registering the host-exposed
+ * `this.board` index `index.ts` builds by registering the host-exposed
  * `kanban` tool — and uses it to add a task. It first normalizes `rawTitle`
  * with {@link normalizeTaskTitle}, then dispatches the `kanban` tool's
  * `add task` operation through the SDK's *path form*: `board.kanban.task.add`.

@@ -60,27 +60,28 @@ use swissarmyhammer_plugin::{
 /// under the server name `kanban-builtin-probe`.
 const BUILTIN_PROBE: &str = "kanban-builtin-probe";
 
-/// The server name the `kanban-builtin-probe` bundle registers — its manifest
-/// `id`, its `provides` entry, and its `register` name are all this string.
+/// The server name the `kanban-builtin-probe` bundle registers — it is the
+/// `register()` name in the bundle's `index.ts`, and it matches the bundle's
+/// directory name (the plugin's identity).
 const PROBE_SERVER: &str = "kanban-builtin-probe";
 
 /// The server name the committed `file-notes` example registers `{ rust: "files" }`
-/// under. It must match the bundle's `provides` and `register` call.
+/// under. It must match the `register` call in the bundle's `index.ts`.
 const FILE_NOTES_SERVER: &str = "fs";
 
 /// The bundle-relative path of the first note the `file-notes` example writes.
-/// It must match the path hard-coded in the bundle's `entry.ts`.
+/// It must match the path hard-coded in the bundle's `index.ts`.
 const HELLO_NOTE: &str = "notes/hello.txt";
 
 /// The bundle-relative path of the echo note the `file-notes` example writes.
-/// It must match the path hard-coded in the bundle's `entry.ts`.
+/// It must match the path hard-coded in the bundle's `index.ts`.
 const ECHO_NOTE: &str = "notes/echo.txt";
 
 /// The exact body the `file-notes` example writes into both note files. It must
-/// match the constant in the bundle's `entry.ts`.
+/// match the constant in the bundle's `index.ts`.
 const NOTE_BODY: &str = "a note round-tripped through the in-process files tool";
 
-/// The placeholder token the committed `cli-echo` `entry.ts` carries where the
+/// The placeholder token the committed `cli-echo` `index.ts` carries where the
 /// CLI command belongs. [`support::stage_example_with`] rewrites it in the
 /// staged copy with the real fixture binary path; it must match the token
 /// spelled in the committed bundle exactly.
@@ -91,7 +92,7 @@ const CLI_COMMAND_TOKEN: &str = "__CLI_ECHO_COMMAND__";
 const ECHO_SERVER: &str = "echo";
 
 /// The two task titles the committed `kanban-tasks` example adds. They must
-/// match the titles hard-coded in that bundle's `entry.ts`.
+/// match the titles hard-coded in that bundle's `index.ts`.
 const KANBAN_TASKS_TITLES: [&str; 2] = ["Draft the plugin proposal", "Review the plugin proposal"];
 
 /// The normalized task title the committed `multi-module` example's imported
@@ -192,7 +193,7 @@ fn stage_repo_builtin_probe(layer_root: &Path) {
 ///
 /// Runs the platform's point-in-time [`discover_plugins`] scan over `layers` —
 /// the very scan [`PluginHost::discover_and_load_all`] runs internally — and
-/// asserts the discovered set is exactly `expected`, matched on manifest `id`
+/// asserts the discovered set is exactly `expected`, matched on `id`
 /// and resolved [`FileSource`]. This is the honest read on "each plugin was
 /// discovered from the layer it was staged in": the `FileSource` on a
 /// [`DiscoveredPlugin`](swissarmyhammer_plugin::DiscoveredPlugin) is the layer
@@ -201,7 +202,7 @@ fn stage_repo_builtin_probe(layer_root: &Path) {
 /// # Parameters
 ///
 /// - `layers` — the discovery layers, lowest precedence first.
-/// - `expected` — the `(manifest id, FileSource)` pairs every layer must yield.
+/// - `expected` — the `(id, FileSource)` pairs every layer must yield.
 ///
 /// # Panics
 ///
@@ -212,7 +213,7 @@ fn assert_discovered_sources(layers: &[LayerRoot], expected: &[(&str, FileSource
         .expect("discovery over the staged layers should succeed");
 
     // `FileSource` is not `Ord`, so the `(id, source)` pairs are sorted by the
-    // manifest `id` alone — which is unique per discovered plugin — to compare
+    // `id` alone — which is unique per discovered plugin — to compare
     // the two sets order-independently.
     let mut found: Vec<(String, FileSource)> = discovered
         .iter()
@@ -446,7 +447,7 @@ async fn each_committed_example_loads_from_its_layer() {
 /// Stages the bundle EXACTLY as committed into a user layer root, asserts the
 /// point-in-time scan resolves it as [`FileSource::User`], loads it through
 /// `discover_and_load_all`, and asserts the board carries exactly the two tasks
-/// the bundle's `entry.ts` adds through the `_meta` path form — the observable
+/// the bundle's `index.ts` adds through the `_meta` path form — the observable
 /// proof its `load()` ran.
 async fn load_kanban_tasks_from_user_layer() {
     // Per-example isolation: a fresh host and fresh roots.
@@ -524,7 +525,7 @@ async fn load_multi_module_from_project_layer() {
     let board_dir = tempfile::TempDir::new().expect("kanban board temp");
 
     // `stage_example` copies the whole bundle directory recursively, so the
-    // sibling `board-helpers.ts` module lands alongside `entry.ts`.
+    // sibling `board-helpers.ts` module lands alongside `index.ts`.
     support::stage_example("multi-module", project_root.path());
 
     let host = PluginHost::for_tests(

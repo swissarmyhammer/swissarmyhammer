@@ -12,55 +12,35 @@ the examples demonstrate.
 
 ## A plugin bundle
 
-A plugin is a directory containing, at minimum, two files:
+A plugin is a directory containing a single required file:
 
 ```
 my-plugin/
-  plugin.json   # the manifest
-  entry.ts      # the entry module
+  index.ts      # the entry module
 ```
 
-The bundle lives under a `plugins/` directory in any plugin layer. Discovery
-scans `<layer-root>/plugins/<name>/` for bundles; the directory name is the
-bundle name.
+There is **no manifest**. A bundle is just a directory with an `index.ts`
+entry module — no `plugin.json`, no `id`, no `entry` field, no `provides`
+list.
 
-A bundle is not limited to a single `entry.ts`. The entry module — or any
+The bundle lives under a `plugins/` directory in any plugin layer. Discovery
+scans `<layer-root>/plugins/<name>/` for bundles; the directory name **is** the
+plugin's identity. When the same directory name appears in two layers, the
+higher-precedence layer's copy is the one that loads.
+
+A bundle is not limited to a single `index.ts`. The entry module — or any
 module it imports — can pull in sibling source files with ordinary relative
 imports (`./helper.ts`); the loader resolves them against the bundle directory.
 The `multi-module` example is exactly such a multi-file bundle. The one rule:
 a relative import may not escape the bundle directory, so the bundle stays a
 self-contained sandbox.
 
-## The `plugin.json` manifest
+## The `index.ts` module and the `load()` contract
 
-The manifest is a JSON object declaring the plugin's identity and what it
-exposes. Its fields:
-
-| Field      | Type       | Meaning |
-|------------|------------|---------|
-| `id`       | string     | The plugin's stable identifier. When the same `id` appears in two layers, the higher-precedence layer's copy is the one that loads. |
-| `name`     | string     | A human-readable display name. |
-| `version`  | string     | The plugin's version, e.g. `"1.0.0"`. |
-| `entry`    | string     | The bundle-relative path to the entry module, e.g. `"entry.ts"`. |
-| `provides` | string[]   | The exact set of server names the plugin's `load()` is allowed to register. The host rejects any `register` of a name absent from this list. |
-
-A minimal manifest:
-
-```json
-{
-  "id": "my-plugin",
-  "name": "My Plugin",
-  "version": "1.0.0",
-  "entry": "entry.ts",
-  "provides": ["my-server"]
-}
-```
-
-## The `entry.ts` module and the `load()` contract
-
-The entry module is TypeScript. The runtime transpiles it to JavaScript and
-runs it inside a fresh V8 isolate. The module must export an async function
-named `load`:
+The entry module is `index.ts` by convention — discovery loads it as the
+bundle's entry point. It is TypeScript: the runtime transpiles it to
+JavaScript and runs it inside a fresh V8 isolate. The module must export an
+async function named `load`:
 
 ```ts
 export async function load(): Promise<unknown> { /* ... */ }
@@ -82,11 +62,15 @@ not need to be installed. It provides two pieces an example uses:
 Every plugin subclasses `Plugin`. The base class is the entire authoring
 surface:
 
+- `name` / `version` — optional `readonly` class props a subclass sets with a
+  plain field initializer (`readonly name = "My Plugin"`). They are
+  descriptive metadata only — used for the plugin's own logging and reporting —
+  and play no part in plugin identity or discovery (the directory name is the
+  identity). A subclass that omits them keeps the inert base defaults.
 - `load()` / `unload()` — optional lifecycle hooks. Override `load()` to do
   setup work; override `unload()` (calling `super.unload()`) to do teardown.
 - `register(name, source)` — point the platform at an MCP server, reachable
-  afterward as `this.<name>`. `name` must appear in the manifest's `provides`.
-  `source` is one of:
+  afterward as `this.<name>`. `source` is one of:
   - `{ rust: "<module-id>" }` — a host-exposed in-process Rust server.
   - `{ url: "<endpoint>", headers?: {...} }` — an HTTP MCP endpoint.
   - `{ cli: ["<cmd>", ...], env?: {...}, cwd?: "..." }` — a stdio MCP subprocess.
@@ -111,6 +95,9 @@ and runs the plugin's `load()`:
 import { Plugin, makePluginThis } from '@swissarmyhammer/plugin';
 
 class MyPlugin extends Plugin {
+  readonly name = 'My Plugin';
+  readonly version = '1.0.0';
+
   async load(): Promise<void> {
     this.register('my-server', { rust: 'files' });
     // this.my-server.<tool>(...) is now callable
@@ -151,7 +138,7 @@ noun `tasks` (plural): `this.board.kanban.task.add(...)` and
 ## Example index
 
 The examples live in subdirectories alongside this README. Each is a
-self-contained bundle with its own `plugin.json` and `entry.ts`, and each is
+self-contained bundle with its own `index.ts` entry module, and each is
 exercised by an end-to-end test.
 
 | Example | Demonstrates | Test |
@@ -159,7 +146,7 @@ exercised by an end-to-end test.
 | `kanban-tasks` | An operation tool driven through the `_meta` `noun.verb` path form: registers the in-process `kanban` tool as `board`, adds two tasks via `this.board.kanban.task.add(...)`, and lists them via `this.board.kanban.tasks.list(...)`. | `tests/kanban_tasks_e2e.rs` |
 | `file-notes` | A real filesystem effect through the in-process `files` tool driven with the direct `op` form: registers `files` as `fs`, then writes a note, reads it back, and writes the read-back content into a second note — all against **relative** paths. | `tests/file_notes_e2e.rs` |
 | `cli-echo` | The `{ cli }` stdio-subprocess transport and the `unload()` lifecycle hook: registers `echo` as a `{ cli }` server the host spawns as a child process, calls its flat `echo` tool over stdio, and overrides `unload()` to record a sentinel kanban task and `unregister` the server at teardown. | `tests/cli_echo_e2e.rs` |
-| `multi-module` | A **multi-file** bundle: `entry.ts` imports a sibling `board-helpers.ts` module with the relative specifier `./board-helpers.ts`. The sandboxed loader resolves the import against the bundle directory; the imported async helper adds one tagged task to the `kanban` board. | `tests/multi_module_e2e.rs` |
+| `multi-module` | A **multi-file** bundle: `index.ts` imports a sibling `board-helpers.ts` module with the relative specifier `./board-helpers.ts`. The sandboxed loader resolves the import against the bundle directory; the imported async helper adds one tagged task to the `kanban` board. | `tests/multi_module_e2e.rs` |
 
 ## `file-notes` and the relative-path contract
 
@@ -203,7 +190,7 @@ optional `env` and `cwd` fields; see the SDK's `ServerSource` type.)
 
 A committed example cannot hard-code the absolute path of an MCP server
 binary: no such path is correct on every machine, and the repository ships no
-binary at a fixed location. So the committed `entry.ts` carries the named
+binary at a fixed location. So the committed `index.ts` carries the named
 placeholder token `__CLI_ECHO_COMMAND__` where the command belongs.
 
 The end-to-end test (`tests/cli_echo_e2e.rs`) stages the bundle with the
@@ -256,17 +243,16 @@ end to end.
 
 ## `multi-module` and relative sibling-module imports
 
-Every other example bundle is a single `entry.ts`. `multi-module` is
+Every other example bundle is a single `index.ts`. `multi-module` is
 deliberately two source files:
 
 ```
 multi-module/
-  plugin.json         the manifest
-  entry.ts            the entry module
-  board-helpers.ts    a sibling module, imported by entry.ts
+  index.ts            the entry module
+  board-helpers.ts    a sibling module, imported by index.ts
 ```
 
-Its `entry.ts` opens with the line that *is* the example:
+Its `index.ts` opens with the line that *is* the example:
 
 ```ts
 import { addBoardTask, normalizeTaskTitle } from "./board-helpers.ts";

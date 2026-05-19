@@ -12,7 +12,7 @@
 //! # The fixture subprocess
 //!
 //! The `cli-echo` plugin registers `echo` as a `{ cli: [<command>] }` source.
-//! The committed `entry.ts` carries a named placeholder token where the command
+//! The committed `index.ts` carries a named placeholder token where the command
 //! belongs — a committed example cannot hard-code an absolute binary path. This
 //! test stages the bundle with [`support::stage_example_with`], which rewrites
 //! the placeholder in the throwaway staged copy with the real path of the
@@ -69,15 +69,15 @@ use serde_json::json;
 use swissarmyhammer_directory::SwissarmyhammerConfig;
 use swissarmyhammer_plugin::{CallerId, Error, PluginHost};
 
-/// The placeholder token the committed `cli-echo` `entry.ts` carries where the
+/// The placeholder token the committed `cli-echo` `index.ts` carries where the
 /// CLI command belongs. [`support::stage_example_with`] rewrites it in the
 /// staged copy with the real fixture binary path; it must match the token
 /// spelled in the committed bundle exactly.
 const CLI_COMMAND_TOKEN: &str = "__CLI_ECHO_COMMAND__";
 
 /// The server name the `cli-echo` plugin registers its `{ cli }` source under.
-/// It must match the name in the bundle's `plugin.json` `provides` and the
-/// `register` call in its `entry.ts` — the test routes calls to this name.
+/// It must match the name in the `register` call in the bundle's `index.ts` —
+/// the test routes calls to this name.
 const ECHO_SERVER: &str = "echo";
 
 /// The flat tool the fixture stdio MCP server exposes. The test invokes it
@@ -95,7 +95,7 @@ const TEST_PAYLOAD: &str = "payload routed by the test over the cli-echo subproc
 const BOARD_NAME: &str = "cli-echo unload-sentinel board";
 
 /// The title of the sentinel task the `cli-echo` plugin's `unload()` adds to
-/// the board. It must match `UNLOAD_SENTINEL_TITLE` in the bundle's `entry.ts`
+/// the board. It must match `UNLOAD_SENTINEL_TITLE` in the bundle's `index.ts`
 /// — the test asserts the board carries exactly this task after unload, and
 /// none before.
 const UNLOAD_SENTINEL_TITLE: &str = "cli-echo unload() ran";
@@ -113,7 +113,7 @@ const UNLOAD_SENTINEL_TITLE: &str = "cli-echo unload() ran";
 ///   throwaway staged copy — the committed source stays a clean example;
 /// - the real in-process `kanban` operation tool is exposed to the host over a
 ///   temp board; the plugin's `unload()` writes a sentinel task there;
-/// - discovery transpiles the bundle's `entry.ts`, creates a fresh V8 isolate,
+/// - discovery transpiles the bundle's `index.ts`, creates a fresh V8 isolate,
 ///   and runs the exported `load`, which registers `echo` as a `{ cli }` source
 ///   (the host spawns the fixture subprocess) and calls its `echo` tool;
 /// - while the plugin is loaded, the test routes its own `echo` call through
@@ -172,7 +172,7 @@ async fn cli_echo_plugin_round_trips_over_stdio_and_unloads() {
         .expect("exposing the kanban module should succeed");
 
     // Trigger discovery: the host scans the project layer, transpiles the
-    // bundle's `entry.ts`, creates a fresh isolate, and runs the exported
+    // bundle's `index.ts`, creates a fresh isolate, and runs the exported
     // `load` — whose body spawns the fixture subprocess and drives an `echo`
     // call over its stdio. A broken transport fails `load()` here.
     let loaded = tokio::time::timeout(

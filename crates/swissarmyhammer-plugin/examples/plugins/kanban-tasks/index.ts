@@ -108,6 +108,12 @@ function countTasks(result: unknown): number {
  * the SDK's operation-tool *path form*.
  */
 class KanbanTasksPlugin extends Plugin {
+  /** Human-readable name — descriptive metadata only, not plugin identity. */
+  readonly name = "Kanban Tasks Example";
+
+  /** Version string — descriptive metadata only. */
+  readonly version = "1.0.0";
+
   /**
    * Registers the `kanban` operation tool and drives it through the path form.
    *
@@ -121,8 +127,8 @@ class KanbanTasksPlugin extends Plugin {
    */
   async load(): Promise<void> {
     // (1) Activate the host-exposed real `kanban` operation tool under the
-    //     name `board`. `board` must appear in plugin.json's `provides`. After
-    //     this, `this.board` is the dispatch index for the `kanban` tool.
+    //     name `board`. After this, `this.board` is the dispatch index for the
+    //     `kanban` tool.
     this.register("board", { rust: "kanban" });
 
     // (2) Add two tasks through the PATH FORM. Neither call passes an `op`:

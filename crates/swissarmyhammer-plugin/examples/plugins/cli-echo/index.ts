@@ -80,16 +80,14 @@ import { Plugin, makePluginThis } from "@swissarmyhammer/plugin";
 // intentionally not a runnable command.
 const ECHO_COMMAND = "__CLI_ECHO_COMMAND__";
 
-// The server name this plugin registers the CLI subprocess under. It must
-// appear in plugin.json's `provides`; after `register`, `this.echo` is the
-// dispatch index for the subprocess server.
+// The server name this plugin registers the CLI subprocess under. After
+// `register`, `this.echo` is the dispatch index for the subprocess server.
 const ECHO_SERVER = "echo";
 
 // The server name the host-exposed in-process `kanban` operation tool is
-// registered under. It must appear in plugin.json's `provides`; after
-// `register`, `this.board` is the dispatch index for the `kanban` tool. The
-// plugin's `unload()` uses it to record a sentinel task — the observable proof
-// that the `unload()` hook itself ran.
+// registered under. After `register`, `this.board` is the dispatch index for
+// the `kanban` tool. The plugin's `unload()` uses it to record a sentinel task
+// — the observable proof that the `unload()` hook itself ran.
 const BOARD_SERVER = "board";
 
 // The message this plugin sends to the subprocess's flat `echo` tool at load
@@ -138,6 +136,12 @@ function echoedText(result: unknown): string {
  * `register`.
  */
 class CliEchoPlugin extends Plugin {
+  /** Human-readable name — descriptive metadata only, not plugin identity. */
+  readonly name = "CLI Echo Example";
+
+  /** Version string — descriptive metadata only. */
+  readonly version = "1.0.0";
+
   /**
    * Registers the CLI subprocess server, registers the kanban board, and
    * calls the subprocess's flat `echo` tool.
@@ -155,15 +159,14 @@ class CliEchoPlugin extends Plugin {
    * The host calls this exactly once, when the plugin is discovered.
    */
   async load(): Promise<void> {
-    // (1) Register the stdio MCP subprocess under the name `echo`. `echo` must
-    //     appear in plugin.json's `provides`. After this, `this.echo` is the
-    //     dispatch index for the subprocess's tools.
+    // (1) Register the stdio MCP subprocess under the name `echo`. After this,
+    //     `this.echo` is the dispatch index for the subprocess's tools.
     this.register(ECHO_SERVER, { cli: [ECHO_COMMAND] });
 
     // (2) Register the host-exposed in-process `kanban` operation tool under
-    //     the name `board`. `board` must appear in plugin.json's `provides`.
-    //     `unload()` writes a sentinel task here so the teardown leaves an
-    //     observable trace the host's automatic disposal could never produce.
+    //     the name `board`. `unload()` writes a sentinel task here so the
+    //     teardown leaves an observable trace the host's automatic disposal
+    //     could never produce.
     this.register(BOARD_SERVER, { rust: "kanban" });
 
     // (3) Call the subprocess's flat `echo` tool. `echo` is a FLAT tool — one

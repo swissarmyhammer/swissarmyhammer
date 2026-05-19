@@ -1,7 +1,0 @@
-{
-  "id": "kanban-builtin-probe",
-  "name": "Kanban Builtin Probe",
-  "version": "1.0.0",
-  "entry": "entry.ts",
-  "provides": ["kanban-builtin-probe"]
-}

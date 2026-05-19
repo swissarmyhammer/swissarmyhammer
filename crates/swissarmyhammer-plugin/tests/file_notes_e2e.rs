@@ -50,18 +50,18 @@ use swissarmyhammer_directory::SwissarmyhammerConfig;
 use swissarmyhammer_plugin::PluginHost;
 
 /// The bundle-relative path of the first note the plugin writes. It must match
-/// the path hard-coded in the example bundle's `entry.ts` — the test asserts
+/// the path hard-coded in the example bundle's `index.ts` — the test asserts
 /// the file lands here, under the temp CWD, with the expected contents.
 const HELLO_NOTE: &str = "notes/hello.txt";
 
 /// The bundle-relative path of the second note — the echo of the first, proof
 /// the `read file` return value crossed back into the isolate. It must match
-/// the path the example bundle's `entry.ts` writes.
+/// the path the example bundle's `index.ts` writes.
 const ECHO_NOTE: &str = "notes/echo.txt";
 
 /// The exact text the `file-notes` plugin writes into the first note and then
 /// reads back into the second. It must match the constant in the bundle's
-/// `entry.ts`; the test asserts it verbatim in **both** note files.
+/// `index.ts`; the test asserts it verbatim in **both** note files.
 const NOTE_BODY: &str = "a note round-tripped through the in-process files tool";
 
 /// The committed `file-notes` example plugin, discovered from disk, drives the
@@ -78,7 +78,7 @@ const NOTE_BODY: &str = "a note round-tripped through the in-process files tool"
 ///   and exposed to the host with `expose_tools_to_plugin_host`; no mock;
 /// - the committed `file-notes` bundle is staged into the project layer with
 ///   [`support::stage_example`] and discovered through `discover_and_load_all`,
-///   which transpiles its `entry.ts`, creates a fresh V8 isolate, and runs the
+///   which transpiles its `index.ts`, creates a fresh V8 isolate, and runs the
 ///   exported `load`;
 /// - inside the isolate the SDK turns each `this.fs.files({ op, … })` into a
 ///   real `tools/call` routed by the host dispatcher into the live `files`
@@ -124,7 +124,7 @@ async fn file_notes_plugin_round_trips_through_files_tool() {
         .expect("exposing the in-process tools should succeed");
 
     // Trigger discovery: the host scans the project layer, transpiles the
-    // bundle's `entry.ts`, creates a fresh isolate, and runs the exported
+    // bundle's `index.ts`, creates a fresh isolate, and runs the exported
     // `load` — whose body performs the three real `files` calls.
     let loaded = tokio::time::timeout(
         support::TIMEOUT,

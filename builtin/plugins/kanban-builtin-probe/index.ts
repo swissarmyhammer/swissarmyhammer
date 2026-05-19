@@ -11,6 +11,12 @@ import { Plugin, makePluginThis } from "@swissarmyhammer/plugin";
 /// The builtin probe plugin. Its `load()` registers the host's `kanban` Rust
 /// module under the plugin's own server name.
 class KanbanBuiltinProbe extends Plugin {
+  /// Human-readable name — descriptive metadata only, not plugin identity.
+  readonly name = "Kanban Builtin Probe";
+
+  /// Version string — descriptive metadata only.
+  readonly version = "1.0.0";
+
   /// Activate the host-exposed `kanban` tool module under this plugin's name.
   async load(): Promise<void> {
     this.register("kanban-builtin-probe", { rust: "kanban" });

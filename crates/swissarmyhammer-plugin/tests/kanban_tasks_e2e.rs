@@ -55,7 +55,7 @@ const BOARD_NAME: &str = "kanban-tasks example board";
 
 /// The titles the committed `kanban-tasks` plugin adds through the SDK path
 /// form. They must match the titles hard-coded in the example bundle's
-/// `entry.ts` — the test asserts the board holds exactly these two.
+/// `index.ts` — the test asserts the board holds exactly these two.
 const FIRST_TASK_TITLE: &str = "Draft the plugin proposal";
 const SECOND_TASK_TITLE: &str = "Review the plugin proposal";
 
@@ -72,7 +72,7 @@ const SECOND_TASK_TITLE: &str = "Review the plugin proposal";
 ///   the host with `expose_rust_module`; no mock, no hand-built `_meta`;
 /// - the committed `kanban-tasks` bundle is staged into the project layer with
 ///   [`support::stage_example`] and discovered through `discover_and_load_all`,
-///   which transpiles its `entry.ts`, creates a fresh V8 isolate, and runs the
+///   which transpiles its `index.ts`, creates a fresh V8 isolate, and runs the
 ///   exported `load`;
 /// - inside the isolate the SDK reads the operation tool's `_meta` to turn each
 ///   `task.add` path into `tools/call("kanban", { op: "add task", … })`.
@@ -119,7 +119,7 @@ async fn kanban_tasks_plugin_adds_tasks_via_meta_path() {
         .expect("exposing the kanban module should succeed");
 
     // Trigger discovery: the host scans the project layer, transpiles the
-    // bundle's `entry.ts`, creates a fresh isolate, and runs the exported
+    // bundle's `index.ts`, creates a fresh isolate, and runs the exported
     // `load` — whose body adds two tasks through the `_meta` path form.
     let loaded = tokio::time::timeout(
         support::TIMEOUT,

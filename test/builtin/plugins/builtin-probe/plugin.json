@@ -1,7 +1,0 @@
-{
-  "id": "builtin-probe",
-  "name": "Builtin Probe",
-  "version": "1.0.0",
-  "entry": "entry.ts",
-  "provides": []
-}

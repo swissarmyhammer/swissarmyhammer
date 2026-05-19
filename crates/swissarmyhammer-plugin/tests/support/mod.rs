@@ -40,7 +40,7 @@ pub const TIMEOUT: Duration = Duration::from_secs(60);
 ///
 /// Resolves to `<CARGO_MANIFEST_DIR>/examples/plugins`, the home for every
 /// example bundle this crate ships. A bundle lives in a `<name>/` subdirectory
-/// of this root and carries a real `plugin.json` plus its entry module.
+/// of this root and carries a real `index.ts` entry module.
 ///
 /// # Returns
 ///
@@ -88,7 +88,7 @@ pub fn stage_example(name: &str, layer_root: &Path) {
 /// string replacement across **every staged file** for each
 /// `(token, replacement)` pair in `substitutions`.
 ///
-/// This is the seam an example needs when its `entry.ts` must reference a value
+/// This is the seam an example needs when its `index.ts` must reference a value
 /// that cannot be known at authoring time — most notably an absolute binary
 /// path. The COMMITTED bundle stays a clean, readable example carrying a named
 /// placeholder token; only the throwaway staged temp copy is specialized with
@@ -99,8 +99,8 @@ pub fn stage_example(name: &str, layer_root: &Path) {
 ///
 /// This helper supports **text bundles only**: every staged file is read as
 /// UTF-8 to scan for tokens, so a bundle carrying a non-UTF-8 binary asset
-/// would panic. Every example bundle today is `plugin.json` + `entry.ts`, both
-/// text — a binary-asset bundle would need a different staging path.
+/// would panic. Every example bundle today is TypeScript source — all text —
+/// so a binary-asset bundle would need a different staging path.
 ///
 /// # Parameters
 ///
@@ -255,7 +255,7 @@ pub async fn build_mcp_server(work_dir: &Path) -> McpServer {
 /// A plugin addresses it with `register(name, { rust: "kanban" })`. It is the
 /// kanban tool's own name — the id [`build_tool_modules`] keys the module by —
 /// so the constant is purely documentary, naming what the example bundle's
-/// `entry.ts` registers.
+/// `index.ts` registers.
 #[allow(dead_code)]
 pub const KANBAN_MODULE_ID: &str = "kanban";
 

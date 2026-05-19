@@ -1,8 +1,9 @@
 //! End-to-end integration tests driven by the committed example plugins.
 //!
 //! The bundles under `examples/plugins/` are real, author-shaped plugins —
-//! a `plugin.json` manifest plus a TypeScript `entry.ts` — committed so a
-//! plugin author can read them as worked examples. This test file exercises
+//! a manifest-less directory whose TypeScript `index.ts` is the entry module —
+//! committed so a plugin author can read them as worked examples. This test
+//! file exercises
 //! those committed bundles through the real plugin platform, so the examples
 //! are also a living regression suite: if an example stops loading, a test
 //! here fails.

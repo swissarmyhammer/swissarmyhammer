@@ -1,11 +1,10 @@
 // multi-module — the relative sibling-module import example.
 //
-// Every other example bundle in this directory is a single `entry.ts`. This
+// Every other example bundle in this directory is a single `index.ts`. This
 // one is deliberately TWO files:
 //
 //     multi-module/
-//       plugin.json         the manifest
-//       entry.ts            this file — the entry module
+//       index.ts            this file — the entry module
 //       board-helpers.ts    a sibling module, imported below
 //
 // ───────────────────────────────────────────────────────────────────────────
@@ -67,6 +66,12 @@ const TASK_TAG = "multi-module";
  * board itself.
  */
 class MultiModulePlugin extends Plugin {
+  /** Human-readable name — descriptive metadata only, not plugin identity. */
+  readonly name = "Multi-Module Example";
+
+  /** Version string — descriptive metadata only. */
+  readonly version = "1.0.0";
+
   /**
    * Registers the `kanban` operation tool and adds a task via the sibling
    * helper module.
@@ -82,8 +87,8 @@ class MultiModulePlugin extends Plugin {
    */
   async load(): Promise<void> {
     // (1) Activate the host-exposed real `kanban` operation tool under the
-    //     name `board`. `board` must appear in plugin.json's `provides`. After
-    //     this, `this.board` is the dispatch index for the `kanban` tool.
+    //     name `board`. After this, `this.board` is the dispatch index for the
+    //     `kanban` tool.
     this.register("board", { rust: "kanban" });
 
     // (2) Add the task by calling the helper IMPORTED from the sibling module.

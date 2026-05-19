@@ -2,10 +2,10 @@
 //! plugin — the demonstration that the sandboxed module loader resolves
 //! **relative sibling-module imports** inside a real, committed plugin bundle.
 //!
-//! Where `kanban_tasks_e2e.rs` and `file_notes_e2e.rs` drive single-`entry.ts`
+//! Where `kanban_tasks_e2e.rs` and `file_notes_e2e.rs` drive single-`index.ts`
 //! bundles, this test proves a bundle can be split across files: the
-//! `multi-module` example ships an `entry.ts` plus a sibling `board-helpers.ts`
-//! module, and `entry.ts` imports that sibling with a **relative specifier**
+//! `multi-module` example ships an `index.ts` plus a sibling `board-helpers.ts`
+//! module, and `index.ts` imports that sibling with a **relative specifier**
 //! (`./board-helpers.ts`).
 //!
 //! # Why a kanban board is the observable effect
@@ -14,14 +14,14 @@
 //! *hand-written temp bundles*. This test instead exercises the **committed**
 //! multi-file bundle through the real plugin platform, and proves the import
 //! resolved by observing a side effect only the imported helper can produce:
-//! the helper module — not `entry.ts` — adds a tagged task to a `.kanban`
+//! the helper module — not `index.ts` — adds a tagged task to a `.kanban`
 //! board. If the relative import had failed to resolve, the V8 isolate would
 //! never have linked `board-helpers.ts`, `load()` would have thrown at module
 //! resolution, and the task would never reach the board.
 //!
 //! # What a passing run proves
 //!
-//! The committed `multi-module` bundle's `entry.ts` imports two helpers from
+//! The committed `multi-module` bundle's `index.ts` imports two helpers from
 //! `./board-helpers.ts`: a pure function that normalizes a task title, and an
 //! `async` function that adds a tagged task through a server dispatcher. Its
 //! `load()` registers the host-exposed `kanban` tool as `board` and calls the
@@ -48,7 +48,7 @@ const BOARD_NAME: &str = "multi-module example board";
 
 /// The task title the imported `board-helpers.ts` helper produces.
 ///
-/// The bundle's `entry.ts` passes a raw, untrimmed title to the helper's
+/// The bundle's `index.ts` passes a raw, untrimmed title to the helper's
 /// `normalizeTaskTitle`; the helper trims it and collapses internal runs of
 /// whitespace. This constant is the **normalized** result the test asserts on —
 /// it must match the title the helper module yields, the proof the imported
@@ -59,18 +59,18 @@ const NORMALIZED_TASK_TITLE: &str = "Ship the multi-module example";
 /// the sandboxed loader resolves a **relative sibling-module import** inside a
 /// real bundle.
 ///
-/// The bundle is two files: `entry.ts` imports `./board-helpers.ts` with a
+/// The bundle is two files: `index.ts` imports `./board-helpers.ts` with a
 /// relative specifier. The end-to-end chain this single test stitches together:
 ///
 /// - the committed bundle is staged into the project layer with
 ///   [`support::stage_example`] — which copies **every** file in the bundle
 ///   directory, `board-helpers.ts` included — and discovered through
-///   `discover_and_load_all`, which transpiles `entry.ts`, creates a fresh V8
+///   `discover_and_load_all`, which transpiles `index.ts`, creates a fresh V8
 ///   isolate, resolves and links the relative import, and runs `load()`;
 /// - the real `kanban` operation tool is built by
 ///   [`support::expose_kanban_module`] over a temp board root and exposed to
 ///   the host, so the imported helper has a real server to drive;
-/// - inside `load()`, `entry.ts` calls the helper exported from
+/// - inside `load()`, `index.ts` calls the helper exported from
 ///   `./board-helpers.ts`, which adds one tagged task to the board.
 ///
 /// The assertion observes the board on disk. The helper-produced task can be
@@ -87,8 +87,8 @@ async fn multi_module_plugin_loads_sibling_module() {
     // Stage the committed `multi-module` bundle into the project layer's
     // `plugins/` directory, where discovery will find it. `stage_example`
     // copies the whole bundle directory recursively, so the sibling
-    // `board-helpers.ts` module is staged alongside `entry.ts` and
-    // `plugin.json` — without it the relative import could not resolve.
+    // `board-helpers.ts` module is staged alongside `index.ts` — without it
+    // the relative import could not resolve.
     support::stage_example("multi-module", project_root.path());
 
     // Expose the real in-process `kanban` operation tool as the module id
@@ -119,7 +119,7 @@ async fn multi_module_plugin_loads_sibling_module() {
         .expect("exposing the kanban module should succeed");
 
     // Trigger discovery: the host scans the project layer, transpiles the
-    // bundle's `entry.ts`, creates a fresh isolate, resolves the relative
+    // bundle's `index.ts`, creates a fresh isolate, resolves the relative
     // `./board-helpers.ts` import, links the sibling module, and runs the
     // exported `load` — whose body calls the imported helper to add a task.
     let loaded = tokio::time::timeout(

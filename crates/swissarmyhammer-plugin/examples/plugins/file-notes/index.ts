@@ -98,6 +98,12 @@ function readBackText(result: unknown): string {
  * directory.
  */
 class FileNotesPlugin extends Plugin {
+  /** Human-readable name — descriptive metadata only, not plugin identity. */
+  readonly name = "File Notes Example";
+
+  /** Version string — descriptive metadata only. */
+  readonly version = "1.0.0";
+
   /**
    * Registers the `files` operation tool and round-trips a note through it.
    *
@@ -112,8 +118,8 @@ class FileNotesPlugin extends Plugin {
    */
   async load(): Promise<void> {
     // (1) Activate the host-exposed real `files` operation tool under the
-    //     name `fs`. `fs` must appear in plugin.json's `provides`. After this,
-    //     `this.fs` is the dispatch index for the `files` tool.
+    //     name `fs`. After this, `this.fs` is the dispatch index for the
+    //     `files` tool.
     this.register("fs", { rust: "files" });
 
     // (2) Write the first note through the direct `op` dispatch form. The path
