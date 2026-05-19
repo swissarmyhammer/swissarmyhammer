@@ -1359,8 +1359,9 @@ mod tests {
     fn test_process_resource_link_content() {
         let processor = create_test_processor();
 
-        // Create a proper ResourceLink with the builder pattern
-        let resource_link = ResourceLink::new("https://example.com/document.pdf", "document.pdf");
+        // Create a proper ResourceLink with the builder pattern.
+        // ResourceLink::new takes (name, uri) in that order.
+        let resource_link = ResourceLink::new("document.pdf", "https://example.com/document.pdf");
 
         let content_block = ContentBlock::ResourceLink(resource_link);
         let result = processor.process_content_block(&content_block);
@@ -1463,7 +1464,8 @@ mod tests {
             false,
         );
 
-        let resource_link = ResourceLink::new("invalid-scheme://test", "test");
+        // ResourceLink::new takes (name, uri); the uri here has an invalid scheme.
+        let resource_link = ResourceLink::new("test", "invalid-scheme://test");
 
         let content_block = ContentBlock::ResourceLink(resource_link);
         let result = processor.process_content_block(&content_block);

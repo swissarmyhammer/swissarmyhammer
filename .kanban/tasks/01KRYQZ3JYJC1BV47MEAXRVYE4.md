@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '80'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffe80
 title: Remove claude-agent [lib] test = false quarantine and fix the broken lib unit tests
 ---
 Discovered during the ACP finish run (not part of the 16 ACP cards — pre-existing debt).

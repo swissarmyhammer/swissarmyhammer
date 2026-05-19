@@ -1440,8 +1440,8 @@ mod tests {
         let content = vec![
             ContentBlock::Text(TextContent::new("Here's a document:")),
             ContentBlock::ResourceLink(ResourceLink::new(
-                "https://example.com/document.pdf",
                 "Example Document",
+                "https://example.com/document.pdf",
             )),
         ];
 

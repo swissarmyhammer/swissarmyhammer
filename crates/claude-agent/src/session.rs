@@ -965,6 +965,13 @@ mod tests {
 
         let manager = SessionManager::new();
         let terminal_manager = TerminalManager::new();
+        // Terminal operations are gated behind the client `terminal` capability,
+        // which a real client declares during `initialize`.
+        terminal_manager
+            .set_client_capabilities(
+                agent_client_protocol::schema::ClientCapabilities::new().terminal(true),
+            )
+            .await;
         let cwd = std::env::current_dir().unwrap();
         let session_id = manager.create_session(cwd, None).unwrap();
         let session_id_str = session_id.to_string();
@@ -1014,6 +1021,13 @@ mod tests {
 
         let manager = SessionManager::new();
         let terminal_manager = TerminalManager::new();
+        // Terminal operations are gated behind the client `terminal` capability,
+        // which a real client declares during `initialize`.
+        terminal_manager
+            .set_client_capabilities(
+                agent_client_protocol::schema::ClientCapabilities::new().terminal(true),
+            )
+            .await;
         let cwd = std::env::current_dir().unwrap();
         let session_id = manager.create_session(cwd, None).unwrap();
         let session_id_str = session_id.to_string();

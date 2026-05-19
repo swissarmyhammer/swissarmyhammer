@@ -303,7 +303,7 @@ mod tests {
             size_bytes: u64,
         ) -> ContentBlock {
             ContentBlock::ResourceLink(
-                ResourceLink::new(uri, name)
+                ResourceLink::new(name, uri)
                     .description(description)
                     .mime_type(mime_type)
                     .title(title)
