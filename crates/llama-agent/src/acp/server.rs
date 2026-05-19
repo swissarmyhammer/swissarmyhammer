@@ -2601,15 +2601,13 @@ impl AcpServer {
                     }
                 }
 
-                let term_req: super::terminal::WaitForExitRequest = serde_json::from_value(
-                    params_value,
-                )
-                .map_err(|e| {
-                    tracing::error!("Failed to parse terminal/wait_for_exit params: {}", e);
-                    super::acp_error::invalid_params(format!(
+                let term_req: super::terminal::WaitForExitRequest =
+                    serde_json::from_value(params_value).map_err(|e| {
+                        tracing::error!("Failed to parse terminal/wait_for_exit params: {}", e);
+                        super::acp_error::invalid_params(format!(
                         "terminal/wait_for_exit parameters do not match the expected schema: {e}"
                     ))
-                })?;
+                    })?;
 
                 let response = self
                     .terminal_manager
