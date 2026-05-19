@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '9380'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffff8180
 project: ai-panel
 title: 'AI panel: hide ''New conversation'' button on an empty conversation'
 ---
@@ -21,16 +21,16 @@ Fix: render the "New conversation" button only when the conversation is non-empt
 Do not change session creation, `newConversation`, or the empty-state copy — only the button's visibility.
 
 ## Acceptance Criteria
-- [ ] On a freshly opened AI panel with zero messages, the "New conversation" button is not in the DOM.
-- [ ] After at least one message exists in the conversation, the "New conversation" button is rendered and still resets the session when clicked.
-- [ ] The composer (CM6 prompt input) is rendered and usable on an empty panel — typing a prompt and sending it starts the conversation with no prior button press (existing lazy `ensureSession` behavior, unchanged).
-- [ ] No change to `useConversation`, `newConversation`, or the empty-state component.
+- [x] On a freshly opened AI panel with zero messages, the "New conversation" button is not in the DOM.
+- [x] After at least one message exists in the conversation, the "New conversation" button is rendered and still resets the session when clicked.
+- [x] The composer (CM6 prompt input) is rendered and usable on an empty panel — typing a prompt and sending it starts the conversation with no prior button press (existing lazy `ensureSession` behavior, unchanged).
+- [x] No change to `useConversation`, `newConversation`, or the empty-state component.
 
 ## Tests
-- [ ] In `apps/kanban-app/ui/src/components/ai-panel.test.tsx`, add a test: a freshly rendered `AiPanel` with no messages does NOT show a "New conversation" button (`queryByRole("button", { name: /new conversation/i })` is null).
-- [ ] Add/extend a test: after a message is streamed in, the "New conversation" button appears.
-- [ ] Confirm the existing `"'New conversation' clears the message log"` test (line ~315) still passes — it sends a message first, so the button is visible there.
-- [ ] Run `cd apps/kanban-app/ui && npx vitest run src/components/ai-panel.test.tsx` — all green.
+- [x] In `apps/kanban-app/ui/src/components/ai-panel.test.tsx`, add a test: a freshly rendered `AiPanel` with no messages does NOT show a "New conversation" button (`queryByRole("button", { name: /new conversation/i })` is null).
+- [x] Add/extend a test: after a message is streamed in, the "New conversation" button appears.
+- [x] Confirm the existing `"'New conversation' clears the message log"` test (line ~315) still passes — it sends a message first, so the button is visible there.
+- [x] Run `cd apps/kanban-app/ui && npx vitest run src/components/ai-panel.test.tsx` — all green.
 
 ## Workflow
 - Use `/tdd` — write the failing visibility tests first, then implement to make them pass.

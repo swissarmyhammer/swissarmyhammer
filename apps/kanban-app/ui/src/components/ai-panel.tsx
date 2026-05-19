@@ -407,6 +407,7 @@ function NoModelState({ hasModels }: NoModelStateProps): ReactNode {
       />
       <ComposerArea
         disabled
+        hasMessages={false}
         placeholder="Select a model to start..."
         streaming={false}
         onCancel={() => {}}
@@ -563,6 +564,7 @@ function AiPanelConversation({
       </AiPanelFocusScope>
       <ComposerArea
         disabled={!modelReady}
+        hasMessages={messages.length > 0}
         placeholder="Ask the AI agent..."
         streaming={status === "streaming"}
         onCancel={handleCancel}
@@ -918,6 +920,12 @@ function PermissionPrompt({
 /** Props for {@link ComposerArea}. */
 interface ComposerAreaProps {
   disabled: boolean;
+  /**
+   * Whether the conversation has at least one message. The "New conversation"
+   * reset button is rendered only when this is true — on an empty conversation
+   * there is nothing to reset, so the button would be misleading clutter.
+   */
+  hasMessages: boolean;
   placeholder: string;
   /** Whether a prompt turn is currently streaming. */
   streaming: boolean;
@@ -928,17 +936,23 @@ interface ComposerAreaProps {
 }
 
 /**
- * The composer: the "new conversation" action above a CM6 prompt editor.
+ * The composer: an optional "new conversation" action above a CM6 prompt
+ * editor.
  *
  * The prompt editor is {@link AiPromptComposer} — a CodeMirror 6 instance on
  * the app's shared `TextEditor` primitive, so the active keymap (vim / emacs /
  * CUA) works inside it ("CM6 everywhere", `ideas/kanban/app-architecture.md`).
  * Submitting calls `onSend`; while a turn streams the submit button becomes a
- * stop control that calls `onCancel`. "New conversation" tears the session
- * down and starts fresh.
+ * stop control that calls `onCancel`.
+ *
+ * The "New conversation" button only *resets* an existing conversation, so it
+ * renders only when `hasMessages` is true — an empty conversation has nothing
+ * to reset, and the agent session is created lazily on the first prompt. When
+ * shown, clicking it tears the session down and starts fresh.
  */
 function ComposerArea({
   disabled,
+  hasMessages,
   placeholder,
   streaming,
   onSend,
@@ -947,17 +961,19 @@ function ComposerArea({
 }: ComposerAreaProps): ReactNode {
   return (
     <div className="border-t p-2">
-      <div className="mb-1 flex justify-end">
-        <Button
-          disabled={disabled}
-          onClick={onNewConversation}
-          size="sm"
-          variant="ghost"
-        >
-          <PlusIcon className="size-4" />
-          New conversation
-        </Button>
-      </div>
+      {hasMessages && (
+        <div className="mb-1 flex justify-end">
+          <Button
+            disabled={disabled}
+            onClick={onNewConversation}
+            size="sm"
+            variant="ghost"
+          >
+            <PlusIcon className="size-4" />
+            New conversation
+          </Button>
+        </div>
+      )}
       {/* The composer is a focus scope — `ui:ai-panel.composer` under the
           panel zone — so jump-to lands directly on the prompt box and
           arrow-nav reaches it. `<FocusScope>` deliberately does NOT steal a

@@ -312,6 +312,52 @@ describe("AiPanel: conversation rendering", () => {
     });
   });
 
+  it("hides 'New conversation' on an empty panel and reveals it after a message", async () => {
+    const harness = mockHarness({
+      updates: [
+        {
+          sessionUpdate: "agent_message_chunk",
+          content: textBlock("a streamed reply"),
+        },
+      ],
+    });
+
+    await renderInAct(
+      <AiPanel
+        boardDir="/tmp/board"
+        models={MODELS}
+        modelId="claude-code"
+        onSelectModel={() => {}}
+        createConnect={harness.createConnect}
+      />,
+    );
+
+    // A freshly opened panel has zero messages — "New conversation" is pure
+    // clutter (there is nothing to reset), so it is not in the DOM.
+    expect(
+      screen.queryByRole("button", { name: /new conversation/i }),
+    ).toBeNull();
+
+    // Send a prompt so the conversation is non-empty.
+    const textarea = screen.getByRole("textbox");
+    await act(async () => {
+      await userEvent.type(textarea, "first prompt");
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /submit/i }));
+    });
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("a streamed reply");
+    });
+
+    // With at least one message, the reset affordance appears.
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /new conversation/i }),
+      ).toBeInTheDocument();
+    });
+  });
+
   it("'New conversation' clears the message log", async () => {
     const harness = mockHarness({
       updates: [
