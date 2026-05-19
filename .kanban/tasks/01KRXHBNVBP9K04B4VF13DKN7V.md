@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8180'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffff780
 title: Remove committed .hence transcript files and gitignore the directory
 ---
 Two raw transcript dumps are committed to the repo and should not be tracked.

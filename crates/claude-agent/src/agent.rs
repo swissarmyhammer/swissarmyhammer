@@ -7,7 +7,6 @@ pub use crate::agent_file_operations::{
 };
 pub use crate::agent_notifications::NotificationSender;
 pub use crate::agent_permissions::{PermissionRequest, PermissionResponse, ToolCallUpdate};
-pub use crate::agent_raw_messages::RawMessageManager;
 pub use crate::agent_reasoning::{AgentThought, ReasoningPhase};
 
 use crate::permission_storage;
@@ -25,10 +24,12 @@ use crate::{
     tools::ToolCallHandler,
 };
 use agent_client_protocol::schema::{
-    AgentCapabilities, ContentBlock, LoadSessionRequest, LoadSessionResponse, NewSessionRequest,
-    NewSessionResponse, PromptRequest, PromptResponse, SessionId, SessionNotification,
-    SessionUpdate, SetSessionModeRequest, SetSessionModeResponse, StopReason, TextContent,
+    AgentCapabilities, ContentBlock, ListSessionsRequest, ListSessionsResponse, LoadSessionRequest,
+    LoadSessionResponse, McpServer, NewSessionRequest, NewSessionResponse, PromptRequest,
+    PromptResponse, SessionId, SessionNotification, SessionUpdate, SetSessionModeRequest,
+    SetSessionModeResponse, StopReason, TextContent,
 };
+use agent_client_protocol_extras::{RawMessageManager, SessionRecord, SessionStore};
 use std::sync::Arc;
 use std::time::SystemTime;
 use swissarmyhammer_common::Pretty;
@@ -133,15 +134,19 @@ impl ClaudeAgent {
         Self::new_with_raw_message_manager(config, None).await
     }
 
-    /// Create a new ClaudeAgent with optional shared RawMessageManager
+    /// Create a new ClaudeAgent with an optional inherited RawMessageManager.
     ///
-    /// This is used when creating subagents that should share the same transcript_raw.jsonl
-    /// file as the root agent. If raw_message_manager is None, a new manager will be created.
+    /// This is used when creating a subagent that should share the same
+    /// `raw.jsonl` transcript as its root agent. When `raw_message_manager` is
+    /// `Some`, the subagent reuses that manager and the root session's
+    /// transcript file. When it is `None`, no manager exists yet — the root
+    /// agent creates one lazily in `new_session`, keyed by the session ULID.
     ///
     /// # Arguments
     ///
     /// * `config` - Agent configuration
-    /// * `raw_message_manager` - Optional RawMessageManager from parent agent to share
+    /// * `raw_message_manager` - Optional RawMessageManager inherited from a
+    ///   parent agent (looked up via [`RawMessageManager::lookup`])
     ///
     /// # Returns
     ///
@@ -159,12 +164,8 @@ impl ClaudeAgent {
         let permission_engine = Self::create_permission_engine();
         let protocol_translator = Arc::new(ProtocolTranslator::new(permission_engine.clone()));
 
-        let (claude_client, raw_message_manager) = Self::create_claude_client(
-            &config,
-            protocol_translator,
-            &notification_sender,
-            raw_message_manager,
-        )?;
+        let claude_client =
+            Self::create_claude_client(&config, protocol_translator, &notification_sender)?;
 
         let mcp_manager = Arc::new(crate::mcp::McpServerManager::new());
         let tool_handler = Self::create_tool_handler(
@@ -207,67 +208,20 @@ impl ClaudeAgent {
         Arc::new(PermissionPolicyEngine::new(Box::new(storage)))
     }
 
-    /// Create and configure the Claude client with optional raw message manager.
+    /// Create and configure the Claude client.
+    ///
+    /// The raw message manager is not wired here — it is created per session
+    /// in `new_session`, once the session ULID is known, and installed onto the
+    /// client via [`ClaudeClient::set_raw_message_manager`] at that point.
     fn create_claude_client(
         config: &AgentConfig,
         protocol_translator: Arc<ProtocolTranslator>,
         notification_sender: &NotificationSender,
-        raw_message_manager: Option<RawMessageManager>,
-    ) -> crate::Result<(Arc<ClaudeClient>, Option<RawMessageManager>)> {
+    ) -> crate::Result<Arc<ClaudeClient>> {
         let mut claude_client = ClaudeClient::new_with_config(&config.claude, protocol_translator)?;
         claude_client.set_notification_sender(Arc::new(notification_sender.clone()));
 
-        let raw_message_manager = Self::resolve_raw_message_manager(raw_message_manager);
-        if let Some(ref manager) = raw_message_manager {
-            claude_client.set_raw_message_manager(manager.clone());
-        }
-
-        Ok((Arc::new(claude_client), raw_message_manager))
-    }
-
-    /// Resolve the raw message manager - use provided or create new.
-    fn resolve_raw_message_manager(
-        raw_message_manager: Option<RawMessageManager>,
-    ) -> Option<RawMessageManager> {
-        if let Some(manager) = raw_message_manager {
-            tracing::debug!("Using shared RawMessageManager from parent agent");
-            return Some(manager);
-        }
-
-        Self::create_new_raw_message_manager()
-    }
-
-    /// Create a new raw message manager for recording JSON-RPC messages.
-    fn create_new_raw_message_manager() -> Option<RawMessageManager> {
-        let raw_json_path = Self::get_raw_message_path();
-        Self::ensure_parent_dir_exists(&raw_json_path);
-
-        RawMessageManager::new(raw_json_path.clone())
-            .inspect(|_| {
-                tracing::info!(
-                    "Raw ACP JSON-RPC messages recording to {}",
-                    raw_json_path.display()
-                );
-            })
-            .inspect_err(|e| {
-                tracing::warn!("Failed to create raw message manager: {}", e);
-            })
-            .ok()
-    }
-
-    /// Get the path for raw message recording.
-    fn get_raw_message_path() -> std::path::PathBuf {
-        std::env::current_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from("."))
-            .join(".acp")
-            .join("transcript_raw.jsonl")
-    }
-
-    /// Ensure the parent directory exists.
-    fn ensure_parent_dir_exists(path: &std::path::Path) {
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
+        Ok(Arc::new(claude_client))
     }
 
     /// Create the tool handler with MCP support.
@@ -315,6 +269,16 @@ impl ClaudeAgent {
             .http(true)
             .sse(false);
 
+        // Advertise `session/list` and `session/resume`. Durable sessions are
+        // persisted to the shared SessionStore at the end of each turn, so the
+        // agent can enumerate them and resume them across process restarts.
+        // `session/resume` re-spawns the claude CLI with `--resume`; the
+        // matching `load_session(true)` below covers `session/load` (resume
+        // plus history replay) per the ACP capability split.
+        let session_capabilities = agent_client_protocol::schema::SessionCapabilities::new()
+            .list(agent_client_protocol::schema::SessionListCapabilities::new())
+            .resume(agent_client_protocol::schema::SessionResumeCapabilities::new());
+
         let mut agent_meta_map = serde_json::Map::new();
         agent_meta_map.insert("tools".to_string(), serde_json::json!(available_tools));
         agent_meta_map.insert("streaming".to_string(), serde_json::json!(true));
@@ -323,6 +287,7 @@ impl ClaudeAgent {
             .load_session(true)
             .prompt_capabilities(prompt_capabilities)
             .mcp_capabilities(mcp_capabilities)
+            .session_capabilities(session_capabilities)
             .meta(agent_meta_map)
     }
 
@@ -590,6 +555,16 @@ impl ClaudeAgent {
             .and_then(|s| s.and_then(|sess| sess.current_mode.clone()))
     }
 
+    /// Borrow the agent's in-memory [`SessionManager`](crate::session::SessionManager).
+    ///
+    /// Exposes the live session cache for observation — notably so the
+    /// integration suite can confirm that `session/resume` rehydration
+    /// reconstructs a session into the cache without driving a live
+    /// `claude --resume`.
+    pub fn session_manager(&self) -> &Arc<SessionManager> {
+        &self.session_manager
+    }
+
     /// Start monitoring MCP server notifications for capability changes
     ///
     /// This should be called after the agent is created and wrapped in Arc.
@@ -664,14 +639,54 @@ impl ClaudeAgent {
         Arc::clone(&self.tool_handler)
     }
 
-    /// Parse and validate a session ID from a SessionId wrapper
-    pub(crate) fn parse_session_id(
+    /// Resolve an incoming ACP `sessionId` to a live session.
+    ///
+    /// This is the single resolution path shared by every method that accepts
+    /// a `sessionId` — `session/prompt`, `session/cancel`, and
+    /// `session/set_mode`. (`session/load` and `session/resume` resolve through
+    /// the durable [`SessionStore`](agent_client_protocol_extras::SessionStore)
+    /// instead, but follow the same opaque-id, resolve-by-existence rule.)
+    ///
+    /// The session id is an **opaque string**: it is valid if and only if a
+    /// session with that exact id exists. This method therefore never rejects
+    /// an id on ULID format. A non-ULID string cannot match any session this
+    /// agent created — claude-agent only ever generates ULID ids — so it
+    /// resolves to the very same "session not found" outcome as a ULID with no
+    /// live session. Both miss in exactly one way.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::invalid_params`](agent_client_protocol::Error::invalid_params)
+    /// when no live session exists for the id — the one, uniform "session not
+    /// found" error.
+    pub(crate) fn resolve_session(
         &self,
         session_id: &SessionId,
-    ) -> Result<crate::session::SessionId, agent_client_protocol::Error> {
-        // Parse session ID from ACP format (raw ULID) to internal SessionId type
-        crate::session::SessionId::parse(session_id.0.as_ref())
-            .map_err(|_| agent_client_protocol::Error::invalid_params())
+    ) -> Result<crate::session::Session, agent_client_protocol::Error> {
+        // An id this agent did not mint (non-ULID) cannot key any live
+        // session; treat that exactly like a ULID lookup miss.
+        let internal_id = crate::session::SessionId::parse(session_id.0.as_ref())
+            .map_err(|_| Self::session_not_found_error(session_id))?;
+
+        self.session_manager
+            .get_session(&internal_id)
+            .map_err(|_| agent_client_protocol::Error::internal_error())?
+            .ok_or_else(|| Self::session_not_found_error(session_id))
+    }
+
+    /// Build the uniform "session not found" error returned by every
+    /// `sessionId`-accepting method when an id resolves to no session.
+    ///
+    /// One code (`invalid_params`, -32602) and one shape, regardless of whether
+    /// the miss was a non-ULID string or a ULID with no live session.
+    pub(crate) fn session_not_found_error(session_id: &SessionId) -> agent_client_protocol::Error {
+        tracing::warn!("Session not found: {}", session_id);
+        crate::acp_error::invalid_params(format!("Session not found: {session_id}")).data(
+            serde_json::json!({
+                "sessionId": session_id,
+                "error": "session_not_found",
+            }),
+        )
     }
 
     /// Apply mode-specific configuration to a session
@@ -702,8 +717,9 @@ impl ClaudeAgent {
         &self,
         request: &PromptRequest,
     ) -> Result<(), agent_client_protocol::Error> {
-        // Validate session ID format
-        self.parse_session_id(&request.session_id)?;
+        // The session id is an opaque string — it is not format-validated here.
+        // `prompt` resolves it by existence via `resolve_session`; this method
+        // only validates the prompt content.
 
         // Process all content blocks and validate
         let mut prompt_text = String::new();
@@ -1215,7 +1231,7 @@ impl ClaudeAgent {
         Ok(())
     }
 
-    /// Create session and register RawMessageManager.
+    /// Create session and wire up the per-session RawMessageManager.
     pub(crate) async fn create_new_session_internal(
         &self,
         request: &NewSessionRequest,
@@ -1230,11 +1246,7 @@ impl ClaudeAgent {
             .create_session(request.cwd.clone(), client_caps)
             .map_err(|_e| agent_client_protocol::Error::internal_error())?;
 
-        // Register RawMessageManager for this session so subagents can find it
-        if let Some(ref manager) = self.raw_message_manager {
-            RawMessageManager::register(session_id.to_string(), manager.clone());
-            tracing::debug!("Registered RawMessageManager for session {}", session_id);
-        }
+        self.wire_raw_message_manager(&session_id);
 
         // Store MCP servers in the session if provided
         if !request.mcp_servers.is_empty() {
@@ -1247,6 +1259,46 @@ impl ClaudeAgent {
 
         tracing::info!("Created session: {}", session_id);
         Ok(session_id)
+    }
+
+    /// Create or inherit the per-session [`RawMessageManager`] and wire it up.
+    ///
+    /// The transcript path embeds the session ULID, so the manager can only be
+    /// built once a session exists. A subagent inherits its root agent's manager
+    /// (carried in `self.raw_message_manager`) so all agents in a hierarchy share
+    /// one transcript; a root agent has no inherited manager and creates a fresh
+    /// one writing `<acp-session-dir>/raw.jsonl` for the session ULID.
+    ///
+    /// The resolved manager is registered in the shared registry keyed by the
+    /// session ULID — so a subagent that later starts its own [`ClaudeAgent`]
+    /// can [`RawMessageManager::lookup`] it — and installed onto the Claude
+    /// client so streamed JSON-RPC frames are recorded.
+    pub(crate) fn wire_raw_message_manager(&self, session_id: &crate::session::SessionId) {
+        let session_ulid = session_id.to_string();
+
+        let manager = match self.raw_message_manager {
+            Some(ref inherited) => {
+                tracing::debug!("Using shared RawMessageManager from parent agent");
+                inherited.clone()
+            }
+            None => match RawMessageManager::new(&session_ulid) {
+                Ok(manager) => {
+                    tracing::info!(
+                        "Raw ACP JSON-RPC messages recording to <acp-session-dir>/raw.jsonl for session {}",
+                        session_ulid
+                    );
+                    manager
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to create raw message manager: {}", e);
+                    return;
+                }
+            },
+        };
+
+        RawMessageManager::register(session_ulid.clone(), manager.clone());
+        self.claude_client.set_raw_message_manager(manager);
+        tracing::debug!("Registered RawMessageManager for session {}", session_ulid);
     }
 
     /// Store MCP server configs in session.
@@ -1345,27 +1397,6 @@ impl ClaudeAgent {
         }
     }
 
-    /// Send initial available commands after session creation.
-    pub(crate) async fn send_initial_session_commands(
-        &self,
-        session_id: &crate::session::SessionId,
-        protocol_session_id: &SessionId,
-    ) {
-        let initial_commands = self
-            .get_available_commands_for_session(protocol_session_id)
-            .await;
-        if let Err(e) = self
-            .update_session_available_commands(protocol_session_id, initial_commands)
-            .await
-        {
-            tracing::warn!(
-                "Failed to send initial available commands for session {}: {}",
-                session_id,
-                e
-            );
-        }
-    }
-
     /// Build new session response with modes if applicable.
     pub(crate) async fn build_new_session_response(
         &self,
@@ -1423,135 +1454,41 @@ impl ClaudeAgent {
         Ok(())
     }
 
-    /// Handle found session: replay history and build response.
-    pub(crate) async fn handle_session_found(
-        &self,
-        session: &crate::session::Session,
-    ) -> LoadSessionResponse {
-        tracing::info!(
-            "Loaded session: {} with {} historical messages",
-            session.id,
-            session.context.len()
-        );
-
-        // Replay historical messages
-        self.replay_session_history(session).await;
-
-        // Build response metadata
-        self.build_load_session_response(session)
-    }
-
-    /// Replay session history via notifications.
-    pub(crate) async fn replay_session_history(&self, session: &crate::session::Session) {
-        if session.context.is_empty() {
-            return;
-        }
-
-        tracing::info!(
-            "Replaying {} historical messages for session {}",
-            session.context.len(),
-            session.id
-        );
-
-        for message in &session.context {
-            let notification = self.build_history_notification(session, message);
-            if let Err(e) = self.notification_sender.send_update(notification).await {
-                tracing::error!("Failed to send historical message notification: {}", e);
-            }
-        }
-
-        tracing::info!(
-            "Completed queueing {} history notifications for session {}",
-            session.context.len(),
-            session.id
-        );
-    }
-
-    /// Build notification for historical message replay.
-    pub(crate) fn build_history_notification(
-        &self,
-        session: &crate::session::Session,
-        message: &crate::session::Message,
-    ) -> SessionNotification {
-        let mut meta_map = serde_json::Map::new();
-        meta_map.insert(
-            "timestamp".to_string(),
-            serde_json::json!(message
-                .timestamp
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()),
-        );
-        meta_map.insert(
-            "message_type".to_string(),
-            serde_json::json!("historical_replay"),
-        );
-
-        SessionNotification::new(
-            SessionId::new(session.id.to_string()),
-            message.update.clone(),
-        )
-        .meta(meta_map)
-    }
-
-    /// Build load session response with metadata.
+    /// Build the `session/load` response from the restored
+    /// [`SessionRecord`].
+    ///
+    /// Carries listing-style metadata — the session id, last-activity
+    /// timestamp, and the count of updates that were replayed to the client —
+    /// so a client can correlate the response with the history it just
+    /// received.
     pub(crate) fn build_load_session_response(
         &self,
-        session: &crate::session::Session,
+        record: &SessionRecord,
     ) -> LoadSessionResponse {
         let mut meta_map = serde_json::Map::new();
         meta_map.insert(
             "session_id".to_string(),
-            serde_json::json!(session.id.to_string()),
+            serde_json::json!(record.session_id),
         );
         meta_map.insert(
-            "created_at".to_string(),
-            serde_json::json!(session
-                .created_at
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()),
+            "updated_at".to_string(),
+            serde_json::json!(record.updated_at),
         );
         meta_map.insert(
             "message_count".to_string(),
-            serde_json::json!(session.context.len()),
+            serde_json::json!(record.updates.len()),
         );
         meta_map.insert(
             "history_replayed".to_string(),
-            serde_json::json!(session.context.len()),
+            serde_json::json!(record.updates.len()),
         );
 
         LoadSessionResponse::new().meta(meta_map)
     }
 
-    /// Create session not found error.
-    pub(crate) fn session_not_found_error(
-        &self,
-        session_id: &SessionId,
-    ) -> agent_client_protocol::Error {
-        tracing::warn!("Session not found: {}", session_id);
-        agent_client_protocol::Error::new(
-            -32602,
-            "Session not found: sessionId does not exist or has expired".to_string(),
-        )
-        .data(serde_json::json!({
-            "sessionId": session_id,
-            "error": "session_not_found"
-        }))
-    }
-
     // =========================================================================
     // set_session_mode helper methods
     // =========================================================================
-
-    /// Parse session ID for mode change request.
-    pub(crate) fn parse_mode_session_id(
-        &self,
-        session_id: &SessionId,
-    ) -> Result<crate::session::SessionId, agent_client_protocol::Error> {
-        crate::session::SessionId::parse(&session_id.0)
-            .map_err(|_| agent_client_protocol::Error::invalid_request())
-    }
 
     /// Validate that the requested mode exists in available modes.
     pub(crate) async fn validate_mode_exists(
@@ -1608,11 +1545,16 @@ impl ClaudeAgent {
     }
 
     /// Handle process replacement when mode changes.
+    ///
+    /// Replaces the underlying Claude process so the next prompt runs under the
+    /// new mode. The client-facing `CurrentModeUpdate` notification is emitted
+    /// by the `set_session_mode` handler, not here — process replacement is an
+    /// internal concern; the notification must fire on every successful mode
+    /// set regardless of whether the process was replaced.
     pub(crate) async fn handle_mode_change_process(
         &self,
         session_id: &crate::session::SessionId,
         mode_id: &str,
-        request: &SetSessionModeRequest,
     ) -> Result<(), agent_client_protocol::Error> {
         let session = self
             .session_manager
@@ -1639,9 +1581,6 @@ impl ClaudeAgent {
             return Err(agent_client_protocol::Error::internal_error());
         }
 
-        // Send mode update notification
-        self.send_mode_update_notification(session_id, request)
-            .await?;
         Ok(())
     }
 
@@ -1872,17 +1811,6 @@ impl ClaudeAgent {
         prompt_text
     }
 
-    /// Get and validate session exists.
-    pub(crate) fn get_validated_session(
-        &self,
-        session_id: &crate::session::SessionId,
-    ) -> Result<crate::session::Session, agent_client_protocol::Error> {
-        self.session_manager
-            .get_session(session_id)
-            .map_err(|_| agent_client_protocol::Error::internal_error())?
-            .ok_or_else(agent_client_protocol::Error::invalid_params)
-    }
-
     /// Prepare session for new turn: reset counters and add user message.
     pub(crate) fn prepare_session_for_turn(
         &self,
@@ -2010,6 +1938,310 @@ impl ClaudeAgent {
     }
 }
 
+/// Default page size for `session/list` when the client does not constrain it.
+///
+/// `ListSessionsRequest` carries no page-size field — paging is cursor-driven —
+/// so the agent picks the page size. A modest fixed value keeps each response
+/// bounded while still being useful for a session picker UI.
+const SESSION_LIST_PAGE_SIZE: usize = 50;
+
+// Durable session persistence via the shared SessionStore.
+//
+// `SessionManager` is the in-memory live-session cache; these methods bridge a
+// live `Session` to the agent-neutral `SessionRecord` / `SessionStore` layer so
+// sessions survive process restarts and can be answered by `session/list`.
+impl ClaudeAgent {
+    /// Persist the current state of a live session as a durable `SessionRecord`.
+    ///
+    /// Builds a [`SessionRecord`] from the in-memory [`Session`](crate::session::Session)
+    /// and writes it to the shared [`SessionStore`]. Called at the end of each
+    /// turn so the on-disk record tracks the conversation as it grows.
+    ///
+    /// Persistence failures are logged and swallowed: a turn must not fail
+    /// because the durable copy could not be written. The live in-memory
+    /// session remains the source of truth for the current process.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - The session whose live state should be persisted.
+    pub(crate) fn persist_session_record(&self, session_id: &crate::session::SessionId) {
+        let session = match self.session_manager.get_session(session_id) {
+            Ok(Some(session)) => session,
+            Ok(None) => {
+                tracing::warn!(
+                    "Cannot persist session record: session {} not found",
+                    session_id
+                );
+                return;
+            }
+            Err(e) => {
+                tracing::warn!("Cannot persist session record for {}: {}", session_id, e);
+                return;
+            }
+        };
+
+        let record = Self::session_record_from(&session);
+        if let Err(e) = SessionStore::new().persist(&record) {
+            tracing::warn!("Failed to persist session record for {}: {}", session_id, e);
+        } else {
+            tracing::debug!("Persisted session record for {}", session_id);
+        }
+    }
+
+    /// Generate the session title after the first meaningful exchange, if it is
+    /// still missing.
+    ///
+    /// This implements the shared title contract documented in
+    /// [`agent_client_protocol_extras::session_title`]: a title is generated
+    /// exactly once, after the session has both a user message and an agent
+    /// response. claude-agent's generation source is the first user prompt —
+    /// the claude CLI exposes no session summary to borrow.
+    ///
+    /// Generation is dispatched to a detached task so it never blocks the
+    /// `session/prompt` response. The task derives the title, stores it on the
+    /// live session, persists the updated [`SessionRecord`], and emits a single
+    /// [`SessionUpdate::SessionInfoUpdate`] notification carrying the new title
+    /// and last-activity timestamp.
+    ///
+    /// Called at the end of every successful prompt turn. It is a cheap no-op
+    /// once a title exists, so re-invoking it on later turns is harmless.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - The session whose title should be generated.
+    pub fn maybe_generate_session_title(&self, session_id: &crate::session::SessionId) {
+        let session = match self.session_manager.get_session(session_id) {
+            Ok(Some(session)) => session,
+            Ok(None) => return,
+            Err(e) => {
+                tracing::warn!("Cannot generate session title for {}: {}", session_id, e);
+                return;
+            }
+        };
+
+        // Generate exactly once, and only after the first meaningful exchange.
+        if session.title.is_some() || !Self::has_first_exchange(&session) {
+            return;
+        }
+
+        let Some(first_user_text) = Self::first_user_message_text(&session) else {
+            return;
+        };
+        let Some(title) =
+            agent_client_protocol_extras::title_from_first_user_message(&first_user_text)
+        else {
+            return;
+        };
+
+        let session_manager = Arc::clone(&self.session_manager);
+        let notification_sender = Arc::clone(&self.notification_sender);
+        let session_id = *session_id;
+
+        // Detached task: title generation must not block the prompt response.
+        // The derivation itself is cheap, but running it off the turn's
+        // critical path keeps the emission behaviour identical to llama-agent's
+        // model-backed generation.
+        tokio::spawn(async move {
+            Self::apply_session_title(&session_manager, &notification_sender, &session_id, title)
+                .await;
+        });
+    }
+
+    /// Store a freshly generated `title` on the live session, persist the
+    /// updated record, and emit one [`SessionUpdate::SessionInfoUpdate`].
+    ///
+    /// This is the shared "on generation" half of the title contract: it bumps
+    /// the session's last-activity time, writes the durable record so
+    /// `session/list` reflects the title across restarts, and announces the
+    /// title live to the client. If the session already has a title (a turn
+    /// raced ahead) it leaves it untouched and emits nothing.
+    async fn apply_session_title(
+        session_manager: &SessionManager,
+        notification_sender: &NotificationSender,
+        session_id: &crate::session::SessionId,
+        title: String,
+    ) {
+        let mut applied = false;
+        if let Err(e) = session_manager.update_session(session_id, |session| {
+            if session.title.is_none() {
+                session.title = Some(title.clone());
+                applied = true;
+            }
+        }) {
+            tracing::warn!(
+                "Failed to store generated title for session {}: {}",
+                session_id,
+                e
+            );
+            return;
+        }
+
+        if !applied {
+            return;
+        }
+
+        // Persist so `session/list` returns the title across restarts, and
+        // capture the session's `last_accessed` so the live notification below
+        // carries the *same* `updated_at` as the persisted record rather than
+        // an independent clock read.
+        let mut updated_at = SystemTime::now();
+        if let Ok(Some(session)) = session_manager.get_session(session_id) {
+            updated_at = session.last_accessed;
+            let record = Self::session_record_from(&session);
+            if let Err(e) = SessionStore::new().persist(&record) {
+                tracing::warn!("Failed to persist session title for {}: {}", session_id, e);
+            }
+        }
+
+        // Emit the single built-in SessionInfoUpdate carrying the new title.
+        // The timestamp matches the persisted record's `updated_at` above, so
+        // `session/list` and the live notification do not disagree.
+        let updated_at = Self::system_time_to_rfc3339(updated_at);
+        let info_update = agent_client_protocol::schema::SessionInfoUpdate::new()
+            .title(title.clone())
+            .updated_at(updated_at);
+        let notification = SessionNotification::new(
+            agent_client_protocol::schema::SessionId::new(session_id.to_string()),
+            SessionUpdate::SessionInfoUpdate(info_update),
+        );
+        if let Err(e) = notification_sender.send_update(notification).await {
+            tracing::warn!(
+                "Failed to emit SessionInfoUpdate for session {}: {}",
+                session_id,
+                e
+            );
+            return;
+        }
+        tracing::info!("Generated session title for {}: {}", session_id, title);
+    }
+
+    /// Build an agent-neutral [`SessionRecord`] from a live [`Session`](crate::session::Session).
+    ///
+    /// Maps the session's accumulated ACP `SessionUpdate` stream
+    /// ([`Session::context`](crate::session::Session::context)) onto
+    /// [`SessionRecord::updates`], carries the stored
+    /// [`title`](crate::session::Session::title), the cwd, the last-activity
+    /// timestamp, and the configured MCP servers.
+    ///
+    /// The title is *not* derived here — it is generated once, after the first
+    /// meaningful exchange, by [`maybe_generate_session_title`](Self::maybe_generate_session_title)
+    /// and stored on the session. This keeps persistence a pure projection of
+    /// session state.
+    fn session_record_from(session: &crate::session::Session) -> SessionRecord {
+        let updated_at = Self::system_time_to_rfc3339(session.last_accessed);
+        let mut record =
+            SessionRecord::new(session.id.to_string(), session.cwd.clone(), updated_at);
+        record.title = session.title.clone();
+        record.mcp_servers = Self::decode_session_mcp_servers(session);
+        record.updates = session
+            .context
+            .iter()
+            .map(|message| message.update.clone())
+            .collect();
+        record
+    }
+
+    /// Render a [`SystemTime`] as an RFC 3339 / ISO 8601 timestamp string.
+    ///
+    /// Times before the Unix epoch (which should not occur for session
+    /// activity) clamp to the epoch.
+    fn system_time_to_rfc3339(time: SystemTime) -> String {
+        let unix_secs = time
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        chrono::DateTime::from_timestamp(unix_secs, 0)
+            .unwrap_or_default()
+            .to_rfc3339()
+    }
+
+    /// Text of the earliest non-empty `UserMessageChunk` in a session.
+    ///
+    /// Returns `None` when the session has no user-message text yet.
+    fn first_user_message_text(session: &crate::session::Session) -> Option<String> {
+        session.context.iter().find_map(|message| {
+            let SessionUpdate::UserMessageChunk(chunk) = &message.update else {
+                return None;
+            };
+            let ContentBlock::Text(text) = &chunk.content else {
+                return None;
+            };
+            let trimmed = text.text.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        })
+    }
+
+    /// Whether a session has had its first meaningful exchange — at least one
+    /// user message *and* at least one agent response.
+    ///
+    /// This is the shared trigger condition for session-title generation (see
+    /// the contract in [`agent_client_protocol_extras::session_title`]).
+    fn has_first_exchange(session: &crate::session::Session) -> bool {
+        let has_user = session
+            .context
+            .iter()
+            .any(|m| matches!(m.update, SessionUpdate::UserMessageChunk(_)));
+        let has_agent = session
+            .context
+            .iter()
+            .any(|m| matches!(m.update, SessionUpdate::AgentMessageChunk(_)));
+        has_user && has_agent
+    }
+
+    /// Decode the session's stored MCP server configurations.
+    ///
+    /// [`Session::mcp_servers`](crate::session::Session::mcp_servers) holds the
+    /// servers as serialized JSON strings (see
+    /// [`store_mcp_servers_in_session`](Self::store_mcp_servers_in_session));
+    /// this parses them back into typed [`McpServer`] values. Entries that fail
+    /// to parse are skipped with a warning rather than aborting persistence.
+    fn decode_session_mcp_servers(session: &crate::session::Session) -> Vec<McpServer> {
+        session
+            .mcp_servers
+            .iter()
+            .filter_map(|raw| match serde_json::from_str::<McpServer>(raw) {
+                Ok(server) => Some(server),
+                Err(e) => {
+                    tracing::warn!("Skipping unparseable MCP server in session record: {}", e);
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Handle the ACP `session/list` request.
+    ///
+    /// Returns persisted sessions from the shared [`SessionStore`], newest
+    /// first, honoring the request's optional `cwd` filter and opaque pagination
+    /// `cursor`. The page carries a `next_cursor` when more sessions remain.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`agent_client_protocol::Error::internal_error`] if the session
+    /// store cannot be scanned.
+    pub async fn list_sessions(
+        &self,
+        request: ListSessionsRequest,
+    ) -> Result<ListSessionsResponse, agent_client_protocol::Error> {
+        self.log_request("list_sessions", &request);
+
+        let page = SessionStore::new()
+            .list(
+                request.cwd.as_deref(),
+                request.cursor.as_deref(),
+                SESSION_LIST_PAGE_SIZE,
+            )
+            .map_err(|e| {
+                tracing::error!("Failed to list sessions: {}", e);
+                agent_client_protocol::Error::internal_error()
+            })?;
+
+        let response = ListSessionsResponse::new(page.sessions).next_cursor(page.next_cursor);
+        self.log_response("list_sessions", &response);
+        Ok(response)
+    }
+}
+
 // Agent trait implementation moved to agent_trait_impl.rs
 
 // Additional ClaudeAgent methods not part of the Agent trait
@@ -2026,7 +2258,9 @@ impl ClaudeAgent {
             request.tool_call.tool_call_id
         );
 
-        let session_id = self.parse_session_id(&request.session_id)?;
+        // Resolve the opaque session id by existence — same not-found path and
+        // `invalid_params` error as the other `sessionId`-accepting methods.
+        let session_id = self.resolve_session(&request.session_id)?.id;
 
         if self.is_session_cancelled(&session_id).await {
             return Ok(Self::cancelled_response());
@@ -2405,39 +2639,227 @@ impl ClaudeAgent {
                 requested_transport,
                 declared_capability,
                 supported_transports,
-            } => {
-                agent_client_protocol::Error::new(
-                    -32602, // Invalid params
-                    format!(
-                        "{} transport not supported: agent did not declare mcpCapabilities.{}",
-                        requested_transport.to_uppercase(),
-                        requested_transport
-                    ),
-                )
-                .data(serde_json::json!({
-                    "requestedTransport": requested_transport,
-                    "declaredCapability": declared_capability,
-                    "supportedTransports": supported_transports
-                }))
-            }
+            } => crate::acp_error::invalid_params(format!(
+                "{} transport not supported: agent did not declare mcpCapabilities.{}",
+                requested_transport.to_uppercase(),
+                requested_transport
+            ))
+            .data(serde_json::json!({
+                "requestedTransport": requested_transport,
+                "declaredCapability": declared_capability,
+                "supportedTransports": supported_transports
+            })),
             SessionSetupError::LoadSessionNotSupported {
                 declared_capability,
-            } => {
-                agent_client_protocol::Error::new(
-                    -32601, // Method not found
-                    "Method not supported: agent does not support loadSession capability"
-                        .to_string(),
-                )
-                .data(serde_json::json!({
-                    "method": "session/load",
-                    "requiredCapability": "loadSession",
-                    "declared": declared_capability
-                }))
-            }
+            } => crate::acp_error::method_not_found(
+                "Method not supported: agent does not support loadSession capability",
+            )
+            .data(serde_json::json!({
+                "method": "session/load",
+                "requiredCapability": "loadSession",
+                "declared": declared_capability
+            })),
             _ => {
                 // For any other validation errors, return generic invalid params
                 agent_client_protocol::Error::invalid_params()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod session_record_tests {
+    use super::*;
+    use crate::session::{Message, MessageRole, Session, SessionId as InternalSessionId};
+    use serial_test::serial;
+    use std::path::PathBuf;
+
+    /// Build a live `Session` with the given cwd and no messages.
+    fn empty_session(cwd: &str) -> Session {
+        Session::new(InternalSessionId::new(), PathBuf::from(cwd))
+    }
+
+    /// `session_record_from` maps a live session's id, cwd, and update stream
+    /// onto a `SessionRecord`.
+    #[test]
+    fn session_record_from_maps_core_fields() {
+        let mut session = empty_session("/work/project");
+        session.add_message(Message::new(MessageRole::User, "first prompt".to_string()));
+        session.add_message(Message::new(MessageRole::Assistant, "a reply".to_string()));
+
+        let record = ClaudeAgent::session_record_from(&session);
+
+        assert_eq!(record.session_id, session.id.to_string());
+        assert_eq!(record.cwd, PathBuf::from("/work/project"));
+        assert_eq!(
+            record.updates.len(),
+            2,
+            "every session update should be carried into the record"
+        );
+        assert!(
+            !record.updated_at.is_empty(),
+            "updated_at should be a populated RFC 3339 timestamp"
+        );
+    }
+
+    /// `session_record_from` carries the title stored on the session, rather
+    /// than re-deriving it — generation happens once, off the persist path.
+    #[test]
+    fn session_record_title_is_taken_from_session() {
+        let mut session = empty_session("/work/project");
+        session.add_message(Message::new(
+            MessageRole::User,
+            "Implement the feature".to_string(),
+        ));
+        session.title = Some("Implement the feature".to_string());
+
+        let record = ClaudeAgent::session_record_from(&session);
+        assert_eq!(record.title.as_deref(), Some("Implement the feature"));
+    }
+
+    /// A session that has not had a title generated yet has no record title,
+    /// even when it already contains user messages.
+    #[test]
+    fn session_record_title_absent_until_generated() {
+        let mut session = empty_session("/work/project");
+        session.add_message(Message::new(
+            MessageRole::User,
+            "Implement the feature".to_string(),
+        ));
+        let record = ClaudeAgent::session_record_from(&session);
+        assert!(record.title.is_none());
+    }
+
+    /// `first_user_message_text` returns the earliest non-empty user message.
+    #[test]
+    fn first_user_message_text_is_earliest_user_message() {
+        let mut session = empty_session("/work/project");
+        session.add_message(Message::new(
+            MessageRole::User,
+            "Implement the feature".to_string(),
+        ));
+        session.add_message(Message::new(
+            MessageRole::User,
+            "a later follow-up".to_string(),
+        ));
+        assert_eq!(
+            ClaudeAgent::first_user_message_text(&session).as_deref(),
+            Some("Implement the feature")
+        );
+    }
+
+    /// `has_first_exchange` is true only once both a user message and an agent
+    /// response are present — the shared title-generation trigger.
+    #[test]
+    fn has_first_exchange_requires_user_and_agent_messages() {
+        let mut session = empty_session("/work/project");
+        assert!(!ClaudeAgent::has_first_exchange(&session));
+
+        session.add_message(Message::new(MessageRole::User, "a prompt".to_string()));
+        assert!(
+            !ClaudeAgent::has_first_exchange(&session),
+            "a user message alone is not a complete exchange"
+        );
+
+        session.add_message(Message::new(MessageRole::Assistant, "a reply".to_string()));
+        assert!(ClaudeAgent::has_first_exchange(&session));
+    }
+
+    /// Stored MCP server JSON strings decode back into typed `McpServer`s.
+    #[test]
+    fn session_record_decodes_mcp_servers() {
+        let server = agent_client_protocol::schema::McpServer::Http(
+            agent_client_protocol::schema::McpServerHttp::new(
+                "test-server".to_string(),
+                "https://example.com/mcp".to_string(),
+            ),
+        );
+        let mut session = empty_session("/work/project");
+        session.mcp_servers = vec![serde_json::to_string(&server).unwrap()];
+
+        let record = ClaudeAgent::session_record_from(&session);
+        assert_eq!(record.mcp_servers, vec![server]);
+    }
+
+    /// `persist_session_record` writes a record that the `SessionStore` can
+    /// load back — the durable, cross-restart persistence path.
+    #[tokio::test]
+    #[serial]
+    async fn persist_session_record_writes_loadable_record() {
+        // Isolate the `SessionStore` state tree.
+        let state = tempfile::tempdir().unwrap();
+        let previous = std::env::var_os("XDG_STATE_HOME");
+        // SAFETY: `#[serial]` serializes against the other `XDG_STATE_HOME`
+        // mutator in this binary; no other claude-agent test touches it.
+        std::env::set_var("XDG_STATE_HOME", state.path());
+
+        // Use a dedicated temp directory as the session cwd rather than
+        // `current_dir()`: the working-directory validator briefly mutates the
+        // process CWD, so a concurrent test could otherwise race this one.
+        let cwd = tempfile::tempdir().unwrap();
+        let cwd_path = cwd.path().to_path_buf();
+
+        let (agent, _rx) = ClaudeAgent::new(AgentConfig::default()).await.unwrap();
+        let session_id = agent
+            .session_manager
+            .create_session(cwd_path.clone(), None)
+            .unwrap();
+        agent
+            .session_manager
+            .update_session(&session_id, |session| {
+                session.add_message(Message::new(MessageRole::User, "persist me".to_string()));
+            })
+            .unwrap();
+
+        agent.persist_session_record(&session_id);
+
+        let loaded = SessionStore::new()
+            .load(&session_id.to_string())
+            .unwrap()
+            .expect("persisted record should be loadable");
+        assert_eq!(loaded.session_id, session_id.to_string());
+        assert_eq!(loaded.cwd, cwd_path);
+        assert_eq!(loaded.updates.len(), 1);
+        assert!(
+            loaded.title.is_none(),
+            "persistence is a pure projection — the title is set only by \
+             title generation, not by persisting"
+        );
+
+        match previous {
+            Some(value) => std::env::set_var("XDG_STATE_HOME", value),
+            None => std::env::remove_var("XDG_STATE_HOME"),
+        }
+        drop(state);
+    }
+
+    /// `persist_session_record` for an unknown session is a no-op: it logs and
+    /// returns without panicking and without writing anything to the store.
+    #[tokio::test]
+    #[serial]
+    async fn persist_session_record_missing_session_is_noop() {
+        let state = tempfile::tempdir().unwrap();
+        let previous = std::env::var_os("XDG_STATE_HOME");
+        // SAFETY: `#[serial]` serializes against the other `XDG_STATE_HOME`
+        // mutator in this binary; no other claude-agent test touches it.
+        std::env::set_var("XDG_STATE_HOME", state.path());
+
+        let (agent, _rx) = ClaudeAgent::new(AgentConfig::default()).await.unwrap();
+        let unknown = InternalSessionId::new();
+
+        // Must not panic for a session that was never created.
+        agent.persist_session_record(&unknown);
+
+        let page = SessionStore::new().list(None, None, 10).unwrap();
+        assert!(
+            page.sessions.is_empty(),
+            "no record should be written for an unknown session"
+        );
+
+        match previous {
+            Some(value) => std::env::set_var("XDG_STATE_HOME", value),
+            None => std::env::remove_var("XDG_STATE_HOME"),
+        }
+        drop(state);
     }
 }

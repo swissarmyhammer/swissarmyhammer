@@ -2,8 +2,9 @@
 
 mod concurrent_session;
 mod coverage_tests;
-mod integrations;
+mod opaque_session_ids;
 mod session_persistence;
+mod session_resume;
 mod terminal_rate_limiting;
 mod tool_call_permissions;
 mod tool_results_in_conversation;

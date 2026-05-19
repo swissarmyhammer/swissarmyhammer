@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KRXHVR4ZZZ436ZGE85TVEG10
-position_column: todo
-position_ordinal: '8880'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffff480
 title: 'llama-agent: implement session/resume (primary) and rewire session/load via chat-template re-render'
 ---
 Implement `session/resume` (the primary goal) and rewire `session/load` for `llama-agent`, both backed by chat-template re-render.
@@ -30,3 +30,11 @@ Implement `session/resume` (the primary goal) and rewire `session/load` for `lla
 - Test both paths explicitly. llama-agent suite green, including `acp_integration.rs`; add `session/resume` coverage.
 
 Depends on the llama-agent session-record card.
+
+## Review Findings (2026-05-18 14:55)
+
+### Warnings
+- [x] `crates/llama-agent/tests/acp_integration.rs` (`with_temp_state`) — The helper sets the process-global `XDG_STATE_HOME` env var but never restores its prior value. After each test it leaves `XDG_STATE_HOME` pointing at a now-deleted temp dir. `#[serial]` prevents concurrent races, but the leaked mutation persists for the rest of the test binary's run and can affect other serialized tests (now or later) that read `XDG_STATE_HOME` without going through this helper. The symmetric claude-agent helper (`crates/claude-agent/tests/integration/session_resume.rs:59`) captures the previous value with `std::env::var_os` and restores it (`set_var`/`remove_var`) after the body runs. Mirror that: capture and restore the prior `XDG_STATE_HOME` so each test leaves the env as it found it.
+
+### Nits
+- [x] `crates/llama-agent/tests/acp_integration.rs` (`with_temp_state` doc comment) — The doc comment reads "Run `body` with `XDG_STATE_HOME` pointed at a fresh temp directory" and "The temp directory is returned alongside so it outlives `body`", but this function takes no `body` parameter — it only sets the env var and returns the `TempDir` guard. The wording was copied verbatim from the claude-agent closure-taking `with_temp_state` and not adapted. Reword to describe the actual contract (sets `XDG_STATE_HOME`, returns a `TempDir` RAII guard the caller binds to keep the dir alive).

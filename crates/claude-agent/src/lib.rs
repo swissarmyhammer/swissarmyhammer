@@ -7,6 +7,7 @@
 /// Crate version, sourced from Cargo.toml at compile time.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+pub mod acp_error;
 pub mod acp_error_conversion;
 pub mod agent;
 pub mod agent_cancellation;
@@ -16,7 +17,6 @@ pub mod agent_file_operations;
 pub mod agent_notifications;
 pub mod agent_permissions;
 pub mod agent_prompt_handling;
-pub mod agent_raw_messages;
 pub mod agent_reasoning;
 pub mod agent_terminal_handlers;
 pub mod agent_trait_impl;
@@ -50,10 +50,9 @@ pub mod protocol_translator;
 #[cfg(test)]
 // mod permission_interaction_tests; // Disabled: tests MockPromptHandler which was deleted
 pub mod request_validation;
-pub mod server;
 pub mod session;
 pub mod session_errors;
-pub mod session_loading;
+pub mod session_resume;
 pub mod session_validation;
 pub mod size_validator;
 pub mod terminal_manager;
@@ -64,7 +63,8 @@ pub mod tools;
 pub mod url_validation;
 
 // Re-exports for convenient access to main types
-pub use agent::{ClaudeAgent, RawMessageManager};
+pub use agent::ClaudeAgent;
+pub use agent_client_protocol_extras::RawMessageManager;
 pub use agent_notifications::NotificationSender;
 pub use claude_process::SpawnConfig;
 pub use config::{AgentConfig, McpServerConfig};
@@ -72,7 +72,6 @@ pub use error::{AgentError, Result};
 pub use plan::{
     todowrite_to_acp_plan, todowrite_to_agent_plan, AgentPlan, PlanEntry, PlanEntryStatus, Priority,
 };
-pub use server::ClaudeAgentServer;
 pub use tools::{ToolCallHandler, ToolCallResult, ToolPermissions};
 
 use agent_client_protocol::schema::{

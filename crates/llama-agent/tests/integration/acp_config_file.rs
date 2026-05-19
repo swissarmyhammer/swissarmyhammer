@@ -11,7 +11,6 @@ capabilities:
   supportsSessionLoading: true
   supportsModes: true
   supportsPlans: true
-  supportsSlashCommands: true
   filesystem:
     readTextFile: true
     writeTextFile: true

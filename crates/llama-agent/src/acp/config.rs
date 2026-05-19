@@ -259,15 +259,20 @@ impl AcpConfig {
 /// Capabilities advertised to ACP clients.
 ///
 /// This structure indicates which features and operations this agent supports,
-/// including session management, modes, plans, slash commands, filesystem operations,
+/// including session management, modes, plans, filesystem operations,
 /// and terminal access.
+///
+/// Note: there is intentionally no `supports_slash_commands` flag. Slash
+/// commands are not advertised because the agent does not deliver them — the
+/// `CommandRegistry` exists but is not wired into the session lifecycle and no
+/// `AvailableCommandsUpdate` notification is ever emitted. A capability is only
+/// advertised when it is genuinely delivered or enforced.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpCapabilities {
     pub supports_session_loading: bool,
     pub supports_modes: bool,
     pub supports_plans: bool,
-    pub supports_slash_commands: bool,
     pub filesystem: FilesystemCapabilities,
     pub terminal: bool,
 }
@@ -278,7 +283,6 @@ impl Default for AcpCapabilities {
             supports_session_loading: true,
             supports_modes: true,
             supports_plans: true,
-            supports_slash_commands: true,
             filesystem: FilesystemCapabilities::default(),
             terminal: true,
         }
@@ -488,7 +492,6 @@ mod tests {
         assert!(config.capabilities.supports_session_loading);
         assert!(config.capabilities.supports_modes);
         assert!(config.capabilities.supports_plans);
-        assert!(config.capabilities.supports_slash_commands);
         assert!(config.capabilities.terminal);
     }
 
@@ -551,7 +554,6 @@ mod tests {
         assert!(caps.supports_session_loading);
         assert!(caps.supports_modes);
         assert!(caps.supports_plans);
-        assert!(caps.supports_slash_commands);
         assert!(caps.terminal);
         assert!(caps.filesystem.read_text_file);
         assert!(caps.filesystem.write_text_file);
@@ -581,9 +583,10 @@ mod tests {
         assert!(json.contains("supportsSessionLoading"));
         assert!(json.contains("supportsModes"));
         assert!(json.contains("supportsPlans"));
-        assert!(json.contains("supportsSlashCommands"));
         assert!(json.contains("readTextFile"));
         assert!(json.contains("writeTextFile"));
+        // Slash commands are intentionally not a capability field.
+        assert!(!json.contains("supportsSlashCommands"));
     }
 
     #[test]
@@ -672,7 +675,6 @@ capabilities:
   supportsSessionLoading: true
   supportsModes: true
   supportsPlans: true
-  supportsSlashCommands: true
   filesystem:
     readTextFile: true
     writeTextFile: true

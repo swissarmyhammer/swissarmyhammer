@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KRXHBJ21JY1B71BFHB44BY9W
-position_column: todo
-position_ordinal: '8380'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffef80
 title: Migrate llama-agent to shared per-session transcript manager
 ---
 Switch `llama-agent` to the shared `RawMessageManager` from `agent-client-protocol-extras` and delete its local copy.

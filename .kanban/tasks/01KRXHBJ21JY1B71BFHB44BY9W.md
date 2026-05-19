@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffed80
 title: Create shared per-session transcript RawMessageManager in agent-client-protocol-extras
 ---
 Consolidate the two duplicate `RawMessageManager` implementations into one shared implementation in the `agent-client-protocol-extras` crate.
@@ -34,3 +34,9 @@ The `RawMessageManager` constructor takes the session ULID, not a fixed path —
 - Port the existing unit test for write/flush/read-back.
 
 Prerequisite for the claude-agent / llama-agent migration cards and the shared session-record card.
+
+## Review Findings (2026-05-18)
+
+Code review outcome: 1 finding (Low). Build, clippy, and all 5 tests pass. Design, correctness, and acceptance-criteria coverage are sound — the no-mutex single-writer design was correctly chosen, `xdg_state_dir` reuses existing plumbing, and the ULID constructor matches spec.
+
+- [x] **[Low] Env-var tests lack `#[serial]` isolation.** `test_acp_session_dir_resolves_and_creates` and `test_new_writes_to_session_raw_jsonl` in `crates/agent-client-protocol-extras/src/raw_messages.rs` mutate the process-global `XDG_STATE_HOME` env var. Rust runs tests within one binary on parallel threads, so these two tests race each other (and any future env-var test in the crate). The sibling `swissarmyhammer-directory` crate already marks every env-mutating test `#[serial]` (via the `serial_test` crate) for exactly this reason — see the project `test-isolation-raii` convention. Fix: add `serial_test` as a dev-dependency to `agent-client-protocol-extras/Cargo.toml` and annotate both tests with `#[serial]`. They pass today only because the crate currently has few env tests; this is latent flakiness. RESOLVED 2026-05-18: added `serial_test` dev-dependency (workspace `3.4`) to `agent-client-protocol-extras/Cargo.toml`; annotated both env-mutating tests with `#[serial]`. The other three tests in the file use only `tempfile` paths and touch no env vars, so they were left unannotated. All 5 `raw_messages` tests pass; `cargo clippy -p agent-client-protocol-extras --all-targets` is clean.

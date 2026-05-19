@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KRXHPVRP4XXABKDFHJ3NDWFJ
 - 01KRXHC509V2E9ZJDJTR5JH1P7
-position_column: todo
-position_ordinal: '8680'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffff280
 title: 'llama-agent: SessionUpdate<->Message conversion, adopt shared SessionStore, implement session/list'
 ---
 Wire `llama-agent` onto the shared `SessionStore` / `SessionRecord`.

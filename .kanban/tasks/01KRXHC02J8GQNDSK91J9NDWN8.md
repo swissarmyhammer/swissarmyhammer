@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KRXHBJ21JY1B71BFHB44BY9W
-position_column: todo
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffee80
 title: Migrate claude-agent to shared per-session transcript manager
 ---
 Switch `claude-agent` to the shared `RawMessageManager` from `agent-client-protocol-extras` and delete its local copy.

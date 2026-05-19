@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: 8f80
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffd80
 title: Fix llama-agent's unbounded ACP session map; align session-cleanup policy
 ---
 The two agents disagree on in-memory session lifecycle: one expires, one leaks.

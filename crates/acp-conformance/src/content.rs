@@ -355,17 +355,31 @@ pub async fn test_resource_link_content(agent: &dyn AgentWithFixture) -> crate::
     }
 }
 
-/// Test that agents properly validate content blocks in prompt requests
+/// Test that agents properly validate content blocks in prompt requests.
+///
+/// Exercises three scenarios:
+///
+/// 1. **Capability rejection** — an image content block is sent. An agent
+///    that advertises `image: false` MUST reject it with the `-32602`
+///    invalid-params capability error; an agent that advertises `image: true`
+///    skips this probe (its accept path is covered by
+///    [`test_image_content_with_capability`]). This is the scenario that
+///    genuinely exercises the advertise-vs-enforce contract.
+/// 2. **Empty content** — an empty content array is technically valid per
+///    spec and must not be rejected as "empty content".
+/// 3. **Multiple content blocks** — several text blocks must not be rejected.
 pub async fn test_content_validation(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing content validation");
 
-    // Initialize agent
+    // Initialize agent and capture the advertised prompt capabilities so we
+    // know whether the agent should accept or reject image content.
     let init_request = InitializeRequest::new(ProtocolVersion::V1);
-    let _init_response = agent
+    let init_response = agent
         .connection()
         .send_request(init_request)
         .block_task()
         .await?;
+    let agent_supports_image = init_response.agent_capabilities.prompt_capabilities.image;
 
     // Create a new session
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
@@ -377,7 +391,49 @@ pub async fn test_content_validation(agent: &dyn AgentWithFixture) -> crate::Res
         .await?;
     let session_id = new_session_response.session_id;
 
-    // Test with empty content array - should be valid (though may not generate response)
+    // Scenario 1: capability rejection. Send an image block. An agent that
+    // does not advertise image support MUST reject it with `-32602`; an agent
+    // that does advertise image support is left to its capability-specific
+    // test, so we skip the probe rather than drive a model turn here.
+    if !agent_supports_image {
+        // A minimal 1x1 PNG — the payload is irrelevant; the content *type*
+        // is what must be rejected.
+        const MINIMAL_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==";
+        let image_block = ContentBlock::Image(ImageContent::new(MINIMAL_PNG, "image/png"));
+        let image_prompt = PromptRequest::new(session_id.clone(), vec![image_block]);
+
+        let result = agent
+            .connection()
+            .send_request(image_prompt)
+            .block_task()
+            .await;
+
+        match result {
+            Ok(_) => {
+                return Err(crate::Error::Validation(
+                    "Agent advertised image: false but accepted image content".to_string(),
+                ));
+            }
+            Err(e) => {
+                let error_code = i32::from(e.code);
+                if error_code != -32602 {
+                    return Err(crate::Error::Validation(format!(
+                        "Agent rejected unsupported image content with code {} — \
+                         expected -32602 (invalid params): {:?}",
+                        error_code, e
+                    )));
+                }
+                tracing::info!("Agent correctly rejected unsupported image content with -32602");
+            }
+        }
+    } else {
+        tracing::info!(
+            "Agent advertises image capability — image accept path is covered by \
+             test_image_content_with_capability; skipping rejection probe"
+        );
+    }
+
+    // Scenario 2: empty content array - should be valid (though may not generate response)
     let prompt_request = PromptRequest::new(session_id.clone(), vec![]);
 
     let result = agent
@@ -401,7 +457,7 @@ pub async fn test_content_validation(agent: &dyn AgentWithFixture) -> crate::Res
         }
     }
 
-    // Test with multiple content blocks
+    // Scenario 3: multiple content blocks
     let text1 = TextContent::new("First message");
     let text2 = TextContent::new("Second message");
     let content_blocks = vec![ContentBlock::Text(text1), ContentBlock::Text(text2)];
@@ -506,13 +562,14 @@ mod tests {
     use futures::future::BoxFuture;
     use std::sync::Arc;
 
-    /// Mock agent that accepts all content types.
+    /// Mock agent that mirrors a text-only agent's content contract.
     ///
-    /// `initialize` does not declare any of the optional prompt
-    /// capabilities (image / audio / embedded context), so the
-    /// capability-gated scenarios skip gracefully when run through this
-    /// mock. The non-gated scenarios (text, resource link, multi-block
-    /// validation) drive real `prompt` calls and reach the
+    /// `initialize` does not declare any of the optional prompt capabilities
+    /// (image / audio / embedded context). Because the agent advertises those
+    /// types as unsupported, `prompt` enforces that contract: image, audio,
+    /// and embedded-resource blocks are rejected with the `-32602`
+    /// invalid-params capability error, exactly as the real agents do. Text
+    /// and resource-link blocks (and empty prompts) reach the
     /// `StopReason::EndTurn` happy path.
     struct ContentMockAgent;
 
@@ -533,9 +590,31 @@ mod tests {
 
         fn prompt<'a>(
             &'a self,
-            _request: PromptRequest,
+            request: PromptRequest,
         ) -> BoxFuture<'a, agent_client_protocol::Result<PromptResponse>> {
-            Box::pin(async move { Ok(PromptResponse::new(StopReason::EndTurn)) })
+            Box::pin(async move {
+                // The mock advertises only text content — reject any block
+                // whose type it has not declared support for, mirroring the
+                // real agents' `ContentCapabilityValidator`.
+                for block in &request.prompt {
+                    let unsupported = match block {
+                        ContentBlock::Image(_) => Some("image"),
+                        ContentBlock::Audio(_) => Some("audio"),
+                        ContentBlock::Resource(_) => Some("resource"),
+                        _ => None,
+                    };
+                    if let Some(content_type) = unsupported {
+                        return Err(agent_client_protocol::Error::new(
+                            -32602,
+                            format!(
+                                "Invalid content type: agent does not support {} content",
+                                content_type
+                            ),
+                        ));
+                    }
+                }
+                Ok(PromptResponse::new(StopReason::EndTurn))
+            })
         }
     }
 

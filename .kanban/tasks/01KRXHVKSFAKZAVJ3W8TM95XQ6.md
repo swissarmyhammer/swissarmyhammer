@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KRXHPVRP4XXABKDFHJ3NDWFJ
 - 01KRXHC02J8GQNDSK91J9NDWN8
-position_column: todo
-position_ordinal: '8580'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffff180
 title: 'claude-agent: persist SessionRecord via shared SessionStore and implement session/list'
 ---
 Wire `claude-agent` onto the shared `SessionStore` / `SessionRecord` from `agent-client-protocol-extras`.
@@ -29,3 +29,8 @@ Production builds `SessionManager::new()` (`agent.rs:155`) with no storage path.
 - claude-agent test suite green.
 
 Depends on the shared session-record card and the claude-agent RawMessageManager migration card.
+
+## Review Findings (2026-05-18 14:18)
+
+### Nits
+- [x] `crates/claude-agent/src/agent_trait_impl.rs:328` — `persist_session_record` runs only on the happy path of `prompt`. The early returns above it — pre-cancelled session (`check_cancelled_before_processing`, ~line 271) and turn-limit hit (`check_turn_limits`, ~line 283) — return before reaching the persist call, even though `send_user_message_chunks` has already grown the live session's `context`. The dropped state is recovered by the next successful turn on the same session, so this is not data loss in practice, and the card scopes persistence as "on each turn (or on a change threshold)". Optional: persist before those early returns too, or document that cancelled/turn-limited turns are intentionally not persisted until the next successful turn. RESOLVED: `persist_session_record` is now called before both early-return paths (cancelled and turn-limited) so a cancelled or limited turn still durably records the context that was already accumulated.
