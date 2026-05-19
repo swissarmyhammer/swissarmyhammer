@@ -12,6 +12,7 @@ metadata:
 
 {% include "_partials/coding-standards" %}
 {% include "_partials/review-column" %}
+{% include "_partials/code-context-checkpoints" %}
 
 # Code Review
 
@@ -71,6 +72,8 @@ When a `range` was used (explicit or auto-defaulted), use `get diff` with `file@
 ```json
 {"op": "get diff", "left": "src/main.rs@HEAD~4", "right": "src/main.rs"}
 ```
+
+For every changed file, run `{"op": "get blastradius", "file_path": "<file>"}` and `get callgraph` (inbound) on the changed symbols. A diff shows what changed; blast radius shows what it *affects*. Use it to size the change in Layer 1 and to find untouched callers the change may have quietly broken in Layer 2.
 
 ### 4. Layered Examination
 
