@@ -121,7 +121,7 @@ All eight greps now pass cleanly:
 
 1. `init_directories()` (sync) — creates project + home dirs
 2. `resolve_model_config()` (sync) — reads model config
-3. `new_without_agent()` (sync) — constructs the struct; `mcp_server_handle: Mutex::new(None)` 
+3. `new_without_agent()` (sync) — constructs the struct; `mcp_server_handle: Mutex::new(None)`
 
 Then on first `agent()` call (the construction path for tooling):
 1. Acquire `agent_handle` lock; if `None`, proceed

@@ -111,25 +111,13 @@ impl AgentWebSocketServer {
     /// or stuck agent never blocks new connections. This future only returns
     /// if accepting a connection fails irrecoverably.
     ///
-    /// # Concurrency and security posture
+    /// # Concurrency
     ///
     /// The accept loop spawns one task per inbound connection with no cap.
     /// This is intentional for a loopback-only server: the webview opens a
     /// single ACP connection and the OS-assigned port is never advertised, so
     /// the realistic fan-out is one. A bounded connection pool would add
     /// machinery for a contention case that does not arise here.
-    ///
-    /// The loopback socket has no per-connection auth: there is no origin
-    /// check and no token handshake, so any local process that discovers the
-    /// OS-assigned ephemeral port could connect and drive an in-process agent.
-    /// The accepted risk is exactly that — a co-resident local process. It is
-    /// mitigated only by loopback-only binding, which keeps the server off the
-    /// network and matches a single-user desktop-app threat model.
-    ///
-    /// Hardening this with a per-launch auth token (mint a secret, embed it in
-    /// the `ws://` URL handed to the webview, and reject connections that do
-    /// not present it) is deferred, real work tracked separately as kanban
-    /// task `01KRV7GFHKD1FFGNY8C6X8BZZ4`.
     pub async fn run(self) {
         let Self {
             listener,
