@@ -77,7 +77,9 @@ use swissarmyhammer_directory::{DirectoryConfig, FileSource, StackedEvent, Watch
 use tokio::sync::mpsc;
 
 use crate::codegen::TypesEmitter;
-use crate::discovery::{discover_plugins, DiscoveredPlugin, LayerRoot, PLUGINS_SUBDIR};
+use crate::discovery::{
+    discover_plugins, resolve_index_entry, DiscoveredPlugin, LayerRoot, PLUGINS_SUBDIR,
+};
 use crate::error::{Error, Result};
 use crate::ledger::{CallbackId, PluginLedger, RegistrationHandle};
 use crate::manifest::{Manifest, MANIFEST_FILE};
@@ -88,22 +90,16 @@ use crate::reload::{
 use crate::runtime::{HostDispatcher, PluginRuntime, RuntimeConfig};
 use crate::server::{CallerId, CliServer, McpServer, PluginId, ToolMetadata, UrlServer};
 
-/// The filename of a plugin bundle's entry module.
-///
-/// A plugin bundle is a directory; its entry TypeScript module is always named
-/// `entry.ts`. The host loads exactly this file as the plugin's main module.
-const ENTRY_FILE: &str = "entry.ts";
-
 /// The exported lifecycle function the host calls to load a plugin.
 ///
-/// A plugin bundle's `entry.ts` exports a `load` function that constructs the
+/// A plugin bundle's `index.ts` exports a `load` function that constructs the
 /// `Plugin` subclass — wrapped in the SDK's dispatch Proxy — and awaits its
 /// `load()` hook. The host invokes this export after evaluating the module.
 const LOAD_EXPORT: &str = "load";
 
 /// The exported lifecycle function the host calls to unload a plugin.
 ///
-/// A plugin bundle's `entry.ts` exports an `unload` function only when the
+/// A plugin bundle's `index.ts` exports an `unload` function only when the
 /// author wrote one. The host calls it best-effort before disposing the
 /// plugin's registrations; a bundle that does not export it is the normal
 /// case, not an error.
@@ -346,9 +342,8 @@ struct HostState {
     /// A plugin loaded from a bundle that has a `plugin.json` has its parsed
     /// [`Manifest`] recorded here for the duration of the load. The bridge's
     /// `register` handler consults it to enforce the manifest's `provides`
-    /// contract. A plugin loaded from a bundle with no manifest — the legacy
-    /// bare-`entry.ts` shape — has no entry here, and its registrations are not
-    /// `provides`-checked.
+    /// contract. A plugin loaded from a TypeScript-only bundle with no manifest
+    /// has no entry here, and its registrations are not `provides`-checked.
     manifests: HashMap<PluginId, Manifest>,
 
     /// The currently active copy of each manifest-identified plugin, keyed by
@@ -511,14 +506,15 @@ struct LoadedPlugin {
     ///
     /// Retained so [`PluginHost::unload`] re-resolves the `unload` export
     /// against the **identical** entry path the `load` export used. The entry
-    /// is the resolved `Manifest::resolve_entry` path — which is canonicalized
-    /// — for a manifest-bearing bundle, so the isolate's module map keys the
-    /// entry's main module under that canonical URL. Re-deriving a bare
-    /// `entry.ts` for unload would join it onto a *non*-canonical bundle
-    /// directory and ask the isolate to create a second "main" module under a
-    /// URL that differs only by an unresolved symlink — which `deno_core`
-    /// rejects, silently skipping the `unload` hook. Reusing the stored entry
-    /// keeps the two lifecycle calls addressing the one module.
+    /// is canonicalized when it is resolved — `Manifest::resolve_entry` for a
+    /// manifest-bearing bundle, `resolve_index_entry` for a TypeScript-only
+    /// bundle — so the isolate's module map keys the entry's main module under
+    /// that canonical URL. Re-deriving the entry for unload would join it onto
+    /// a *non*-canonical bundle directory and ask the isolate to create a
+    /// second "main" module under a URL that differs only by an unresolved
+    /// symlink — which `deno_core` rejects, silently skipping the `unload`
+    /// hook. Reusing the stored entry keeps the two lifecycle calls addressing
+    /// the one module.
     entry_file: String,
 }
 
@@ -803,7 +799,7 @@ impl PluginHost {
     /// `load()` is inserted into the live registry and recorded in the plugin's
     /// ledger.
     ///
-    /// # The manifest
+    /// # The entry module and the manifest
     ///
     /// When `plugin_dir` contains a [`MANIFEST_FILE`] the host parses it: the
     /// manifest's `entry` names the module to evaluate, and the host retains
@@ -813,14 +809,18 @@ impl PluginHost {
     /// that is absolute or escapes the bundle directory — so the module the
     /// runtime evaluates is always contained within the bundle. Before the
     /// isolate is created, every `provides` name is checked against the host's
-    /// reserved server names; a collision fails the load up front. A bundle
-    /// with no manifest — the legacy bare-`entry.ts` shape — loads `entry.ts`
-    /// directly and is not `provides`-checked.
+    /// reserved server names; a collision fails the load up front.
+    ///
+    /// A bundle with no manifest is a TypeScript-only bundle: its entry module
+    /// is the bundle's `index.ts` (or `index.js`), found by the same convention
+    /// discovery uses and containment-checked the same way. It is not
+    /// `provides`-checked.
     ///
     /// # Parameters
     ///
     /// - `plugin_dir` — the plugin's bundle directory; it must contain either a
-    ///   `plugin.json` naming an entry module, or a bare `entry.ts`.
+    ///   `plugin.json` naming an entry module, or an `index.ts` / `index.js`
+    ///   entry module.
     ///
     /// # Returns
     ///
@@ -829,7 +829,8 @@ impl PluginHost {
     /// # Errors
     ///
     /// Returns [`Error::Manifest`] when a present `plugin.json` is invalid or
-    /// when its `entry` is absolute or escapes the bundle directory,
+    /// when its `entry` is absolute or escapes the bundle directory, or when a
+    /// manifest-less bundle has no `index.{ts,js}` entry module,
     /// [`Error::ProvidesViolation`] when a `provides` name collides with a
     /// reserved host server, [`Error::RuntimeStartup`] when the isolate cannot
     /// be created, [`Error::Transpile`] or [`Error::Runtime`] when the bundle
@@ -839,9 +840,9 @@ impl PluginHost {
     pub async fn load(&self, plugin_dir: impl AsRef<Path>) -> Result<PluginId> {
         let plugin_dir = plugin_dir.as_ref().to_path_buf();
 
-        // A bundle with a `plugin.json` carries a manifest; a legacy bundle
-        // with a bare `entry.ts` does not. The manifest, when present, names
-        // the entry module and is the source of the `provides` contract.
+        // A bundle with a `plugin.json` carries a manifest; a TypeScript-only
+        // bundle does not. The manifest, when present, names the entry module
+        // and is the source of the `provides` contract.
         let manifest = if plugin_dir.join(MANIFEST_FILE).is_file() {
             Some(Manifest::load(&plugin_dir)?)
         } else {
@@ -850,13 +851,22 @@ impl PluginHost {
 
         // The entry module is the manifest's `entry` when present, resolved —
         // and sandbox-checked — through `Manifest::resolve_entry`; a manifest-
-        // less bundle loaded directly by path uses the legacy bare `entry.ts`.
+        // less bundle's entry is its `index.ts` (or `index.js`), resolved and
+        // containment-checked the same way a discovery scan resolves it.
         let entry_file = match &manifest {
             Some(manifest) => manifest
                 .resolve_entry(&plugin_dir)?
                 .to_string_lossy()
                 .into_owned(),
-            None => ENTRY_FILE.to_string(),
+            None => resolve_index_entry(&plugin_dir)?
+                .ok_or_else(|| {
+                    Error::Manifest(format!(
+                        "plugin bundle at {} has no index.ts or index.js entry module",
+                        plugin_dir.display(),
+                    ))
+                })?
+                .to_string_lossy()
+                .into_owned(),
         };
         self.load_resolved(&plugin_dir, entry_file, manifest).await
     }
@@ -2053,7 +2063,8 @@ impl PluginHost {
     /// appear in that manifest's `provides` list. A plugin registering a name
     /// it did not declare is rejected before the server is even connected — the
     /// manifest is the authoritative statement of what a plugin will register.
-    /// A plugin loaded from a legacy bundle with no manifest is not checked.
+    /// A plugin loaded from a TypeScript-only bundle with no manifest is not
+    /// checked.
     ///
     /// # Errors
     ///
@@ -2101,7 +2112,7 @@ impl PluginHost {
     ///
     /// Looks up the registering plugin's retained [`Manifest`]: when one is
     /// present, `name` must be one of its `provides` entries. A plugin loaded
-    /// without a manifest — the legacy bare-`entry.ts` shape — has no `provides`
+    /// from a TypeScript-only bundle with no manifest has no `provides`
     /// declaration and so passes unchecked.
     ///
     /// # Errors
@@ -2111,7 +2122,7 @@ impl PluginHost {
     fn check_register_allowed(&self, plugin_id: &PluginId, name: &str) -> Result<()> {
         let state = self.lock();
         let Some(manifest) = state.manifests.get(plugin_id) else {
-            // No manifest — a legacy bundle — so nothing to enforce.
+            // No manifest — a TypeScript-only bundle — so nothing to enforce.
             return Ok(());
         };
         if manifest.provides.iter().any(|provided| provided == name) {

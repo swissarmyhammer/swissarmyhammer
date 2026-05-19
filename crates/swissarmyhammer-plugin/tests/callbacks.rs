@@ -113,7 +113,7 @@ fn write_plugin(dir: &std::path::Path, body: &str) {
            return null;\n\
          }}\n"
     );
-    std::fs::write(dir.join("entry.ts"), entry).expect("entry.ts should be written");
+    std::fs::write(dir.join("index.ts"), entry).expect("index.ts should be written");
 }
 
 /// Reads the single `$callback` id at `payload[field]`.
@@ -144,7 +144,7 @@ async fn host_invokes_a_callback_and_receives_its_return_value() {
 
     tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", "load"),
+        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", "load"),
     )
     .await
     .expect("loading the plugin should not hang")
@@ -192,7 +192,7 @@ async fn void_and_value_callbacks_both_behave_correctly() {
 
     tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", "load"),
+        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", "load"),
     )
     .await
     .expect("loading the plugin should not hang")
@@ -263,7 +263,7 @@ async fn an_async_callback_is_awaited() {
 
     tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", "load"),
+        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", "load"),
     )
     .await
     .expect("loading the plugin should not hang")
@@ -303,7 +303,7 @@ async fn tool_call_payloads_are_not_scanned_for_callbacks() {
 
     tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", "load"),
+        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", "load"),
     )
     .await
     .expect("loading the plugin should not hang")
@@ -363,7 +363,7 @@ async fn a_cyclic_callback_payload_does_not_overflow_the_isolate() {
 
     let load = tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", "load"),
+        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", "load"),
     )
     .await
     .expect("the cyclic dispatch must not hang — the cycle guard must terminate the walk");
@@ -412,7 +412,7 @@ async fn a_shared_subtree_is_marshalled_once_and_its_function_is_caught() {
 
     tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", "load"),
+        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", "load"),
     )
     .await
     .expect("loading the plugin should not hang")

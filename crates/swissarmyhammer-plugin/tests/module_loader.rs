@@ -37,17 +37,17 @@ async fn relative_import_inside_bundle_loads_and_runs() {
     )
     .expect("helper.ts should be written");
     std::fs::write(
-        bundle.path().join("entry.ts"),
+        bundle.path().join("index.ts"),
         "import { answer } from './helper.ts';\n\
          export function activate(): number { return answer(); }",
     )
-    .expect("entry.ts should be written");
+    .expect("index.ts should be written");
 
     let runtime = PluginRuntime::new(RuntimeConfig::default()).expect("runtime should start");
 
     let result = tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", "activate"),
+        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", "activate"),
     )
     .await
     .expect("loading a multi-file plugin should not hang")
@@ -78,17 +78,17 @@ async fn relative_import_escaping_bundle_is_rejected() {
     )
     .expect("outside.ts should be written");
     std::fs::write(
-        bundle.join("entry.ts"),
+        bundle.join("index.ts"),
         "import { secret } from '../outside.ts';\n\
          export function activate(): string { return secret; }",
     )
-    .expect("entry.ts should be written");
+    .expect("index.ts should be written");
 
     let runtime = PluginRuntime::new(RuntimeConfig::default()).expect("runtime should start");
 
     let result = tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(&bundle, "entry.ts", "activate"),
+        runtime.call_plugin_lifecycle(&bundle, "index.ts", "activate"),
     )
     .await
     .expect("a rejected import should not hang");
@@ -111,17 +111,17 @@ async fn bare_import_fails_with_clear_error() {
     // The imported binding is used as a value, so the transpiler keeps the
     // import statement — the loader, not type erasure, must reject `lodash`.
     std::fs::write(
-        bundle.path().join("entry.ts"),
+        bundle.path().join("index.ts"),
         "import { merge } from 'lodash';\n\
          export function activate(): unknown { return merge({}, {}); }",
     )
-    .expect("entry.ts should be written");
+    .expect("index.ts should be written");
 
     let runtime = PluginRuntime::new(RuntimeConfig::default()).expect("runtime should start");
 
     let result = tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", "activate"),
+        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", "activate"),
     )
     .await
     .expect("a rejected bare import should not hang");
@@ -144,17 +144,17 @@ async fn swissarmyhammer_plugin_import_resolves_to_virtual_module() {
     let bundle = tempfile::TempDir::new().expect("temp dir should be created");
 
     std::fs::write(
-        bundle.path().join("entry.ts"),
+        bundle.path().join("index.ts"),
         "import * as sdk from '@swissarmyhammer/plugin';\n\
          export function activate(): string { return typeof sdk; }",
     )
-    .expect("entry.ts should be written");
+    .expect("index.ts should be written");
 
     let runtime = PluginRuntime::new(RuntimeConfig::default()).expect("runtime should start");
 
     let result = tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", "activate"),
+        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", "activate"),
     )
     .await
     .expect("importing the SDK virtual module should not hang")
@@ -177,17 +177,17 @@ async fn swissarmyhammer_app_import_resolves_to_virtual_module() {
     let bundle = tempfile::TempDir::new().expect("temp dir should be created");
 
     std::fs::write(
-        bundle.path().join("entry.ts"),
+        bundle.path().join("index.ts"),
         "import * as app from '@swissarmyhammer/app';\n\
          export function activate(): string { return typeof app; }",
     )
-    .expect("entry.ts should be written");
+    .expect("index.ts should be written");
 
     let runtime = PluginRuntime::new(RuntimeConfig::default()).expect("runtime should start");
 
     let result = tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", "activate"),
+        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", "activate"),
     )
     .await
     .expect("importing the app virtual module should not hang")

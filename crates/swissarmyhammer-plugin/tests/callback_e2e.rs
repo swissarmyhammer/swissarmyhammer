@@ -2,7 +2,7 @@
 //! a real multi-file plugin.
 //!
 //! This is the capability-level companion to `callbacks.rs`. Where
-//! `callbacks.rs` drives the primitive with inline `entry.ts` bodies and a
+//! `callbacks.rs` drives the primitive with inline `index.ts` bodies and a
 //! recording `HostDispatcher`, this test proves the same primitive works when
 //! a *real, multi-file plugin bundle* — loaded from disk, its sibling import
 //! resolved by [`PluginModuleLoader`], run in a real V8 isolate — hands the

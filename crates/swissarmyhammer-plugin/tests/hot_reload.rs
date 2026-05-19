@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use swissarmyhammer_directory::SwissarmyhammerConfig;
 use swissarmyhammer_plugin::{
-    CallerId, DenyProvidesExpansion, Error, InProcessServer, McpServer, PluginHost, ReloadStatus,
+    CallerId, Error, InProcessServer, McpServer, PluginHost, ReloadStatus,
 };
 
 /// A generous upper bound on any single host interaction.
@@ -87,34 +87,20 @@ async fn echo_module() -> Arc<dyn McpServer> {
     )
 }
 
-/// Writes a probe plugin bundle — `plugin.json` plus `entry.ts` — into
+/// Writes a probe plugin bundle — a single `index.ts` entry — into
 /// `layer_root/plugins/<dir_name>/`.
 ///
-/// The manifest declares `id` and `provides`; the entry imports the SDK,
-/// declares a `Plugin` subclass whose `load` runs `body`, and exports a `load`
-/// lifecycle function.
-fn write_bundle(
-    layer_root: &Path,
-    dir_name: &str,
-    manifest_id: &str,
-    provides: &[&str],
-    body: &str,
-) {
+/// A plugin's identity is its bundle directory name, so `dir_name` is also the
+/// plugin id. The entry imports the SDK, declares a `Plugin` subclass whose
+/// `load` runs `body`, and exports a `load` lifecycle function.
+fn write_bundle(layer_root: &Path, dir_name: &str, body: &str) {
     let plugin_dir = layer_root.join("plugins").join(dir_name);
     std::fs::create_dir_all(&plugin_dir).expect("plugin directory should be created");
-
-    let provides_json = serde_json::to_string(provides).expect("provides serializes");
-    let manifest = format!(
-        "{{\n  \"id\": \"{manifest_id}\",\n  \"name\": \"{manifest_id} plugin\",\n  \
-         \"version\": \"1.0.0\",\n  \"entry\": \"entry.ts\",\n  \"provides\": {provides_json}\n}}\n"
-    );
-    std::fs::write(plugin_dir.join("plugin.json"), manifest)
-        .expect("plugin.json should be written");
     write_entry(&plugin_dir, body);
 }
 
-/// Overwrites only the `entry.ts` of an already-written bundle with a new
-/// `load` body — the "rewrite the source" half of a hot-reload test.
+/// Overwrites the `index.ts` of an already-written bundle with a new `load`
+/// body — the "rewrite the source" half of a hot-reload test.
 fn write_entry(plugin_dir: &Path, body: &str) {
     let source = format!(
         "import {{ Plugin, makePluginThis }} from '@swissarmyhammer/plugin';\n\
@@ -127,7 +113,7 @@ fn write_entry(plugin_dir: &Path, body: &str) {
            return null;\n\
          }}\n"
     );
-    std::fs::write(plugin_dir.join("entry.ts"), source).expect("entry.ts should be written");
+    std::fs::write(plugin_dir.join("index.ts"), source).expect("index.ts should be written");
 }
 
 /// Polls until a call to `(server, "echo")` succeeds, or fails the test after
@@ -237,13 +223,10 @@ async fn assert_not_live(host: &PluginHost, server: &str) {
 async fn rewriting_an_active_plugins_source_reloads_it_in_place() {
     let project = tempfile::TempDir::new().expect("project root temp dir");
     let plugin_dir = project.path().join("plugins").join("probe-dir");
-    // Version 1: registers `probe-v1`. Both names are declared up front so the
-    // reload to v2 is not a `provides` expansion.
+    // Version 1: registers `probe-v1`.
     write_bundle(
         project.path(),
         "probe-dir",
-        "probe",
-        &["probe-v1", "probe-v2"],
         "this.register('probe-v1', { rust: 'probe-mod' });",
     );
 
@@ -313,8 +296,6 @@ async fn a_failed_v2_load_leaves_the_plugin_unloaded_and_surfaces_the_error() {
     write_bundle(
         project.path(),
         "crash-dir",
-        "crasher",
-        &["crash-v1"],
         "this.register('crash-v1', { rust: 'crash-mod' });",
     );
 
@@ -362,7 +343,7 @@ async fn a_failed_v2_load_leaves_the_plugin_unloaded_and_surfaces_the_error() {
     // The failure is surfaced, not silent: the plugin's status records it.
     let deadline = Instant::now() + SETTLE;
     let status = loop {
-        match host.reload_status("crasher").await {
+        match host.reload_status("crash-dir").await {
             Some(ReloadStatus::Failed { error }) => break error,
             _ if Instant::now() >= deadline => {
                 panic!("the failed reload was never surfaced as ReloadStatus::Failed");
@@ -384,21 +365,17 @@ async fn removing_the_active_layer_falls_back_to_the_lower_layer() {
     let user = tempfile::TempDir::new().expect("user root temp dir");
     let project = tempfile::TempDir::new().expect("project root temp dir");
 
-    // The same id `shared` in both layers. The user copy registers
-    // `from-user`; the project copy registers `from-project`. Project shadows
-    // user, so `from-project` is active first.
+    // A bundle named `shared` in both layers, so both have id `shared`. The
+    // user copy registers `from-user`; the project copy registers
+    // `from-project`. Project shadows user, so `from-project` is active first.
     write_bundle(
         user.path(),
         "shared",
-        "shared",
-        &["from-user"],
         "this.register('from-user', { rust: 'shared-mod-user' });",
     );
     write_bundle(
         project.path(),
         "shared",
-        "shared",
-        &["from-project"],
         "this.register('from-project', { rust: 'shared-mod-project' });",
     );
 
@@ -470,21 +447,17 @@ async fn modifying_a_shadowed_layer_does_not_reload_the_active_copy() {
     let user = tempfile::TempDir::new().expect("user root temp dir");
     let project = tempfile::TempDir::new().expect("project root temp dir");
 
-    // The same id `shared` in both layers. The project copy is active and
-    // registers `project-active`; the shadowed user copy registers
-    // `user-shadowed` and is not live.
+    // A bundle named `shared` in both layers, so both have id `shared`. The
+    // project copy is active and registers `project-active`; the shadowed user
+    // copy registers `user-shadowed` and is not live.
     write_bundle(
         user.path(),
         "shared",
-        "shared",
-        &["user-shadowed"],
         "this.register('user-shadowed', { rust: 'user-mod' });",
     );
     write_bundle(
         project.path(),
         "shared",
-        "shared",
-        &["project-active"],
         "this.register('project-active', { rust: 'project-mod' });",
     );
 
@@ -572,21 +545,16 @@ async fn modifying_the_active_copy_still_reloads_it() {
     let project = tempfile::TempDir::new().expect("project root temp dir");
     let active_dir = project.path().join("plugins").join("shared");
 
-    // `shared` exists in both layers; the project copy is active. Both server
-    // names the project copy will ever register are declared up front so the
-    // reload to v2 is not a `provides` expansion.
+    // A bundle named `shared` in both layers, so both have id `shared`; the
+    // project copy is active.
     write_bundle(
         user.path(),
         "shared",
-        "shared",
-        &["user-shadowed"],
         "this.register('user-shadowed', { rust: 'user-mod' });",
     );
     write_bundle(
         project.path(),
         "shared",
-        "shared",
-        &["active-v1", "active-v2"],
         "this.register('active-v1', { rust: 'active-mod-1' });",
     );
 
@@ -645,88 +613,4 @@ async fn modifying_the_active_copy_still_reloads_it() {
     // server is disposed.
     wait_until_live(&host, "active-v2").await;
     assert_not_live(&host, "active-v1").await;
-}
-
-/// A reload whose v2 manifest expands the `provides` set is gated by the
-/// installed [`ReloadPolicy`]: under the deny policy the expansion is refused,
-/// the plugin is left unloaded, and the refusal is surfaced via
-/// [`PluginHost::reload_status`].
-#[tokio::test]
-async fn a_provides_expansion_is_gated_by_the_reload_policy() {
-    let project = tempfile::TempDir::new().expect("project root temp dir");
-    let plugin_dir = project.path().join("plugins").join("grow-dir");
-    // Version 1 declares and registers only `grow-a`.
-    write_bundle(
-        project.path(),
-        "grow-dir",
-        "grower",
-        &["grow-a"],
-        "this.register('grow-a', { rust: 'grow-mod' });",
-    );
-
-    let host = PluginHost::for_tests(
-        tempfile::TempDir::new()
-            .expect("user root temp dir")
-            .path()
-            .to_path_buf(),
-        Some(project.path().to_path_buf()),
-    );
-    // Install the strict policy: any `provides` expansion is refused.
-    host.set_reload_policy(Arc::new(DenyProvidesExpansion));
-    tokio::time::timeout(
-        TIMEOUT,
-        host.expose_rust_module("grow-mod", echo_module().await),
-    )
-    .await
-    .expect("expose_rust_module should not hang")
-    .expect("exposing a rust module should succeed");
-
-    tokio::time::timeout(
-        TIMEOUT,
-        host.discover_and_load_all::<SwissarmyhammerConfig>(),
-    )
-    .await
-    .expect("discovery should not hang")
-    .expect("the initial discovery should succeed");
-    assert_live(&host, "grow-a").await;
-
-    let _watcher = tokio::time::timeout(TIMEOUT, host.watch_plugins::<SwissarmyhammerConfig>())
-        .await
-        .expect("starting the watcher should not hang")
-        .expect("the watcher should start");
-    tokio::time::sleep(Duration::from_millis(300)).await;
-
-    // Version 2's manifest expands `provides` to add `grow-b`.
-    let grow_dir = project.path().join("plugins").join("grow-dir");
-    std::fs::write(
-        grow_dir.join("plugin.json"),
-        "{\n  \"id\": \"grower\",\n  \"name\": \"grower plugin\",\n  \
-         \"version\": \"2.0.0\",\n  \"entry\": \"entry.ts\",\n  \
-         \"provides\": [\"grow-a\", \"grow-b\"]\n}\n",
-    )
-    .expect("the v2 manifest should be written");
-    write_entry(
-        &plugin_dir,
-        "this.register('grow-a', { rust: 'grow-mod' });",
-    );
-
-    // The deny policy refuses the expansion: the plugin is left unloaded — its
-    // old isolate was already torn down — so `grow-a` goes non-live.
-    wait_until_gone(&host, "grow-a").await;
-
-    let deadline = Instant::now() + SETTLE;
-    let added = loop {
-        match host.reload_status("grower").await {
-            Some(ReloadStatus::ProvidesExpansionDenied { added }) => break added,
-            _ if Instant::now() >= deadline => {
-                panic!("the denied expansion was never surfaced");
-            }
-            _ => tokio::time::sleep(Duration::from_millis(100)).await,
-        }
-    };
-    assert_eq!(
-        added,
-        vec!["grow-b".to_string()],
-        "the surfaced status must name the refused server, got: {added:?}"
-    );
 }

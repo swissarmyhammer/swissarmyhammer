@@ -1,12 +1,11 @@
-//! Integration tests for plugin discovery, manifest parsing, layer stacking,
-//! and `provides` validation.
+//! Integration tests for plugin discovery and layer stacking.
 //!
-//! These tests drive [`PluginHost`] end to end: real plugin bundles — a real
-//! `plugin.json` manifest plus a real entry `.ts` file — are written into
-//! temporary layer roots, discovered through `swissarmyhammer-directory`'s
-//! stacked `plugins/` subdirectory, and loaded into real V8 isolates. The
-//! probe plugins register *real* in-process `rmcp` servers, so an assertion
-//! observes a genuine round-trip rather than a mock.
+//! These tests drive [`PluginHost`] end to end: real plugin bundles — a single
+//! `index.ts` entry module each — are written into temporary layer roots,
+//! discovered through `swissarmyhammer-directory`'s stacked `plugins/`
+//! subdirectory, and loaded into real V8 isolates. A plugin's identity is its
+//! bundle directory name. The probe plugins register *real* in-process `rmcp`
+//! servers, so an assertion observes a genuine round-trip rather than a mock.
 //!
 //! Every cross-thread interaction is bounded by a timeout so a wedged isolate
 //! fails the test fast instead of hanging CI.
@@ -66,60 +65,14 @@ fn rendered(value: &Value) -> String {
     serde_json::to_string(value).expect("a tools/call result is serializable")
 }
 
-/// Writes a plugin bundle — `plugin.json` plus an `entry.ts` — into
+/// Writes a TypeScript-only plugin bundle — a single `index.ts` entry — into
 /// `layer_root/plugins/<dir_name>/`.
 ///
-/// The on-disk directory name (`dir_name`) is deliberately separate from the
-/// manifest `id` so tests can prove that identity follows the manifest, not
-/// the directory name. The entry imports the SDK, declares a `Plugin` subclass
-/// whose `load` runs `body`, and exports a `load` lifecycle function.
-fn write_plugin_in_layer(
-    layer_root: &Path,
-    dir_name: &str,
-    manifest_id: &str,
-    provides: &[&str],
-    entry: &str,
-    body: &str,
-) {
-    let plugin_dir = layer_root.join("plugins").join(dir_name);
-    std::fs::create_dir_all(&plugin_dir).expect("plugin directory should be created");
-
-    let provides_json = serde_json::to_string(provides).expect("provides serializes");
-    let manifest = format!(
-        "{{\n  \"id\": \"{manifest_id}\",\n  \"name\": \"{manifest_id} plugin\",\n  \
-         \"version\": \"1.0.0\",\n  \"entry\": \"{entry}\",\n  \"provides\": {provides_json}\n}}\n"
-    );
-    std::fs::write(plugin_dir.join("plugin.json"), manifest)
-        .expect("plugin.json should be written");
-
-    let source = format!(
-        "import {{ Plugin, makePluginThis }} from '@swissarmyhammer/plugin';\n\
-         class P extends Plugin {{\n\
-           async load(): Promise<void> {{\n{body}\n}}\n\
-         }}\n\
-         export async function load(): Promise<unknown> {{\n\
-           const p = makePluginThis(new P()) as P;\n\
-           await p.load();\n\
-           return null;\n\
-         }}\n"
-    );
-    // `entry` may name a nested path (e.g. `src/plugin.ts`); create parents.
-    let entry_path = plugin_dir.join(entry);
-    if let Some(parent) = entry_path.parent() {
-        std::fs::create_dir_all(parent).expect("entry parent dir should be created");
-    }
-    std::fs::write(&entry_path, source).expect("entry file should be written");
-}
-
-/// Writes a manifest-less, TypeScript-only plugin bundle — just an `index.ts`
-/// entry, no `plugin.json` — into `layer_root/plugins/<dir_name>/`.
-///
-/// A manifest-less plugin's identity is its bundle directory name, so
-/// `dir_name` is both the on-disk directory and the plugin id. The entry
-/// imports the SDK, declares a `Plugin` subclass whose `load` runs `body`, and
-/// exports a `load` lifecycle function — the same shape a manifest bundle's
-/// entry uses, only the file is `index.ts` and there is no manifest.
-fn write_manifestless_plugin_in_layer(layer_root: &Path, dir_name: &str, body: &str) {
+/// A plugin's identity is its bundle directory name, so `dir_name` is both the
+/// on-disk directory and the plugin id. The entry imports the SDK, declares a
+/// `Plugin` subclass whose `load` runs `body`, and exports a `load` lifecycle
+/// function.
+fn write_plugin_in_layer(layer_root: &Path, dir_name: &str, body: &str) {
     let plugin_dir = layer_root.join("plugins").join(dir_name);
     std::fs::create_dir_all(&plugin_dir).expect("plugin directory should be created");
 
@@ -137,20 +90,19 @@ fn write_manifestless_plugin_in_layer(layer_root: &Path, dir_name: &str, body: &
     std::fs::write(plugin_dir.join("index.ts"), source).expect("index.ts should be written");
 }
 
-/// A manifest-less, TypeScript-only bundle — an `index.ts` entry and no
-/// `plugin.json` — staged into the project layer is discovered by
-/// `discover_and_load_all` and loaded: its `load()` runs, observed by a real
-/// `tools/call` round-trip into the server it registered.
+/// A TypeScript-only bundle — a single `index.ts` entry — staged into the
+/// project layer is discovered by `discover_and_load_all` and loaded: its
+/// `load()` runs, observed by a real `tools/call` round-trip into the server it
+/// registered.
 ///
-/// A manifest-less plugin declares no `provides`, so the host's `provides` gate
-/// is skipped for it — a `register` inside its `load()` is not checked against
-/// any manifest list. Its identity is its bundle directory name.
+/// The plugin's identity is its bundle directory name, and a `register` inside
+/// its `load()` may name any server.
 #[tokio::test]
-async fn discover_and_load_all_loads_a_manifestless_index_ts_plugin() {
+async fn discover_and_load_all_loads_an_index_ts_plugin() {
     let user = tempfile::TempDir::new().expect("user root temp dir");
     let project = tempfile::TempDir::new().expect("project root temp dir");
-    // No `plugin.json`: identity is the bundle directory name, `ts-probe`.
-    write_manifestless_plugin_in_layer(
+    // Identity is the bundle directory name, `ts-probe`.
+    write_plugin_in_layer(
         project.path(),
         "ts-probe",
         "this.register('ts-probe-server', { rust: 'ts-probe-mod' });",
@@ -176,30 +128,30 @@ async fn discover_and_load_all_loads_a_manifestless_index_ts_plugin() {
     )
     .await
     .expect("discovery should not hang")
-    .expect("discovery of a manifest-less bundle should succeed");
+    .expect("discovery of an index.ts bundle should succeed");
     assert_eq!(
         loaded.len(),
         1,
-        "the manifest-less index.ts bundle must be discovered and loaded"
+        "the index.ts bundle must be discovered and loaded"
     );
 
-    // The manifest-less plugin's `load()` ran its `register` with no `provides`
-    // gate; the server it provided is live and serves a real rmcp tool call.
+    // The plugin's `load()` ran its `register`; the server it provided is live
+    // and serves a real rmcp tool call.
     let result = tokio::time::timeout(
         TIMEOUT,
         host.call(
             CallerId::HostInternal,
             "ts-probe-server",
             "echo",
-            json!({ "message": "manifest-less" }),
+            json!({ "message": "ts-only" }),
         ),
     )
     .await
     .expect("the dispatch call should not hang")
-    .expect("a call into the manifest-less plugin's server should succeed");
+    .expect("a call into the plugin's server should succeed");
     assert!(
-        rendered(&result).contains("manifest-less"),
-        "the manifest-less plugin's load() must have registered a working server, got {}",
+        rendered(&result).contains("ts-only"),
+        "the plugin's load() must have registered a working server, got {}",
         rendered(&result)
     );
 }
@@ -213,11 +165,7 @@ async fn discover_and_load_all_loads_a_discovered_plugin() {
     let project = tempfile::TempDir::new().expect("project root temp dir");
     write_plugin_in_layer(
         project.path(),
-        // The disk directory name differs from the manifest id on purpose.
         "probe-dir",
-        "probe",
-        &["probe-server"],
-        "entry.ts",
         "this.register('probe-server', { rust: 'probe-mod' });",
     );
 
@@ -265,31 +213,25 @@ async fn discover_and_load_all_loads_a_discovered_plugin() {
     );
 }
 
-/// When the same plugin `id` exists in two layers, the higher-precedence
-/// (project) copy is the one that loads — observed by which copy's distinct
-/// behavior runs.
+/// When the same plugin `id` — a shared bundle directory name — exists in two
+/// layers, the higher-precedence (project) copy is the one that loads —
+/// observed by which copy's distinct behavior runs.
 #[tokio::test]
 async fn layering_picks_the_higher_precedence_copy() {
     let user = tempfile::TempDir::new().expect("user root temp dir");
     let project = tempfile::TempDir::new().expect("project root temp dir");
 
-    // Both layers carry id `shared`; the user copy registers `from-user`, the
-    // project copy registers `from-project`. The active copy decides which
-    // server name becomes live.
+    // Both layers carry a bundle named `shared`, so both have id `shared`; the
+    // user copy registers `from-user`, the project copy registers
+    // `from-project`. The active copy decides which server name becomes live.
     write_plugin_in_layer(
         user.path(),
         "shared",
-        "shared",
-        &["from-user"],
-        "entry.ts",
         "this.register('from-user', { rust: 'shared-mod' });",
     );
     write_plugin_in_layer(
         project.path(),
         "shared",
-        "shared",
-        &["from-project"],
-        "entry.ts",
         "this.register('from-project', { rust: 'shared-mod' });",
     );
 
@@ -370,9 +312,6 @@ async fn discover_and_load_all_loads_a_builtin_layer_plugin() {
     write_plugin_in_layer(
         builtin.path(),
         "builtin-dir",
-        "builtin-svc",
-        &["builtin-server"],
-        "entry.ts",
         "this.register('builtin-server', { rust: 'builtin-mod' });",
     );
 
@@ -478,23 +417,18 @@ async fn the_user_layer_shadows_the_builtin_layer() {
     let builtin = tempfile::TempDir::new().expect("builtin root temp dir");
     let user = tempfile::TempDir::new().expect("user root temp dir");
 
-    // Both layers carry id `shared`; the builtin copy registers `from-builtin`,
-    // the user copy registers `from-user`. Which server name becomes live is an
-    // unambiguous read on which copy is active.
+    // Both layers carry a bundle named `shared`, so both have id `shared`; the
+    // builtin copy registers `from-builtin`, the user copy registers
+    // `from-user`. Which server name becomes live is an unambiguous read on
+    // which copy is active.
     write_plugin_in_layer(
         builtin.path(),
         "shared",
-        "shared",
-        &["from-builtin"],
-        "entry.ts",
         "this.register('from-builtin', { rust: 'shared-mod' });",
     );
     write_plugin_in_layer(
         user.path(),
         "shared",
-        "shared",
-        &["from-user"],
-        "entry.ts",
         "this.register('from-user', { rust: 'shared-mod' });",
     );
 
@@ -559,54 +493,6 @@ async fn the_user_layer_shadows_the_builtin_layer() {
     );
 }
 
-/// A plugin whose `load()` registers a server name absent from its manifest's
-/// `provides` fails to load with a clear error naming the offending name.
-#[tokio::test]
-async fn register_of_a_name_absent_from_provides_is_rejected() {
-    let user = tempfile::TempDir::new().expect("user root temp dir");
-    let project = tempfile::TempDir::new().expect("project root temp dir");
-    // The manifest promises `declared` but `load()` registers `sneaky`.
-    write_plugin_in_layer(
-        project.path(),
-        "liar",
-        "liar",
-        &["declared"],
-        "entry.ts",
-        "this.register('sneaky', { rust: 'liar-mod' });",
-    );
-
-    let host = PluginHost::for_tests(
-        user.path().to_path_buf(),
-        Some(project.path().to_path_buf()),
-    );
-    let liar_mod: Arc<dyn McpServer> = Arc::new(
-        InProcessServer::new(EchoServer::new())
-            .await
-            .expect("wrapping a real rmcp handler should succeed"),
-    );
-    tokio::time::timeout(TIMEOUT, host.expose_rust_module("liar-mod", liar_mod))
-        .await
-        .expect("expose_rust_module should not hang")
-        .expect("exposing a rust module should succeed");
-
-    let err = tokio::time::timeout(
-        TIMEOUT,
-        host.discover_and_load_all::<SwissarmyhammerConfig>(),
-    )
-    .await
-    .expect("discovery should not hang")
-    .expect_err("a plugin registering an undeclared name must fail to load");
-    let message = err.to_string();
-    assert!(
-        message.contains("sneaky"),
-        "the error must name the undeclared server, got: {message}"
-    );
-    assert!(
-        message.contains("provides"),
-        "the error must mention the manifest's provides list, got: {message}"
-    );
-}
-
 /// A discovery scan is atomic: when one discovered plugin fails to load, every
 /// plugin the scan loaded earlier is rolled back, so a failed scan leaves the
 /// host with no plugin from that scan live — and no stale hot-reload state.
@@ -622,24 +508,18 @@ async fn a_failed_discovery_scan_rolls_back_already_loaded_plugins() {
     let project = tempfile::TempDir::new().expect("project root temp dir");
 
     // `aaa-good` loads cleanly and registers a working server. Discovery sorts
-    // by id, so it is resolved before `zzz-bad` and is loaded first.
+    // by id — the bundle directory name — so it is resolved before `zzz-bad`
+    // and is loaded first.
     write_plugin_in_layer(
         project.path(),
-        "good-dir",
         "aaa-good",
-        &["good-server"],
-        "entry.ts",
         "this.register('good-server', { rust: 'good-mod' });",
     );
-    // `zzz-bad`'s manifest promises `declared` but its `load()` registers
-    // `undeclared`, so its load fails mid-scan.
+    // `zzz-bad`'s `load()` throws, so its load fails mid-scan.
     write_plugin_in_layer(
         project.path(),
-        "bad-dir",
         "zzz-bad",
-        &["declared"],
-        "entry.ts",
-        "this.register('undeclared', { rust: 'bad-mod' });",
+        "throw new Error('zzz-bad load deliberately fails');",
     );
 
     let host = PluginHost::for_tests(
@@ -664,7 +544,7 @@ async fn a_failed_discovery_scan_rolls_back_already_loaded_plugins() {
     .expect("discovery should not hang")
     .expect_err("a scan with a plugin that fails to load must return Err");
     assert!(
-        err.to_string().contains("undeclared"),
+        err.to_string().contains("zzz-bad load deliberately fails"),
         "the surfaced error must be the failing plugin's load error, got: {err}"
     );
 
@@ -705,115 +585,5 @@ async fn a_failed_discovery_scan_rolls_back_already_loaded_plugins() {
     assert!(
         good_status.is_none(),
         "a rolled-back plugin must leave no reload status, got: {good_status:?}"
-    );
-}
-
-/// A manifest whose plugin-authored `entry` traverses out of the bundle with
-/// `..` is rejected with a clear manifest error, and no isolate is spent on it.
-#[tokio::test]
-async fn a_manifest_entry_escaping_the_bundle_is_rejected() {
-    let user = tempfile::TempDir::new().expect("user root temp dir");
-    let project = tempfile::TempDir::new().expect("project root temp dir");
-
-    // Lay out a normal bundle, then overwrite its manifest with one whose
-    // `entry` points at a sibling file outside the bundle directory.
-    write_plugin_in_layer(
-        project.path(),
-        "escapee-dir",
-        "escapee",
-        &["escapee-server"],
-        "entry.ts",
-        "this.register('escapee-server', { rust: 'escapee-mod' });",
-    );
-    let plugins_dir = project.path().join("plugins");
-    // A file one level above the bundle directory — the escape target.
-    std::fs::write(plugins_dir.join("escape.ts"), "// outside the bundle")
-        .expect("escape target should be written");
-    let escaping_manifest = "{\n  \"id\": \"escapee\",\n  \"name\": \"escapee plugin\",\n  \
-         \"version\": \"1.0.0\",\n  \"entry\": \"../escape.ts\",\n  \
-         \"provides\": [\"escapee-server\"]\n}\n";
-    std::fs::write(
-        plugins_dir.join("escapee-dir").join("plugin.json"),
-        escaping_manifest,
-    )
-    .expect("escaping plugin.json should be written");
-
-    let host = PluginHost::for_tests(
-        user.path().to_path_buf(),
-        Some(project.path().to_path_buf()),
-    );
-
-    let err = tokio::time::timeout(
-        TIMEOUT,
-        host.discover_and_load_all::<SwissarmyhammerConfig>(),
-    )
-    .await
-    .expect("discovery should not hang")
-    .expect_err("a manifest entry escaping the bundle must be rejected");
-    assert!(
-        matches!(err, swissarmyhammer_plugin::Error::Manifest(_)),
-        "an escaping entry must surface as Error::Manifest, got: {err:?}"
-    );
-    let message = err.to_string();
-    assert!(
-        message.contains("escapes the plugin bundle"),
-        "the error must explain the escape, got: {message}"
-    );
-    assert!(
-        message.contains("escapee"),
-        "the error must name the offending plugin, got: {message}"
-    );
-
-    // Nothing loaded: the rejection happened before any isolate was created.
-    let debug = format!("{host:?}");
-    assert!(
-        debug.contains("loaded_plugins: 0"),
-        "a rejected manifest entry must leave the host with no loaded plugins, got: {debug}"
-    );
-}
-
-/// A `provides` entry that collides with a reserved host server name is
-/// rejected at discovery time, before the plugin's isolate is even created.
-#[tokio::test]
-async fn provides_colliding_with_a_reserved_host_name_is_rejected() {
-    let user = tempfile::TempDir::new().expect("user root temp dir");
-    let project = tempfile::TempDir::new().expect("project root temp dir");
-    // `host-reserved` is exposed by the host below, so a plugin may not claim
-    // it in `provides`.
-    write_plugin_in_layer(
-        project.path(),
-        "greedy",
-        "greedy",
-        &["host-reserved"],
-        "entry.ts",
-        "this.register('host-reserved', { rust: 'greedy-mod' });",
-    );
-
-    let host = PluginHost::for_tests(
-        user.path().to_path_buf(),
-        Some(project.path().to_path_buf()),
-    );
-    // The host reserves `host-reserved` by exposing a module under that name.
-    let reserved: Arc<dyn McpServer> = Arc::new(
-        InProcessServer::new(EchoServer::new())
-            .await
-            .expect("wrapping a real rmcp handler should succeed"),
-    );
-    tokio::time::timeout(TIMEOUT, host.expose_rust_module("host-reserved", reserved))
-        .await
-        .expect("expose_rust_module should not hang")
-        .expect("exposing a rust module should succeed");
-
-    let err = tokio::time::timeout(
-        TIMEOUT,
-        host.discover_and_load_all::<SwissarmyhammerConfig>(),
-    )
-    .await
-    .expect("discovery should not hang")
-    .expect_err("a provides name colliding with a reserved host name must be rejected");
-    let message = err.to_string();
-    assert!(
-        message.contains("host-reserved"),
-        "the error must name the colliding server, got: {message}"
     );
 }

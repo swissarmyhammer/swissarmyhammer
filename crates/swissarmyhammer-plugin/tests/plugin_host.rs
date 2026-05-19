@@ -68,10 +68,11 @@ fn rendered(value: &Value) -> String {
 
 /// Writes a one-file plugin bundle whose `load` export runs `body`.
 ///
-/// The entry imports the SDK, declares a `Plugin` subclass whose `load`
-/// contains `body`, and exports a `load` lifecycle function that constructs the
-/// subclass — wrapped in the SDK's plugin Proxy — and awaits its `load`. This
-/// matches the bundle shape the host's `load(plugin_dir)` expects.
+/// The entry is the bundle's `index.ts`: it imports the SDK, declares a
+/// `Plugin` subclass whose `load` contains `body`, and exports a `load`
+/// lifecycle function that constructs the subclass — wrapped in the SDK's
+/// plugin Proxy — and awaits its `load`. This matches the bundle shape the
+/// host's `load(plugin_dir)` expects.
 fn write_plugin(dir: &std::path::Path, body: &str) {
     let entry = format!(
         "import {{ Plugin, makePluginThis }} from '@swissarmyhammer/plugin';\n\
@@ -84,7 +85,7 @@ fn write_plugin(dir: &std::path::Path, body: &str) {
            return null;\n\
          }}\n"
     );
-    std::fs::write(dir.join("entry.ts"), entry).expect("entry.ts should be written");
+    std::fs::write(dir.join("index.ts"), entry).expect("index.ts should be written");
 }
 
 /// `PluginHost::load` runs a probe plugin whose `load()` registers a `rust`

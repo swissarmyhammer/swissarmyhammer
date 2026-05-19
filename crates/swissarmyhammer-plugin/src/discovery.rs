@@ -299,7 +299,7 @@ fn scan_bundle(directory: &Path, source: &FileSource) -> Result<Option<Discovere
     Ok(None)
 }
 
-/// Resolves a manifest-less bundle's entry module — `index.ts`, else
+/// Resolves a TypeScript-only bundle's entry module — `index.ts`, else
 /// `index.js` — to a path proven to be contained within the bundle directory.
 ///
 /// The `index.{ts,js}` filenames are a fixed convention, not plugin-authored
@@ -309,6 +309,11 @@ fn scan_bundle(directory: &Path, source: &FileSource) -> Result<Option<Discovere
 /// [`Manifest::resolve_entry`] resolves a manifest's: it canonicalizes the
 /// bundle root and the entry path — collapsing symlinks — and rejects any entry
 /// that resolves outside the bundle.
+///
+/// Shared with [`PluginHost::load`](crate::PluginHost::load), which resolves a
+/// by-path bundle's entry the same way discovery does, so a bundle loaded
+/// directly and a bundle loaded through a discovery scan find their `index.ts`
+/// identically.
 ///
 /// # Returns
 ///
@@ -320,7 +325,7 @@ fn scan_bundle(directory: &Path, source: &FileSource) -> Result<Option<Discovere
 /// Returns [`Error::Manifest`](crate::Error::Manifest) when the bundle
 /// directory or the index file cannot be canonicalized, or when the
 /// canonicalized index entry escapes the canonicalized bundle root.
-fn resolve_index_entry(directory: &Path) -> Result<Option<PathBuf>> {
+pub(crate) fn resolve_index_entry(directory: &Path) -> Result<Option<PathBuf>> {
     let Some(index_file) = INDEX_ENTRY_FILES
         .iter()
         .find(|name| directory.join(name).is_file())
