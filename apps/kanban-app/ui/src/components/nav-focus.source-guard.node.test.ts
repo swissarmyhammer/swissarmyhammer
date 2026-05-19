@@ -60,10 +60,10 @@ const SCANNED_FILES = [
 ];
 
 /**
- * Resolve the repo root from this test file's location. The test
- * lives at `kanban-app/ui/src/components/`, so two levels up from
- * `process.cwd()` (the UI project root, where vitest runs) is the
- * repo root.
+ * Resolve the base the `kanban-app/ui/...` entries in `SCANNED_FILES`
+ * are relative to. The UI project root (`process.cwd()`, where vitest
+ * runs) is `apps/kanban-app/ui`, so two levels up is `apps/` — the
+ * directory the `kanban-app/ui/...` prefixes resolve against.
  */
 function repoRoot(): string {
   return resolve(process.cwd(), "..", "..");

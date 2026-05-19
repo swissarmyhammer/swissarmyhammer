@@ -166,13 +166,21 @@ pub struct WindowState {
     pub active_perspective_id: String,
     /// IDs of tasks visible under the active perspective's filter.
     ///
+    /// `None` means no `perspective.switch` has occurred for this window yet
+    /// ("never switched"); `Some(vec)` means a switch has happened and the
+    /// vec is the resolved id list (which may be empty if the filter matched
+    /// nothing). The frontend treats an absent key as `undefined` → "show all
+    /// tasks", and `[]` as "switched, matched zero" → empty board; emitting
+    /// `[]` for a never-switched window would conflate the two and leave the
+    /// board empty on launch.
+    ///
     /// Written atomically with `active_perspective_id` by
     /// [`UIState::switch_perspective`] so the frontend sees both fields land
     /// in a single `ui-state-changed` event. Transient — not persisted: a
     /// fresh window restart will repopulate this on the next perspective
     /// switch.
     #[serde(skip)]
-    pub filtered_task_ids: Vec<String>,
+    pub filtered_task_ids: Option<Vec<String>>,
     /// Whether the command palette is open in this window. Transient — not persisted.
     #[serde(skip)]
     pub palette_open: bool,
@@ -208,7 +216,7 @@ impl Default for WindowState {
             inspector_stack: Vec::new(),
             active_view_id: String::new(),
             active_perspective_id: String::new(),
-            filtered_task_ids: Vec::new(),
+            filtered_task_ids: None,
             palette_open: false,
             palette_mode: "command".to_string(),
             app_mode: "normal".to_string(),
@@ -581,12 +589,14 @@ impl UIState {
             let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
             let ws = inner.windows.entry(window_label.to_string()).or_default();
             let id_changed = ws.active_perspective_id != perspective_id;
-            let ids_changed = ws.filtered_task_ids != filtered_task_ids;
+            // A never-switched window holds `None`, which is never equal to
+            // `Some(...)`, so the first switch always counts as changed.
+            let ids_changed = ws.filtered_task_ids.as_deref() != Some(filtered_task_ids.as_slice());
             if !id_changed && !ids_changed {
                 return None;
             }
             ws.active_perspective_id = perspective_id.to_string();
-            ws.filtered_task_ids = filtered_task_ids.clone();
+            ws.filtered_task_ids = Some(filtered_task_ids.clone());
             Some(UIStateChange::PerspectiveSwitch {
                 perspective_id: perspective_id.to_string(),
                 filtered_task_ids,
@@ -1057,7 +1067,7 @@ impl UIState {
             .unwrap_or_else(|e| e.into_inner())
             .windows
             .get(window_label)
-            .map(|ws| ws.filtered_task_ids.clone())
+            .and_then(|ws| ws.filtered_task_ids.clone())
             .unwrap_or_default()
     }
 
@@ -1238,10 +1248,13 @@ impl UIState {
                         serde_json::json!(ws.palette_mode),
                     );
                     map.insert("app_mode".to_string(), serde_json::json!(ws.app_mode));
-                    map.insert(
-                        "filtered_task_ids".to_string(),
-                        serde_json::json!(ws.filtered_task_ids),
-                    );
+                    // Only emit `filtered_task_ids` once a perspective switch
+                    // has occurred. A never-switched window omits the key so
+                    // the frontend reads it as `undefined` ("show all tasks")
+                    // rather than `[]` ("switched, matched zero").
+                    if let Some(ids) = &ws.filtered_task_ids {
+                        map.insert("filtered_task_ids".to_string(), serde_json::json!(ids));
+                    }
                 }
                 (label.clone(), obj)
             })
@@ -2738,6 +2751,30 @@ mod tests {
         assert_eq!(
             main_win["filtered_task_ids"],
             serde_json::json!(["t1", "t2"])
+        );
+    }
+
+    /// A window that has never had `switch_perspective` called must serialize
+    /// through `to_json()` with NO `filtered_task_ids` key — the frontend
+    /// reads the absent key as `undefined` ("never switched → show all tasks").
+    /// Emitting `[]` here would be indistinguishable from "switched, matched
+    /// zero" and leaves the board empty on launch.
+    #[test]
+    fn never_switched_window_omits_filtered_task_ids_in_to_json() {
+        let state = UIState::new();
+        // Touch the window through a non-perspective mutation so it exists in
+        // the windows map without ever calling switch_perspective.
+        state.set_active_view("main", "board-view");
+        let json = state.to_json();
+        let main_win = &json["windows"]["main"];
+        assert!(
+            main_win.is_object(),
+            "main window should be present in to_json output",
+        );
+        assert!(
+            main_win.get("filtered_task_ids").is_none(),
+            "a never-switched window must omit filtered_task_ids so the \
+             frontend reads it as undefined; got: {main_win:?}",
         );
     }
 

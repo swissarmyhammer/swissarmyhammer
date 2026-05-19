@@ -4086,6 +4086,7 @@ dependencies = [
  "dirs",
  "futures-util",
  "objc2",
+ "objc2-foundation",
  "reqwest 0.13.2",
  "rmcp",
  "serde",

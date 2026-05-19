@@ -80,7 +80,7 @@ Grab the signed, notarized DMG from the latest GitHub release:
 https://github.com/swissarmyhammer/swissarmyhammer/releases/latest/download/Kanban_aarch64.dmg
 ```
 
-When you drag `Kanban.app` to `/Applications` from a DMG, there is no package manager to link the CLI. Instead, the app self-installs the `kanban` CLI onto your `PATH` on first launch: it creates a `kanban` symlink in a directory that is both user-writable and on the default `PATH` (preferring your Homebrew `bin`). If no user-writable `PATH` directory exists, the app falls back to `/usr/local/bin` and shows a single one-time macOS admin password prompt to create the symlink there. The prompt appears at most once — whether you accept or decline, the app does not ask again on later launches.
+When you drag `Kanban.app` to `/Applications` from a DMG, there is no package manager to link the CLI. Instead, the app self-installs the `kanban` CLI onto your `PATH` at launch: it creates a `kanban` symlink in a directory that is both user-writable and on the default `PATH` (preferring your Homebrew `bin`). If no user-writable `PATH` directory exists, the app falls back to `/usr/local/bin` — and since that directory is root-owned, it shows an explanatory dialog followed by the macOS admin password prompt to create the symlink there. Self-install is gated solely on the symlink: if the `kanban` CLI is not linked (you declined, or the link was later removed), the app offers to install it again on a later launch; once it is linked, the app stays silent.
 
 ### From source
 
