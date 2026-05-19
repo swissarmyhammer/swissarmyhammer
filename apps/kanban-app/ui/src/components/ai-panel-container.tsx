@@ -55,11 +55,7 @@ import {
   type ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import {
-  SparklesIcon,
-  PanelRightCloseIcon,
-  PanelRightOpenIcon,
-} from "lucide-react";
+import { SparklesIcon, PanelRightOpenIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useActiveBoardPath } from "@/lib/command-scope";
 import {
@@ -398,6 +394,7 @@ function AiPanelContainerBody({
         models={models}
         modelId={modelId}
         onSelectModel={handleSelectModel}
+        onCollapse={handleToggle}
         createConnect={effectiveConnect}
       />
     </AiPanelShell>
@@ -554,7 +551,9 @@ function AiPanelShell({
     );
   }
 
-  // Expanded: the resize handle, the collapse control, and the hosted View.
+  // Expanded: the resize handle and the hosted View. The collapse control
+  // lives inside the View's own header (`AiPanelHeader`), wired through the
+  // `onCollapse` prop — the shell no longer carries a standalone collapse row.
   return (
     <div
       className="relative flex h-full shrink-0 flex-col border-l bg-background"
@@ -571,16 +570,6 @@ function AiPanelShell({
         aria-hidden="true"
       >
         <div className="h-full w-px bg-transparent transition-colors group-hover:bg-border" />
-      </div>
-      <div className="flex items-center justify-end border-b px-2 py-1">
-        <Button
-          aria-label="Collapse AI panel"
-          onClick={onToggle}
-          size="icon"
-          variant="ghost"
-        >
-          <PanelRightCloseIcon className="size-4" />
-        </Button>
       </div>
       <div className="min-h-0 flex-1">{children}</div>
     </div>

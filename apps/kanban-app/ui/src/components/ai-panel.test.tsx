@@ -236,6 +236,7 @@ describe("AiPanel: conversation rendering", () => {
         models={MODELS}
         modelId="claude-code"
         onSelectModel={() => {}}
+        onCollapse={() => {}}
         createConnect={harness.createConnect}
       />,
     );
@@ -289,6 +290,7 @@ describe("AiPanel: conversation rendering", () => {
         models={MODELS}
         modelId="claude-code"
         onSelectModel={() => {}}
+        onCollapse={() => {}}
         createConnect={createConnect}
       />,
     );
@@ -328,6 +330,7 @@ describe("AiPanel: conversation rendering", () => {
         models={MODELS}
         modelId="claude-code"
         onSelectModel={() => {}}
+        onCollapse={() => {}}
         createConnect={harness.createConnect}
       />,
     );
@@ -374,6 +377,7 @@ describe("AiPanel: conversation rendering", () => {
         models={MODELS}
         modelId="claude-code"
         onSelectModel={() => {}}
+        onCollapse={() => {}}
         createConnect={harness.createConnect}
       />,
     );
@@ -412,6 +416,7 @@ describe("AiPanel: model selector", () => {
         models={MODELS}
         modelId="claude-code"
         onSelectModel={() => {}}
+        onCollapse={() => {}}
         createConnect={harness.createConnect}
       />,
     );
@@ -455,6 +460,7 @@ describe("AiPanel: model selector", () => {
         models={bothAvailable}
         modelId="claude-code"
         onSelectModel={onSelectModel}
+        onCollapse={() => {}}
         createConnect={harness.createConnect}
       />,
     );
@@ -482,6 +488,7 @@ describe("AiPanel: model selector", () => {
           models={bothAvailable}
           modelId="qwen-coder"
           onSelectModel={onSelectModel}
+          onCollapse={() => {}}
           createConnect={harness.createConnect}
         />,
       );
@@ -510,6 +517,7 @@ describe("AiPanel: model selector", () => {
         models={MODELS}
         modelId={null}
         onSelectModel={() => {}}
+        onCollapse={() => {}}
         createConnect={harness.createConnect}
       />,
     );
@@ -520,6 +528,40 @@ describe("AiPanel: model selector", () => {
     expect(screen.getByRole("textbox").getAttribute("contenteditable")).toBe(
       "false",
     );
+  });
+});
+
+describe("AiPanel: collapse control", () => {
+  it("renders the collapse button in the header and clicking it calls onCollapse", async () => {
+    const harness = mockHarness();
+    const onCollapse = vi.fn();
+
+    await renderInAct(
+      <AiPanel
+        boardDir="/tmp/board"
+        models={MODELS}
+        modelId="claude-code"
+        onSelectModel={() => {}}
+        onCollapse={onCollapse}
+        createConnect={harness.createConnect}
+      />,
+    );
+
+    // The collapse control lives in the panel header — `<header>` is the
+    // single header row that also holds the "AI" title and the model
+    // selector. The button keeps the exact `aria-label` it had in the old
+    // standalone shell row.
+    const header = document.querySelector("header");
+    expect(header, "the panel header must be present").not.toBeNull();
+    const collapse = within(header as HTMLElement).getByRole("button", {
+      name: /collapse ai panel/i,
+    });
+
+    await act(async () => {
+      await userEvent.click(collapse);
+    });
+
+    expect(onCollapse).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -537,6 +579,7 @@ describe("AiPanel: permission prompt", () => {
         models={MODELS}
         modelId="claude-code"
         onSelectModel={() => {}}
+        onCollapse={() => {}}
         createConnect={harness.createConnect}
       />,
     );
@@ -623,6 +666,7 @@ describe("AiPanel: ai.* command integration", () => {
         models={MODELS}
         modelId="claude-code"
         onSelectModel={() => {}}
+        onCollapse={() => {}}
         createConnect={harness.createConnect}
       />,
     );
@@ -679,6 +723,7 @@ describe("AiPanel: ai.* command integration", () => {
         models={MODELS}
         modelId="claude-code"
         onSelectModel={() => {}}
+        onCollapse={() => {}}
         createConnect={createConnect}
       />,
     );

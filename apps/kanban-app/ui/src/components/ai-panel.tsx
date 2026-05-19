@@ -50,6 +50,7 @@ import {
   CircleDotIcon,
   CircleIcon,
   CopyIcon,
+  PanelRightCloseIcon,
   PlusIcon,
   RotateCcwIcon,
   SparklesIcon,
@@ -198,6 +199,12 @@ export interface AiPanelProps {
    * feeds the new id back via {@link AiPanelProps.modelId}.
    */
   onSelectModel: (modelId: string) => void;
+  /**
+   * Collapse the panel to its rail. The hosting container owns the panel's
+   * open-state; the header's collapse button is wired straight to this
+   * callback, exactly as the model selector is wired to `onSelectModel`.
+   */
+  onCollapse: () => void;
   /** Builds the {@link ConversationConnect} factory for a model id. */
   createConnect: AiPanelConnectFactory;
 }
@@ -215,6 +222,7 @@ export function AiPanel({
   models,
   modelId,
   onSelectModel,
+  onCollapse,
   createConnect,
 }: AiPanelProps): ReactNode {
   void boardDir;
@@ -249,6 +257,7 @@ export function AiPanel({
           models={models}
           selectedModel={selectedModel}
           onSelectModel={onSelectModel}
+          onCollapse={onCollapse}
         />
         {modelId === null ? (
           <NoModelState hasModels={(models?.length ?? 0) > 0} />
@@ -273,19 +282,25 @@ interface AiPanelHeaderProps {
   models: AiModel[] | undefined;
   selectedModel: AiModel | null;
   onSelectModel: (modelId: string) => void;
+  /** Collapse the panel to its rail — wired to the header's collapse button. */
+  onCollapse: () => void;
 }
 
 /**
- * The panel header: the title and the model selector dropdown.
+ * The panel header: the title, the model selector dropdown, and the collapse
+ * control.
  *
  * The selector lists every model from `ai_list_models`. An unavailable model
  * is a disabled menu item that still shows its hint (e.g. "install Claude
- * Code"); selecting an available one reports the choice upward.
+ * Code"); selecting an available one reports the choice upward. The collapse
+ * button — to the right of the selector — folds the panel down to its rail
+ * via `onCollapse`; the hosting container owns the open-state.
  */
 function AiPanelHeader({
   models,
   selectedModel,
   onSelectModel,
+  onCollapse,
 }: AiPanelHeaderProps): ReactNode {
   const triggerLabel = selectedModel?.label ?? "Select a model";
 
@@ -295,53 +310,68 @@ function AiPanelHeader({
         <SparklesIcon className="size-4 text-muted-foreground" />
         <span>AI</span>
       </div>
-      <DropdownMenu>
-        {/* The model selector is a focusable spatial-nav leaf:
-            `ui:ai-panel.model-selector`, composed under the `ui:ai-panel`
-            zone. `<AiPanelPressable asChild>` mounts the leaf and the
-            Enter / Space keyboard-activation CommandDefs; the
-            `DropdownMenuTrigger`'s slot becomes the host `<button>` so the
-            chain renders exactly one button. `onPress` is a no-op — Radix's
-            own trigger handler opens the menu; the Pressable is here purely
-            for the focus leaf + keyboard activation, and a `<button>`
-            press toggles the dropdown natively.
+      {/* The model selector and the collapse control share the right side of
+          the single header row, while the "AI" title stays on the left. */}
+      <div className="flex items-center gap-2">
+        <DropdownMenu>
+          {/* The model selector is a focusable spatial-nav leaf:
+              `ui:ai-panel.model-selector`, composed under the `ui:ai-panel`
+              zone. `<AiPanelPressable asChild>` mounts the leaf and the
+              Enter / Space keyboard-activation CommandDefs; the
+              `DropdownMenuTrigger`'s slot becomes the host `<button>` so the
+              chain renders exactly one button. `onPress` is a no-op — Radix's
+              own trigger handler opens the menu; the Pressable is here purely
+              for the focus leaf + keyboard activation, and a `<button>`
+              press toggles the dropdown natively.
 
-            `ariaLabel` is the trigger's visible label (the model name, or
-            "Select a model"): the button already shows that text, so the
-            accessible name must match it rather than introduce a competing
-            label. */}
-        <DropdownMenuTrigger asChild>
-          <AiPanelPressable
-            asChild
-            moniker={asSegment("ui:ai-panel.model-selector")}
-            ariaLabel={triggerLabel}
-            onPress={() => {}}
-            disabled={!models || models.length === 0}
-          >
-            <Button
-              className="gap-1.5"
+              `ariaLabel` is the trigger's visible label (the model name, or
+              "Select a model"): the button already shows that text, so the
+              accessible name must match it rather than introduce a competing
+              label. */}
+          <DropdownMenuTrigger asChild>
+            <AiPanelPressable
+              asChild
+              moniker={asSegment("ui:ai-panel.model-selector")}
+              ariaLabel={triggerLabel}
+              onPress={() => {}}
               disabled={!models || models.length === 0}
-              size="sm"
-              variant="outline"
             >
-              {triggerLabel}
-              <ChevronDownIcon className="size-4 opacity-60" />
-            </Button>
-          </AiPanelPressable>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-64">
-          <DropdownMenuLabel>Model</DropdownMenuLabel>
-          <DropdownMenuSeparator />
-          {(models ?? []).map((model) => (
-            <ModelMenuItem
-              key={model.id}
-              model={model}
-              selected={model.id === selectedModel?.id}
-              onSelect={onSelectModel}
-            />
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
+              <Button
+                className="gap-1.5"
+                disabled={!models || models.length === 0}
+                size="sm"
+                variant="outline"
+              >
+                {triggerLabel}
+                <ChevronDownIcon className="size-4 opacity-60" />
+              </Button>
+            </AiPanelPressable>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-64">
+            <DropdownMenuLabel>Model</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {(models ?? []).map((model) => (
+              <ModelMenuItem
+                key={model.id}
+                model={model}
+                selected={model.id === selectedModel?.id}
+                onSelect={onSelectModel}
+              />
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        {/* The collapse control — folds the panel to its rail. The hosting
+            container owns the open-state; this button is wired straight to
+            the `onCollapse` callback. */}
+        <Button
+          aria-label="Collapse AI panel"
+          onClick={onCollapse}
+          size="icon"
+          variant="ghost"
+        >
+          <PanelRightCloseIcon className="size-4" />
+        </Button>
+      </div>
     </header>
   );
 }

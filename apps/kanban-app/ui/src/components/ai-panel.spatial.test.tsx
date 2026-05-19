@@ -240,6 +240,7 @@ async function renderPanel(script: SessionScript = {}) {
               models={MODELS}
               modelId="claude-code"
               onSelectModel={() => {}}
+              onCollapse={() => {}}
               createConnect={mockConnect(script)}
             />
           </EntityFocusProvider>
