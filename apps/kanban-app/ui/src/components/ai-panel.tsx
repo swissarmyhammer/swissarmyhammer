@@ -936,17 +936,17 @@ function ComposerArea({
           </Button>
         </div>
       )}
-      {/* The composer is a focus scope — `ui:ai-panel.composer` under the
-          panel zone — so jump-to lands directly on the prompt box and
-          arrow-nav reaches it. `<FocusScope>` deliberately does NOT steal a
-          click that lands inside the CM6 editor, so caret placement inside
-          the prompt is untouched; the scope just registers the leaf and
-          paints its focus indicator. The `flex`/`min-h-0` chain lets the
-          composer's CM6 body flex to fill the available height. */}
-      <AiPanelFocusScope
-        moniker={asSegment("ui:ai-panel.composer")}
-        className="flex min-h-0 flex-1 flex-col"
-      >
+      {/* This layout `<div>` carries NO focus scope — it is a plain
+          flex container. The composer's CM6 prompt and its footer model
+          picker are two INDEPENDENT controls, each its own spatial-nav
+          leaf and a sibling of the other under the `ui:ai-panel` zone: a
+          scope on this surrounding container would bundle them under one
+          moniker and route a drill-in (Enter) to the wrong control.
+          `AiPromptComposer` mounts the `ui:ai-panel.composer` scope around
+          only the CM6 editor body; `ComposerModelSelect` registers the
+          sibling `ui:ai-panel.model-selector` leaf. The `flex`/`min-h-0`
+          chain lets the composer's CM6 body flex to fill the height. */}
+      <div className="flex min-h-0 flex-1 flex-col">
         <AiPromptComposer
           disabled={disabled}
           placeholder={placeholder}
@@ -957,7 +957,7 @@ function ComposerArea({
           onSend={onSend}
           onCancel={onCancel}
         />
-      </AiPanelFocusScope>
+      </div>
     </div>
   );
 }

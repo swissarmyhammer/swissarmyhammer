@@ -28,6 +28,29 @@
  * fill it (`h-full`), so the prompt area grows with the panel. The footer
  * toolbar stays pinned at the bottom of the container.
  *
+ * # Focus scopes: the prompt and the picker are independent siblings
+ *
+ * The CM6 prompt and the footer model picker are two INDEPENDENT spatial-nav
+ * controls. The bordered shell carries NO focus scope; instead the
+ * `ui:ai-panel.composer` scope wraps ONLY the CM6 editor body — so landing on
+ * it and drilling in (Enter) focuses the CM6 prompt, exactly like the filter
+ * formula bar's `filter_editor:${id}` scope. The footer's `ComposerModelSelect`
+ * registers its own `ui:ai-panel.model-selector` leaf. With no scope on the
+ * shell the two compose their FQM directly under the `ui:ai-panel` zone —
+ * `/window/ui:ai-panel/ui:ai-panel.composer` and
+ * `/window/ui:ai-panel/ui:ai-panel.model-selector` — as siblings, neither
+ * nested inside the other.
+ *
+ * Drill-in actually moving the cursor in is NOT automatic: a bare
+ * `<FocusScope>` only registers the scope as a nav target. The composer
+ * scope is given a per-scope `ui.ai-panel.composer.drillIn` `CommandDef`
+ * (keyed to Enter for every keymap) whose `execute` calls
+ * `editorRef.current?.focus()` — the shared `TextEditor` primitive's
+ * `TextEditorHandle.focus()`. That command shadows the global
+ * `nav.drillIn: Enter` for the composer scope and is what drives the CM6
+ * editing cursor in. This mirrors `FilterFormulaBarFocusable`'s
+ * `filter_editor.drillIn` command in `perspective-tab-bar.tsx`.
+ *
  * # Submit / stop policy
  *
  * The composer is a chat box: plain `Enter` submits the buffer, `Shift-Enter`
@@ -71,7 +94,11 @@ import {
   TextEditor,
   type TextEditorHandle,
 } from "@/components/fields/text-editor";
-import { AiPanelPressable } from "@/components/ai-panel-focus";
+import {
+  AiPanelFocusScope,
+  AiPanelPressable,
+} from "@/components/ai-panel-focus";
+import type { CommandDef } from "@/lib/command-scope";
 import {
   PromptInputSelect,
   PromptInputSelectContent,
@@ -286,6 +313,30 @@ export function AiPromptComposer({
     [disabled],
   );
 
+  // Per-scope drill-in command for the CM6 body's `ui:ai-panel.composer`
+  // scope. A bare `<FocusScope>` only *registers* the scope as a nav
+  // target — landing on it and pressing Enter does not move the editing
+  // cursor into the editor. This `CommandDef` (keyed to Enter for every
+  // keymap) shadows the global `nav.drillIn: Enter` for the composer
+  // scope and calls `editorRef.current?.focus()`, the shared
+  // `TextEditor` primitive's `TextEditorHandle.focus()` (which drives
+  // the underlying CM6 `view.focus()`). This is the exact pattern
+  // `FilterFormulaBarFocusable` uses for the filter formula bar's
+  // `filter_editor.drillIn` command (see `perspective-tab-bar.tsx`).
+  const drillInCommands = useMemo<readonly CommandDef[]>(
+    () => [
+      {
+        id: "ui.ai-panel.composer.drillIn",
+        name: "Edit Prompt",
+        keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
+        execute: () => {
+          editorRef.current?.focus();
+        },
+      },
+    ],
+    [],
+  );
+
   return (
     // The single bordered container — the AI Elements `PromptInput` shell.
     // It is the only border around the input; `ComposerArea` no longer adds
@@ -299,13 +350,30 @@ export function AiPromptComposer({
         disabled && "opacity-60",
       )}
     >
-      {/* The CM6 editor body flexes to fill the container's available
-          height. `min-h-24` is a content-height floor so the prompt area
-          never collapses below a few lines; `flex-1` lets it grow past that
-          floor with the panel. The `[&_.cm-editor]` / `[&_.cm-scroller]`
-          arbitrary selectors make the CM6 surfaces themselves fill the body
-          so the prompt area grows rather than staying content-height. */}
-      <div className="min-h-24 flex-1 overflow-auto px-2 py-1.5 [&_.cm-editor]:h-full [&_.cm-scroller]:h-full">
+      {/* Only the CM6 editor body is a focus scope — `ui:ai-panel.composer`
+          under the panel zone. Landing on it and drilling in (Enter)
+          focuses the CM6 prompt, exactly like the filter formula bar's
+          `filter_editor:${id}` scope. The `drillInCommands` array carries
+          the per-scope `ui.ai-panel.composer.drillIn` `CommandDef` keyed
+          to Enter — that command is what actually drives the editing
+          cursor into the CM6 editor on drill-in (a bare scope only
+          registers the nav target). The footer toolbar — with the model
+          picker's own `ui:ai-panel.model-selector` leaf — stays OUTSIDE
+          this scope, so the two are independent spatial-nav siblings.
+          `<FocusScope>` deliberately does NOT steal a click that lands
+          inside the CM6 editor, so caret placement in the prompt is
+          untouched. The CM6 editor body flexes to fill the container's
+          available height: `min-h-24` is a content-height floor so the
+          prompt area never collapses below a few lines; `flex-1` lets it
+          grow past that floor with the panel. The `[&_.cm-editor]` /
+          `[&_.cm-scroller]` arbitrary selectors make the CM6 surfaces
+          themselves fill the body so the prompt area grows rather than
+          staying content-height. */}
+      <AiPanelFocusScope
+        moniker={asSegment("ui:ai-panel.composer")}
+        commands={drillInCommands}
+        className="min-h-24 flex-1 overflow-auto px-2 py-1.5 [&_.cm-editor]:h-full [&_.cm-scroller]:h-full"
+      >
         <TextEditor
           ref={editorRef}
           value=""
@@ -313,7 +381,7 @@ export function AiPromptComposer({
           placeholder={placeholder}
           autoFocus={false}
         />
-      </div>
+      </AiPanelFocusScope>
       {/* The footer toolbar — pinned at the bottom of the container. The
           model selector sits on the left, the submit/stop control on the
           right. */}

@@ -38,7 +38,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act } from "@testing-library/react";
+import { act, fireEvent } from "@testing-library/react";
 import { renderInAct } from "@/test/act-render";
 
 // ---------------------------------------------------------------------------
@@ -95,12 +95,17 @@ import type {
 } from "@/ai/acp-client";
 import type { ConversationConnect } from "@/ai/conversation";
 import { AiPanel, type AiModel, type AiPanelConnectFactory } from "./ai-panel";
+import { AppShell } from "./app-shell";
 import { FocusLayer } from "./focus-layer";
 import { FocusScope } from "./focus-scope";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { UIStateProvider } from "@/lib/ui-state-context";
+import { AppModeProvider } from "@/lib/app-mode-context";
+import { UndoProvider } from "@/lib/undo-context";
 import {
   setupSpatialHarness,
+  type DefaultInvokeImpl,
   type SpatialHarness,
 } from "@/test/spatial-shadow-registry";
 import {
@@ -262,6 +267,77 @@ function findRegisterRecord(segment: string): Record<string, unknown> | null {
   return null;
 }
 
+/**
+ * Fallback for the non-spatial Tauri commands the `AppShell` provider
+ * stack hits on mount — `get_ui_state` (drives the keymap mode the
+ * `KeybindingHandler` resolves against) and `get_undo_state`. Every
+ * spatial command is handled by the shadow navigator before this runs.
+ */
+const appShellInvokeImpl: DefaultInvokeImpl = (cmd) => {
+  if (cmd === "get_ui_state") {
+    return {
+      palette_open: false,
+      palette_mode: "command",
+      keymap_mode: "cua",
+      scope_chain: [],
+      open_boards: [],
+      windows: {},
+      recent_boards: [],
+    };
+  }
+  if (cmd === "get_undo_state") return { can_undo: false, can_redo: false };
+  return undefined;
+};
+
+/**
+ * Render `<AiPanel>` inside the production spatial-nav stack wrapped by
+ * `<AppShell>` so the global keybinding pipeline is live.
+ *
+ * The shadow harness alone routes `spatial_*` IPCs but never turns a
+ * keystroke into a command dispatch — that is `<AppShell>`'s
+ * `<KeybindingHandler>`, which attaches a `keydown` listener on
+ * `document` and resolves the focused scope's `commands` via
+ * `extractScopeBindings`. Mounting it here lets the test drive a real
+ * Enter keystroke and observe the composer scope's `drillIn` command
+ * run — the path the user reported as broken.
+ */
+async function renderPanelWithShell(script: SessionScript = {}) {
+  ensureTestLayoutCss();
+  return await renderInAct(
+    <div
+      style={{
+        width: "1200px",
+        height: "700px",
+        display: "flex",
+        flexDirection: "row",
+      }}
+    >
+      <SpatialFocusProvider>
+        <FocusLayer name={asSegment("window")}>
+          <EntityFocusProvider>
+            <UIStateProvider>
+              <AppModeProvider>
+                <UndoProvider>
+                  <AppShell>
+                    <AiPanel
+                      boardDir="/tmp/board"
+                      models={MODELS}
+                      modelId="claude-code"
+                      onSelectModel={() => {}}
+                      onCollapse={() => {}}
+                      createConnect={mockConnect(script)}
+                    />
+                  </AppShell>
+                </UndoProvider>
+              </AppModeProvider>
+            </UIStateProvider>
+          </EntityFocusProvider>
+        </FocusLayer>
+      </SpatialFocusProvider>
+    </div>,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -352,45 +428,226 @@ describe("AiPanel — spatial-nav focus scopes", () => {
   });
 
   // -------------------------------------------------------------------------
-  // The model selector moved into the composer footer (the AI Elements
-  // `PromptInput` layout). Its `ui:ai-panel.model-selector` leaf is preserved
-  // — now nested under the `ui:ai-panel.composer` scope rather than directly
-  // under the panel zone — so it is still a path-addressable beam target.
+  // The composer prompt (CM6) and the footer model selector are two
+  // INDEPENDENT controls — each its own focus leaf, SIBLINGS under the
+  // `ui:ai-panel` zone. Neither is nested inside the other: the surrounding
+  // bordered composer container carries no focus scope, so the
+  // `ui:ai-panel.composer` (CM6) and `ui:ai-panel.model-selector` leaves both
+  // compose their FQM directly under `/window/ui:ai-panel`.
   // -------------------------------------------------------------------------
 
-  it("registers the model selector as a leaf nested under the composer scope", async () => {
+  it("registers the model selector as a sibling of the composer leaf under the panel zone", async () => {
     const { unmount } = await renderPanel();
     await flushSetup();
 
     const zone = findRegisterRecord("ui:ai-panel");
     const composer = findRegisterRecord("ui:ai-panel.composer");
     expect(zone && composer).toBeTruthy();
-    const composerFq = composer!.fq as FullyQualifiedMoniker;
+    const zoneFq = zone!.fq as FullyQualifiedMoniker;
 
     const selector = findRegisterRecord("ui:ai-panel.model-selector");
     expect(
       selector,
       "the model selector must still register a FocusScope leaf",
     ).toBeTruthy();
-    // The selector now lives in the composer footer — its FQM is composed
-    // under the composer scope, and the composer scope is its parent zone.
+    // The selector is its own leaf composed directly under the panel zone —
+    // a SIBLING of the composer CM6 leaf, not nested under it.
     expect(
       selector!.fq,
-      "the model selector FQM must be composed under the composer scope",
-    ).toBe(composeFq(composerFq, asSegment("ui:ai-panel.model-selector")));
+      "the model selector FQM must be composed directly under the panel zone",
+    ).toBe(composeFq(zoneFq, asSegment("ui:ai-panel.model-selector")));
     expect(
       selector!.parentZone,
-      "the model selector must be parented at the composer scope",
-    ).toBe(composerFq);
-    // Either way, the leaf FQM is still a path-descendant of the panel zone.
+      "the model selector must be parented at the ui:ai-panel zone, not the composer",
+    ).toBe(zoneFq);
+    // The composer CM6 leaf is likewise parented at the panel zone — the two
+    // are peers, neither one a path-descendant of the other.
     expect(
-      String(selector!.fq).startsWith(`${String(zone!.fq)}/`),
-      "the model selector FQM must remain a path-descendant of the panel zone",
-    ).toBe(true);
+      composer!.parentZone,
+      "the composer CM6 leaf must be parented at the ui:ai-panel zone",
+    ).toBe(zoneFq);
+    expect(
+      String(selector!.fq).startsWith(`${String(composer!.fq)}/`),
+      "the model selector must NOT be nested inside the composer scope",
+    ).toBe(false);
     expect(
       selector!.layerFq,
       "the model selector must live in the window layer",
     ).toBe(zone!.layerFq);
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // Drilling into the composer leaf lands DOM focus on the CM6 prompt — NOT
+  // the model picker. `ui:ai-panel.composer` wraps only the CM6 editor body,
+  // so focusing it puts the caret in the prompt, exactly like the filter
+  // formula bar's scope; the model picker is a separate leaf and is not the
+  // current spatial-nav target.
+  // -------------------------------------------------------------------------
+
+  it("focusing the composer leaf lands DOM focus on the CM6 prompt, not the model picker", async () => {
+    const { container, unmount } = await renderPanel();
+    await flushSetup();
+
+    const composer = findRegisterRecord("ui:ai-panel.composer");
+    const selector = findRegisterRecord("ui:ai-panel.model-selector");
+    expect(composer && selector).toBeTruthy();
+    const composerFq = composer!.fq as FullyQualifiedMoniker;
+
+    // Focus the composer leaf, then drive DOM focus into the CM6 prompt —
+    // the same "land on the scope, drill into the CM6 editor" flow the
+    // filter formula bar uses.
+    await act(async () => {
+      await mockInvoke("spatial_focus", { fq: composerFq });
+    });
+    await flushSetup();
+
+    const composerNode = container.querySelector(
+      "[data-segment='ui:ai-panel.composer']",
+    ) as HTMLElement | null;
+    expect(composerNode, "composer leaf must be in the DOM").not.toBeNull();
+
+    // The CM6 prompt — the `role="textbox"` content DOM with the panel's
+    // accessible label — lives INSIDE the composer leaf.
+    const prompt = composerNode!.querySelector(
+      "[role='textbox'][aria-label='Message the AI agent']",
+    ) as HTMLElement | null;
+    expect(
+      prompt,
+      "the CM6 prompt must be a descendant of the ui:ai-panel.composer leaf",
+    ).not.toBeNull();
+    await act(async () => {
+      prompt!.focus();
+    });
+    expect(
+      document.activeElement,
+      "drilling into the composer must land DOM focus on the CM6 prompt",
+    ).toBe(prompt);
+
+    // The model picker is NOT inside the composer leaf — it is a sibling
+    // leaf, so the picker's trigger is not the drilled-into element.
+    const pickerInComposer = composerNode!.querySelector(
+      "[data-segment='ui:ai-panel.model-selector']",
+    );
+    expect(
+      pickerInComposer,
+      "the model picker leaf must NOT be nested inside the composer leaf",
+    ).toBeNull();
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // Drill-in actually drives the cursor in: with the composer leaf the
+  // spatial focus, pressing Enter must move DOM focus into the CM6 prompt.
+  //
+  // A bare `<FocusScope>` only *registers* the composer as a nav target —
+  // landing on it and pressing Enter does NOT focus the editor. The fix
+  // gives the composer scope a per-scope `ui.ai-panel.composer.drillIn`
+  // `CommandDef` (keyed to Enter) whose `execute` calls the shared
+  // `TextEditorHandle.focus()`. This test drives a real Enter keystroke
+  // through `<AppShell>`'s `<KeybindingHandler>` and asserts the CM6
+  // prompt — NOT the model picker — receives DOM focus, mirroring the
+  // filter formula bar's `filter_editor.drillIn` contract.
+  // -------------------------------------------------------------------------
+
+  it("Enter on the focused composer leaf drives DOM focus into the CM6 prompt", async () => {
+    harness = setupSpatialHarness({ defaultInvokeImpl: appShellInvokeImpl });
+    const { container, unmount } = await renderPanelWithShell();
+    await flushSetup();
+
+    const composer = findRegisterRecord("ui:ai-panel.composer");
+    expect(composer, "the composer leaf must register").toBeTruthy();
+    const composerFq = composer!.fq as FullyQualifiedMoniker;
+
+    // The CM6 prompt is the `role="textbox"` content DOM with the panel's
+    // accessible label, a descendant of the composer leaf.
+    const composerNode = container.querySelector(
+      "[data-segment='ui:ai-panel.composer']",
+    ) as HTMLElement | null;
+    expect(composerNode, "composer leaf must be in the DOM").not.toBeNull();
+    const prompt = composerNode!.querySelector(
+      "[role='textbox'][aria-label='Message the AI agent']",
+    ) as HTMLElement | null;
+    expect(prompt, "the CM6 prompt must be inside the composer leaf").not.toBeNull();
+
+    // Move the cursor OFF the CM6 prompt first so the drill-in has a
+    // visible effect to assert — focus the document body.
+    await act(async () => {
+      (document.body as HTMLElement).focus();
+    });
+    expect(
+      document.activeElement,
+      "precondition: DOM focus must not already be on the CM6 prompt",
+    ).not.toBe(prompt);
+
+    // Seed the spatial focus onto the composer leaf. The shadow
+    // navigator echoes a `focus-changed` event whose `next_segment` the
+    // entity-focus bridge mirrors into the store — that is the chain
+    // `extractScopeBindings` walks on the next keydown.
+    await act(async () => {
+      await mockInvoke("spatial_focus", { fq: composerFq });
+    });
+    await flushSetup();
+
+    // Press Enter. `<KeybindingHandler>` resolves it against the focused
+    // composer scope's `commands` — the `ui.ai-panel.composer.drillIn`
+    // `CommandDef` shadows the global `nav.drillIn` and calls
+    // `editorRef.current?.focus()`.
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
+      await Promise.resolve();
+    });
+    await flushSetup();
+
+    expect(
+      document.activeElement,
+      "Enter on the focused composer leaf must land DOM focus on the CM6 prompt",
+    ).toBe(prompt);
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // The surrounding bordered composer container is NOT a focus scope. Only
+  // the CM6 editor body is `ui:ai-panel.composer`; the `ai-prompt-composer`
+  // bordered shell that also holds the footer toolbar carries no scope, so
+  // it has no `data-segment` focus-scope marker.
+  // -------------------------------------------------------------------------
+
+  it("the ai-prompt-composer bordered container is not a focus scope", async () => {
+    const { container, unmount } = await renderPanel();
+    await flushSetup();
+
+    const composerShell = container.querySelector(
+      "[data-slot='ai-prompt-composer']",
+    ) as HTMLElement | null;
+    expect(
+      composerShell,
+      "the bordered composer container must be present",
+    ).not.toBeNull();
+    // A `<FocusScope>` always stamps `data-segment` (and `data-moniker`) on
+    // its wrapper div. The bordered shell carrying either marker would mean
+    // it is a focus scope — it must not be one.
+    expect(
+      composerShell!.hasAttribute("data-segment"),
+      "the bordered composer container must not carry a focus-scope data-segment marker",
+    ).toBe(false);
+    expect(
+      composerShell!.hasAttribute("data-moniker"),
+      "the bordered composer container must not carry a focus-scope data-moniker marker",
+    ).toBe(false);
+
+    // The CM6 editor body — a descendant of the shell — IS the
+    // `ui:ai-panel.composer` focus scope.
+    const composerScope = composerShell!.querySelector(
+      "[data-segment='ui:ai-panel.composer']",
+    );
+    expect(
+      composerScope,
+      "the CM6 editor body inside the shell must be the ui:ai-panel.composer scope",
+    ).not.toBeNull();
 
     unmount();
   });
