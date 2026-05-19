@@ -341,6 +341,69 @@ async fn unknown_server_raises_unknown_server() {
     );
 }
 
+/// A `Plugin` subclass that sets `name`/`version` transpiles cleanly and the
+/// properties are readable on the constructed instance.
+///
+/// `name` and `version` are author-facing descriptive metadata on the `Plugin`
+/// base class. A subclass overrides them as plain field initializers; this test
+/// confirms such a subclass transpiles, constructs, and exposes the overridden
+/// values — and that an instance keeps the base defaults when it does not.
+#[tokio::test]
+async fn plugin_subclass_exposes_name_and_version() {
+    let bundle = tempfile::TempDir::new().expect("temp dir");
+    // Two subclasses: `Named` overrides both metadata fields, `Bare` overrides
+    // neither and so must inherit the base defaults.
+    let entry = "import { Plugin } from '@swissarmyhammer/plugin';\n\
+         class Named extends Plugin {\n\
+           readonly name = 'my-plugin';\n\
+           readonly version = '1.2.3';\n\
+         }\n\
+         class Bare extends Plugin {}\n\
+         export async function load(): Promise<unknown> {\n\
+           const named = new Named();\n\
+           const bare = new Bare();\n\
+           return {\n\
+             namedName: named.name,\n\
+             namedVersion: named.version,\n\
+             bareName: bare.name,\n\
+             bareVersion: bare.version,\n\
+           };\n\
+         }\n";
+    std::fs::write(bundle.path().join("entry.ts"), entry).expect("entry.ts should be written");
+
+    let dispatcher = Arc::new(RecordingDispatcher::default());
+    let runtime = PluginRuntime::new(config_with(dispatcher.clone())).expect("runtime starts");
+
+    let result = tokio::time::timeout(
+        TIMEOUT,
+        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", "load"),
+    )
+    .await
+    .expect("loading the plugin should not hang")
+    .expect("the plugin's load should succeed");
+
+    assert_eq!(
+        result.get("namedName").and_then(Value::as_str),
+        Some("my-plugin"),
+        "a subclass-set `name` must be readable on the instance, got: {result}"
+    );
+    assert_eq!(
+        result.get("namedVersion").and_then(Value::as_str),
+        Some("1.2.3"),
+        "a subclass-set `version` must be readable on the instance, got: {result}"
+    );
+    assert_eq!(
+        result.get("bareName").and_then(Value::as_str),
+        Some("unnamed plugin"),
+        "a subclass that omits `name` must inherit the base default, got: {result}"
+    );
+    assert_eq!(
+        result.get("bareVersion").and_then(Value::as_str),
+        Some("0.0.0"),
+        "a subclass that omits `version` must inherit the base default, got: {result}"
+    );
+}
+
 /// `RESERVED` names are not treated as path segments.
 ///
 /// Accessing `this.srv.kanban.on` must yield the reserved-name handler, not a
