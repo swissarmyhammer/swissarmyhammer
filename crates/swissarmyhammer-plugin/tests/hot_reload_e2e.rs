@@ -16,20 +16,21 @@
 //!
 //! # The two versions
 //!
-//! A single probe plugin is written into a project-layer temp root. Its two
-//! versions are deliberately *different*:
+//! A single manifest-less probe plugin is written into a project-layer temp
+//! root. Its two versions are deliberately *different*:
 //!
 //! - version 1's `load()` registers a server named `behavior-a`;
 //! - version 2's `load()` registers a server named `behavior-b`.
 //!
-//! Both names are declared in the manifest's `provides` up front, so the
-//! reload from v1 to v2 is an in-place reload, not a `provides` expansion.
+//! The bundle carries no `plugin.json` and so declares no `provides`, which
+//! means the reload from v1 to v2 is always an in-place reload — a manifest-
+//! less bundle can never trip the `provides`-expansion gate.
 //!
 //! # What a passing run proves
 //!
 //! 1. After the initial `discover_and_load_all`, `behavior-a` answers a real
 //!    `rmcp` `echo` call — version 1 ran.
-//! 2. The plugin's `entry.ts` is rewritten on disk to version 2 and the
+//! 2. The plugin's `index.ts` is rewritten on disk to version 2 and the
 //!    watcher fires: on the *same host* `behavior-b` answers a real `echo`
 //!    call and `behavior-a` is gone — the live host reloaded the plugin in
 //!    place, tearing down v1's isolate and running v2's source.
@@ -115,27 +116,16 @@ async fn echo_module() -> Arc<dyn McpServer> {
     )
 }
 
-/// Writes the probe plugin's `plugin.json` into `plugin_dir`.
-///
-/// The manifest declares both server names the plugin will ever register —
-/// version 1's and version 2's — up front, so the reload from v1 to v2 is an
-/// in-place reload rather than a `provides` expansion.
-fn write_manifest(plugin_dir: &Path, version_a: &str, version_b: &str) {
-    let manifest = format!(
-        "{{\n  \"id\": \"probe\",\n  \"name\": \"hot reload probe\",\n  \
-         \"version\": \"1.0.0\",\n  \"entry\": \"entry.ts\",\n  \
-         \"provides\": [\"{version_a}\", \"{version_b}\"]\n}}\n"
-    );
-    std::fs::write(plugin_dir.join("plugin.json"), manifest)
-        .expect("plugin.json should be written");
-}
-
-/// Overwrites the probe plugin's `entry.ts` with a version whose `load()`
+/// Overwrites the probe plugin's `index.ts` with a version whose `load()`
 /// registers `server` against the host-exposed `rust` module `rust_module`.
 ///
 /// This is both the initial write and the "rewrite the source" half of the
 /// hot-reload test: writing a new `server` makes the watcher observe a genuine
-/// content change and reload.
+/// content change and reload. The bundle is manifest-less — it carries no
+/// `plugin.json` — so its identity is its bundle directory name (`probe`) and
+/// the reload from v1 to v2 is always an in-place reload: a manifest-less
+/// bundle declares no `provides`, so a reload can never be a `provides`
+/// expansion.
 fn write_version(plugin_dir: &Path, server: &str, rust_module: &str) {
     let entry = format!(
         "import {{ Plugin, makePluginThis }} from '@swissarmyhammer/plugin';\n\
@@ -150,7 +140,7 @@ fn write_version(plugin_dir: &Path, server: &str, rust_module: &str) {
            return null;\n\
          }}\n"
     );
-    std::fs::write(plugin_dir.join("entry.ts"), entry).expect("entry.ts should be written");
+    std::fs::write(plugin_dir.join("index.ts"), entry).expect("index.ts should be written");
 }
 
 /// Renders a `tools/call` result to a string for substring assertions.
@@ -234,7 +224,7 @@ async fn wait_until_live(host: &PluginHost, server: &str) {
 ///
 /// - version 1 of the probe plugin is discovered and loaded, observed by
 ///   `behavior-a` answering a real `echo` call;
-/// - the layer watcher is started, then the plugin's `entry.ts` is rewritten
+/// - the layer watcher is started, then the plugin's `index.ts` is rewritten
 ///   to version 2 on disk — the "save a new version" plugin-author action;
 /// - the watcher fires and the host reloads the plugin in place: on the same
 ///   host `behavior-b` becomes live and `behavior-a` is disposed — proof the
@@ -248,10 +238,9 @@ async fn rewriting_a_running_plugins_source_hot_reloads_it_in_the_same_host() {
     let plugin_dir = project.path().join("plugins").join("probe");
     std::fs::create_dir_all(&plugin_dir).expect("probe plugin directory should be created");
 
-    // The manifest declares both versions' server names up front so the reload
-    // is an in-place reload, not a `provides` expansion.
-    write_manifest(&plugin_dir, "behavior-a", "behavior-b");
-    // Version 1: `load()` registers `behavior-a`.
+    // Version 1: `load()` registers `behavior-a`. The bundle is manifest-less,
+    // so the v1→v2 reload is always an in-place reload — there is no `provides`
+    // contract to expand.
     write_version(&plugin_dir, "behavior-a", "mod-a");
 
     let host = PluginHost::for_tests(

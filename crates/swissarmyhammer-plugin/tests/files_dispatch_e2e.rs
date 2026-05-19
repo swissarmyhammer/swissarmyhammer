@@ -2,8 +2,8 @@
 //!
 //! This is the canonical example every other capability `*_e2e.rs` test
 //! follows. It exercises the **whole** plugin pipeline through the real `files`
-//! MCP server — manifest load, TypeScript transpile, a fresh V8 isolate,
-//! discovery, the SDK dispatch Proxy, the host dispatcher, operation-tool `op`
+//! MCP server — manifest-less bundle discovery, TypeScript transpile, a fresh
+//! V8 isolate, the SDK dispatch Proxy, the host dispatcher, operation-tool `op`
 //! dispatch, and return-value marshalling — and verifies the one effect that
 //! can only happen if every stage works: real files land on disk.
 //!
@@ -30,7 +30,7 @@
 //! round trip: the first file proves an `op` dispatch reached the real `files`
 //! handler; the second proves the handler's return value crossed back through
 //! the dispatcher into the isolate and was usable by plugin code. If any
-//! pipeline stage is broken — manifest load, transpile, isolate creation,
+//! pipeline stage is broken — bundle discovery, transpile, isolate creation,
 //! server lookup, `op` dispatch, or return-value marshalling — at least one
 //! assertion fails.
 //!
@@ -79,13 +79,14 @@ async fn build_mcp_server(work_dir: &Path) -> McpServer {
         .expect("MCP server bootstrap should succeed")
 }
 
-/// Writes the probe plugin bundle — a real `plugin.json` plus a real entry
-/// `.ts` — into `<project_root>/plugins/probe/`.
+/// Writes the probe plugin bundle — a manifest-less, TypeScript-only
+/// `index.ts` entry — into `<project_root>/plugins/probe/`.
 ///
 /// The bundle is what discovery scans for and the host loads:
 ///
-/// - The manifest declares the plugin's `id`, `name`, `version`, the relative
-///   `entry` module, and the single server name the plugin `provides` (`fs`).
+/// - There is no `plugin.json`: the bundle is a manifest-less, TS-only bundle.
+///   Its identity is the bundle directory name (`probe`) and its entry module
+///   is the conventional `index.ts`.
 /// - The entry imports the SDK, subclasses [`Plugin`], and in `load()` registers
 ///   the host-exposed `files` Rust module under the name `fs`, then drives three
 ///   real `files` operations through the SDK dispatch Proxy:
@@ -101,18 +102,6 @@ fn write_probe_plugin(project_root: &Path, output_dir: &Path) {
         .join(swissarmyhammer_plugin::PLUGINS_SUBDIR)
         .join("probe");
     std::fs::create_dir_all(&plugin_dir).expect("probe plugin directory should be created");
-
-    // A real manifest. `provides` lists exactly the one server name the
-    // plugin's `load()` registers; the host rejects any register of a name
-    // absent from this list.
-    let manifest = "{\n  \
-         \"id\": \"probe\",\n  \
-         \"name\": \"files dispatch probe\",\n  \
-         \"version\": \"1.0.0\",\n  \
-         \"entry\": \"entry.ts\",\n  \
-         \"provides\": [\"fs\"]\n}\n";
-    std::fs::write(plugin_dir.join("plugin.json"), manifest)
-        .expect("probe plugin.json should be written");
 
     // Absolute paths the plugin writes to. `to_string_lossy` is fine here:
     // `tempfile` hands back valid UTF-8 paths on every supported platform.
@@ -186,7 +175,7 @@ fn write_probe_plugin(project_root: &Path, output_dir: &Path) {
         second_path = json_string(&second_path.to_string_lossy()),
         payload = json_string(PROBE_PAYLOAD),
     );
-    std::fs::write(plugin_dir.join("entry.ts"), entry).expect("probe entry.ts should be written");
+    std::fs::write(plugin_dir.join("index.ts"), entry).expect("probe index.ts should be written");
 }
 
 /// Encodes `value` as a JSON/TypeScript string literal, quotes included.
@@ -205,7 +194,7 @@ fn json_string(value: &str) -> String {
 ///
 /// - the real [`FilesTool`] is built by the MCP server bootstrap and exposed to
 ///   the host with [`McpServer::expose_tools_to_plugin_host`] — no mock;
-/// - the probe bundle (`plugin.json` + `entry.ts`) is discovered from the
+/// - the probe bundle (a manifest-less `index.ts`) is discovered from the
 ///   project layer and loaded through `discover_and_load_all`, which transpiles
 ///   the TypeScript, creates a fresh V8 isolate, and runs the exported `load`;
 /// - inside the isolate the SDK dispatch Proxy turns `this.fs.files({ op, … })`
@@ -243,9 +232,10 @@ async fn discovered_plugin_drives_the_real_files_tool_end_to_end() {
         .expect("exposing the in-process tools should not hang")
         .expect("exposing the in-process tools should succeed");
 
-    // Trigger discovery: the host scans the project layer, parses the probe's
-    // manifest, transpiles its `entry.ts`, creates a fresh isolate, and runs
-    // the exported `load` — whose body performs the three real `files` calls.
+    // Trigger discovery: the host scans the project layer, resolves the
+    // manifest-less probe's `index.ts` entry, transpiles it, creates a fresh
+    // isolate, and runs the exported `load` — whose body performs the three
+    // real `files` calls.
     let loaded = tokio::time::timeout(
         TIMEOUT,
         host.discover_and_load_all::<SwissarmyhammerConfig>(),

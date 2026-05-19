@@ -107,26 +107,19 @@ impl EchoServer {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for EchoServer {}
 
-/// Writes the probe plugin bundle — `plugin.json` plus an `entry.ts` — into
-/// `layer_root/plugins/crasher/`.
+/// Writes the probe plugin bundle — a manifest-less, TypeScript-only
+/// `index.ts` entry — into `layer_root/plugins/crasher/`.
 ///
-/// The entry imports the SDK, declares a `Plugin` subclass whose `load()`
-/// first registers the real `rmcp` server `half-built` and *then* throws, and
-/// exports a `load` lifecycle function. Registering before throwing is what
-/// makes the bundle prove the load path rolls back a registration a failing
-/// plugin had already made.
+/// The bundle carries no `plugin.json`: its identity is the bundle directory
+/// name (`crasher`) and its entry module is the conventional `index.ts`. The
+/// entry imports the SDK, declares a `Plugin` subclass whose `load()` first
+/// registers the real `rmcp` server `half-built` and *then* throws, and exports
+/// a `load` lifecycle function. Registering before throwing is what makes the
+/// bundle prove the load path rolls back a registration a failing plugin had
+/// already made.
 fn write_crashing_plugin(layer_root: &Path) {
     let plugin_dir = layer_root.join("plugins").join("crasher");
     std::fs::create_dir_all(&plugin_dir).expect("plugin directory should be created");
-
-    let manifest = "{\n  \
-         \"id\": \"crasher\",\n  \
-         \"name\": \"failed load probe\",\n  \
-         \"version\": \"1.0.0\",\n  \
-         \"entry\": \"entry.ts\",\n  \
-         \"provides\": [\"half-built\"]\n}\n";
-    std::fs::write(plugin_dir.join("plugin.json"), manifest)
-        .expect("probe plugin.json should be written");
 
     // `load()` registers a real server successfully, then throws. The host
     // must roll the registration back and surface the thrown message.
@@ -145,7 +138,7 @@ fn write_crashing_plugin(layer_root: &Path) {
          }}\n",
         message = serde_json::to_string(THROW_MESSAGE).expect("a string always serializes to JSON"),
     );
-    std::fs::write(plugin_dir.join("entry.ts"), entry).expect("probe entry.ts should be written");
+    std::fs::write(plugin_dir.join("index.ts"), entry).expect("probe index.ts should be written");
 }
 
 /// The failed-load capability, end to end: a plugin whose `load()` throws

@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KS0416MQYVFSQFZMM2E9VAVX
-position_column: todo
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffff9380
 project: plugin-tsonly
 title: Migrate e2e tests off inline plugin.json (transport/dispatch group)
 ---
@@ -28,14 +28,19 @@ For each: drop the `plugin.json` write; write the entry as `index.ts`; remove `p
 This is mechanical and per-file; the test *logic* and assertions stay the same except for the id-source change. Do NOT change behavior the tests verify.
 
 ## Acceptance Criteria
-- [ ] None of the nine files writes a `plugin.json`; each writes only an `index.ts` entry.
-- [ ] Each test's plugin-id expectations use the bundle directory name.
-- [ ] No `provides` declarations remain in these tests' bundle setup.
-- [ ] Every test still verifies the same behavior it verified before (transports, dispatch, callbacks, layering, hot reload, unload, failed load).
+- [x] None of the nine files writes a `plugin.json`; each writes only an `index.ts` entry.
+- [x] Each test's plugin-id expectations use the bundle directory name.
+- [x] No `provides` declarations remain in these tests' bundle setup.
+- [x] Every test still verifies the same behavior it verified before (transports, dispatch, callbacks, layering, hot reload, unload, failed load).
 
 ## Tests
-- [ ] `cargo nextest run -p swissarmyhammer-plugin --test files_dispatch_e2e --test operation_meta_e2e --test callback_e2e --test cli_server_e2e --test url_server_e2e --test discovery_layering_e2e --test hot_reload_e2e --test unload_disposal_e2e --test failed_load_e2e` — all pass.
-- [ ] `cargo clippy -p swissarmyhammer-plugin --all-targets -- -D warnings` — clean.
+- [x] `cargo nextest run -p swissarmyhammer-plugin --test files_dispatch_e2e --test operation_meta_e2e --test callback_e2e --test cli_server_e2e --test url_server_e2e --test discovery_layering_e2e --test hot_reload_e2e --test unload_disposal_e2e --test failed_load_e2e` — all pass.
+- [x] `cargo clippy -p swissarmyhammer-plugin --all-targets -- -D warnings` — clean.
 
 ## Workflow
 - Use `/tdd` — these tests ARE the spec; convert the bundle-writing helper, run each test red→green.
+
+## Implementation notes
+- `callback_e2e.rs` and `unload_disposal_e2e.rs` bypass `discover_and_load_all`. Per user decision (option B), both were migrated to `index.ts` uniformly. `callback_e2e.rs` calls `runtime.call_plugin_lifecycle` directly — its entry argument was updated to `"index.ts"`. `unload_disposal_e2e.rs` previously called `host.load(bundle.path())`, whose manifest-less by-path path hardcodes `entry.ts`; it was switched to stage the bundle under `<layer_root>/plugins/weather-probe/` and load via `discover_and_load_all`, taking the returned `PluginId` from the loaded vec.
+- `hot_reload_e2e.rs`: the `write_manifest` helper was deleted entirely — a manifest-less bundle declares no `provides`, so a v1→v2 reload can never be a `provides` expansion (per `provides_expansion()` in host.rs). Doc comments updated to reflect this.
+- Doc comments in all nine files were updated to describe the manifest-less / `index.ts` shape instead of `plugin.json` + `entry.ts`.

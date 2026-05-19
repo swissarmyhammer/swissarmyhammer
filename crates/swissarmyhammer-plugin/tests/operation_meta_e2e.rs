@@ -119,11 +119,11 @@ fn json_string(value: &str) -> String {
     serde_json::to_string(value).expect("a string always serializes to JSON")
 }
 
-/// Writes the probe plugin bundle — a real `plugin.json` plus a real entry
-/// `.ts` — into `<project_root>/plugins/probe/`.
+/// Writes the probe plugin bundle — a manifest-less, TypeScript-only
+/// `index.ts` entry — into `<project_root>/plugins/probe/`.
 ///
-/// The manifest declares the single server name the plugin `provides` (`fs`);
-/// the host rejects any `register` of a name absent from this list.
+/// The bundle carries no `plugin.json`: its identity is the bundle directory
+/// name (`probe`) and its entry module is the conventional `index.ts`.
 ///
 /// The entry module's `load()` activates the host-exposed real `files`
 /// operation tool under the name `fs`, then drives the SDK's operation-tool
@@ -141,17 +141,6 @@ fn write_probe_plugin(project_root: &Path, output_dir: &Path) {
         .join(swissarmyhammer_plugin::PLUGINS_SUBDIR)
         .join("probe");
     std::fs::create_dir_all(&plugin_dir).expect("probe plugin directory should be created");
-
-    // A real manifest. `provides` lists exactly the one server name the
-    // plugin's `load()` registers.
-    let manifest = "{\n  \
-         \"id\": \"probe\",\n  \
-         \"name\": \"operation meta probe\",\n  \
-         \"version\": \"1.0.0\",\n  \
-         \"entry\": \"entry.ts\",\n  \
-         \"provides\": [\"fs\"]\n}\n";
-    std::fs::write(plugin_dir.join("plugin.json"), manifest)
-        .expect("probe plugin.json should be written");
 
     let path_form_path = output_dir.join(PATH_FORM_FILE);
     let direct_form_path = output_dir.join(DIRECT_FORM_FILE);
@@ -243,7 +232,7 @@ fn write_probe_plugin(project_root: &Path, output_dir: &Path) {
         unknown_verb = json_string(&unknown_verb_path.to_string_lossy()),
         payload = json_string(PROBE_PAYLOAD),
     );
-    std::fs::write(plugin_dir.join("entry.ts"), entry).expect("probe entry.ts should be written");
+    std::fs::write(plugin_dir.join("index.ts"), entry).expect("probe index.ts should be written");
 }
 
 /// A discovered probe plugin drives the real `files` operation tool through
@@ -256,7 +245,7 @@ fn write_probe_plugin(project_root: &Path, output_dir: &Path) {
 ///   `io.swissarmyhammer/operations` `_meta` — is built by the MCP server
 ///   bootstrap and exposed to the host with
 ///   [`McpServer::expose_tools_to_plugin_host`]; no mock, no hand-built `_meta`;
-/// - the probe bundle (`plugin.json` + `entry.ts`) is discovered and loaded
+/// - the probe bundle (a manifest-less `index.ts`) is discovered and loaded
 ///   through `discover_and_load_all`, which transpiles the TypeScript, creates
 ///   a fresh V8 isolate, and runs the exported `load`;
 /// - inside the isolate the SDK reads the operation tool's `_meta` to turn a
@@ -294,7 +283,7 @@ async fn discovered_plugin_drives_operation_meta_path_sugar_end_to_end() {
         .expect("exposing the in-process tools should succeed");
 
     // Trigger discovery: the host scans the project layer, transpiles the
-    // probe's `entry.ts`, creates a fresh isolate, and runs the exported
+    // probe's `index.ts`, creates a fresh isolate, and runs the exported
     // `load` — whose body exercises the operation-`_meta` dispatch three ways.
     let loaded = tokio::time::timeout(
         TIMEOUT,

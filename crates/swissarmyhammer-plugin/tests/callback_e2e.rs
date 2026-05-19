@@ -24,7 +24,7 @@
 //!
 //! # What a passing run proves
 //!
-//! 1. The plugin bundle is **multi-file and loaded from disk**: `entry.ts`
+//! 1. The plugin bundle is **multi-file and loaded from disk**: `index.ts`
 //!    imports a sibling `./probe.ts` with a relative specifier. Loading it
 //!    through [`PluginRuntime::call_plugin_lifecycle`] exercises the real
 //!    [`PluginModuleLoader`] — the entry, the relative import, and the
@@ -322,11 +322,13 @@ fn json_string(value: &str) -> String {
     serde_json::to_string(value).expect("a string always serializes to JSON")
 }
 
-/// Writes the probe plugin bundle — a real `plugin.json` and a real, **multi-
-/// file** TypeScript entry — into `bundle_dir`.
+/// Writes the probe plugin bundle — a manifest-less, **multi-file** TypeScript
+/// bundle whose entry is `index.ts` — into `bundle_dir`.
 ///
-/// The bundle is genuinely multi-file: `entry.ts` imports a sibling
-/// `./probe.ts` with a relative specifier. Loading it exercises the real
+/// The bundle carries no `plugin.json`: it is a manifest-less, TS-only bundle
+/// whose entry module is the conventional `index.ts`. It is genuinely
+/// multi-file: `index.ts` imports a sibling `./probe.ts` with a relative
+/// specifier. Loading it exercises the real
 /// [`PluginModuleLoader`](swissarmyhammer_plugin::PluginModuleLoader) — the
 /// entry, the relative import, and the `@swissarmyhammer/plugin` SDK virtual
 /// module all resolve and transpile.
@@ -339,21 +341,11 @@ fn json_string(value: &str) -> String {
 /// 2. returns a string folding the argument in — a value the test observes
 ///    flowing back from `invoke_callback`.
 ///
-/// `entry.ts`'s `load()` registers the real `files` tool as `fs` and hands the
+/// `index.ts`'s `load()` registers the real `files` tool as `fs` and hands the
 /// host the handler in a `callbackDispatch` payload, so the SDK marshals it
 /// into a `$callback` marker.
 fn write_probe_plugin(bundle_dir: &Path, probe_path: &Path) {
-    // A real manifest. `provides` lists the one server name `load()` registers.
-    let manifest = "{\n  \
-         \"id\": \"probe\",\n  \
-         \"name\": \"callback primitive probe\",\n  \
-         \"version\": \"1.0.0\",\n  \
-         \"entry\": \"entry.ts\",\n  \
-         \"provides\": [\"fs\"]\n}\n";
-    std::fs::write(bundle_dir.join("plugin.json"), manifest)
-        .expect("probe plugin.json should be written");
-
-    // The sibling module `entry.ts` imports with a relative specifier. It owns
+    // The sibling module `index.ts` imports with a relative specifier. It owns
     // the callback function: when the host invokes it, it writes the host's
     // argument to disk through the real `files` tool and returns a value.
     let probe_module = format!(
@@ -411,7 +403,7 @@ fn write_probe_plugin(bundle_dir: &Path, probe_path: &Path) {
          \x20 await p.load();\n\
          \x20 return null;\n\
          }\n";
-    std::fs::write(bundle_dir.join("entry.ts"), entry).expect("probe entry.ts should be written");
+    std::fs::write(bundle_dir.join("index.ts"), entry).expect("probe index.ts should be written");
 }
 
 /// Reads the single `$callback` id at `payload[field]`.
@@ -429,7 +421,7 @@ fn callback_id(payload: &Value, field: &str) -> String {
 ///
 /// This single test stitches the callback primitive together end to end:
 ///
-/// - the probe bundle is **multi-file** (`entry.ts` + a sibling `./probe.ts`)
+/// - the probe bundle is **multi-file** (`index.ts` + a sibling `./probe.ts`)
 ///   and **loaded from disk** through [`PluginRuntime::call_plugin_lifecycle`],
 ///   which drives the real [`PluginModuleLoader`] — entry, relative import, and
 ///   SDK virtual module all resolve and transpile in a fresh V8 isolate;
@@ -472,7 +464,7 @@ async fn host_invokes_a_real_plugins_callback_end_to_end() {
     // plugin hands the host its callback function.
     tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle_dir.path(), "entry.ts", "load"),
+        runtime.call_plugin_lifecycle(bundle_dir.path(), "index.ts", "load"),
     )
     .await
     .expect("loading the multi-file probe bundle should not hang")

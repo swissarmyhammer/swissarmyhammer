@@ -16,8 +16,10 @@
 //!
 //! # The two copies
 //!
-//! The id `shared` is laid down in both the user-layer and the project-layer
-//! temp roots. The two copies are deliberately *different*:
+//! Two manifest-less bundles sharing the directory name `shared` are laid down
+//! in both the user-layer and the project-layer temp roots — a manifest-less
+//! bundle's identity is its directory name, so the shared directory name is the
+//! shared plugin id. The two copies are deliberately *different*:
 //!
 //! - the user copy registers a server named `from-user`;
 //! - the project copy registers a server named `from-project`.
@@ -118,26 +120,20 @@ async fn echo_module() -> Arc<dyn McpServer> {
     )
 }
 
-/// Writes a probe plugin bundle — `plugin.json` plus an `entry.ts` — into
-/// `layer_root/plugins/<dir_name>/`.
+/// Writes a manifest-less, TypeScript-only probe plugin bundle — just an
+/// `index.ts` entry — into `layer_root/plugins/<dir_name>/`.
 ///
-/// The bundle's manifest declares `id` and a single `provides` entry; the entry
-/// imports the SDK, declares a `Plugin` subclass whose `load` registers
-/// `server` against the host-exposed `rust` module `rust_module`, and exports a
-/// `load` lifecycle function. Two copies of the same id written into different
-/// layers with different `server` names are how the test reads which copy is
-/// active.
-fn write_layer_copy(layer_root: &Path, manifest_id: &str, server: &str, rust_module: &str) {
-    let plugin_dir = layer_root.join("plugins").join(manifest_id);
+/// The bundle carries no `plugin.json`: it is a manifest-less, TS-only bundle
+/// whose identity is its bundle directory name (`dir_name`) and whose entry
+/// module is the conventional `index.ts`. The entry imports the SDK, declares a
+/// `Plugin` subclass whose `load` registers `server` against the host-exposed
+/// `rust` module `rust_module`, and exports a `load` lifecycle function. Two
+/// copies sharing the same `dir_name` written into different layers — so they
+/// share an identity — with different `server` names are how the test reads
+/// which copy is active.
+fn write_layer_copy(layer_root: &Path, dir_name: &str, server: &str, rust_module: &str) {
+    let plugin_dir = layer_root.join("plugins").join(dir_name);
     std::fs::create_dir_all(&plugin_dir).expect("plugin directory should be created");
-
-    let manifest = format!(
-        "{{\n  \"id\": \"{manifest_id}\",\n  \"name\": \"{manifest_id} plugin\",\n  \
-         \"version\": \"1.0.0\",\n  \"entry\": \"entry.ts\",\n  \
-         \"provides\": [\"{server}\"]\n}}\n"
-    );
-    std::fs::write(plugin_dir.join("plugin.json"), manifest)
-        .expect("plugin.json should be written");
 
     let entry = format!(
         "import {{ Plugin, makePluginThis }} from '@swissarmyhammer/plugin';\n\
@@ -152,7 +148,7 @@ fn write_layer_copy(layer_root: &Path, manifest_id: &str, server: &str, rust_mod
            return null;\n\
          }}\n"
     );
-    std::fs::write(plugin_dir.join("entry.ts"), entry).expect("entry.ts should be written");
+    std::fs::write(plugin_dir.join("index.ts"), entry).expect("index.ts should be written");
 }
 
 /// Renders a `tools/call` result to a string for substring assertions.
@@ -233,8 +229,9 @@ async fn wait_until_live(host: &PluginHost, server: &str) {
 ///
 /// This single test stitches the layering capability together:
 ///
-/// - the id `shared` is laid down in both the user and project temp layers,
-///   each copy registering a distinct server name;
+/// - a manifest-less bundle with the directory name `shared` — and thus the id
+///   `shared` — is laid down in both the user and project temp layers, each
+///   copy registering a distinct server name;
 /// - `discover_and_load_all` resolves the shadowed id to one active copy — the
 ///   project copy — observed by `from-project` answering a real `echo` call
 ///   while `from-user` never came live;
@@ -247,9 +244,10 @@ async fn project_layer_shadows_user_and_removal_falls_back_to_user() {
     let user = tempfile::TempDir::new().expect("user root temp dir");
     let project = tempfile::TempDir::new().expect("project root temp dir");
 
-    // The same id `shared` in both layers, behaving differently: the user copy
-    // registers `from-user`, the project copy registers `from-project`. Which
-    // server name becomes live tells the test which copy is active.
+    // The same directory name `shared` — hence the same id — in both layers,
+    // behaving differently: the user copy registers `from-user`, the project
+    // copy registers `from-project`. Which server name becomes live tells the
+    // test which copy is active.
     write_layer_copy(user.path(), "shared", "from-user", "user-mod");
     write_layer_copy(project.path(), "shared", "from-project", "project-mod");
 

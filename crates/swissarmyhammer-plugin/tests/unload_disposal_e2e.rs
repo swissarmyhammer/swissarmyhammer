@@ -45,7 +45,7 @@
 //!
 //! # Isolation
 //!
-//! The test owns its own [`tempfile::TempDir`] bundle root and a fresh
+//! The test owns its own [`tempfile::TempDir`] layer root and a fresh
 //! [`PluginHost`]; nothing is `static` and no temp dir is reused. Every
 //! cross-thread interaction is bounded by a timeout so a wedged isolate fails
 //! the test fast instead of hanging CI.
@@ -60,6 +60,7 @@ use rmcp::schemars::{self, JsonSchema};
 use rmcp::{tool, tool_handler, tool_router, ServerHandler};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use swissarmyhammer_directory::SwissarmyhammerConfig;
 use swissarmyhammer_plugin::{CallerId, Error, InProcessServer, McpServer, PluginHost};
 
 /// A generous upper bound on any single host interaction.
@@ -108,23 +109,25 @@ fn rendered(value: &Value) -> String {
     serde_json::to_string(value).expect("a tools/call result is serializable")
 }
 
-/// Writes the probe plugin bundle — `plugin.json` plus an `entry.ts` — into
-/// `bundle_dir`.
+/// Writes the probe plugin bundle — a manifest-less, TypeScript-only
+/// `index.ts` entry — into `<layer_root>/plugins/weather-probe/`.
 ///
-/// The entry imports the SDK, declares a `Plugin` subclass whose `load()`
-/// registers the real `rmcp` server `weather` and hands the host two functions
-/// in a callback-bearing payload, then exports a `load` lifecycle function. A
-/// plugin that registers *both* handle kinds is what makes the test prove
-/// `unload` disposes a server *and* callbacks in one capability.
-fn write_probe_plugin(bundle_dir: &Path) {
-    let manifest = "{\n  \
-         \"id\": \"weather-probe\",\n  \
-         \"name\": \"unload disposal probe\",\n  \
-         \"version\": \"1.0.0\",\n  \
-         \"entry\": \"entry.ts\",\n  \
-         \"provides\": [\"weather\"]\n}\n";
-    std::fs::write(bundle_dir.join("plugin.json"), manifest)
-        .expect("probe plugin.json should be written");
+/// The bundle carries no `plugin.json`: it is a manifest-less, TS-only bundle
+/// whose identity is its bundle directory name (`weather-probe`) and whose
+/// entry module is the conventional `index.ts`. The entry imports the SDK,
+/// declares a `Plugin` subclass whose `load()` registers the real `rmcp` server
+/// `weather` and hands the host two functions in a callback-bearing payload,
+/// then exports a `load` lifecycle function. A plugin that registers *both*
+/// handle kinds is what makes the test prove `unload` disposes a server *and*
+/// callbacks in one capability.
+///
+/// The bundle is staged under the layer's `plugins/` directory so the platform
+/// discovers it through `discover_and_load_all`.
+fn write_probe_plugin(layer_root: &Path) {
+    let plugin_dir = layer_root
+        .join(swissarmyhammer_plugin::PLUGINS_SUBDIR)
+        .join("weather-probe");
+    std::fs::create_dir_all(&plugin_dir).expect("probe plugin directory should be created");
 
     // `load()` activates the real `weather` server and hands the host two
     // callback functions, so the ledger holds one server handle and two
@@ -144,7 +147,7 @@ fn write_probe_plugin(bundle_dir: &Path) {
            await p.load();\n\
            return null;\n\
          }\n";
-    std::fs::write(bundle_dir.join("entry.ts"), entry).expect("probe entry.ts should be written");
+    std::fs::write(plugin_dir.join("index.ts"), entry).expect("probe index.ts should be written");
 }
 
 /// The unload-disposal capability, end to end: a plugin that registered a
@@ -162,11 +165,11 @@ fn write_probe_plugin(bundle_dir: &Path) {
 ///   the isolate was torn down, so nothing the plugin registered can fire.
 #[tokio::test]
 async fn unload_disposes_a_real_plugins_server_and_callbacks() {
-    // Per-test isolation: the bundle root is this test's own `TempDir`.
-    let bundle = tempfile::TempDir::new().expect("plugin bundle temp dir");
-    write_probe_plugin(bundle.path());
+    // Per-test isolation: the layer root is this test's own `TempDir`.
+    let layer = tempfile::TempDir::new().expect("plugin layer temp dir");
+    write_probe_plugin(layer.path());
 
-    let host = PluginHost::for_tests(bundle.path().to_path_buf(), None);
+    let host = PluginHost::for_tests(layer.path().to_path_buf(), None);
     // Expose the real `rmcp` server the plugin will activate as `weather`.
     let weather_mod: Arc<dyn McpServer> = Arc::new(
         InProcessServer::new(EchoServer::new())
@@ -178,12 +181,23 @@ async fn unload_disposes_a_real_plugins_server_and_callbacks() {
         .expect("expose_rust_module should not hang")
         .expect("exposing the rust module should succeed");
 
-    // Load the probe plugin: its `load()` registers `weather` and hands the
-    // host two callbacks.
-    let plugin_id = tokio::time::timeout(TIMEOUT, host.load(bundle.path()))
-        .await
-        .expect("loading the plugin should not hang")
-        .expect("the probe plugin's load should succeed");
+    // Discover and load the probe plugin: the host scans the layer's
+    // `plugins/` directory, resolves the manifest-less bundle's `index.ts`
+    // entry, and runs `load()` — which registers `weather` and hands the host
+    // two callbacks.
+    let mut loaded = tokio::time::timeout(
+        TIMEOUT,
+        host.discover_and_load_all::<SwissarmyhammerConfig>(),
+    )
+    .await
+    .expect("discovery should not hang")
+    .expect("discovering and loading the probe plugin should succeed");
+    assert_eq!(
+        loaded.len(),
+        1,
+        "exactly the one probe plugin should be discovered and loaded"
+    );
+    let plugin_id = loaded.pop().expect("the discovered plugin's id");
 
     // While loaded: the registered server answers a real `rmcp` `echo` call.
     let result = tokio::time::timeout(

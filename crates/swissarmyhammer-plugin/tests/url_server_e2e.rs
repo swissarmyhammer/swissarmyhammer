@@ -249,12 +249,11 @@ fn json_string(value: &str) -> String {
     serde_json::to_string(value).expect("a string always serializes to JSON")
 }
 
-/// Writes the probe plugin bundle — a real `plugin.json` plus a real entry
-/// `.ts` — into `<project_root>/plugins/probe/`.
+/// Writes the probe plugin bundle — a manifest-less, TypeScript-only
+/// `index.ts` entry — into `<project_root>/plugins/probe/`.
 ///
-/// The manifest declares the two server names the plugin `provides`: `url`
-/// (the transport under test) and `fs` (the observation channel). The host
-/// rejects any `register` of a name absent from this list.
+/// The bundle carries no `plugin.json`: its identity is the bundle directory
+/// name (`probe`) and its entry module is the conventional `index.ts`.
 ///
 /// The entry module's `load()`:
 ///
@@ -270,17 +269,6 @@ fn write_probe_plugin(project_root: &Path, endpoint_url: &str, probe_path: &Path
         .join(swissarmyhammer_plugin::PLUGINS_SUBDIR)
         .join("probe");
     std::fs::create_dir_all(&plugin_dir).expect("probe plugin directory should be created");
-
-    // A real manifest. `provides` lists exactly the two server names the
-    // plugin's `load()` registers.
-    let manifest = "{\n  \
-         \"id\": \"probe\",\n  \
-         \"name\": \"url transport probe\",\n  \
-         \"version\": \"1.0.0\",\n  \
-         \"entry\": \"entry.ts\",\n  \
-         \"provides\": [\"url\", \"fs\"]\n}\n";
-    std::fs::write(plugin_dir.join("plugin.json"), manifest)
-        .expect("probe plugin.json should be written");
 
     // The entry module. `load()` registers the HTTP MCP endpoint with an auth
     // header and the real `files` tool, calls `echo` over HTTP, and writes the
@@ -339,7 +327,7 @@ fn write_probe_plugin(project_root: &Path, endpoint_url: &str, probe_path: &Path
         probe = json_string(&probe_path.to_string_lossy()),
         payload = json_string(ECHO_PAYLOAD),
     );
-    std::fs::write(plugin_dir.join("entry.ts"), entry).expect("probe entry.ts should be written");
+    std::fs::write(plugin_dir.join("index.ts"), entry).expect("probe index.ts should be written");
 }
 
 /// A discovered probe plugin registers a `{ url }` source and proves a
@@ -384,7 +372,7 @@ async fn discovered_plugin_round_trips_a_tools_call_over_the_url_endpoint() {
         .expect("exposing the in-process tools should succeed");
 
     // Trigger discovery: the host scans the project layer, transpiles the
-    // probe's `entry.ts`, creates a fresh isolate, and runs `load` — which
+    // probe's `index.ts`, creates a fresh isolate, and runs `load` — which
     // connects to the HTTP endpoint and drives the `echo` call over HTTP.
     let loaded = tokio::time::timeout(
         TIMEOUT,
