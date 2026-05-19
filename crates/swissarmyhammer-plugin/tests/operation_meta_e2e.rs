@@ -119,11 +119,11 @@ fn json_string(value: &str) -> String {
     serde_json::to_string(value).expect("a string always serializes to JSON")
 }
 
-/// Writes the probe plugin bundle — a manifest-less, TypeScript-only
-/// `index.ts` entry — into `<project_root>/plugins/probe/`.
+/// Writes the probe plugin bundle — a TypeScript-only `index.ts` entry —
+/// into `<project_root>/plugins/probe/`.
 ///
-/// The bundle carries no `plugin.json`: its identity is the bundle directory
-/// name (`probe`) and its entry module is the conventional `index.ts`.
+/// The bundle's identity is the bundle directory name (`probe`) and its entry
+/// module is the conventional `index.ts`.
 ///
 /// The entry module's `load()` activates the host-exposed real `files`
 /// operation tool under the name `fs`, then drives the SDK's operation-tool
@@ -245,8 +245,8 @@ fn write_probe_plugin(project_root: &Path, output_dir: &Path) {
 ///   `io.swissarmyhammer/operations` `_meta` — is built by the MCP server
 ///   bootstrap and exposed to the host with
 ///   [`McpServer::expose_tools_to_plugin_host`]; no mock, no hand-built `_meta`;
-/// - the probe bundle (a manifest-less `index.ts`) is discovered and loaded
-///   through `discover_and_load_all`, which transpiles the TypeScript, creates
+/// - the probe bundle (an `index.ts`) is discovered and loaded through
+///   `discover_and_load_all`, which transpiles the TypeScript, creates
 ///   a fresh V8 isolate, and runs the exported `load`;
 /// - inside the isolate the SDK reads the operation tool's `_meta` to turn a
 ///   `file.write` path into `tools/call("files", { op: "write file", … })`,

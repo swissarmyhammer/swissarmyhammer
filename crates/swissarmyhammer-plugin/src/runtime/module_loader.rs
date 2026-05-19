@@ -214,13 +214,12 @@ impl PluginModuleLoader {
     /// [`PluginModuleLoader::resolve`]. For a plugin *import* that URL has
     /// passed the sandbox containment check, so it is known to be inside the
     /// bundle root. The entry/main module URL is returned by `resolve` without
-    /// re-checking it here, but it is not unchecked: when the entry comes from
-    /// a manifest's plugin-authored `entry` field, the host resolves it through
-    /// `Manifest::resolve_entry`, which canonicalizes and rejects any `entry`
-    /// that is absolute or escapes the bundle — so the entry path the host
-    /// hands the runtime is already proven contained, exactly as a relative
-    /// import is. The file is read, transpiled via [`transpile_typescript`]
-    /// (the same path the entry module takes), and returned as a JavaScript
+    /// re-checking it here, but it is not unchecked: the host resolves the
+    /// entry through `resolve_index_entry`, which canonicalizes and rejects
+    /// any entry that escapes the bundle — so the entry path the host hands
+    /// the runtime is already proven contained, exactly as a relative import
+    /// is. The file is read, transpiled via [`transpile_typescript`] (the
+    /// same path the entry module takes), and returned as a JavaScript
     /// [`ModuleSource`].
     fn load_relative(&self, specifier: &ModuleSpecifier) -> Result<ModuleSource, JsErrorBox> {
         let path = specifier

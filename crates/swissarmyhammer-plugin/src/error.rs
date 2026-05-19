@@ -102,31 +102,16 @@ pub enum Error {
     #[error("plugin transpilation error: {0}")]
     Transpile(String),
 
-    /// A plugin's `plugin.json` manifest could not be read or parsed.
+    /// A plugin bundle could not be resolved or its entry module could not be
+    /// located.
     ///
-    /// Raised when the manifest file is unreadable, its JSON is malformed, a
-    /// required field is missing, or it carries an unknown key. The message
-    /// names the offending plugin directory and the precise problem, so a
-    /// broken manifest fails loudly at discovery rather than mid-load.
-    #[error("plugin manifest error: {0}")]
-    Manifest(String),
-
-    /// A plugin tried to register a server name its manifest does not allow.
-    ///
-    /// Raised when a plugin's `this.register(name, …)` names a server that is
-    /// not listed in the manifest's `provides`, or when a `provides` entry
-    /// collides with a server name the host has reserved. `provides` is a
-    /// contract: a plugin may register only the names it declared, and only
-    /// names no host server already claims.
-    #[error("plugin '{plugin}' may not register server '{server}': {reason}")]
-    ProvidesViolation {
-        /// The id of the offending plugin.
-        plugin: String,
-        /// The server name the plugin was not permitted to register.
-        server: String,
-        /// Why the registration was rejected.
-        reason: String,
-    },
+    /// Raised when a bundle directory has no `index.ts` or `index.js` entry,
+    /// or when the entry path cannot be canonicalized or escapes the bundle
+    /// directory. The message names the offending plugin bundle and the
+    /// precise problem, so a broken bundle fails loudly at discovery rather
+    /// than mid-load.
+    #[error("plugin bundle error: {0}")]
+    BundleError(String),
 }
 
 /// Convenience alias for results produced by the plugin platform.

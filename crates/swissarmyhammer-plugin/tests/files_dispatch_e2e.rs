@@ -2,8 +2,8 @@
 //!
 //! This is the canonical example every other capability `*_e2e.rs` test
 //! follows. It exercises the **whole** plugin pipeline through the real `files`
-//! MCP server — manifest-less bundle discovery, TypeScript transpile, a fresh
-//! V8 isolate, the SDK dispatch Proxy, the host dispatcher, operation-tool `op`
+//! MCP server — bundle discovery, TypeScript transpile, a fresh V8 isolate,
+//! the SDK dispatch Proxy, the host dispatcher, operation-tool `op`
 //! dispatch, and return-value marshalling — and verifies the one effect that
 //! can only happen if every stage works: real files land on disk.
 //!
@@ -79,14 +79,13 @@ async fn build_mcp_server(work_dir: &Path) -> McpServer {
         .expect("MCP server bootstrap should succeed")
 }
 
-/// Writes the probe plugin bundle — a manifest-less, TypeScript-only
-/// `index.ts` entry — into `<project_root>/plugins/probe/`.
+/// Writes the probe plugin bundle — a TypeScript-only `index.ts` entry —
+/// into `<project_root>/plugins/probe/`.
 ///
 /// The bundle is what discovery scans for and the host loads:
 ///
-/// - There is no `plugin.json`: the bundle is a manifest-less, TS-only bundle.
-///   Its identity is the bundle directory name (`probe`) and its entry module
-///   is the conventional `index.ts`.
+/// - The bundle's identity is the bundle directory name (`probe`) and its
+///   entry module is the conventional `index.ts`.
 /// - The entry imports the SDK, subclasses [`Plugin`], and in `load()` registers
 ///   the host-exposed `files` Rust module under the name `fs`, then drives three
 ///   real `files` operations through the SDK dispatch Proxy:
@@ -194,7 +193,7 @@ fn json_string(value: &str) -> String {
 ///
 /// - the real [`FilesTool`] is built by the MCP server bootstrap and exposed to
 ///   the host with [`McpServer::expose_tools_to_plugin_host`] — no mock;
-/// - the probe bundle (a manifest-less `index.ts`) is discovered from the
+/// - the probe bundle (an `index.ts`) is discovered from the
 ///   project layer and loaded through `discover_and_load_all`, which transpiles
 ///   the TypeScript, creates a fresh V8 isolate, and runs the exported `load`;
 /// - inside the isolate the SDK dispatch Proxy turns `this.fs.files({ op, … })`
@@ -233,9 +232,9 @@ async fn discovered_plugin_drives_the_real_files_tool_end_to_end() {
         .expect("exposing the in-process tools should succeed");
 
     // Trigger discovery: the host scans the project layer, resolves the
-    // manifest-less probe's `index.ts` entry, transpiles it, creates a fresh
-    // isolate, and runs the exported `load` — whose body performs the three
-    // real `files` calls.
+    // probe's `index.ts` entry, transpiles it, creates a fresh isolate, and
+    // runs the exported `load` — whose body performs the three real `files`
+    // calls.
     let loaded = tokio::time::timeout(
         TIMEOUT,
         host.discover_and_load_all::<SwissarmyhammerConfig>(),

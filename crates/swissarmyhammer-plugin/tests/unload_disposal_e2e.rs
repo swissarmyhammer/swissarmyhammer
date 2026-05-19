@@ -109,12 +109,11 @@ fn rendered(value: &Value) -> String {
     serde_json::to_string(value).expect("a tools/call result is serializable")
 }
 
-/// Writes the probe plugin bundle — a manifest-less, TypeScript-only
-/// `index.ts` entry — into `<layer_root>/plugins/weather-probe/`.
+/// Writes the probe plugin bundle — a TypeScript-only `index.ts` entry —
+/// into `<layer_root>/plugins/weather-probe/`.
 ///
-/// The bundle carries no `plugin.json`: it is a manifest-less, TS-only bundle
-/// whose identity is its bundle directory name (`weather-probe`) and whose
-/// entry module is the conventional `index.ts`. The entry imports the SDK,
+/// The bundle's identity is its bundle directory name (`weather-probe`) and
+/// its entry module is the conventional `index.ts`. The entry imports the SDK,
 /// declares a `Plugin` subclass whose `load()` registers the real `rmcp` server
 /// `weather` and hands the host two functions in a callback-bearing payload,
 /// then exports a `load` lifecycle function. A plugin that registers *both*
@@ -182,9 +181,8 @@ async fn unload_disposes_a_real_plugins_server_and_callbacks() {
         .expect("exposing the rust module should succeed");
 
     // Discover and load the probe plugin: the host scans the layer's
-    // `plugins/` directory, resolves the manifest-less bundle's `index.ts`
-    // entry, and runs `load()` — which registers `weather` and hands the host
-    // two callbacks.
+    // `plugins/` directory, resolves the bundle's `index.ts` entry, and runs
+    // `load()` — which registers `weather` and hands the host two callbacks.
     let mut loaded = tokio::time::timeout(
         TIMEOUT,
         host.discover_and_load_all::<SwissarmyhammerConfig>(),

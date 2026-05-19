@@ -18,10 +18,9 @@
 //! - [`sdk`] — the `@swissarmyhammer/plugin` TypeScript SDK, embedded.
 //! - [`host`] — host-side bindings exposed to plugins.
 //! - [`ledger`] — records of registration and dispatch activity.
-//! - [`manifest`] — the `plugin.json` manifest a plugin bundle ships.
 //! - [`discovery`] — stacked, point-in-time discovery of plugins on disk.
-//! - [`reload`] — hot reload seams: the `provides`-expansion policy and the
-//!   per-plugin reload status the host surfaces.
+//! - [`reload`] — hot reload seam: the per-plugin reload status the host
+//!   surfaces.
 //! - [`codegen`] — code generation for plugin scaffolding and bindings.
 //! - [`error`] — the platform [`Error`] type and [`Result`] alias.
 //!
@@ -33,7 +32,6 @@ pub mod dispatcher;
 pub mod error;
 pub mod host;
 pub mod ledger;
-pub mod manifest;
 pub mod registry;
 pub mod reload;
 pub mod runtime;
@@ -45,12 +43,8 @@ pub use dispatcher::Dispatcher;
 pub use error::{Error, Result};
 pub use host::PluginHost;
 pub use ledger::{CallbackId, PluginLedger, RegistrationHandle};
-pub use manifest::{Manifest, MANIFEST_FILE};
 pub use registry::{ServerName, ServerRegistry};
-pub use reload::{
-    ApproveAllReloads, DenyProvidesExpansion, ProvidesDecision, ProvidesExpansion, ReloadPolicy,
-    ReloadStatus,
-};
+pub use reload::ReloadStatus;
 pub use runtime::{
     transpile_typescript, HostDispatcher, PluginModuleLoader, PluginRuntime, RuntimeConfig,
     TranspiledModule, UnboundHostDispatcher,

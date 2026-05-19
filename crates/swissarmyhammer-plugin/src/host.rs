@@ -39,7 +39,7 @@
 //! [`new`](PluginHost::new) for production embedders, each of which computes
 //! its own roots and passes them in.
 //!
-//! # Discovery and the manifest
+//! # Discovery
 //!
 //! On top of explicit `load` / `unload`, the host scans its layer roots for
 //! plugins on disk: [`discover_and_load_all`](PluginHost::discover_and_load_all)
@@ -47,13 +47,9 @@
 //! copy across layers (project shadows user shadows builtin) and loads it. The
 //! read-only builtin layer is the lowest-precedence floor — an embedder ships
 //! it via [`new`](PluginHost::new) — under the writable user and project
-//! layers. The scan is
-//! all-or-nothing: a mid-scan load failure rolls back every plugin the scan
-//! already loaded, so a failed scan leaves the host unchanged. Each plugin
-//! bundle carries a [`Manifest`] (`plugin.json`); the host retains the manifest
-//! of a loaded plugin so the bridge's `register` handler can enforce the
-//! manifest's `provides` contract — a plugin may register only the server names
-//! it declared.
+//! layers. The scan is all-or-nothing: a mid-scan load failure rolls back
+//! every plugin the scan already loaded, so a failed scan leaves the host
+//! unchanged.
 //!
 //! # Hot reload
 //!
@@ -82,11 +78,8 @@ use crate::discovery::{
 };
 use crate::error::{Error, Result};
 use crate::ledger::{CallbackId, PluginLedger, RegistrationHandle};
-use crate::manifest::{Manifest, MANIFEST_FILE};
 use crate::registry::{ServerName, ServerRegistry, ServerStatus};
-use crate::reload::{
-    ApproveAllReloads, ProvidesDecision, ProvidesExpansion, ReloadPolicy, ReloadStatus,
-};
+use crate::reload::ReloadStatus;
 use crate::runtime::{HostDispatcher, PluginRuntime, RuntimeConfig};
 use crate::server::{CallerId, CliServer, McpServer, PluginId, ToolMetadata, UrlServer};
 
@@ -178,12 +171,6 @@ struct HostInner {
 
     /// Source of stable, per-host-unique plugin ids.
     next_plugin_seq: AtomicU64,
-
-    /// The policy consulted when a hot reload would expand a plugin's
-    /// `provides` set. Behind its own mutex so a host can install a policy
-    /// after construction without locking the rest of the host state.
-    /// Defaults to [`ApproveAllReloads`].
-    reload_policy: Mutex<Arc<dyn ReloadPolicy>>,
 
     /// The emitter that keeps a generated `.d.ts` file in sync with the live
     /// registry.
@@ -337,41 +324,31 @@ struct HostState {
     /// The loaded plugins, keyed by plugin id.
     plugins: HashMap<PluginId, LoadedPlugin>,
 
-    /// The manifest of each plugin that was loaded with one, keyed by plugin id.
+    /// The currently active copy of each plugin id, keyed by the plugin's
+    /// bundle-directory id.
     ///
-    /// A plugin loaded from a bundle that has a `plugin.json` has its parsed
-    /// [`Manifest`] recorded here for the duration of the load. The bridge's
-    /// `register` handler consults it to enforce the manifest's `provides`
-    /// contract. A plugin loaded from a TypeScript-only bundle with no manifest
-    /// has no entry here, and its registrations are not `provides`-checked.
-    manifests: HashMap<PluginId, Manifest>,
-
-    /// The currently active copy of each manifest-identified plugin, keyed by
-    /// the manifest `id`.
-    ///
-    /// Hot reload reasons in terms of manifest identity and layer precedence,
-    /// not the host-minted [`PluginId`]: this map records, per manifest id,
+    /// Hot reload reasons in terms of plugin identity and layer precedence,
+    /// not the host-minted [`PluginId`]: this map records, per plugin id,
     /// which layer's copy is live and the internal id it loaded under, so a
     /// [`StackedEvent`](swissarmyhammer_directory::StackedEvent) can be
     /// translated against the active layer. A plugin appears here exactly while
-    /// it is loaded by manifest identity — discovery and the watcher both
-    /// populate it; an unload removes it.
+    /// it is loaded; discovery and the watcher both populate it; an unload
+    /// removes it.
     active_plugins: HashMap<String, ActivePlugin>,
 
-    /// The outcome of the most recent reload of each manifest-identified
-    /// plugin, keyed by the manifest `id`.
+    /// The outcome of the most recent reload of each plugin id, keyed by the
+    /// plugin's bundle-directory id.
     ///
-    /// A failed v2 load or a [`ReloadPolicy`]-denied `provides` expansion
-    /// leaves the plugin unloaded; the failure is recorded here so a caller —
-    /// the settings UI, a test — can observe it. A successful load records
-    /// [`ReloadStatus::Healthy`].
+    /// A failed v2 load leaves the plugin unloaded; the failure is recorded
+    /// here so a caller — the settings UI, a test — can observe it. A
+    /// successful load records [`ReloadStatus::Healthy`].
     reload_status: HashMap<String, ReloadStatus>,
 }
 
 /// A content fingerprint of a plugin bundle's source, used to tell a *genuine*
 /// change of the active copy apart from a no-op reconcile.
 ///
-/// Hot reload re-runs full discovery and reconciles *every* manifest id on any
+/// Hot reload re-runs full discovery and reconciles *every* plugin id on any
 /// watcher event, so [`reconcile_id`](PluginHost::reconcile_id) is reached for
 /// an id whose active copy did not change — for example when a *shadowed*
 /// lower-layer copy of the same id was edited. Without a way to see that the
@@ -383,21 +360,17 @@ struct HostState {
 ///
 /// # What is fingerprinted
 ///
-/// The fingerprint hashes, in order, the bytes of two files in the bundle:
+/// The fingerprint hashes the bytes of the bundle's resolved entry module, so
+/// an edit to the plugin's source is caught.
 ///
-/// 1. The bundle's [`MANIFEST_FILE`] (`plugin.json`) — so an `entry` rename, a
-///    `provides` change, or a version bump is caught.
-/// 2. The manifest's resolved entry module — so an edit to the plugin's actual
-///    source is caught.
-///
-/// A bundle whose files cannot be read fingerprints to [`Self::Unreadable`],
+/// A bundle whose entry cannot be read fingerprints to [`Self::Unreadable`],
 /// which compares **unequal to every fingerprint including another
 /// `Unreadable`** — so a bundle the host cannot fingerprint is always treated
 /// as changed and reloaded. The reconcile fails *toward* a reload, never toward
 /// leaving a possibly-stale plugin in place.
 #[derive(Debug, Clone)]
 enum PluginFingerprint {
-    /// A 64-bit content hash of the bundle's manifest and entry module.
+    /// A 64-bit content hash of the bundle's entry module.
     Hashed(u64),
 
     /// The bundle's files could not be read, so no content hash exists.
@@ -427,10 +400,8 @@ impl PartialEq for PluginFingerprint {
 impl PluginFingerprint {
     /// Computes the fingerprint of a discovered plugin's bundle.
     ///
-    /// Reads and hashes the bundle's entry module and — for a manifest bundle —
-    /// its `plugin.json`; any read failure yields [`Self::Unreadable`]. A
-    /// manifest-less bundle has no `plugin.json`, so only its resolved entry
-    /// module is hashed. The hash is a `DefaultHasher` digest — this is a
+    /// Reads and hashes the bundle's entry module; any read failure yields
+    /// [`Self::Unreadable`]. The hash is a `DefaultHasher` digest — this is a
     /// same-process change-detection signal, not a security boundary, so a
     /// fast non-cryptographic hash is the right tool.
     ///
@@ -442,15 +413,6 @@ impl PluginFingerprint {
 
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
 
-        // A manifest bundle's `plugin.json` is part of its content; a
-        // manifest-less bundle has none, so only its entry module is hashed.
-        if plugin.manifest.is_some() {
-            let Ok(manifest_bytes) = std::fs::read(plugin.directory.join(MANIFEST_FILE)) else {
-                return Self::Unreadable;
-            };
-            manifest_bytes.hash(&mut hasher);
-        }
-
         let Ok(entry_bytes) = std::fs::read(&plugin.entry) else {
             return Self::Unreadable;
         };
@@ -460,10 +422,9 @@ impl PluginFingerprint {
     }
 }
 
-/// The active copy of a manifest-identified plugin, as the host tracks it for
-/// hot reload.
+/// The active copy of a plugin id, as the host tracks it for hot reload.
 ///
-/// One `ActivePlugin` is the *currently live* copy of a manifest `id`. The
+/// One `ActivePlugin` is the *currently live* copy of a plugin `id`. The
 /// watcher's translation logic uses it to answer "which layer is active for
 /// this id" and "which internal plugin id do I unload to reload it".
 #[derive(Debug, Clone)]
@@ -473,10 +434,6 @@ struct ActivePlugin {
 
     /// The layer the active copy was loaded from.
     layer: FileSource,
-
-    /// The set of server names the active copy's manifest declared. Compared
-    /// against a reloaded copy's `provides` to detect an expansion.
-    provides: Vec<String>,
 
     /// A content fingerprint of the active copy's bundle at the time it was
     /// loaded.
@@ -506,11 +463,10 @@ struct LoadedPlugin {
     ///
     /// Retained so [`PluginHost::unload`] re-resolves the `unload` export
     /// against the **identical** entry path the `load` export used. The entry
-    /// is canonicalized when it is resolved — `Manifest::resolve_entry` for a
-    /// manifest-bearing bundle, `resolve_index_entry` for a TypeScript-only
-    /// bundle — so the isolate's module map keys the entry's main module under
-    /// that canonical URL. Re-deriving the entry for unload would join it onto
-    /// a *non*-canonical bundle directory and ask the isolate to create a
+    /// is canonicalized by `resolve_index_entry` when it is resolved, so the
+    /// isolate's module map keys the entry's main module under that canonical
+    /// URL. Re-deriving the entry for unload would join it onto a
+    /// *non*-canonical bundle directory and ask the isolate to create a
     /// second "main" module under a URL that differs only by an unresolved
     /// symlink — which `deno_core` rejects, silently skipping the `unload`
     /// hook. Reusing the stored entry keeps the two lifecycle calls addressing
@@ -695,7 +651,6 @@ impl PluginHost {
                 user_root,
                 project_root,
                 next_plugin_seq: AtomicU64::new(0),
-                reload_policy: Mutex::new(Arc::new(ApproveAllReloads)),
                 types_emitter,
                 bridge_runtime,
                 state: Mutex::new(HostState {
@@ -703,7 +658,6 @@ impl PluginHost {
                     ledger: PluginLedger::new(),
                     modules: HashMap::new(),
                     plugins: HashMap::new(),
-                    manifests: HashMap::new(),
                     active_plugins: HashMap::new(),
                     reload_status: HashMap::new(),
                 }),
@@ -711,41 +665,22 @@ impl PluginHost {
         }
     }
 
-    /// Installs the [`ReloadPolicy`] consulted when a hot reload would expand a
-    /// plugin's `provides` set.
-    ///
-    /// The host defaults to [`ApproveAllReloads`] — a plugin author editing
-    /// their own plugin is trusted to widen its `provides`. An embedder that
-    /// wants a human in the loop installs its own policy here; a test installs
-    /// [`DenyProvidesExpansion`](crate::DenyProvidesExpansion) or a bespoke
-    /// policy to drive the gated path deterministically.
-    ///
-    /// # Parameters
-    ///
-    /// - `policy` — the policy to consult on every `provides`-expanding reload.
-    pub fn set_reload_policy(&self, policy: Arc<dyn ReloadPolicy>) {
-        *self
-            .inner
-            .reload_policy
-            .lock()
-            .expect("reload policy mutex poisoned") = policy;
-    }
-
     /// The [`ReloadStatus`] of the most recent reload of the plugin whose
-    /// manifest `id` is `manifest_id`.
+    /// id is `plugin_id`.
     ///
     /// Returns `None` when the host has performed no reload-path lifecycle
     /// action for that id — neither a watcher-driven load nor a discovery
     /// scan recorded a status. A loaded, never-reloaded plugin reports
-    /// [`ReloadStatus::Healthy`]; a plugin whose reload failed or whose
-    /// `provides` expansion was denied reports the corresponding variant, so a
-    /// caller can surface a plugin that needs attention.
+    /// [`ReloadStatus::Healthy`]; a plugin whose reload failed reports the
+    /// corresponding variant, so a caller can surface a plugin that needs
+    /// attention.
     ///
     /// # Parameters
     ///
-    /// - `manifest_id` — the manifest `id` of the plugin to inspect.
-    pub async fn reload_status(&self, manifest_id: &str) -> Option<ReloadStatus> {
-        self.lock().reload_status.get(manifest_id).cloned()
+    /// - `plugin_id` — the id (bundle directory name) of the plugin to
+    ///   inspect.
+    pub async fn reload_status(&self, plugin_id: &str) -> Option<ReloadStatus> {
+        self.lock().reload_status.get(plugin_id).cloned()
     }
 
     /// The writable user-layer plugin root this host was given.
@@ -799,28 +734,16 @@ impl PluginHost {
     /// `load()` is inserted into the live registry and recorded in the plugin's
     /// ledger.
     ///
-    /// # The entry module and the manifest
+    /// # The entry module
     ///
-    /// When `plugin_dir` contains a [`MANIFEST_FILE`] the host parses it: the
-    /// manifest's `entry` names the module to evaluate, and the host retains
-    /// the manifest so the bridge's `register` handler can enforce the
-    /// manifest's `provides` contract. Because `entry` is plugin-authored, it
-    /// is resolved through [`Manifest::resolve_entry`], which rejects an `entry`
-    /// that is absolute or escapes the bundle directory — so the module the
-    /// runtime evaluates is always contained within the bundle. Before the
-    /// isolate is created, every `provides` name is checked against the host's
-    /// reserved server names; a collision fails the load up front.
-    ///
-    /// A bundle with no manifest is a TypeScript-only bundle: its entry module
-    /// is the bundle's `index.ts` (or `index.js`), found by the same convention
-    /// discovery uses and containment-checked the same way. It is not
-    /// `provides`-checked.
+    /// A bundle's entry module is its `index.ts` (preferred) or `index.js`,
+    /// found by the same convention discovery uses and containment-checked
+    /// the same way.
     ///
     /// # Parameters
     ///
-    /// - `plugin_dir` — the plugin's bundle directory; it must contain either a
-    ///   `plugin.json` naming an entry module, or an `index.ts` / `index.js`
-    ///   entry module.
+    /// - `plugin_dir` — the plugin's bundle directory; it must contain an
+    ///   `index.ts` or `index.js` entry module.
     ///
     /// # Returns
     ///
@@ -828,85 +751,45 @@ impl PluginHost {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Manifest`] when a present `plugin.json` is invalid or
-    /// when its `entry` is absolute or escapes the bundle directory, or when a
-    /// manifest-less bundle has no `index.{ts,js}` entry module,
-    /// [`Error::ProvidesViolation`] when a `provides` name collides with a
-    /// reserved host server, [`Error::RuntimeStartup`] when the isolate cannot
-    /// be created, [`Error::Transpile`] or [`Error::Runtime`] when the bundle
-    /// fails to load or its `load()` throws, or any error a `register` made
-    /// during `load()` surfaced. A plugin that fails to load is removed from
-    /// the host, so a failed load leaves no half-initialized plugin behind.
+    /// Returns [`Error::BundleError`] when the bundle has no `index.{ts,js}`
+    /// entry module or the entry escapes the bundle directory,
+    /// [`Error::RuntimeStartup`] when the isolate cannot be created,
+    /// [`Error::Transpile`] or [`Error::Runtime`] when the bundle fails to
+    /// load or its `load()` throws, or any error a `register` made during
+    /// `load()` surfaced. A plugin that fails to load is removed from the
+    /// host, so a failed load leaves no half-initialized plugin behind.
     pub async fn load(&self, plugin_dir: impl AsRef<Path>) -> Result<PluginId> {
         let plugin_dir = plugin_dir.as_ref().to_path_buf();
 
-        // A bundle with a `plugin.json` carries a manifest; a TypeScript-only
-        // bundle does not. The manifest, when present, names the entry module
-        // and is the source of the `provides` contract.
-        let manifest = if plugin_dir.join(MANIFEST_FILE).is_file() {
-            Some(Manifest::load(&plugin_dir)?)
-        } else {
-            None
-        };
-
-        // The entry module is the manifest's `entry` when present, resolved —
-        // and sandbox-checked — through `Manifest::resolve_entry`; a manifest-
-        // less bundle's entry is its `index.ts` (or `index.js`), resolved and
-        // containment-checked the same way a discovery scan resolves it.
-        let entry_file = match &manifest {
-            Some(manifest) => manifest
-                .resolve_entry(&plugin_dir)?
-                .to_string_lossy()
-                .into_owned(),
-            None => resolve_index_entry(&plugin_dir)?
-                .ok_or_else(|| {
-                    Error::Manifest(format!(
-                        "plugin bundle at {} has no index.ts or index.js entry module",
-                        plugin_dir.display(),
-                    ))
-                })?
-                .to_string_lossy()
-                .into_owned(),
-        };
-        self.load_resolved(&plugin_dir, entry_file, manifest).await
+        // The entry module is the bundle's `index.ts` (or `index.js`),
+        // resolved and containment-checked the same way a discovery scan
+        // resolves it.
+        let entry_file = resolve_index_entry(&plugin_dir)?
+            .ok_or_else(|| {
+                Error::BundleError(format!(
+                    "plugin bundle at {} has no index.ts or index.js entry module",
+                    plugin_dir.display(),
+                ))
+            })?
+            .to_string_lossy()
+            .into_owned();
+        self.load_resolved(&plugin_dir, entry_file).await
     }
 
-    /// Loads a plugin whose entry module is already resolved and whose
-    /// manifest — if any — is already parsed.
+    /// Loads a plugin whose entry module is already resolved.
     ///
-    /// Shared by [`load`](Self::load), which parses a bundle's manifest and
-    /// resolves its entry from disk, and
-    /// [`discover_and_load_all`](Self::discover_and_load_all), which already
-    /// holds both from the discovery scan. A `Some(manifest)` has its
-    /// `provides` validated against reserved host names before the isolate is
-    /// created, so an isolate is not spent on a plugin that cannot legally
-    /// register what it promised; the manifest is retained so the bridge can
-    /// enforce `provides` during `load()`. A `None` manifest is a manifest-less
-    /// bundle: it carries no `provides`, so the `provides` gate is skipped.
+    /// Shared by [`load`](Self::load), which resolves a bundle's entry from
+    /// disk, and [`discover_and_load_all`](Self::discover_and_load_all), which
+    /// already holds the entry from the discovery scan.
     ///
     /// # Parameters
     ///
     /// - `plugin_dir` — the plugin's bundle directory.
     /// - `entry_file` — the resolved, bundle-contained entry module path the
     ///   runtime evaluates. The caller is responsible for the sandbox check:
-    ///   it is either a `Manifest::resolve_entry` result or a discovery-
-    ///   resolved `index.{ts,js}` path, both already containment-checked.
-    /// - `manifest` — the parsed manifest, or `None` for a manifest-less
-    ///   bundle.
-    async fn load_resolved(
-        &self,
-        plugin_dir: &Path,
-        entry_file: String,
-        manifest: Option<Manifest>,
-    ) -> Result<PluginId> {
-        // A manifest's `provides` must not collide with a reserved host server
-        // name — reject before spending an isolate on a plugin that cannot
-        // legally register what it promised. A manifest-less bundle has no
-        // `provides`, so this gate does not apply to it.
-        if let Some(manifest) = &manifest {
-            self.check_provides_against_reserved(manifest)?;
-        }
-
+    ///   it is a discovery-resolved `index.{ts,js}` path, already
+    ///   containment-checked.
+    async fn load_resolved(&self, plugin_dir: &Path, entry_file: String) -> Result<PluginId> {
         let plugin_id = self.mint_plugin_id();
 
         // The bridge dispatcher is scoped to this plugin's id: every call it
@@ -919,14 +802,10 @@ impl PluginHost {
 
         // Track the plugin before running its `load()` so the `register` calls
         // that `load()` makes — which arrive over the bridge while the call
-        // below is awaiting — have a ledger vec to append to, and the manifest
-        // is in place for the bridge's `provides` check.
+        // below is awaiting — have a ledger vec to append to.
         {
             let mut state = self.lock();
             state.ledger.track(plugin_id.clone());
-            if let Some(manifest) = &manifest {
-                state.manifests.insert(plugin_id.clone(), manifest.clone());
-            }
         }
 
         // Drive the plugin's lifecycle on its own isolate. `PluginRuntime` is
@@ -960,12 +839,10 @@ impl PluginHost {
             }
             Err(error) => {
                 // A failed load must not leave a half-initialized plugin: undo
-                // every registration it managed to make, and drop the manifest
-                // it never finished using. The isolate is still alive here — it
-                // is torn down as `runtime` drops at the end of this scope — so
-                // callback handles can be disposed on it.
+                // every registration it managed to make. The isolate is still
+                // alive here — it is torn down as `runtime` drops at the end
+                // of this scope — so callback handles can be disposed on it.
                 self.dispose_registrations(&plugin_id, &runtime).await;
-                self.lock().manifests.remove(&plugin_id);
                 Err(error)
             }
         }
@@ -1006,38 +883,29 @@ impl PluginHost {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Manifest`] when a discovered bundle's `plugin.json` is
-    /// invalid, or any error [`load`](Self::load) surfaces for a plugin that
-    /// fails to load. On any such error every plugin loaded earlier in the scan
-    /// has already been unloaded, so no plugin from a failed scan stays live.
+    /// Returns [`Error::BundleError`] when a discovered bundle's entry module
+    /// cannot be resolved, or any error [`load`](Self::load) surfaces for a
+    /// plugin that fails to load. On any such error every plugin loaded
+    /// earlier in the scan has already been unloaded, so no plugin from a
+    /// failed scan stays live.
     pub async fn discover_and_load_all<C: DirectoryConfig>(&self) -> Result<Vec<PluginId>> {
         let discovered = discover_plugins::<C>(&self.discovery_layers())?;
 
         let mut loaded = Vec::with_capacity(discovered.len());
         for plugin in discovered {
-            // Hold the identity and the content fingerprint the active-plugin
-            // record needs before the manifest is moved into `load_resolved`.
-            // A manifest-less bundle has no `provides` — the active record
-            // tracks an empty set, so a later reload of it never trips the
-            // `provides`-expansion gate.
-            let manifest_id = plugin.id.clone();
-            let provides = plugin
-                .manifest
-                .as_ref()
-                .map(|manifest| manifest.provides.clone())
-                .unwrap_or_default();
+            // Hold the identity, source, and content fingerprint the
+            // active-plugin record needs before the entry is moved into
+            // `load_resolved`.
+            let id = plugin.id.clone();
             let source = plugin.source.clone();
             let fingerprint = PluginFingerprint::of(&plugin);
             let entry_file = plugin.entry.to_string_lossy().into_owned();
-            match self
-                .load_resolved(&plugin.directory, entry_file, plugin.manifest)
-                .await
-            {
+            match self.load_resolved(&plugin.directory, entry_file).await {
                 Ok(plugin_id) => {
-                    // Record the active copy by manifest identity so the
-                    // watcher can later translate events against the layer
-                    // this scan resolved as the winner.
-                    self.record_active(&manifest_id, &plugin_id, source, provides, fingerprint);
+                    // Record the active copy by plugin id so the watcher can
+                    // later translate events against the layer this scan
+                    // resolved as the winner.
+                    self.record_active(&id, &plugin_id, source, fingerprint);
                     loaded.push(plugin_id);
                 }
                 Err(error) => {
@@ -1054,43 +922,41 @@ impl PluginHost {
         Ok(loaded)
     }
 
-    /// Records the active copy of a manifest-identified plugin.
+    /// Records the active copy of a plugin id.
     ///
-    /// Inserts (or replaces) the [`ActivePlugin`] entry for `manifest_id` and
-    /// marks the plugin [`ReloadStatus::Healthy`], because reaching this point
+    /// Inserts (or replaces) the [`ActivePlugin`] entry for `id` and marks
+    /// the plugin [`ReloadStatus::Healthy`], because reaching this point
     /// means the copy loaded and is serving. The `fingerprint` is the content
     /// fingerprint of the copy's bundle at load time — [`reconcile_id`](Self::reconcile_id)
     /// compares it against a re-discovered winner's fingerprint to tell a
     /// genuine source change apart from a no-op reconcile.
     fn record_active(
         &self,
-        manifest_id: &str,
+        id: &str,
         plugin_id: &PluginId,
         layer: FileSource,
-        provides: Vec<String>,
         fingerprint: PluginFingerprint,
     ) {
         let mut state = self.lock();
         state.active_plugins.insert(
-            manifest_id.to_string(),
+            id.to_string(),
             ActivePlugin {
                 plugin_id: plugin_id.clone(),
                 layer,
-                provides,
                 fingerprint,
             },
         );
         state
             .reload_status
-            .insert(manifest_id.to_string(), ReloadStatus::Healthy);
+            .insert(id.to_string(), ReloadStatus::Healthy);
     }
 
     /// Drops every hot-reload record of the plugin whose internal id is
     /// `plugin_id`.
     ///
     /// Used by the discovery-scan rollback: the scan keyed its records by
-    /// manifest id, but the rollback holds only the host-minted [`PluginId`]s,
-    /// so the matching manifest id is found by scanning for that internal id.
+    /// plugin id, but the rollback holds only the host-minted [`PluginId`]s,
+    /// so the matching plugin id is found by scanning for that internal id.
     /// Both the [`ActivePlugin`] entry **and** the [`ReloadStatus`] entry —
     /// `record_active` inserts a `Healthy` status alongside the active record —
     /// are removed, so a rolled-back plugin reports `None` from
@@ -1098,16 +964,16 @@ impl PluginHost {
     /// hot-reload state behind.
     fn forget_active_by_plugin_id(&self, plugin_id: &PluginId) {
         let mut state = self.lock();
-        let manifest_id = state
+        let id = state
             .active_plugins
             .iter()
             .find(|(_, active)| &active.plugin_id == plugin_id)
             .map(|(id, _)| id.clone());
-        if let Some(manifest_id) = manifest_id {
-            state.active_plugins.remove(&manifest_id);
+        if let Some(id) = id {
+            state.active_plugins.remove(&id);
             // `record_active` paired this id with a `Healthy` reload status;
             // drop it too so a rolled-back plugin has no lingering status.
-            state.reload_status.remove(&manifest_id);
+            state.reload_status.remove(&id);
         }
     }
 
@@ -1160,37 +1026,6 @@ impl PluginHost {
         layers
     }
 
-    /// Rejects a manifest whose `provides` collides with a reserved host name.
-    ///
-    /// The host reserves the server names it has exposed as Rust modules and
-    /// the names currently live in the registry. A plugin may not promise — in
-    /// its manifest's `provides` — a name the host already owns, because the
-    /// registry's single global namespace would reject the registration
-    /// anyway; catching it here turns a mid-load failure into a clear up-front
-    /// one.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::ProvidesViolation`] naming the first `provides` entry
-    /// that collides with a reserved host server name.
-    fn check_provides_against_reserved(&self, manifest: &Manifest) -> Result<()> {
-        let state = self.lock();
-        for server in &manifest.provides {
-            let reserved_module = state.modules.contains_key(server);
-            let reserved_live = matches!(state.registry.resolve(server), ServerStatus::Live(_));
-            if reserved_module || reserved_live {
-                return Err(Error::ProvidesViolation {
-                    plugin: manifest.id.clone(),
-                    server: server.clone(),
-                    reason: "the manifest's provides list claims a server name \
-                             already reserved by the host"
-                        .to_string(),
-                });
-            }
-        }
-        Ok(())
-    }
-
     /// Unloads the plugin identified by `plugin_id`.
     ///
     /// Disposal does not need the plugin's cooperation. The plugin's optional
@@ -1233,9 +1068,6 @@ impl PluginHost {
         // server the plugin had registered, so flushing now settles them into
         // one `.d.ts` write the moment the unload completes.
         self.inner.types_emitter.flush();
-
-        // The plugin's manifest is no longer needed once it is unloaded.
-        self.lock().manifests.remove(plugin_id);
 
         // Dropping the runtime tears the isolate's worker thread down.
         drop(plugin);
@@ -1347,18 +1179,18 @@ impl PluginHost {
 
     /// Handles one [`StackedEvent`] by reconciling the affected plugin id.
     ///
-    /// The watcher's `name` is the on-disk *directory* name, which need not
-    /// equal the plugin's manifest `id`. So rather than trust the event's
-    /// `name` as an identity, the host re-runs point-in-time discovery — the
-    /// same scan [`discover_and_load_all`](Self::discover_and_load_all) uses —
-    /// to learn the current highest-precedence copy of every id, then
-    /// reconciles each manifest id whose state the event could have changed
-    /// against what is currently active. The event's
+    /// The watcher's `name` is the on-disk *directory* name, which is the
+    /// plugin's identity. Rather than trust the event's `name` directly, the
+    /// host re-runs point-in-time discovery — the same scan
+    /// [`discover_and_load_all`](Self::discover_and_load_all) uses — to learn
+    /// the current highest-precedence copy of every id, then reconciles each
+    /// plugin id whose state the event could have changed against what is
+    /// currently active. The event's
     /// [`LayerChange`](swissarmyhammer_directory::LayerChange) only
     /// selects *how much* to reconcile:
     ///
-    /// - `Added`/`Modified` — reconcile every id, because a directory rename or
-    ///   a manifest id change can move identity between directories.
+    /// - `Added`/`Modified` — reconcile every id, because a directory rename
+    ///   can move identity between directories.
     /// - `Removed` — likewise reconcile every id, since a removal can re-emerge
     ///   a shadowed lower-layer copy under a different directory name.
     ///
@@ -1376,7 +1208,7 @@ impl PluginHost {
         let discovered = match discover_plugins::<C>(&self.discovery_layers()) {
             Ok(discovered) => discovered,
             Err(error) => {
-                // A broken manifest fails the scan; the host is left as it was
+                // A broken bundle fails the scan; the host is left as it was
                 // rather than guessing. The next event re-attempts the scan.
                 tracing::warn!(%error, "plugin watcher rescan failed; host left unchanged");
                 return;
@@ -1385,7 +1217,7 @@ impl PluginHost {
         self.reconcile_all(discovered).await;
     }
 
-    /// Reconciles every manifest id across the discovered set and the active
+    /// Reconciles every plugin id across the discovered set and the active
     /// set.
     ///
     /// The union of ids present on disk and ids currently active is the set
@@ -1416,7 +1248,7 @@ impl PluginHost {
         }
     }
 
-    /// Reconciles a single manifest id against its highest-precedence copy on
+    /// Reconciles a single plugin id against its highest-precedence copy on
     /// disk.
     ///
     /// This is the translation of a [`StackedEvent`] into a lifecycle action,
@@ -1446,8 +1278,8 @@ impl PluginHost {
     /// watcher re-runs full discovery on every event and reconciles every id,
     /// this method *is* reached for an id whose shadowed copy changed — the
     /// fingerprint comparison above is what makes that reconcile a no-op.
-    async fn reconcile_id(&self, manifest_id: &str, on_disk: Option<&DiscoveredPlugin>) {
-        let active = self.lock().active_plugins.get(manifest_id).cloned();
+    async fn reconcile_id(&self, id: &str, on_disk: Option<&DiscoveredPlugin>) {
+        let active = self.lock().active_plugins.get(id).cloned();
         match (active, on_disk) {
             (None, None) => {}
             (None, Some(winner)) => {
@@ -1456,7 +1288,7 @@ impl PluginHost {
             }
             (Some(active), None) => {
                 // Removed with no lower layer left: unload entirely.
-                self.unload_active(manifest_id, &active.plugin_id).await;
+                self.unload_active(id, &active.plugin_id).await;
             }
             (Some(active), Some(winner)) => {
                 if winner.source == active.layer {
@@ -1470,56 +1302,42 @@ impl PluginHost {
                     // discards its class-field state — skip it.
                     if PluginFingerprint::of(winner) == active.fingerprint {
                         tracing::debug!(
-                            plugin = %manifest_id,
+                            plugin = %id,
                             "reconcile: active copy unchanged; no reload",
                         );
                     } else {
-                        self.reload_active(manifest_id, &active, winner).await;
+                        self.reload_active(id, &active, winner).await;
                     }
                 } else {
                     // A different layer is now the winner: a higher layer
                     // appeared, or the active layer was removed and a lower
                     // one re-emerged. Tear down the old copy, load the new.
-                    self.unload_active(manifest_id, &active.plugin_id).await;
+                    self.unload_active(id, &active.plugin_id).await;
                     self.load_active_copy(winner).await;
                 }
             }
         }
     }
 
-    /// Loads the discovered `winner` as the active copy of its manifest id.
+    /// Loads the discovered `winner` as the active copy of its plugin id.
     ///
     /// Used for an `Added` reconcile and for the load half of a layer change.
     /// A successful load records the active copy and [`ReloadStatus::Healthy`];
     /// a failed load records [`ReloadStatus::Failed`] and leaves the id
     /// unloaded — there is no fallback, matching the failed-v2 contract.
     async fn load_active_copy(&self, winner: &DiscoveredPlugin) {
-        let manifest_id = winner.id.clone();
-        let provides = winner
-            .manifest
-            .as_ref()
-            .map(|manifest| manifest.provides.clone())
-            .unwrap_or_default();
+        let id = winner.id.clone();
         let fingerprint = PluginFingerprint::of(winner);
         let entry_file = winner.entry.to_string_lossy().into_owned();
-        match self
-            .load_resolved(&winner.directory, entry_file, winner.manifest.clone())
-            .await
-        {
+        match self.load_resolved(&winner.directory, entry_file).await {
             Ok(plugin_id) => {
-                self.record_active(
-                    &manifest_id,
-                    &plugin_id,
-                    winner.source.clone(),
-                    provides,
-                    fingerprint,
-                );
-                tracing::info!(plugin = %manifest_id, "plugin loaded by the watcher");
+                self.record_active(&id, &plugin_id, winner.source.clone(), fingerprint);
+                tracing::info!(plugin = %id, "plugin loaded by the watcher");
             }
             Err(error) => {
-                self.record_failure(&manifest_id, &error);
+                self.record_failure(&id, &error);
                 tracing::warn!(
-                    plugin = %manifest_id,
+                    plugin = %id,
                     %error,
                     "plugin failed to load on a watcher event; left unloaded",
                 );
@@ -1527,9 +1345,9 @@ impl PluginHost {
         }
     }
 
-    /// Reloads the active copy of `manifest_id` from the discovered `winner`.
+    /// Reloads the active copy of `id` from the discovered `winner`.
     ///
-    /// The reload mechanism is "dispose old, load new" for the same manifest
+    /// The reload mechanism is "dispose old, load new" for the same plugin
     /// id, reusing the existing [`unload`](Self::unload) and
     /// [`load_resolved`](Self::load_resolved) machinery:
     ///
@@ -1543,87 +1361,47 @@ impl PluginHost {
     /// Class-field state from the old copy is intentionally lost — a fresh
     /// isolate keeps nothing from the old one.
     ///
-    /// If `winner`'s manifest expands the `provides` set beyond what the active
-    /// copy declared, the reload first consults the [`ReloadPolicy`]; a denied
-    /// expansion leaves the plugin unloaded (the old isolate is already torn
-    /// down) and records [`ReloadStatus::ProvidesExpansionDenied`]. A failed v2
-    /// load leaves the plugin unloaded and records [`ReloadStatus::Failed`].
-    async fn reload_active(
-        &self,
-        manifest_id: &str,
-        active: &ActivePlugin,
-        winner: &DiscoveredPlugin,
-    ) {
-        // Re-approval gate: a reload may keep or narrow `provides`, but
-        // widening it is a privilege escalation the policy must approve.
-        if let Some(expansion) = provides_expansion(manifest_id, active, winner) {
-            if self.reload_policy().approve_provides_expansion(&expansion) == ProvidesDecision::Deny
-            {
-                // The old isolate is torn down regardless — the active copy is
-                // gone — and the plugin is left unloaded, as a failed v2 would
-                // leave it.
-                self.unload_active(manifest_id, &active.plugin_id).await;
-                self.lock().reload_status.insert(
-                    manifest_id.to_string(),
-                    ReloadStatus::ProvidesExpansionDenied {
-                        added: expansion.added(),
-                    },
-                );
-                tracing::warn!(
-                    plugin = %manifest_id,
-                    "reload denied: provides expansion refused by policy; plugin unloaded",
-                );
-                return;
-            }
-        }
-
+    /// A failed v2 load leaves the plugin unloaded and records
+    /// [`ReloadStatus::Failed`].
+    async fn reload_active(&self, id: &str, active: &ActivePlugin, winner: &DiscoveredPlugin) {
         // Dispose the old copy: tear the isolate down, drain the ledger.
-        self.unload_active(manifest_id, &active.plugin_id).await;
+        self.unload_active(id, &active.plugin_id).await;
         // Load the new copy fresh.
         self.load_active_copy(winner).await;
     }
 
-    /// Unloads the active copy of `manifest_id` and drops its active record.
+    /// Unloads the active copy of `id` and drops its active record.
     ///
     /// Reuses [`unload`](Self::unload) for the isolate-and-ledger teardown,
     /// then removes the [`ActivePlugin`] entry so the id is no longer
     /// considered active. An [`Error::UnknownPlugin`] from `unload` — the
     /// plugin was already gone — is logged and ignored, because the goal
     /// state (id not active) is reached either way.
-    async fn unload_active(&self, manifest_id: &str, plugin_id: &PluginId) {
+    async fn unload_active(&self, id: &str, plugin_id: &PluginId) {
         if let Err(error) = self.unload(plugin_id).await {
             tracing::debug!(
-                plugin = %manifest_id,
+                plugin = %id,
                 %error,
                 "unloading the active copy during reconcile reported an error; continuing",
             );
         }
-        self.lock().active_plugins.remove(manifest_id);
+        self.lock().active_plugins.remove(id);
     }
 
-    /// Records that a reload-path load of `manifest_id` failed.
+    /// Records that a reload-path load of `id` failed.
     ///
     /// Drops any active record for the id — a failed load leaves nothing
     /// active — and stores [`ReloadStatus::Failed`] carrying the surfaced
     /// error so a caller can see the plugin needs a manual reload.
-    fn record_failure(&self, manifest_id: &str, error: &Error) {
+    fn record_failure(&self, id: &str, error: &Error) {
         let mut state = self.lock();
-        state.active_plugins.remove(manifest_id);
+        state.active_plugins.remove(id);
         state.reload_status.insert(
-            manifest_id.to_string(),
+            id.to_string(),
             ReloadStatus::Failed {
                 error: error.to_string(),
             },
         );
-    }
-
-    /// The currently installed [`ReloadPolicy`].
-    fn reload_policy(&self) -> Arc<dyn ReloadPolicy> {
-        self.inner
-            .reload_policy
-            .lock()
-            .expect("reload policy mutex poisoned")
-            .clone()
     }
 
     /// Runs the plugin's optional `unload` lifecycle hook, ignoring failures.
@@ -2057,33 +1835,18 @@ impl PluginHost {
     /// into the live registry under `name` and a [`RegistrationHandle::Server`]
     /// is appended to the plugin's ledger.
     ///
-    /// # The `provides` contract
-    ///
-    /// When the registering plugin was loaded with a manifest, `name` must
-    /// appear in that manifest's `provides` list. A plugin registering a name
-    /// it did not declare is rejected before the server is even connected — the
-    /// manifest is the authoritative statement of what a plugin will register.
-    /// A plugin loaded from a TypeScript-only bundle with no manifest is not
-    /// checked.
-    ///
     /// # Errors
     ///
-    /// Returns [`Error::ProvidesViolation`] when `name` is absent from the
-    /// plugin's manifest `provides`, [`Error::ServerNameTaken`] when `name` is
-    /// already registered, [`Error::UnknownServer`] when a `rust` id names no
-    /// exposed module, or [`Error::ServerUnavailable`] when a `cli` or `url`
-    /// source cannot be connected or the source shape is not one of the three
-    /// kinds.
+    /// Returns [`Error::ServerNameTaken`] when `name` is already registered,
+    /// [`Error::UnknownServer`] when a `rust` id names no exposed module, or
+    /// [`Error::ServerUnavailable`] when a `cli` or `url` source cannot be
+    /// connected or the source shape is not one of the three kinds.
     async fn connect_and_register(
         &self,
         plugin_id: &PluginId,
         name: ServerName,
         source: Value,
     ) -> Result<()> {
-        // Enforce the manifest's `provides` contract before connecting: a
-        // plugin may register only the server names it declared.
-        self.check_register_allowed(plugin_id, &name)?;
-
         let server = self.connect_source(&source).await?;
 
         // Snapshot the server's tools before it is moved into the registry so
@@ -2106,35 +1869,6 @@ impl PluginHost {
         // registrations into a single write at the flush boundary.
         self.inner.types_emitter.server_registered(name, tools);
         Ok(())
-    }
-
-    /// Rejects a `register` for a name absent from the plugin's `provides`.
-    ///
-    /// Looks up the registering plugin's retained [`Manifest`]: when one is
-    /// present, `name` must be one of its `provides` entries. A plugin loaded
-    /// from a TypeScript-only bundle with no manifest has no `provides`
-    /// declaration and so passes unchecked.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::ProvidesViolation`] when the plugin has a manifest and
-    /// `name` is not listed in its `provides`.
-    fn check_register_allowed(&self, plugin_id: &PluginId, name: &str) -> Result<()> {
-        let state = self.lock();
-        let Some(manifest) = state.manifests.get(plugin_id) else {
-            // No manifest — a TypeScript-only bundle — so nothing to enforce.
-            return Ok(());
-        };
-        if manifest.provides.iter().any(|provided| provided == name) {
-            return Ok(());
-        }
-        Err(Error::ProvidesViolation {
-            plugin: manifest.id.clone(),
-            server: name.to_string(),
-            reason: "the manifest's provides list does not declare this server \
-                     name"
-                .to_string(),
-        })
     }
 
     /// Connects the [`McpServer`] a [`ServerSource`] describes.
@@ -2217,34 +1951,6 @@ fn collect_callback_ids(value: &Value, ids: &mut Vec<String>) {
             _ => {}
         }
     }
-}
-
-/// Computes the [`ProvidesExpansion`] a reload represents, or `None`.
-///
-/// A reload that keeps or narrows a plugin's declared `provides` set is not an
-/// expansion and never reaches the [`ReloadPolicy`]. This returns `Some` only
-/// when the discovered `winner`'s manifest declares at least one server name
-/// the active copy did not — the strict-superset case the policy gates. A
-/// manifest-less `winner` declares no `provides` at all, so it can never be an
-/// expansion.
-fn provides_expansion(
-    manifest_id: &str,
-    active: &ActivePlugin,
-    winner: &DiscoveredPlugin,
-) -> Option<ProvidesExpansion> {
-    let requested: &[String] = match &winner.manifest {
-        Some(manifest) => &manifest.provides,
-        None => &[],
-    };
-    let adds_new = requested.iter().any(|name| !active.provides.contains(name));
-    if !adds_new {
-        return None;
-    }
-    Some(ProvidesExpansion {
-        plugin: manifest_id.to_string(),
-        previous: active.provides.clone(),
-        requested: requested.to_vec(),
-    })
 }
 
 /// Renders a [`FileSource`] as a short label for watcher log lines.

@@ -3,8 +3,8 @@
 //!
 //! This is the capability-level companion to the failure cases in
 //! `discovery.rs` and `plugin_host.rs`. Where those drive individual rejection
-//! mechanics — an undeclared `register`, an escaping manifest entry — this
-//! single test proves the one capability the load path must guarantee for
+//! mechanics — an escaping entry path, a malformed bundle — this single test
+//! proves the one capability the load path must guarantee for
 //! *any* failure: a plugin whose `load()` throws leaves the host **exactly as
 //! it found it**. The error is surfaced to the caller, no zombie isolate is
 //! retained, and no half-built server the plugin managed to register before
@@ -107,11 +107,11 @@ impl EchoServer {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for EchoServer {}
 
-/// Writes the probe plugin bundle — a manifest-less, TypeScript-only
-/// `index.ts` entry — into `layer_root/plugins/crasher/`.
+/// Writes the probe plugin bundle — a TypeScript-only `index.ts` entry —
+/// into `layer_root/plugins/crasher/`.
 ///
-/// The bundle carries no `plugin.json`: its identity is the bundle directory
-/// name (`crasher`) and its entry module is the conventional `index.ts`. The
+/// The bundle's identity is the bundle directory name (`crasher`) and its
+/// entry module is the conventional `index.ts`. The
 /// entry imports the SDK, declares a `Plugin` subclass whose `load()` first
 /// registers the real `rmcp` server `half-built` and *then* throws, and exports
 /// a `load` lifecycle function. Registering before throwing is what makes the

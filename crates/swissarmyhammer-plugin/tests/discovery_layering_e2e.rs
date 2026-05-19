@@ -2,8 +2,8 @@
 //! capability**, driven through real plugins.
 //!
 //! This is the capability-level companion to `discovery.rs`. Where
-//! `discovery.rs` drives the mechanics of manifest parsing, `provides`
-//! validation, and layer stacking, this single test proves the one capability
+//! `discovery.rs` drives the mechanics of bundle resolution and layer
+//! stacking, this single test proves the one capability
 //! the layering machinery exists to deliver: when the *same plugin id* lives in
 //! two writable layers, the higher-precedence (project) copy is the one that
 //! runs — and when that copy is removed, the lower-precedence (user) copy
@@ -16,10 +16,10 @@
 //!
 //! # The two copies
 //!
-//! Two manifest-less bundles sharing the directory name `shared` are laid down
-//! in both the user-layer and the project-layer temp roots — a manifest-less
-//! bundle's identity is its directory name, so the shared directory name is the
-//! shared plugin id. The two copies are deliberately *different*:
+//! Two bundles sharing the directory name `shared` are laid down in both the
+//! user-layer and the project-layer temp roots — a bundle's identity is its
+//! directory name, so the shared directory name is the shared plugin id. The
+//! two copies are deliberately *different*:
 //!
 //! - the user copy registers a server named `from-user`;
 //! - the project copy registers a server named `from-project`.
@@ -120,14 +120,14 @@ async fn echo_module() -> Arc<dyn McpServer> {
     )
 }
 
-/// Writes a manifest-less, TypeScript-only probe plugin bundle — just an
-/// `index.ts` entry — into `layer_root/plugins/<dir_name>/`.
+/// Writes a TypeScript-only probe plugin bundle — just an `index.ts` entry —
+/// into `layer_root/plugins/<dir_name>/`.
 ///
-/// The bundle carries no `plugin.json`: it is a manifest-less, TS-only bundle
-/// whose identity is its bundle directory name (`dir_name`) and whose entry
-/// module is the conventional `index.ts`. The entry imports the SDK, declares a
-/// `Plugin` subclass whose `load` registers `server` against the host-exposed
-/// `rust` module `rust_module`, and exports a `load` lifecycle function. Two
+/// The bundle's identity is its bundle directory name (`dir_name`) and its
+/// entry module is the conventional `index.ts`. The entry imports the SDK,
+/// declares a `Plugin` subclass whose `load` registers `server` against the
+/// host-exposed `rust` module `rust_module`, and exports a `load` lifecycle
+/// function. Two
 /// copies sharing the same `dir_name` written into different layers — so they
 /// share an identity — with different `server` names are how the test reads
 /// which copy is active.
@@ -229,9 +229,9 @@ async fn wait_until_live(host: &PluginHost, server: &str) {
 ///
 /// This single test stitches the layering capability together:
 ///
-/// - a manifest-less bundle with the directory name `shared` — and thus the id
-///   `shared` — is laid down in both the user and project temp layers, each
-///   copy registering a distinct server name;
+/// - a bundle with the directory name `shared` — and thus the id `shared` —
+///   is laid down in both the user and project temp layers, each copy
+///   registering a distinct server name;
 /// - `discover_and_load_all` resolves the shadowed id to one active copy — the
 ///   project copy — observed by `from-project` answering a real `echo` call
 ///   while `from-user` never came live;

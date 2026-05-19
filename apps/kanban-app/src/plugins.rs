@@ -304,23 +304,17 @@ mod tests {
 
     /// Writes a genuine probe plugin bundle into `plugins_dir/<id>/`.
     ///
-    /// The bundle is a real `plugin.json` + `entry.ts`. The plugin declares an
-    /// empty `provides` and its `load()` runs real plugin code (a `log` call)
-    /// without registering a server — exactly what is needed to prove a layer
-    /// genuinely *loads* a plugin (manifest parsed, isolate created, lifecycle
-    /// run) without contending for the single-activation `kanban` Rust module,
-    /// which the builtin probe already consumes.
+    /// The bundle is a real TS-only bundle: just an `index.ts`. The plugin's
+    /// `load()` runs real plugin code (a `log` call) without registering a
+    /// server — exactly what is needed to prove a layer genuinely *loads* a
+    /// plugin (isolate created, lifecycle run) without contending for the
+    /// single-activation `kanban` Rust module, which the builtin probe
+    /// already consumes.
     ///
-    /// `id` is the manifest identity and the bundle directory name.
+    /// `id` is the bundle directory name and so the plugin's identity.
     fn write_probe_plugin(plugins_dir: &std::path::Path, id: &str) {
         let plugin_dir = plugins_dir.join(id);
         std::fs::create_dir_all(&plugin_dir).expect("probe plugin directory");
-        let manifest = format!(
-            "{{\n  \"id\": \"{id}\",\n  \"name\": \"{id}\",\n  \
-             \"version\": \"1.0.0\",\n  \"entry\": \"entry.ts\",\n  \
-             \"provides\": []\n}}\n"
-        );
-        std::fs::write(plugin_dir.join("plugin.json"), manifest).expect("probe plugin.json");
         let entry = format!(
             "import {{ Plugin, makePluginThis }} from '@swissarmyhammer/plugin';\n\
              class P extends Plugin {{\n\
@@ -334,7 +328,7 @@ mod tests {
                return null;\n\
              }}\n"
         );
-        std::fs::write(plugin_dir.join("entry.ts"), entry).expect("probe entry.ts");
+        std::fs::write(plugin_dir.join("index.ts"), entry).expect("probe index.ts");
     }
 
     /// Constructing `AppState` over temp roots loads the builtin probe plugin

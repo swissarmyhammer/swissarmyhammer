@@ -249,11 +249,11 @@ fn json_string(value: &str) -> String {
     serde_json::to_string(value).expect("a string always serializes to JSON")
 }
 
-/// Writes the probe plugin bundle — a manifest-less, TypeScript-only
-/// `index.ts` entry — into `<project_root>/plugins/probe/`.
+/// Writes the probe plugin bundle — a TypeScript-only `index.ts` entry —
+/// into `<project_root>/plugins/probe/`.
 ///
-/// The bundle carries no `plugin.json`: its identity is the bundle directory
-/// name (`probe`) and its entry module is the conventional `index.ts`.
+/// The bundle's identity is the bundle directory name (`probe`) and its entry
+/// module is the conventional `index.ts`.
 ///
 /// The entry module's `load()`:
 ///

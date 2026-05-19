@@ -5,8 +5,8 @@ depends_on:
 - 01KS042GT4J98KQ45T9SXY9R9X
 - 01KS04359YHCZV13T7F1EZN1DD
 - 01KS043W7MBVPJJPB000TTJGVM
-position_column: todo
-position_ordinal: '8680'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffff9580
 project: plugin-tsonly
 title: Remove plugin.json, Manifest, and provides entirely
 ---
@@ -26,18 +26,26 @@ Every committed bundle and every test now uses the TS-only layout (tasks 3–5).
 This task lands the breaking removal in one coherent change; tasks 3–5 guarantee nothing still depends on `plugin.json`.
 
 ## Acceptance Criteria
-- [ ] `Manifest`, `MANIFEST_FILE`, and `Manifest::resolve_entry` no longer exist.
-- [ ] Discovery accepts only `index.ts`/`index.js`; the `plugin.json` branch is gone.
-- [ ] `provides` enforcement and `Error::ProvidesViolation` are removed; a plugin can register any (non-colliding) server name.
-- [ ] `Error::Manifest` is removed; no dead error variants remain.
-- [ ] No `plugin.json` / `Manifest` / `provides`-allowlist reference remains anywhere in `swissarmyhammer-plugin` or `apps/kanban-app`.
+- [x] `Manifest`, `MANIFEST_FILE`, and `Manifest::resolve_entry` no longer exist.
+- [x] Discovery accepts only `index.ts`/`index.js`; the `plugin.json` branch is gone.
+- [x] `provides` enforcement and `Error::ProvidesViolation` are removed; a plugin can register any (non-colliding) server name.
+- [x] `Error::Manifest` is removed; no dead error variants remain. (Replaced with `Error::BundleError` for bundle entry-resolution failures.)
+- [x] No `plugin.json` / `Manifest` / `provides`-allowlist reference remains anywhere in `swissarmyhammer-plugin` or `apps/kanban-app`.
 
 ## Tests
-- [ ] `cargo nextest run -p swissarmyhammer-plugin` — full crate green.
-- [ ] `cargo nextest run -p kanban-app` — green.
-- [ ] `cargo nextest run -p swissarmyhammer-tools` — green (it dev-depends on the plugin crate).
-- [ ] `cargo clippy -p swissarmyhammer-plugin -p kanban-app --all-targets -- -D warnings` — clean (no dead-code/unused warnings from the removal).
-- [ ] `cargo build --workspace` — clean.
+- [x] `cargo nextest run -p swissarmyhammer-plugin` — full crate green (130 tests pass).
+- [x] `cargo nextest run -p kanban-app` — green (124 tests pass).
+- [x] `cargo nextest run -p swissarmyhammer-tools` — green (1233 tests pass).
+- [x] `cargo clippy -p swissarmyhammer-plugin -p kanban-app --all-targets -- -D warnings` — clean (no dead-code/unused warnings from the removal).
+- [x] `cargo build --workspace` — clean.
 
 ## Workflow
 - Use `/tdd` — removal is verified by the existing (already-migrated) suite staying green; let the compiler and clippy drive out every dead reference.
+
+## Implementation Notes
+- Deleted `crates/swissarmyhammer-plugin/src/manifest.rs` entirely.
+- `Error::Manifest` was renamed to `Error::BundleError` (kept the variant for the entry-resolution error message, but it no longer references "manifest").
+- `ReloadPolicy`, `ApproveAllReloads`, `DenyProvidesExpansion`, `ProvidesDecision`, `ProvidesExpansion`, and `ReloadStatus::ProvidesExpansionDenied` all removed from `reload.rs` and from the public API.
+- `host.rs` simplified: removed `manifests` map, `reload_policy` field, `check_provides_against_reserved`, `check_register_allowed`, and `provides_expansion()` helper. The `ActivePlugin` struct dropped its `provides` field. Reload mechanism is now unconditionally "dispose old, load new" since there is no provides-expansion gate to check.
+- `apps/kanban-app/src/plugins.rs` test helper `write_probe_plugin` rewritten to use TS-only layout (just `index.ts`).
+- Stale `plugin.json` / `manifest-less` doc-comment language cleaned from 9 test files.

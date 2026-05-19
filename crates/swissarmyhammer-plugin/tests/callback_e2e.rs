@@ -322,11 +322,10 @@ fn json_string(value: &str) -> String {
     serde_json::to_string(value).expect("a string always serializes to JSON")
 }
 
-/// Writes the probe plugin bundle — a manifest-less, **multi-file** TypeScript
-/// bundle whose entry is `index.ts` — into `bundle_dir`.
+/// Writes the probe plugin bundle — a **multi-file** TypeScript bundle whose
+/// entry is `index.ts` — into `bundle_dir`.
 ///
-/// The bundle carries no `plugin.json`: it is a manifest-less, TS-only bundle
-/// whose entry module is the conventional `index.ts`. It is genuinely
+/// The bundle's entry module is the conventional `index.ts`. It is genuinely
 /// multi-file: `index.ts` imports a sibling `./probe.ts` with a relative
 /// specifier. Loading it exercises the real
 /// [`PluginModuleLoader`](swissarmyhammer_plugin::PluginModuleLoader) — the

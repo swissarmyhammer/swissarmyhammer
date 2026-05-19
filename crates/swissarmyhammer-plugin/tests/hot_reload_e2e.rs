@@ -16,15 +16,11 @@
 //!
 //! # The two versions
 //!
-//! A single manifest-less probe plugin is written into a project-layer temp
-//! root. Its two versions are deliberately *different*:
+//! A single probe plugin is written into a project-layer temp root. Its two
+//! versions are deliberately *different*:
 //!
 //! - version 1's `load()` registers a server named `behavior-a`;
 //! - version 2's `load()` registers a server named `behavior-b`.
-//!
-//! The bundle carries no `plugin.json` and so declares no `provides`, which
-//! means the reload from v1 to v2 is always an in-place reload — a manifest-
-//! less bundle can never trip the `provides`-expansion gate.
 //!
 //! # What a passing run proves
 //!
@@ -121,11 +117,8 @@ async fn echo_module() -> Arc<dyn McpServer> {
 ///
 /// This is both the initial write and the "rewrite the source" half of the
 /// hot-reload test: writing a new `server` makes the watcher observe a genuine
-/// content change and reload. The bundle is manifest-less — it carries no
-/// `plugin.json` — so its identity is its bundle directory name (`probe`) and
-/// the reload from v1 to v2 is always an in-place reload: a manifest-less
-/// bundle declares no `provides`, so a reload can never be a `provides`
-/// expansion.
+/// content change and reload. The bundle's identity is its bundle directory
+/// name (`probe`) and the reload from v1 to v2 is always an in-place reload.
 fn write_version(plugin_dir: &Path, server: &str, rust_module: &str) {
     let entry = format!(
         "import {{ Plugin, makePluginThis }} from '@swissarmyhammer/plugin';\n\
@@ -238,9 +231,7 @@ async fn rewriting_a_running_plugins_source_hot_reloads_it_in_the_same_host() {
     let plugin_dir = project.path().join("plugins").join("probe");
     std::fs::create_dir_all(&plugin_dir).expect("probe plugin directory should be created");
 
-    // Version 1: `load()` registers `behavior-a`. The bundle is manifest-less,
-    // so the v1→v2 reload is always an in-place reload — there is no `provides`
-    // contract to expand.
+    // Version 1: `load()` registers `behavior-a`.
     write_version(&plugin_dir, "behavior-a", "mod-a");
 
     let host = PluginHost::for_tests(
