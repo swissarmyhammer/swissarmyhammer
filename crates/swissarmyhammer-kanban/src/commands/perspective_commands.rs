@@ -960,7 +960,11 @@ impl Command for SwitchPerspectiveCmd {
 /// `#tag` / `@user` predicates resolve, build the slug registry, then
 /// delegate to [`filter_task_ids`]. An empty / whitespace-only filter
 /// returns every task id (no filter).
-async fn evaluate_perspective_filter(
+///
+/// Public so the entity-cache bridge (`kanban-app`) can recompute a window's
+/// `filtered_task_ids` on a live task change using the *same* DSL evaluator
+/// `perspective.switch` uses — one pipeline, no divergence.
+pub async fn evaluate_perspective_filter(
     kanban: &KanbanContext,
     filter: &str,
 ) -> swissarmyhammer_commands::Result<Vec<String>> {
@@ -2862,5 +2866,44 @@ mod tests {
             CommandError::MissingArg(name) => assert_eq!(name, "perspective_id"),
             other => panic!("expected MissingArg(perspective_id), got: {other:?}"),
         }
+    }
+
+    // =========================================================================
+    // evaluate_perspective_filter tests
+    //
+    // The helper is `pub` so the kanban-app entity-cache bridge can recompute a
+    // window's `filtered_task_ids` on a live task change with the same DSL
+    // evaluator `perspective.switch` uses. These pin its two contracts: a
+    // non-empty filter narrows to matching ids; an empty filter is "no filter".
+    // =========================================================================
+
+    #[tokio::test]
+    async fn evaluate_perspective_filter_narrows_to_matching_tasks() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+
+        let t_bug = add_task_with_body(&kanban, "Bug", "#bug body").await;
+        let _t_feat = add_task_with_body(&kanban, "Feature", "#feature body").await;
+
+        let ids = evaluate_perspective_filter(&kanban, "#bug").await.unwrap();
+        assert_eq!(
+            ids,
+            vec![t_bug],
+            "only `#bug` tasks should match the filter"
+        );
+    }
+
+    #[tokio::test]
+    async fn evaluate_perspective_filter_empty_filter_returns_all_tasks() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+
+        let t1 = add_task_with_body(&kanban, "One", "#bug").await;
+        let t2 = add_task_with_body(&kanban, "Two", "#feature").await;
+
+        let ids = evaluate_perspective_filter(&kanban, "").await.unwrap();
+        assert_eq!(ids.len(), 2, "an empty filter must return every task id");
+        assert!(ids.contains(&t1));
+        assert!(ids.contains(&t2));
     }
 }
