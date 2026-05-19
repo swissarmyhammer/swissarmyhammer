@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { renderInAct, flushActSettle } from "@/test/act-render";
+import { renderInAct, waitForInAct } from "@/test/act-render";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 import {
@@ -42,20 +42,8 @@ import {
   MessageToolbar,
 } from "./message";
 import { Reasoning, ReasoningTrigger, ReasoningContent } from "./reasoning";
-import {
-  Tool,
-  ToolHeader,
-  ToolContent,
-  ToolInput,
-  ToolOutput,
-} from "./tool";
-import {
-  Task,
-  TaskTrigger,
-  TaskContent,
-  TaskItem,
-  TaskItemFile,
-} from "./task";
+import { Tool, ToolHeader, ToolContent, ToolInput, ToolOutput } from "./tool";
+import { Task, TaskTrigger, TaskContent, TaskItem, TaskItemFile } from "./task";
 import {
   PromptInput,
   PromptInputBody,
@@ -187,10 +175,7 @@ describe("AI Elements: Tool", () => {
         />
         <ToolContent>
           <ToolInput input={{ query: "kanban" }} />
-          <ToolOutput
-            output={{ hits: 3 }}
-            errorText={undefined}
-          />
+          <ToolOutput output={{ hits: 3 }} errorText={undefined} />
         </ToolContent>
       </Tool>,
     );
@@ -271,10 +256,12 @@ describe("AI Elements: CodeBlock", () => {
 
     // The copy button mounts synchronously.
     expect(container.querySelector("button")).not.toBeNull();
-    // Shiki highlights asynchronously — let the effect resolve before
-    // asserting the highlighted source landed in the DOM.
-    await flushActSettle(50);
-    expect(container.textContent).toContain("ok");
+    // Shiki highlights asynchronously — poll until the highlighted
+    // source actually lands in the DOM rather than racing a fixed
+    // timeout, which flakes under full-suite parallel load.
+    await waitForInAct(() => {
+      expect(container.textContent).toContain("ok");
+    });
   });
 });
 
