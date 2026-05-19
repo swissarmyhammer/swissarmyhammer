@@ -111,6 +111,99 @@ fn write_plugin_in_layer(
     std::fs::write(&entry_path, source).expect("entry file should be written");
 }
 
+/// Writes a manifest-less, TypeScript-only plugin bundle — just an `index.ts`
+/// entry, no `plugin.json` — into `layer_root/plugins/<dir_name>/`.
+///
+/// A manifest-less plugin's identity is its bundle directory name, so
+/// `dir_name` is both the on-disk directory and the plugin id. The entry
+/// imports the SDK, declares a `Plugin` subclass whose `load` runs `body`, and
+/// exports a `load` lifecycle function — the same shape a manifest bundle's
+/// entry uses, only the file is `index.ts` and there is no manifest.
+fn write_manifestless_plugin_in_layer(layer_root: &Path, dir_name: &str, body: &str) {
+    let plugin_dir = layer_root.join("plugins").join(dir_name);
+    std::fs::create_dir_all(&plugin_dir).expect("plugin directory should be created");
+
+    let source = format!(
+        "import {{ Plugin, makePluginThis }} from '@swissarmyhammer/plugin';\n\
+         class P extends Plugin {{\n\
+           async load(): Promise<void> {{\n{body}\n}}\n\
+         }}\n\
+         export async function load(): Promise<unknown> {{\n\
+           const p = makePluginThis(new P()) as P;\n\
+           await p.load();\n\
+           return null;\n\
+         }}\n"
+    );
+    std::fs::write(plugin_dir.join("index.ts"), source).expect("index.ts should be written");
+}
+
+/// A manifest-less, TypeScript-only bundle — an `index.ts` entry and no
+/// `plugin.json` — staged into the project layer is discovered by
+/// `discover_and_load_all` and loaded: its `load()` runs, observed by a real
+/// `tools/call` round-trip into the server it registered.
+///
+/// A manifest-less plugin declares no `provides`, so the host's `provides` gate
+/// is skipped for it — a `register` inside its `load()` is not checked against
+/// any manifest list. Its identity is its bundle directory name.
+#[tokio::test]
+async fn discover_and_load_all_loads_a_manifestless_index_ts_plugin() {
+    let user = tempfile::TempDir::new().expect("user root temp dir");
+    let project = tempfile::TempDir::new().expect("project root temp dir");
+    // No `plugin.json`: identity is the bundle directory name, `ts-probe`.
+    write_manifestless_plugin_in_layer(
+        project.path(),
+        "ts-probe",
+        "this.register('ts-probe-server', { rust: 'ts-probe-mod' });",
+    );
+
+    let host = PluginHost::for_tests(
+        user.path().to_path_buf(),
+        Some(project.path().to_path_buf()),
+    );
+    let probe_mod: Arc<dyn McpServer> = Arc::new(
+        InProcessServer::new(EchoServer::new())
+            .await
+            .expect("wrapping a real rmcp handler should succeed"),
+    );
+    tokio::time::timeout(TIMEOUT, host.expose_rust_module("ts-probe-mod", probe_mod))
+        .await
+        .expect("expose_rust_module should not hang")
+        .expect("exposing a rust module should succeed");
+
+    let loaded = tokio::time::timeout(
+        TIMEOUT,
+        host.discover_and_load_all::<SwissarmyhammerConfig>(),
+    )
+    .await
+    .expect("discovery should not hang")
+    .expect("discovery of a manifest-less bundle should succeed");
+    assert_eq!(
+        loaded.len(),
+        1,
+        "the manifest-less index.ts bundle must be discovered and loaded"
+    );
+
+    // The manifest-less plugin's `load()` ran its `register` with no `provides`
+    // gate; the server it provided is live and serves a real rmcp tool call.
+    let result = tokio::time::timeout(
+        TIMEOUT,
+        host.call(
+            CallerId::HostInternal,
+            "ts-probe-server",
+            "echo",
+            json!({ "message": "manifest-less" }),
+        ),
+    )
+    .await
+    .expect("the dispatch call should not hang")
+    .expect("a call into the manifest-less plugin's server should succeed");
+    assert!(
+        rendered(&result).contains("manifest-less"),
+        "the manifest-less plugin's load() must have registered a working server, got {}",
+        rendered(&result)
+    );
+}
+
 /// A probe plugin discovered in the project layer is loaded by
 /// `discover_and_load_all`, and its `load()` runs — observed by a real
 /// `tools/call` round-trip into the server it registered.

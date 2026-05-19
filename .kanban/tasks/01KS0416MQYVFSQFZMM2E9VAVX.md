@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffff9080
 project: plugin-tsonly
 title: 'Discovery: index.ts entry convention + directory-name identity'
 ---
@@ -25,17 +25,21 @@ Files:
 - Do NOT delete `Manifest`, `MANIFEST_FILE`, or `provides` — that is the final task.
 
 ## Acceptance Criteria
-- [ ] A `plugins/<dir>/` directory with only `index.ts` (no `plugin.json`) is discovered: `id` = `<dir>`, entry = the `index.ts`.
-- [ ] `index.js` is used as the entry when no `index.ts` is present.
-- [ ] Existing `plugin.json` bundles still discover and load exactly as before — no behavior change for them.
-- [ ] A directory with neither a manifest nor `index.{ts,js}` is skipped without error.
-- [ ] A manifest-less plugin loads without any `provides` check.
+- [x] A `plugins/<dir>/` directory with only `index.ts` (no `plugin.json`) is discovered: `id` = `<dir>`, entry = the `index.ts`.
+- [x] `index.js` is used as the entry when no `index.ts` is present.
+- [x] Existing `plugin.json` bundles still discover and load exactly as before — no behavior change for them.
+- [x] A directory with neither a manifest nor `index.{ts,js}` is skipped without error.
+- [x] A manifest-less plugin loads without any `provides` check.
 
 ## Tests
-- [ ] New unit tests in `discovery.rs::tests`: a manifest-less `index.ts` bundle is discovered with dir-name id; `index.js` fallback works; a manifest-less directory with no entry is skipped; a manifest-less bundle in one layer shadows/stacks correctly against another layer.
-- [ ] New integration assertion (extend `tests/discovery.rs`): a manifest-less bundle staged into a temp layer is discovered and `discover_and_load_all` loads it.
-- [ ] Run `cargo nextest run -p swissarmyhammer-plugin` — all green, including every existing `plugin.json` test.
-- [ ] `cargo clippy -p swissarmyhammer-plugin --all-targets -- -D warnings` — clean.
+- [x] New unit tests in `discovery.rs::tests`: a manifest-less `index.ts` bundle is discovered with dir-name id; `index.js` fallback works; a manifest-less directory with no entry is skipped; a manifest-less bundle in one layer shadows/stacks correctly against another layer.
+- [x] New integration assertion (extend `tests/discovery.rs`): a manifest-less bundle staged into a temp layer is discovered and `discover_and_load_all` loads it.
+- [x] Run `cargo nextest run -p swissarmyhammer-plugin` — all green, including every existing `plugin.json` test.
+- [x] `cargo clippy -p swissarmyhammer-plugin --all-targets -- -D warnings` — clean.
 
 ## Workflow
 - Use `/tdd` — write the failing manifest-less discovery tests first, then implement.
+
+## Implementation notes
+- `reload.rs` carries no reference to `DiscoveredPlugin` — it only defines `ReloadPolicy`/`ReloadStatus`. No change was needed there; the `DiscoveredPlugin` shape change is fully absorbed by `discovery.rs` and `host.rs`.
+- `host.rs::load_resolved` now takes the resolved `entry_file: String` explicitly (rather than re-deriving it from a manifest). The public `load()` resolves entry itself for the legacy by-path path; `discover_and_load_all` and `load_active_copy` pass `DiscoveredPlugin::entry`. This keeps the legacy bare-`entry.ts` `host.load()` path unchanged.

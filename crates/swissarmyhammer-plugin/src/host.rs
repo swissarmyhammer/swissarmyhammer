@@ -432,9 +432,10 @@ impl PartialEq for PluginFingerprint {
 impl PluginFingerprint {
     /// Computes the fingerprint of a discovered plugin's bundle.
     ///
-    /// Reads and hashes the bundle's `plugin.json` and its resolved entry
-    /// module; any read or entry-resolution failure yields
-    /// [`Self::Unreadable`]. The hash is a `DefaultHasher` digest — this is a
+    /// Reads and hashes the bundle's entry module and — for a manifest bundle —
+    /// its `plugin.json`; any read failure yields [`Self::Unreadable`]. A
+    /// manifest-less bundle has no `plugin.json`, so only its resolved entry
+    /// module is hashed. The hash is a `DefaultHasher` digest — this is a
     /// same-process change-detection signal, not a security boundary, so a
     /// fast non-cryptographic hash is the right tool.
     ///
@@ -444,20 +445,22 @@ impl PluginFingerprint {
     fn of(plugin: &DiscoveredPlugin) -> Self {
         use std::hash::{Hash, Hasher};
 
-        let manifest_path = plugin.directory.join(MANIFEST_FILE);
-        let Ok(manifest_bytes) = std::fs::read(&manifest_path) else {
-            return Self::Unreadable;
-        };
-        let Ok(entry_path) = plugin.manifest.resolve_entry(&plugin.directory) else {
-            return Self::Unreadable;
-        };
-        let Ok(entry_bytes) = std::fs::read(&entry_path) else {
-            return Self::Unreadable;
-        };
-
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        manifest_bytes.hash(&mut hasher);
+
+        // A manifest bundle's `plugin.json` is part of its content; a
+        // manifest-less bundle has none, so only its entry module is hashed.
+        if plugin.manifest.is_some() {
+            let Ok(manifest_bytes) = std::fs::read(plugin.directory.join(MANIFEST_FILE)) else {
+                return Self::Unreadable;
+            };
+            manifest_bytes.hash(&mut hasher);
+        }
+
+        let Ok(entry_bytes) = std::fs::read(&plugin.entry) else {
+            return Self::Unreadable;
+        };
         entry_bytes.hash(&mut hasher);
+
         Self::Hashed(hasher.finish())
     }
 }
@@ -844,44 +847,55 @@ impl PluginHost {
         } else {
             None
         };
-        self.load_resolved(&plugin_dir, manifest).await
-    }
 
-    /// Loads a plugin whose manifest — if any — has already been parsed.
-    ///
-    /// Shared by [`load`](Self::load), which parses a bundle's manifest from
-    /// disk, and [`discover_and_load_all`](Self::discover_and_load_all), which
-    /// already holds the manifest from the discovery scan. A `Some(manifest)`
-    /// has its `provides` validated against reserved host names before the
-    /// isolate is created, and its plugin-authored `entry` resolved through
-    /// [`Manifest::resolve_entry`] — both checks happen before an isolate is
-    /// spent on a plugin that cannot legally load. The manifest is retained so
-    /// the bridge can enforce `provides` during `load()`.
-    async fn load_resolved(
-        &self,
-        plugin_dir: &Path,
-        manifest: Option<Manifest>,
-    ) -> Result<PluginId> {
-        // A manifest's `provides` must not collide with a reserved host server
-        // name — reject before spending an isolate on a plugin that cannot
-        // legally register what it promised.
-        if let Some(manifest) = &manifest {
-            self.check_provides_against_reserved(manifest)?;
-        }
-
-        // The entry module is the manifest's `entry` when present, or the
-        // legacy bare `entry.ts` otherwise. A manifest `entry` is plugin-
-        // authored, so it is resolved — and sandbox-checked — through
-        // `Manifest::resolve_entry`: the validated absolute path it returns is
-        // proven contained within the bundle directory before it is handed to
-        // the runtime.
+        // The entry module is the manifest's `entry` when present, resolved —
+        // and sandbox-checked — through `Manifest::resolve_entry`; a manifest-
+        // less bundle loaded directly by path uses the legacy bare `entry.ts`.
         let entry_file = match &manifest {
             Some(manifest) => manifest
-                .resolve_entry(plugin_dir)?
+                .resolve_entry(&plugin_dir)?
                 .to_string_lossy()
                 .into_owned(),
             None => ENTRY_FILE.to_string(),
         };
+        self.load_resolved(&plugin_dir, entry_file, manifest).await
+    }
+
+    /// Loads a plugin whose entry module is already resolved and whose
+    /// manifest — if any — is already parsed.
+    ///
+    /// Shared by [`load`](Self::load), which parses a bundle's manifest and
+    /// resolves its entry from disk, and
+    /// [`discover_and_load_all`](Self::discover_and_load_all), which already
+    /// holds both from the discovery scan. A `Some(manifest)` has its
+    /// `provides` validated against reserved host names before the isolate is
+    /// created, so an isolate is not spent on a plugin that cannot legally
+    /// register what it promised; the manifest is retained so the bridge can
+    /// enforce `provides` during `load()`. A `None` manifest is a manifest-less
+    /// bundle: it carries no `provides`, so the `provides` gate is skipped.
+    ///
+    /// # Parameters
+    ///
+    /// - `plugin_dir` — the plugin's bundle directory.
+    /// - `entry_file` — the resolved, bundle-contained entry module path the
+    ///   runtime evaluates. The caller is responsible for the sandbox check:
+    ///   it is either a `Manifest::resolve_entry` result or a discovery-
+    ///   resolved `index.{ts,js}` path, both already containment-checked.
+    /// - `manifest` — the parsed manifest, or `None` for a manifest-less
+    ///   bundle.
+    async fn load_resolved(
+        &self,
+        plugin_dir: &Path,
+        entry_file: String,
+        manifest: Option<Manifest>,
+    ) -> Result<PluginId> {
+        // A manifest's `provides` must not collide with a reserved host server
+        // name — reject before spending an isolate on a plugin that cannot
+        // legally register what it promised. A manifest-less bundle has no
+        // `provides`, so this gate does not apply to it.
+        if let Some(manifest) = &manifest {
+            self.check_provides_against_reserved(manifest)?;
+        }
 
         let plugin_id = self.mint_plugin_id();
 
@@ -993,12 +1007,20 @@ impl PluginHost {
         for plugin in discovered {
             // Hold the identity and the content fingerprint the active-plugin
             // record needs before the manifest is moved into `load_resolved`.
-            let manifest_id = plugin.manifest.id.clone();
-            let provides = plugin.manifest.provides.clone();
+            // A manifest-less bundle has no `provides` — the active record
+            // tracks an empty set, so a later reload of it never trips the
+            // `provides`-expansion gate.
+            let manifest_id = plugin.id.clone();
+            let provides = plugin
+                .manifest
+                .as_ref()
+                .map(|manifest| manifest.provides.clone())
+                .unwrap_or_default();
             let source = plugin.source.clone();
             let fingerprint = PluginFingerprint::of(&plugin);
+            let entry_file = plugin.entry.to_string_lossy().into_owned();
             match self
-                .load_resolved(&plugin.directory, Some(plugin.manifest))
+                .load_resolved(&plugin.directory, entry_file, plugin.manifest)
                 .await
             {
                 Ok(plugin_id) => {
@@ -1362,10 +1384,10 @@ impl PluginHost {
     /// layer-precedence change. Each id is reconciled independently by
     /// [`reconcile_id`](Self::reconcile_id).
     async fn reconcile_all(&self, discovered: Vec<DiscoveredPlugin>) {
-        // Index the scan by manifest id so each id is reconciled once.
+        // Index the scan by plugin id so each id is reconciled once.
         let on_disk: HashMap<String, DiscoveredPlugin> = discovered
             .into_iter()
-            .map(|plugin| (plugin.manifest.id.clone(), plugin))
+            .map(|plugin| (plugin.id.clone(), plugin))
             .collect();
 
         // The active ids, snapshotted under the lock so the await below does
@@ -1462,11 +1484,16 @@ impl PluginHost {
     /// a failed load records [`ReloadStatus::Failed`] and leaves the id
     /// unloaded — there is no fallback, matching the failed-v2 contract.
     async fn load_active_copy(&self, winner: &DiscoveredPlugin) {
-        let manifest_id = winner.manifest.id.clone();
-        let provides = winner.manifest.provides.clone();
+        let manifest_id = winner.id.clone();
+        let provides = winner
+            .manifest
+            .as_ref()
+            .map(|manifest| manifest.provides.clone())
+            .unwrap_or_default();
         let fingerprint = PluginFingerprint::of(winner);
+        let entry_file = winner.entry.to_string_lossy().into_owned();
         match self
-            .load_resolved(&winner.directory, Some(winner.manifest.clone()))
+            .load_resolved(&winner.directory, entry_file, winner.manifest.clone())
             .await
         {
             Ok(plugin_id) => {
@@ -2186,24 +2213,26 @@ fn collect_callback_ids(value: &Value, ids: &mut Vec<String>) {
 /// A reload that keeps or narrows a plugin's declared `provides` set is not an
 /// expansion and never reaches the [`ReloadPolicy`]. This returns `Some` only
 /// when the discovered `winner`'s manifest declares at least one server name
-/// the active copy did not — the strict-superset case the policy gates.
+/// the active copy did not — the strict-superset case the policy gates. A
+/// manifest-less `winner` declares no `provides` at all, so it can never be an
+/// expansion.
 fn provides_expansion(
     manifest_id: &str,
     active: &ActivePlugin,
     winner: &DiscoveredPlugin,
 ) -> Option<ProvidesExpansion> {
-    let adds_new = winner
-        .manifest
-        .provides
-        .iter()
-        .any(|name| !active.provides.contains(name));
+    let requested: &[String] = match &winner.manifest {
+        Some(manifest) => &manifest.provides,
+        None => &[],
+    };
+    let adds_new = requested.iter().any(|name| !active.provides.contains(name));
     if !adds_new {
         return None;
     }
     Some(ProvidesExpansion {
         plugin: manifest_id.to_string(),
         previous: active.provides.clone(),
-        requested: winner.manifest.provides.clone(),
+        requested: requested.to_vec(),
     })
 }
 
