@@ -314,7 +314,10 @@ describe("AiPanel: conversation rendering", () => {
     });
   });
 
-  it("hides 'New conversation' on an empty panel and reveals it after a message", async () => {
+  it("never renders a 'New conversation' button in the composer", async () => {
+    // Regression guard: the in-composer reset button was removed — the only
+    // supported reset path is now the `ai.newChat` command. The button must
+    // not appear on an empty conversation NOR after a message has streamed.
     const harness = mockHarness({
       updates: [
         {
@@ -335,13 +338,12 @@ describe("AiPanel: conversation rendering", () => {
       />,
     );
 
-    // A freshly opened panel has zero messages — "New conversation" is pure
-    // clutter (there is nothing to reset), so it is not in the DOM.
+    // Empty panel: no reset button.
     expect(
       screen.queryByRole("button", { name: /new conversation/i }),
     ).toBeNull();
 
-    // Send a prompt so the conversation is non-empty.
+    // Send a prompt so the conversation becomes non-empty.
     const textarea = screen.getByRole("textbox");
     await act(async () => {
       await userEvent.type(textarea, "first prompt");
@@ -353,56 +355,10 @@ describe("AiPanel: conversation rendering", () => {
       expect(document.body.textContent).toContain("a streamed reply");
     });
 
-    // With at least one message, the reset affordance appears.
-    await waitFor(() => {
-      expect(
-        screen.getByRole("button", { name: /new conversation/i }),
-      ).toBeInTheDocument();
-    });
-  });
-
-  it("'New conversation' clears the message log", async () => {
-    const harness = mockHarness({
-      updates: [
-        {
-          sessionUpdate: "agent_message_chunk",
-          content: textBlock("first reply"),
-        },
-      ],
-    });
-
-    await renderInAct(
-      <AiPanel
-        boardDir="/tmp/board"
-        models={MODELS}
-        modelId="claude-code"
-        onSelectModel={() => {}}
-        onCollapse={() => {}}
-        createConnect={harness.createConnect}
-      />,
-    );
-
-    const textarea = screen.getByRole("textbox");
-    await act(async () => {
-      await userEvent.type(textarea, "hello there");
-    });
-    await act(async () => {
-      await userEvent.click(screen.getByRole("button", { name: /submit/i }));
-    });
-    await waitFor(() => {
-      expect(document.body.textContent).toContain("first reply");
-    });
-
-    await act(async () => {
-      await userEvent.click(
-        screen.getByRole("button", { name: /new conversation/i }),
-      );
-    });
-
-    await waitFor(() => {
-      expect(document.body.textContent).not.toContain("first reply");
-    });
-    expect(document.body.textContent).not.toContain("hello there");
+    // Non-empty panel: still no reset button.
+    expect(
+      screen.queryByRole("button", { name: /new conversation/i }),
+    ).toBeNull();
   });
 });
 

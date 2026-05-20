@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '9980'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffff8980
 project: ai-panel
 title: 'AI panel: remove the "+ New conversation" button from the composer'
 ---
@@ -25,16 +25,23 @@ Files and locations:
   - Delete the test `"'New conversation' clears the message log"` (~line 364) — the reset behavior is still exercised through the `ai.newChat` command path elsewhere; if no existing test covers that path, add a replacement test that drives `ai.newChat` through the command registry and asserts the message log clears.
 
 ## Acceptance Criteria
-- [ ] The "+ New conversation" button no longer renders in the AI panel composer under any conversation state (empty or non-empty).
-- [ ] The `ai.newChat` command still resets the conversation (the registry handler is unchanged).
-- [ ] `ComposerArea` no longer accepts `hasMessages` or `onNewConversation` props; no caller passes them.
-- [ ] No dead imports remain in `ai-panel.tsx` (e.g. `PlusIcon` if its only use was this button — verify and remove if so).
+- [x] The "+ New conversation" button no longer renders in the AI panel composer under any conversation state (empty or non-empty).
+- [x] The `ai.newChat` command still resets the conversation (the registry handler is unchanged).
+- [x] `ComposerArea` no longer accepts `hasMessages` or `onNewConversation` props; no caller passes them.
+- [x] No dead imports remain in `ai-panel.tsx` (e.g. `PlusIcon` if its only use was this button — verify and remove if so).
 
 ## Tests
-- [ ] In `apps/kanban-app/ui/src/components/ai-panel.test.tsx`, remove the two button-specific tests listed above; if no other test covers the `ai.newChat`-driven reset path, add one that invokes the registered `ai.newChat` handler and asserts the message log is cleared.
-- [ ] Add or update a test asserting that after sending a message the composer does NOT contain a button with accessible name `/new conversation/i` (regression guard).
-- [ ] Run `cd apps/kanban-app/ui && npx vitest run src/components/ai-panel.test.tsx` — all green.
-- [ ] Run `cd apps/kanban-app/ui && npx tsc --noEmit` — clean (catches dead-prop / dead-import fallout).
+- [x] In `apps/kanban-app/ui/src/components/ai-panel.test.tsx`, remove the two button-specific tests listed above; if no other test covers the `ai.newChat`-driven reset path, add one that invokes the registered `ai.newChat` handler and asserts the message log is cleared.
+- [x] Add or update a test asserting that after sending a message the composer does NOT contain a button with accessible name `/new conversation/i` (regression guard).
+- [x] Run `cd apps/kanban-app/ui && npx vitest run src/components/ai-panel.test.tsx` — all green.
+- [x] Run `cd apps/kanban-app/ui && npx tsc --noEmit` — clean (catches dead-prop / dead-import fallout).
 
 ## Workflow
 - Use `/tdd` — write the failing "button is never present" regression test first, then delete the button and props.
+
+## Implementation Notes
+
+- TDD followed: added the regression-guard test first and confirmed it failed because the button was rendering; then removed the button and the test went green.
+- The existing test `"the ai.newChat handler clears the conversation/session"` in the `AiPanel: ai.* command integration` describe block already exercises the `ai.newChat`-driven reset path via `triggerAiNewChat()`, so no additional test was needed for that flow — the two old button-specific tests were replaced with a single combined regression-guard test that asserts the button is absent both before and after sending a message.
+- Removed `PlusIcon` from the `lucide-react` import (only the deleted button used it). `Button` is still used elsewhere in the file and kept.
+- Test results: `vitest run src/components/ai-panel.test.tsx` — 11 passed, 0 failed. `tsc --noEmit` — clean.

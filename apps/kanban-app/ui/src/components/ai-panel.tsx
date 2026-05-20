@@ -50,7 +50,6 @@ import {
   CircleIcon,
   CopyIcon,
   PanelRightCloseIcon,
-  PlusIcon,
   RotateCcwIcon,
   SparklesIcon,
 } from "lucide-react";
@@ -339,14 +338,12 @@ function NoModelState({
       />
       <ComposerArea
         disabled
-        hasMessages={false}
         placeholder="Select a model to start..."
         streaming={false}
         models={models}
         selectedModel={selectedModel}
         onSelectModel={onSelectModel}
         onCancel={() => {}}
-        onNewConversation={() => {}}
         onSend={() => {}}
       />
     </div>
@@ -508,14 +505,12 @@ function AiPanelConversation({
       </AiPanelFocusScope>
       <ComposerArea
         disabled={!modelReady}
-        hasMessages={messages.length > 0}
         placeholder="Ask the AI agent..."
         streaming={status === "streaming"}
         models={models}
         selectedModel={selectedModel}
         onSelectModel={onSelectModel}
         onCancel={handleCancel}
-        onNewConversation={newConversation}
         onSend={handleSend}
       />
     </div>
@@ -867,12 +862,6 @@ function PermissionPrompt({
 /** Props for {@link ComposerArea}. */
 interface ComposerAreaProps {
   disabled: boolean;
-  /**
-   * Whether the conversation has at least one message. The "New conversation"
-   * reset button is rendered only when this is true — on an empty conversation
-   * there is nothing to reset, so the button would be misleading clutter.
-   */
-  hasMessages: boolean;
   placeholder: string;
   /** Whether a prompt turn is currently streaming. */
   streaming: boolean;
@@ -885,12 +874,10 @@ interface ComposerAreaProps {
   /** Submit the composed prompt — called with the trimmed buffer text. */
   onSend: (text: string) => void;
   onCancel: () => void;
-  onNewConversation: () => void;
 }
 
 /**
- * The composer section: an optional "new conversation" action above the CM6
- * prompt composer.
+ * The composer section wrapping the CM6 prompt composer.
  *
  * The prompt composer is {@link AiPromptComposer} — a CodeMirror 6 instance on
  * the app's shared `TextEditor` primitive, so the active keymap (vim / emacs /
@@ -904,14 +891,12 @@ interface ComposerAreaProps {
  * `border-t` here would read as a doubled edge. The section is `flex` /
  * `min-h-0` so the composer flexes to fill the panel's available height.
  *
- * The "New conversation" button only *resets* an existing conversation, so it
- * renders only when `hasMessages` is true — an empty conversation has nothing
- * to reset, and the agent session is created lazily on the first prompt. When
- * shown, clicking it tears the session down and starts fresh.
+ * Resetting the conversation is the responsibility of the `ai.newChat`
+ * command (keyboard shortcut / command palette) — there is intentionally no
+ * in-composer reset button.
  */
 function ComposerArea({
   disabled,
-  hasMessages,
   placeholder,
   streaming,
   models,
@@ -919,23 +904,9 @@ function ComposerArea({
   onSelectModel,
   onSend,
   onCancel,
-  onNewConversation,
 }: ComposerAreaProps): ReactNode {
   return (
     <div className="flex shrink-0 flex-col p-2">
-      {hasMessages && (
-        <div className="mb-1 flex justify-end">
-          <Button
-            disabled={disabled}
-            onClick={onNewConversation}
-            size="sm"
-            variant="ghost"
-          >
-            <PlusIcon className="size-4" />
-            New conversation
-          </Button>
-        </div>
-      )}
       {/* This layout `<div>` carries NO focus scope — it is a plain
           flex container. The composer's CM6 prompt and its footer model
           picker are two INDEPENDENT controls, each its own spatial-nav
