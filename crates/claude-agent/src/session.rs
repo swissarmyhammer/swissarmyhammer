@@ -797,6 +797,39 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    /// Build a `SessionManager` whose storage path lives inside a fresh
+    /// `TempDir` (leaked so the directory survives the manager).
+    ///
+    /// `SessionManager::new()` defaults to `current_dir().join(".swissarmyhammer/sessions")`,
+    /// which (a) writes session files into the real source tree when tests run
+    /// inside the repo and (b) is shared across parallel tests — counts and
+    /// listings then depend on what other tests happen to be running. Tests
+    /// that assert on storage state must use an isolated directory.
+    fn create_test_session_manager() -> SessionManager {
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir for session storage");
+        let storage_path = temp_dir.path().to_path_buf();
+        // Keep the directory alive for the test by leaking the TempDir. The OS
+        // cleans up `/tmp` and `/var/folders/...` between reboots.
+        std::mem::forget(temp_dir);
+        SessionManager::new().with_storage_path(Some(storage_path))
+    }
+
+    /// Build a `TerminalManager` with terminal capability already advertised.
+    ///
+    /// Mirrors `create_test_terminal_manager` in `terminal_manager::tests` and
+    /// `tools::tests`; needed wherever a test exercises a code path that calls
+    /// `validate_terminal_capability` before reaching its actual assertions.
+    async fn create_test_terminal_manager_with_caps() -> crate::terminal_manager::TerminalManager {
+        let manager = crate::terminal_manager::TerminalManager::new();
+        let test_capabilities = agent_client_protocol::schema::ClientCapabilities::new()
+            .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(true);
+        manager.set_client_capabilities(test_capabilities).await;
+        manager
+    }
+
     // SessionId tests
     #[test]
     fn test_session_id_new() {
@@ -1050,10 +1083,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_session_with_cleanup() {
-        use crate::terminal_manager::{TerminalCreateParams, TerminalManager};
+        use crate::terminal_manager::TerminalCreateParams;
 
-        let manager = SessionManager::new();
-        let terminal_manager = TerminalManager::new();
+        let manager = create_test_session_manager();
+        let terminal_manager = create_test_terminal_manager_with_caps().await;
         let cwd = std::env::current_dir().unwrap();
         let session_id = manager.create_session(cwd, None).unwrap();
         let session_id_str = session_id.to_string();
@@ -1099,10 +1132,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_session_with_cleanup_multiple_terminals() {
-        use crate::terminal_manager::{TerminalCreateParams, TerminalManager};
+        use crate::terminal_manager::TerminalCreateParams;
 
-        let manager = SessionManager::new();
-        let terminal_manager = TerminalManager::new();
+        let manager = create_test_session_manager();
+        let terminal_manager = create_test_terminal_manager_with_caps().await;
         let cwd = std::env::current_dir().unwrap();
         let session_id = manager.create_session(cwd, None).unwrap();
         let session_id_str = session_id.to_string();
@@ -1182,7 +1215,11 @@ mod tests {
 
     #[test]
     fn test_list_sessions() {
-        let manager = SessionManager::new();
+        // Use an isolated storage directory so `list_sessions()` doesn't pick
+        // up stale `.json` files written by other tests (or worse, by a real
+        // run in this checkout) sharing the default `.swissarmyhammer/sessions`
+        // path.
+        let manager = create_test_session_manager();
         let cwd = std::env::current_dir().unwrap();
 
         // Initially empty

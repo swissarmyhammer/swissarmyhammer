@@ -1286,8 +1286,41 @@ impl TerminalSession {
 mod tests {
     use super::*;
 
+    /// Build a `SessionManager` that stores sessions inside a fresh `TempDir`.
+    ///
+    /// Using `SessionManager::new()` would pin storage to
+    /// `current_dir().join(".swissarmyhammer/sessions")`, which (a) pollutes the
+    /// real source tree when tests run inside the repo and (b) is shared across
+    /// parallel test threads, racing on disk state. The `TempDir` is kept alive
+    /// for the manager's lifetime by leaking — tests are short-lived and the OS
+    /// reclaims the directory on process exit.
     async fn create_test_session_manager() -> crate::session::SessionManager {
-        crate::session::SessionManager::new()
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir for session storage");
+        let storage_path = temp_dir.path().to_path_buf();
+        // Leak the TempDir to keep the directory alive for the duration of the
+        // test without forcing callers to thread it through every helper. The
+        // OS cleans up `/tmp` (and macOS's `/var/folders/...`) on reboot.
+        std::mem::forget(temp_dir);
+        crate::session::SessionManager::new().with_storage_path(Some(storage_path))
+    }
+
+    /// Build a `TerminalManager` with client capabilities already set for tests.
+    ///
+    /// `create_terminal_with_command` (and similar entry points) first call
+    /// `validate_terminal_capability`, which rejects the request unless the
+    /// client has advertised `terminal = true` via `set_client_capabilities`.
+    /// Test fixtures that construct a bare `TerminalManager::new()` therefore
+    /// fail on the capability gate before reaching their actual assertions.
+    /// This helper mirrors `create_test_terminal_manager` in `tools.rs`.
+    async fn create_test_terminal_manager() -> TerminalManager {
+        let manager = TerminalManager::new();
+        let test_capabilities = agent_client_protocol::schema::ClientCapabilities::new()
+            .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(true);
+        manager.set_client_capabilities(test_capabilities).await;
+        manager
     }
 
     async fn create_terminal_for_testing(
@@ -1319,7 +1352,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_terminal_success() {
-        let manager = TerminalManager::new();
+        let manager = create_test_terminal_manager().await;
         let session_manager = create_test_session_manager().await;
 
         let (session_id, terminal_id) = create_terminal_for_testing(&manager, &session_manager)
@@ -1333,7 +1366,16 @@ mod tests {
             .unwrap();
 
         let session = terminals.get(&terminal_id).unwrap();
-        assert_eq!(session.get_state().await, TerminalState::Created);
+        // The terminal starts in `Running` (set on construction) and may have
+        // already transitioned to `Finished` because the spawned `echo` is a
+        // very short-lived process. Either state is acceptable for "success" —
+        // what we care about is that the terminal is not released.
+        let state = session.get_state().await;
+        assert!(
+            matches!(state, TerminalState::Running | TerminalState::Finished),
+            "unexpected state for freshly-created terminal: {:?}",
+            state
+        );
 
         // Clean up
         drop(terminals);
@@ -1346,11 +1388,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_terminal_invalid_session() {
-        let manager = TerminalManager::new();
+        let manager = create_test_terminal_manager().await;
         let session_manager = create_test_session_manager().await;
 
+        // Use a syntactically valid (26-char) ULID that doesn't correspond to
+        // any session. The previous fixture passed a 25-char string which
+        // tripped the ULID parser and produced "Invalid session ID format"
+        // instead of the "Session not found" path this test wants to cover.
         let result = manager
-            .get_terminal(&session_manager, "01K6DB0000000000000000000", "term_test")
+            .get_terminal(&session_manager, "01ARZ3NDEKTSV4RRFFQ69G5FAV", "term_test")
             .await;
 
         assert!(result.is_err());
@@ -1362,7 +1408,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_terminal_not_found() {
-        let manager = TerminalManager::new();
+        let manager = create_test_terminal_manager().await;
         let session_manager = create_test_session_manager().await;
 
         let cwd = std::env::current_dir()
@@ -1388,7 +1434,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_terminal_released() {
-        let manager = TerminalManager::new();
+        let manager = create_test_terminal_manager().await;
         let session_manager = create_test_session_manager().await;
 
         let (session_id, terminal_id) = create_terminal_for_testing(&manager, &session_manager)
@@ -1405,7 +1451,11 @@ mod tests {
             .await
             .unwrap();
 
-        // Try to get the released terminal for operations (should fail)
+        // Try to get the released terminal for operations (should fail).
+        // Per ACP spec, `release_terminal` removes the terminal from the
+        // registry, so a subsequent lookup yields "Terminal not found", not
+        // "Terminal has been released" — the released-state error only fires
+        // for callers that still hold a reference to the session object.
         let result = manager
             .get_terminal(&session_manager, &session_id, &terminal_id)
             .await;
@@ -1414,12 +1464,12 @@ mod tests {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("Terminal has been released"));
+            .contains("Terminal not found"));
     }
 
     #[tokio::test]
     async fn test_terminal_state_lifecycle() {
-        let manager = TerminalManager::new();
+        let manager = create_test_terminal_manager().await;
         let session_manager = create_test_session_manager().await;
 
         let (session_id, terminal_id) = create_terminal_for_testing(&manager, &session_manager)
@@ -1431,7 +1481,15 @@ mod tests {
             let session = terminals.get(&terminal_id).unwrap();
             let state = session.get_state().await;
 
-            assert_eq!(state, TerminalState::Created);
+            // A terminal created by `create_terminal_with_command` is born in
+            // `Running` and may have already transitioned to `Finished` for a
+            // short-lived process like `echo`. The lifecycle invariant being
+            // tested here is that the terminal exists and is not released.
+            assert!(
+                matches!(state, TerminalState::Running | TerminalState::Finished),
+                "unexpected lifecycle state: {:?}",
+                state
+            );
             assert!(!session.is_released().await);
         }
 
@@ -1445,7 +1503,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_release_terminal_not_found() {
-        let manager = TerminalManager::new();
+        let manager = create_test_terminal_manager().await;
         let session_manager = create_test_session_manager().await;
 
         let cwd = std::env::current_dir()
@@ -1469,7 +1527,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_release_terminal_invalid_session() {
-        let manager = TerminalManager::new();
+        let manager = create_test_terminal_manager().await;
         let session_manager = create_test_session_manager().await;
 
         let params = TerminalReleaseParams {
@@ -1519,7 +1577,7 @@ mod tests {
     #[tokio::test]
     #[cfg(unix)]
     async fn test_signal_handling_graceful_termination() {
-        let manager = TerminalManager::new();
+        let manager = create_test_terminal_manager().await;
         let session_manager = create_test_session_manager().await;
 
         let cwd = std::env::current_dir()
@@ -1583,7 +1641,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_wait_for_exit_already_finished() {
-        let manager = TerminalManager::new();
+        let manager = create_test_terminal_manager().await;
         let session_manager = create_test_session_manager().await;
 
         let (session_id, terminal_id) = create_terminal_for_testing(&manager, &session_manager)
@@ -1617,7 +1675,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_kill_already_finished_process() {
-        let manager = TerminalManager::new();
+        let manager = create_test_terminal_manager().await;
         let session_manager = create_test_session_manager().await;
 
         let (session_id, terminal_id) = create_terminal_for_testing(&manager, &session_manager)
@@ -1654,7 +1712,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_wait_for_exit_with_running_process() {
-        let manager = TerminalManager::new();
+        let manager = create_test_terminal_manager().await;
         let session_manager = create_test_session_manager().await;
 
         let cwd = std::env::current_dir()
@@ -1715,7 +1773,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_wait_for_exit_calls() {
-        let manager = Arc::new(TerminalManager::new());
+        let manager = Arc::new(create_test_terminal_manager().await);
         let session_manager = Arc::new(create_test_session_manager().await);
 
         let cwd = std::env::current_dir()
@@ -1795,7 +1853,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_kill_then_wait_for_exit() {
-        let manager = TerminalManager::new();
+        let manager = create_test_terminal_manager().await;
         let session_manager = create_test_session_manager().await;
 
         let cwd = std::env::current_dir()
@@ -2164,7 +2222,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cleanup_session_terminals() {
-        let manager = TerminalManager::new();
+        let manager = create_test_terminal_manager().await;
         let session_manager = create_test_session_manager().await;
 
         let cwd = std::env::current_dir()
@@ -2218,7 +2276,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cleanup_session_terminals_mixed_sessions() {
-        let manager = TerminalManager::new();
+        let manager = create_test_terminal_manager().await;
         let session_manager = create_test_session_manager().await;
 
         let cwd = std::env::current_dir()
@@ -2302,7 +2360,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cleanup_session_terminals_no_terminals() {
-        let manager = TerminalManager::new();
+        let manager = create_test_terminal_manager().await;
 
         // Clean up terminals for a session that has none
         let cleanup_count = manager
@@ -2314,7 +2372,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cleanup_session_terminals_with_running_processes() {
-        let manager = TerminalManager::new();
+        let manager = create_test_terminal_manager().await;
         let session_manager = create_test_session_manager().await;
 
         let cwd = std::env::current_dir()
@@ -2374,7 +2432,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_terminal_creates() {
-        let manager = Arc::new(TerminalManager::new());
+        let manager = Arc::new(create_test_terminal_manager().await);
         let session_manager = Arc::new(create_test_session_manager().await);
 
         let cwd = std::env::current_dir()
@@ -2429,7 +2487,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_get_output() {
-        let manager = Arc::new(TerminalManager::new());
+        let manager = Arc::new(create_test_terminal_manager().await);
         let session_manager = Arc::new(create_test_session_manager().await);
 
         let (session_id, terminal_id) = create_terminal_for_testing(&manager, &session_manager)
@@ -2473,7 +2531,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_output_additions() {
-        let manager = TerminalManager::new();
+        let manager = create_test_terminal_manager().await;
         let session_manager = create_test_session_manager().await;
 
         let (_session_id, terminal_id) = create_terminal_for_testing(&manager, &session_manager)
@@ -2517,7 +2575,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_release_and_query() {
-        let manager = Arc::new(TerminalManager::new());
+        let manager = Arc::new(create_test_terminal_manager().await);
         let session_manager = Arc::new(create_test_session_manager().await);
 
         let (session_id, terminal_id) = create_terminal_for_testing(&manager, &session_manager)
@@ -2588,7 +2646,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_kills_on_same_terminal() {
-        let manager = Arc::new(TerminalManager::new());
+        let manager = Arc::new(create_test_terminal_manager().await);
         let session_manager = Arc::new(create_test_session_manager().await);
 
         let cwd = std::env::current_dir()
@@ -2668,7 +2726,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_operations_on_different_terminals() {
-        let manager = Arc::new(TerminalManager::new());
+        let manager = Arc::new(create_test_terminal_manager().await);
         let session_manager = Arc::new(create_test_session_manager().await);
 
         let cwd = std::env::current_dir()
@@ -2771,17 +2829,23 @@ mod tests {
             assert!(result.is_ok());
         }
 
-        // Verify all terminals are released
+        // Verify all terminals are released. Per ACP spec, `release_terminal`
+        // removes the terminal from the registry entirely (it does not leave a
+        // tombstone), so the post-release invariant is that `terminals.get`
+        // returns `None`.
         let terminals = manager.terminals.read().await;
         for terminal_id in terminal_ids.iter() {
-            let session = terminals.get(terminal_id).unwrap();
-            assert!(session.is_released().await);
+            assert!(
+                terminals.get(terminal_id).is_none(),
+                "expected terminal {} to have been removed after release",
+                terminal_id
+            );
         }
     }
 
     #[tokio::test]
     async fn test_concurrent_cleanup_and_query() {
-        let manager = Arc::new(TerminalManager::new());
+        let manager = Arc::new(create_test_terminal_manager().await);
         let session_manager = Arc::new(create_test_session_manager().await);
 
         let cwd = std::env::current_dir()

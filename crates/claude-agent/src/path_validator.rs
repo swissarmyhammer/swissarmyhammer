@@ -771,7 +771,12 @@ mod tests {
     #[test]
     fn test_blocked_paths() {
         let temp_dir = TempDir::new().unwrap();
-        let blocked_dir = temp_dir.path().join("blocked");
+        // Canonicalize the temp-dir root before deriving paths — on macOS
+        // `/var/folders/...` is a symlink to `/private/var/folders/...`, and the
+        // validator canonicalizes the input it validates. The blocked-path list
+        // must use canonical paths or `path.starts_with(blocked)` won't match.
+        let root = temp_dir.path().canonicalize().unwrap();
+        let blocked_dir = root.join("blocked");
         let test_file = blocked_dir.join("test.txt");
         std::fs::create_dir(&blocked_dir).unwrap();
         std::fs::write(&test_file, "test").unwrap();
@@ -791,14 +796,13 @@ mod tests {
     #[test]
     fn test_blocked_takes_precedence_over_allowed() {
         let temp_dir = TempDir::new().unwrap();
-        let test_file = temp_dir.path().join("test.txt");
+        let root = temp_dir.path().canonicalize().unwrap();
+        let test_file = root.join("test.txt");
         std::fs::write(&test_file, "test").unwrap();
 
         // Both in allowed and blocked - blocked should win
-        let validator = PathValidator::with_allowed_and_blocked(
-            vec![temp_dir.path().to_path_buf()],
-            vec![temp_dir.path().to_path_buf()],
-        );
+        let validator =
+            PathValidator::with_allowed_and_blocked(vec![root.clone()], vec![root.clone()]);
         let result = validator.validate_absolute_path(&test_file.to_string_lossy());
 
         match result {
@@ -813,13 +817,14 @@ mod tests {
     #[test]
     fn test_subdirectory_of_blocked() {
         let temp_dir = TempDir::new().unwrap();
-        let subdir = temp_dir.path().join("subdir");
+        let root = temp_dir.path().canonicalize().unwrap();
+        let subdir = root.join("subdir");
         let test_file = subdir.join("test.txt");
         std::fs::create_dir(&subdir).unwrap();
         std::fs::write(&test_file, "test").unwrap();
 
         // Block parent directory, should block subdirectory
-        let validator = PathValidator::with_blocked_paths(vec![temp_dir.path().to_path_buf()]);
+        let validator = PathValidator::with_blocked_paths(vec![root.clone()]);
         let result = validator.validate_absolute_path(&test_file.to_string_lossy());
 
         match result {
@@ -834,18 +839,17 @@ mod tests {
     #[test]
     fn test_allowed_with_blocked_subdirectory() {
         let temp_dir = TempDir::new().unwrap();
-        let allowed_file = temp_dir.path().join("allowed.txt");
-        let blocked_dir = temp_dir.path().join("blocked");
+        let root = temp_dir.path().canonicalize().unwrap();
+        let allowed_file = root.join("allowed.txt");
+        let blocked_dir = root.join("blocked");
         let blocked_file = blocked_dir.join("blocked.txt");
 
         std::fs::write(&allowed_file, "allowed").unwrap();
         std::fs::create_dir(&blocked_dir).unwrap();
         std::fs::write(&blocked_file, "blocked").unwrap();
 
-        let validator = PathValidator::with_allowed_and_blocked(
-            vec![temp_dir.path().to_path_buf()],
-            vec![blocked_dir.clone()],
-        );
+        let validator =
+            PathValidator::with_allowed_and_blocked(vec![root.clone()], vec![blocked_dir.clone()]);
 
         // Allowed file should pass
         let result = validator.validate_absolute_path(&allowed_file.to_string_lossy());

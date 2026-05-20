@@ -283,8 +283,9 @@ mod tests {
             title: &str,
             size_bytes: u64,
         ) -> ContentBlock {
+            // ResourceLink::new takes (name, uri).
             ContentBlock::ResourceLink(
-                ResourceLink::new(uri, name)
+                ResourceLink::new(name, uri)
                     .description(description)
                     .mime_type(mime_type)
                     .title(title)

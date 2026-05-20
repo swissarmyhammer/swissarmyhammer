@@ -653,10 +653,10 @@ mod tests {
         };
 
         let protocol_error = error.to_protocol_error();
-        assert_eq!(
-            protocol_error.code,
-            agent_client_protocol::ErrorCode::Other(-32602)
-        );
+        // The schema crate maps -32602 to the typed InvalidParams variant
+        // (not Other(-32602)) — verify via the i32 conversion which is what
+        // wire-level consumers actually see.
+        assert_eq!(i32::from(protocol_error.code), -32602);
         assert!(protocol_error.message.contains("Invalid session ID format"));
         assert!(protocol_error.data.is_some());
     }

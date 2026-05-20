@@ -78,31 +78,52 @@ pub fn validate_working_directory(path: &Path) -> SessionSetupResult<()> {
 }
 
 /// Validate directory permissions for session operations
+///
+/// Verifies the directory is readable and traversable without mutating any
+/// process-global state. The previous implementation called
+/// `std::env::set_current_dir()` and then tried to restore the original cwd,
+/// but the restore was a no-op (it queried `current_dir()` *after* the change,
+/// getting back the path we just changed to) — concurrent tests would race on
+/// the process-global cwd, breaking unrelated tests that rely on the default
+/// session storage path derived from `current_dir()`.
 fn validate_directory_permissions(path: &Path) -> SessionSetupResult<()> {
-    // Try to read the directory
-    match fs::read_dir(path) {
-        Ok(_) => {
-            // Directory is readable, now check if we can access it (execute permission)
-            // On Unix systems, execute permission on a directory means we can traverse it
-            match std::env::set_current_dir(path) {
-                Ok(_) => {
-                    // Restore the original directory
-                    if let Ok(original_dir) = std::env::current_dir() {
-                        let _ = std::env::set_current_dir(&original_dir);
-                    }
-                    Ok(())
-                }
-                Err(_) => Err(SessionSetupError::WorkingDirectoryPermissionDenied {
-                    path: path.to_path_buf(),
-                    required_permissions: vec!["read".to_string(), "execute".to_string()],
-                }),
-            }
-        }
-        Err(_) => Err(SessionSetupError::WorkingDirectoryPermissionDenied {
+    // Read permission: try to enumerate the directory.
+    if fs::read_dir(path).is_err() {
+        return Err(SessionSetupError::WorkingDirectoryPermissionDenied {
             path: path.to_path_buf(),
             required_permissions: vec!["read".to_string(), "execute".to_string()],
-        }),
+        });
     }
+
+    // Execute permission on Unix means we can traverse into the directory.
+    // Use `libc::access(path, X_OK)` which checks permissions without
+    // mutating the process cwd. On other platforms read_dir succeeding is
+    // a sufficient proxy.
+    #[cfg(unix)]
+    {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let c_path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+            SessionSetupError::WorkingDirectoryPermissionDenied {
+                path: path.to_path_buf(),
+                required_permissions: vec!["read".to_string(), "execute".to_string()],
+            }
+        })?;
+
+        // SAFETY: `c_path` is a valid NUL-terminated C string for the lifetime
+        // of this call. `access(2)` reads it and returns an int; no
+        // allocation, no mutation of our state.
+        let result = unsafe { libc::access(c_path.as_ptr(), libc::X_OK) };
+        if result != 0 {
+            return Err(SessionSetupError::WorkingDirectoryPermissionDenied {
+                path: path.to_path_buf(),
+                required_permissions: vec!["read".to_string(), "execute".to_string()],
+            });
+        }
+    }
+
+    Ok(())
 }
 
 /// Find invalid characters in a path string

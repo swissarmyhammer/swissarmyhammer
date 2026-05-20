@@ -1439,9 +1439,10 @@ mod tests {
         let translator = create_test_translator();
         let content = vec![
             ContentBlock::Text(TextContent::new("Here's a document:")),
+            // ResourceLink::new(name, uri) — name first, uri second.
             ContentBlock::ResourceLink(ResourceLink::new(
-                "https://example.com/document.pdf",
                 "Example Document",
+                "https://example.com/document.pdf",
             )),
         ];
 

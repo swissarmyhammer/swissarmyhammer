@@ -811,17 +811,17 @@ mod tests {
 
     #[test]
     fn test_validate_client_capabilities_with_invalid_meta_type() {
-        use agent_client_protocol::schema::{ClientCapabilities, FileSystemCapabilities};
-
+        // The schema crate now types `meta` as `Option<Map<String, Value>>`, so a
+        // non-object meta cannot reach `validate_client_capabilities` — the type
+        // system rejects it before we get there. Exercise the underlying
+        // `validate_capability_format` directly to confirm the object check still
+        // works.
         let validator = CapabilityValidator::new();
-        let capabilities = ClientCapabilities::new()
-            .fs(FileSystemCapabilities::new()
-                .read_text_file(true)
-                .write_text_file(true))
-            .terminal(true)
-            .meta(serde_json::json!("not_an_object").as_object().cloned());
-
-        let result = validator.validate_client_capabilities(Some(&capabilities));
+        let result = validator.validate_capability_format(
+            "meta",
+            &serde_json::json!("not_an_object"),
+            "object",
+        );
         assert!(result.is_err());
 
         match result {
@@ -918,17 +918,17 @@ mod tests {
 
     #[test]
     fn test_validate_client_capabilities_with_invalid_fs_meta() {
-        use agent_client_protocol::schema::{ClientCapabilities, FileSystemCapabilities};
-
+        // As with `meta`, the schema crate now types `fs.meta` as
+        // `Option<Map<String, Value>>`, so a non-object fs.meta cannot reach
+        // `validate_client_capabilities`. Exercise the underlying
+        // `validate_capability_format` directly to confirm the object check
+        // still works for the `fs.meta` capability name.
         let validator = CapabilityValidator::new();
-        let capabilities = ClientCapabilities::new()
-            .fs(FileSystemCapabilities::new()
-                .read_text_file(true)
-                .write_text_file(false)
-                .meta(serde_json::json!("not_an_object").as_object().cloned()))
-            .terminal(false);
-
-        let result = validator.validate_client_capabilities(Some(&capabilities));
+        let result = validator.validate_capability_format(
+            "fs.meta",
+            &serde_json::json!("not_an_object"),
+            "object",
+        );
         assert!(result.is_err());
 
         match result {
