@@ -806,14 +806,15 @@ function makeLogger(): Logger {
  * The base instance must be wrapped by `makePluginThis` before its `load` is
  * run, so that `this.<server>...` inside the plugin resolves to a dispatcher.
  *
- * ## `name` and `version`
+ * ## `name`, `version`, and `description`
  *
- * A subclass may set `name` and `version` as plain field initializers to
- * describe itself. These are **descriptive metadata only**: the platform does
- * not use them for identity or discovery — a plugin's identity is its bundle
- * directory name — and the SDK never sends them to the host. They exist purely
- * so a plugin can name and version itself for its own logging and reporting. A
- * subclass that omits them keeps the inert base defaults.
+ * A subclass may set `name`, `version`, and `description` as plain field
+ * initializers to describe itself. These are **descriptive metadata only**: the
+ * platform does not use them for identity or discovery — a plugin's identity is
+ * its bundle directory name — and the SDK never sends them to the host. They
+ * exist purely so a plugin can name, version, and describe itself for its own
+ * logging and reporting. A subclass that omits them keeps the inert base
+ * defaults.
  */
 export abstract class Plugin {
   /**
@@ -846,6 +847,18 @@ export abstract class Plugin {
    * is a placeholder a subclass is expected to override.
    */
   readonly version: string = "0.0.0";
+
+  /**
+   * The plugin's human-readable description — descriptive metadata only.
+   *
+   * A subclass overrides this with a plain field initializer
+   * (`readonly description = "what this plugin does"`). Like {@link name} and
+   * {@link version}, it plays no part in plugin identity or discovery and is
+   * never sent to the host; it exists so a plugin can describe itself for its
+   * own logging and reporting. The default is the empty string, which a
+   * subclass is expected to override with a one-line summary.
+   */
+  readonly description: string = "";
 
   /** A scoped logger. Records are forwarded to the host. */
   readonly log: Logger = makeLogger();

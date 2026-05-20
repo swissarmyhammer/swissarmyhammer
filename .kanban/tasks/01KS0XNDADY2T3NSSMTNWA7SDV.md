@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8780'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffff9680
 project: plugin-tsonly
 title: 'SDK: description as a Plugin class prop + set it on the committed bundles'
 ---
@@ -16,16 +16,16 @@ The user wants a plugin's metadata self-described in its TypeScript: name, versi
 - Extend the `tests/sdk.rs` props test to also assert `description` (override + default).
 
 ## Acceptance Criteria
-- [ ] `Plugin` exposes `description` with a default; a subclass can override it.
-- [ ] Each of the 6 committed bundles sets a meaningful `description`.
-- [ ] README documents `description` as a metadata prop.
-- [ ] The `sdk.rs` props test covers `description`.
+- [x] `Plugin` exposes `description` with a default; a subclass can override it.
+- [x] Each of the 6 committed bundles sets a meaningful `description`.
+- [x] README documents `description` as a metadata prop.
+- [x] The `sdk.rs` props test covers `description`.
 
 ## Tests
-- [ ] `cargo nextest run -p swissarmyhammer-plugin --test sdk` — passes (the props test now covers `description`).
-- [ ] `cargo nextest run -p swissarmyhammer-plugin` — full crate green (the example e2e tests still load the bundles).
-- [ ] `cargo nextest run -p kanban-app` — green.
-- [ ] `cargo clippy -p swissarmyhammer-plugin --all-targets -- -D warnings` — clean.
+- [x] `cargo nextest run -p swissarmyhammer-plugin --test sdk` — passes (the props test now covers `description`).
+- [x] `cargo nextest run -p swissarmyhammer-plugin` — full crate green (the example e2e tests still load the bundles).
+- [x] `cargo nextest run -p kanban-app` — green.
+- [x] `cargo clippy -p swissarmyhammer-plugin --all-targets -- -D warnings` — clean.
 
 ## Workflow
 - Use `/tdd` — extend the failing SDK test first, then add the prop and set it on the bundles.

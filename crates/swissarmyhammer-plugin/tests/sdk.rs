@@ -341,22 +341,24 @@ async fn unknown_server_raises_unknown_server() {
     );
 }
 
-/// A `Plugin` subclass that sets `name`/`version` transpiles cleanly and the
-/// properties are readable on the constructed instance.
+/// A `Plugin` subclass that sets `name`/`version`/`description` transpiles
+/// cleanly and the properties are readable on the constructed instance.
 ///
-/// `name` and `version` are author-facing descriptive metadata on the `Plugin`
-/// base class. A subclass overrides them as plain field initializers; this test
-/// confirms such a subclass transpiles, constructs, and exposes the overridden
-/// values — and that an instance keeps the base defaults when it does not.
+/// `name`, `version`, and `description` are author-facing descriptive metadata
+/// on the `Plugin` base class. A subclass overrides them as plain field
+/// initializers; this test confirms such a subclass transpiles, constructs, and
+/// exposes the overridden values — and that an instance keeps the base
+/// defaults when it does not.
 #[tokio::test]
-async fn plugin_subclass_exposes_name_and_version() {
+async fn plugin_subclass_exposes_metadata_props() {
     let bundle = tempfile::TempDir::new().expect("temp dir");
-    // Two subclasses: `Named` overrides both metadata fields, `Bare` overrides
-    // neither and so must inherit the base defaults.
+    // Two subclasses: `Named` overrides every metadata field, `Bare` overrides
+    // none and so must inherit the base defaults.
     let entry = "import { Plugin } from '@swissarmyhammer/plugin';\n\
          class Named extends Plugin {\n\
            readonly name = 'my-plugin';\n\
            readonly version = '1.2.3';\n\
+           readonly description = 'a worked example plugin';\n\
          }\n\
          class Bare extends Plugin {}\n\
          export async function load(): Promise<unknown> {\n\
@@ -365,8 +367,10 @@ async fn plugin_subclass_exposes_name_and_version() {
            return {\n\
              namedName: named.name,\n\
              namedVersion: named.version,\n\
+             namedDescription: named.description,\n\
              bareName: bare.name,\n\
              bareVersion: bare.version,\n\
+             bareDescription: bare.description,\n\
            };\n\
          }\n";
     std::fs::write(bundle.path().join("entry.ts"), entry).expect("entry.ts should be written");
@@ -393,6 +397,11 @@ async fn plugin_subclass_exposes_name_and_version() {
         "a subclass-set `version` must be readable on the instance, got: {result}"
     );
     assert_eq!(
+        result.get("namedDescription").and_then(Value::as_str),
+        Some("a worked example plugin"),
+        "a subclass-set `description` must be readable on the instance, got: {result}"
+    );
+    assert_eq!(
         result.get("bareName").and_then(Value::as_str),
         Some("unnamed plugin"),
         "a subclass that omits `name` must inherit the base default, got: {result}"
@@ -401,6 +410,11 @@ async fn plugin_subclass_exposes_name_and_version() {
         result.get("bareVersion").and_then(Value::as_str),
         Some("0.0.0"),
         "a subclass that omits `version` must inherit the base default, got: {result}"
+    );
+    assert_eq!(
+        result.get("bareDescription").and_then(Value::as_str),
+        Some(""),
+        "a subclass that omits `description` must inherit the base default, got: {result}"
     );
 }
 

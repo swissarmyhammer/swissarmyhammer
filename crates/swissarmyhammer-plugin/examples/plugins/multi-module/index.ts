@@ -72,6 +72,10 @@ class MultiModulePlugin extends Plugin {
   /** Version string — descriptive metadata only. */
   readonly version = "1.0.0";
 
+  /** One-line description — descriptive metadata only. */
+  readonly description =
+    "Splits its logic across a sibling module imported with a relative specifier.";
+
   /**
    * Registers the `kanban` operation tool and adds a task via the sibling
    * helper module.

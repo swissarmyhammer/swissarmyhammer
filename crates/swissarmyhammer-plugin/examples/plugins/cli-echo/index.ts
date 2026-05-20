@@ -142,6 +142,10 @@ class CliEchoPlugin extends Plugin {
   /** Version string — descriptive metadata only. */
   readonly version = "1.0.0";
 
+  /** One-line description — descriptive metadata only. */
+  readonly description =
+    "Drives a stdio-subprocess MCP server and records a sentinel on unload().";
+
   /**
    * Registers the CLI subprocess server, registers the kanban board, and
    * calls the subprocess's flat `echo` tool.

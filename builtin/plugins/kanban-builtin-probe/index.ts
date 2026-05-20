@@ -17,6 +17,10 @@ class KanbanBuiltinProbe extends Plugin {
   /// Version string — descriptive metadata only.
   readonly version = "1.0.0";
 
+  /// One-line description — descriptive metadata only.
+  readonly description =
+    "Builtin-layer probe that activates the host's kanban tool module.";
+
   /// Activate the host-exposed `kanban` tool module under this plugin's name.
   async load(): Promise<void> {
     this.register("kanban-builtin-probe", { rust: "kanban" });

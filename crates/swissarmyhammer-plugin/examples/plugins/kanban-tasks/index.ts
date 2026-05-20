@@ -114,6 +114,10 @@ class KanbanTasksPlugin extends Plugin {
   /** Version string — descriptive metadata only. */
   readonly version = "1.0.0";
 
+  /** One-line description — descriptive metadata only. */
+  readonly description =
+    "Seeds two tasks onto a kanban board via the operation-tool path form.";
+
   /**
    * Registers the `kanban` operation tool and drives it through the path form.
    *

@@ -104,6 +104,10 @@ class FileNotesPlugin extends Plugin {
   /** Version string — descriptive metadata only. */
   readonly version = "1.0.0";
 
+  /** One-line description — descriptive metadata only. */
+  readonly description =
+    "Round-trips a note through the in-process files tool using relative paths.";
+
   /**
    * Registers the `files` operation tool and round-trips a note through it.
    *

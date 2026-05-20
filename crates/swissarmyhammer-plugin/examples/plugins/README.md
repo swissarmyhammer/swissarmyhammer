@@ -62,11 +62,12 @@ not need to be installed. It provides two pieces an example uses:
 Every plugin subclasses `Plugin`. The base class is the entire authoring
 surface:
 
-- `name` / `version` — optional `readonly` class props a subclass sets with a
-  plain field initializer (`readonly name = "My Plugin"`). They are
-  descriptive metadata only — used for the plugin's own logging and reporting —
-  and play no part in plugin identity or discovery (the directory name is the
-  identity). A subclass that omits them keeps the inert base defaults.
+- `name` / `version` / `description` — optional `readonly` class props a
+  subclass sets with a plain field initializer (`readonly name = "My Plugin"`,
+  `readonly description = "what this plugin does"`). They are descriptive
+  metadata only — used for the plugin's own logging and reporting — and play no
+  part in plugin identity or discovery (the directory name is the identity). A
+  subclass that omits them keeps the inert base defaults.
 - `load()` / `unload()` — optional lifecycle hooks. Override `load()` to do
   setup work; override `unload()` (calling `super.unload()`) to do teardown.
 - `register(name, source)` — point the platform at an MCP server, reachable
@@ -97,6 +98,7 @@ import { Plugin, makePluginThis } from '@swissarmyhammer/plugin';
 class MyPlugin extends Plugin {
   readonly name = 'My Plugin';
   readonly version = '1.0.0';
+  readonly description = 'What my plugin does in one line.';
 
   async load(): Promise<void> {
     this.register('my-server', { rust: 'files' });

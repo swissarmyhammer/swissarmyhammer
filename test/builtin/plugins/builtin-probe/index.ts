@@ -22,6 +22,10 @@ class BuiltinProbe extends Plugin {
   /// Version string — descriptive metadata only.
   readonly version = "1.0.0";
 
+  /// One-line description — descriptive metadata only.
+  readonly description =
+    "Builtin-layer probe that runs lifecycle code without registering a server.";
+
   /// Run real plugin lifecycle code on the builtin layer's isolate.
   async load(): Promise<void> {
     this.log.info("builtin-probe loaded from the builtin layer");
