@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '9680'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffff8680
 project: ai-panel
 title: 'AI panel: pass the per-board MCP server to the spawned Claude CLI'
 ---
@@ -47,17 +47,24 @@ To make this unit-testable, extract the `SpawnConfig` assembly into a pure helpe
 Leave `connect_new_session_mcp_servers` / `mcp_manager` as-is — `mcp_manager` may serve the agent's own tool inventory; removing it is out of scope for this fix.
 
 ## Acceptance Criteria
-- [ ] `build_session_spawn_config` (the extracted helper) returns a `SpawnConfig` whose `mcp_servers` includes every HTTP server from `request.mcp_servers`, in addition to any `self.config.mcp_servers`.
-- [ ] With a session that carries an HTTP MCP server, the spawned `claude` CLI receives `--mcp-config <file>` and `--strict-mcp-config`, and the written config's `mcpServers` map contains the per-board server URL.
-- [ ] `self.config.mcp_servers` entries are still included (a configured static server is not dropped).
-- [ ] No change to `start_board_mcp_server`, `McpServer` rooting, or the webview ACP client.
+- [x] `build_session_spawn_config` (the extracted helper) returns a `SpawnConfig` whose `mcp_servers` includes every HTTP server from `request.mcp_servers`, in addition to any `self.config.mcp_servers`.
+- [x] With a session that carries an HTTP MCP server, the spawned `claude` CLI receives `--mcp-config <file>` and `--strict-mcp-config`, and the written config's `mcpServers` map contains the per-board server URL.
+- [x] `self.config.mcp_servers` entries are still included (a configured static server is not dropped).
+- [x] No change to `start_board_mcp_server`, `McpServer` rooting, or the webview ACP client.
 
 ## Tests
-- [ ] In `crates/claude-agent/src/agent.rs` tests: build a `NewSessionRequest` with one HTTP `McpServer` and assert `build_session_spawn_config(...)` yields a `SpawnConfig` whose `mcp_servers` contains that server (converted to the internal HTTP variant).
-- [ ] Add a test that with both a static `self.config.mcp_servers` entry and a session entry, both appear in the result.
-- [ ] In `crates/claude-agent/src/claude_process.rs` `mod tests` (line ~802): assert `build_mcp_servers_map` on a non-empty HTTP server list produces the expected `mcpServers` entry; assert `configure_mcp_servers` on a non-empty list writes a config file and the `Command` gets `--mcp-config` and `--strict-mcp-config` (and on an empty list adds neither).
-- [ ] Run `cargo test -p claude-agent` — all green.
-- [ ] Run `cargo clippy -p claude-agent -- -D warnings` — clean.
+- [x] In `crates/claude-agent/src/agent.rs` tests: build a `NewSessionRequest` with one HTTP `McpServer` and assert `build_session_spawn_config(...)` yields a `SpawnConfig` whose `mcp_servers` contains that server (converted to the internal HTTP variant).
+- [x] Add a test that with both a static `self.config.mcp_servers` entry and a session entry, both appear in the result.
+- [x] In `crates/claude-agent/src/claude_process.rs` `mod tests` (line ~802): assert `build_mcp_servers_map` on a non-empty HTTP server list produces the expected `mcpServers` entry; assert `configure_mcp_servers` on a non-empty list writes a config file and the `Command` gets `--mcp-config` and `--strict-mcp-config` (and on an empty list adds neither).
+- [x] Run `cargo test -p claude-agent` — all green.
+- [x] Run `cargo clippy -p claude-agent -- -D warnings` — clean.
 
 ## Workflow
 - Use `/tdd` — write the failing `build_session_spawn_config` test first, then extract the helper and apply the union fix.
+
+## Implementation Notes
+
+- Added pure helper `ClaudeAgent::build_session_spawn_config` in `crates/claude-agent/src/agent.rs` that returns a `SpawnConfig` with `mcp_servers` set to the **union** of `self.config.mcp_servers` and the per-session servers converted via `convert_acp_to_internal_mcp_config`. The static config comes first so a duplicate name from `request.mcp_servers` is the last write into the JSON map built by `claude_process::ClaudeProcess::build_mcp_servers_map` (last-write-wins).
+- Refactored `spawn_claude_for_new_session` to delegate `SpawnConfig` assembly to the helper. The function now only handles the side-effecting work (logging, spawning, init handling).
+- Added a `#[cfg(test)] mod tests` block at the end of `agent.rs` (file previously had none) with three tests for the helper. Per `crates/claude-agent/Cargo.toml`'s `[lib] test = false`, these are run via `cargo test -p claude-agent --lib` — the standard `cargo test -p claude-agent` target uses the integration tests under `tests/`.
+- Extended `claude_process::tests` with five new tests covering `build_mcp_servers_map` (HTTP, SSE, empty) and `configure_mcp_servers` (non-empty list adds both `--mcp-config` and `--strict-mcp-config` and writes the correct JSON; empty list adds neither).

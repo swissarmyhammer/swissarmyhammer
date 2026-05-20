@@ -1326,13 +1326,35 @@ impl ClaudeAgent {
         }
     }
 
-    /// Spawn Claude process and handle init response for new session.
-    pub(crate) async fn spawn_claude_for_new_session(
+    /// Build the [`SpawnConfig`] for a brand-new session.
+    ///
+    /// Pure assembly logic, factored out of [`Self::spawn_claude_for_new_session`]
+    /// so it can be unit-tested without spawning a subprocess.
+    ///
+    /// The crucial behavior this encodes: `SpawnConfig.mcp_servers` is the
+    /// **union** of the agent's static `self.config.mcp_servers` and the
+    /// per-session servers in `request.mcp_servers` (translated to the
+    /// internal [`McpServerConfig`] via [`Self::convert_acp_to_internal_mcp_config`]).
+    ///
+    /// Without this union, the spawned `claude` CLI would see only the
+    /// build-time static config — empty for callers like the kanban app —
+    /// and would silently fall back to ambient global/project MCP
+    /// configuration (`~/.claude.json`, `.mcp.json`), bypassing the
+    /// per-board MCP server the ACP client supplied.
+    ///
+    /// Stdio entries from `request.mcp_servers` are still converted and
+    /// included; the downstream [`crate::claude_process::ClaudeProcess::build_mcp_servers_map`]
+    /// will warn and skip them (the Claude CLI only accepts HTTP/SSE), so
+    /// dropping them here would lose information about what was requested.
+    ///
+    /// [`SpawnConfig`]: crate::claude_process::SpawnConfig
+    /// [`McpServerConfig`]: crate::config::McpServerConfig
+    pub(crate) fn build_session_spawn_config(
         &self,
         session_id: &crate::session::SessionId,
         protocol_session_id: &SessionId,
         request: &NewSessionRequest,
-    ) {
+    ) -> crate::claude_process::SpawnConfig {
         use crate::claude_process::SpawnConfig;
 
         // Extract system_prompt from session metadata if present
@@ -1343,16 +1365,39 @@ impl ClaudeAgent {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        tracing::info!("Spawning Claude process for session: {}", session_id);
-        let spawn_config = SpawnConfig::builder()
+        // Union: static build-time servers first, then per-session servers
+        // converted from ACP. Order is preserved so a duplicate name in
+        // `request.mcp_servers` overrides the static entry when the Claude
+        // CLI builds its servers map (last-write-wins on the JSON map).
+        let mut mcp_servers = self.config.mcp_servers.clone();
+        mcp_servers.extend(
+            request
+                .mcp_servers
+                .iter()
+                .filter_map(|server| self.convert_acp_to_internal_mcp_config(server)),
+        );
+
+        SpawnConfig::builder()
             .session_id(*session_id)
             .acp_session_id(protocol_session_id.clone())
             .cwd(request.cwd.clone())
-            .mcp_servers(self.config.mcp_servers.clone())
+            .mcp_servers(mcp_servers)
             .system_prompt(system_prompt)
             .ephemeral(self.config.claude.ephemeral)
             .tools_override(self.config.claude.tools_override.clone())
-            .build();
+            .build()
+    }
+
+    /// Spawn Claude process and handle init response for new session.
+    pub(crate) async fn spawn_claude_for_new_session(
+        &self,
+        session_id: &crate::session::SessionId,
+        protocol_session_id: &SessionId,
+        request: &NewSessionRequest,
+    ) {
+        tracing::info!("Spawning Claude process for session: {}", session_id);
+        let spawn_config =
+            self.build_session_spawn_config(session_id, protocol_session_id, request);
 
         match self
             .claude_client
@@ -2498,5 +2543,150 @@ impl ClaudeAgent {
                 agent_client_protocol::Error::invalid_params()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{AgentConfig, HttpTransport, McpServerConfig};
+
+    /// Build a `NewSessionRequest` carrying one HTTP MCP server entry. The
+    /// `SessionId` and URL must be unique per call so concurrent tests do not
+    /// collide on the temp-dir MCP-config filename written by
+    /// `configure_mcp_servers`.
+    fn new_session_request_with_http_server(name: &str, url: &str) -> NewSessionRequest {
+        use agent_client_protocol::schema::{McpServer, McpServerHttp};
+
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+        NewSessionRequest::new(cwd).mcp_servers(vec![McpServer::Http(McpServerHttp::new(
+            name, url,
+        ))])
+    }
+
+    /// Verifies the per-session MCP server from `request.mcp_servers` is
+    /// forwarded into `SpawnConfig.mcp_servers` so the spawned `claude` CLI
+    /// is launched with `--mcp-config` pointing at the per-board server.
+    ///
+    /// This is the regression test for the bug where `spawn_claude_for_new_session`
+    /// fed only `self.config.mcp_servers` (empty for the kanban app) and so the
+    /// `claude` CLI fell back to ambient global MCP config.
+    #[tokio::test]
+    async fn test_build_session_spawn_config_includes_per_session_http_server() {
+        let config = AgentConfig::default();
+        let (agent, _rx) = ClaudeAgent::new(config)
+            .await
+            .expect("agent construction must succeed");
+
+        let request = new_session_request_with_http_server(
+            "per-board-kanban",
+            "http://127.0.0.1:54321/mcp",
+        );
+
+        let session_id = crate::session::SessionId::new();
+        let protocol_session_id = SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV");
+
+        let spawn_config =
+            agent.build_session_spawn_config(&session_id, &protocol_session_id, &request);
+
+        let http_names: Vec<&str> = spawn_config
+            .mcp_servers
+            .iter()
+            .filter_map(|s| match s {
+                McpServerConfig::Http(http) => Some(http.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            http_names.contains(&"per-board-kanban"),
+            "Per-session HTTP MCP server must be forwarded into SpawnConfig.mcp_servers, got: {:?}",
+            http_names
+        );
+
+        let urls: Vec<&str> = spawn_config
+            .mcp_servers
+            .iter()
+            .filter_map(|s| match s {
+                McpServerConfig::Http(http) => Some(http.url.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            urls.contains(&"http://127.0.0.1:54321/mcp"),
+            "Per-session HTTP MCP server URL must be preserved in SpawnConfig, got: {:?}",
+            urls
+        );
+    }
+
+    /// Verifies the helper takes the *union* of `self.config.mcp_servers`
+    /// and `request.mcp_servers`: a statically configured MCP server is
+    /// not dropped when a per-session server is also supplied.
+    #[tokio::test]
+    async fn test_build_session_spawn_config_unions_static_and_per_session_servers() {
+        let config = AgentConfig {
+            mcp_servers: vec![McpServerConfig::Http(HttpTransport {
+                transport_type: "http".to_string(),
+                name: "static-server".to_string(),
+                url: "https://static.example.com/mcp".to_string(),
+                headers: vec![],
+            })],
+            ..AgentConfig::default()
+        };
+
+        let (agent, _rx) = ClaudeAgent::new(config)
+            .await
+            .expect("agent construction must succeed");
+
+        let request = new_session_request_with_http_server(
+            "session-server",
+            "http://127.0.0.1:54322/mcp",
+        );
+
+        let session_id = crate::session::SessionId::new();
+        let protocol_session_id = SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAW");
+
+        let spawn_config =
+            agent.build_session_spawn_config(&session_id, &protocol_session_id, &request);
+
+        let names: Vec<&str> = spawn_config
+            .mcp_servers
+            .iter()
+            .map(|s| s.name())
+            .collect();
+        assert!(
+            names.contains(&"static-server"),
+            "Static server from self.config.mcp_servers must still appear in SpawnConfig, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"session-server"),
+            "Per-session server from request.mcp_servers must appear in SpawnConfig, got: {:?}",
+            names
+        );
+    }
+
+    /// Sanity check for the empty case: with no static config and no
+    /// per-session servers, `SpawnConfig.mcp_servers` is empty (so
+    /// `configure_mcp_servers` correctly skips `--mcp-config`).
+    #[tokio::test]
+    async fn test_build_session_spawn_config_empty_when_no_servers() {
+        let config = AgentConfig::default();
+        let (agent, _rx) = ClaudeAgent::new(config)
+            .await
+            .expect("agent construction must succeed");
+
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+        let request = NewSessionRequest::new(cwd);
+
+        let session_id = crate::session::SessionId::new();
+        let protocol_session_id = SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAX");
+
+        let spawn_config =
+            agent.build_session_spawn_config(&session_id, &protocol_session_id, &request);
+
+        assert!(
+            spawn_config.mcp_servers.is_empty(),
+            "With no static or per-session MCP servers, SpawnConfig.mcp_servers must be empty"
+        );
     }
 }

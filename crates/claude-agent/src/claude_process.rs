@@ -801,6 +801,7 @@ impl Drop for ClaudeProcess {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{HttpHeader, HttpTransport, McpServerConfig, SseTransport};
 
     #[tokio::test]
     async fn test_process_manager_new() {
@@ -821,5 +822,166 @@ mod tests {
         } else {
             panic!("Expected Session error");
         }
+    }
+
+    /// Helper to build a minimal `SpawnConfig` with the supplied MCP servers
+    /// for testing the MCP-related command configuration in isolation.
+    fn spawn_config_with_servers(servers: Vec<McpServerConfig>) -> SpawnConfig {
+        SpawnConfig::builder()
+            .session_id(SessionId::new())
+            .acp_session_id(agent_client_protocol::schema::SessionId::new(
+                "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            ))
+            .cwd(std::env::temp_dir())
+            .mcp_servers(servers)
+            .build()
+    }
+
+    /// `build_mcp_servers_map` must convert each HTTP MCP server entry
+    /// into a JSON `{"type":"http","url":"...","headers":{}}` block keyed
+    /// by the server name — this is exactly the shape the Claude CLI
+    /// expects in its `--mcp-config` file.
+    #[test]
+    fn test_build_mcp_servers_map_with_http_server() {
+        let servers = vec![McpServerConfig::Http(HttpTransport {
+            transport_type: "http".to_string(),
+            name: "per-board-kanban".to_string(),
+            url: "http://127.0.0.1:54321/mcp".to_string(),
+            headers: vec![HttpHeader {
+                name: "X-Test".to_string(),
+                value: "ignored-by-builder".to_string(),
+            }],
+        })];
+
+        let map = ClaudeProcess::build_mcp_servers_map(&servers);
+        let entry = map
+            .get("per-board-kanban")
+            .expect("HTTP server must be keyed by name");
+        assert_eq!(entry["type"], "http");
+        assert_eq!(entry["url"], "http://127.0.0.1:54321/mcp");
+        // The current builder always emits an empty `headers` object; lock
+        // that in so a regression that starts injecting headers under the
+        // wrong key is caught.
+        assert!(entry["headers"].is_object());
+    }
+
+    /// SSE servers must be emitted with `"type":"sse"` so the Claude CLI
+    /// picks the correct transport.
+    #[test]
+    fn test_build_mcp_servers_map_with_sse_server() {
+        let servers = vec![McpServerConfig::Sse(SseTransport {
+            transport_type: "sse".to_string(),
+            name: "events-server".to_string(),
+            url: "https://events.example.com/sse".to_string(),
+            headers: vec![],
+        })];
+
+        let map = ClaudeProcess::build_mcp_servers_map(&servers);
+        let entry = map.get("events-server").expect("SSE server must be present");
+        assert_eq!(entry["type"], "sse");
+        assert_eq!(entry["url"], "https://events.example.com/sse");
+    }
+
+    /// Empty input must produce an empty map (and downstream this means
+    /// `configure_mcp_servers` skips the temp file and the CLI flags).
+    #[test]
+    fn test_build_mcp_servers_map_empty() {
+        let map = ClaudeProcess::build_mcp_servers_map(&[]);
+        assert!(map.is_empty());
+    }
+
+    /// With a non-empty MCP server list, `configure_mcp_servers` must add
+    /// both `--mcp-config <file>` and `--strict-mcp-config` to the spawn
+    /// command. Without `--strict-mcp-config`, the Claude CLI would merge
+    /// in ambient global/project MCP config and pick up the wrong `kanban`
+    /// server — which is the bug this task fixes.
+    #[test]
+    fn test_configure_mcp_servers_adds_strict_flag_for_non_empty_list() {
+        let config = spawn_config_with_servers(vec![McpServerConfig::Http(HttpTransport {
+            transport_type: "http".to_string(),
+            name: "per-board-kanban".to_string(),
+            url: "http://127.0.0.1:54321/mcp".to_string(),
+            headers: vec![],
+        })]);
+
+        let mut command = Command::new("claude");
+        ClaudeProcess::configure_mcp_servers(&mut command, &config);
+
+        let args: Vec<String> = command
+            .as_std()
+            .get_args()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect();
+
+        assert!(
+            args.iter().any(|a| a == "--mcp-config"),
+            "Expected --mcp-config flag, got args: {:?}",
+            args
+        );
+        assert!(
+            args.iter().any(|a| a == "--strict-mcp-config"),
+            "Expected --strict-mcp-config flag, got args: {:?}",
+            args
+        );
+
+        // The `--mcp-config` flag must be followed by an existing file
+        // path holding the JSON config the CLI will read.
+        let cfg_pos = args
+            .iter()
+            .position(|a| a == "--mcp-config")
+            .expect("--mcp-config not found in args");
+        let cfg_path = args
+            .get(cfg_pos + 1)
+            .expect("--mcp-config must be followed by a file path");
+        let cfg_path = std::path::PathBuf::from(cfg_path);
+        assert!(
+            cfg_path.exists(),
+            "MCP config file written by configure_mcp_servers must exist on disk: {}",
+            cfg_path.display()
+        );
+
+        let written = std::fs::read_to_string(&cfg_path)
+            .expect("MCP config file must be readable");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&written).expect("MCP config file must be valid JSON");
+        let server_entry = parsed
+            .get("mcpServers")
+            .and_then(|m| m.get("per-board-kanban"))
+            .expect("Written MCP config must include the per-session server");
+        assert_eq!(server_entry["type"], "http");
+        assert_eq!(server_entry["url"], "http://127.0.0.1:54321/mcp");
+
+        // Clean up the temp file so repeat test runs don't leave debris.
+        let _ = std::fs::remove_file(&cfg_path);
+    }
+
+    /// With an empty MCP server list, `configure_mcp_servers` must add
+    /// neither `--mcp-config` nor `--strict-mcp-config`. (If it did, the
+    /// CLI would still be flagged strict and would reject the ambient
+    /// config — but the point here is that an empty list means "no MCP
+    /// configuration at all".)
+    #[test]
+    fn test_configure_mcp_servers_skips_flags_for_empty_list() {
+        let config = spawn_config_with_servers(vec![]);
+
+        let mut command = Command::new("claude");
+        ClaudeProcess::configure_mcp_servers(&mut command, &config);
+
+        let args: Vec<String> = command
+            .as_std()
+            .get_args()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect();
+
+        assert!(
+            !args.iter().any(|a| a == "--mcp-config"),
+            "Empty MCP server list must not add --mcp-config, got args: {:?}",
+            args
+        );
+        assert!(
+            !args.iter().any(|a| a == "--strict-mcp-config"),
+            "Empty MCP server list must not add --strict-mcp-config, got args: {:?}",
+            args
+        );
     }
 }
