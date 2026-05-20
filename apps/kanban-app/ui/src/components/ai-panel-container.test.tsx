@@ -368,6 +368,27 @@ describe("AiPanelContainer", () => {
     );
     expect(stored.open).toBe(false);
 
+    // The collapsed rail now exposes a single AI-star button as its toggle.
+    // There must be no leftover `panel-right-open` icon from the old design
+    // and the lone button must carry the sparkles icon.
+    const rail = screen.getByTestId("ai-panel-container");
+    const railButtons = within(rail).getAllByRole("button");
+    expect(
+      railButtons,
+      "the collapsed rail must contain exactly one button (the star toggle)",
+    ).toHaveLength(1);
+    const railToggle = within(rail).getByRole("button", {
+      name: /expand ai panel/i,
+    });
+    expect(
+      railToggle.querySelector(".lucide-sparkles"),
+      "the rail expand button must use the sparkles icon",
+    ).not.toBeNull();
+    expect(
+      rail.querySelector(".lucide-panel-right-open"),
+      "the rail must not render the legacy panel-right-open icon",
+    ).toBeNull();
+
     // Remount — the container reads the persisted state back and stays collapsed.
     unmount();
     await renderContainer();

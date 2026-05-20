@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: 9b80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffff8b80
 title: Replace redundant AI header buttons with a single AI star toggle
 ---
 ## What
@@ -25,16 +25,16 @@ The window-layer `ai.toggle` command (`AppShell` → `triggerAiToggle`) is uncha
 
 ## Acceptance Criteria
 
-- [ ] `AiPanelHeader` renders no "AI" text and no `PanelRightCloseIcon`; its right-aligned button uses `SparklesIcon` and keeps `aria-label="Collapse AI panel"`.
-- [ ] The collapsed rail renders exactly one button — a `SparklesIcon` with `aria-label="Expand AI panel"` — and no `PanelRightOpenIcon`.
-- [ ] Clicking the star in either state toggles the panel (existing `onToggle`/`onCollapse` wiring preserved).
-- [ ] No new unused imports; `PanelRightCloseIcon` and `PanelRightOpenIcon` removed from the two files if no other usage remains.
+- [x] `AiPanelHeader` renders no "AI" text and no `PanelRightCloseIcon`; its right-aligned button uses `SparklesIcon` and keeps `aria-label="Collapse AI panel"`.
+- [x] The collapsed rail renders exactly one button — a `SparklesIcon` with `aria-label="Expand AI panel"` — and no `PanelRightOpenIcon`.
+- [x] Clicking the star in either state toggles the panel (existing `onToggle`/`onCollapse` wiring preserved).
+- [x] No new unused imports; `PanelRightCloseIcon` and `PanelRightOpenIcon` removed from the two files if no other usage remains.
 
 ## Tests
 
-- [ ] Update `apps/kanban-app/ui/src/components/ai-panel.test.tsx` — the existing header assertions (lines ~461 and ~592 reference the "AI" title); rewrite them to assert the star-only header: no `text("AI")`, one button with `aria-label="Collapse AI panel"` containing a `lucide-sparkles` icon.
-- [ ] Update `apps/kanban-app/ui/src/components/ai-panel-container.test.tsx` collapsed-rail assertions: exactly one button with `aria-label="Expand AI panel"` whose icon is `lucide-sparkles`; no `lucide-panel-right-open` in the rail.
-- [ ] Run `pnpm --filter kanban-ui test -- ai-panel ai-panel-container` and confirm green.
+- [x] Update `apps/kanban-app/ui/src/components/ai-panel.test.tsx` — the existing header assertions (lines ~461 and ~592 reference the "AI" title); rewrite them to assert the star-only header: no `text("AI")`, one button with `aria-label="Collapse AI panel"` containing a `lucide-sparkles` icon.
+- [x] Update `apps/kanban-app/ui/src/components/ai-panel-container.test.tsx` collapsed-rail assertions: exactly one button with `aria-label="Expand AI panel"` whose icon is `lucide-sparkles`; no `lucide-panel-right-open` in the rail.
+- [x] Run `pnpm --filter kanban-ui test -- ai-panel ai-panel-container` and confirm green.
 
 ## Workflow
 

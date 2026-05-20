@@ -55,7 +55,7 @@ import {
   type ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { SparklesIcon, PanelRightOpenIcon } from "lucide-react";
+import { SparklesIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useActiveBoardPath } from "@/lib/command-scope";
 import {
@@ -576,9 +576,9 @@ function AiPanelShell({
         </div>
       ) : null}
 
-      {/* The collapsed rail — the expand control and the sparkle glyph. Only
-          shown when collapsed; the expanded panel has its own header with a
-          collapse control wired through `onCollapse` on the hosted View. */}
+      {/* The collapsed rail — a single AI-star toggle. Only shown when
+          collapsed; the expanded panel has its own header with the matching
+          star control wired through `onCollapse` on the hosted View. */}
       {open ? null : (
         <div className="flex flex-col items-center py-2">
           <Button
@@ -587,9 +587,8 @@ function AiPanelShell({
             size="icon"
             variant="ghost"
           >
-            <PanelRightOpenIcon className="size-4" />
+            <SparklesIcon className="size-4" />
           </Button>
-          <SparklesIcon className="mt-2 size-4 text-muted-foreground" />
         </div>
       )}
 

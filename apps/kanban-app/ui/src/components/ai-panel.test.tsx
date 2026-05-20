@@ -414,7 +414,7 @@ describe("AiPanel: model selector", () => {
     const trigger = screen.getByRole("combobox", { name: /claude code/i });
 
     // The selector trigger is NOT inside the `<header>` — the header keeps
-    // only the "AI" title and the collapse button.
+    // only the single AI-star collapse button.
     const header = document.querySelector("header");
     expect(header, "the panel header must be present").not.toBeNull();
     expect(
@@ -425,6 +425,25 @@ describe("AiPanel: model selector", () => {
       header!.contains(trigger),
       "the model selector must not be inside the header",
     ).toBe(false);
+
+    // The header carries no "AI" text label — the star icon stands alone.
+    expect(
+      within(header as HTMLElement).queryByText("AI"),
+      "the panel header must not render an 'AI' text label",
+    ).toBeNull();
+    // The single header button is the star-toggle that collapses the panel.
+    const headerButtons = within(header as HTMLElement).getAllByRole("button");
+    expect(
+      headerButtons,
+      "the panel header must contain exactly one button (the star toggle)",
+    ).toHaveLength(1);
+    const starCollapse = within(header as HTMLElement).getByRole("button", {
+      name: /collapse ai panel/i,
+    });
+    expect(
+      starCollapse.querySelector(".lucide-sparkles"),
+      "the collapse button must use the sparkles icon",
+    ).not.toBeNull();
 
     // It IS inside the composer region.
     const composer = container.querySelector(
@@ -709,14 +728,27 @@ describe("AiPanel: collapse control", () => {
     );
 
     // The collapse control lives in the panel header — `<header>` is the
-    // single header row that also holds the "AI" title and the model
-    // selector. The button keeps the exact `aria-label` it had in the old
-    // standalone shell row.
+    // single header row. After the AI/star consolidation it carries no "AI"
+    // text and exactly one button: the sparkles-icon star toggle. The button
+    // keeps the exact `aria-label` it had in the old standalone shell row.
     const header = document.querySelector("header");
     expect(header, "the panel header must be present").not.toBeNull();
+    expect(
+      within(header as HTMLElement).queryByText("AI"),
+      "the panel header must not render an 'AI' text label",
+    ).toBeNull();
+    const headerButtons = within(header as HTMLElement).getAllByRole("button");
+    expect(
+      headerButtons,
+      "the panel header must contain exactly one button (the star toggle)",
+    ).toHaveLength(1);
     const collapse = within(header as HTMLElement).getByRole("button", {
       name: /collapse ai panel/i,
     });
+    expect(
+      collapse.querySelector(".lucide-sparkles"),
+      "the collapse button must use the sparkles icon",
+    ).not.toBeNull();
 
     await act(async () => {
       await userEvent.click(collapse);

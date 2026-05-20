@@ -52,7 +52,6 @@ import {
   CircleDotIcon,
   CircleIcon,
   CopyIcon,
-  PanelRightCloseIcon,
   RotateCcwIcon,
   SparklesIcon,
 } from "lucide-react";
@@ -282,31 +281,28 @@ interface AiPanelHeaderProps {
 }
 
 /**
- * The panel header: the "AI" title and the collapse control.
+ * The panel header: a single AI-star collapse control.
  *
  * The model selector no longer lives here — it moved into the composer footer
  * (the AI Elements `PromptInput` layout puts model selection in the input
- * area). The collapse button — to the right of the title — folds the panel
- * down to its rail via `onCollapse`; the hosting container owns the
- * open-state.
+ * area). The header carries no "AI" text label and no separate close icon:
+ * the right-aligned sparkles button is the entire surface, and clicking it
+ * folds the panel down to its rail via `onCollapse`. The hosting container
+ * owns the open-state and mirrors this control on the collapsed rail.
  */
 function AiPanelHeader({ onCollapse }: AiPanelHeaderProps): ReactNode {
   return (
-    <header className="flex items-center justify-between gap-2 border-b px-3 py-2">
-      <div className="flex items-center gap-1.5 font-medium text-sm">
-        <SparklesIcon className="size-4 text-muted-foreground" />
-        <span>AI</span>
-      </div>
-      {/* The collapse control — folds the panel to its rail. The hosting
-          container owns the open-state; this button is wired straight to
-          the `onCollapse` callback. */}
+    <header className="flex items-center justify-end gap-2 border-b px-3 py-2">
+      {/* The single AI-star toggle — folds the panel to its rail. The hosting
+          container owns the open-state; this button is wired straight to the
+          `onCollapse` callback. */}
       <Button
         aria-label="Collapse AI panel"
         onClick={onCollapse}
         size="icon"
         variant="ghost"
       >
-        <PanelRightCloseIcon className="size-4" />
+        <SparklesIcon className="size-4" />
       </Button>
     </header>
   );
