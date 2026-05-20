@@ -234,6 +234,48 @@ describe("useConversation", () => {
     expect(sessions()).toHaveLength(2);
   });
 
+  it("tool_call followed by tool_call_update completed advances the tool part", async () => {
+    // Regression coverage for the "AI panel tool calls never leave pending"
+    // bug: the agent now forwards tool_result completions as
+    // `tool_call_update` notifications and the hook must fold them onto the
+    // matching pending tool part.
+    const { connect } = fakeConnect({
+      updates: [
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "call-42",
+          title: "search_board",
+          kind: "search",
+          status: "pending",
+          rawInput: { query: "kanban" },
+        },
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "call-42",
+          status: "completed",
+          rawOutput: { hits: 3 },
+        },
+      ],
+      stopReason: "end_turn",
+    });
+    const { result } = renderHook(() => useConversation({ connect }));
+
+    await act(async () => {
+      await result.current.sendPrompt([textBlock("hello")]);
+    });
+
+    // The user message plus the assistant message that owns the tool part.
+    expect(result.current.messages).toHaveLength(2);
+    const part = result.current.messages[1].parts[0];
+    expect(part).toMatchObject({
+      type: "dynamic-tool",
+      toolCallId: "call-42",
+      state: "output-available",
+      input: { query: "kanban" },
+      output: { hits: 3 },
+    });
+  });
+
   it("surfaces a permission request and resolves it via respondPermission", async () => {
     const { connect, permission } = fakeConnect({});
     const { result } = renderHook(() => useConversation({ connect }));

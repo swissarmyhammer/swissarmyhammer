@@ -436,6 +436,12 @@ pub struct MessageChunk {
     pub chunk_type: ChunkType,
     /// Tool call information (only present when chunk_type is ToolCall).
     pub tool_call: Option<ToolCallInfo>,
+    /// Tool result information (only present when chunk_type is ToolResult).
+    ///
+    /// Carries the completion update for a previously-emitted tool call so the
+    /// downstream chunk consumer can fold the result back onto the matching
+    /// pending tool card in the AI panel.
+    pub tool_result: Option<ToolResultInfo>,
     /// Token usage information (only present in Result messages).
     pub token_usage: Option<TokenUsageInfo>,
     /// Stop reason from Claude (only present in final chunk from result message).
@@ -453,6 +459,26 @@ pub struct ToolCallInfo {
     pub name: String,
     /// Parameters to pass to the tool as JSON.
     pub parameters: serde_json::Value,
+}
+
+/// Tool completion information extracted from Claude `tool_result` messages.
+///
+/// Mirrors the ACP `ToolCallUpdate` payload: a tool call id, the new execution
+/// status (`Completed` or `Failed`), and any content/output the tool produced.
+/// Carried on a `MessageChunk` of `ChunkType::ToolResult` so the streaming
+/// pipeline can fold it back onto the original `ToolCall` emitted upstream.
+#[derive(Debug, Clone)]
+pub struct ToolResultInfo {
+    /// Identifier of the tool call this result refers to (matches the
+    /// originating `ToolCallInfo::id`).
+    pub id: String,
+    /// Final execution status for the tool call.
+    pub status: agent_client_protocol::schema::ToolCallStatus,
+    /// Content blocks produced by the tool, if any (e.g. tool stdout, file
+    /// contents). Mirrors `ToolCallUpdateFields::content`.
+    pub content: Option<Vec<agent_client_protocol::schema::ToolCallContent>>,
+    /// Raw tool output as JSON, if any. Mirrors `ToolCallUpdateFields::raw_output`.
+    pub raw_output: Option<serde_json::Value>,
 }
 
 /// Token usage information extracted from Message metadata.
@@ -532,6 +558,7 @@ impl ClaudeClient {
                 content: text.text,
                 chunk_type: ChunkType::Text,
                 tool_call: None,
+                tool_result: None,
                 token_usage: None,
                 stop_reason: None,
             },
@@ -540,6 +567,7 @@ impl ClaudeClient {
                 content: String::new(),
                 chunk_type: ChunkType::Text,
                 tool_call: None,
+                tool_result: None,
                 token_usage: None,
                 stop_reason: None,
             },
@@ -794,6 +822,7 @@ impl ClaudeClient {
                 content: String::new(),
                 chunk_type: ChunkType::Text,
                 tool_call: None,
+                tool_result: None,
                 token_usage: None,
                 stop_reason: result.stop_reason.clone(),
             };
@@ -825,9 +854,8 @@ impl ClaudeClient {
                 Self::handle_message_chunk(ctx, chunk, state)
             }
             SessionUpdate::ToolCall(tool_call) => Self::handle_tool_call(ctx, tool_call, state),
-            SessionUpdate::ToolCallUpdate(_) => {
-                tracing::debug!("ToolCallUpdate notification forwarded");
-                true
+            SessionUpdate::ToolCallUpdate(tool_call_update) => {
+                Self::handle_tool_call_update(ctx, tool_call_update, state)
             }
             _ => true,
         }
@@ -879,6 +907,7 @@ impl ClaudeClient {
                 name: tool_call.title.clone(),
                 parameters: tool_call.raw_input.unwrap_or_else(|| serde_json::json!({})),
             }),
+            tool_result: None,
             token_usage: None,
             stop_reason: None,
         };
@@ -889,6 +918,72 @@ impl ClaudeClient {
         }
         state.chunks_sent += 1;
         true
+    }
+
+    /// Handle a tool-call completion update. Returns false if channel closed.
+    ///
+    /// Translates a `SessionUpdate::ToolCallUpdate` into a `MessageChunk` of
+    /// `ChunkType::ToolResult` carrying the tool call id, the new status, and
+    /// any result content. The downstream chunk consumer in
+    /// `agent_prompt_handling::process_single_chunk` folds the result back into
+    /// a richer `SessionUpdate::ToolCallUpdate` and stores it on the session.
+    fn handle_tool_call_update(
+        ctx: &StreamContext,
+        tool_call_update: agent_client_protocol::schema::ToolCallUpdate,
+        state: &mut StreamState,
+    ) -> bool {
+        let Some(chunk) = Self::tool_call_update_to_chunk(tool_call_update) else {
+            return true;
+        };
+
+        tracing::debug!(
+            "Forwarding ToolCallUpdate as ToolResult chunk for tool_call_id={}",
+            chunk
+                .tool_result
+                .as_ref()
+                .map(|r| r.id.as_str())
+                .unwrap_or("<unknown>")
+        );
+
+        if ctx.tx.send(chunk).is_err() {
+            tracing::debug!("Channel closed");
+            return false;
+        }
+        state.chunks_sent += 1;
+        true
+    }
+
+    /// Pure-function builder for a `ChunkType::ToolResult` chunk from a
+    /// `ToolCallUpdate`.
+    ///
+    /// Returns `None` when the update has no status — the AI panel uses the
+    /// status to advance the tool card past pending, so a status-less update
+    /// carries no meaningful signal and is dropped. Factored out so the
+    /// translation can be unit-tested without a real `StreamContext`.
+    pub(crate) fn tool_call_update_to_chunk(
+        tool_call_update: agent_client_protocol::schema::ToolCallUpdate,
+    ) -> Option<MessageChunk> {
+        let agent_client_protocol::schema::ToolCallUpdate {
+            tool_call_id,
+            fields,
+            ..
+        } = tool_call_update;
+
+        let status = fields.status?;
+
+        Some(MessageChunk {
+            content: String::new(),
+            chunk_type: ChunkType::ToolResult,
+            tool_call: None,
+            tool_result: Some(ToolResultInfo {
+                id: tool_call_id.0.to_string(),
+                status,
+                content: fields.content,
+                raw_output: fields.raw_output,
+            }),
+            token_usage: None,
+            stop_reason: None,
+        })
     }
 
     /// Execute a query with full session context
@@ -1173,6 +1268,7 @@ mod tests {
             content: "text".to_string(),
             chunk_type: ChunkType::Text,
             tool_call: None,
+            tool_result: None,
             token_usage: None,
             stop_reason: None,
         };
@@ -1185,6 +1281,7 @@ mod tests {
                 name: "test_tool".to_string(),
                 parameters: serde_json::json!({"arg": "value"}),
             }),
+            tool_result: None,
             token_usage: None,
             stop_reason: None,
         };
@@ -1193,6 +1290,7 @@ mod tests {
             content: "tool_result".to_string(),
             chunk_type: ChunkType::ToolResult,
             tool_call: None,
+            tool_result: None,
             token_usage: None,
             stop_reason: None,
         };
@@ -1201,6 +1299,7 @@ mod tests {
             content: String::new(),
             chunk_type: ChunkType::Text,
             tool_call: None,
+            tool_result: None,
             token_usage: Some(TokenUsageInfo {
                 input_tokens: 100,
                 output_tokens: 200,
@@ -1249,5 +1348,68 @@ mod tests {
 
         // Note: Token tracking would need to be updated separately via the public fields
         // This test now focuses on basic message addition functionality
+    }
+
+    /// `process_notification` (via the pure builder `tool_call_update_to_chunk`)
+    /// turns a `SessionUpdate::ToolCallUpdate` into a `ChunkType::ToolResult`
+    /// chunk carrying the tool call id and status. Before this fix the
+    /// `ToolCallUpdate` arm logged "forwarded" and returned `true` without
+    /// sending anything, so the AI panel's tool cards never advanced from
+    /// pending.
+    #[test]
+    fn test_tool_call_update_becomes_tool_result_chunk_completed() {
+        use agent_client_protocol::schema::{
+            ToolCallId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+        };
+
+        let fields = ToolCallUpdateFields::new()
+            .status(ToolCallStatus::Completed)
+            .raw_output(serde_json::json!({"hits": 3}));
+        let update = ToolCallUpdate::new(ToolCallId::new("toolu_abc"), fields);
+
+        let chunk = ClaudeClient::tool_call_update_to_chunk(update)
+            .expect("Completed update must produce a chunk");
+        assert!(matches!(chunk.chunk_type, ChunkType::ToolResult));
+        let info = chunk
+            .tool_result
+            .as_ref()
+            .expect("ToolResult chunk must carry tool_result info");
+        assert_eq!(info.id, "toolu_abc");
+        assert_eq!(info.status, ToolCallStatus::Completed);
+        assert_eq!(info.raw_output, Some(serde_json::json!({"hits": 3})));
+    }
+
+    /// An `is_error: true` tool_result lands as `ToolCallStatus::Failed` in the
+    /// chunk, which is what the AI panel uses to render the tool card in the
+    /// failed state.
+    #[test]
+    fn test_tool_call_update_becomes_tool_result_chunk_failed() {
+        use agent_client_protocol::schema::{
+            ToolCallId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+        };
+
+        let fields = ToolCallUpdateFields::new().status(ToolCallStatus::Failed);
+        let update = ToolCallUpdate::new(ToolCallId::new("toolu_fail"), fields);
+
+        let chunk = ClaudeClient::tool_call_update_to_chunk(update)
+            .expect("Failed update must produce a chunk");
+        let info = chunk
+            .tool_result
+            .expect("ToolResult chunk must carry tool_result info");
+        assert_eq!(info.id, "toolu_fail");
+        assert_eq!(info.status, ToolCallStatus::Failed);
+    }
+
+    /// `tool_call_update_to_chunk` returns `None` for an update with no status
+    /// — without a status there's nothing to advance the AI panel's tool card,
+    /// so we drop the update rather than emit a no-op chunk.
+    #[test]
+    fn test_tool_call_update_without_status_is_dropped() {
+        use agent_client_protocol::schema::{ToolCallId, ToolCallUpdate, ToolCallUpdateFields};
+
+        let fields = ToolCallUpdateFields::new();
+        let update = ToolCallUpdate::new(ToolCallId::new("toolu_nostatus"), fields);
+
+        assert!(ClaudeClient::tool_call_update_to_chunk(update).is_none());
     }
 }

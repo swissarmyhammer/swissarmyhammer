@@ -679,6 +679,22 @@ impl ClaudeAgent {
         self.mcp_manager.clone()
     }
 
+    /// Get a reference to the notification sender.
+    ///
+    /// Exposes the [`NotificationSender`] this agent uses internally to publish
+    /// `SessionNotification`s on the broadcast channel returned by
+    /// [`ClaudeAgent::new`]. Tests use this accessor to inject synthetic
+    /// notifications and assert they propagate end-to-end through the bridge
+    /// (`forward_session_notifications` in `swissarmyhammer-agent`) onto the
+    /// ACP JSON-RPC wire — the production path the AI panel observes.
+    ///
+    /// # Returns
+    ///
+    /// A clone of the shared [`NotificationSender`].
+    pub fn notification_sender(&self) -> Arc<NotificationSender> {
+        Arc::clone(&self.notification_sender)
+    }
+
     /// Parse and validate a session ID from a SessionId wrapper
     pub(crate) fn parse_session_id(
         &self,

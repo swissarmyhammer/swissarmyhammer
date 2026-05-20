@@ -361,6 +361,12 @@ impl ProtocolTranslator {
     }
 
     /// Try to handle a tool_result content item.
+    ///
+    /// Anthropic's tool_result schema carries an optional `is_error: true` flag
+    /// when the tool reported a failure (e.g. a shell command that returned
+    /// non-zero, a permission denial, an MCP tool that raised). When present we
+    /// translate the update to `ToolCallStatus::Failed` so the AI panel can
+    /// surface the failure to the user; otherwise the call is `Completed`.
     fn try_handle_tool_result(
         &self,
         content_item: &JsonValue,
@@ -383,7 +389,17 @@ impl ProtocolTranslator {
             ToolCallId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
         };
 
-        let mut fields = ToolCallUpdateFields::new().status(ToolCallStatus::Completed);
+        let status = if content_item
+            .get("is_error")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            ToolCallStatus::Failed
+        } else {
+            ToolCallStatus::Completed
+        };
+
+        let mut fields = ToolCallUpdateFields::new().status(status);
         if let Some(content) = tool_content {
             fields = fields.content(content);
         }
@@ -1752,6 +1768,51 @@ mod tests {
                     update.fields.content.is_none(),
                     "Expected None for empty content array"
                 );
+            }
+            _ => panic!("Expected ToolCallUpdate"),
+        }
+    }
+
+    /// Anthropic's tool_result protocol marks a failure with `is_error: true`.
+    /// We translate that to `ToolCallStatus::Failed` so the AI panel can surface
+    /// the failure (with the error message in the content) instead of showing
+    /// the tool as having succeeded.
+    #[tokio::test]
+    async fn test_stream_json_to_acp_tool_result_is_error_yields_failed() {
+        let translator = create_test_translator();
+        let line = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_err","is_error":true,"content":"command failed: exit 1"}]}}"#;
+        let session_id = SessionId::new("test_session");
+
+        let notification = translator
+            .stream_json_to_acp(line, &session_id)
+            .await
+            .expect("stream_json_to_acp must succeed")
+            .expect("tool_result must produce a notification");
+
+        match notification.update {
+            SessionUpdate::ToolCallUpdate(update) => {
+                assert_eq!(update.tool_call_id.0.as_ref(), "toolu_err");
+                assert_eq!(
+                    update.fields.status,
+                    Some(agent_client_protocol::schema::ToolCallStatus::Failed),
+                    "is_error: true must translate to ToolCallStatus::Failed"
+                );
+                let content = update
+                    .fields
+                    .content
+                    .expect("error result must carry content");
+                assert_eq!(content.len(), 1);
+                match &content[0] {
+                    agent_client_protocol::schema::ToolCallContent::Content(wrapper) => {
+                        match &wrapper.content {
+                            ContentBlock::Text(text) => {
+                                assert_eq!(text.text, "command failed: exit 1");
+                            }
+                            _ => panic!("Expected text content block"),
+                        }
+                    }
+                    _ => panic!("Expected Content variant"),
+                }
             }
             _ => panic!("Expected ToolCallUpdate"),
         }

@@ -2235,4 +2235,274 @@ mod tests {
         let cloned = t.clone();
         assert!(matches!(cloned, AgentResponseType::Partial));
     }
+
+    // ========================================================================
+    // End-to-end notification bridge test
+    //
+    // Exercises the *exact* production path the kanban app uses to receive
+    // `SessionUpdate::ToolCallUpdate` notifications: the agent's broadcast
+    // channel → the `forward_session_notifications` task spawned by
+    // `wrap_claude_into_handle` → `cx.send_notification` → the JSON-RPC
+    // wire framed onto a WebSocket text frame.
+    //
+    // The kanban app declares no streaming meta in `clientCapabilities`, so
+    // the production path runs through `handle_non_streaming_prompt`. The
+    // existing `claude-agent` tests already prove the chunk pipeline emits a
+    // broadcast notification — see
+    // `test_real_cli_tool_result_line_round_trips_to_tool_call_update`.
+    // What this test proves is the remaining hop: a broadcast notification
+    // emitted by the agent actually arrives on the WebSocket as a JSON-RPC
+    // `session/update` frame the webview ACP client can parse.
+    //
+    // If a future change to `forward_session_notifications`, the
+    // `with_spawned` wiring, or the lines/WebSocket adapter silently drops
+    // `ToolCallUpdate` notifications, this test fails — pinning the bug to
+    // the bridge / transport layer rather than to the chunk pipeline.
+    // ========================================================================
+
+    /// Drive a real ACP `initialize` request → reply round-trip over a
+    /// loopback WebSocket against a `ClaudeAgent` wrapped by
+    /// `wrap_claude_into_handle`, then inject a `SessionUpdate::ToolCallUpdate`
+    /// via the agent's notification sender and confirm the WebSocket client
+    /// receives a matching `session/update` JSON-RPC notification.
+    ///
+    /// This is the e2e test the user asked for in the task: it builds the
+    /// agent the way production does, drives the same `ConnectTo::<Agent>`
+    /// wiring `agent_ws.rs` uses, and asserts the `ToolCallUpdate` arrives
+    /// on the wire — which is the chain that the chunk-level unit tests do
+    /// not cover.
+    #[tokio::test]
+    async fn test_tool_call_update_arrives_on_websocket_wire() {
+        use agent_client_protocol::schema::{
+            SessionId, SessionNotification, SessionUpdate, ToolCallId, ToolCallStatus,
+            ToolCallUpdate, ToolCallUpdateFields,
+        };
+        use agent_client_protocol::{Agent as AgentRole, ConnectTo};
+        use claude_agent::{AgentConfig, ClaudeAgent};
+        use futures_util::{SinkExt, StreamExt};
+        use std::io;
+        use std::time::Duration;
+        use tokio::net::TcpListener;
+        use tokio_tungstenite::tungstenite::Message;
+
+        // Build the agent the way production does — `ClaudeAgent::new` does
+        // not spawn any subprocess. The returned broadcast receiver is the
+        // global channel `notification_sender.send_update` publishes to;
+        // `wrap_claude_into_handle` resubscribes it for the bridge task.
+        let (agent, notification_rx) = ClaudeAgent::new(AgentConfig::default())
+            .await
+            .expect("agent construction must succeed");
+
+        // Extract the notification sender *before* moving the agent into
+        // `wrap_claude_into_handle`. The sender hands us a back door onto
+        // the same broadcast channel `forward_session_notifications` is
+        // reading, so we can publish synthetic `ToolCallUpdate`s without
+        // needing a real Claude CLI process.
+        let sender = agent.notification_sender();
+
+        let handle = wrap_claude_into_handle(agent, notification_rx);
+
+        // Stand up a loopback WebSocket server that wraps the agent
+        // component exactly the way `agent_ws.rs::serve_agent` does — same
+        // `lines_transport` shape, same `ConnectTo::<Agent>::connect_to`
+        // call. Anything that works here works for the real kanban app.
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("loopback bind must succeed");
+        let addr = listener.local_addr().expect("bound listener has addr");
+
+        let server_task = tokio::spawn(async move {
+            let (stream, _peer) = listener.accept().await.expect("accept must succeed");
+            let ws = tokio_tungstenite::accept_async(stream)
+                .await
+                .expect("ws handshake must succeed");
+            let transport = ws_lines_transport(ws);
+            ConnectTo::<AgentRole>::connect_to(transport, handle.agent)
+                .await
+                .map_err(|e| io::Error::other(e.to_string()))
+        });
+
+        // Connect the client side of the WebSocket.
+        let url = format!("ws://{addr}/");
+        let (mut ws, _resp) = tokio_tungstenite::connect_async(&url)
+            .await
+            .expect("client connect must succeed");
+
+        // ACP handshake: send `initialize` so the agent's
+        // `ConnectTo<Client>` is live and `forward_session_notifications`
+        // is actively pumping the bridge. Without this, `send_notification`
+        // would not yet have a counterpart to write to.
+        let initialize = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": 1,
+                "clientCapabilities": {
+                    "fs": { "readTextFile": false, "writeTextFile": false },
+                    "terminal": false
+                }
+            }
+        });
+        ws.send(Message::text(initialize.to_string()))
+            .await
+            .expect("initialize send must succeed");
+
+        // Drain the `initialize` reply so the next frame the client reads
+        // is the notification we are about to inject.
+        let init_reply = tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                match ws.next().await {
+                    Some(Ok(Message::Text(text))) => return text.to_string(),
+                    Some(Ok(Message::Close(_))) | None => {
+                        panic!("connection closed before initialize reply arrived")
+                    }
+                    Some(Ok(_)) => continue,
+                    Some(Err(e)) => panic!("WebSocket error during initialize: {e}"),
+                }
+            }
+        })
+        .await
+        .expect("initialize reply must arrive within timeout");
+        let init_value: serde_json::Value =
+            serde_json::from_str(&init_reply).expect("initialize reply is JSON");
+        assert_eq!(
+            init_value.get("id").and_then(|v| v.as_i64()),
+            Some(1),
+            "initialize reply must echo id=1: {init_reply}"
+        );
+
+        // Inject a `ToolCallUpdate` onto the agent's broadcast channel.
+        // This is exactly what `handle_streaming_tool_result` does inside
+        // the chunk pipeline — but we shortcut the chunk pipeline so the
+        // test does not need a Claude CLI subprocess. The remaining hops
+        // — broadcast → bridge task → `cx.send_notification` → JSON-RPC
+        // serialization → WebSocket frame — are the production path being
+        // verified.
+        let session_id = SessionId::new(std::sync::Arc::from("test-session-001"));
+        let tool_call_id = ToolCallId::new(std::sync::Arc::from(
+            "toolu_01DrhKGoTS6bBL9KkZqigfM1",
+        ));
+        let fields = ToolCallUpdateFields::new().status(ToolCallStatus::Completed);
+        let update = ToolCallUpdate::new(tool_call_id, fields);
+        let notification = SessionNotification::new(
+            session_id,
+            SessionUpdate::ToolCallUpdate(update),
+        );
+
+        sender
+            .send_update(notification)
+            .await
+            .expect("send_update must succeed");
+
+        // Read the next WebSocket frame and assert it is a
+        // `session/update` JSON-RPC notification carrying our injected
+        // `tool_call_update`. If `forward_session_notifications` dropped
+        // the message, or if `cx.send_notification` failed silently, or if
+        // the lines/WebSocket adapter ate the frame, this read times out
+        // or yields the wrong payload — both pinpoint a bridge/transport
+        // bug rather than a chunk-pipeline bug.
+        let frame = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match ws.next().await {
+                    Some(Ok(Message::Text(text))) => return text.to_string(),
+                    Some(Ok(Message::Close(_))) | None => {
+                        panic!("connection closed before notification frame arrived")
+                    }
+                    Some(Ok(_)) => continue,
+                    Some(Err(e)) => panic!("WebSocket error awaiting notification: {e}"),
+                }
+            }
+        })
+        .await
+        .expect("ToolCallUpdate notification must arrive on the wire within timeout");
+
+        let frame_value: serde_json::Value =
+            serde_json::from_str(&frame).expect("notification frame is JSON");
+
+        // ACP `session/update` is the JSON-RPC method name for
+        // `SessionNotification` (see `agent-client-protocol-schema`'s
+        // `CLIENT_METHOD_NAMES.session_update`). A notification frame has
+        // no `id` and a `method`/`params` shape.
+        assert!(
+            frame_value.get("id").is_none(),
+            "notification frame must have no id, got: {frame}"
+        );
+        assert_eq!(
+            frame_value.get("method").and_then(|v| v.as_str()),
+            Some("session/update"),
+            "frame method must be session/update, got: {frame}"
+        );
+
+        let params = frame_value
+            .get("params")
+            .expect("notification frame must carry params");
+        assert_eq!(
+            params.get("sessionId").and_then(|v| v.as_str()),
+            Some("test-session-001"),
+            "params.sessionId must round-trip, got: {params}"
+        );
+
+        // The session update payload is nested under `update`. The
+        // `SessionUpdate::ToolCallUpdate` discriminant serializes as
+        // `sessionUpdate = "tool_call_update"` (snake_case) on the wire —
+        // the snake_case key the webview adapter's reducer matches on.
+        let update_payload = params
+            .get("update")
+            .expect("params must carry an update object");
+        assert_eq!(
+            update_payload
+                .get("sessionUpdate")
+                .and_then(|v| v.as_str()),
+            Some("tool_call_update"),
+            "update.sessionUpdate must be tool_call_update, got: {update_payload}"
+        );
+        assert_eq!(
+            update_payload
+                .get("toolCallId")
+                .and_then(|v| v.as_str()),
+            Some("toolu_01DrhKGoTS6bBL9KkZqigfM1"),
+            "update.toolCallId must round-trip end-to-end, got: {update_payload}"
+        );
+        assert_eq!(
+            update_payload.get("status").and_then(|v| v.as_str()),
+            Some("completed"),
+            "update.status must be completed (ToolCallStatus::Completed serializes lowercase), got: {update_payload}"
+        );
+
+        // Clean teardown. Dropping the client closes the socket, which
+        // ends `ConnectTo::connect_to` on the server side.
+        drop(ws);
+        let _ = server_task.await;
+    }
+
+    /// Build the same `Lines` transport `agent_ws::lines_transport` builds.
+    /// Duplicated here so this test crate does not depend on `kanban-app`
+    /// (which is a binary target). The semantics — one JSON-RPC message
+    /// per text frame, dropped binary/ping/pong, errors via `io::Error` —
+    /// are intentionally identical.
+    fn ws_lines_transport(
+        ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    ) -> agent_client_protocol::Lines<
+        impl futures_util::Sink<String, Error = std::io::Error> + Send + 'static,
+        impl futures_util::Stream<Item = std::io::Result<String>> + Send + 'static,
+    > {
+        use futures_util::{SinkExt, StreamExt};
+        let (sink, stream) = ws.split();
+        let incoming = stream.filter_map(|frame| async move {
+            match frame {
+                Ok(tokio_tungstenite::tungstenite::Message::Text(text)) => {
+                    Some(Ok(text.as_str().to_owned()))
+                }
+                Ok(_) => None,
+                Err(e) => Some(Err(std::io::Error::other(e))),
+            }
+        });
+        let outgoing = sink.sink_map_err(std::io::Error::other).with(
+            |line: String| async move {
+                Ok(tokio_tungstenite::tungstenite::Message::text(line))
+            },
+        );
+        agent_client_protocol::Lines::new(outgoing, incoming)
+    }
 }
