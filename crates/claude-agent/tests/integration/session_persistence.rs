@@ -1,532 +1,381 @@
-//! Tests for session persistence and loading functionality
+//! Tests for durable session persistence via the shared `SessionStore`.
 //!
-//! This test suite verifies that sessions can be:
-//! 1. Saved to disk correctly
-//! 2. Loaded from disk with all data intact
-//! 3. Survive process restarts (simulated by creating new SessionManager instances)
-//! 4. Handle edge cases like missing files, corrupted data, etc.
+//! claude-agent persists a [`SessionRecord`] to the shared
+//! [`SessionStore`](agent_client_protocol_extras::SessionStore) at the end of
+//! each turn. This gives sessions durable, cross-restart persistence — they
+//! survive the process exiting — and makes them answerable by the ACP
+//! `session/list` method.
+//!
+//! These tests exercise that wiring through claude-agent's public surface:
+//!
+//! 1. `session/list` returns persisted sessions, newest first.
+//! 2. The `cwd` filter narrows results to one working directory.
+//! 3. Cursor pagination walks every persisted session exactly once.
+//! 4. Records round-trip through a simulated process restart — a record
+//!    persisted by one `SessionStore` is read back by a fresh one, exactly as
+//!    a new process would.
+//! 5. `initialize` advertises the `sessionCapabilities.list` capability.
 
-use claude_agent::session::{Message, MessageRole, Session, SessionId, SessionManager};
+use agent_client_protocol::schema::{
+    ContentBlock, ContentChunk, InitializeRequest, ListSessionsRequest, SessionUpdate, TextContent,
+};
+use agent_client_protocol_extras::{SessionRecord, SessionStore};
+use claude_agent::session::{Message, MessageRole};
+use claude_agent::{config::AgentConfig, ClaudeAgent};
+use serial_test::serial;
+use std::path::{Path, PathBuf};
 
-use std::time::Duration;
-use tempfile::TempDir;
-
-/// Helper to create a session manager with a temporary storage directory
-fn create_test_session_manager() -> (SessionManager, TempDir) {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let manager = SessionManager::new().with_storage_path(Some(temp_dir.path().join("sessions")));
-
-    (manager, temp_dir)
+/// Run `body` with `XDG_STATE_HOME` pointed at a fresh temp directory, so the
+/// `SessionStore` reads and writes an isolated `acp/` state tree. The previous
+/// value is restored afterwards.
+///
+/// Callers must be `#[serial]`: this mutates the process-global
+/// `XDG_STATE_HOME` environment variable.
+async fn with_temp_state<F, Fut, R>(body: F) -> R
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = R>,
+{
+    let temp = tempfile::tempdir().unwrap();
+    let previous = std::env::var_os("XDG_STATE_HOME");
+    // SAFETY: callers are `#[serial]`, so no other thread reads or writes the
+    // env var concurrently; the previous value is restored below.
+    std::env::set_var("XDG_STATE_HOME", temp.path());
+    let result = body().await;
+    match previous {
+        Some(value) => std::env::set_var("XDG_STATE_HOME", value),
+        None => std::env::remove_var("XDG_STATE_HOME"),
+    }
+    drop(temp);
+    result
 }
 
-#[test]
-fn test_session_saved_to_disk_on_creation() {
-    let (manager, temp_dir) = create_test_session_manager();
-    let cwd = std::env::current_dir().unwrap();
-
-    let session_id = manager.create_session(cwd.clone(), None).unwrap();
-
-    // Verify session file exists on disk
-    let session_file = temp_dir
-        .path()
-        .join("sessions")
-        .join(format!("{}.json", session_id));
-    assert!(
-        session_file.exists(),
-        "Session file should exist after creation"
-    );
-
-    // Verify file contains valid JSON
-    let json = std::fs::read_to_string(&session_file).unwrap();
-    let session: Session = serde_json::from_str(&json).unwrap();
-    assert_eq!(session.id, session_id);
-    assert_eq!(session.cwd, cwd);
+/// Build a `SessionRecord` with one user-message update for the given id and
+/// cwd, so a persisted session has realistic listing metadata.
+fn record_with_message(id: &str, cwd: &str, message: &str) -> SessionRecord {
+    let mut record = SessionRecord::new(id, PathBuf::from(cwd), "2026-05-18T12:00:00Z");
+    record.title = Some(message.to_string());
+    record
+        .updates
+        .push(SessionUpdate::UserMessageChunk(ContentChunk::new(
+            ContentBlock::Text(TextContent::new(message.to_string())),
+        )));
+    record
 }
 
-#[test]
-fn test_session_loaded_from_disk_after_restart() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let cwd = std::env::current_dir().unwrap();
+/// Collect the session-id strings from a `ListSessionsResponse`.
+fn ids(response: &agent_client_protocol::schema::ListSessionsResponse) -> Vec<String> {
+    response
+        .sessions
+        .iter()
+        .map(|s| s.session_id.0.to_string())
+        .collect()
+}
 
-    let session_id = {
-        // Create session in first "process"
-        let manager =
-            SessionManager::new().with_storage_path(Some(temp_dir.path().join("sessions")));
+/// `session/list` with no filter returns every persisted session, newest
+/// (highest ULID) first.
+#[tokio::test]
+#[serial]
+async fn session_list_returns_persisted_sessions_newest_first() {
+    with_temp_state(|| async {
+        let store = SessionStore::new();
+        for id in ["01AAA0000000000000000000A0", "01BBB0000000000000000000B0"] {
+            store
+                .persist(&record_with_message(id, "/work/x", "hello"))
+                .unwrap();
+        }
 
-        let session_id = manager.create_session(cwd.clone(), None).unwrap();
+        let (agent, _rx) = ClaudeAgent::new(AgentConfig::default()).await.unwrap();
+        let response = agent
+            .list_sessions(ListSessionsRequest::new())
+            .await
+            .unwrap();
 
-        // Add some messages to the session
-        manager
+        assert_eq!(
+            ids(&response),
+            vec![
+                "01BBB0000000000000000000B0".to_string(),
+                "01AAA0000000000000000000A0".to_string(),
+            ]
+        );
+        assert!(response.next_cursor.is_none());
+    })
+    .await;
+}
+
+/// `session/list` honors the `cwd` filter, returning only sessions whose
+/// working directory matches exactly.
+#[tokio::test]
+#[serial]
+async fn session_list_applies_cwd_filter() {
+    with_temp_state(|| async {
+        let store = SessionStore::new();
+        store
+            .persist(&record_with_message(
+                "01CCC0000000000000000000C0",
+                "/work/keep",
+                "keep me",
+            ))
+            .unwrap();
+        store
+            .persist(&record_with_message(
+                "01DDD0000000000000000000D0",
+                "/work/skip",
+                "skip me",
+            ))
+            .unwrap();
+        store
+            .persist(&record_with_message(
+                "01EEE0000000000000000000E0",
+                "/work/keep",
+                "keep me too",
+            ))
+            .unwrap();
+
+        let (agent, _rx) = ClaudeAgent::new(AgentConfig::default()).await.unwrap();
+        let response = agent
+            .list_sessions(ListSessionsRequest::new().cwd(PathBuf::from("/work/keep")))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            ids(&response),
+            vec![
+                "01EEE0000000000000000000E0".to_string(),
+                "01CCC0000000000000000000C0".to_string(),
+            ]
+        );
+    })
+    .await;
+}
+
+/// `session/list` paginates: following the `next_cursor` walks every persisted
+/// session exactly once, and the final page carries no cursor.
+#[tokio::test]
+#[serial]
+async fn session_list_paginates_with_cursor() {
+    with_temp_state(|| async {
+        let store = SessionStore::new();
+        // Persist more sessions than a single page of SESSION_LIST_PAGE_SIZE (50)
+        // so that pagination is actually exercised.
+        let mut expected = Vec::new();
+        for i in 0..130 {
+            let id = format!("01AAA00000000000000000{:04}", i);
+            store
+                .persist(&record_with_message(&id, "/work/p", "paged"))
+                .unwrap();
+            expected.push(id);
+        }
+        // Newest (highest ULID) first.
+        expected.sort_unstable_by(|a, b| b.cmp(a));
+
+        let (agent, _rx) = ClaudeAgent::new(AgentConfig::default()).await.unwrap();
+
+        let mut collected = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let request = match &cursor {
+                Some(c) => ListSessionsRequest::new().cursor(c.clone()),
+                None => ListSessionsRequest::new(),
+            };
+            let response = agent.list_sessions(request).await.unwrap();
+            collected.extend(ids(&response));
+            match response.next_cursor {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+
+        assert_eq!(
+            collected, expected,
+            "pagination should visit every persisted session exactly once"
+        );
+    })
+    .await;
+}
+
+/// A `SessionRecord` persisted by one `SessionStore` is read back intact by a
+/// fresh `SessionStore` — exactly as a brand-new process would after a restart.
+/// This is the cross-restart durability that did not exist before.
+#[tokio::test]
+#[serial]
+async fn session_record_round_trips_across_simulated_restart() {
+    with_temp_state(|| async {
+        let id = "01FFF0000000000000000000F0";
+
+        // "First process": persist a record.
+        {
+            let store = SessionStore::new();
+            store
+                .persist(&record_with_message(id, "/work/restart", "before restart"))
+                .unwrap();
+        }
+
+        // "Second process": a fresh store, as if the process had restarted.
+        let restarted_store = SessionStore::new();
+        let loaded = restarted_store
+            .load(id)
+            .unwrap()
+            .expect("record should survive the simulated restart");
+        assert_eq!(loaded.session_id, id);
+        assert_eq!(loaded.cwd, Path::new("/work/restart"));
+        assert_eq!(loaded.updates.len(), 1);
+
+        // And the agent's `session/list` sees it after the restart.
+        let (agent, _rx) = ClaudeAgent::new(AgentConfig::default()).await.unwrap();
+        let response = agent
+            .list_sessions(ListSessionsRequest::new())
+            .await
+            .unwrap();
+        assert_eq!(ids(&response), vec![id.to_string()]);
+    })
+    .await;
+}
+
+/// `session/list` against an empty store is an empty page, not an error.
+#[tokio::test]
+#[serial]
+async fn session_list_with_no_sessions_is_empty() {
+    with_temp_state(|| async {
+        let (agent, _rx) = ClaudeAgent::new(AgentConfig::default()).await.unwrap();
+        let response = agent
+            .list_sessions(ListSessionsRequest::new())
+            .await
+            .unwrap();
+        assert!(response.sessions.is_empty());
+        assert!(response.next_cursor.is_none());
+    })
+    .await;
+}
+
+/// `initialize` advertises the `sessionCapabilities.list` capability alongside
+/// the existing `load_session` capability.
+#[tokio::test]
+#[serial]
+async fn initialize_advertises_session_list_capability() {
+    with_temp_state(|| async {
+        let (agent, _rx) = ClaudeAgent::new(AgentConfig::default()).await.unwrap();
+
+        let request = InitializeRequest::new(1.into());
+        let response = agent.initialize(request).await.unwrap();
+
+        assert!(
+            response
+                .agent_capabilities
+                .session_capabilities
+                .list
+                .is_some(),
+            "agent must advertise sessionCapabilities.list"
+        );
+        assert!(
+            response.agent_capabilities.load_session,
+            "load_session capability must still be advertised"
+        );
+    })
+    .await;
+}
+
+/// `maybe_generate_session_title` generates a title from the first user
+/// message after the first meaningful exchange, stores it on the live
+/// session, and persists it so `session/list` reflects it.
+///
+/// This exercises the title-generation path through claude-agent's public
+/// surface — it lives here, in a real integration target, because the crate's
+/// `[lib] test = false` makes `#[cfg(test)]` lib modules dead code.
+#[tokio::test]
+#[serial]
+async fn maybe_generate_session_title_sets_and_persists_title() {
+    with_temp_state(|| async {
+        let cwd = tempfile::tempdir().unwrap();
+        let cwd_path = cwd.path().to_path_buf();
+
+        let (agent, _rx) = ClaudeAgent::new(AgentConfig::default()).await.unwrap();
+        let session_id = agent
+            .session_manager()
+            .create_session(cwd_path.clone(), None)
+            .unwrap();
+        agent
+            .session_manager()
             .update_session(&session_id, |session| {
-                session.add_message(Message::new(MessageRole::User, "Hello".to_string()));
+                session.add_message(Message::new(
+                    MessageRole::User,
+                    "Add dark mode to the settings page".to_string(),
+                ));
                 session.add_message(Message::new(
                     MessageRole::Assistant,
-                    "Hi there!".to_string(),
+                    "Sure, here is how.".to_string(),
                 ));
             })
             .unwrap();
 
-        session_id
-    };
+        agent.maybe_generate_session_title(&session_id);
 
-    // Simulate restart by creating new SessionManager with same storage path
-    let manager = SessionManager::new().with_storage_path(Some(temp_dir.path().join("sessions")));
-
-    // Load session from disk
-    let session = manager.get_session(&session_id).unwrap();
-    assert!(session.is_some(), "Session should be loaded from disk");
-
-    let session = session.unwrap();
-    assert_eq!(session.id, session_id);
-    assert_eq!(session.cwd, cwd);
-    assert_eq!(session.context.len(), 2, "Messages should be preserved");
-
-    // Verify message content
-    if let agent_client_protocol::schema::SessionUpdate::UserMessageChunk(chunk) =
-        &session.context[0].update
-    {
-        if let agent_client_protocol::schema::ContentBlock::Text(text) = &chunk.content {
-            assert_eq!(text.text, "Hello");
-        } else {
-            panic!("Expected text content");
-        }
-    } else {
-        panic!("Expected UserMessageChunk");
-    }
-}
-
-#[test]
-fn test_session_updates_persisted_to_disk() {
-    let (manager, temp_dir) = create_test_session_manager();
-    let cwd = std::env::current_dir().unwrap();
-
-    let session_id = manager.create_session(cwd, None).unwrap();
-
-    // Update session
-    manager
-        .update_session(&session_id, |session| {
-            session.add_message(Message::new(MessageRole::User, "Test message".to_string()));
+        // Generation is dispatched to a detached task; give it a moment.
+        let title = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let session = agent
+                    .session_manager()
+                    .get_session(&session_id)
+                    .unwrap()
+                    .unwrap();
+                if let Some(title) = session.title {
+                    break title;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
         })
-        .unwrap();
+        .await
+        .expect("title should be generated within the timeout");
 
-    // Read session file directly
-    let session_file = temp_dir
-        .path()
-        .join("sessions")
-        .join(format!("{}.json", session_id));
-    let json = std::fs::read_to_string(&session_file).unwrap();
-    let session: Session = serde_json::from_str(&json).unwrap();
+        assert_eq!(title, "Add dark mode to the settings page");
 
-    // Verify update was persisted
-    assert_eq!(session.context.len(), 1);
-}
-
-#[test]
-fn test_session_removal_deletes_disk_file() {
-    let (manager, temp_dir) = create_test_session_manager();
-    let cwd = std::env::current_dir().unwrap();
-
-    let session_id = manager.create_session(cwd, None).unwrap();
-
-    let session_file = temp_dir
-        .path()
-        .join("sessions")
-        .join(format!("{}.json", session_id));
-    assert!(session_file.exists(), "Session file should exist");
-
-    // Remove session
-    manager.remove_session(&session_id).unwrap();
-
-    // Verify file is deleted
-    assert!(
-        !session_file.exists(),
-        "Session file should be deleted after removal"
-    );
-}
-
-#[test]
-fn test_list_sessions_includes_disk_sessions() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let cwd = std::env::current_dir().unwrap();
-
-    // Create sessions and then drop the manager
-    let session_ids = {
-        let manager =
-            SessionManager::new().with_storage_path(Some(temp_dir.path().join("sessions")));
-
-        let id1 = manager.create_session(cwd.clone(), None).unwrap();
-        let id2 = manager.create_session(cwd.clone(), None).unwrap();
-        let id3 = manager.create_session(cwd, None).unwrap();
-
-        vec![id1, id2, id3]
-    };
-
-    // Create new manager and list sessions
-    let manager = SessionManager::new().with_storage_path(Some(temp_dir.path().join("sessions")));
-
-    let listed_sessions = manager.list_sessions().unwrap();
-
-    // Should find all three sessions from disk
-    assert_eq!(listed_sessions.len(), 3);
-    for id in session_ids {
-        assert!(
-            listed_sessions.contains(&id),
-            "Session {} should be in list",
-            id
+        let loaded = SessionStore::new()
+            .load(&session_id.to_string())
+            .unwrap()
+            .expect("record should be persisted with the title");
+        assert_eq!(
+            loaded.title.as_deref(),
+            Some("Add dark mode to the settings page")
         );
-    }
+    })
+    .await;
 }
 
-#[test]
-fn test_session_with_client_capabilities_persisted() {
-    let (manager, _temp_dir) = create_test_session_manager();
-    let cwd = std::env::current_dir().unwrap();
-
-    let fs_cap = agent_client_protocol::schema::FileSystemCapabilities::new()
-        .read_text_file(true)
-        .write_text_file(true);
-
-    let capabilities = agent_client_protocol::schema::ClientCapabilities::new()
-        .fs(fs_cap)
-        .terminal(true);
-
-    let session_id = manager
-        .create_session(cwd, Some(capabilities.clone()))
-        .unwrap();
-
-    // Simulate restart
-    let session = manager.get_session(&session_id).unwrap().unwrap();
-
-    assert!(session.client_capabilities.is_some());
-    let loaded_caps = session.client_capabilities.unwrap();
-
-    // Verify capabilities were preserved
-    assert!(loaded_caps.fs.read_text_file);
-    assert!(loaded_caps.fs.write_text_file);
-    assert!(loaded_caps.terminal);
-}
-
-#[test]
-fn test_session_with_mcp_servers_persisted() {
-    let (manager, _temp_dir) = create_test_session_manager();
-    let cwd = std::env::current_dir().unwrap();
-
-    let session_id = manager.create_session(cwd, None).unwrap();
-
-    // Update session with MCP servers
-    manager
-        .update_session(&session_id, |session| {
-            session.mcp_servers = vec!["server1".to_string(), "server2".to_string()];
-        })
-        .unwrap();
-
-    // Load from disk
-    let session = manager.get_session(&session_id).unwrap().unwrap();
-
-    assert_eq!(session.mcp_servers.len(), 2);
-    assert_eq!(session.mcp_servers[0], "server1");
-    assert_eq!(session.mcp_servers[1], "server2");
-}
-
-#[test]
-fn test_session_timestamps_persisted() {
-    let (manager, _temp_dir) = create_test_session_manager();
-    let cwd = std::env::current_dir().unwrap();
-
-    let session_id = manager.create_session(cwd, None).unwrap();
-
-    // Get original timestamps
-    let original_session = manager.get_session(&session_id).unwrap().unwrap();
-    let created_at = original_session.created_at;
-    let last_accessed = original_session.last_accessed;
-
-    // Small delay to ensure time difference
-    std::thread::sleep(Duration::from_millis(10));
-
-    // Update session to change last_accessed
-    manager
-        .update_session(&session_id, |session| {
-            session.add_message(Message::new(MessageRole::User, "Test".to_string()));
-        })
-        .unwrap();
-
-    // Clear in-memory cache by dropping and recreating manager
-    drop(manager);
-    let manager = SessionManager::new().with_storage_path(Some(_temp_dir.path().join("sessions")));
-
-    // Load from disk
-    let session = manager.get_session(&session_id).unwrap().unwrap();
-
-    // created_at should be unchanged
-    assert_eq!(session.created_at, created_at);
-
-    // last_accessed should be updated
-    assert!(session.last_accessed > last_accessed);
-}
-
-#[test]
-fn test_session_available_commands_persisted() {
-    let (manager, _temp_dir) = create_test_session_manager();
-    let cwd = std::env::current_dir().unwrap();
-
-    let session_id = manager.create_session(cwd, None).unwrap();
-
-    let commands = vec![
-        agent_client_protocol::schema::AvailableCommand::new(
-            "create_plan".to_string(),
-            "Create an execution plan".to_string(),
-        ),
-        agent_client_protocol::schema::AvailableCommand::new(
-            "research_codebase".to_string(),
-            "Research the codebase".to_string(),
-        ),
-    ];
-
-    manager
-        .update_available_commands(&session_id, commands.clone())
-        .unwrap();
-
-    // Load from disk
-    let session = manager.get_session(&session_id).unwrap().unwrap();
-
-    assert_eq!(session.available_commands.len(), 2);
-    assert_eq!(session.available_commands[0].name, "create_plan");
-    assert_eq!(session.available_commands[1].name, "research_codebase");
-}
-
-#[test]
-fn test_session_turn_counters_persisted() {
-    let (manager, _temp_dir) = create_test_session_manager();
-    let cwd = std::env::current_dir().unwrap();
-
-    let session_id = manager.create_session(cwd, None).unwrap();
-
-    // Update turn counters
-    manager
-        .update_session(&session_id, |session| {
-            session.increment_turn_requests();
-            session.increment_turn_requests();
-            session.add_turn_tokens(1000);
-            session.add_turn_tokens(500);
-        })
-        .unwrap();
-
-    // Load from disk
-    let session = manager.get_session(&session_id).unwrap().unwrap();
-
-    assert_eq!(session.get_turn_request_count(), 2);
-    assert_eq!(session.get_turn_token_count(), 1500);
-}
-
-#[test]
-fn test_session_current_mode_persisted() {
-    let (manager, _temp_dir) = create_test_session_manager();
-    let cwd = std::env::current_dir().unwrap();
-
-    let session_id = manager.create_session(cwd, None).unwrap();
-
-    // Set current mode
-    manager
-        .update_session(&session_id, |session| {
-            session.current_mode = Some("research".to_string());
-        })
-        .unwrap();
-
-    // Load from disk
-    let session = manager.get_session(&session_id).unwrap().unwrap();
-
-    assert_eq!(session.current_mode, Some("research".to_string()));
-}
-
-#[test]
-fn test_multiple_sessions_persisted_independently() {
-    let (manager, _temp_dir) = create_test_session_manager();
-    let cwd = std::env::current_dir().unwrap();
-
-    // Create multiple sessions with different data
-    let session_id1 = manager.create_session(cwd.clone(), None).unwrap();
-    let session_id2 = manager.create_session(cwd.clone(), None).unwrap();
-    let session_id3 = manager.create_session(cwd, None).unwrap();
-
-    manager
-        .update_session(&session_id1, |session| {
-            session.add_message(Message::new(MessageRole::User, "Session 1".to_string()));
-        })
-        .unwrap();
-
-    manager
-        .update_session(&session_id2, |session| {
-            session.add_message(Message::new(MessageRole::User, "Session 2".to_string()));
-        })
-        .unwrap();
-
-    manager
-        .update_session(&session_id3, |session| {
-            session.add_message(Message::new(MessageRole::User, "Session 3".to_string()));
-        })
-        .unwrap();
-
-    // Load each session and verify they have correct data
-    let session1 = manager.get_session(&session_id1).unwrap().unwrap();
-    let session2 = manager.get_session(&session_id2).unwrap().unwrap();
-    let session3 = manager.get_session(&session_id3).unwrap().unwrap();
-
-    assert_eq!(session1.context.len(), 1);
-    assert_eq!(session2.context.len(), 1);
-    assert_eq!(session3.context.len(), 1);
-
-    // Verify each session has its own distinct message
-    if let agent_client_protocol::schema::SessionUpdate::UserMessageChunk(chunk) =
-        &session1.context[0].update
-    {
-        if let agent_client_protocol::schema::ContentBlock::Text(text) = &chunk.content {
-            assert_eq!(text.text, "Session 1");
-        }
-    }
-
-    if let agent_client_protocol::schema::SessionUpdate::UserMessageChunk(chunk) =
-        &session2.context[0].update
-    {
-        if let agent_client_protocol::schema::ContentBlock::Text(text) = &chunk.content {
-            assert_eq!(text.text, "Session 2");
-        }
-    }
-
-    if let agent_client_protocol::schema::SessionUpdate::UserMessageChunk(chunk) =
-        &session3.context[0].update
-    {
-        if let agent_client_protocol::schema::ContentBlock::Text(text) = &chunk.content {
-            assert_eq!(text.text, "Session 3");
-        }
-    }
-}
-
-#[test]
-fn test_session_loaded_on_first_get_after_restart() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let cwd = std::env::current_dir().unwrap();
-
-    // Create session
-    let session_id = {
-        let manager =
-            SessionManager::new().with_storage_path(Some(temp_dir.path().join("sessions")));
-        manager.create_session(cwd, None).unwrap()
-    };
-
-    // Create new manager (simulated restart)
-    let manager = SessionManager::new().with_storage_path(Some(temp_dir.path().join("sessions")));
-
-    // First get should load from disk
-    let session = manager.get_session(&session_id).unwrap();
-    assert!(
-        session.is_some(),
-        "Session should be loaded from disk on first get"
-    );
-
-    // Second get should use in-memory cache
-    let session2 = manager.get_session(&session_id).unwrap();
-    assert!(
-        session2.is_some(),
-        "Session should still be available from cache"
-    );
-}
-
-#[test]
-fn test_session_with_complex_message_history_persisted() {
-    let (manager, _temp_dir) = create_test_session_manager();
-    let cwd = std::env::current_dir().unwrap();
-
-    let session_id = manager.create_session(cwd, None).unwrap();
-
-    // Add various types of messages
-    manager
-        .update_session(&session_id, |session| {
-            session.add_message(Message::new(MessageRole::User, "Hello".to_string()));
-            session.add_message(Message::new(MessageRole::Assistant, "Hi!".to_string()));
-            session.add_message(Message::new(MessageRole::User, "How are you?".to_string()));
-            session.add_message(Message::new(
-                MessageRole::Assistant,
-                "I'm doing well!".to_string(),
-            ));
-            session.add_message(Message::new(
-                MessageRole::System,
-                "System message".to_string(),
-            ));
-        })
-        .unwrap();
-
-    // Load from disk
-    let session = manager.get_session(&session_id).unwrap().unwrap();
-
-    assert_eq!(session.context.len(), 5);
-}
-
-#[test]
-fn test_nonexistent_session_file_returns_none() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let manager = SessionManager::new().with_storage_path(Some(temp_dir.path().join("sessions")));
-
-    let nonexistent_id = SessionId::new();
-    let session = manager.get_session(&nonexistent_id).unwrap();
-
-    assert!(session.is_none(), "Nonexistent session should return None");
-}
-
-#[test]
-fn test_session_storage_directory_created_if_missing() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let storage_path = temp_dir.path().join("new_sessions_dir");
-
-    // Verify directory doesn't exist yet
-    assert!(!storage_path.exists());
-
-    let manager = SessionManager::new().with_storage_path(Some(storage_path.clone()));
-
-    let cwd = std::env::current_dir().unwrap();
-    manager.create_session(cwd, None).unwrap();
-
-    // Directory should be created
-    assert!(storage_path.exists());
-    assert!(storage_path.is_dir());
-}
-
-#[test]
-fn test_session_file_contains_valid_json() {
-    let (manager, temp_dir) = create_test_session_manager();
-    let cwd = std::env::current_dir().unwrap();
-
-    let session_id = manager.create_session(cwd.clone(), None).unwrap();
-
-    let session_file = temp_dir
-        .path()
-        .join("sessions")
-        .join(format!("{}.json", session_id));
-    let json = std::fs::read_to_string(&session_file).unwrap();
-
-    // Should be pretty-printed JSON
-    assert!(json.contains("{\n"));
-
-    // Should be parseable
-    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-
-    // Should contain expected fields
-    assert!(parsed.get("id").is_some());
-    assert!(parsed.get("created_at").is_some());
-    assert!(parsed.get("last_accessed").is_some());
-    assert!(parsed.get("context").is_some());
-    assert!(parsed.get("cwd").is_some());
-}
-
-#[test]
-fn test_session_working_directory_path_persisted_correctly() {
-    let (manager, _temp_dir) = create_test_session_manager();
-    let cwd = std::env::temp_dir();
-
-    let session_id = manager.create_session(cwd.clone(), None).unwrap();
-
-    // Load from disk
-    let session = manager.get_session(&session_id).unwrap().unwrap();
-
-    assert_eq!(session.cwd, cwd);
-    assert!(session.cwd.is_absolute());
+/// `maybe_generate_session_title` does not generate a title before the first
+/// agent response — a user message alone is not a full exchange.
+#[tokio::test]
+#[serial]
+async fn maybe_generate_session_title_waits_for_first_exchange() {
+    with_temp_state(|| async {
+        let cwd = tempfile::tempdir().unwrap();
+        let cwd_path = cwd.path().to_path_buf();
+
+        let (agent, _rx) = ClaudeAgent::new(AgentConfig::default()).await.unwrap();
+        let session_id = agent
+            .session_manager()
+            .create_session(cwd_path.clone(), None)
+            .unwrap();
+        agent
+            .session_manager()
+            .update_session(&session_id, |session| {
+                session.add_message(Message::new(MessageRole::User, "just a prompt".to_string()));
+            })
+            .unwrap();
+
+        agent.maybe_generate_session_title(&session_id);
+
+        // Allow any (incorrectly) spawned task time to run.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let session = agent
+            .session_manager()
+            .get_session(&session_id)
+            .unwrap()
+            .unwrap();
+        assert!(
+            session.title.is_none(),
+            "no title should be generated before the first agent response"
+        );
+    })
+    .await;
 }

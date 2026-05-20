@@ -6,26 +6,20 @@
 //! 3. Updating multiple sessions concurrently
 //! 4. Deleting multiple sessions concurrently
 //! 5. Mixed operations (create, read, update, delete) running concurrently
-//! 6. Concurrent operations with persistence enabled
 
 use claude_agent::session::{Message, MessageRole, SessionManager};
 use std::sync::Arc;
 use std::time::Duration;
-use tempfile::TempDir;
 use tokio::task::JoinSet;
 
-/// Helper to create a session manager with a temporary storage directory
-fn create_test_session_manager() -> (Arc<SessionManager>, TempDir) {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let manager =
-        Arc::new(SessionManager::new().with_storage_path(Some(temp_dir.path().join("sessions"))));
-
-    (manager, temp_dir)
+/// Helper to create an in-memory session manager for concurrency tests.
+fn create_test_session_manager() -> Arc<SessionManager> {
+    Arc::new(SessionManager::new())
 }
 
 #[tokio::test]
 async fn test_concurrent_session_creation() {
-    let (manager, _temp_dir) = create_test_session_manager();
+    let manager = create_test_session_manager();
     let cwd = std::env::current_dir().unwrap();
 
     // Create 10 sessions concurrently
@@ -63,7 +57,7 @@ async fn test_concurrent_session_creation() {
 
 #[tokio::test]
 async fn test_concurrent_session_reads() {
-    let (manager, _temp_dir) = create_test_session_manager();
+    let manager = create_test_session_manager();
     let cwd = std::env::current_dir().unwrap();
 
     // Create a session
@@ -105,7 +99,7 @@ async fn test_concurrent_session_reads() {
 
 #[tokio::test]
 async fn test_concurrent_session_updates() {
-    let (manager, _temp_dir) = create_test_session_manager();
+    let manager = create_test_session_manager();
     let cwd = std::env::current_dir().unwrap();
 
     // Create multiple sessions
@@ -153,7 +147,7 @@ async fn test_concurrent_session_updates() {
 
 #[tokio::test]
 async fn test_concurrent_session_removal() {
-    let (manager, _temp_dir) = create_test_session_manager();
+    let manager = create_test_session_manager();
     let cwd = std::env::current_dir().unwrap();
 
     // Create 10 sessions
@@ -206,7 +200,7 @@ async fn test_concurrent_session_removal() {
 
 #[tokio::test]
 async fn test_concurrent_mixed_operations() {
-    let (manager, _temp_dir) = create_test_session_manager();
+    let manager = create_test_session_manager();
     let cwd = std::env::current_dir().unwrap();
 
     // Create initial sessions
@@ -284,7 +278,7 @@ async fn test_concurrent_mixed_operations() {
 
 #[tokio::test]
 async fn test_concurrent_list_operations() {
-    let (manager, _temp_dir) = create_test_session_manager();
+    let manager = create_test_session_manager();
     let cwd = std::env::current_dir().unwrap();
 
     // Create sessions
@@ -317,97 +311,8 @@ async fn test_concurrent_list_operations() {
 }
 
 #[tokio::test]
-async fn test_concurrent_operations_with_persistence() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let manager =
-        Arc::new(SessionManager::new().with_storage_path(Some(temp_dir.path().join("sessions"))));
-    let cwd = std::env::current_dir().unwrap();
-
-    // Create sessions concurrently
-    let mut create_tasks = JoinSet::new();
-    for i in 0..5 {
-        let manager_clone = manager.clone();
-        let cwd_clone = cwd.clone();
-        create_tasks.spawn(async move {
-            let session_id = manager_clone.create_session(cwd_clone, None).unwrap();
-            (i, session_id)
-        });
-    }
-
-    let mut session_ids = Vec::new();
-    while let Some(result) = create_tasks.join_next().await {
-        let (_index, session_id) = result.unwrap();
-        session_ids.push(session_id);
-    }
-
-    // Update sessions concurrently
-    let mut update_tasks = JoinSet::new();
-    for (i, session_id) in session_ids.iter().enumerate() {
-        let manager_clone = manager.clone();
-        let session_id_clone = *session_id;
-        update_tasks.spawn(async move {
-            manager_clone
-                .update_session(&session_id_clone, |session| {
-                    session.add_message(Message::new(
-                        MessageRole::User,
-                        format!("Persistent message {}", i),
-                    ));
-                })
-                .unwrap();
-        });
-    }
-
-    while let Some(result) = update_tasks.join_next().await {
-        result.unwrap();
-    }
-
-    // Verify all session files exist on disk
-    for session_id in &session_ids {
-        let session_file = temp_dir
-            .path()
-            .join("sessions")
-            .join(format!("{}.json", session_id));
-        assert!(
-            session_file.exists(),
-            "Session file for {} should exist",
-            session_id
-        );
-    }
-
-    // Create a new manager (simulated restart) and verify sessions can be loaded
-    let new_manager =
-        Arc::new(SessionManager::new().with_storage_path(Some(temp_dir.path().join("sessions"))));
-
-    // Load all sessions concurrently
-    let mut load_tasks = JoinSet::new();
-    for session_id in &session_ids {
-        let manager_clone = new_manager.clone();
-        let session_id_clone = *session_id;
-        load_tasks.spawn(async move {
-            let session = manager_clone.get_session(&session_id_clone).unwrap();
-            (session_id_clone, session)
-        });
-    }
-
-    let mut loaded_count = 0;
-    while let Some(result) = load_tasks.join_next().await {
-        let (session_id, session) = result.unwrap();
-        assert!(
-            session.is_some(),
-            "Session {} should be loaded from disk",
-            session_id
-        );
-        let session = session.unwrap();
-        assert_eq!(session.context.len(), 1, "Session should have 1 message");
-        loaded_count += 1;
-    }
-
-    assert_eq!(loaded_count, 5, "All sessions should be loaded");
-}
-
-#[tokio::test]
 async fn test_concurrent_updates_same_session() {
-    let (manager, _temp_dir) = create_test_session_manager();
+    let manager = create_test_session_manager();
     let cwd = std::env::current_dir().unwrap();
 
     // Create a single session
@@ -446,7 +351,7 @@ async fn test_concurrent_updates_same_session() {
 
 #[tokio::test]
 async fn test_concurrent_create_and_immediate_read() {
-    let (manager, _temp_dir) = create_test_session_manager();
+    let manager = create_test_session_manager();
     let cwd = std::env::current_dir().unwrap();
 
     // Create and immediately read sessions concurrently
@@ -481,7 +386,7 @@ async fn test_concurrent_create_and_immediate_read() {
 
 #[tokio::test]
 async fn test_concurrent_operations_stress_test() {
-    let (manager, _temp_dir) = create_test_session_manager();
+    let manager = create_test_session_manager();
     let cwd = std::env::current_dir().unwrap();
 
     // Create a larger number of sessions to stress test the system
@@ -550,7 +455,7 @@ async fn test_concurrent_operations_stress_test() {
 
 #[tokio::test]
 async fn test_concurrent_delete_and_recreate() {
-    let (manager, _temp_dir) = create_test_session_manager();
+    let manager = create_test_session_manager();
     let cwd = std::env::current_dir().unwrap();
 
     // Create initial sessions

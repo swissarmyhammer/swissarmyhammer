@@ -10,13 +10,23 @@ use futures::StreamExt;
 use swissarmyhammer_common::Pretty;
 use tokio::sync::{broadcast, RwLock};
 
+use agent_client_protocol_extras::{RawMessageManager, SessionStore};
+
 use super::config::AcpConfig;
 use super::filesystem::FilesystemOperations;
 use super::permissions::PermissionPolicyEngine;
-use super::raw_message_manager::RawMessageManager;
 use super::session::AcpSessionState;
+use super::session_record::session_record_from;
 use super::terminal::TerminalManager;
 use super::translation::ToJsonRpcError;
+
+/// Default page size for the `session/list` handler.
+///
+/// [`ListSessionsRequest`](agent_client_protocol::schema::ListSessionsRequest)
+/// carries no page-size field — paging is cursor-driven — so the agent picks
+/// the size. A modest fixed value keeps each response bounded while remaining
+/// useful for a session-picker UI.
+const SESSION_LIST_PAGE_SIZE: usize = 50;
 
 pub struct AcpServer {
     /// Underlying llama-agent server
@@ -46,14 +56,74 @@ pub struct AcpServer {
     /// Terminal manager for process handling
     terminal_manager: Arc<RwLock<TerminalManager>>,
 
-    /// Raw message recorder for debugging/auditing
-    raw_message_manager: Option<RawMessageManager>,
+    /// How often the background task scans the session cache for eviction.
+    ///
+    /// Mirrors claude-agent's `SessionManager::cleanup_interval` so both agents
+    /// sweep idle in-memory session state on the same cadence.
+    cleanup_interval: std::time::Duration,
+
+    /// Idle time after which a cached session is evicted from the in-memory
+    /// maps.
+    ///
+    /// The in-memory `sessions` / `llama_to_acp` maps are a bounded cache over
+    /// the durable [`SessionStore`]; an entry untouched for longer than this is
+    /// dropped from the cache. Eviction is lossless — the session's
+    /// [`SessionRecord`] persists on disk and [`get_session`](Self::get_session)
+    /// transparently reloads it from the store on the next request. Mirrors
+    /// claude-agent's `SessionManager::max_session_age`.
+    max_session_age: std::time::Duration,
 }
 
+/// Default interval between session-cache eviction sweeps (5 minutes).
+///
+/// Matches claude-agent's `SessionManager` default so both agents sweep on the
+/// same cadence.
+const DEFAULT_CLEANUP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Default idle time before a cached session is evicted (1 hour).
+///
+/// Matches claude-agent's `SessionManager` default so both agents expire
+/// in-memory session state on the same idle-time policy.
+const DEFAULT_MAX_SESSION_AGE: std::time::Duration = std::time::Duration::from_secs(3600);
+
 impl AcpServer {
+    /// Create an ACP server with the default session-cache eviction policy.
+    ///
+    /// The eviction policy (5-minute sweep interval, 1-hour idle TTL) matches
+    /// claude-agent's `SessionManager` defaults. Use
+    /// [`with_cleanup_settings`](Self::with_cleanup_settings) to override it.
     pub fn new(
         agent_server: Arc<AgentServer>,
         config: AcpConfig,
+    ) -> (
+        Self,
+        tokio::sync::broadcast::Receiver<agent_client_protocol::schema::SessionNotification>,
+    ) {
+        Self::with_cleanup_settings(
+            agent_server,
+            config,
+            DEFAULT_CLEANUP_INTERVAL,
+            DEFAULT_MAX_SESSION_AGE,
+        )
+    }
+
+    /// Create an ACP server with an explicit session-cache eviction policy.
+    ///
+    /// The in-memory `sessions` / `llama_to_acp` maps are a bounded cache over
+    /// the durable [`SessionStore`]; `cleanup_interval` controls how often the
+    /// background task sweeps the cache and `max_session_age` is the idle time
+    /// after which a cache entry is evicted. Mirrors claude-agent's
+    /// `SessionManager::with_cleanup_settings`.
+    ///
+    /// # Parameters
+    ///
+    /// * `cleanup_interval` - How often to scan the cache for idle sessions.
+    /// * `max_session_age` - Idle time after which a cached session is evicted.
+    pub fn with_cleanup_settings(
+        agent_server: Arc<AgentServer>,
+        config: AcpConfig,
+        cleanup_interval: std::time::Duration,
+        max_session_age: std::time::Duration,
     ) -> (
         Self,
         tokio::sync::broadcast::Receiver<agent_client_protocol::schema::SessionNotification>,
@@ -72,33 +142,9 @@ impl AcpServer {
             config.terminal.graceful_shutdown_timeout.as_duration(),
         )));
 
-        // Initialize raw message recorder for debugging
-        let raw_message_manager = {
-            let raw_json_path = std::env::current_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                .join(".acp")
-                .join("transcript_raw.jsonl");
-
-            // Create parent directory if needed
-            if let Some(parent) = raw_json_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-
-            match RawMessageManager::new(raw_json_path.clone()) {
-                Ok(manager) => {
-                    tracing::info!(
-                        "Raw ACP JSON-RPC messages recording to {}",
-                        raw_json_path.display()
-                    );
-                    Some(manager)
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to create raw message recorder: {}", e);
-                    None
-                }
-            }
-        };
-
+        // The raw JSON-RPC transcript recorder is per-session, not per-server:
+        // it is created in `new_session` once the session ULID is known and
+        // registered in the shared registry keyed by that ULID.
         let server = Self {
             agent_server,
             sessions: Arc::new(RwLock::new(HashMap::new())),
@@ -109,7 +155,8 @@ impl AcpServer {
             permission_engine,
             filesystem_ops,
             terminal_manager,
-            raw_message_manager,
+            cleanup_interval,
+            max_session_age,
         };
 
         (server, notification_rx)
@@ -182,6 +229,49 @@ impl AcpServer {
         Ok(())
     }
 
+    /// Build the prompt capabilities llama-agent advertises in `initialize`.
+    ///
+    /// llama-agent only supports text content (see `translation.rs`), so image,
+    /// audio, and embedded-context are all advertised as unsupported. This is
+    /// the single source of truth: `initialize` advertises exactly these
+    /// capabilities, and `prompt` enforces them via
+    /// [`ContentCapabilityValidator`], so what is advertised always matches what
+    /// is enforced.
+    fn advertised_prompt_capabilities() -> agent_client_protocol::schema::PromptCapabilities {
+        agent_client_protocol::schema::PromptCapabilities::new()
+            .audio(false)
+            .embedded_context(false)
+            .image(false)
+            .meta({
+                let mut map = serde_json::Map::new();
+                map.insert("streaming".to_string(), serde_json::Value::Bool(true));
+                map
+            })
+    }
+
+    /// Reject prompt content the agent advertised as unsupported.
+    ///
+    /// Validates every [`ContentBlock`] in the request against the advertised
+    /// [`PromptCapabilities`]. This mirrors claude-agent's
+    /// `ContentCapabilityValidator` step in its prompt path, so both agents
+    /// reject exactly the content types they advertise as unsupported.
+    fn validate_prompt_content(
+        prompt: &[agent_client_protocol::schema::ContentBlock],
+    ) -> Result<(), agent_client_protocol::Error> {
+        let validator = super::content_validation::ContentCapabilityValidator::new(
+            Self::advertised_prompt_capabilities(),
+        );
+        if let Err(capability_error) = validator.validate_content_blocks(prompt) {
+            let acp_error = capability_error.to_acp_error();
+            tracing::warn!(
+                "Content capability validation failed: {}",
+                acp_error.message
+            );
+            return Err(acp_error);
+        }
+        Ok(())
+    }
+
     /// Convert a llama-agent error to ACP JSON-RPC error format
     ///
     /// This helper uses the ToJsonRpcError trait to convert llama-agent errors
@@ -194,6 +284,26 @@ impl AcpServer {
             error = error.data(data);
         }
         error
+    }
+
+    /// Log an incoming ACP request at `debug` level.
+    ///
+    /// Every ACP method calls this on entry. It is the request half of the
+    /// uniform request/response logging convention shared with claude-agent
+    /// (`ClaudeAgent::log_request`), so a transcript shows the same
+    /// `Handling <method> request: ...` line from either agent.
+    fn log_request<T: std::fmt::Debug + serde::Serialize>(&self, method: &str, request: &T) {
+        tracing::debug!("Handling {} request: {}", method, Pretty(request));
+    }
+
+    /// Log an outgoing ACP response at `debug` level.
+    ///
+    /// Every ACP method calls this before returning a successful response. It
+    /// is the response half of the request/response logging convention shared
+    /// with claude-agent (`ClaudeAgent::log_response`), so a transcript shows
+    /// the same `Returning <method> response: ...` line from either agent.
+    fn log_response<T: std::fmt::Debug + serde::Serialize>(&self, method: &str, response: &T) {
+        tracing::debug!("Returning {} response: {}", method, Pretty(response));
     }
 
     /// Map llama-agent FinishReason to ACP StopReason
@@ -261,6 +371,12 @@ impl AcpServer {
         W: tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
         tracing::info!("Starting ACP server with stdio streams (SDK 0.11 builder)");
+
+        // Start the background task that bounds the in-memory session cache by
+        // evicting idle sessions. Eviction is lossless — an evicted session's
+        // durable `SessionRecord` is reloaded from the `SessionStore` on the
+        // next request — so the cache stays bounded over a long-lived process.
+        self.start_cleanup_task();
 
         // Cancellation token used to wake the notification bridge when the
         // transport's reader hits EOF. The transport's incoming stream is
@@ -354,13 +470,197 @@ impl AcpServer {
             .await
     }
 
-    /// Get a session by ACP session ID
+    /// Resolve a session by ACP session ID.
     ///
-    /// This method first checks the in-memory session cache. If the session is not found
-    /// in memory, it returns None. Session persistence and loading from disk should be
-    /// handled explicitly via the load_session method.
+    /// The in-memory `sessions` map is a *bounded cache* over the durable
+    /// [`SessionStore`], not the source of truth. Resolution is therefore
+    /// two-tier:
+    ///
+    /// 1. **Cache hit** — return the cached [`AcpSessionState`], refreshing its
+    ///    [`last_accessed`](AcpSessionState::last_accessed) timestamp so the
+    ///    periodic cleanup task treats the session as recently used.
+    /// 2. **Cache miss** — attempt to reload the session from the durable
+    ///    [`SessionStore`] via [`reload_session_from_store`](Self::reload_session_from_store).
+    ///    A miss happens for an evicted session or after a process restart.
+    ///    Reload reconstructs the live llama session and the ACP session state
+    ///    and re-populates the cache, so an evicted session stays fully
+    ///    resolvable for the next request.
+    ///
+    /// Returns `None` only when the id has no live cache entry *and* no durable
+    /// record — i.e. the session genuinely does not exist.
+    ///
+    /// This is what makes cache eviction lossless: dropping an entry never
+    /// loses a session, because the next `get_session` reloads it from disk.
     async fn get_session(&self, session_id: &AcpSessionId) -> Option<AcpSessionState> {
-        self.sessions.read().await.get(session_id).cloned()
+        // Cache hit: refresh recency under the write lock so the cleanup task
+        // sees the access, and return the refreshed state.
+        {
+            let mut sessions = self.sessions.write().await;
+            if let Some(session) = sessions.get_mut(session_id) {
+                session.touch();
+                return Some(session.clone());
+            }
+        }
+
+        // Cache miss: the session may have been evicted or the process
+        // restarted. Reload it from the durable store.
+        self.reload_session_from_store(session_id).await
+    }
+
+    /// Reload an evicted (or post-restart) session from the durable
+    /// [`SessionStore`] and re-populate the in-memory cache.
+    ///
+    /// This is the cache-miss branch of [`get_session`](Self::get_session). It
+    /// reuses the same restore machinery as `session/resume`:
+    ///
+    /// 1. Load the durable [`SessionRecord`] for the id. A missing record means
+    ///    the session never existed (or was never persisted) — returns `None`.
+    /// 2. Restore the live llama session from the record via
+    ///    [`ResumeStrategy::restore`](agent_client_protocol_extras::ResumeStrategy::restore).
+    /// 3. Reconstruct the [`AcpSessionState`] and insert it into the cache via
+    ///    [`store_session`](Self::store_session).
+    ///
+    /// All failures are logged and surface as `None`: a caller that cannot
+    /// resolve the session treats it as not found, exactly as before this
+    /// cache existed. The session id stays opaque — a non-llama id simply
+    /// fails to restore rather than being rejected on format.
+    async fn reload_session_from_store(
+        &self,
+        session_id: &AcpSessionId,
+    ) -> Option<AcpSessionState> {
+        let record = match self.load_session_record(&session_id.0) {
+            Ok(record) => record,
+            Err(super::session_resume::SessionRestoreError::NotFound(_)) => return None,
+            Err(e) => {
+                tracing::warn!(
+                    "Cannot reload evicted session {} from store: {}",
+                    session_id.0,
+                    e
+                );
+                return None;
+            }
+        };
+
+        if let Err(e) = agent_client_protocol_extras::ResumeStrategy::restore(self, &record).await {
+            tracing::warn!(
+                "Failed to restore evicted session {} from store: {}",
+                session_id.0,
+                e
+            );
+            return None;
+        }
+
+        let llama_session_id = match crate::types::SessionId::from_str(&session_id.0) {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!(
+                    "Reloaded session id {} is not a llama session id: {}",
+                    session_id.0,
+                    e
+                );
+                return None;
+            }
+        };
+
+        let client_caps = self
+            .client_capabilities
+            .read()
+            .await
+            .clone()
+            .unwrap_or_default();
+
+        let reconstructed = AcpSessionState::with_capabilities(llama_session_id, client_caps);
+        self.store_session(reconstructed.clone()).await;
+        Self::wire_raw_message_manager(session_id);
+
+        tracing::info!(
+            "Reloaded evicted session {} from durable store",
+            session_id.0
+        );
+        Some(reconstructed)
+    }
+
+    /// Evict idle sessions from the in-memory cache.
+    ///
+    /// Drops every cache entry whose [`last_accessed`](AcpSessionState::last_accessed)
+    /// age exceeds [`max_session_age`](Self::max_session_age), and removes the
+    /// matching reverse mapping from `llama_to_acp`. This bounds the cache for a
+    /// long-lived process: without it the `sessions` / `llama_to_acp` maps would
+    /// grow for the entire process lifetime.
+    ///
+    /// Eviction is **lossless** — the durable [`SessionRecord`] for an evicted
+    /// session remains on disk, and [`get_session`](Self::get_session) reloads
+    /// it transparently on the next request. This mirrors claude-agent's
+    /// `SessionManager::cleanup_expired_sessions`.
+    ///
+    /// Returns the number of sessions evicted.
+    async fn cleanup_expired_sessions(&self) -> usize {
+        let now = std::time::SystemTime::now();
+
+        // Identify expired sessions under the read lock.
+        let expired: Vec<AcpSessionId> = {
+            let sessions = self.sessions.read().await;
+            sessions
+                .iter()
+                .filter(|(_, session)| {
+                    now.duration_since(session.last_accessed)
+                        .map(|age| age > self.max_session_age)
+                        .unwrap_or(false)
+                })
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+
+        if expired.is_empty() {
+            return 0;
+        }
+
+        // Drop the expired entries and their reverse mappings.
+        let mut sessions = self.sessions.write().await;
+        let mut llama_to_acp = self.llama_to_acp.write().await;
+        for acp_id in &expired {
+            if let Some(state) = sessions.remove(acp_id) {
+                // Only drop the reverse entry if it still points at this ACP
+                // id — a concurrent reload may have re-registered the llama id.
+                if llama_to_acp.get(&state.llama_session_id) == Some(acp_id) {
+                    llama_to_acp.remove(&state.llama_session_id);
+                }
+                tracing::info!(
+                    "Evicted idle session {} from in-memory cache (durable record retained)",
+                    acp_id.0
+                );
+            }
+        }
+
+        expired.len()
+    }
+
+    /// Spawn the background task that periodically evicts idle sessions.
+    ///
+    /// Every [`cleanup_interval`](Self::cleanup_interval) the task runs
+    /// [`cleanup_expired_sessions`](Self::cleanup_expired_sessions), bounding
+    /// the in-memory session cache for a long-lived process. The task is
+    /// detached and lives as long as the `Arc<AcpServer>` it holds — i.e. for
+    /// the lifetime of the connection. Mirrors claude-agent's
+    /// `SessionManager::start_cleanup_task`.
+    fn start_cleanup_task(self: &Arc<Self>) {
+        let server = Arc::clone(self);
+        let interval = server.cleanup_interval;
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            tracing::info!(
+                "ACP session-cache cleanup task started (interval: {:?}, max age: {:?})",
+                interval,
+                server.max_session_age
+            );
+            loop {
+                ticker.tick().await;
+                let evicted = server.cleanup_expired_sessions().await;
+                if evicted > 0 {
+                    tracing::debug!("Session-cache cleanup evicted {} idle sessions", evicted);
+                }
+            }
+        });
     }
 
     /// Get a session by llama session ID
@@ -400,14 +700,50 @@ impl AcpServer {
         }
     }
 
+    /// Create and register the per-session raw JSON-RPC transcript recorder.
+    ///
+    /// The transcript path embeds the session ULID, so the manager can only be
+    /// built once a session exists. The resolved manager writes
+    /// `<acp-session-dir>/raw.jsonl` for the session and is registered in the
+    /// shared registry keyed by the session ULID, so [`broadcast_notification`]
+    /// (and any subagent) can [`RawMessageManager::lookup`] it.
+    ///
+    /// Failure to create the recorder is logged and otherwise ignored — raw
+    /// transcript recording is a debugging aid, not a session requirement.
+    ///
+    /// # Parameters
+    ///
+    /// * `session_id` - The ACP session ID, whose string form is the session
+    ///   ULID used both as the transcript directory name and the registry key.
+    ///
+    /// [`broadcast_notification`]: Self::broadcast_notification
+    fn wire_raw_message_manager(session_id: &AcpSessionId) {
+        let session_ulid = session_id.0.to_string();
+
+        match RawMessageManager::new(&session_ulid) {
+            Ok(manager) => {
+                RawMessageManager::register(session_ulid.clone(), manager);
+                tracing::info!(
+                    "Raw ACP JSON-RPC messages recording to <acp-session-dir>/raw.jsonl for session {}",
+                    session_ulid
+                );
+            }
+            Err(e) => {
+                tracing::warn!("Failed to create raw message recorder: {}", e);
+            }
+        }
+    }
+
     fn broadcast_notification(&self, notification: SessionNotification) {
         tracing::trace!(
             "Broadcasting notification: {}",
             Pretty(&notification.update)
         );
 
-        // Record notification to raw message log for debugging
-        if let Some(ref manager) = self.raw_message_manager {
+        // Record the notification to the session's raw transcript for
+        // debugging. The recorder is looked up from the shared registry by the
+        // session ULID carried on the notification.
+        if let Some(manager) = RawMessageManager::lookup(&notification.session_id.0) {
             if let Ok(json) = serde_json::to_string(&notification) {
                 manager.record(json);
             }
@@ -530,126 +866,474 @@ impl AcpServer {
         );
     }
 
-    /// Load an existing session and replay its history via notifications
+    /// Build one `session/update` notification for a replayed update, tagging
+    /// it as a historical replay so clients can distinguish it from live
+    /// output.
     ///
-    /// This method implements the ACP load_session capability by:
-    /// 1. Looking up the ACP session state
-    /// 2. Retrieving the corresponding llama-agent session with all messages
-    /// 3. Streaming ALL historical messages chronologically via session/update notifications
+    /// The `_meta` shape is identical to claude-agent's
+    /// `ClaudeAgent::build_replay_notification`
+    /// (`message_type: "historical_replay"`, `message_index`,
+    /// `total_messages`) so a client observes the same replayed-history stream
+    /// from both agents.
+    fn build_replay_notification(
+        session_id: &AcpSessionId,
+        update: &agent_client_protocol::schema::SessionUpdate,
+        index: usize,
+        total: usize,
+    ) -> SessionNotification {
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "message_type".to_string(),
+            serde_json::json!("historical_replay"),
+        );
+        meta.insert("message_index".to_string(), serde_json::json!(index));
+        meta.insert("total_messages".to_string(), serde_json::json!(total));
+
+        SessionNotification::new(session_id.clone(), update.clone()).meta(meta)
+    }
+
+    /// Handle the ACP `session/load` request: restore a session, then replay
+    /// its recorded conversation to the client.
     ///
-    /// This enables clients to reconstruct the full conversation history when loading
-    /// an existing session.
+    /// `session/load` is `session/resume` plus replay. It:
     ///
-    /// NOTE: Full implementation requires agent-client-protocol types that may not be
-    /// available in version 0.8.0. This is a stub implementation that validates the
-    /// session exists and returns success.
+    /// 1. Loads the durable
+    ///    [`SessionRecord`](agent_client_protocol_extras::SessionRecord) from
+    ///    the shared [`SessionStore`].
+    /// 2. Restores agent state via
+    ///    [`ResumeStrategy::restore`](agent_client_protocol_extras::ResumeStrategy::restore),
+    ///    which reconstructs the in-memory llama session from the record and
+    ///    re-renders it through the chat template so the model is primed.
+    /// 3. Reconstructs the ACP session state so the next `session/prompt`
+    ///    resolves the session.
+    /// 4. Replays [`SessionRecord::updates`](agent_client_protocol_extras::SessionRecord::updates)
+    ///    as `session/update` notifications — the only step `session/load`
+    ///    performs beyond `session/resume` — so the client can reconstruct the
+    ///    full conversation history.
+    ///
+    /// The empty [`LoadSessionResponse`](agent_client_protocol::schema::LoadSessionResponse)
+    /// is the correct response: the conversation is delivered through the
+    /// replayed notifications, not the response body.
+    ///
+    /// A missing or unreadable record surfaces as a session-not-found error —
+    /// the opaque session id is never rejected on format.
     pub async fn load_session(
         &self,
         req: agent_client_protocol::schema::LoadSessionRequest,
     ) -> Result<agent_client_protocol::schema::LoadSessionResponse, agent_client_protocol::Error>
     {
+        self.log_request("load_session", &req);
         tracing::info!("Loading session {}", req.session_id.0);
 
-        // Try to get ACP session from memory, or reconstruct it from llama session
-        let acp_session = if let Some(session) = self.get_session(&req.session_id).await {
-            session
-        } else {
-            // ACP session not in memory - try to reconstruct from llama session storage
-            // Parse the ACP session ID to get the llama session ID
-            let llama_session_id =
-                crate::types::SessionId::from_str(&req.session_id.0).map_err(|_| {
-                    tracing::error!("Invalid session ID format: {}", req.session_id.0);
-                    agent_client_protocol::Error::invalid_params()
-                })?;
-
-            // Verify the llama session exists in storage
-            let _llama_session = self
-                .agent_server
-                .session_manager()
-                .get_session(&llama_session_id)
-                .await
-                .map_err(|e| {
-                    tracing::error!("Failed to get session from storage: {}", e);
-                    Self::convert_error(e)
-                })?
-                .ok_or_else(|| {
-                    tracing::error!("Session not found: {}", llama_session_id);
-                    agent_client_protocol::Error::invalid_params()
-                })?;
-
-            // Get stored client capabilities
-            let client_caps = self
-                .client_capabilities
-                .read()
-                .await
-                .clone()
-                .unwrap_or_default();
-
-            // Reconstruct ACP session state with client capabilities
-            let reconstructed = AcpSessionState::with_capabilities(llama_session_id, client_caps);
-
-            // Store it for future use
-            self.store_session(reconstructed.clone()).await;
-
-            tracing::info!(
-                "Reconstructed ACP session {} from llama session storage",
-                req.session_id.0
+        // Enforce the advertised `loadSession` capability before acting. The
+        // `initialize` response advertises `load_session` from
+        // `config.capabilities.supports_session_loading`; if it is disabled the
+        // agent must reject `session/load` rather than silently honoring it.
+        // This mirrors claude-agent's `check_load_session_requirements` gate so
+        // both agents enforce exactly what they advertise. The error shape
+        // (`method_not_found`, `requiredCapability: loadSession`) is identical
+        // to claude-agent's `LoadSessionNotSupported` mapping.
+        if !self.config.capabilities.supports_session_loading {
+            tracing::error!(
+                "Rejecting session/load: agent does not advertise loadSession capability"
             );
+            return Err(super::acp_error::method_not_found(
+                "Method not supported: agent does not support loadSession capability",
+            )
+            .data(serde_json::json!({
+                "method": "session/load",
+                "requiredCapability": "loadSession",
+                "declared": false
+            })));
+        }
 
-            reconstructed
-        };
+        // Resolve the durable record from the shared SessionStore. This is the
+        // source of truth across process restarts — the in-memory llama
+        // session may not exist yet.
+        let record = self
+            .load_session_record(&req.session_id.0)
+            .map_err(|e| self.restore_error_to_acp(&req.session_id, e))?;
 
-        // Get llama session with all messages
-        let llama_session = self
-            .agent_server
-            .session_manager()
-            .get_session(&acp_session.llama_session_id)
+        // Restore state: reconstruct the in-memory llama session from the
+        // record and prime the model via chat-template re-render.
+        agent_client_protocol_extras::ResumeStrategy::restore(self, &record)
             .await
-            .map_err(|e| {
-                tracing::error!("Failed to get session: {}", e);
-                Self::convert_error(e)
-            })?
-            .ok_or_else(|| {
-                tracing::error!("Session not found: {}", acp_session.llama_session_id);
-                agent_client_protocol::Error::invalid_params()
-            })?;
+            .map_err(|e| self.session_restore_failed_error(&req.session_id, &e))?;
 
-        // Stream ALL historical messages via session/update notifications
-        for message in &llama_session.messages {
-            let text_content =
-                agent_client_protocol::schema::TextContent::new(message.content.clone());
-            let content_block = agent_client_protocol::schema::ContentBlock::Text(text_content);
-            let content_chunk = agent_client_protocol::schema::ContentChunk::new(content_block);
+        // Ensure ACP session state exists so the next `session/prompt` resolves
+        // the session. The ACP session id is the llama session id string.
+        self.ensure_acp_session_state(&req.session_id).await?;
 
-            let update = match message.role {
-                crate::types::MessageRole::User => {
-                    agent_client_protocol::schema::SessionUpdate::UserMessageChunk(content_chunk)
-                }
-                crate::types::MessageRole::Assistant => {
-                    agent_client_protocol::schema::SessionUpdate::AgentMessageChunk(content_chunk)
-                }
-                crate::types::MessageRole::Tool => {
-                    // For tool messages, we need to send them as agent message chunks
-                    // since SessionUpdate doesn't have a direct ToolResult variant for historical messages
-                    agent_client_protocol::schema::SessionUpdate::AgentMessageChunk(content_chunk)
-                }
-                crate::types::MessageRole::System => {
-                    // Skip system messages in session history
-                    continue;
-                }
-            };
-
-            let notification = SessionNotification::new(req.session_id.clone(), update);
+        // Replay the recorded conversation via session/update notifications.
+        // This is the only thing `session/load` does beyond `session/resume`.
+        //
+        // Each replayed notification is tagged with `_meta` identical to
+        // claude-agent's replay tagging (`message_type: "historical_replay"`,
+        // `message_index`, `total_messages`) so a client can distinguish
+        // replayed history from live updates, and observes the same shape from
+        // both agents.
+        let replayed = record.updates.len();
+        for (index, update) in record.updates.iter().enumerate() {
+            let notification =
+                Self::build_replay_notification(&req.session_id, update, index, replayed);
             self.broadcast_notification(notification);
         }
 
         tracing::info!(
-            "Loaded session {} with {} messages",
+            "Loaded session {} ({} replayed updates)",
             req.session_id.0,
-            llama_session.messages.len()
+            replayed
         );
 
-        Ok(agent_client_protocol::schema::LoadSessionResponse::new())
+        let response = agent_client_protocol::schema::LoadSessionResponse::new();
+        self.log_response("load_session", &response);
+        Ok(response)
+    }
+
+    /// Handle the ACP `session/resume` request: restore a session and return.
+    ///
+    /// `session/resume` restores agent state and returns — it MUST NOT replay
+    /// history. It loads the durable
+    /// [`SessionRecord`](agent_client_protocol_extras::SessionRecord) from the
+    /// shared [`SessionStore`] and restores state via
+    /// [`ResumeStrategy::restore`](agent_client_protocol_extras::ResumeStrategy::restore),
+    /// which reconstructs the in-memory llama session and re-renders the
+    /// conversation through the chat template so the next `session/prompt`
+    /// continues it. The recorded conversation is *not* streamed back to the
+    /// client; that is `session/load`.
+    ///
+    /// A missing or unreadable record surfaces as a session-not-found error —
+    /// the opaque session id is never rejected on format.
+    pub async fn resume_session(
+        &self,
+        req: agent_client_protocol::schema::ResumeSessionRequest,
+    ) -> Result<agent_client_protocol::schema::ResumeSessionResponse, agent_client_protocol::Error>
+    {
+        self.log_request("resume_session", &req);
+        tracing::info!("Resuming session {}", req.session_id.0);
+
+        // Resolve the durable record from the shared SessionStore.
+        let record = self
+            .load_session_record(&req.session_id.0)
+            .map_err(|e| self.restore_error_to_acp(&req.session_id, e))?;
+
+        // Restore state only — no history replay, per the ACP resume contract.
+        agent_client_protocol_extras::ResumeStrategy::restore(self, &record)
+            .await
+            .map_err(|e| self.session_restore_failed_error(&req.session_id, &e))?;
+
+        // Ensure ACP session state exists so the next `session/prompt` resolves
+        // the session.
+        self.ensure_acp_session_state(&req.session_id).await?;
+
+        tracing::info!("Resumed session {}", req.session_id.0);
+
+        let response = agent_client_protocol::schema::ResumeSessionResponse::new();
+        self.log_response("resume_session", &response);
+        Ok(response)
+    }
+
+    /// Ensure ACP session state exists for a restored session.
+    ///
+    /// `session/resume` and `session/load` restore the *llama* session via
+    /// [`ResumeStrategy::restore`](agent_client_protocol_extras::ResumeStrategy::restore),
+    /// but the ACP layer also tracks per-session [`AcpSessionState`] (client
+    /// capabilities, mode, permissions). After a process restart that state is
+    /// gone, so it is reconstructed here from the current client capabilities.
+    /// If the state already exists in memory it is left untouched.
+    ///
+    /// The ACP session id is the llama session id string, so a non-llama id
+    /// surfaces as `invalid_params` — consistent with the restore error path.
+    async fn ensure_acp_session_state(
+        &self,
+        session_id: &AcpSessionId,
+    ) -> Result<(), agent_client_protocol::Error> {
+        // Check the in-memory cache directly rather than via `get_session`:
+        // the caller has just run `ResumeStrategy::restore`, so going through
+        // `get_session`'s store-reload fallback would restore the session a
+        // second time. A direct cache probe avoids that redundant work.
+        if self.sessions.read().await.contains_key(session_id) {
+            return Ok(());
+        }
+
+        let llama_session_id = crate::types::SessionId::from_str(&session_id.0).map_err(|e| {
+            tracing::error!("Restored session id is not a llama session id: {}", e);
+            agent_client_protocol::Error::invalid_params()
+        })?;
+
+        let client_caps = self
+            .client_capabilities
+            .read()
+            .await
+            .clone()
+            .unwrap_or_default();
+
+        let reconstructed = AcpSessionState::with_capabilities(llama_session_id, client_caps);
+        self.store_session(reconstructed).await;
+
+        // Wire up the per-session transcript recorder so any replayed history
+        // and subsequent turns are recorded to the existing transcript.
+        Self::wire_raw_message_manager(session_id);
+
+        tracing::info!("Reconstructed ACP session state for {}", session_id.0);
+        Ok(())
+    }
+
+    /// Handle the ACP `session/list` request.
+    ///
+    /// Returns persisted sessions from the shared [`SessionStore`], newest
+    /// first, honoring the request's optional `cwd` filter and opaque
+    /// pagination `cursor`. The returned page carries a `next_cursor` when more
+    /// sessions remain.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`agent_client_protocol::Error::internal_error`] if the session
+    /// store cannot be scanned.
+    pub async fn list_sessions(
+        &self,
+        request: agent_client_protocol::schema::ListSessionsRequest,
+    ) -> Result<agent_client_protocol::schema::ListSessionsResponse, agent_client_protocol::Error>
+    {
+        self.log_request("list_sessions", &request);
+        tracing::info!("Listing sessions (cursor: {:?})", request.cursor);
+
+        let page = SessionStore::new()
+            .list(
+                request.cwd.as_deref(),
+                request.cursor.as_deref(),
+                SESSION_LIST_PAGE_SIZE,
+            )
+            .map_err(|e| {
+                tracing::error!("Failed to list sessions: {}", e);
+                super::acp_error::internal_error(format!("Failed to list sessions: {e}"))
+            })?;
+
+        tracing::info!("Listed {} sessions", page.sessions.len());
+        let response = agent_client_protocol::schema::ListSessionsResponse::new(page.sessions)
+            .next_cursor(page.next_cursor);
+        self.log_response("list_sessions", &response);
+        Ok(response)
+    }
+
+    /// Persist the current state of an ACP session as a durable [`SessionRecord`].
+    ///
+    /// Loads the live llama session for `acp_session`, projects its
+    /// conversation onto an agent-neutral
+    /// [`SessionRecord`](agent_client_protocol_extras::SessionRecord) via
+    /// [`session_record_from`], and writes it to the shared [`SessionStore`].
+    /// Called at the end of `session/new` and each `session/prompt` turn so the
+    /// on-disk record tracks the conversation as it grows and `session/list`
+    /// can enumerate it across process restarts.
+    ///
+    /// Persistence failures are logged and swallowed: a turn must not fail
+    /// because the durable copy could not be written. The in-memory llama
+    /// session remains the source of truth for the running process.
+    ///
+    /// # Parameters
+    ///
+    /// * `acp_session` - The ACP session whose live state should be persisted.
+    async fn persist_session_record(&self, acp_session: &AcpSessionState) {
+        let llama_session = match self
+            .agent_server
+            .session_manager()
+            .get_session(&acp_session.llama_session_id)
+            .await
+        {
+            Ok(Some(session)) => session,
+            Ok(None) => {
+                tracing::warn!(
+                    "Cannot persist session record: llama session {} not found",
+                    acp_session.llama_session_id
+                );
+                return;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Cannot persist session record for {}: {}",
+                    acp_session.session_id.0,
+                    e
+                );
+                return;
+            }
+        };
+
+        let record = session_record_from(&acp_session.session_id.0, &llama_session);
+        match SessionStore::new().persist(&record) {
+            Ok(()) => tracing::debug!("Persisted session record for {}", acp_session.session_id.0),
+            Err(e) => tracing::warn!(
+                "Failed to persist session record for {}: {}",
+                acp_session.session_id.0,
+                e
+            ),
+        }
+    }
+
+    /// Generate the session title after the first meaningful exchange, if it is
+    /// still missing.
+    ///
+    /// This implements the shared title contract documented in
+    /// [`agent_client_protocol_extras::session_title`]: a title is generated
+    /// exactly once, after the session has both a user message and an
+    /// assistant response. llama-agent's generation source is a short model
+    /// call ([`AgentServer::generate_session_title`]), which falls back to the
+    /// first-user-message heuristic on model error.
+    ///
+    /// Generation is dispatched to a detached task so it never blocks the
+    /// `session/prompt` response. The task generates the title, stores it on
+    /// the live llama session, persists the updated [`SessionRecord`], and
+    /// broadcasts a single
+    /// [`SessionUpdate::SessionInfoUpdate`](agent_client_protocol::schema::SessionUpdate)
+    /// notification carrying the new title and last-activity timestamp.
+    ///
+    /// Called at the end of every successful prompt turn. It is a cheap no-op
+    /// once a title exists, so re-invoking it on later turns is harmless.
+    ///
+    /// # Parameters
+    ///
+    /// * `acp_session` - The ACP session whose title should be generated.
+    fn maybe_generate_session_title(&self, acp_session: &AcpSessionState) {
+        let agent_server = Arc::clone(&self.agent_server);
+        let notification_tx = self.notification_tx.clone();
+        let llama_session_id = acp_session.llama_session_id;
+        let acp_session_id = acp_session.session_id.clone();
+
+        // Detached task: title generation runs a model call and must never
+        // block the prompt response.
+        tokio::spawn(async move {
+            Self::generate_and_emit_title(
+                agent_server,
+                notification_tx,
+                llama_session_id,
+                acp_session_id,
+            )
+            .await;
+        });
+    }
+
+    /// Generate a session title and emit the built-in `SessionInfoUpdate`.
+    ///
+    /// This is the detached worker behind [`maybe_generate_session_title`]. It
+    /// re-checks the trigger condition (so a racing turn cannot double-generate
+    /// a title), runs the model call, stores the title on the live session,
+    /// persists the record, and broadcasts exactly one `SessionInfoUpdate`.
+    ///
+    /// All failures are logged and swallowed — a missing title must never fail
+    /// a turn that has already completed.
+    ///
+    /// [`maybe_generate_session_title`]: Self::maybe_generate_session_title
+    async fn generate_and_emit_title(
+        agent_server: Arc<AgentServer>,
+        notification_tx: broadcast::Sender<SessionNotification>,
+        llama_session_id: LlamaSessionId,
+        acp_session_id: AcpSessionId,
+    ) {
+        let session = match agent_server
+            .session_manager()
+            .get_session(&llama_session_id)
+            .await
+        {
+            Ok(Some(session)) => session,
+            Ok(None) => return,
+            Err(e) => {
+                tracing::warn!(
+                    "Cannot generate session title for {}: {}",
+                    acp_session_id.0,
+                    e
+                );
+                return;
+            }
+        };
+
+        // Generate exactly once, and only after the first meaningful exchange.
+        if session.title.is_some() || !super::session_record::has_first_exchange(&session.messages)
+        {
+            return;
+        }
+
+        let Some(first_user_text) =
+            super::session_record::first_user_message_text(&session.messages)
+        else {
+            return;
+        };
+
+        let Some(title) = agent_server.generate_session_title(&first_user_text).await else {
+            return;
+        };
+
+        // Store the title on the live session, guarding against a turn that
+        // raced ahead and already set one. The mutation is applied in place
+        // under the session write lock so a concurrent turn or MCP context
+        // update on this same session is not clobbered by a read-modify-write.
+        // `mutate_session` bumps `updated_at` itself, so the closure only
+        // touches the title.
+        let mut applied = false;
+        match agent_server
+            .session_manager()
+            .mutate_session(&llama_session_id, |session| {
+                if session.title.is_none() {
+                    session.title = Some(title.clone());
+                    applied = true;
+                }
+            })
+            .await
+        {
+            Ok(()) => {}
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to store generated title for session {}: {}",
+                    acp_session_id.0,
+                    e
+                );
+                return;
+            }
+        }
+        if !applied {
+            return;
+        }
+
+        // Persist so `session/list` returns the title across restarts.
+        if let Ok(Some(session)) = agent_server
+            .session_manager()
+            .get_session(&llama_session_id)
+            .await
+        {
+            let record = session_record_from(&acp_session_id.0, &session);
+            if let Err(e) = SessionStore::new().persist(&record) {
+                tracing::warn!(
+                    "Failed to persist session title for {}: {}",
+                    acp_session_id.0,
+                    e
+                );
+            }
+        }
+
+        // Emit the single built-in SessionInfoUpdate carrying the new title.
+        let updated_at = chrono::Utc::now().to_rfc3339();
+        let info_update = agent_client_protocol::schema::SessionInfoUpdate::new()
+            .title(title.clone())
+            .updated_at(updated_at);
+        let notification = SessionNotification::new(
+            acp_session_id.clone(),
+            agent_client_protocol::schema::SessionUpdate::SessionInfoUpdate(info_update),
+        );
+        if let Some(manager) = RawMessageManager::lookup(&acp_session_id.0) {
+            if let Ok(json) = serde_json::to_string(&notification) {
+                manager.record(json);
+            }
+        }
+        match notification_tx.send(notification) {
+            Ok(_) => tracing::info!(
+                "Generated session title for {}: {}",
+                acp_session_id.0,
+                title
+            ),
+            Err(e) => tracing::warn!(
+                "Failed to broadcast SessionInfoUpdate for {}: {}",
+                acp_session_id.0,
+                e
+            ),
+        }
     }
 
     /// Get a session by ACP session ID
@@ -676,6 +1360,17 @@ impl AcpServer {
         self.get_session(session_id).await
     }
 
+    /// Borrow the underlying llama [`AgentServer`].
+    ///
+    /// The `AgentServer` owns the session manager, model, and chat template.
+    /// Exposing it lets the session-resume layer reconstruct sessions and
+    /// re-render conversations, and lets integration tests inspect restored
+    /// session state after `session/resume` and `session/load`.
+    #[must_use]
+    pub fn agent_server(&self) -> &Arc<AgentServer> {
+        &self.agent_server
+    }
+
     /// Supported ACP protocol versions (V0 and V1)
     const SUPPORTED_PROTOCOL_VERSIONS: &'static [agent_client_protocol::schema::ProtocolVersion] =
         &[
@@ -688,12 +1383,18 @@ impl AcpServer {
     /// Returns the client's requested version if supported, otherwise returns
     /// the agent's latest supported version (V1).
     ///
+    /// Defined as a `pub(crate)` associated function (no `&self`): negotiation
+    /// depends only on the client's requested version and the static
+    /// [`Self::SUPPORTED_PROTOCOL_VERSIONS`] list, never on instance state.
+    /// `claude-agent` carries the identical `pub(crate)` associated-function
+    /// signature so the "one convention" claim holds at the signature level.
+    ///
     /// # Arguments
     /// * `client_requested_version` - The protocol version requested by the client
     ///
     /// # Returns
     /// The negotiated protocol version to use for the session
-    fn negotiate_protocol_version(
+    pub(crate) fn negotiate_protocol_version(
         client_requested_version: &agent_client_protocol::schema::ProtocolVersion,
     ) -> agent_client_protocol::schema::ProtocolVersion {
         // If client's requested version is supported, use it
@@ -745,12 +1446,12 @@ impl AcpServer {
         request: agent_client_protocol::schema::InitializeRequest,
     ) -> Result<agent_client_protocol::schema::InitializeResponse, agent_client_protocol::Error>
     {
-        tracing::trace!(
-            "Processing initialize request with protocol version {}",
-            Pretty(&request.protocol_version)
-        );
+        self.log_request("initialize", &request);
 
-        // Negotiate protocol version with client
+        // `initialize` is a light, non-fatal handshake: negotiate the protocol
+        // version and never hard-fail on a mismatch. There is no request-body
+        // validation beyond negotiation — claude-agent follows the identical
+        // convention.
         let negotiated_version = Self::negotiate_protocol_version(&request.protocol_version);
 
         tracing::trace!(
@@ -775,27 +1476,45 @@ impl AcpServer {
             Pretty(&request.client_capabilities)
         );
 
-        // Build agent capabilities from config
-        // Only advertise capabilities we actually support
-        // Currently llama-agent only supports text content (see translation.rs)
-        let prompt_caps = agent_client_protocol::schema::PromptCapabilities::new()
-            .audio(false)
-            .embedded_context(false)
-            .image(false)
-            .meta({
-                let mut map = serde_json::Map::new();
-                map.insert("streaming".to_string(), serde_json::Value::Bool(true));
-                map
-            });
+        // Build agent capabilities from config. Only advertise capabilities we
+        // actually support. The advertised prompt capabilities come from
+        // `advertised_prompt_capabilities()` — the same source of truth that
+        // `prompt` enforces against, so advertise and enforce never drift.
+        let prompt_caps = Self::advertised_prompt_capabilities();
 
         let mcp_caps = agent_client_protocol::schema::McpCapabilities::new()
             .http(true)
             .sse(false);
 
+        // Advertise `session/list` and `session/resume`. Sessions are
+        // persisted to the shared SessionStore in `session/new` and at the end
+        // of each prompt turn, so the agent can enumerate them and resume them
+        // across process restarts. `session/resume` restores the conversation
+        // by re-rendering it through the model's chat template; the matching
+        // `session/load` (resume plus history replay) is gated separately by
+        // the `load_session` capability flag below.
+        let session_caps = agent_client_protocol::schema::SessionCapabilities::new()
+            .list(agent_client_protocol::schema::SessionListCapabilities::new())
+            .resume(agent_client_protocol::schema::SessionResumeCapabilities::new());
+
+        // Build the agent capability `_meta` map. ACP's `AgentCapabilities`
+        // has no first-class field for these flags, so they live in `_meta` as
+        // genuine agent-specific extras (per the ACP extensibility contract).
+        //
+        // `supports_slash_commands` is deliberately NOT advertised: the
+        // `CommandRegistry` exists but is not wired into the session lifecycle
+        // and no `AvailableCommandsUpdate` is ever emitted, so the agent does
+        // not actually deliver slash commands. Advertising a capability that is
+        // not delivered is the bug this card fixes — honest behavior is to omit
+        // it until the registry is wired (tracked by the notification-parity
+        // card). `supports_modes`/`supports_plans` ARE genuinely delivered
+        // (modes via `session/new` + `session/set_mode`, plans via plan
+        // notifications), so they remain advertised.
         let agent_capabilities = agent_client_protocol::schema::AgentCapabilities::new()
             .load_session(self.config.capabilities.supports_session_loading)
             .prompt_capabilities(prompt_caps)
             .mcp_capabilities(mcp_caps)
+            .session_capabilities(session_caps)
             .meta({
                 let mut map = serde_json::Map::new();
                 map.insert("streaming".to_string(), serde_json::Value::Bool(true));
@@ -806,10 +1525,6 @@ impl AcpServer {
                 map.insert(
                     "supports_plans".to_string(),
                     serde_json::Value::Bool(self.config.capabilities.supports_plans),
-                );
-                map.insert(
-                    "supports_slash_commands".to_string(),
-                    serde_json::Value::Bool(self.config.capabilities.supports_slash_commands),
                 );
                 map
             });
@@ -822,12 +1537,13 @@ impl AcpServer {
         .title(format!("LLaMA Agent v{}", env!("CARGO_PKG_VERSION")));
 
         // Return InitializeResponse with agent capabilities using builder pattern
-        Ok(
-            agent_client_protocol::schema::InitializeResponse::new(negotiated_version)
-                .agent_capabilities(agent_capabilities)
-                .auth_methods(vec![])
-                .agent_info(agent_info),
-        )
+        let response = agent_client_protocol::schema::InitializeResponse::new(negotiated_version)
+            .agent_capabilities(agent_capabilities)
+            .auth_methods(vec![])
+            .agent_info(agent_info);
+
+        self.log_response("initialize", &response);
+        Ok(response)
     }
 
     pub async fn authenticate(
@@ -835,6 +1551,8 @@ impl AcpServer {
         request: agent_client_protocol::schema::AuthenticateRequest,
     ) -> Result<agent_client_protocol::schema::AuthenticateResponse, agent_client_protocol::Error>
     {
+        self.log_request("authenticate", &request);
+
         // AUTHENTICATION ARCHITECTURE DECISION:
         // llama-agent declares NO authentication methods in initialize().
         // According to ACP spec, clients should not call authenticate when no methods are declared.
@@ -844,7 +1562,9 @@ impl AcpServer {
             request.method_id
         );
 
-        Err(agent_client_protocol::Error::method_not_found())
+        Err(super::acp_error::method_not_found(
+            "Authentication is not supported: llama-agent declares no auth methods in initialize.",
+        ))
     }
 
     pub async fn new_session(
@@ -852,6 +1572,7 @@ impl AcpServer {
         request: agent_client_protocol::schema::NewSessionRequest,
     ) -> Result<agent_client_protocol::schema::NewSessionResponse, agent_client_protocol::Error>
     {
+        self.log_request("new_session", &request);
         tracing::info!(
             "Creating new ACP session with cwd: {:?}, mcp_servers: {}",
             request.cwd,
@@ -994,9 +1715,20 @@ impl AcpServer {
         let session_id = acp_session.session_id.clone();
 
         // Store the session
-        self.store_session(acp_session).await;
+        self.store_session(acp_session.clone()).await;
+
+        // Persist an initial SessionRecord so the session is enumerable via
+        // `session/list` immediately, before the first prompt turn.
+        self.persist_session_record(&acp_session).await;
 
         tracing::info!("Created new ACP session: {}", session_id.0);
+
+        // Wire up the per-session raw JSON-RPC transcript recorder. The
+        // transcript path embeds the session ULID, so the manager can only be
+        // built once the session exists. It is registered in the shared
+        // registry keyed by the session ULID; `broadcast_notification` looks
+        // it up from there to record outgoing frames.
+        Self::wire_raw_message_manager(&session_id);
 
         // Build session mode state if modes are supported
         let modes = if self.config.capabilities.supports_modes {
@@ -1010,6 +1742,7 @@ impl AcpServer {
             response = response.modes(mode_state);
         }
 
+        self.log_response("new_session", &response);
         Ok(response)
     }
 
@@ -1018,6 +1751,8 @@ impl AcpServer {
         request: agent_client_protocol::schema::SetSessionModeRequest,
     ) -> Result<agent_client_protocol::schema::SetSessionModeResponse, agent_client_protocol::Error>
     {
+        self.log_request("set_session_mode", &request);
+
         // Parse mode ID from request
         let mode_id = &request.mode_id;
         let session_id = &request.session_id;
@@ -1103,6 +1838,7 @@ impl AcpServer {
         );
         response.meta = Some(meta);
 
+        self.log_response("set_session_mode", &response);
         Ok(response)
     }
 
@@ -1110,7 +1846,17 @@ impl AcpServer {
         &self,
         request: agent_client_protocol::schema::PromptRequest,
     ) -> Result<agent_client_protocol::schema::PromptResponse, agent_client_protocol::Error> {
+        self.log_request("prompt", &request);
         tracing::info!("Processing prompt for session {}", request.session_id.0);
+
+        // Reject prompt content the agent advertised as unsupported (image,
+        // audio, embedded resources). This enforces the `promptCapabilities`
+        // advertised in `initialize` — mirroring claude-agent's
+        // `ContentCapabilityValidator` step — so both agents reject exactly the
+        // content types they declare unsupported, with the same ACP error
+        // shape. Capability validation is a request-shape check independent of
+        // session resolution, so it runs first.
+        Self::validate_prompt_content(&request.prompt)?;
 
         // Get ACP session
         let acp_session = self.get_session(&request.session_id).await.ok_or_else(|| {
@@ -1459,13 +2205,44 @@ impl AcpServer {
         self.clear_mcp_session_context(&acp_session.llama_session_id)
             .await;
 
-        Ok(agent_client_protocol::schema::PromptResponse::new(final_stop_reason).meta(meta))
+        // Persist the updated conversation as a durable SessionRecord so the
+        // turn survives a process restart and stays answerable by
+        // `session/list`. Failures are logged inside `persist_session_record`
+        // and never fail the turn.
+        self.persist_session_record(&acp_session).await;
+
+        // After the first meaningful exchange, generate a human-readable
+        // session title and emit the built-in `SessionInfoUpdate`. This runs
+        // off the turn's critical path and is a no-op once a title exists.
+        self.maybe_generate_session_title(&acp_session);
+
+        let response =
+            agent_client_protocol::schema::PromptResponse::new(final_stop_reason).meta(meta);
+        self.log_response("prompt", &response);
+        Ok(response)
     }
 
+    /// Handle the ACP `session/cancel` notification.
+    ///
+    /// Cancels the active request for the session via the request queue and
+    /// emits a final status update so the client observes the cancellation on
+    /// the notification stream — not only via the in-flight `prompt` returning
+    /// `StopReason::Cancelled`.
+    ///
+    /// The final update mirrors claude-agent's `send_final_cancellation_updates`
+    /// exactly (an `AgentMessageChunk` carrying
+    /// `[Session cancelled by client request]`, with `_meta` tagging the
+    /// notification as a final cancellation update) so a client cancelling a
+    /// turn observes the same notification stream from both agents. The
+    /// internal cancellation mechanism — llama's request queue vs claude's
+    /// subprocess/tool/permission fan-out — is an essential difference and is
+    /// intentionally not unified.
     pub async fn cancel(
         &self,
         request: agent_client_protocol::schema::CancelNotification,
     ) -> Result<(), agent_client_protocol::Error> {
+        self.log_request("cancel", &request);
+
         let session_id = &request.session_id;
         tracing::info!("Processing cancellation for session: {}", session_id.0);
 
@@ -1494,20 +2271,75 @@ impl AcpServer {
             );
         }
 
+        // Emit a final status update so a client cancelling a turn observes the
+        // same notification stream from both agents.
+        self.send_cancellation_update(session_id);
+
         Ok(())
+    }
+
+    /// Broadcast a final status update for a cancelled session.
+    ///
+    /// Mirrors claude-agent's `send_final_cancellation_updates`: an
+    /// `AgentMessageChunk` carrying `[Session cancelled by client request]`,
+    /// the text content tagged with `cancelled_at` / `reason` / `session_id`
+    /// `_meta`, and the notification tagged with `final_update` / `cancellation`
+    /// `_meta`. Keeping the shape identical means a client observes the same
+    /// cancellation notification regardless of which agent it is talking to.
+    fn send_cancellation_update(&self, session_id: &AcpSessionId) {
+        let cancelled_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let mut text_meta = serde_json::Map::new();
+        text_meta.insert("cancelled_at".to_string(), serde_json::json!(cancelled_at));
+        text_meta.insert(
+            "reason".to_string(),
+            serde_json::json!("client_cancellation"),
+        );
+        text_meta.insert("session_id".to_string(), serde_json::json!(session_id.0));
+
+        let text_content = agent_client_protocol::schema::TextContent::new(
+            "[Session cancelled by client request]".to_string(),
+        )
+        .meta(text_meta);
+        let content_chunk = agent_client_protocol::schema::ContentChunk::new(
+            agent_client_protocol::schema::ContentBlock::Text(text_content),
+        );
+
+        let mut notif_meta = serde_json::Map::new();
+        notif_meta.insert("final_update".to_string(), serde_json::json!(true));
+        notif_meta.insert("cancellation".to_string(), serde_json::json!(true));
+
+        let notification = SessionNotification::new(
+            session_id.clone(),
+            agent_client_protocol::schema::SessionUpdate::AgentMessageChunk(content_chunk),
+        )
+        .meta(notif_meta);
+
+        self.broadcast_notification(notification);
+
+        tracing::debug!(
+            "Sent final cancellation update for session: {}",
+            session_id.0
+        );
     }
 
     pub async fn ext_method(
         &self,
         request: agent_client_protocol::schema::ExtRequest,
     ) -> Result<ExtResponse, agent_client_protocol::Error> {
+        self.log_request("ext_method", &request);
         tracing::info!("Extension method called: {}", request.method);
 
         // Parse the request parameters from RawValue
         let params_value: serde_json::Value =
             serde_json::from_str(request.params.get()).map_err(|e| {
                 tracing::error!("Failed to parse extension method parameters: {}", e);
-                agent_client_protocol::Error::invalid_params()
+                super::acp_error::invalid_params(format!(
+                    "Extension method parameters are not valid JSON: {e}"
+                ))
             })?;
 
         // Route extension methods to appropriate handlers
@@ -1523,13 +2355,17 @@ impl AcpServer {
                         }
                         Some(_) => {
                             tracing::error!("fs/read_text_file capability not declared by client");
-                            return Err(agent_client_protocol::Error::invalid_params());
+                            return Err(super::acp_error::invalid_params(
+                                "File system read capability not declared by client. Set client_capabilities.fs.read_text_file = true during initialization.",
+                            ));
                         }
                         None => {
                             tracing::error!(
                                 "No client capabilities available for fs/read_text_file validation"
                             );
-                            return Err(agent_client_protocol::Error::invalid_params());
+                            return Err(super::acp_error::invalid_params(
+                                "Client capabilities not initialized. Cannot perform file system operations without capability declaration.",
+                            ));
                         }
                     }
                 }
@@ -1538,14 +2374,19 @@ impl AcpServer {
                 let fs_req: agent_client_protocol::schema::ReadTextFileRequest =
                     serde_json::from_value(params_value).map_err(|e| {
                         tracing::error!("Failed to parse fs/read_text_file params: {}", e);
-                        agent_client_protocol::Error::invalid_params()
+                        super::acp_error::invalid_params(format!(
+                            "fs/read_text_file parameters do not match the expected schema: {e}"
+                        ))
                     })?;
 
                 // Get session ID from the request
                 let session_id = &fs_req.session_id;
                 let session = self.get_session(session_id).await.ok_or_else(|| {
                     tracing::error!("Session not found for fs/read_text_file: {}", session_id.0);
-                    agent_client_protocol::Error::invalid_params()
+                    super::acp_error::invalid_params(format!(
+                        "Session not found for fs/read_text_file: {}",
+                        session_id.0
+                    ))
                 })?;
 
                 // Execute operation
@@ -1560,7 +2401,9 @@ impl AcpServer {
 
                 serde_json::to_value(response).map_err(|e| {
                     tracing::error!("Failed to serialize fs/read_text_file response: {}", e);
-                    agent_client_protocol::Error::internal_error()
+                    super::acp_error::internal_error(format!(
+                        "Failed to serialize fs/read_text_file response: {e}"
+                    ))
                 })?
             }
 
@@ -1574,13 +2417,17 @@ impl AcpServer {
                         }
                         Some(_) => {
                             tracing::error!("fs/write_text_file capability not declared by client");
-                            return Err(agent_client_protocol::Error::invalid_params());
+                            return Err(super::acp_error::invalid_params(
+                                "File system write capability not declared by client. Set client_capabilities.fs.write_text_file = true during initialization.",
+                            ));
                         }
                         None => {
                             tracing::error!(
                                 "No client capabilities available for fs/write_text_file validation"
                             );
-                            return Err(agent_client_protocol::Error::invalid_params());
+                            return Err(super::acp_error::invalid_params(
+                                "Client capabilities not initialized. Cannot perform file system operations without capability declaration.",
+                            ));
                         }
                     }
                 }
@@ -1589,14 +2436,19 @@ impl AcpServer {
                 let fs_req: agent_client_protocol::schema::WriteTextFileRequest =
                     serde_json::from_value(params_value).map_err(|e| {
                         tracing::error!("Failed to parse fs/write_text_file params: {}", e);
-                        agent_client_protocol::Error::invalid_params()
+                        super::acp_error::invalid_params(format!(
+                            "fs/write_text_file parameters do not match the expected schema: {e}"
+                        ))
                     })?;
 
                 // Get session ID from the request
                 let session_id = &fs_req.session_id;
                 let session = self.get_session(session_id).await.ok_or_else(|| {
                     tracing::error!("Session not found for fs/write_text_file: {}", session_id.0);
-                    agent_client_protocol::Error::invalid_params()
+                    super::acp_error::invalid_params(format!(
+                        "Session not found for fs/write_text_file: {}",
+                        session_id.0
+                    ))
                 })?;
 
                 // Execute operation
@@ -1611,7 +2463,9 @@ impl AcpServer {
 
                 serde_json::to_value(response).map_err(|e| {
                     tracing::error!("Failed to serialize fs/write_text_file response: {}", e);
-                    agent_client_protocol::Error::internal_error()
+                    super::acp_error::internal_error(format!(
+                        "Failed to serialize fs/write_text_file response: {e}"
+                    ))
                 })?
             }
 
@@ -1626,13 +2480,17 @@ impl AcpServer {
                         }
                         Some(_) => {
                             tracing::error!("terminal/create capability not declared by client");
-                            return Err(agent_client_protocol::Error::invalid_params());
+                            return Err(super::acp_error::invalid_params(
+                                "Terminal capability not declared by client; terminal/create requires client_capabilities.terminal = true during initialization.",
+                            ));
                         }
                         None => {
                             tracing::error!(
                                 "No client capabilities available for terminal/create validation"
                             );
-                            return Err(agent_client_protocol::Error::invalid_params());
+                            return Err(super::acp_error::invalid_params(
+                                "Client capabilities not initialized; cannot perform terminal/create without capability declaration.",
+                            ));
                         }
                     }
                 }
@@ -1640,7 +2498,9 @@ impl AcpServer {
                 let term_req: super::terminal::CreateTerminalRequest =
                     serde_json::from_value(params_value).map_err(|e| {
                         tracing::error!("Failed to parse terminal/create params: {}", e);
-                        agent_client_protocol::Error::invalid_params()
+                        super::acp_error::invalid_params(format!(
+                            "terminal/create parameters do not match the expected schema: {e}"
+                        ))
                     })?;
 
                 let response = self
@@ -1651,12 +2511,14 @@ impl AcpServer {
                     .await
                     .map_err(|e| {
                         tracing::error!("terminal/create failed: {}", e);
-                        agent_client_protocol::Error::internal_error()
+                        Self::convert_error(e)
                     })?;
 
                 serde_json::to_value(response).map_err(|e| {
                     tracing::error!("Failed to serialize terminal/create response: {}", e);
-                    agent_client_protocol::Error::internal_error()
+                    super::acp_error::internal_error(format!(
+                        "Failed to serialize terminal/create response: {e}"
+                    ))
                 })?
             }
 
@@ -1670,13 +2532,17 @@ impl AcpServer {
                         }
                         Some(_) => {
                             tracing::error!("terminal/output capability not declared by client");
-                            return Err(agent_client_protocol::Error::invalid_params());
+                            return Err(super::acp_error::invalid_params(
+                                "Terminal capability not declared by client; terminal/output requires client_capabilities.terminal = true during initialization.",
+                            ));
                         }
                         None => {
                             tracing::error!(
                                 "No client capabilities available for terminal/output validation"
                             );
-                            return Err(agent_client_protocol::Error::invalid_params());
+                            return Err(super::acp_error::invalid_params(
+                                "Client capabilities not initialized; cannot perform terminal/output without capability declaration.",
+                            ));
                         }
                     }
                 }
@@ -1684,7 +2550,9 @@ impl AcpServer {
                 let term_req: super::terminal::TerminalOutputRequest =
                     serde_json::from_value(params_value).map_err(|e| {
                         tracing::error!("Failed to parse terminal/output params: {}", e);
-                        agent_client_protocol::Error::invalid_params()
+                        super::acp_error::invalid_params(format!(
+                            "terminal/output parameters do not match the expected schema: {e}"
+                        ))
                     })?;
 
                 let response = self
@@ -1695,12 +2563,14 @@ impl AcpServer {
                     .await
                     .map_err(|e| {
                         tracing::error!("terminal/output failed: {}", e);
-                        agent_client_protocol::Error::internal_error()
+                        Self::convert_error(e)
                     })?;
 
                 serde_json::to_value(response).map_err(|e| {
                     tracing::error!("Failed to serialize terminal/output response: {}", e);
-                    agent_client_protocol::Error::internal_error()
+                    super::acp_error::internal_error(format!(
+                        "Failed to serialize terminal/output response: {e}"
+                    ))
                 })?
             }
 
@@ -1716,13 +2586,17 @@ impl AcpServer {
                             tracing::error!(
                                 "terminal/wait_for_exit capability not declared by client"
                             );
-                            return Err(agent_client_protocol::Error::invalid_params());
+                            return Err(super::acp_error::invalid_params(
+                                "Terminal capability not declared by client; terminal/wait_for_exit requires client_capabilities.terminal = true during initialization.",
+                            ));
                         }
                         None => {
                             tracing::error!(
                                 "No client capabilities available for terminal/wait_for_exit validation"
                             );
-                            return Err(agent_client_protocol::Error::invalid_params());
+                            return Err(super::acp_error::invalid_params(
+                                "Client capabilities not initialized; cannot perform terminal/wait_for_exit without capability declaration.",
+                            ));
                         }
                     }
                 }
@@ -1730,7 +2604,9 @@ impl AcpServer {
                 let term_req: super::terminal::WaitForExitRequest =
                     serde_json::from_value(params_value).map_err(|e| {
                         tracing::error!("Failed to parse terminal/wait_for_exit params: {}", e);
-                        agent_client_protocol::Error::invalid_params()
+                        super::acp_error::invalid_params(format!(
+                        "terminal/wait_for_exit parameters do not match the expected schema: {e}"
+                    ))
                     })?;
 
                 let response = self
@@ -1741,12 +2617,14 @@ impl AcpServer {
                     .await
                     .map_err(|e| {
                         tracing::error!("terminal/wait_for_exit failed: {}", e);
-                        agent_client_protocol::Error::internal_error()
+                        Self::convert_error(e)
                     })?;
 
                 serde_json::to_value(response).map_err(|e| {
                     tracing::error!("Failed to serialize terminal/wait_for_exit response: {}", e);
-                    agent_client_protocol::Error::internal_error()
+                    super::acp_error::internal_error(format!(
+                        "Failed to serialize terminal/wait_for_exit response: {e}"
+                    ))
                 })?
             }
 
@@ -1760,13 +2638,17 @@ impl AcpServer {
                         }
                         Some(_) => {
                             tracing::error!("terminal/get capability not declared by client");
-                            return Err(agent_client_protocol::Error::invalid_params());
+                            return Err(super::acp_error::invalid_params(
+                                "Terminal capability not declared by client; terminal/get requires client_capabilities.terminal = true during initialization.",
+                            ));
                         }
                         None => {
                             tracing::error!(
                                 "No client capabilities available for terminal/get validation"
                             );
-                            return Err(agent_client_protocol::Error::invalid_params());
+                            return Err(super::acp_error::invalid_params(
+                                "Client capabilities not initialized; cannot perform terminal/get without capability declaration.",
+                            ));
                         }
                     }
                 }
@@ -1774,7 +2656,9 @@ impl AcpServer {
                 let term_req: super::terminal::GetTerminalRequest =
                     serde_json::from_value(params_value).map_err(|e| {
                         tracing::error!("Failed to parse terminal/get params: {}", e);
-                        agent_client_protocol::Error::invalid_params()
+                        super::acp_error::invalid_params(format!(
+                            "terminal/get parameters do not match the expected schema: {e}"
+                        ))
                     })?;
 
                 let response = self
@@ -1784,12 +2668,14 @@ impl AcpServer {
                     .get_terminal(term_req)
                     .map_err(|e| {
                         tracing::error!("terminal/get failed: {}", e);
-                        agent_client_protocol::Error::internal_error()
+                        Self::convert_error(e)
                     })?;
 
                 serde_json::to_value(response).map_err(|e| {
                     tracing::error!("Failed to serialize terminal/get response: {}", e);
-                    agent_client_protocol::Error::internal_error()
+                    super::acp_error::internal_error(format!(
+                        "Failed to serialize terminal/get response: {e}"
+                    ))
                 })?
             }
 
@@ -1803,13 +2689,17 @@ impl AcpServer {
                         }
                         Some(_) => {
                             tracing::error!("terminal/kill capability not declared by client");
-                            return Err(agent_client_protocol::Error::invalid_params());
+                            return Err(super::acp_error::invalid_params(
+                                "Terminal capability not declared by client; terminal/kill requires client_capabilities.terminal = true during initialization.",
+                            ));
                         }
                         None => {
                             tracing::error!(
                                 "No client capabilities available for terminal/kill validation"
                             );
-                            return Err(agent_client_protocol::Error::invalid_params());
+                            return Err(super::acp_error::invalid_params(
+                                "Client capabilities not initialized; cannot perform terminal/kill without capability declaration.",
+                            ));
                         }
                     }
                 }
@@ -1817,7 +2707,9 @@ impl AcpServer {
                 let term_req: super::terminal::KillTerminalRequest =
                     serde_json::from_value(params_value).map_err(|e| {
                         tracing::error!("Failed to parse terminal/kill params: {}", e);
-                        agent_client_protocol::Error::invalid_params()
+                        super::acp_error::invalid_params(format!(
+                            "terminal/kill parameters do not match the expected schema: {e}"
+                        ))
                     })?;
 
                 let response = self
@@ -1828,12 +2720,14 @@ impl AcpServer {
                     .await
                     .map_err(|e| {
                         tracing::error!("terminal/kill failed: {}", e);
-                        agent_client_protocol::Error::internal_error()
+                        Self::convert_error(e)
                     })?;
 
                 serde_json::to_value(response).map_err(|e| {
                     tracing::error!("Failed to serialize terminal/kill response: {}", e);
-                    agent_client_protocol::Error::internal_error()
+                    super::acp_error::internal_error(format!(
+                        "Failed to serialize terminal/kill response: {e}"
+                    ))
                 })?
             }
 
@@ -1847,13 +2741,17 @@ impl AcpServer {
                         }
                         Some(_) => {
                             tracing::error!("terminal/release capability not declared by client");
-                            return Err(agent_client_protocol::Error::invalid_params());
+                            return Err(super::acp_error::invalid_params(
+                                "Terminal capability not declared by client; terminal/release requires client_capabilities.terminal = true during initialization.",
+                            ));
                         }
                         None => {
                             tracing::error!(
                                 "No client capabilities available for terminal/release validation"
                             );
-                            return Err(agent_client_protocol::Error::invalid_params());
+                            return Err(super::acp_error::invalid_params(
+                                "Client capabilities not initialized; cannot perform terminal/release without capability declaration.",
+                            ));
                         }
                     }
                 }
@@ -1861,7 +2759,9 @@ impl AcpServer {
                 let term_req: super::terminal::ReleaseTerminalRequest =
                     serde_json::from_value(params_value).map_err(|e| {
                         tracing::error!("Failed to parse terminal/release params: {}", e);
-                        agent_client_protocol::Error::invalid_params()
+                        super::acp_error::invalid_params(format!(
+                            "terminal/release parameters do not match the expected schema: {e}"
+                        ))
                     })?;
 
                 self.terminal_manager
@@ -1871,40 +2771,53 @@ impl AcpServer {
                     .await
                     .map_err(|e| {
                         tracing::error!("terminal/release failed: {}", e);
-                        agent_client_protocol::Error::internal_error()
+                        Self::convert_error(e)
                     })?;
 
                 // Return null for successful release
                 serde_json::Value::Null
             }
 
-            // Unknown method
+            // Unknown method. An extension method the agent does not
+            // implement is genuinely "not found", so it is rejected with
+            // `method_not_found` (`-32601`) — matching claude-agent, so a
+            // client probing an unsupported extension observes the same
+            // failure from either agent.
             _ => {
                 tracing::warn!("Unknown extension method: {}", request.method);
-                return Err(agent_client_protocol::Error::method_not_found());
+                return Err(super::acp_error::method_not_found(format!(
+                    "Extension method not found: {}",
+                    request.method
+                )));
             }
         };
 
         // Convert response to ExtResponse (RawValue)
         let response_json_str = serde_json::to_string(&result).map_err(|e| {
             tracing::error!("Failed to serialize extension method response: {}", e);
-            agent_client_protocol::Error::internal_error()
+            super::acp_error::internal_error(format!(
+                "Failed to serialize extension method response: {e}"
+            ))
         })?;
 
         let raw_value = agent_client_protocol::schema::RawValue::from_string(response_json_str)
             .map_err(|e| {
                 tracing::error!("Failed to create RawValue from response: {}", e);
-                agent_client_protocol::Error::internal_error()
+                super::acp_error::internal_error(format!(
+                    "Failed to build raw JSON for extension method response: {e}"
+                ))
             })?;
 
-        Ok(ExtResponse::new(Arc::from(raw_value)))
+        let response = ExtResponse::new(Arc::from(raw_value));
+        self.log_response("ext_method", &response);
+        Ok(response)
     }
 
     pub async fn ext_notification(
         &self,
         notification: agent_client_protocol::schema::ExtNotification,
     ) -> Result<(), agent_client_protocol::Error> {
-        tracing::debug!("Extension notification {} received", notification.method);
+        self.log_request("ext_notification", &notification);
         // Extension notifications are ignored for now
         Ok(())
     }
@@ -1988,6 +2901,14 @@ impl AcpServer {
             }
             Req::LoadSessionRequest(req) => {
                 let result = server.load_session(req).await;
+                responder.cast().respond_with_result(result)
+            }
+            Req::ResumeSessionRequest(req) => {
+                let result = server.resume_session(req).await;
+                responder.cast().respond_with_result(result)
+            }
+            Req::ListSessionsRequest(req) => {
+                let result = server.list_sessions(req).await;
                 responder.cast().respond_with_result(result)
             }
             Req::SetSessionModeRequest(req) => {
@@ -2176,6 +3097,7 @@ fn extract_request_max_tokens(
 mod tests {
     use super::*;
     use serial_test::serial;
+    use std::time::Duration;
 
     async fn create_test_server() -> AcpServer {
         use crate::types::{
@@ -2238,6 +3160,288 @@ mod tests {
         server
     }
 
+    /// Build a test server backed by the given [`AcpConfig`].
+    ///
+    /// Mirrors [`create_test_server`] but lets a test override the advertised
+    /// capabilities — used to verify that capability gating (e.g. `loadSession`)
+    /// actually enforces what the config advertises.
+    async fn create_test_server_with_config(config: AcpConfig) -> AcpServer {
+        use crate::types::{
+            AgentConfig, ModelConfig, ModelSource, ParallelConfig, QueueConfig, RetryConfig,
+            SessionConfig,
+        };
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let test_config = AgentConfig {
+            model: ModelConfig {
+                source: ModelSource::Local {
+                    folder: temp_dir.path().to_path_buf(),
+                    filename: Some("test.gguf".to_string()),
+                },
+                batch_size: 512,
+                n_seq_max: 1,
+                n_threads: 1,
+                n_threads_batch: 1,
+                use_hf_params: false,
+                retry_config: RetryConfig::default(),
+                debug: false,
+            },
+            queue_config: QueueConfig::default(),
+            mcp_servers: Vec::new(),
+            session_config: SessionConfig::default(),
+            parallel_execution_config: ParallelConfig::default(),
+        };
+
+        let model_manager =
+            Arc::new(crate::model::ModelManager::new(test_config.model.clone()).unwrap());
+        let request_queue = Arc::new(crate::queue::RequestQueue::new(
+            model_manager.clone(),
+            test_config.queue_config.clone(),
+            test_config.session_config.clone(),
+        ));
+        let session_manager = Arc::new(crate::session::SessionManager::new(
+            test_config.session_config.clone(),
+        ));
+        let mcp_client: Arc<dyn crate::mcp::MCPClient> = Arc::new(crate::mcp::NoOpMCPClient::new());
+        let chat_template = Arc::new(crate::chat_template::ChatTemplateEngine::new());
+        let dependency_analyzer = Arc::new(crate::dependency_analysis::DependencyAnalyzer::new(
+            test_config.parallel_execution_config.clone(),
+        ));
+
+        let agent_server = Arc::new(AgentServer::new(
+            model_manager,
+            request_queue,
+            session_manager,
+            mcp_client,
+            chat_template,
+            dependency_analyzer,
+            test_config,
+        ));
+
+        let (server, _notification_rx) = AcpServer::new(agent_server, config);
+        server
+    }
+
+    /// Build a test server with an explicit session-cache eviction policy.
+    ///
+    /// Mirrors [`create_test_server`] but lets a test pin a short
+    /// `max_session_age` so [`AcpServer::cleanup_expired_sessions`] evicts a
+    /// just-created session without waiting out the production 1-hour TTL.
+    async fn create_test_server_with_cleanup(
+        cleanup_interval: std::time::Duration,
+        max_session_age: std::time::Duration,
+    ) -> AcpServer {
+        use crate::types::{
+            AgentConfig, ModelConfig, ModelSource, ParallelConfig, QueueConfig, RetryConfig,
+            SessionConfig,
+        };
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let test_config = AgentConfig {
+            model: ModelConfig {
+                source: ModelSource::Local {
+                    folder: temp_dir.path().to_path_buf(),
+                    filename: Some("test.gguf".to_string()),
+                },
+                batch_size: 512,
+                n_seq_max: 1,
+                n_threads: 1,
+                n_threads_batch: 1,
+                use_hf_params: false,
+                retry_config: RetryConfig::default(),
+                debug: false,
+            },
+            queue_config: QueueConfig::default(),
+            mcp_servers: Vec::new(),
+            session_config: SessionConfig::default(),
+            parallel_execution_config: ParallelConfig::default(),
+        };
+
+        let model_manager =
+            Arc::new(crate::model::ModelManager::new(test_config.model.clone()).unwrap());
+        let request_queue = Arc::new(crate::queue::RequestQueue::new(
+            model_manager.clone(),
+            test_config.queue_config.clone(),
+            test_config.session_config.clone(),
+        ));
+        let session_manager = Arc::new(crate::session::SessionManager::new(
+            test_config.session_config.clone(),
+        ));
+        let mcp_client: Arc<dyn crate::mcp::MCPClient> = Arc::new(crate::mcp::NoOpMCPClient::new());
+        let chat_template = Arc::new(crate::chat_template::ChatTemplateEngine::new());
+        let dependency_analyzer = Arc::new(crate::dependency_analysis::DependencyAnalyzer::new(
+            test_config.parallel_execution_config.clone(),
+        ));
+
+        let agent_server = Arc::new(AgentServer::new(
+            model_manager,
+            request_queue,
+            session_manager,
+            mcp_client,
+            chat_template,
+            dependency_analyzer,
+            test_config,
+        ));
+
+        let (server, _notification_rx) = AcpServer::with_cleanup_settings(
+            agent_server,
+            AcpConfig::default(),
+            cleanup_interval,
+            max_session_age,
+        );
+        server
+    }
+
+    /// `session/load` must be rejected when the agent does not advertise the
+    /// `loadSession` capability.
+    ///
+    /// This is the advertise-vs-enforce contract: the agent only advertises
+    /// `loadSession` when `config.capabilities.supports_session_loading` is
+    /// true, so when it is false the agent must refuse `session/load` rather
+    /// than acting on it. The rejection mirrors claude-agent's
+    /// `LoadSessionNotSupported` mapping (`-32601`,
+    /// `requiredCapability: loadSession`).
+    #[tokio::test]
+    #[serial]
+    async fn test_load_session_rejected_when_capability_disabled() {
+        let _state = StateDirGuard::new();
+
+        let config = AcpConfig {
+            capabilities: crate::acp::config::AcpCapabilities {
+                supports_session_loading: false,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let server = Arc::new(create_test_server_with_config(config).await);
+
+        let req = agent_client_protocol::schema::LoadSessionRequest::new(
+            agent_client_protocol::schema::SessionId::new("any-session-id"),
+            std::env::temp_dir(),
+        );
+
+        let result = server.load_session(req).await;
+        let error = result.expect_err(
+            "load_session must be rejected when loadSession capability is not advertised",
+        );
+        assert_eq!(
+            error.code,
+            agent_client_protocol::ErrorCode::from(-32601),
+            "loadSession rejection must use the method-not-found code"
+        );
+        let data = error.data.expect("rejection must carry structured data");
+        assert_eq!(data["requiredCapability"], "loadSession");
+        assert_eq!(data["method"], "session/load");
+    }
+
+    /// `session/load` is honored (reaches the record lookup) when the agent
+    /// advertises the `loadSession` capability.
+    ///
+    /// With the capability advertised the gate is a no-op, so the request
+    /// proceeds to the durable record lookup. No record exists for the bogus
+    /// id, so the call still fails — but it must NOT fail with the
+    /// capability-rejection error; it must reach the lookup and fail there.
+    #[tokio::test]
+    #[serial]
+    async fn test_load_session_passes_capability_gate_when_advertised() {
+        let _state = StateDirGuard::new();
+
+        // Default config advertises loadSession.
+        let server = Arc::new(create_test_server().await);
+
+        let req = agent_client_protocol::schema::LoadSessionRequest::new(
+            agent_client_protocol::schema::SessionId::new("missing-session-id"),
+            std::env::temp_dir(),
+        );
+
+        let result = server.load_session(req).await;
+        let error = result.expect_err("no record exists for a bogus session id");
+        assert_ne!(
+            error.code,
+            agent_client_protocol::ErrorCode::from(-32601),
+            "with loadSession advertised, the request must pass the capability gate"
+        );
+    }
+
+    /// `session/prompt` must reject content types the agent advertises as
+    /// unsupported.
+    ///
+    /// llama-agent advertises `image: false` / `audio: false` /
+    /// `embeddedContext: false`, so an image content block in a prompt must be
+    /// rejected with a structured `-32602` capability error — mirroring
+    /// claude-agent's `ContentCapabilityValidator`.
+    #[tokio::test]
+    #[serial]
+    async fn test_prompt_rejects_unsupported_content_type() {
+        let _state = StateDirGuard::new();
+        let server = Arc::new(create_test_server().await);
+
+        // An image block — the agent does not advertise image support.
+        const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==";
+        let prompt = vec![agent_client_protocol::schema::ContentBlock::Image(
+            agent_client_protocol::schema::ImageContent::new(PNG, "image/png"),
+        )];
+        let req = agent_client_protocol::schema::PromptRequest::new(
+            agent_client_protocol::schema::SessionId::new("any-session-id"),
+            prompt,
+        );
+
+        let result = server.prompt(req).await;
+        let error =
+            result.expect_err("prompt with image content must be rejected — image not advertised");
+        assert_eq!(
+            error.code,
+            agent_client_protocol::ErrorCode::from(-32602),
+            "unsupported content must be rejected with the invalid-params code"
+        );
+        let data = error.data.expect("rejection must carry structured data");
+        assert_eq!(data["contentType"], "image");
+        assert_eq!(data["required"], "promptCapabilities.image");
+    }
+
+    /// RAII guard that points `XDG_STATE_HOME` at a fresh temp directory for
+    /// the lifetime of the guard, restoring the previous value on drop.
+    ///
+    /// `AcpServer::new_session` and `AcpServer::prompt` persist a
+    /// `SessionRecord` to the shared `SessionStore`, which resolves its
+    /// directory under `$XDG_STATE_HOME`. Tests that exercise those paths must
+    /// isolate the state directory so they neither pollute the developer's
+    /// real state tree nor observe records left by other tests. Hold the guard
+    /// for the whole test body; it must be paired with `#[serial]` because the
+    /// `XDG_STATE_HOME` env var is process-global.
+    struct StateDirGuard {
+        _temp: tempfile::TempDir,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl StateDirGuard {
+        /// Create a fresh temp directory and point `XDG_STATE_HOME` at it.
+        fn new() -> Self {
+            let temp = tempfile::TempDir::new().unwrap();
+            let previous = std::env::var_os("XDG_STATE_HOME");
+            // SAFETY: callers are `#[serial]`, so no other thread reads or
+            // writes the env var concurrently; the previous value is restored
+            // in `Drop`.
+            std::env::set_var("XDG_STATE_HOME", temp.path());
+            Self {
+                _temp: temp,
+                previous,
+            }
+        }
+    }
+
+    impl Drop for StateDirGuard {
+        fn drop(&mut self) {
+            // SAFETY: see `StateDirGuard::new` — callers are `#[serial]`.
+            match self.previous.take() {
+                Some(value) => std::env::set_var("XDG_STATE_HOME", value),
+                None => std::env::remove_var("XDG_STATE_HOME"),
+            }
+        }
+    }
+
     #[tokio::test]
     #[serial]
     async fn test_initialize() {
@@ -2268,6 +3472,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_new_session() {
+        let _state = StateDirGuard::new();
         let server = Arc::new(create_test_server().await);
 
         // Create a new session request
@@ -2309,6 +3514,132 @@ mod tests {
         // Verify session has client capabilities (even if default)
         // Just verify we can access the capabilities without panicking
         let _caps = &session.client_capabilities;
+    }
+
+    /// `session/list` returns nothing when no sessions have been created.
+    #[tokio::test]
+    #[serial]
+    async fn test_list_sessions_empty() {
+        let _state = StateDirGuard::new();
+        let server = Arc::new(create_test_server().await);
+
+        let response = server
+            .list_sessions(agent_client_protocol::schema::ListSessionsRequest::new())
+            .await
+            .expect("list_sessions should succeed with no sessions");
+
+        assert!(
+            response.sessions.is_empty(),
+            "no sessions should be listed before any are created"
+        );
+        assert!(
+            response.next_cursor.is_none(),
+            "an empty listing must not carry a cursor"
+        );
+    }
+
+    /// Creating sessions via `session/new` persists a `SessionRecord` that
+    /// `session/list` then enumerates — the durable, cross-restart path.
+    #[tokio::test]
+    #[serial]
+    async fn test_list_sessions_after_new_session() {
+        let _state = StateDirGuard::new();
+        let server = Arc::new(create_test_server().await);
+
+        let cwd = std::env::current_dir().unwrap();
+        let first = server
+            .new_session(agent_client_protocol::schema::NewSessionRequest::new(
+                cwd.clone(),
+            ))
+            .await
+            .expect("first new_session should succeed");
+        let second = server
+            .new_session(agent_client_protocol::schema::NewSessionRequest::new(
+                cwd.clone(),
+            ))
+            .await
+            .expect("second new_session should succeed");
+
+        let response = server
+            .list_sessions(agent_client_protocol::schema::ListSessionsRequest::new())
+            .await
+            .expect("list_sessions should succeed");
+
+        let listed_ids: Vec<String> = response
+            .sessions
+            .iter()
+            .map(|info| info.session_id.0.to_string())
+            .collect();
+        assert_eq!(
+            listed_ids.len(),
+            2,
+            "both created sessions should be listed"
+        );
+        assert!(listed_ids.contains(&first.session_id.0.to_string()));
+        assert!(listed_ids.contains(&second.session_id.0.to_string()));
+
+        // `SessionStore` orders sessions by descending lexical ULID order.
+        // Two sessions created within the same millisecond share the ULID
+        // timestamp prefix and carry independent random suffixes, so creation
+        // order is *not* a reliable predictor of list order. Assert against
+        // the store's actual contract — descending lexical sort of the ids —
+        // rather than assuming the second-created session sorts first.
+        let first_id = first.session_id.0.to_string();
+        let second_id = second.session_id.0.to_string();
+        let mut expected_order = [first_id.clone(), second_id.clone()];
+        expected_order.sort_unstable_by(|a, b| b.cmp(a));
+        assert_eq!(
+            listed_ids, expected_order,
+            "sessions should be listed in descending lexical ULID order"
+        );
+
+        // The persisted record carries the session's working directory.
+        for info in &response.sessions {
+            assert_eq!(info.cwd, cwd, "listed session should carry its cwd");
+        }
+    }
+
+    /// The `cwd` filter on `session/list` only returns sessions whose working
+    /// directory matches exactly.
+    #[tokio::test]
+    #[serial]
+    async fn test_list_sessions_cwd_filter() {
+        let _state = StateDirGuard::new();
+        let server = Arc::new(create_test_server().await);
+
+        let cwd = std::env::current_dir().unwrap();
+        server
+            .new_session(agent_client_protocol::schema::NewSessionRequest::new(
+                cwd.clone(),
+            ))
+            .await
+            .expect("new_session should succeed");
+
+        // A filter on the real cwd matches the created session.
+        let matching = server
+            .list_sessions(
+                agent_client_protocol::schema::ListSessionsRequest::new().cwd(cwd.clone()),
+            )
+            .await
+            .expect("filtered list_sessions should succeed");
+        assert_eq!(
+            matching.sessions.len(),
+            1,
+            "the session should match its own cwd filter"
+        );
+
+        // A filter on an unrelated cwd matches nothing.
+        let non_matching = server
+            .list_sessions(
+                agent_client_protocol::schema::ListSessionsRequest::new()
+                    .cwd(std::path::PathBuf::from("/nonexistent/path/for/test")),
+            )
+            .await
+            .expect("filtered list_sessions should succeed");
+        assert!(
+            non_matching.sessions.is_empty(),
+            "no session should match an unrelated cwd filter"
+        );
     }
 
     #[tokio::test]
@@ -2385,7 +3716,17 @@ mod tests {
             "Should not advertise SSE MCP support"
         );
 
-        // Verify meta capabilities (modes, plans, slash commands)
+        // Verify session/list capability is advertised. The presence of the
+        // `list` key (even as an empty object) signals `session/list` support.
+        let session_caps = agent_caps
+            .get("sessionCapabilities")
+            .expect("Session capabilities should be advertised");
+        assert!(
+            session_caps.get("list").is_some(),
+            "Should advertise session/list capability"
+        );
+
+        // Verify meta capabilities (modes, plans)
         // meta field is optional, only check if present
         if let Some(meta) = agent_caps.get("meta") {
             assert_eq!(
@@ -2403,10 +3744,13 @@ mod tests {
                 Some(&serde_json::Value::Bool(true)),
                 "Should advertise plans support from default config"
             );
-            assert_eq!(
-                meta.get("supports_slash_commands"),
-                Some(&serde_json::Value::Bool(true)),
-                "Should advertise slash commands support from default config"
+            // Slash commands are intentionally NOT advertised — the agent does
+            // not deliver them (the CommandRegistry is not wired into the
+            // session lifecycle). Advertise-vs-deliver consistency requires the
+            // key to be absent.
+            assert!(
+                meta.get("supports_slash_commands").is_none(),
+                "Should NOT advertise slash commands — agent does not deliver them"
             );
         }
 
@@ -2504,7 +3848,6 @@ mod tests {
                 supports_session_loading: false,
                 supports_modes: false,
                 supports_plans: false,
-                supports_slash_commands: false,
                 filesystem: crate::acp::config::FilesystemCapabilities {
                     read_text_file: true,
                     write_text_file: false,
@@ -2556,10 +3899,11 @@ mod tests {
                 Some(&serde_json::Value::Bool(false)),
                 "Should advertise disabled plans support"
             );
-            assert_eq!(
-                meta.get("supports_slash_commands"),
-                Some(&serde_json::Value::Bool(false)),
-                "Should advertise disabled slash commands support"
+            // Slash commands are never advertised regardless of config —
+            // the capability is not delivered.
+            assert!(
+                meta.get("supports_slash_commands").is_none(),
+                "Should NOT advertise slash commands — agent does not deliver them"
             );
         }
     }
@@ -2567,6 +3911,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_client_capabilities_stored_and_transferred_to_sessions() {
+        let _state = StateDirGuard::new();
         let server = Arc::new(create_test_server().await);
 
         // Create initialize request with specific capabilities
@@ -2817,13 +4162,214 @@ mod tests {
     async fn test_get_nonexistent_session() {
         use agent_client_protocol::schema::SessionId;
 
+        // `get_session` now falls back to the durable `SessionStore` on a cache
+        // miss, so isolate the state directory for a clean lookup.
+        let _state = StateDirGuard::new();
         let server = create_test_server().await;
 
-        // Try to get a session that doesn't exist
+        // Try to get a session that exists neither in the cache nor on disk.
         let fake_id = SessionId::new("nonexistent");
         let result = server.get_session(&fake_id).await;
 
         assert!(result.is_none(), "Nonexistent session should return None");
+    }
+
+    /// `cleanup_expired_sessions` evicts a session that has been idle longer
+    /// than `max_session_age` from the in-memory cache — both the `sessions`
+    /// map and the `llama_to_acp` reverse map — and the eviction is lossless:
+    /// the durable `SessionRecord` is still readable from the `SessionStore`.
+    ///
+    /// This is the core unbounded-growth fix: without eviction the in-memory
+    /// maps grow for the whole process lifetime.
+    #[tokio::test]
+    #[serial]
+    async fn cleanup_expired_sessions_evicts_idle_session_and_retains_durable_record() {
+        let _state = StateDirGuard::new();
+        // Zero idle TTL: any session is immediately eligible for eviction.
+        let server =
+            create_test_server_with_cleanup(Duration::from_secs(300), Duration::from_secs(0)).await;
+
+        // `new_session` populates the in-memory cache AND persists a durable
+        // `SessionRecord` to the `SessionStore`.
+        let created = server
+            .new_session(agent_client_protocol::schema::NewSessionRequest::new(
+                std::env::current_dir().unwrap(),
+            ))
+            .await
+            .expect("new_session should succeed");
+        let session_id = created.session_id.clone();
+        let llama_id = crate::types::SessionId::from_str(&session_id.0).unwrap();
+
+        // The session is in the cache and the reverse map.
+        assert_eq!(
+            server.sessions.read().await.len(),
+            1,
+            "session should be cached after creation"
+        );
+        assert!(
+            server.llama_to_acp.read().await.contains_key(&llama_id),
+            "reverse mapping should exist after creation"
+        );
+
+        // Sweep: with a zero TTL the session is idle and gets evicted.
+        let evicted = server.cleanup_expired_sessions().await;
+        assert_eq!(evicted, 1, "the idle session should be evicted");
+
+        // The in-memory cache no longer holds the session — growth is bounded.
+        assert!(
+            server.sessions.read().await.is_empty(),
+            "cache should be empty after eviction"
+        );
+        assert!(
+            !server.llama_to_acp.read().await.contains_key(&llama_id),
+            "reverse mapping should be removed on eviction"
+        );
+
+        // Eviction is lossless: the durable record survives in the store.
+        let record = SessionStore::new()
+            .load(&session_id.0)
+            .expect("store load should succeed")
+            .expect("durable record must survive cache eviction");
+        assert_eq!(
+            record.session_id.as_str(),
+            &*session_id.0,
+            "the persisted record is still the truth for this session"
+        );
+    }
+
+    /// `cleanup_expired_sessions` keeps a session that was accessed within
+    /// `max_session_age` — only genuinely idle entries are evicted.
+    #[tokio::test]
+    #[serial]
+    async fn cleanup_expired_sessions_keeps_recently_used_session() {
+        let _state = StateDirGuard::new();
+        // A long idle TTL: a just-created session is well within it.
+        let server =
+            create_test_server_with_cleanup(Duration::from_secs(300), Duration::from_secs(3600))
+                .await;
+
+        let created = server
+            .new_session(agent_client_protocol::schema::NewSessionRequest::new(
+                std::env::current_dir().unwrap(),
+            ))
+            .await
+            .expect("new_session should succeed");
+
+        let evicted = server.cleanup_expired_sessions().await;
+        assert_eq!(evicted, 0, "a recently-used session must not be evicted");
+        assert!(
+            server
+                .sessions
+                .read()
+                .await
+                .contains_key(&created.session_id),
+            "the recently-used session should remain cached"
+        );
+    }
+
+    /// After a session is evicted from the in-memory cache, `get_session`
+    /// transparently reloads it from the durable `SessionStore` and
+    /// re-populates the cache — proving eviction never loses a session.
+    #[tokio::test]
+    #[serial]
+    async fn evicted_session_is_still_resolvable_via_get_session() {
+        let _state = StateDirGuard::new();
+        let server =
+            create_test_server_with_cleanup(Duration::from_secs(300), Duration::from_secs(0)).await;
+
+        let created = server
+            .new_session(agent_client_protocol::schema::NewSessionRequest::new(
+                std::env::current_dir().unwrap(),
+            ))
+            .await
+            .expect("new_session should succeed");
+        let session_id = created.session_id.clone();
+        let llama_id = crate::types::SessionId::from_str(&session_id.0).unwrap();
+
+        // Evict the session from the in-memory cache.
+        assert_eq!(server.cleanup_expired_sessions().await, 1);
+        assert!(
+            server.sessions.read().await.is_empty(),
+            "session should be evicted from the cache"
+        );
+
+        // `get_session` for the evicted id reloads it from the durable store.
+        let resolved = server
+            .get_session(&session_id)
+            .await
+            .expect("an evicted session must still resolve via the SessionStore");
+        assert_eq!(resolved.session_id, session_id);
+        assert_eq!(resolved.llama_session_id, llama_id);
+
+        // The reload re-populated the cache and the reverse mapping.
+        assert!(
+            server.sessions.read().await.contains_key(&session_id),
+            "resolving an evicted session should re-populate the cache"
+        );
+        assert_eq!(
+            server.llama_to_acp.read().await.get(&llama_id),
+            Some(&session_id),
+            "the reverse mapping should be restored on reload"
+        );
+    }
+
+    /// Over a long-lived process the in-memory session maps must not grow
+    /// without bound: once sessions go idle, a cleanup sweep drains them from
+    /// the cache while every durable record is retained on disk.
+    #[tokio::test]
+    #[serial]
+    async fn session_cache_does_not_grow_without_bound() {
+        let _state = StateDirGuard::new();
+        // Zero TTL so every created session is immediately idle-eligible.
+        let server =
+            create_test_server_with_cleanup(Duration::from_secs(300), Duration::from_secs(0)).await;
+
+        // Simulate a long-lived process churning through many sessions.
+        const SESSION_COUNT: usize = 25;
+        let mut created_ids = Vec::with_capacity(SESSION_COUNT);
+        for _ in 0..SESSION_COUNT {
+            let created = server
+                .new_session(agent_client_protocol::schema::NewSessionRequest::new(
+                    std::env::current_dir().unwrap(),
+                ))
+                .await
+                .expect("new_session should succeed");
+            created_ids.push(created.session_id);
+        }
+
+        // Without eviction the cache would now hold every session forever.
+        assert_eq!(
+            server.sessions.read().await.len(),
+            SESSION_COUNT,
+            "all created sessions are cached before the sweep"
+        );
+
+        // A single cleanup sweep evicts every idle session.
+        let evicted = server.cleanup_expired_sessions().await;
+        assert_eq!(
+            evicted, SESSION_COUNT,
+            "every idle session should be evicted in one sweep"
+        );
+        assert!(
+            server.sessions.read().await.is_empty(),
+            "the in-memory cache must be bounded — empty after the sweep"
+        );
+        assert!(
+            server.llama_to_acp.read().await.is_empty(),
+            "the reverse mapping must be bounded — empty after the sweep"
+        );
+
+        // Every evicted session is still durably resolvable from the store.
+        for id in &created_ids {
+            assert!(
+                SessionStore::new()
+                    .load(&id.0)
+                    .expect("store load should succeed")
+                    .is_some(),
+                "durable record for {} must survive eviction",
+                id.0
+            );
+        }
     }
 
     // JSON-RPC parsing/dispatch tests removed when start_with_streams was
@@ -2919,6 +4465,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_session_modes_in_new_session_response() {
+        let _state = StateDirGuard::new();
         let server = Arc::new(create_test_server_with_modes().await);
 
         // Initialize with client capabilities
@@ -3002,6 +4549,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_set_session_mode_changes_mode() {
+        let _state = StateDirGuard::new();
         let server = Arc::new(create_test_server().await);
 
         // Create a session first
@@ -3094,6 +4642,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_set_session_mode() {
+        let _state = StateDirGuard::new();
         let server = Arc::new(create_test_server().await);
 
         // Create a new session first
@@ -3346,5 +4895,229 @@ mod tests {
         let mut meta = serde_json::Map::new();
         meta.insert("max_tokens".to_string(), serde_json::json!(-1_i64));
         assert_eq!(extract_request_max_tokens(Some(&meta)), None);
+    }
+
+    // =========================================================================
+    // generate_and_emit_title — session-title generation, trigger, and once-guard
+    // =========================================================================
+
+    /// Append a [`crate::types::Message`] to a llama session in place under the
+    /// session lock, so a test can stage a conversation without racing the
+    /// read-modify-write that `mutate_session` exists to avoid.
+    async fn push_message(
+        server: &AcpServer,
+        session_id: &LlamaSessionId,
+        role: crate::types::MessageRole,
+        content: &str,
+    ) {
+        server
+            .agent_server
+            .session_manager()
+            .mutate_session(session_id, |session| {
+                session.messages.push(crate::types::Message {
+                    role,
+                    content: content.to_string(),
+                    tool_call_id: None,
+                    tool_name: None,
+                    timestamp: std::time::SystemTime::now(),
+                });
+            })
+            .await
+            .unwrap();
+    }
+
+    /// With a first exchange present, `generate_and_emit_title` generates a
+    /// title, stores it on the live session, persists it, and broadcasts one
+    /// `SessionInfoUpdate`.
+    ///
+    /// The test server has no model loaded, so the model call fails and
+    /// `generate_session_title` falls back to the first-user-message heuristic —
+    /// this exercises the deterministic heuristic-fallback branch end to end.
+    #[tokio::test]
+    #[serial]
+    async fn generate_and_emit_title_uses_heuristic_when_model_unavailable() {
+        let _state = StateDirGuard::new();
+        let server = create_test_server().await;
+        let mut notifications = server.notification_tx.subscribe();
+
+        let llama_session = server.agent_server.create_session().await.unwrap();
+        let llama_session_id = llama_session.id;
+        let acp_session_id = AcpSessionId::new("01TITLEHEURISTIC0000000000");
+
+        // Stage a complete first exchange: user prompt + assistant reply.
+        push_message(
+            &server,
+            &llama_session_id,
+            crate::types::MessageRole::User,
+            "Add dark mode to the settings page",
+        )
+        .await;
+        push_message(
+            &server,
+            &llama_session_id,
+            crate::types::MessageRole::Assistant,
+            "Sure, here is how.",
+        )
+        .await;
+
+        AcpServer::generate_and_emit_title(
+            Arc::clone(&server.agent_server),
+            server.notification_tx.clone(),
+            llama_session_id,
+            acp_session_id.clone(),
+        )
+        .await;
+
+        // The heuristic title is the trimmed first user message.
+        let session = server
+            .agent_server
+            .session_manager()
+            .get_session(&llama_session_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            session.title.as_deref(),
+            Some("Add dark mode to the settings page"),
+            "title should be stored on the live session via the heuristic fallback"
+        );
+
+        // The record is persisted so `session/list` reflects the title.
+        let loaded = SessionStore::new()
+            .load(&acp_session_id.0)
+            .unwrap()
+            .expect("record should be persisted with the title");
+        assert_eq!(
+            loaded.title.as_deref(),
+            Some("Add dark mode to the settings page")
+        );
+
+        // Exactly one SessionInfoUpdate carrying the title is broadcast.
+        let notification = notifications
+            .try_recv()
+            .expect("a SessionInfoUpdate should have been broadcast");
+        match notification.update {
+            agent_client_protocol::schema::SessionUpdate::SessionInfoUpdate(info) => {
+                assert_eq!(
+                    info.title.as_opt_deref(),
+                    Some(Some("Add dark mode to the settings page"))
+                );
+            }
+            other => panic!("expected SessionInfoUpdate, got {other:?}"),
+        }
+        assert!(
+            notifications.try_recv().is_err(),
+            "exactly one notification should be emitted"
+        );
+    }
+
+    /// `generate_and_emit_title` does not generate a title before the first
+    /// agent response — a user message alone is not a full exchange.
+    #[tokio::test]
+    #[serial]
+    async fn generate_and_emit_title_skips_without_first_exchange() {
+        let _state = StateDirGuard::new();
+        let server = create_test_server().await;
+        let mut notifications = server.notification_tx.subscribe();
+
+        let llama_session = server.agent_server.create_session().await.unwrap();
+        let llama_session_id = llama_session.id;
+        let acp_session_id = AcpSessionId::new("01TITLENOEXCHANGE000000000");
+
+        // Only a user message — no assistant reply yet.
+        push_message(
+            &server,
+            &llama_session_id,
+            crate::types::MessageRole::User,
+            "just a prompt",
+        )
+        .await;
+
+        AcpServer::generate_and_emit_title(
+            Arc::clone(&server.agent_server),
+            server.notification_tx.clone(),
+            llama_session_id,
+            acp_session_id,
+        )
+        .await;
+
+        let session = server
+            .agent_server
+            .session_manager()
+            .get_session(&llama_session_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            session.title.is_none(),
+            "no title should be generated before the first agent response"
+        );
+        assert!(
+            notifications.try_recv().is_err(),
+            "no notification should be emitted without a first exchange"
+        );
+    }
+
+    /// `generate_and_emit_title` is a no-op when the session already has a
+    /// title — the once-guard prevents a racing turn from overwriting it.
+    #[tokio::test]
+    #[serial]
+    async fn generate_and_emit_title_skips_when_title_already_set() {
+        let _state = StateDirGuard::new();
+        let server = create_test_server().await;
+        let mut notifications = server.notification_tx.subscribe();
+
+        let llama_session = server.agent_server.create_session().await.unwrap();
+        let llama_session_id = llama_session.id;
+        let acp_session_id = AcpSessionId::new("01TITLEALREADYSET000000000");
+
+        push_message(
+            &server,
+            &llama_session_id,
+            crate::types::MessageRole::User,
+            "Add dark mode to the settings page",
+        )
+        .await;
+        push_message(
+            &server,
+            &llama_session_id,
+            crate::types::MessageRole::Assistant,
+            "Sure, here is how.",
+        )
+        .await;
+        // A turn raced ahead and already set a title.
+        server
+            .agent_server
+            .session_manager()
+            .mutate_session(&llama_session_id, |session| {
+                session.title = Some("Pre-existing title".to_string());
+            })
+            .await
+            .unwrap();
+
+        AcpServer::generate_and_emit_title(
+            Arc::clone(&server.agent_server),
+            server.notification_tx.clone(),
+            llama_session_id,
+            acp_session_id,
+        )
+        .await;
+
+        let session = server
+            .agent_server
+            .session_manager()
+            .get_session(&llama_session_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            session.title.as_deref(),
+            Some("Pre-existing title"),
+            "an existing title must not be overwritten"
+        );
+        assert!(
+            notifications.try_recv().is_err(),
+            "no notification should be emitted when a title already exists"
+        );
     }
 }

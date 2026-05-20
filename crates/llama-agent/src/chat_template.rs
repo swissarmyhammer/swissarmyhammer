@@ -1707,6 +1707,7 @@ mod qwen3coder_model_integration {
         client_capabilities: None,
             cached_message_count: 0,
             cached_token_count: 0,
+            title: None,
         }
     }
 
@@ -2313,6 +2314,7 @@ mod qwen3coder_integration_tests {
         client_capabilities: None,
             cached_message_count: 0,
             cached_token_count: 0,
+            title: None,
         }
     }
 
@@ -5127,6 +5129,7 @@ mod tests {
             client_capabilities: None,
             cached_message_count: 0,
             cached_token_count: 0,
+            title: None,
         }
     }
 
@@ -8298,6 +8301,7 @@ mod template_only_tests {
             client_capabilities: None,
             cached_message_count: 0,
             cached_token_count: 0,
+            title: None,
         };
 
         // Add a simple tool

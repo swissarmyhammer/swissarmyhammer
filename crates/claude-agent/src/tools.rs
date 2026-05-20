@@ -3031,6 +3031,13 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let session_manager = Arc::new(SessionManager::new());
         let terminal_manager = Arc::new(TerminalManager::new());
+        // Terminal operations are gated behind the client `terminal` capability,
+        // which a real client declares during `initialize`.
+        terminal_manager
+            .set_client_capabilities(
+                agent_client_protocol::schema::ClientCapabilities::new().terminal(true),
+            )
+            .await;
 
         // Create test session
         let session_id = session_manager
@@ -3090,6 +3097,13 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let session_manager = Arc::new(SessionManager::new());
         let terminal_manager = Arc::new(TerminalManager::new());
+        // Terminal operations are gated behind the client `terminal` capability,
+        // which a real client declares during `initialize`.
+        terminal_manager
+            .set_client_capabilities(
+                agent_client_protocol::schema::ClientCapabilities::new().terminal(true),
+            )
+            .await;
 
         // Create test session
         let session_id = session_manager
@@ -3127,6 +3141,13 @@ mod tests {
 
         let session_manager = Arc::new(SessionManager::new());
         let terminal_manager = Arc::new(TerminalManager::new());
+        // Grant the terminal capability so creation reaches the session-ID
+        // validation this test is asserting on, rather than the capability gate.
+        terminal_manager
+            .set_client_capabilities(
+                agent_client_protocol::schema::ClientCapabilities::new().terminal(true),
+            )
+            .await;
 
         let params = TerminalCreateParams {
             session_id: "invalid-session-id".to_string(),
@@ -3142,8 +3163,15 @@ mod tests {
             .await;
 
         assert!(result.is_err());
+        // ACP session IDs are opaque strings: an id this agent did not mint
+        // (a non-ULID string) cannot match any live session, so it is treated
+        // exactly like any other session lookup miss — "Session not found"
+        // rather than a separate "invalid format" error.
         let error = result.unwrap_err().to_string();
-        assert!(error.contains("Invalid session ID format"));
+        assert!(
+            error.contains("Session not found"),
+            "expected a session-not-found error, got: {error}"
+        );
     }
 
     #[tokio::test]
@@ -3152,6 +3180,13 @@ mod tests {
 
         let session_manager = Arc::new(SessionManager::new());
         let terminal_manager = Arc::new(TerminalManager::new());
+        // Grant the terminal capability so creation reaches the session-ID
+        // validation this test is asserting on, rather than the capability gate.
+        terminal_manager
+            .set_client_capabilities(
+                agent_client_protocol::schema::ClientCapabilities::new().terminal(true),
+            )
+            .await;
 
         let params = TerminalCreateParams {
             session_id: ulid::Ulid::new().to_string(), // Valid ULID but non-existent
@@ -3302,6 +3337,13 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let session_manager = Arc::new(SessionManager::new());
         let terminal_manager = Arc::new(TerminalManager::new());
+        // Terminal operations are gated behind the client `terminal` capability,
+        // which a real client declares during `initialize`.
+        terminal_manager
+            .set_client_capabilities(
+                agent_client_protocol::schema::ClientCapabilities::new().terminal(true),
+            )
+            .await;
         let handler = TerminalMethodHandler::new(terminal_manager.clone(), session_manager.clone());
 
         // Create test session

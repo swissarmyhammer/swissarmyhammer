@@ -1,8 +1,12 @@
-//! Integration test for slash command advertisement in ACP
+//! Integration test for the `CommandRegistry` in ACP.
 //!
 //! This test verifies that:
-//! 1. The ACP server advertises supports_slash_commands capability during initialization
-//! 2. Slash commands are derived from MCP prompts and Agent Skills via CommandRegistry
+//! 1. The ACP server does NOT advertise slash command support — the
+//!    `CommandRegistry` is not wired into the session lifecycle, so the
+//!    capability is intentionally not advertised (advertise-vs-deliver
+//!    consistency).
+//! 2. The `CommandRegistry` itself, when invoked directly, correctly derives
+//!    slash commands from MCP prompts and Agent Skills.
 //! 3. Commands include proper metadata for parameters when available
 //! 4. Skills appear as ACP commands with correct structure
 //! 5. Skills take precedence over duplicate MCP prompts
@@ -67,32 +71,30 @@ mod acp_slash_command_tests {
         }
     }
 
-    /// Test that the ACP config advertises supports_slash_commands capability
+    /// Test that the ACP config does NOT carry a slash-command capability flag.
+    ///
+    /// Slash commands are not advertised because the `CommandRegistry` is not
+    /// wired into the session lifecycle — no `AvailableCommandsUpdate` is ever
+    /// emitted. Advertise-vs-deliver consistency requires the capability to be
+    /// absent until the registry is genuinely delivered.
     #[test]
-    fn test_acp_config_advertises_slash_commands_capability() {
+    fn test_acp_config_does_not_advertise_slash_commands_capability() {
         // Initialize tracing for test visibility
         let _ = tracing_subscriber::fmt()
             .with_test_writer()
             .with_max_level(tracing::Level::DEBUG)
             .try_init();
 
-        // Verify the default config has supports_slash_commands enabled
+        // The capabilities struct must not serialize any slash-command flag.
         let default_config = llama_agent::acp::AcpConfig::default();
-        assert!(
-            default_config.capabilities.supports_slash_commands,
-            "Default ACP config should support slash commands"
-        );
-
-        // Verify the capability is serialized correctly for the protocol
         let json = serde_json::to_string(&default_config.capabilities).unwrap();
         assert!(
-            json.contains("\"supports_slash_commands\":true")
-                || json.contains("\"supportsSlashCommands\":true"),
-            "Slash commands capability should be present in JSON: {}",
+            !json.contains("supports_slash_commands") && !json.contains("supportsSlashCommands"),
+            "Slash commands capability must not be present in JSON: {}",
             json
         );
 
-        tracing::info!("✓ ACP config advertises slash commands support");
+        tracing::info!("✓ ACP config does not advertise slash command support");
     }
 
     /// Test that CommandRegistry correctly converts MCP prompts to slash commands

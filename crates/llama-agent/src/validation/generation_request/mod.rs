@@ -49,6 +49,7 @@ mod integration_tests {
             client_capabilities: None,
             cached_message_count: 0,
             cached_token_count: 0,
+            title: None,
         };
 
         // Create a realistic generation request
@@ -111,6 +112,7 @@ mod integration_tests {
         client_capabilities: None,
             cached_message_count: 0,
             cached_token_count: 0,
+            title: None,
         };
 
         let request = GenerationRequest {
@@ -152,6 +154,7 @@ mod integration_tests {
             client_capabilities: None,
             cached_message_count: 0,
             cached_token_count: 0,
+            title: None,
         };
 
         let request = GenerationRequest {
@@ -209,6 +212,7 @@ mod integration_tests {
         client_capabilities: None,
             cached_message_count: 0,
             cached_token_count: 0,
+            title: None,
         };
 
         let request = GenerationRequest {

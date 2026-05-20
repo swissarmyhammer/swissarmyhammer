@@ -78,6 +78,7 @@ doc/book
 
 # ACP transcript recordings
 .acp/
+.hence/
 
 # AVP runtime state (self-manages its own .gitignore)
 .avp/
