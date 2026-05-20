@@ -167,6 +167,13 @@ class FakeSession implements AcpSession {
   constructor(
     private readonly onUpdate: SessionUpdateHandler,
     private readonly script: SessionScript,
+    /**
+     * The board directory the parent factory captured at construction time —
+     * the production analogue is `cwd` passed to `newSession`. Exposed so the
+     * board-switch regression test can assert the session was started against
+     * the new board.
+     */
+    readonly cwd: string,
   ) {}
 
   async prompt(prompt: ContentBlock[]): Promise<PromptResponse> {
@@ -201,9 +208,15 @@ interface MockHarness {
  *
  * The returned factory captures which model ids the panel connects for and
  * exposes the constructed sessions so the test can assert no fresh connect or
- * session was created across a panel toggle.
+ * session was created across a panel toggle. The factory is bound to a single
+ * `boardDir` — production's `useProductionConnect(boardDir)` returns a new
+ * factory whenever the active board changes, and the harness mirrors that:
+ * board-switch tests build a fresh harness for each board.
  */
-function mockHarness(script: SessionScript = {}): MockHarness {
+function mockHarness(
+  script: SessionScript = {},
+  boardDir: string = BOARD,
+): MockHarness {
   const connectedModels: string[] = [];
   const sessions: FakeSession[] = [];
 
@@ -214,7 +227,11 @@ function mockHarness(script: SessionScript = {}): MockHarness {
         protocolVersion: 1,
         initializeResponse: { protocolVersion: 1, agentCapabilities: {} },
         async startSession(): Promise<AcpSession> {
-          const session = new FakeSession(handlers.onSessionUpdate, script);
+          const session = new FakeSession(
+            handlers.onSessionUpdate,
+            script,
+            boardDir,
+          );
           sessions.push(session);
           return session;
         },
@@ -259,6 +276,26 @@ function renderContainer(
     <ActiveBoardPathProvider value={boardPath}>
       <AiPanelContainer createConnect={noopConnect} {...props} />
     </ActiveBoardPathProvider>,
+  );
+}
+
+/**
+ * Wrap `AiPanelContainer` in an `ActiveBoardPathProvider` for board-switch
+ * tests. The wrapper takes the current `boardPath` and `createConnect` so the
+ * test can rerender with a different board and a freshly-bound factory in one
+ * pass — mirroring the production `useProductionConnect(boardPath)` pattern.
+ */
+function BoardScopedContainer({
+  boardPath,
+  createConnect,
+}: {
+  boardPath: string;
+  createConnect: AiPanelConnectFactory;
+}) {
+  return (
+    <ActiveBoardPathProvider value={boardPath}>
+      <AiPanelContainer createConnect={createConnect} />
+    </ActiveBoardPathProvider>
   );
 }
 
@@ -433,6 +470,181 @@ describe("AiPanelContainer", () => {
     expect(harness.connectedModels().length).toBe(connectCountBeforeToggle);
     expect(harness.sessions()).toHaveLength(1);
     expect(harness.sessions()[0]).toBe(sessionBeforeToggle);
+  });
+
+  it("switching the active board starts a fresh ACP session against the new board's cwd", async () => {
+    // Regression: per the AI panel task, switching to a different kanban board
+    // must tear down the prior ACP client + session and issue a fresh
+    // `newSession` whose `cwd` is the new board directory — the agent (and
+    // the per-board MCP server) must see the new cwd, not the prior board's.
+    //
+    // The production path keys `<AiPanelConversation>` on a composite of
+    // `${boardDir}::${modelId}`, so a board change remounts the conversation
+    // and its `useConversation` refs are freshly initialized — `connect` is
+    // re-invoked against the new factory built by `useProductionConnect`. The
+    // harness here mirrors that contract: each board gets its own
+    // `mockHarness(_, boardDir)`, and the test rerenders with the new board
+    // path AND the new harness in one pass.
+    const BOARD_A = "/tmp/board-a";
+    const BOARD_B = "/tmp/board-b";
+    const REPLY = "reply for board a";
+
+    // Preseed a chosen model so the panel mounts `AiPanelConversation`
+    // immediately — without a model the panel renders the no-model state and
+    // never connects.
+    localStorage.setItem(
+      aiPanelStateStorageKey(BOARD_A),
+      JSON.stringify({ open: true, modelId: "claude-code" }),
+    );
+    localStorage.setItem(
+      aiPanelStateStorageKey(BOARD_B),
+      JSON.stringify({ open: true, modelId: "claude-code" }),
+    );
+
+    const harnessA = mockHarness(
+      {
+        updates: [
+          {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: REPLY },
+          },
+        ],
+      },
+      BOARD_A,
+    );
+
+    const { rerender } = await renderInAct(
+      <BoardScopedContainer
+        boardPath={BOARD_A}
+        createConnect={harnessA.createConnect}
+      />,
+    );
+    await screen.findByTestId("ai-panel-container");
+
+    // Send a prompt against board A so `ensureSession` fires and the harness
+    // captures a session tagged with board A's cwd.
+    const textareaA = await screen.findByRole("textbox", {
+      name: /message the ai agent/i,
+    });
+    await act(async () => {
+      await userEvent.type(textareaA, "first prompt");
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /submit/i }));
+    });
+    await waitFor(() => {
+      expect(harnessA.sessions()).toHaveLength(1);
+    });
+    expect(harnessA.sessions()[0].cwd).toBe(BOARD_A);
+
+    // Switch to board B — production hands the container a fresh
+    // `createConnect` (memoized on the new boardDir) at the same time the
+    // `ActiveBoardPathProvider` value flips, so the harness pattern matches:
+    // a new `mockHarness` bound to board B accompanies the rerender.
+    const harnessB = mockHarness({}, BOARD_B);
+    await act(async () => {
+      rerender(
+        <BoardScopedContainer
+          boardPath={BOARD_B}
+          createConnect={harnessB.createConnect}
+        />,
+      );
+    });
+
+    // The board-A session must NOT be reused for board B — sending a prompt
+    // against the new board triggers a brand-new connect + newSession on the
+    // new harness.
+    const textareaB = await screen.findByRole("textbox", {
+      name: /message the ai agent/i,
+    });
+    await act(async () => {
+      await userEvent.type(textareaB, "second prompt");
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /submit/i }));
+    });
+
+    await waitFor(() => {
+      expect(harnessB.sessions()).toHaveLength(1);
+    });
+    // The board-B session was started against board B's cwd — the production
+    // analogue is `cwd: BOARD_B` in `newSession`.
+    expect(harnessB.sessions()[0].cwd).toBe(BOARD_B);
+    // And no extra session was started on the old (board-A) harness.
+    expect(harnessA.sessions()).toHaveLength(1);
+  });
+
+  it("re-selecting the same board does not tear the session down", async () => {
+    // The flip side of the board-switch regression: a no-op switch (the
+    // user picks the same board again, or the active-board value re-emits)
+    // must NOT remount `AiPanelConversation`. The composite key
+    // `${boardDir}::${modelId}` is stable when boardDir and modelId are
+    // both stable, so the existing client + session survive.
+    localStorage.setItem(
+      aiPanelStateStorageKey(BOARD),
+      JSON.stringify({ open: true, modelId: "claude-code" }),
+    );
+
+    const harness = mockHarness(
+      {
+        updates: [
+          {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "ack" },
+          },
+        ],
+      },
+      BOARD,
+    );
+
+    const { rerender } = await renderInAct(
+      <BoardScopedContainer
+        boardPath={BOARD}
+        createConnect={harness.createConnect}
+      />,
+    );
+    await screen.findByTestId("ai-panel-container");
+
+    const textarea = await screen.findByRole("textbox", {
+      name: /message the ai agent/i,
+    });
+    await act(async () => {
+      await userEvent.type(textarea, "hello");
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /submit/i }));
+    });
+    await waitFor(() => {
+      expect(harness.sessions()).toHaveLength(1);
+    });
+    const sessionBefore = harness.sessions()[0];
+
+    // Rerender with the SAME board path and the SAME `createConnect`. The
+    // composite key is unchanged so `AiPanelConversation` is NOT remounted
+    // and the cached client + session survive.
+    await act(async () => {
+      rerender(
+        <BoardScopedContainer
+          boardPath={BOARD}
+          createConnect={harness.createConnect}
+        />,
+      );
+    });
+
+    // A second prompt reuses the existing session — no new connect, no new
+    // `newSession`.
+    await act(async () => {
+      await userEvent.type(textarea, "again");
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /submit/i }));
+    });
+
+    await waitFor(() => {
+      expect(sessionBefore.prompts.length).toBe(2);
+    });
+    expect(harness.sessions()).toHaveLength(1);
+    expect(harness.sessions()[0]).toBe(sessionBefore);
   });
 
   it("dragging the resize handle updates the width and persists it", async () => {

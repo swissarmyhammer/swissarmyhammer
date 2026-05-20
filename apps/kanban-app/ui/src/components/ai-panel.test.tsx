@@ -528,6 +528,170 @@ describe("AiPanel: model selector", () => {
   });
 });
 
+describe("AiPanel: board switch starts a fresh session", () => {
+  it("changing boardDir while modelId stays the same remounts the conversation and re-invokes createConnect", async () => {
+    // Regression: switching the active kanban board must tear down the prior
+    // ACP client + session even when the model id is unchanged. The fix keys
+    // `AiPanelConversation` on `${boardDir}::${modelId}` so a board change
+    // unmounts/remounts the conversation, which (a) freshly initializes the
+    // hook's `clientRef` / `sessionRef`, and (b) re-invokes `createConnect`.
+    //
+    // The production analogue: `useProductionConnect(boardDir)` hands the
+    // panel a NEW factory each time the board changes, so production also
+    // sees a fresh connect call. The test mirrors that by passing a fresh
+    // `createConnect` for each board, but the load-bearing behavior is the
+    // remount itself — without the composite key, the cached refs would
+    // short-circuit and the new factory would never be called.
+    const harnessA = mockHarness({
+      updates: [
+        { sessionUpdate: "agent_message_chunk", content: textBlock("from a") },
+      ],
+    });
+    const harnessB = mockHarness({
+      updates: [
+        { sessionUpdate: "agent_message_chunk", content: textBlock("from b") },
+      ],
+    });
+
+    const { rerender } = await renderInAct(
+      <AiPanel
+        boardDir="/a"
+        models={MODELS}
+        modelId="claude-code"
+        onSelectModel={() => {}}
+        onCollapse={() => {}}
+        createConnect={harnessA.createConnect}
+      />,
+    );
+
+    // Send one prompt against board /a — the first connect+session is built.
+    const textareaA = screen.getByRole("textbox");
+    await act(async () => {
+      await userEvent.type(textareaA, "first");
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /submit/i }));
+    });
+    await waitFor(() => {
+      expect(harnessA.connectedModels()).toEqual(["claude-code"]);
+    });
+    expect(harnessA.sessions()).toHaveLength(1);
+    const sessionA = harnessA.sessions()[0];
+
+    // Switch the board (same model). The composite key flips, so
+    // `AiPanelConversation` is unmounted — taking its `useConversation`
+    // refs with it — and a fresh one mounts.
+    await act(async () => {
+      rerender(
+        <AiPanel
+          boardDir="/b"
+          models={MODELS}
+          modelId="claude-code"
+          onSelectModel={() => {}}
+          onCollapse={() => {}}
+          createConnect={harnessB.createConnect}
+        />,
+      );
+    });
+
+    // The empty-state placeholder is back — proof the conversation was
+    // remounted, since the prior prompt's user message would otherwise still
+    // be in the message log.
+    await waitFor(() => {
+      expect(document.body.textContent).toContain(
+        "Send a message to start the conversation",
+      );
+    });
+    expect(document.body.textContent).not.toContain("first");
+
+    // A new prompt against board /b triggers a fresh connect on the new
+    // harness — proof the new `createConnect` factory was invoked, not the
+    // cached client from the prior board.
+    const textareaB = screen.getByRole("textbox");
+    await act(async () => {
+      await userEvent.type(textareaB, "second");
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /submit/i }));
+    });
+    await waitFor(() => {
+      expect(harnessB.connectedModels()).toEqual(["claude-code"]);
+    });
+    expect(harnessB.sessions()).toHaveLength(1);
+    // The board-A session is preserved (no extra connect, no extra session),
+    // and the board-B session is brand new — not the same object.
+    expect(harnessA.sessions()).toHaveLength(1);
+    expect(harnessB.sessions()[0]).not.toBe(sessionA);
+  });
+
+  it("re-rendering with the same boardDir + modelId does not remount the conversation", async () => {
+    // The flip side: when neither the board nor the model changes, the
+    // composite key is stable and `AiPanelConversation` must NOT remount.
+    // The cached client + session survive so the existing conversation is
+    // preserved across an unrelated prop change.
+    const harness = mockHarness({
+      updates: [
+        { sessionUpdate: "agent_message_chunk", content: textBlock("ok") },
+      ],
+    });
+    const { rerender } = await renderInAct(
+      <AiPanel
+        boardDir="/a"
+        models={MODELS}
+        modelId="claude-code"
+        onSelectModel={() => {}}
+        onCollapse={() => {}}
+        createConnect={harness.createConnect}
+      />,
+    );
+
+    const textarea = screen.getByRole("textbox");
+    await act(async () => {
+      await userEvent.type(textarea, "hello");
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /submit/i }));
+    });
+    await waitFor(() => {
+      expect(harness.sessions()).toHaveLength(1);
+    });
+    const session = harness.sessions()[0];
+
+    // Re-render with the same board, same model, and the same
+    // `createConnect`. The composite key is unchanged.
+    await act(async () => {
+      rerender(
+        <AiPanel
+          boardDir="/a"
+          models={MODELS}
+          modelId="claude-code"
+          onSelectModel={() => {}}
+          onCollapse={() => {}}
+          createConnect={harness.createConnect}
+        />,
+      );
+    });
+
+    // Send another prompt — it must reuse the existing session, not start a
+    // fresh one.
+    await act(async () => {
+      await userEvent.type(textarea, "again");
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /submit/i }));
+    });
+
+    await waitFor(() => {
+      expect(session.prompts.length).toBe(2);
+    });
+    expect(harness.sessions()).toHaveLength(1);
+    expect(harness.sessions()[0]).toBe(session);
+    // `createConnect` was invoked exactly once — only at the first
+    // `ensureSession`. The same-key rerender did not retrigger it.
+    expect(harness.connectedModels()).toEqual(["claude-code"]);
+  });
+});
+
 describe("AiPanel: collapse control", () => {
   it("renders the collapse button in the header and clicking it calls onCollapse", async () => {
     const harness = mockHarness();

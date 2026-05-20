@@ -22,12 +22,15 @@
  *   composing `ai_start_agent` -> {@link connectAcpStream} ->
  *   {@link createKanbanClient}; tests inject a mock that needs no transport.
  *
- * # Switching models starts a fresh session
+ * # Switching boards or models starts a fresh session
  *
- * The conversation is keyed on the selected model id. Selecting a different
- * model remounts {@link AiPanelConversation}, which tears down the prior ACP
- * client and session and starts a brand-new stateless one for the new model —
- * exactly the "fresh session per model" the task requires.
+ * The conversation is keyed on a composite of the active board directory and
+ * the selected model id. Selecting a different model — or switching to a
+ * different board — remounts {@link AiPanelConversation}, which tears down
+ * the prior ACP client and session and starts a brand-new stateless one for
+ * the new (board, model) pair. The `cwd` and per-board MCP server passed at
+ * `newSession` therefore always match the currently active board, exactly
+ * the "fresh session per board / per model" the task requires.
  */
 import {
   useCallback,
@@ -214,7 +217,6 @@ export function AiPanel({
   onCollapse,
   createConnect,
 }: AiPanelProps): ReactNode {
-  void boardDir;
   const selectedModel = useMemo(
     () => models?.find((model) => model.id === modelId) ?? null,
     [models, modelId],
@@ -251,10 +253,15 @@ export function AiPanel({
           />
         ) : (
           <AiPanelConversation
-            // Keying on the model id remounts the conversation on a model
-            // switch — tearing down the prior ACP session and starting a
-            // fresh, stateless one for the newly selected model.
-            key={modelId}
+            // Keying on `${boardDir}::${modelId}` remounts the conversation
+            // on a board switch OR a model switch — tearing down the prior
+            // ACP client + session and starting a fresh stateless one for
+            // the new (board, model) pair. The board half of the key is
+            // load-bearing: the agent reads `cwd` and per-board MCP servers
+            // off `newSession`, so a board change must force a new session
+            // or the agent would keep running against the prior board's
+            // directory and MCP URL.
+            key={`${boardDir}::${modelId}`}
             modelId={modelId}
             modelReady={selectedModel?.available ?? false}
             models={models}
