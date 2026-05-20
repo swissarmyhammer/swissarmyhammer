@@ -222,6 +222,34 @@ impl PluginLedger {
         Some(handles)
     }
 
+    /// Returns the server names `plugin` currently holds, in registration order.
+    ///
+    /// Reads the ledger non-destructively — unlike [`drain`](Self::drain), the
+    /// entries stay in place. Used by the hot-reload path to stage the
+    /// `Reloading` markers on the registry **before** v1's registrations are
+    /// disposed, so the in-flight window covers every name v1 held.
+    ///
+    /// # Parameters
+    ///
+    /// - `plugin` — the id of the plugin whose ledger to inspect.
+    ///
+    /// # Returns
+    ///
+    /// `Some` vec of names when `plugin` is tracked; `None` when it is not.
+    /// A tracked plugin that has registered no servers returns `Some(vec![])`.
+    pub fn server_names(&self, plugin: &PluginId) -> Option<Vec<String>> {
+        let handles = self.entries.get(plugin)?;
+        Some(
+            handles
+                .iter()
+                .filter_map(|handle| match handle {
+                    RegistrationHandle::Server(name) => Some(name.clone()),
+                    _ => None,
+                })
+                .collect(),
+        )
+    }
+
     /// Returns the number of handles currently recorded for `plugin`.
     ///
     /// `None` when `plugin` is not tracked — distinguishing an unloaded plugin

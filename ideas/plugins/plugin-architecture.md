@@ -1382,8 +1382,14 @@ calls `load()`. Total latency on the order of tens of ms.
    Conflicts surface as `ServerNameTaken` from the new registrations.
 3. **Failed v2 load leaves the plugin unloaded.** No fallback to v1; v1
    is already torn down by the time v2 is attempted. Manual retry.
-4. **Crashed plugins do not auto-restart.** Surfaced via notification and
-   settings UI badge; user-initiated reload.
+4. **Crashed plugins do not auto-restart.** The platform records
+   [`ReloadStatus::Crashed { error }`](crate::ReloadStatus::Crashed) and
+   exposes it through `PluginHost::reload_status(plugin_id)`. "No
+   auto-restart" is structural: the watcher only fires on file changes,
+   and a crash is not a file change. Host applications (settings UI, a
+   TUI badge, a notification system) consume the status and surface it
+   to the user, who then triggers a manual reload by touching the bundle
+   on disk or calling `PluginHost::load` directly.
 5. **Plugin state in class fields is lost on reload.** Intended.
 
 **Dev-mode niceties:** the `swissarmyhammer-directory` watcher triggers

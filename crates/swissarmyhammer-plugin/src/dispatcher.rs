@@ -10,7 +10,7 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use crate::error::{Error, Result};
-use crate::registry::ServerRegistry;
+use crate::registry::{ServerRegistry, ServerStatus};
 use crate::server::CallerId;
 
 /// The single dispatcher every call within the platform flows through.
@@ -76,10 +76,20 @@ impl Dispatcher {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::UnknownServer`] when no server is registered under
-    /// `server`. Any error the target server's `invoke` produces — an unknown
-    /// tool, an unavailable server, a reloaded plugin, or a handler failure —
-    /// is propagated to the caller unchanged.
+    /// Resolves `server` against the registry and translates the resolution
+    /// status into the appropriate error:
+    ///
+    /// - [`ServerStatus::Live`] — forward to the server's `invoke`.
+    /// - [`ServerStatus::Reloading`] — the backing plugin is mid-hot-reload;
+    ///   returns [`Error::PluginReloaded`] so the caller retries once v2
+    ///   settles.
+    /// - [`ServerStatus::Disposed`] — the server was unregistered without a
+    ///   reload in progress; returns [`Error::ServerUnavailable`].
+    /// - [`ServerStatus::Unknown`] — the registry never saw the name; returns
+    ///   [`Error::UnknownServer`].
+    ///
+    /// Errors the target server's `invoke` itself produces are propagated to
+    /// the caller unchanged.
     pub async fn call(
         &self,
         caller: CallerId,
@@ -87,7 +97,12 @@ impl Dispatcher {
         tool: &str,
         input: Value,
     ) -> Result<Value> {
-        let target = self.registry.get(server).ok_or(Error::UnknownServer)?;
+        let target = match self.registry.resolve(server) {
+            ServerStatus::Live(target) => target,
+            ServerStatus::Reloading => return Err(Error::PluginReloaded),
+            ServerStatus::Disposed => return Err(Error::ServerUnavailable),
+            ServerStatus::Unknown => return Err(Error::UnknownServer),
+        };
         target.invoke(caller, tool, input).await
     }
 }

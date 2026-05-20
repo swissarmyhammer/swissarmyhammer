@@ -35,6 +35,20 @@ pub enum ReloadStatus {
         /// The error that the failed load surfaced, rendered for display.
         error: String,
     },
+
+    /// The plugin's isolate crashed *after* the load completed — distinct from
+    /// [`Failed`](Self::Failed), which describes a load that never succeeded.
+    /// All of the plugin's registrations have been disposed and its runtime
+    /// dropped; the plugin does **not** auto-restart. A manual reload is
+    /// required to bring it back, which the spec promises is the only way out
+    /// of a crashed state.
+    Crashed {
+        /// The error that surfaced from the dying isolate, rendered for
+        /// display. Typically the host bridge's `Error::RuntimeStopped` or a
+        /// captured panic message, but any string that explains the crash is
+        /// acceptable.
+        error: String,
+    },
 }
 
 impl fmt::Display for ReloadStatus {
@@ -43,6 +57,7 @@ impl fmt::Display for ReloadStatus {
         match self {
             ReloadStatus::Healthy => write!(f, "healthy"),
             ReloadStatus::Failed { error } => write!(f, "reload failed: {error}"),
+            ReloadStatus::Crashed { error } => write!(f, "plugin crashed: {error}"),
         }
     }
 }
@@ -57,6 +72,11 @@ mod tests {
         assert!(!ReloadStatus::Healthy.to_string().is_empty());
         assert!(!ReloadStatus::Failed {
             error: "boom".to_string(),
+        }
+        .to_string()
+        .is_empty());
+        assert!(!ReloadStatus::Crashed {
+            error: "isolate died".to_string(),
         }
         .to_string()
         .is_empty());

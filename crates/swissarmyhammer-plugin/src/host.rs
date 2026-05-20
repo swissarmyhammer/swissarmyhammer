@@ -535,6 +535,102 @@ impl PluginHost {
         Self::with_roots(None, user_root, project_root, types_emitter)
     }
 
+    /// Record that a loaded plugin's isolate has crashed.
+    ///
+    /// Mirrors [`unload`](Self::unload) but skips the plugin's own
+    /// `unload()` lifecycle hook — the isolate is dead, the hook cannot run.
+    /// All of the plugin's registrations are disposed (so subsequent calls to
+    /// its servers fail with [`Error::ServerUnavailable`]), the runtime is
+    /// dropped, and [`ReloadStatus::Crashed`] is recorded against the
+    /// plugin's active disk id.
+    ///
+    /// The plugin does **not** auto-restart. The watcher only fires on file
+    /// changes; a crash is not a file change. The plugin stays
+    /// [`ReloadStatus::Crashed`] until the user touches the bundle (which
+    /// triggers a normal reload) or calls [`load`](Self::load) directly.
+    ///
+    /// # Parameters
+    ///
+    /// - `plugin_id` — the id of the plugin to mark crashed.
+    /// - `error` — a human-readable description of the crash, surfaced through
+    ///   [`reload_status`](Self::reload_status). Typically the `Display` of
+    ///   the runtime error that detected the dead isolate.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnknownPlugin`] when no plugin is loaded under
+    /// `plugin_id`. A successful call sets the crashed status — the plugin
+    /// is now unloaded, no servers, no runtime.
+    pub async fn record_crashed(&self, plugin_id: &PluginId, error: &str) -> Result<()> {
+        // Take the loaded plugin out. `PluginRuntime` is not `Sync`, so it is
+        // held in this local — never across the host mutex — while disposal
+        // runs.
+        let Some(plugin) = self.lock().plugins.remove(plugin_id) else {
+            return Err(Error::UnknownPlugin);
+        };
+
+        // Skip `run_plugin_unload` — the isolate is dead. Disposal still runs
+        // against the (about-to-drop) runtime; callback disposal logs and
+        // continues if the runtime cannot answer.
+        self.dispose_registrations(plugin_id, &plugin.runtime).await;
+        self.inner.types_emitter.flush();
+        drop(plugin);
+
+        // Record Crashed against the active disk id, if the plugin had one
+        // registered. A plugin loaded outside the discovery scan (a direct
+        // `load(path)` from a test or an embedder) has no `active_plugins`
+        // entry, so there is no `ReloadStatus` surface for it to populate —
+        // the registrations are still disposed and the runtime still
+        // dropped, but `reload_status(...)` will return `None` afterward.
+        // Logging the silent path keeps the asymmetry observable in
+        // operator-facing logs rather than appearing as a phantom success.
+        let mut state = self.lock();
+        let disk_id = state
+            .active_plugins
+            .iter()
+            .find_map(|(disk, active)| (active.plugin_id == *plugin_id).then(|| disk.clone()));
+        match disk_id {
+            Some(disk_id) => {
+                state.active_plugins.remove(&disk_id);
+                state.reload_status.insert(
+                    disk_id,
+                    ReloadStatus::Crashed {
+                        error: error.to_string(),
+                    },
+                );
+            }
+            None => {
+                tracing::warn!(
+                    plugin = %plugin_id.as_str(),
+                    %error,
+                    "record_crashed disposed registrations but found no active-plugin record; \
+                     ReloadStatus will not be surfaced for this plugin id"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Marks `name` as in the hot-reload window — *test-only*.
+    ///
+    /// Used by integration tests that need to exercise the
+    /// [`Error::PluginReloaded`] surface deterministically without driving a
+    /// real v1→v2 source rewrite + watcher debounce. The reload path
+    /// (`reload_active`) uses the same registry primitive internally; this
+    /// shim exposes it under `pub` so an external `tests/*_e2e.rs` file can
+    /// stage the window directly.
+    #[doc(hidden)]
+    pub async fn mark_reloading_for_test(&self, name: &str) {
+        self.lock().registry.mark_reloading(name);
+    }
+
+    /// Clears the hot-reload marker for `name` — *test-only*. See
+    /// [`mark_reloading_for_test`](Self::mark_reloading_for_test).
+    #[doc(hidden)]
+    pub async fn clear_reloading_for_test(&self, name: &str) {
+        self.lock().registry.clear_reloading(name);
+    }
+
     /// Creates a test host with an explicit read-only builtin layer root.
     ///
     /// Like [`for_tests`](Self::for_tests) but with a builtin layer added
@@ -1364,10 +1460,39 @@ impl PluginHost {
     /// A failed v2 load leaves the plugin unloaded and records
     /// [`ReloadStatus::Failed`].
     async fn reload_active(&self, id: &str, active: &ActivePlugin, winner: &DiscoveredPlugin) {
+        // Capture the set of server names v1 holds and open a hot-reload
+        // window covering them. The guard owns the marker lifetime: it marks
+        // every name `Reloading` on construction and clears the markers on
+        // drop. Drop runs on the normal return path, on a panic, AND on a
+        // mid-await task cancellation (e.g. `PluginWatcher::drop` aborting
+        // the drain task) — so an aborted reload never leaves a name
+        // permanently `Reloading` and unreachable.
+        //
+        // v2's `register` calls of the same names clear individual markers
+        // as those servers go live again; the guard's drop is idempotent
+        // (the registry just has nothing more to remove).
+        let names = self.server_names_held_by(&active.plugin_id);
+        let _marker_guard = ReloadingMarkerGuard::new(self.inner.clone(), names);
+
         // Dispose the old copy: tear the isolate down, drain the ledger.
         self.unload_active(id, &active.plugin_id).await;
-        // Load the new copy fresh.
+        // Load the new copy fresh. v2's `register` calls clear individual
+        // markers for the names it re-registers; the guard's drop covers any
+        // remaining ones.
         self.load_active_copy(winner).await;
+    }
+
+    /// Collects the set of server names a plugin currently holds in its ledger.
+    ///
+    /// Used by the reload path to stage the in-flight `Reloading` markers
+    /// before v1's unregister runs. A plugin id with no ledger entry returns
+    /// the empty vector — the caller treats "no recorded names" the same as
+    /// "no servers to mark".
+    fn server_names_held_by(&self, plugin_id: &PluginId) -> Vec<String> {
+        self.lock()
+            .ledger
+            .server_names(plugin_id)
+            .unwrap_or_default()
     }
 
     /// Unloads the active copy of `id` and drops its active record.
@@ -1516,8 +1641,10 @@ impl PluginHost {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::ServerUnavailable`] when `server` was registered and
-    /// has since been disposed, [`Error::UnknownServer`] when `server` was
+    /// Returns [`Error::PluginReloaded`] when `server`'s backing plugin is
+    /// mid-hot-reload (the caller should retry once v2 settles),
+    /// [`Error::ServerUnavailable`] when `server` was registered and has
+    /// since been disposed, [`Error::UnknownServer`] when `server` was
     /// never registered, or any error the target server's `invoke` produces.
     pub async fn call(
         &self,
@@ -1548,8 +1675,10 @@ impl PluginHost {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::ServerUnavailable`] when `server` was registered and
-    /// has since been disposed, [`Error::UnknownServer`] when `server` was
+    /// Returns [`Error::PluginReloaded`] when `server`'s backing plugin is
+    /// mid-hot-reload (the caller should retry once v2 settles),
+    /// [`Error::ServerUnavailable`] when `server` was registered and has
+    /// since been disposed, [`Error::UnknownServer`] when `server` was
     /// never registered, or any error the target server's `invoke` produces.
     async fn route(
         &self,
@@ -1563,6 +1692,7 @@ impl PluginHost {
         // blocked.
         let target = match self.lock().registry.resolve(server) {
             ServerStatus::Live(target) => target,
+            ServerStatus::Reloading => return Err(Error::PluginReloaded),
             ServerStatus::Disposed => return Err(Error::ServerUnavailable),
             ServerStatus::Unknown => return Err(Error::UnknownServer),
         };
@@ -1591,6 +1721,67 @@ impl PluginHost {
     /// Locks the host's mutable state.
     fn lock(&self) -> std::sync::MutexGuard<'_, HostState> {
         self.inner.state.lock().expect("host state mutex poisoned")
+    }
+}
+
+/// RAII guard that owns the lifetime of `Reloading` markers across a reload.
+///
+/// Built by `reload_active` from the set of server names v1 holds. The
+/// constructor takes the lock once, marks every name `Reloading`, and
+/// returns the guard. The destructor takes the lock again and clears any
+/// markers that are still set — names v2 re-registered during the reload
+/// window cleared their own markers via `ServerRegistry::register`, so the
+/// drop is idempotent against those.
+///
+/// Drop runs on:
+///
+/// - **Normal return** — the markers cleared after `load_active_copy`
+///   resolves.
+/// - **Panic** — markers cleared as the panic unwinds through
+///   `reload_active`.
+/// - **Task cancellation** — when an outer holder of the drain task
+///   (`PluginWatcher`) calls `.abort()`, every `await` in the task may be
+///   torn down. The guard's stack slot is dropped synchronously as part of
+///   that teardown, so the markers do not get stuck.
+///
+/// Without this guard, an abort between mark-reloading and clear-reloading
+/// would leave names permanently resolving as `Reloading` — every
+/// subsequent call would return `Error::PluginReloaded` with no in-crate
+/// way to recover.
+struct ReloadingMarkerGuard {
+    /// Shared host inner — held so the guard's drop can re-acquire the
+    /// state lock without going through `&PluginHost`.
+    inner: Arc<HostInner>,
+    /// The names that were marked `Reloading` at construction, in the
+    /// order the ledger reports them. Cleared on drop.
+    names: Vec<String>,
+}
+
+impl ReloadingMarkerGuard {
+    /// Marks every name in `names` as in the hot-reload window and returns
+    /// a guard whose drop clears the markers.
+    fn new(inner: Arc<HostInner>, names: Vec<String>) -> Self {
+        if !names.is_empty() {
+            let mut state = inner.state.lock().expect("host state mutex poisoned");
+            for name in &names {
+                state.registry.mark_reloading(name);
+            }
+        }
+        Self { inner, names }
+    }
+}
+
+impl Drop for ReloadingMarkerGuard {
+    fn drop(&mut self) {
+        if self.names.is_empty() {
+            return;
+        }
+        // A poisoned host mutex is unrecoverable — every other lock call
+        // also panics — so unwrap is consistent with the rest of the host.
+        let mut state = self.inner.state.lock().expect("host state mutex poisoned");
+        for name in &self.names {
+            state.registry.clear_reloading(name);
+        }
     }
 }
 

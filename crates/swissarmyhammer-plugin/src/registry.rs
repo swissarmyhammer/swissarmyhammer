@@ -29,14 +29,26 @@ pub type ServerName = String;
 
 /// The outcome of resolving a name against the [`ServerRegistry`].
 ///
-/// Resolution distinguishes three cases so a caller can return the accurate
-/// error: a name that resolves to a [`Live`](Self::Live) server, a name whose
-/// server was registered and later [`Disposed`](Self::Disposed) — the
-/// tombstone case — and a name the registry has never seen
+/// Resolution distinguishes four cases so a caller can return the accurate
+/// error: a [`Live`](Self::Live) server; a name whose plugin is currently
+/// being hot-reloaded ([`Reloading`](Self::Reloading) — the spec edge case
+/// that maps to [`Error::PluginReloaded`](crate::Error::PluginReloaded)); a
+/// name whose server was registered and later [`Disposed`](Self::Disposed) —
+/// the regular tombstone case; and a name the registry has never seen
 /// ([`Unknown`](Self::Unknown)).
+///
+/// `Reloading` takes priority over `Disposed`: during the hot-reload window,
+/// the name *is* tombstoned (the v1 unregister already ran) but a caller's
+/// `retry` is the correct response, so the more specific status is reported.
 pub enum ServerStatus {
     /// The name resolves to a live, callable server.
     Live(Arc<dyn McpServer>),
+
+    /// The name's backing plugin is mid-hot-reload — the v1 server has been
+    /// disposed and the v2 server has not finished registering. Callers see
+    /// this as [`Error::PluginReloaded`](crate::Error::PluginReloaded) and
+    /// the right response is to retry once v2 settles.
+    Reloading,
 
     /// The name was registered and has since been unregistered. A consumer
     /// holding this name learns its server was disposed out from under it.
@@ -65,6 +77,21 @@ pub struct ServerRegistry {
     /// registering moves it into `servers` and clears any tombstone;
     /// unregistering moves it the other way.
     disposed: HashSet<ServerName>,
+
+    /// Names currently in the **hot-reload window**: their v1 server has been
+    /// unregistered and their v2 server has not finished re-registering. A
+    /// resolve against a reloading name returns
+    /// [`ServerStatus::Reloading`], which the host translates to
+    /// [`Error::PluginReloaded`](crate::Error::PluginReloaded) — the spec's
+    /// "in-flight calls reject with `PluginReloaded`" edge case.
+    ///
+    /// The reload path stages this set with
+    /// [`mark_reloading`](Self::mark_reloading) before disposing v1's
+    /// registrations, and clears it with
+    /// [`clear_reloading`](Self::clear_reloading) once v2's load completes;
+    /// a successful v2 [`register`](Self::register) also clears the
+    /// reloading flag for the re-registered name (the name is live again).
+    reloading: HashSet<ServerName>,
 }
 
 /// `Debug` is written by hand because the registered server values are
@@ -77,6 +104,7 @@ impl fmt::Debug for ServerRegistry {
         f.debug_struct("ServerRegistry")
             .field("servers", &self.servers.keys())
             .field("disposed", &self.disposed)
+            .field("reloading", &self.reloading)
             .finish()
     }
 }
@@ -111,9 +139,11 @@ impl ServerRegistry {
     pub fn register(&mut self, name: ServerName, server: Arc<dyn McpServer>) -> Result<()> {
         match self.servers.entry(name) {
             Entry::Vacant(slot) => {
-                // A re-registration revives the name: clear any tombstone so
-                // it resolves as live rather than disposed.
+                // A re-registration revives the name: clear any tombstone and
+                // any in-flight reload marker so the name resolves as live
+                // rather than disposed or reloading.
                 self.disposed.remove(slot.key());
+                self.reloading.remove(slot.key());
                 slot.insert(server);
                 Ok(())
             }
@@ -164,10 +194,11 @@ impl ServerRegistry {
     /// Resolves `name` to its registration status.
     ///
     /// Unlike [`get`](Self::get), this distinguishes a live server from a name
-    /// whose server was disposed (tombstoned) and from a name the registry has
-    /// never seen — so a router can return [`Error::ServerUnavailable`] for the
-    /// disposed case and [`Error::UnknownServer`] only for the never-registered
-    /// case.
+    /// whose server was disposed (tombstoned), a name whose backing plugin is
+    /// mid-hot-reload, and a name the registry has never seen — so a router
+    /// can return [`Error::PluginReloaded`] for the reloading case,
+    /// [`Error::ServerUnavailable`] for the disposed case, and
+    /// [`Error::UnknownServer`] only for the never-registered case.
     ///
     /// # Parameters
     ///
@@ -175,10 +206,20 @@ impl ServerRegistry {
     ///
     /// # Returns
     ///
-    /// [`ServerStatus::Live`] carrying the server handle when `name` is live,
-    /// [`ServerStatus::Disposed`] when `name` carries a tombstone, and
-    /// [`ServerStatus::Unknown`] when the registry has no record of `name`.
+    /// [`ServerStatus::Reloading`] when `name` is staged for hot reload (this
+    /// status wins over `Live`/`Disposed` for the duration of the reload
+    /// window), [`ServerStatus::Live`] carrying the server handle when `name`
+    /// is live, [`ServerStatus::Disposed`] when `name` carries a tombstone,
+    /// and [`ServerStatus::Unknown`] when the registry has no record of
+    /// `name`.
     pub fn resolve(&self, name: &str) -> ServerStatus {
+        // Reloading wins over Live and Disposed: the in-flight reload window
+        // expressly tells callers to retry, so a server that the v1 unregister
+        // has already removed from `servers` (and that the v2 load has not
+        // re-registered yet) reports `Reloading` rather than `Disposed`.
+        if self.reloading.contains(name) {
+            return ServerStatus::Reloading;
+        }
         if let Some(server) = self.servers.get(name) {
             return ServerStatus::Live(server.clone());
         }
@@ -186,6 +227,34 @@ impl ServerRegistry {
             return ServerStatus::Disposed;
         }
         ServerStatus::Unknown
+    }
+
+    /// Marks `name` as in the hot-reload window.
+    ///
+    /// The reload path calls this for every server name v1 holds before
+    /// disposing v1's registrations. Until the matching
+    /// [`clear_reloading`](Self::clear_reloading) — or until v2's
+    /// [`register`](Self::register) of the same name — a
+    /// [`resolve`](Self::resolve) of `name` reports
+    /// [`ServerStatus::Reloading`], which the host translates to
+    /// [`Error::PluginReloaded`](crate::Error::PluginReloaded).
+    ///
+    /// Idempotent: marking a name that is already reloading is a no-op.
+    pub fn mark_reloading(&mut self, name: &str) {
+        self.reloading.insert(name.to_string());
+    }
+
+    /// Clears the hot-reload marker on `name`.
+    ///
+    /// Called by the reload path after v2's load completes (success or
+    /// failure) for every name v1 held that v2 did not re-register. A
+    /// successful v2 [`register`](Self::register) already clears the marker
+    /// for the re-registered name, so this call is a no-op there.
+    ///
+    /// Returns `true` if the marker was set and is now cleared, `false` if
+    /// the name was not marked reloading.
+    pub fn clear_reloading(&mut self, name: &str) -> bool {
+        self.reloading.remove(name)
     }
 }
 
