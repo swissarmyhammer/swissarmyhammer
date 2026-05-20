@@ -24,7 +24,8 @@
 //!
 //! | # | Spec edge case                                              | Test                                                                                            |
 //! | - | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-//! | 1 | In-flight calls reject with `PluginReloaded`                | `hot_reload_e2e::an_in_flight_call_rejects_with_plugin_reloaded_when_the_isolate_is_disposed`   |
+//! | 1 | In-flight calls reject with `PluginReloaded` (deterministic) | `hot_reload_e2e::an_in_flight_call_rejects_with_plugin_reloaded_when_the_isolate_is_disposed`   |
+//! | 1 | In-flight calls reject with `PluginReloaded` (end-to-end via real `reload_active`) | `hot_reload_e2e::a_watcher_driven_reload_emits_plugin_reloaded_to_an_in_flight_caller` |
 //! | 2 | Registration set changes silently (different set)           | `hot_reload::rewriting_an_active_plugins_source_reloads_it_in_place`                            |
 //! | 2 | Registration set changes silently (expansion: `{foo}` → `{foo, bar}`) | `hot_reload_e2e::reloading_to_a_version_that_registers_an_additional_server_picks_it_up` |
 //! | 3 | Failed v2 load leaves the plugin unloaded                   | `hot_reload::a_failed_v2_load_leaves_the_plugin_unloaded_and_surfaces_the_error`                |
@@ -34,7 +35,14 @@
 //! Edges 1 and 4 required platform work — `PluginReloaded` was a dead
 //! variant before this task and the crash channel did not exist. Both are
 //! now plumbed through; the tests cited above exercise the new surfaces end
-//! to end.
+//! to end. Edge 1 is double-covered: the *deterministic* test stages the
+//! reload window through the registry's `mark_reloading_for_test` /
+//! `clear_reloading_for_test` backdoors so the registry-resolve →
+//! host-route → `PluginReloaded` translation is isolated from watcher
+//! debounce timing; the *end-to-end* test drives the real production
+//! `reload_active` path through the watcher so a real v1→v2 source rewrite
+//! must stage AND clear the markers for an in-flight call to observe
+//! `PluginReloaded`.
 //!
 //! # Isolation
 //!
@@ -46,6 +54,7 @@
 //! fails fast instead of hanging CI.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -605,6 +614,185 @@ async fn an_in_flight_call_rejects_with_plugin_reloaded_when_the_isolate_is_disp
     // still-registered server — the test never disposed it.
     host.clear_reloading_for_test("mid-reload").await;
     assert_live(&host, "mid-reload", "after window closes").await;
+}
+
+/// Spec edge case 1, end-to-end: a real watcher-driven `reload_active` must
+/// stage AND clear the `Reloading` markers so an in-flight call during the
+/// window observes [`Error::PluginReloaded`].
+///
+/// The companion deterministic test
+/// (`an_in_flight_call_rejects_with_plugin_reloaded_when_the_isolate_is_disposed`)
+/// drives the markers directly through the registry backdoor — that isolates
+/// the registry-resolve → host-route → `PluginReloaded` translation from
+/// watcher-debounce timing, the right scope for a unit-level pin. This test
+/// is the end-to-end companion: it drives the production
+/// [`PluginHost::reload_active`] path through a real filesystem rewrite and
+/// watcher fire, so the assertion only holds if the platform itself stages
+/// the markers around `unload_active` / `load_active_copy` and clears them
+/// at the end of the reload — the very wiring the
+/// [`ReloadingMarkerGuard`] contract promises.
+///
+/// # Shape
+///
+/// 1. v1 (`behavior-a` / `mod-a`) is loaded and the watcher is started.
+/// 2. A background task spins issuing `host.call("behavior-a", "echo", ...)`
+///    with a short between-call sleep (a tight loop wide enough to land at
+///    least one call inside the reload window), recording every result.
+/// 3. v2's source (`behavior-b` / `mod-b`) is written to disk — the same
+///    `write_version` rewrite the base hot-reload test uses.
+/// 4. The test waits until either `behavior-b` becomes live (proof the
+///    reload completed) or a deadline expires; the deadline is generous
+///    so the test does not time out on slow CI.
+/// 5. The background task is stopped and its results drained.
+/// 6. Assert: at least one result is `Err(Error::PluginReloaded)`. Other
+///    error variants observed during the window are fine — what matters
+///    is that at least one call landed in the window the production
+///    `reload_active` opened.
+///
+/// # Why "at least one"
+///
+/// Hitting the window is timing-dependent on the watcher debounce, isolate
+/// teardown, and the calling cadence. The honest claim a probabilistic
+/// race-driven test can make is "the marker was visible at least once
+/// during the reload" — which is exactly the regression we care about: a
+/// future change that stops staging markers around `reload_active` would
+/// show zero `PluginReloaded` results across the whole window, failing the
+/// assertion. A "exactly one" or "all calls during the window" assertion
+/// would be flaky for reasons that have nothing to do with the contract.
+#[tokio::test]
+async fn a_watcher_driven_reload_emits_plugin_reloaded_to_an_in_flight_caller() {
+    let user = tempfile::TempDir::new().expect("user root temp dir");
+    let project = tempfile::TempDir::new().expect("project root temp dir");
+    let plugin_dir = project.path().join("plugins").join("probe-watcher-reload");
+    std::fs::create_dir_all(&plugin_dir).expect("probe plugin directory should be created");
+
+    // v1's load registers `behavior-a` against `mod-a`.
+    write_version(&plugin_dir, "behavior-a", "mod-a");
+
+    let host = Arc::new(PluginHost::for_tests(
+        user.path().to_path_buf(),
+        Some(project.path().to_path_buf()),
+    ));
+
+    // Pre-expose both versions' rust modules so v2's `load()` — which may
+    // run the moment the debounce elapses — never races a missing module.
+    for id in ["mod-a", "mod-b"] {
+        tokio::time::timeout(TIMEOUT, host.expose_rust_module(id, echo_module().await))
+            .await
+            .expect("expose_rust_module should not hang")
+            .unwrap_or_else(|error| panic!("exposing '{id}' should succeed: {error:?}"));
+    }
+
+    tokio::time::timeout(
+        TIMEOUT,
+        host.discover_and_load_all::<SwissarmyhammerConfig>(),
+    )
+    .await
+    .expect("discovery should not hang")
+    .expect("the initial discovery should succeed");
+
+    // Sanity check: v1 is live before the watcher fires.
+    assert_live(&host, "behavior-a", "v1 live").await;
+
+    let _watcher = tokio::time::timeout(TIMEOUT, host.watch_plugins::<SwissarmyhammerConfig>())
+        .await
+        .expect("starting the watcher should not hang")
+        .expect("the watcher should start");
+    // Let the OS watcher register before mutating the tree.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Signal the background caller to stop once the reload has settled. A
+    // shared atomic flag is the simplest stop channel for a busy-loop
+    // caller: each iteration checks it with a single atomic load.
+    let stop = Arc::new(AtomicBool::new(false));
+    let caller = spawn_in_flight_caller(Arc::clone(&host), Arc::clone(&stop));
+
+    // Trigger the real reload by rewriting v1's source to v2's. The
+    // watcher's debounce + isolate teardown opens the reload window the
+    // background caller is hammering.
+    write_version(&plugin_dir, "behavior-b", "mod-b");
+
+    // Wait for v2 to come live — proof the watcher fired and
+    // `reload_active` ran to completion (markers staged and cleared).
+    wait_until_live(&host, "behavior-b").await;
+
+    // Stop the background caller and drain its results. The caller observes
+    // the flag on its next iteration and exits the loop.
+    stop.store(true, Ordering::SeqCst);
+    let results = tokio::time::timeout(TIMEOUT, caller)
+        .await
+        .expect("the in-flight caller task should finish promptly after stop")
+        .expect("the in-flight caller task should not panic");
+
+    // The reload completed, so v2's `behavior-b` is now live and v1's
+    // `behavior-a` is disposed — the same observable the base hot-reload
+    // test pins. Anchoring it here ensures the window the caller saw was a
+    // genuine reload window, not some other failure mode.
+    assert_live(&host, "behavior-b", "v2 live").await;
+    assert_not_live(&host, "behavior-a").await;
+
+    // The contract: at least one call into `behavior-a` during the reload
+    // window must have observed `Error::PluginReloaded` — the variant the
+    // spec promises an in-flight caller. A regression that stopped staging
+    // markers around `reload_active` would show zero hits across the whole
+    // window.
+    let reloaded_hits = results
+        .iter()
+        .filter(|result| matches!(result, Err(Error::PluginReloaded)))
+        .count();
+    assert!(
+        reloaded_hits >= 1,
+        "expected at least one Error::PluginReloaded across the reload window; \
+         observed {reloaded_hits} of {total} results: {results:?}",
+        total = results.len(),
+    );
+}
+
+/// Spawns a background task that hammers `behavior-a` with `echo` calls
+/// against `host` until `stop` is signaled, returning the task's join handle.
+///
+/// Each call's result — `Ok(_)` while v1 is live, `Err(_)` during the reload
+/// window or after v1 is disposed — is appended to a `Vec` the task returns
+/// when it exits. The cadence is a 1 ms sleep between calls, tight enough to
+/// land inside the watcher-debounce + isolate-teardown window with high
+/// probability but loose enough not to starve the host's bridge runtime.
+///
+/// # Parameters
+///
+/// - `host` — the plugin host the caller dispatches through.
+/// - `stop` — the flag the caller checks on every iteration to know when to
+///   exit. Set with `stop.store(true, Ordering::SeqCst)` from the test.
+///
+/// # Returns
+///
+/// A join handle whose value is the recorded results in call order. Awaiting
+/// it yields the vector once the task exits.
+fn spawn_in_flight_caller(
+    host: Arc<PluginHost>,
+    stop: Arc<AtomicBool>,
+) -> tokio::task::JoinHandle<Vec<swissarmyhammer_plugin::Result<Value>>> {
+    tokio::spawn(async move {
+        let mut results = Vec::new();
+        while !stop.load(Ordering::SeqCst) {
+            // Every dispatch is bounded — a hang in the host would otherwise
+            // pin the task forever and surface as an outer timeout instead
+            // of a `host.call` error.
+            let result = tokio::time::timeout(
+                TIMEOUT,
+                host.call(
+                    CallerId::HostInternal,
+                    "behavior-a",
+                    "echo",
+                    json!({ "message": "in-flight" }),
+                ),
+            )
+            .await
+            .expect("a dispatch call should not hang");
+            results.push(result);
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        results
+    })
 }
 
 /// Spec edge case 4: a crashed plugin records `ReloadStatus::Crashed` and
