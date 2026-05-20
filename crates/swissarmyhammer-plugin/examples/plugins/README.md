@@ -149,6 +149,8 @@ exercised by an end-to-end test.
 | `file-notes` | A real filesystem effect through the in-process `files` tool driven with the direct `op` form: registers `files` as `fs`, then writes a note, reads it back, and writes the read-back content into a second note — all against **relative** paths. | `tests/file_notes_e2e.rs` |
 | `cli-echo` | The `{ cli }` stdio-subprocess transport and the `unload()` lifecycle hook: registers `echo` as a `{ cli }` server the host spawns as a child process, calls its flat `echo` tool over stdio, and overrides `unload()` to record a sentinel kanban task and `unregister` the server at teardown. | `tests/cli_echo_e2e.rs` |
 | `multi-module` | A **multi-file** bundle: `index.ts` imports a sibling `board-helpers.ts` module with the relative specifier `./board-helpers.ts`. The sandboxed loader resolves the import against the bundle directory; the imported async helper adds one tagged task to the `kanban` board. | `tests/multi_module_e2e.rs` |
+| `collide-probe-a` | The **winning** side of a server-name collision: registers an in-process `{ rust }` source under the shared name `"collide-probe"` first, then drives its `echo` tool to prove the registration is live and callable. | `tests/server_name_collision_e2e.rs` |
+| `collide-probe-b` | The **losing** side of a server-name collision: tries to register the same shared name and observes the platform's `ServerNameTaken` propagate from Rust as a synchronously-thrown JS `Error`. Loads cleanly from a fresh host with no prior claim on the name. | `tests/server_name_collision_e2e.rs` |
 
 ## `file-notes` and the relative-path contract
 

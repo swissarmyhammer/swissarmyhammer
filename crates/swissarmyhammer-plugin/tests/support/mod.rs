@@ -18,10 +18,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use rmcp::handler::server::router::tool::ToolRouter;
+use rmcp::handler::server::wrapper::Parameters;
+use rmcp::schemars::{self, JsonSchema};
+use rmcp::{tool, tool_handler, tool_router, ServerHandler};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use swissarmyhammer_config::ModelConfig;
 use swissarmyhammer_git::GitOperations;
-use swissarmyhammer_plugin::{CallerId, McpServer as PluginMcpServer, PluginHost, PLUGINS_SUBDIR};
+use swissarmyhammer_plugin::{
+    CallerId, InProcessServer, McpServer as PluginMcpServer, PluginHost, PLUGINS_SUBDIR,
+};
 use swissarmyhammer_prompts::PromptLibrary;
 use swissarmyhammer_tools::mcp::plugin_bridge::build_tool_modules;
 use swissarmyhammer_tools::mcp::{McpServer, ToolHandlers};
@@ -404,6 +411,142 @@ pub async fn expose_kanban_module(board_root: &Path) -> ExposedKanban {
         module_id,
         module,
     }
+}
+
+/// The id the first `collide-probe` rust module is exposed under.
+///
+/// The committed `collide-probe-a` example bundle references this id in its
+/// `index.ts` as the `{ rust: ... }` source it activates — the exact
+/// `register("collide-probe", { rust: COLLIDE_PROBE_A_MODULE_ID })` call.
+#[allow(dead_code)]
+pub const COLLIDE_PROBE_A_MODULE_ID: &str = "collide-probe-a-mod";
+
+/// The id the second `collide-probe` rust module is exposed under.
+///
+/// The committed `collide-probe-b` example bundle references this id in its
+/// `index.ts` as the `{ rust: ... }` source it activates — the exact
+/// `register("collide-probe", { rust: COLLIDE_PROBE_B_MODULE_ID })` call.
+#[allow(dead_code)]
+pub const COLLIDE_PROBE_B_MODULE_ID: &str = "collide-probe-b-mod";
+
+/// The shared registered server name both `collide-probe-*` bundles target.
+///
+/// The collision the test exercises is on this name: bundle A registers it
+/// first and wins, bundle B's second registration of the same name fails with
+/// `ServerNameTaken`. Held as a constant so the bundle source, the test, and
+/// any later cross-check all agree on the literal string.
+#[allow(dead_code)]
+pub const COLLIDE_PROBE_SERVER_NAME: &str = "collide-probe";
+
+/// Arguments for the in-process probe server's `echo` tool.
+///
+/// A real `rmcp` macro-generated handler needs a real schemars-derived
+/// arguments struct; this is the minimal one — a single `message` payload the
+/// `echo` tool returns verbatim — for the `collide-probe-*` example bundles to
+/// drive.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct ProbeEchoArgs {
+    /// The payload echoed straight back to the caller.
+    message: String,
+}
+
+/// A real `rmcp` server handler exposing a single flat `echo` tool.
+///
+/// Built with the `#[tool_router]` / `#[tool]` / `#[tool_handler]` stack so the
+/// `InProcessServer` wrapper exposes a genuine `rmcp` round-trip — every call
+/// crosses the macro-generated router, not a fake. Used by
+/// [`expose_collide_probe_modules`] to stand up two distinct in-process modules
+/// the `collide-probe-*` example bundles register under one shared name.
+#[derive(Clone)]
+struct ProbeEchoServer {
+    /// The macro-generated tool router for this handler.
+    tool_router: ToolRouter<Self>,
+}
+
+#[tool_router(router = tool_router)]
+impl ProbeEchoServer {
+    /// Builds a [`ProbeEchoServer`] with its tool router wired up.
+    fn new() -> Self {
+        Self {
+            tool_router: Self::tool_router(),
+        }
+    }
+
+    /// Echoes the `message` argument straight back to the caller.
+    #[tool(name = "echo", description = "Echoes its message argument back.")]
+    async fn echo(&self, Parameters(args): Parameters<ProbeEchoArgs>) -> String {
+        args.message
+    }
+}
+
+#[tool_handler(router = self.tool_router)]
+impl ServerHandler for ProbeEchoServer {}
+
+/// Exposes one `collide-probe` in-process module under `id`.
+///
+/// A single fresh [`ProbeEchoServer`], wrapped through [`InProcessServer`], is
+/// added to the host's available-modules table keyed by `id`. The companion
+/// `collide-probe-*` example bundles activate the module by that id with
+/// `register(COLLIDE_PROBE_SERVER_NAME, { rust: id })`, so the call moves it out
+/// of the table — a one-shot exposure. The test re-calls this helper to expose
+/// a fresh instance whenever a bundle is loaded a second time.
+///
+/// # Parameters
+///
+/// - `host` — the plugin host to expose the module into.
+/// - `id` — the `{ rust }` source id the bundle's `register` call names; in
+///   practice [`COLLIDE_PROBE_A_MODULE_ID`] or [`COLLIDE_PROBE_B_MODULE_ID`].
+///
+/// # Panics
+///
+/// Panics if wrapping the handler with [`InProcessServer`] fails or `host`
+/// rejects the exposure (e.g. `id` is already exposed); both are test wiring
+/// errors rather than conditions under test.
+#[allow(dead_code)]
+pub async fn expose_collide_probe_module(host: &PluginHost, id: &str) {
+    let server: Arc<dyn PluginMcpServer> = Arc::new(
+        InProcessServer::new(ProbeEchoServer::new())
+            .await
+            .expect("wrapping the probe echo server should succeed"),
+    );
+    host.expose_rust_module(id.to_string(), server)
+        .await
+        .unwrap_or_else(|error| {
+            panic!("exposing the collide-probe module '{id}' should succeed: {error}")
+        });
+}
+
+/// Exposes the two in-process modules the `collide-probe-*` bundles activate.
+///
+/// Each bundle's `load()` does
+/// `this.register(COLLIDE_PROBE_SERVER_NAME, { rust: "<its-own-module-id>" })`,
+/// so the two registrations target the **same registered server name** but
+/// **distinct** Rust sources. That mismatch is deliberate: an in-process
+/// `{ rust }` source is *single-activation* (activating moves the module out of
+/// the available-modules table), so two bundles sharing one `{ rust }` id would
+/// hit `UnknownServer` on the second bundle's `register` and never reach the
+/// name-uniqueness check the test is meant to exercise. Wiring distinct modules
+/// behind one name lets bundle B's `register` get past `connect_source` and
+/// surface the real `ServerNameTaken` from the registry.
+///
+/// Both modules are independent [`ProbeEchoServer`] instances — they share the
+/// handler implementation but not the Rust object — so a call into bundle A's
+/// registered server after the collision is a genuine round-trip into the
+/// in-process Rust handler bundle A activated.
+///
+/// # Parameters
+///
+/// - `host` — the plugin host to expose the two modules into. The host's
+///   available-modules table is keyed by id, so the exposures coexist.
+///
+/// # Panics
+///
+/// Panics if wrapping either handler with [`InProcessServer`] or exposing it on
+/// `host` fails — a setup failure is a test wiring error.
+#[allow(dead_code)]
+pub async fn expose_collide_probe_modules(host: &PluginHost) {
+    expose_collide_probe_module(host, COLLIDE_PROBE_A_MODULE_ID).await;
+    expose_collide_probe_module(host, COLLIDE_PROBE_B_MODULE_ID).await;
 }
 
 /// Extracts the task titles from a `kanban` `list tasks` result.
