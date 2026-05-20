@@ -32,6 +32,16 @@ import {
 } from "@testing-library/react";
 import { userEvent } from "vitest/browser";
 import { renderInAct } from "@/test/act-render";
+import type {
+  ContentBlock,
+  PromptResponse,
+  SessionNotification,
+} from "@agentclientprotocol/sdk";
+import type {
+  AcpSession,
+  KanbanAcpClient,
+  SessionUpdateHandler,
+} from "@/ai/acp-client";
 import type { ConversationConnect } from "@/ai/conversation";
 import type { AiModel, AiPanelConnectFactory } from "./ai-panel";
 import {
@@ -112,6 +122,115 @@ const noopConnect: AiPanelConnectFactory = () => {
   return connect;
 };
 
+/**
+ * Whether the hosted `AiPanel` body is hidden by the shell.
+ *
+ * Collapsing the panel must NOT unmount the body — the contract is "still
+ * present but hidden". The shell hides it by setting `hidden` on the
+ * always-mounted wrapper around `{children}`, which CSS-hides via
+ * `display: none`. Walks up from the `data-slot='ai-panel'` element to its
+ * nearest ancestor carrying `hidden` (HTML `hidden` attribute or the `hidden`
+ * Tailwind class compiled to `display: none`).
+ */
+function isPanelBodyHidden(panelBody: Element): boolean {
+  let node: Element | null = panelBody;
+  while (node) {
+    const el = node as HTMLElement;
+    if (el.hidden) return true;
+    if (el.classList.contains("hidden")) return true;
+    if (getComputedStyle(el).display === "none") return true;
+    node = node.parentElement;
+  }
+  return false;
+}
+
+/**
+ * Replay scripted ACP `session/update` notifications during a fake turn.
+ *
+ * Mirrors the `SessionScript` pattern in `ai-panel.test.tsx`: the test scripts
+ * notifications that the panel folds into renderable conversation state, then
+ * `prompt` resolves with a `stopReason`.
+ */
+interface SessionScript {
+  /** `session/update` notifications streamed before `prompt` resolves. */
+  updates?: SessionNotification["update"][];
+  /** The stop reason `prompt` resolves with (default `end_turn`). */
+  stopReason?: PromptResponse["stopReason"];
+}
+
+/** A controllable fake ACP session with no transport. */
+class FakeSession implements AcpSession {
+  readonly sessionId = "fake-container-session";
+  readonly prompts: ContentBlock[][] = [];
+  cancelled = false;
+
+  constructor(
+    private readonly onUpdate: SessionUpdateHandler,
+    private readonly script: SessionScript,
+  ) {}
+
+  async prompt(prompt: ContentBlock[]): Promise<PromptResponse> {
+    this.prompts.push(prompt);
+    for (const update of this.script.updates ?? []) {
+      await this.onUpdate({ sessionId: this.sessionId, update });
+    }
+    return { stopReason: this.script.stopReason ?? "end_turn" };
+  }
+
+  async cancel(): Promise<void> {
+    this.cancelled = true;
+  }
+
+  async setMode(): Promise<void> {
+    // Unused by these tests.
+  }
+}
+
+/** A mock {@link AiPanelConnectFactory} plus the seams a test inspects. */
+interface MockHarness {
+  /** The factory to inject as the container's `createConnect` prop. */
+  createConnect: AiPanelConnectFactory;
+  /** Every model id the factory was invoked with, in order. */
+  connectedModels: () => string[];
+  /** Every {@link FakeSession} the fake client started, in order. */
+  sessions: () => FakeSession[];
+}
+
+/**
+ * Build a {@link MockHarness} backed by {@link FakeSession}s.
+ *
+ * The returned factory captures which model ids the panel connects for and
+ * exposes the constructed sessions so the test can assert no fresh connect or
+ * session was created across a panel toggle.
+ */
+function mockHarness(script: SessionScript = {}): MockHarness {
+  const connectedModels: string[] = [];
+  const sessions: FakeSession[] = [];
+
+  const createConnect: AiPanelConnectFactory = (modelId) => {
+    connectedModels.push(modelId);
+    const connect: ConversationConnect = async (handlers) => {
+      const client: KanbanAcpClient = {
+        protocolVersion: 1,
+        initializeResponse: { protocolVersion: 1, agentCapabilities: {} },
+        async startSession(): Promise<AcpSession> {
+          const session = new FakeSession(handlers.onSessionUpdate, script);
+          sessions.push(session);
+          return session;
+        },
+      };
+      return client;
+    };
+    return connect;
+  };
+
+  return {
+    createConnect,
+    connectedModels: () => connectedModels,
+    sessions: () => sessions,
+  };
+}
+
 const BOARD = "/tmp/board-a";
 
 /**
@@ -187,7 +306,9 @@ describe("AiPanelContainer", () => {
 
     // Open by default — the panel body is visible.
     await screen.findByTestId("ai-panel-container");
-    expect(document.querySelector("[data-slot='ai-panel']")).not.toBeNull();
+    const initialBody = document.querySelector("[data-slot='ai-panel']");
+    expect(initialBody).not.toBeNull();
+    expect(isPanelBodyHidden(initialBody!)).toBe(false);
 
     // Collapse via the toggle control.
     const toggle = screen.getByRole("button", { name: /collapse ai panel/i });
@@ -195,9 +316,13 @@ describe("AiPanelContainer", () => {
       fireEvent.click(toggle);
     });
 
-    // The panel body is gone once collapsed.
+    // The panel body stays mounted but is hidden once collapsed — toggling the
+    // panel must not unmount the conversation (see "conversation survives a
+    // toggle" below).
     await waitFor(() => {
-      expect(document.querySelector("[data-slot='ai-panel']")).toBeNull();
+      const body = document.querySelector("[data-slot='ai-panel']");
+      expect(body).not.toBeNull();
+      expect(isPanelBodyHidden(body!)).toBe(true);
     });
 
     // The collapsed state was persisted per board.
@@ -210,20 +335,104 @@ describe("AiPanelContainer", () => {
     unmount();
     await renderContainer();
     await screen.findByTestId("ai-panel-container");
-    expect(document.querySelector("[data-slot='ai-panel']")).toBeNull();
+    const remountedBody = document.querySelector("[data-slot='ai-panel']");
+    expect(remountedBody).not.toBeNull();
+    expect(isPanelBodyHidden(remountedBody!)).toBe(true);
 
-    // Expanding again persists `open: true`.
+    // Expanding again persists `open: true` and reveals the body.
     const expand = screen.getByRole("button", { name: /expand ai panel/i });
     await act(async () => {
       fireEvent.click(expand);
     });
     await waitFor(() => {
-      expect(document.querySelector("[data-slot='ai-panel']")).not.toBeNull();
+      const body = document.querySelector("[data-slot='ai-panel']");
+      expect(body).not.toBeNull();
+      expect(isPanelBodyHidden(body!)).toBe(false);
     });
     const reopened = JSON.parse(
       localStorage.getItem(aiPanelStateStorageKey(BOARD))!,
     );
     expect(reopened.open).toBe(true);
+  });
+
+  it("conversation survives a toggle: collapsing then re-expanding preserves the messages", async () => {
+    // Preseed a chosen model so the container mounts `AiPanelConversation` and
+    // its `useConversation` store — without a model the panel renders the
+    // no-model state instead.
+    localStorage.setItem(
+      aiPanelStateStorageKey(BOARD),
+      JSON.stringify({ open: true, modelId: "claude-code" }),
+    );
+
+    const REPLY = "persistent agent reply";
+    const harness = mockHarness({
+      updates: [
+        {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: REPLY },
+        },
+      ],
+    });
+
+    await renderContainer({ createConnect: harness.createConnect });
+    await screen.findByTestId("ai-panel-container");
+
+    // Drive one turn through the panel so the conversation store has a
+    // message; both the user's prompt and the streamed reply must render.
+    const textarea = await screen.findByRole("textbox", {
+      name: /message the ai agent/i,
+    });
+    await act(async () => {
+      await userEvent.type(textarea, "hello panel");
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /submit/i }));
+    });
+    await waitFor(() => {
+      expect(document.body.textContent).toContain(REPLY);
+      expect(document.body.textContent).toContain("hello panel");
+    });
+
+    // The hosted ACP session that streamed the reply.
+    const sessionBeforeToggle = harness.sessions()[0];
+    expect(sessionBeforeToggle).toBeDefined();
+    const connectCountBeforeToggle = harness.connectedModels().length;
+
+    // Collapse via the window-layer `ai.toggle` command.
+    await act(async () => {
+      triggerAiToggle();
+    });
+
+    // The panel body is hidden but still mounted, and the reply text is still
+    // in the DOM — the conversation survived the collapse.
+    await waitFor(() => {
+      const body = document.querySelector("[data-slot='ai-panel']");
+      expect(body).not.toBeNull();
+      expect(isPanelBodyHidden(body!)).toBe(true);
+    });
+    expect(document.body.textContent).toContain(REPLY);
+    expect(document.body.textContent).toContain("hello panel");
+
+    // Re-expand via the same command.
+    await act(async () => {
+      triggerAiToggle();
+    });
+    await waitFor(() => {
+      const body = document.querySelector("[data-slot='ai-panel']");
+      expect(body).not.toBeNull();
+      expect(isPanelBodyHidden(body!)).toBe(false);
+    });
+
+    // After re-expanding both the user prompt and the assistant reply are
+    // still rendered — no fresh conversation, no reset store.
+    expect(document.body.textContent).toContain(REPLY);
+    expect(document.body.textContent).toContain("hello panel");
+
+    // The ACP session itself was preserved — `createConnect` was not invoked
+    // again, and no new session was started on the re-expand.
+    expect(harness.connectedModels().length).toBe(connectCountBeforeToggle);
+    expect(harness.sessions()).toHaveLength(1);
+    expect(harness.sessions()[0]).toBe(sessionBeforeToggle);
   });
 
   it("dragging the resize handle updates the width and persists it", async () => {
@@ -287,16 +496,21 @@ describe("AiPanelContainer", () => {
 
     // Open by default — the panel body is visible.
     await screen.findByTestId("ai-panel-container");
-    expect(document.querySelector("[data-slot='ai-panel']")).not.toBeNull();
+    const openBody = document.querySelector("[data-slot='ai-panel']");
+    expect(openBody).not.toBeNull();
+    expect(isPanelBodyHidden(openBody!)).toBe(false);
 
     // The container registered its `toggle` handler into the AI command
     // registry; firing it (as the window-layer `ai.toggle` command does)
-    // collapses the panel.
+    // collapses the panel — the body stays mounted but is hidden so the
+    // conversation survives the toggle.
     await act(async () => {
       triggerAiToggle();
     });
     await waitFor(() => {
-      expect(document.querySelector("[data-slot='ai-panel']")).toBeNull();
+      const body = document.querySelector("[data-slot='ai-panel']");
+      expect(body).not.toBeNull();
+      expect(isPanelBodyHidden(body!)).toBe(true);
     });
     // The collapsed state is persisted per board, exactly like the in-header
     // toggle control.
@@ -309,7 +523,9 @@ describe("AiPanelContainer", () => {
       triggerAiToggle();
     });
     await waitFor(() => {
-      expect(document.querySelector("[data-slot='ai-panel']")).not.toBeNull();
+      const body = document.querySelector("[data-slot='ai-panel']");
+      expect(body).not.toBeNull();
+      expect(isPanelBodyHidden(body!)).toBe(false);
     });
   });
 
@@ -322,7 +538,9 @@ describe("AiPanelContainer", () => {
     );
     await renderContainer();
     await screen.findByTestId("ai-panel-container");
-    expect(document.querySelector("[data-slot='ai-panel']")).toBeNull();
+    const collapsedBody = document.querySelector("[data-slot='ai-panel']");
+    expect(collapsedBody).not.toBeNull();
+    expect(isPanelBodyHidden(collapsedBody!)).toBe(true);
 
     // Firing the registered `ai.focus` handler expands the panel and moves
     // focus into the prompt editor — the AI composer's CM6 content DOM,
@@ -331,7 +549,9 @@ describe("AiPanelContainer", () => {
       triggerAiFocus();
     });
     await waitFor(() => {
-      expect(document.querySelector("[data-slot='ai-panel']")).not.toBeNull();
+      const body = document.querySelector("[data-slot='ai-panel']");
+      expect(body).not.toBeNull();
+      expect(isPanelBodyHidden(body!)).toBe(false);
     });
     await waitFor(() => {
       const input = document.querySelector(

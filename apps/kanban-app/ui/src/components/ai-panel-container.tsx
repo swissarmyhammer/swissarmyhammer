@@ -420,10 +420,23 @@ interface AiPanelShellProps {
 /**
  * The right-docked panel shell — collapse rail, resize handle, and body.
  *
- * When collapsed the shell shrinks to a thin rail with just the expand
- * control, so the panel never fully disappears and stays one click away.
- * When expanded it renders the left-edge resize handle and the hosted View
+ * When collapsed the shell shrinks to a thin rail with the expand control;
+ * when expanded it renders the left-edge resize handle and the hosted View
  * inside a fixed-width column.
+ *
+ * # The body stays mounted across toggles
+ *
+ * `children` (the hosted `AiPanel`) is rendered unconditionally — collapsing
+ * the panel only hides the body (`hidden` → `display: none`), it never
+ * unmounts it. Unmounting on collapse would tear down the `useConversation`
+ * store and the live ACP session, so a toggle would silently destroy the
+ * conversation. The "start fresh" path is the dedicated `ai.newChat` /
+ * "New conversation" affordance — toggling the panel must never do that.
+ *
+ * The rail and the body live under one always-mounted outer container so the
+ * body is never unmounted by a toggle. The outer container's width is the
+ * rail width (`w-9`) when collapsed and the user-resizable `width` when
+ * expanded.
  *
  * The resize handle reuses the `SlidePanel` drag pattern: window-level
  * `mousemove`/`mouseup` listeners installed only for the duration of a drag,
@@ -530,48 +543,63 @@ function AiPanelShell({
     [width],
   );
 
-  // Collapsed: a thin rail with just the expand control.
-  if (!open) {
-    return (
-      <div
-        className="flex h-full w-9 shrink-0 flex-col items-center border-l bg-background py-2"
-        data-testid="ai-panel-container"
-        data-ai-panel-collapsed="true"
-      >
-        <Button
-          aria-label="Expand AI panel"
-          onClick={onToggle}
-          size="icon"
-          variant="ghost"
-        >
-          <PanelRightOpenIcon className="size-4" />
-        </Button>
-        <SparklesIcon className="mt-2 size-4 text-muted-foreground" />
-      </div>
-    );
-  }
-
-  // Expanded: the resize handle and the hosted View. The collapse control
-  // lives inside the View's own header (`AiPanelHeader`), wired through the
-  // `onCollapse` prop — the shell no longer carries a standalone collapse row.
+  // One always-mounted outer container hosts both the collapsed rail and the
+  // expanded body. The rail and the body are siblings; only their visibility
+  // toggles. `children` is never unmounted by a toggle, so the hosted
+  // `AiPanel`'s `useConversation` store and live ACP session survive any
+  // number of collapse/expand cycles.
+  //
+  // Sizing: `w-9` (the rail width) when collapsed, the user-resizable `width`
+  // when expanded. `maxWidth: 85vw` matches the resize clamp so the expanded
+  // panel can never swallow the whole window on a narrow display.
   return (
     <div
-      className="relative flex h-full shrink-0 flex-col border-l bg-background"
+      className={
+        open
+          ? "relative flex h-full shrink-0 flex-col border-l bg-background"
+          : "relative flex h-full w-9 shrink-0 flex-col border-l bg-background"
+      }
       data-testid="ai-panel-container"
-      data-ai-panel-collapsed="false"
-      style={{ width, maxWidth: "85vw" }}
+      data-ai-panel-collapsed={open ? "false" : "true"}
+      style={open ? { width, maxWidth: "85vw" } : undefined}
     >
-      {/* Left-edge resize handle — a 6 px invisible hit zone with a hairline
-          indicator on hover, mirroring the inspector's `SlidePanel` handle. */}
-      <div
-        data-ai-panel-resize-handle
-        onMouseDown={handleMouseDown}
-        className="group absolute top-0 left-0 z-10 h-full w-[6px] cursor-col-resize select-none"
-        aria-hidden="true"
-      >
-        <div className="h-full w-px bg-transparent transition-colors group-hover:bg-border" />
+      {/* Left-edge resize handle — only rendered when expanded; it has nothing
+          to grab when the container is at the rail width. */}
+      {open ? (
+        <div
+          data-ai-panel-resize-handle
+          onMouseDown={handleMouseDown}
+          className="group absolute top-0 left-0 z-10 h-full w-[6px] cursor-col-resize select-none"
+          aria-hidden="true"
+        >
+          <div className="h-full w-px bg-transparent transition-colors group-hover:bg-border" />
+        </div>
+      ) : null}
+
+      {/* The collapsed rail — the expand control and the sparkle glyph. Only
+          shown when collapsed; the expanded panel has its own header with a
+          collapse control wired through `onCollapse` on the hosted View. */}
+      {open ? null : (
+        <div className="flex flex-col items-center py-2">
+          <Button
+            aria-label="Expand AI panel"
+            onClick={onToggle}
+            size="icon"
+            variant="ghost"
+          >
+            <PanelRightOpenIcon className="size-4" />
+          </Button>
+          <SparklesIcon className="mt-2 size-4 text-muted-foreground" />
+        </div>
+      )}
+
+      {/* The hosted `AiPanel` body — always rendered. When collapsed it is
+          hidden (`hidden` → `display: none`) so it takes no layout space, but
+          it stays in the tree so the conversation and ACP session survive a
+          toggle. */}
+      <div className="min-h-0 flex-1" hidden={!open}>
+        {children}
       </div>
-      <div className="min-h-0 flex-1">{children}</div>
     </div>
   );
 }
