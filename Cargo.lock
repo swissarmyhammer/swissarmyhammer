@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "acp-conformance"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-extras",
@@ -48,13 +48,14 @@ dependencies = [
 
 [[package]]
 name = "agent-client-protocol"
-version = "0.11.1"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2af62fb84df2af0f933d8f5fd78b843fa5eb0ec5a48fa1b528c41951d0bbe36c"
+checksum = "4361ba6627e51de955b10f3c77fb9eb959c85191a236c1c2c84e32f4ff240faf"
 dependencies = [
  "agent-client-protocol-derive",
  "agent-client-protocol-schema",
- "anyhow",
+ "async-process",
+ "blocking",
  "futures",
  "futures-concurrency",
  "jsonrpcmsg",
@@ -63,7 +64,7 @@ dependencies = [
  "schemars 1.2.1",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
+ "shell-words",
  "tokio",
  "tokio-util",
  "tracing",
@@ -72,18 +73,17 @@ dependencies = [
 
 [[package]]
 name = "agent-client-protocol-derive"
-version = "0.11.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce42c2d3c048c12897eef2e577dfff1e3355c632c9f1625cc953b9df48b44631"
+checksum = "cabdc9d845d08ec7ed2d0c9de1ae4a1b198301407d55855261572761be90ec9f"
 dependencies = [
- "proc-macro2",
  "quote",
  "syn 2.0.117",
 ]
 
 [[package]]
 name = "agent-client-protocol-extras"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "agent-client-protocol",
  "async-trait",
@@ -96,7 +96,9 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "serial_test",
  "swissarmyhammer-common",
+ "swissarmyhammer-directory",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -106,9 +108,9 @@ dependencies = [
 
 [[package]]
 name = "agent-client-protocol-schema"
-version = "0.12.0"
+version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49bae57dad1c28a362fbdcf7bab0583316a02b45a70792109fced55780a3b63c"
+checksum = "b957d8391ac3933e2a940446171c508d2b8ffc386d8fa7d0b9c936a2575b463e"
 dependencies = [
  "anyhow",
  "derive_more 2.1.1",
@@ -203,7 +205,7 @@ dependencies = [
 
 [[package]]
 name = "ane-embedding"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "async-trait",
  "block2",
@@ -372,6 +374,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-channel"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "924ed96dd52d1b75e9c1a3e6275715fd320f5f9439fb5a4a11fa51f4221158d2"
+dependencies = [
+ "concurrent-queue",
+ "event-listener-strategy",
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "async-compression"
 version = "0.4.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -382,6 +396,77 @@ dependencies = [
  "pin-project-lite",
  "tokio",
 ]
+
+[[package]]
+name = "async-io"
+version = "2.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "456b8a8feb6f42d237746d4b3e9a178494627745c3c56c6ea55d92ba50d026fc"
+dependencies = [
+ "autocfg",
+ "cfg-if",
+ "concurrent-queue",
+ "futures-io",
+ "futures-lite",
+ "parking",
+ "polling",
+ "rustix 1.1.4",
+ "slab",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "async-lock"
+version = "3.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "290f7f2596bd5b78a9fec8088ccd89180d7f9f55b94b0576823bbbdc72ee8311"
+dependencies = [
+ "event-listener",
+ "event-listener-strategy",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "async-process"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc50921ec0055cdd8a16de48773bfeec5c972598674347252c0399676be7da75"
+dependencies = [
+ "async-channel",
+ "async-io",
+ "async-lock",
+ "async-signal",
+ "async-task",
+ "blocking",
+ "cfg-if",
+ "event-listener",
+ "futures-lite",
+ "rustix 1.1.4",
+]
+
+[[package]]
+name = "async-signal"
+version = "0.2.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52b5aaafa020cf5053a01f2a60e8ff5dccf550f0f77ec54a4e47285ac2bab485"
+dependencies = [
+ "async-io",
+ "async-lock",
+ "atomic-waker",
+ "cfg-if",
+ "futures-core",
+ "futures-io",
+ "rustix 1.1.4",
+ "signal-hook-registry",
+ "slab",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "async-task"
+version = "4.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b75356056920673b02621b35afd0f7dda9306d03c79a30f5c56c44cf256e3de"
 
 [[package]]
 name = "async-trait"
@@ -465,7 +550,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "avp-cli"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "avp-common",
  "clap",
@@ -489,7 +574,7 @@ dependencies = [
 
 [[package]]
 name = "avp-common"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-extras",
@@ -742,6 +827,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "blocking"
+version = "1.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e83f8d02be6967315521be875afa792a316e28d57b5a2d401897e2a7921b7f21"
+dependencies = [
+ "async-channel",
+ "async-task",
+ "futures-io",
+ "futures-lite",
+ "piper",
+]
+
+[[package]]
 name = "borrow-or-share"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -800,6 +898,15 @@ checksum = "874bb8112abecc98cbd6d81ea4fa7e94fb9449648c93cc89aa40c81c24d7de03"
 dependencies = [
  "alloc-no-stdlib",
  "alloc-stdlib",
+]
+
+[[package]]
+name = "bs58"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf88ba1141d185c399bee5288d850d63b8369520c1eafc32a0430b5b6c287bf4"
+dependencies = [
+ "tinyvec",
 ]
 
 [[package]]
@@ -1248,7 +1355,7 @@ dependencies = [
 
 [[package]]
 name = "claude-agent"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-extras",
@@ -1309,7 +1416,7 @@ dependencies = [
 
 [[package]]
 name = "code-context-cli"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1433,6 +1540,15 @@ name = "compression-core"
 version = "0.4.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75984efb6ed102a0d42db99afb6c1948f0380d1d91808d5529916e6c08b49d8d"
+
+[[package]]
+name = "concurrent-queue"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ca0197aee26d1ae37445ee532fefce43251d24cc7c166799f4d46817f1d3973"
+dependencies = [
+ "crossbeam-utils",
+]
 
 [[package]]
 name = "console"
@@ -2498,7 +2614,7 @@ checksum = "4ef6b89e5b37196644d8796de5268852ff179b44e96276cf4290264843743bb7"
 
 [[package]]
 name = "embedding-benchmark"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "ane-embedding",
  "criterion",
@@ -2621,6 +2737,27 @@ name = "esaxx-rs"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d817e038c30374a4bcb22f94d0a8a0e216958d4c3dcde369b1439fec4bdda6e6"
+
+[[package]]
+name = "event-listener"
+version = "5.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e13b66accf52311f30a0db42147dadea9850cb48cd070028831ae5f5d4b856ab"
+dependencies = [
+ "concurrent-queue",
+ "parking",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "event-listener-strategy"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
+dependencies = [
+ "event-listener",
+ "pin-project-lite",
+]
 
 [[package]]
 name = "fallible-iterator"
@@ -3621,7 +3758,7 @@ dependencies = [
 
 [[package]]
 name = "heb"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "chrono",
  "dirs",
@@ -4535,7 +4672,7 @@ dependencies = [
 
 [[package]]
 name = "kanban-app"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -4579,7 +4716,7 @@ dependencies = [
 
 [[package]]
 name = "kanban-cli"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "clap",
  "clap-markdown",
@@ -4873,7 +5010,7 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "llama-agent"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-extras",
@@ -4924,7 +5061,7 @@ dependencies = [
 
 [[package]]
 name = "llama-common"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "async-trait",
  "serde",
@@ -4964,7 +5101,7 @@ dependencies = [
 
 [[package]]
 name = "llama-embedding"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "async-trait",
  "llama-common",
@@ -5053,7 +5190,7 @@ checksum = "670fdfda89751bc4a84ac13eaa63e205cf0fd22b4c9a5fbfa085b63c1f1d3a30"
 
 [[package]]
 name = "markdowndown"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5260,7 +5397,7 @@ dependencies = [
 
 [[package]]
 name = "mirdan"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -5301,7 +5438,7 @@ dependencies = [
 
 [[package]]
 name = "mirdan-app"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -5322,7 +5459,7 @@ dependencies = [
 
 [[package]]
 name = "mirdan-cli"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "clap",
  "clap-markdown",
@@ -5362,7 +5499,7 @@ dependencies = [
 
 [[package]]
 name = "model-context-protocol-extras"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "async-trait",
  "axum",
@@ -5380,7 +5517,7 @@ dependencies = [
 
 [[package]]
 name = "model-embedding"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "async-trait",
  "md5",
@@ -5395,7 +5532,7 @@ dependencies = [
 
 [[package]]
 name = "model-loader"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "dirs",
  "hf-hub",
@@ -6652,6 +6789,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "polling"
+version = "3.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d0e4f59085d47d8241c88ead0f274e8a0cb551f3625263c05eb8dd897c34218"
+dependencies = [
+ "cfg-if",
+ "concurrent-queue",
+ "hermit-abi 0.5.2",
+ "pin-project-lite",
+ "rustix 1.1.4",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "portable-atomic"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7187,9 +7338,9 @@ checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
 
 [[package]]
 name = "rayon"
-version = "1.11.0"
+version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "368f01d005bf8fd9b1206fb6fa653e6c4a81ceb1466406b81792d87c5677a58f"
+checksum = "fb39b166781f92d482534ef4b4b1b2568f42613b53e5b6c160e24cfbfa30926d"
 dependencies = [
  "either",
  "rayon-core",
@@ -7509,9 +7660,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "1.5.0"
+version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67d69668de0b0ccd9cc435f700f3b39a7861863cf37a15e1f304ea78688a4826"
+checksum = "0810a9f717d9828f475fe1f629f4c305c8464b7f496c3a854b58d29e65f4058e"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -7544,9 +7695,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "1.5.0"
+version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48fdc01c81097b0aed18633e676e269fefa3a78ec1df56b4fe597c1241b92025"
+checksum = "6aefac48c364756e97f04c0401ba3231e8607882c7c1d92da0437dc16307904d"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",
@@ -8150,11 +8301,12 @@ dependencies = [
 
 [[package]]
 name = "serde_with"
-version = "3.18.0"
+version = "3.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd5414fad8e6907dbdd5bc441a50ae8d6e26151a03b1de04d89a5576de61d01f"
+checksum = "e72c1c2cb7b223fafb600a619537a871c2818583d619401b785e7c0b746ccde2"
 dependencies = [
  "base64 0.22.1",
+ "bs58",
  "chrono",
  "hex",
  "indexmap 1.9.3",
@@ -8169,9 +8321,9 @@ dependencies = [
 
 [[package]]
 name = "serde_with_macros"
-version = "3.18.0"
+version = "3.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3db8978e608f1fe7357e211969fd9abdcae80bac1ba7a3369bb7eb6b404eb65"
+checksum = "b90c488738ecb4fb0262f41f43bc40efc5868d9fb744319ddf5f5317f417bfac"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",
@@ -8311,7 +8463,7 @@ checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 
 [[package]]
 name = "shelltool-cli"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "clap",
  "clap-markdown",
@@ -9114,7 +9266,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9180,7 +9332,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-agent"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-extras",
@@ -9199,7 +9351,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-agents"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "async-trait",
  "once_cell",
@@ -9218,11 +9370,11 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-build"
-version = "0.12.11"
+version = "0.13.5"
 
 [[package]]
 name = "swissarmyhammer-cli"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "arboard",
@@ -9288,7 +9440,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-cli-completions"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "clap",
  "clap_complete",
@@ -9297,7 +9449,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-code-context"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "fuzzy-matcher",
  "ignore",
@@ -9324,7 +9476,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-commands"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "async-trait",
  "include_dir",
@@ -9339,7 +9491,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-common"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "colored 2.2.0",
@@ -9369,7 +9521,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-config"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "dirs",
@@ -9393,7 +9545,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-directory"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "async-watcher",
  "dirs",
@@ -9410,7 +9562,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-doctor"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "comfy-table",
  "crossterm",
@@ -9421,7 +9573,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-embedding"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "ane-embedding",
  "async-trait",
@@ -9436,7 +9588,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-entity"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "async-trait",
  "chrono",
@@ -9464,7 +9616,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-entity-search"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "fuzzy-matcher",
  "model-embedding",
@@ -9477,7 +9629,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-fields"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "async-trait",
  "serde",
@@ -9495,7 +9647,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-filter-expr"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "chumsky",
  "thiserror 2.0.18",
@@ -9503,7 +9655,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-focus"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "include_dir",
  "serde",
@@ -9519,7 +9671,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-git"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9535,7 +9687,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-js"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9555,7 +9707,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-kanban"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "async-trait",
  "chrono",
@@ -9591,7 +9743,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-leader-election"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "fs2",
  "md5",
@@ -9604,7 +9756,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-lsp"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "lsp-types",
  "once_cell",
@@ -9624,7 +9776,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-mcp-proxy"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9650,7 +9802,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-merge"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "diffy",
  "serde_json",
@@ -9661,7 +9813,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-modes"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "dirs",
@@ -9681,7 +9833,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-operations"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "async-trait",
  "chrono",
@@ -9694,7 +9846,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-operations-macros"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -9706,7 +9858,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-perspectives"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -9724,7 +9876,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-plugin"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "async-trait",
  "axum",
@@ -9752,7 +9904,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-project-detection"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -9762,7 +9914,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-prompts"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -9795,7 +9947,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-sem"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "rayon",
  "regex",
@@ -9826,7 +9978,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-shell"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "regex",
  "serde",
@@ -9844,7 +9996,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-skills"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "async-trait",
  "dirs",
@@ -9865,7 +10017,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-statusline"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "dirs",
  "git2",
@@ -9884,7 +10036,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-store"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "async-trait",
  "chrono",
@@ -9901,7 +10053,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-templating"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "liquid",
@@ -9921,7 +10073,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-tools"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9996,7 +10148,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-treesitter"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "async-watcher",
@@ -10053,7 +10205,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-views"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "chrono",
  "serde",
@@ -10071,7 +10223,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-web"
-version = "0.12.11"
+version = "0.13.5"
 dependencies = [
  "async-trait",
  "dashmap",
@@ -10733,9 +10885,9 @@ checksum = "8f50febec83f5ee1df3015341d8bd429f2d1cc62bcba7ea2076759d315084683"
 
 [[package]]
 name = "test-log"
-version = "0.2.19"
+version = "0.2.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37d53ac171c92a39e4769491c4b4dde7022c60042254b5fc044ae409d34a24d4"
+checksum = "2f46bf474f0a4afebf92f076d54fd5e63423d9438b8c278a3d2ccb0f47f7cdb3"
 dependencies = [
  "env_logger",
  "test-log-macros",
@@ -10743,14 +10895,24 @@ dependencies = [
 ]
 
 [[package]]
-name = "test-log-macros"
-version = "0.2.19"
+name = "test-log-core"
+version = "0.2.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be35209fd0781c5401458ab66e4f98accf63553e8fae7425503e92fdd319783b"
+checksum = "37d4d41320b48bc4a211a9021678fcc0c99569b594ea31c93735b8e517102b4c"
 dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "test-log-macros"
+version = "0.2.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9beb9249a81e430dffd42400a49019bcf548444f1968ff23080a625de0d4d320"
+dependencies = [
+ "syn 2.0.117",
+ "test-log-core",
 ]
 
 [[package]]
@@ -10950,9 +11112,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.51.0"
+version = "1.52.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bd1c4c0fc4a7ab90fc15ef6daaa3ec3b893f004f915f2392557ed23237820cd"
+checksum = "8fc7f01b389ac15039e4dc9531aa973a135d7a4135281b12d7c1bc79fd57fffe"
 dependencies = [
  "bytes",
  "libc",

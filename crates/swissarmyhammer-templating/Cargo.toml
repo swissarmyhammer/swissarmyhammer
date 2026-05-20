@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 description = "Template engine domain crate for SwissArmyHammer using Liquid templates"
 documentation = "https://docs.rs/swissarmyhammer-templating"
-readme = "../README.md"
+readme = "../../README.md"
 keywords = ["template", "liquid", "templating", "engine", "domain"]
 categories = ["template-engine", "development-tools"]
 

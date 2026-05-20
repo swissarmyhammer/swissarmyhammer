@@ -7,13 +7,27 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
-use swissarmyhammer_common::SwissarmyhammerDirectory;
 use ulid::Ulid;
 
-/// Session identifier - raw ULID that can be used with Claude CLI
+/// Internal session identifier for sessions this agent itself created.
 ///
 /// # Format
 /// Raw ULID (no prefix): `01ARZ3NDEKTSV4RRFFQ69G5FAV`
+///
+/// # Opaque-string boundary
+/// claude-agent **generates** a ULID for every session it creates, and uses
+/// this type internally as the [`SessionManager`] cache key and to derive the
+/// claude CLI's deterministic UUID. ULIDs are an implementation detail of
+/// *generation* only — they are never imposed on session ids arriving from the
+/// client.
+///
+/// Incoming ACP `sessionId` strings are opaque: a session is valid if and only
+/// if it exists, not if it matches a format. The protocol boundary therefore
+/// never rejects an id on ULID format — it resolves the id by existence (see
+/// [`ClaudeAgent::resolve_session`](crate::agent::ClaudeAgent::resolve_session)).
+/// [`SessionId::parse`] is used only to interpret an id that this agent itself
+/// minted; a non-ULID id simply fails to resolve to any session, which is a
+/// not-found outcome rather than a format error.
 ///
 /// # Claude CLI Compatibility
 /// ULIDs are valid UUIDs and can be passed to `claude --session-id <uuid>`
@@ -34,7 +48,14 @@ impl SessionId {
         Self(Ulid::new())
     }
 
-    /// Parse a session ID from string
+    /// Interpret a string as an internal session id.
+    ///
+    /// This is **not** a protocol-boundary validator. It is used only to
+    /// interpret an id that claude-agent itself minted (always a ULID) so it
+    /// can be used as the [`SessionManager`] cache key. Incoming ACP session
+    /// ids are opaque and are resolved by existence, not by parsing — see the
+    /// type-level documentation and
+    /// [`ClaudeAgent::resolve_session`](crate::agent::ClaudeAgent::resolve_session).
     ///
     /// # Format
     /// Expects raw ULID string: `01ARZ3NDEKTSV4RRFFQ69G5FAV`
@@ -43,6 +64,10 @@ impl SessionId {
     /// Returns error if:
     /// - Invalid ULID format
     /// - Empty string
+    ///
+    /// A non-ULID string is therefore *not* a valid internal id — but at the
+    /// protocol boundary that is treated as "no such session", never as a
+    /// format rejection.
     pub fn parse(s: &str) -> Result<Self, SessionIdError> {
         if s.is_empty() {
             return Err(SessionIdError::Empty);
@@ -188,6 +213,15 @@ pub struct Session {
     pub turn_token_count: u64,
     /// Current session mode identifier for ACP current mode updates
     pub current_mode: Option<String>,
+    /// Human-readable session title, generated after the first meaningful
+    /// exchange.
+    ///
+    /// `None` until a title has been generated; once set it is kept for the
+    /// life of the session (see the title-generation contract in
+    /// [`agent_client_protocol_extras::session_title`]). This field is the
+    /// source of truth for [`SessionRecord::title`](agent_client_protocol_extras::SessionRecord).
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 impl Session {
@@ -222,6 +256,7 @@ impl Session {
             turn_request_count: 0,
             turn_token_count: 0,
             current_mode: None,
+            title: None,
         }
     }
 
@@ -358,13 +393,19 @@ pub enum MessageRole {
     System,
 }
 
-/// Thread-safe session manager
+/// Thread-safe, in-memory cache of live sessions.
+///
+/// `SessionManager` holds the sessions of the current process in a
+/// `HashMap`. It is the live-session cache only — it has no durable storage of
+/// its own. Cross-restart persistence is the job of
+/// [`SessionStore`](agent_client_protocol_extras::SessionStore), which the
+/// agent writes a [`SessionRecord`](agent_client_protocol_extras::SessionRecord)
+/// to at the end of each turn.
 #[derive(Debug)]
 pub struct SessionManager {
     sessions: Arc<RwLock<HashMap<SessionId, Session>>>,
     cleanup_interval: Duration,
     max_session_age: Duration,
-    storage_path: Option<PathBuf>,
 }
 
 impl SessionManager {
@@ -374,7 +415,6 @@ impl SessionManager {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             cleanup_interval: Duration::from_secs(300), // 5 minutes
             max_session_age: Duration::from_secs(3600), // 1 hour
-            storage_path: Self::default_storage_path(),
         }
     }
 
@@ -384,95 +424,7 @@ impl SessionManager {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             cleanup_interval,
             max_session_age,
-            storage_path: Self::default_storage_path(),
         }
-    }
-
-    /// Set the storage path for sessions
-    ///
-    /// This allows tests and custom configurations to specify where session files are stored.
-    /// If set to None, sessions will only be kept in memory.
-    pub fn with_storage_path(mut self, path: Option<PathBuf>) -> Self {
-        self.storage_path = path;
-        self
-    }
-
-    /// Get the default storage path for sessions
-    fn default_storage_path() -> Option<PathBuf> {
-        std::env::current_dir().ok().map(|cwd| {
-            cwd.join(SwissarmyhammerDirectory::dir_name())
-                .join("sessions")
-        })
-    }
-
-    /// Ensure the storage directory exists
-    fn ensure_storage_directory(&self) -> crate::Result<PathBuf> {
-        if let Some(storage_path) = &self.storage_path {
-            std::fs::create_dir_all(storage_path).map_err(|e| {
-                crate::AgentError::Session(format!(
-                    "Failed to create session storage directory: {}",
-                    e
-                ))
-            })?;
-            Ok(storage_path.clone())
-        } else {
-            Err(crate::AgentError::Session(
-                "No storage path configured".to_string(),
-            ))
-        }
-    }
-
-    /// Get the file path for a session
-    fn session_file_path(&self, session_id: &SessionId) -> crate::Result<PathBuf> {
-        let storage_path = self.ensure_storage_directory()?;
-        Ok(storage_path.join(format!("{}.json", session_id)))
-    }
-
-    /// Save a session to disk
-    fn save_session_to_disk(&self, session: &Session) -> crate::Result<()> {
-        let file_path = self.session_file_path(&session.id)?;
-        let json = serde_json::to_string_pretty(session).map_err(|e| {
-            crate::AgentError::Session(format!("Failed to serialize session: {}", e))
-        })?;
-        std::fs::write(&file_path, json).map_err(|e| {
-            crate::AgentError::Session(format!("Failed to write session to disk: {}", e))
-        })?;
-        tracing::debug!("Saved session {} to disk", session.id);
-        Ok(())
-    }
-
-    /// Load a session from disk
-    fn load_session_from_disk(&self, session_id: &SessionId) -> crate::Result<Option<Session>> {
-        let file_path = self.session_file_path(session_id)?;
-
-        if !file_path.exists() {
-            return Ok(None);
-        }
-
-        let json = std::fs::read_to_string(&file_path).map_err(|e| {
-            crate::AgentError::Session(format!("Failed to read session from disk: {}", e))
-        })?;
-
-        let session: Session = serde_json::from_str(&json).map_err(|e| {
-            crate::AgentError::Session(format!("Failed to deserialize session: {}", e))
-        })?;
-
-        tracing::debug!("Loaded session {} from disk", session_id);
-        Ok(Some(session))
-    }
-
-    /// Delete a session file from disk
-    fn delete_session_from_disk(&self, session_id: &SessionId) -> crate::Result<()> {
-        let file_path = self.session_file_path(session_id)?;
-
-        if file_path.exists() {
-            std::fs::remove_file(&file_path).map_err(|e| {
-                crate::AgentError::Session(format!("Failed to delete session from disk: {}", e))
-            })?;
-            tracing::debug!("Deleted session {} from disk", session_id);
-        }
-
-        Ok(())
     }
 
     /// Create a new session with specified working directory and return its ID
@@ -499,9 +451,6 @@ impl SessionManager {
         let mut session = Session::new(session_id, cwd);
         session.client_capabilities = client_capabilities;
 
-        // Save to disk first
-        self.save_session_to_disk(&session)?;
-
         let mut sessions = self
             .sessions
             .write()
@@ -512,37 +461,44 @@ impl SessionManager {
         Ok(session_id)
     }
 
-    /// Get a session by ID
+    /// Insert a fully-formed [`Session`] into the in-memory cache, replacing
+    /// any existing session with the same id.
+    ///
+    /// This is the rehydration counterpart of [`create_session`](Self::create_session):
+    /// where `create_session` mints a brand-new session, `restore_session`
+    /// re-populates the cache from a session reconstructed elsewhere — namely
+    /// from a durable [`SessionRecord`](agent_client_protocol_extras::SessionRecord)
+    /// during `session/resume` and `session/load`. After a process restart the
+    /// in-memory cache is empty, so a resumed session must be inserted here for
+    /// the subsequent `session/prompt` to find it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the session storage write lock cannot be acquired.
+    pub fn restore_session(&self, session: Session) -> crate::Result<()> {
+        let session_id = session.id;
+        let mut sessions = self
+            .sessions
+            .write()
+            .map_err(|_| crate::AgentError::Session("Failed to acquire write lock".to_string()))?;
+
+        sessions.insert(session_id, session);
+        tracing::debug!("Restored session into in-memory cache: {}", session_id);
+        Ok(())
+    }
+
+    /// Get a session by ID from the in-memory cache.
+    ///
+    /// Returns `Ok(None)` when no live session with that id exists in this
+    /// process. Durable, cross-restart lookups are served by
+    /// [`SessionStore`](agent_client_protocol_extras::SessionStore), not here.
     pub fn get_session(&self, session_id: &SessionId) -> crate::Result<Option<Session>> {
-        // Fast path: check in-memory cache with read lock
-        {
-            let sessions = self.sessions.read().map_err(|_| {
-                crate::AgentError::Session("Failed to acquire read lock".to_string())
-            })?;
+        let sessions = self
+            .sessions
+            .read()
+            .map_err(|_| crate::AgentError::Session("Failed to acquire read lock".to_string()))?;
 
-            if let Some(session) = sessions.get(session_id) {
-                return Ok(Some(session.clone()));
-            }
-        } // Release read lock immediately
-
-        // Slow path: load from disk if storage is configured
-        if let Some(session) = self.load_session_from_disk(session_id)? {
-            // Cache the loaded session in memory
-            let mut sessions = self.sessions.write().map_err(|_| {
-                crate::AgentError::Session("Failed to acquire write lock".to_string())
-            })?;
-
-            // Double-check in case another thread loaded it while we were acquiring write lock
-            if let Some(existing) = sessions.get(session_id) {
-                return Ok(Some(existing.clone()));
-            }
-
-            sessions.insert(*session_id, session.clone());
-            tracing::debug!("Loaded session {} from disk into memory", session_id);
-            Ok(Some(session))
-        } else {
-            Ok(None)
-        }
+        Ok(sessions.get(session_id).cloned())
     }
 
     /// Update a session using a closure
@@ -550,9 +506,6 @@ impl SessionManager {
     where
         F: FnOnce(&mut Session),
     {
-        // First ensure the session is loaded into memory
-        self.get_session(session_id)?;
-
         let mut sessions = self
             .sessions
             .write()
@@ -561,12 +514,6 @@ impl SessionManager {
         if let Some(session) = sessions.get_mut(session_id) {
             updater(session);
             session.update_access_time();
-
-            // Save updated session to disk
-            let session_clone = session.clone();
-            drop(sessions); // Release lock before disk I/O
-            self.save_session_to_disk(&session_clone)?;
-
             tracing::trace!("Updated session: {}", session_id);
         } else {
             tracing::warn!("Attempted to update non-existent session: {}", session_id);
@@ -588,10 +535,6 @@ impl SessionManager {
 
         let removed = sessions.remove(session_id);
 
-        // Also remove from disk
-        drop(sessions); // Release lock before disk I/O
-        let _ = self.delete_session_from_disk(session_id); // Best effort deletion
-
         if removed.is_some() {
             tracing::debug!("Removed session: {}", session_id);
         }
@@ -603,7 +546,7 @@ impl SessionManager {
     /// This is the preferred method for removing sessions as it ensures proper cleanup
     /// of terminal processes associated with the session. It:
     /// 1. Cleans up all terminal processes for the session
-    /// 2. Removes the session from memory and disk
+    /// 2. Removes the session from the in-memory cache
     ///
     /// # Arguments
     ///
@@ -647,42 +590,19 @@ impl SessionManager {
         self.remove_session(session_id)
     }
 
-    /// List all session IDs (from both memory and disk)
+    /// List the IDs of all live sessions in the in-memory cache.
+    ///
+    /// This reflects only sessions active in the current process. For a durable
+    /// listing across process restarts, use
+    /// [`SessionStore::list`](agent_client_protocol_extras::SessionStore::list),
+    /// which backs the ACP `session/list` method.
     pub fn list_sessions(&self) -> crate::Result<Vec<SessionId>> {
-        let mut session_ids = std::collections::HashSet::new();
-
-        // Get in-memory sessions
         let sessions = self
             .sessions
             .read()
             .map_err(|_| crate::AgentError::Session("Failed to acquire read lock".to_string()))?;
 
-        for id in sessions.keys() {
-            session_ids.insert(*id);
-        }
-
-        drop(sessions); // Release lock before disk I/O
-
-        // Get sessions from disk
-        if let Some(storage_path) = &self.storage_path {
-            if storage_path.exists() {
-                if let Ok(entries) = std::fs::read_dir(storage_path) {
-                    for entry in entries.flatten() {
-                        if let Some(file_name) = entry.file_name().to_str() {
-                            if file_name.ends_with(".json") {
-                                if let Some(id_str) = file_name.strip_suffix(".json") {
-                                    if let Ok(session_id) = SessionId::parse(id_str) {
-                                        session_ids.insert(session_id);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(session_ids.into_iter().collect())
+        Ok(sessions.keys().copied().collect())
     }
 
     /// Get the number of active sessions
@@ -702,9 +622,6 @@ impl SessionManager {
         session_id: &SessionId,
         commands: Vec<agent_client_protocol::schema::AvailableCommand>,
     ) -> crate::Result<bool> {
-        // First ensure the session is loaded into memory
-        self.get_session(session_id)?;
-
         let mut sessions = self
             .sessions
             .write()
@@ -714,12 +631,6 @@ impl SessionManager {
             let commands_changed = session.has_available_commands_changed(&commands);
             if commands_changed {
                 session.update_available_commands(commands);
-
-                // Save updated session to disk
-                let session_clone = session.clone();
-                drop(sessions); // Release lock before disk I/O
-                self.save_session_to_disk(&session_clone)?;
-
                 tracing::debug!("Updated available commands for session: {}", session_id);
                 Ok(true)
             } else {
@@ -796,39 +707,6 @@ impl Default for SessionManager {
 mod tests {
     use super::*;
     use std::time::Duration;
-
-    /// Build a `SessionManager` whose storage path lives inside a fresh
-    /// `TempDir` (leaked so the directory survives the manager).
-    ///
-    /// `SessionManager::new()` defaults to `current_dir().join(".swissarmyhammer/sessions")`,
-    /// which (a) writes session files into the real source tree when tests run
-    /// inside the repo and (b) is shared across parallel tests — counts and
-    /// listings then depend on what other tests happen to be running. Tests
-    /// that assert on storage state must use an isolated directory.
-    fn create_test_session_manager() -> SessionManager {
-        let temp_dir = tempfile::TempDir::new().expect("create temp dir for session storage");
-        let storage_path = temp_dir.path().to_path_buf();
-        // Keep the directory alive for the test by leaking the TempDir. The OS
-        // cleans up `/tmp` and `/var/folders/...` between reboots.
-        std::mem::forget(temp_dir);
-        SessionManager::new().with_storage_path(Some(storage_path))
-    }
-
-    /// Build a `TerminalManager` with terminal capability already advertised.
-    ///
-    /// Mirrors `create_test_terminal_manager` in `terminal_manager::tests` and
-    /// `tools::tests`; needed wherever a test exercises a code path that calls
-    /// `validate_terminal_capability` before reaching its actual assertions.
-    async fn create_test_terminal_manager_with_caps() -> crate::terminal_manager::TerminalManager {
-        let manager = crate::terminal_manager::TerminalManager::new();
-        let test_capabilities = agent_client_protocol::schema::ClientCapabilities::new()
-            .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
-                .read_text_file(true)
-                .write_text_file(true))
-            .terminal(true);
-        manager.set_client_capabilities(test_capabilities).await;
-        manager
-    }
 
     // SessionId tests
     #[test]
@@ -1083,10 +961,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_session_with_cleanup() {
-        use crate::terminal_manager::TerminalCreateParams;
+        use crate::terminal_manager::{TerminalCreateParams, TerminalManager};
 
-        let manager = create_test_session_manager();
-        let terminal_manager = create_test_terminal_manager_with_caps().await;
+        let manager = SessionManager::new();
+        let terminal_manager = TerminalManager::new();
+        // Terminal operations are gated behind the client `terminal` capability,
+        // which a real client declares during `initialize`.
+        terminal_manager
+            .set_client_capabilities(
+                agent_client_protocol::schema::ClientCapabilities::new().terminal(true),
+            )
+            .await;
         let cwd = std::env::current_dir().unwrap();
         let session_id = manager.create_session(cwd, None).unwrap();
         let session_id_str = session_id.to_string();
@@ -1132,10 +1017,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_session_with_cleanup_multiple_terminals() {
-        use crate::terminal_manager::TerminalCreateParams;
+        use crate::terminal_manager::{TerminalCreateParams, TerminalManager};
 
-        let manager = create_test_session_manager();
-        let terminal_manager = create_test_terminal_manager_with_caps().await;
+        let manager = SessionManager::new();
+        let terminal_manager = TerminalManager::new();
+        // Terminal operations are gated behind the client `terminal` capability,
+        // which a real client declares during `initialize`.
+        terminal_manager
+            .set_client_capabilities(
+                agent_client_protocol::schema::ClientCapabilities::new().terminal(true),
+            )
+            .await;
         let cwd = std::env::current_dir().unwrap();
         let session_id = manager.create_session(cwd, None).unwrap();
         let session_id_str = session_id.to_string();
@@ -1215,11 +1107,7 @@ mod tests {
 
     #[test]
     fn test_list_sessions() {
-        // Use an isolated storage directory so `list_sessions()` doesn't pick
-        // up stale `.json` files written by other tests (or worse, by a real
-        // run in this checkout) sharing the default `.swissarmyhammer/sessions`
-        // path.
-        let manager = create_test_session_manager();
+        let manager = SessionManager::new();
         let cwd = std::env::current_dir().unwrap();
 
         // Initially empty

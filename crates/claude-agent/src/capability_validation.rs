@@ -159,9 +159,11 @@ impl CapabilityValidator {
     /// * `Err(SessionSetupError::CapabilityFormatError)` if validation fails
     ///
     /// # Errors
-    /// Returns `CapabilityFormatError` if:
-    /// - Meta is not a JSON object
-    /// - Known meta capabilities (`streaming`, `notifications`, `progress`) have wrong types (must be boolean)
+    /// Returns `CapabilityFormatError` if known meta capabilities (`streaming`,
+    /// `notifications`, `progress`) have wrong types (must be boolean).
+    ///
+    /// The `meta` field is already typed as a JSON object map by the protocol
+    /// schema, so it cannot be a non-object value.
     ///
     /// Unknown meta capabilities are logged but don't fail validation (lenient approach for forward compatibility).
     fn validate_client_meta_capabilities(
@@ -202,11 +204,10 @@ impl CapabilityValidator {
     /// * `Err(SessionSetupError::CapabilityFormatError)` if validation fails
     ///
     /// # Errors
-    /// Returns `CapabilityFormatError` if:
-    /// - fs.meta field (if present) is not a JSON object
-    ///
-    /// The boolean fields (`read_text_file`, `write_text_file`) are always valid.
-    /// Unknown fs.meta capabilities are logged but don't fail validation.
+    /// Currently never returns an error: the `fs.meta` field is already typed as
+    /// a JSON object map by the protocol schema, and the boolean fields
+    /// (`read_text_file`, `write_text_file`) are always valid. Unknown `fs.meta`
+    /// capabilities are logged but don't fail validation.
     fn validate_client_filesystem_capabilities(
         &self,
         fs_caps: &agent_client_protocol::schema::FileSystemCapabilities,
@@ -810,34 +811,6 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_client_capabilities_with_invalid_meta_type() {
-        // The schema crate now types `meta` as `Option<Map<String, Value>>`, so a
-        // non-object meta cannot reach `validate_client_capabilities` — the type
-        // system rejects it before we get there. Exercise the underlying
-        // `validate_capability_format` directly to confirm the object check still
-        // works.
-        let validator = CapabilityValidator::new();
-        let result = validator.validate_capability_format(
-            "meta",
-            &serde_json::json!("not_an_object"),
-            "object",
-        );
-        assert!(result.is_err());
-
-        match result {
-            Err(SessionSetupError::CapabilityFormatError {
-                capability_name,
-                expected_format,
-                ..
-            }) => {
-                assert_eq!(capability_name, "meta");
-                assert_eq!(expected_format, "object");
-            }
-            _ => panic!("Expected CapabilityFormatError for invalid meta type"),
-        }
-    }
-
-    #[test]
     fn test_validate_client_capabilities_with_invalid_meta_value() {
         use agent_client_protocol::schema::{ClientCapabilities, FileSystemCapabilities};
 
@@ -914,34 +887,6 @@ mod tests {
 
         let result = validator.validate_client_capabilities(Some(&capabilities));
         assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_validate_client_capabilities_with_invalid_fs_meta() {
-        // As with `meta`, the schema crate now types `fs.meta` as
-        // `Option<Map<String, Value>>`, so a non-object fs.meta cannot reach
-        // `validate_client_capabilities`. Exercise the underlying
-        // `validate_capability_format` directly to confirm the object check
-        // still works for the `fs.meta` capability name.
-        let validator = CapabilityValidator::new();
-        let result = validator.validate_capability_format(
-            "fs.meta",
-            &serde_json::json!("not_an_object"),
-            "object",
-        );
-        assert!(result.is_err());
-
-        match result {
-            Err(SessionSetupError::CapabilityFormatError {
-                capability_name,
-                expected_format,
-                ..
-            }) => {
-                assert_eq!(capability_name, "fs.meta");
-                assert_eq!(expected_format, "object");
-            }
-            _ => panic!("Expected CapabilityFormatError for invalid fs.meta type"),
-        }
     }
 
     #[test]

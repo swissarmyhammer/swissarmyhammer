@@ -29,12 +29,24 @@
 //! - [`test_mcp_server`] — an in-process MCP test server with a notification
 //!   capture proxy ([`start_test_mcp_server_with_capture`]) for use in the
 //!   conformance fixture-recording flow.
+//! - [`raw_messages`] — the shared per-session [`RawMessageManager`] that
+//!   records raw JSON-RPC frames to `<acp-session-dir>/raw.jsonl`, plus the
+//!   [`acp_session_dir`] helper resolving the per-session state directory.
+//! - [`session_store`] — the agent-neutral session-persistence layer
+//!   ([`SessionRecord`], [`SessionStore`], [`ResumeStrategy`]) backing ACP
+//!   `session/list`, `session/load`, and `session/resume`.
+//! - [`session_title`] — the agent-neutral session-title derivation helper and
+//!   the shared trigger/emission contract for the built-in
+//!   `SessionUpdate::SessionInfoUpdate` rename mechanism.
 
 pub mod fixture;
 pub mod hook_config;
 pub mod hookable_agent;
 pub mod playback;
+pub mod raw_messages;
 pub mod recording;
+pub mod session_store;
+pub mod session_title;
 pub mod test_mcp_server;
 pub mod tracing_agent;
 
@@ -50,6 +62,7 @@ pub use hook_config::{
 };
 pub use hookable_agent::{hookable_agent_from_config, HookableAgent};
 pub use playback::PlaybackAgent;
+pub use raw_messages::{acp_session_dir, RawMessageManager};
 pub use test_mcp_server::{start_test_mcp_server_with_capture, TestMcpServer};
 // NOTE: The A3 task acceptance criteria mentioned `RecordedEvent` alongside
 // `RecordedCall`/`RecordedSession`, but no `RecordedEvent` type ever existed
@@ -59,6 +72,13 @@ pub use test_mcp_server::{start_test_mcp_server_with_capture, TestMcpServer};
 // surface of the recording module, so future reviewers shouldn't go hunting
 // for a phantom `RecordedEvent`.
 pub use recording::{RecordedCall, RecordedSession, RecordingAgent, RecordingFlushHandle};
+pub use session_store::{
+    ResumeStrategy, SessionListPage, SessionRecord, SessionStore, SessionStoreError,
+};
+pub use session_title::{
+    normalize_title, title_from_first_user_message, SESSION_TITLE_MAX_CHARS,
+    TITLE_GENERATION_INSTRUCTION,
+};
 pub use tracing_agent::{trace_notifications, TracingAgent};
 
 // Re-export MCP notification types for convenience

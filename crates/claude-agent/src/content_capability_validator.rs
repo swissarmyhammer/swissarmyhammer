@@ -30,43 +30,62 @@ pub enum ContentCapabilityError {
 }
 
 impl ContentCapabilityError {
-    /// Convert to ACP-compliant JSON-RPC error with structured data
-    pub fn to_acp_error(&self) -> Value {
+    /// Render the error as an ACP-compliant JSON-RPC error.
+    ///
+    /// Built through [`crate::acp_error::invalid_params`] so the code (`-32602`,
+    /// Invalid params) is named rather than a raw integer. The structured `data`
+    /// shape matches llama-agent's `ContentCapabilityError::to_acp_error`, so a
+    /// client sees an identical error contract from both agents.
+    pub fn to_acp_error(&self) -> agent_client_protocol::Error {
         match self {
             ContentCapabilityError::UnsupportedContentType {
                 content_type,
                 declared_capability,
                 required_capability,
                 supported_types,
-            } => json!({
-                "code": -32602,
-                "message": format!("Invalid content type: agent does not support {} content", content_type),
-                "data": {
-                    "contentType": content_type,
-                    "declaredCapability": declared_capability,
-                    "required": required_capability,
-                    "supportedTypes": supported_types
-                }
-            }),
-            ContentCapabilityError::ValidationFailed { reason } => json!({
-                "code": -32602,
-                "message": format!("Content validation failed: {}", reason),
-                "data": {
-                    "reason": reason
-                }
-            }),
+            } => crate::acp_error::invalid_params(format!(
+                "Invalid content type: agent does not support {} content",
+                content_type
+            ))
+            .data(json!({
+                "contentType": content_type,
+                "declaredCapability": declared_capability,
+                "required": required_capability,
+                "supportedTypes": supported_types
+            })),
+            ContentCapabilityError::ValidationFailed { reason } => {
+                crate::acp_error::invalid_params(format!("Content validation failed: {}", reason))
+                    .data(json!({ "reason": reason }))
+            }
             ContentCapabilityError::MultipleViolations {
                 violation_count,
                 violations,
-            } => json!({
-                "code": -32602,
-                "message": format!("Multiple content capability violations: {} issues", violation_count),
-                "data": {
-                    "violationCount": violation_count,
-                    "violations": violations.iter().map(|v| v.to_acp_error()).collect::<Vec<_>>()
-                }
-            }),
+            } => crate::acp_error::invalid_params(format!(
+                "Multiple content capability violations: {} issues",
+                violation_count
+            ))
+            .data(json!({
+                "violationCount": violation_count,
+                "violations": violations
+                    .iter()
+                    .map(ContentCapabilityError::to_acp_error_data)
+                    .collect::<Vec<_>>()
+            })),
         }
+    }
+
+    /// The JSON-RPC error object as a plain [`serde_json::Value`].
+    ///
+    /// Used to embed each nested violation inside a `MultipleViolations`
+    /// payload. The shape (`code` / `message` / `data`) mirrors a full JSON-RPC
+    /// error object and matches llama-agent's `to_acp_error_data`.
+    fn to_acp_error_data(&self) -> Value {
+        let acp = self.to_acp_error();
+        json!({
+            "code": i32::from(acp.code),
+            "message": acp.message,
+            "data": acp.data,
+        })
     }
 }
 
@@ -283,7 +302,6 @@ mod tests {
             title: &str,
             size_bytes: u64,
         ) -> ContentBlock {
-            // ResourceLink::new takes (name, uri).
             ContentBlock::ResourceLink(
                 ResourceLink::new(name, uri)
                     .description(description)
@@ -493,12 +511,13 @@ mod tests {
         };
 
         let acp_error = error.to_acp_error();
-        assert_eq!(acp_error["code"], -32602);
-        assert!(acp_error["message"]
-            .as_str()
-            .unwrap()
-            .contains("image content"));
-        assert_eq!(acp_error["data"]["contentType"], "image");
-        assert_eq!(acp_error["data"]["declaredCapability"], false);
+        assert_eq!(
+            acp_error.code,
+            agent_client_protocol::ErrorCode::InvalidParams
+        );
+        assert!(acp_error.message.contains("image content"));
+        let data = acp_error.data.expect("error data present");
+        assert_eq!(data["contentType"], "image");
+        assert_eq!(data["declaredCapability"], false);
     }
 }

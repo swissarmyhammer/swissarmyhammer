@@ -1929,27 +1929,6 @@ mod tests {
         session_id("01ARZ3NDEKTSV4RRFFQ69G5FAV")
     }
 
-    /// Build a `TerminalManager` with client capabilities set for terminal operations.
-    ///
-    /// `create_terminal_with_command` (and `create_terminal`) call
-    /// `validate_terminal_capability` first, which rejects the request unless the
-    /// client has sent an initialize request advertising `terminal = true`. Tests
-    /// that drive `TerminalManager` directly must replicate that handshake; this
-    /// helper does so the same way `create_test_handler_with_permissions` sets up
-    /// capabilities for `ToolCallHandler`.
-    async fn create_test_terminal_manager() -> Arc<TerminalManager> {
-        let terminal_manager = Arc::new(TerminalManager::new());
-        let test_capabilities = agent_client_protocol::schema::ClientCapabilities::new()
-            .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
-                .read_text_file(true)
-                .write_text_file(true))
-            .terminal(true);
-        terminal_manager
-            .set_client_capabilities(test_capabilities)
-            .await;
-        terminal_manager
-    }
-
     fn create_test_handler_with_session(
         permissions: ToolPermissions,
         session_manager: std::sync::Arc<crate::session::SessionManager>,
@@ -3051,7 +3030,14 @@ mod tests {
 
         let temp_dir = TempDir::new().unwrap();
         let session_manager = Arc::new(SessionManager::new());
-        let terminal_manager = create_test_terminal_manager().await;
+        let terminal_manager = Arc::new(TerminalManager::new());
+        // Terminal operations are gated behind the client `terminal` capability,
+        // which a real client declares during `initialize`.
+        terminal_manager
+            .set_client_capabilities(
+                agent_client_protocol::schema::ClientCapabilities::new().terminal(true),
+            )
+            .await;
 
         // Create test session
         let session_id = session_manager
@@ -3110,7 +3096,14 @@ mod tests {
 
         let temp_dir = TempDir::new().unwrap();
         let session_manager = Arc::new(SessionManager::new());
-        let terminal_manager = create_test_terminal_manager().await;
+        let terminal_manager = Arc::new(TerminalManager::new());
+        // Terminal operations are gated behind the client `terminal` capability,
+        // which a real client declares during `initialize`.
+        terminal_manager
+            .set_client_capabilities(
+                agent_client_protocol::schema::ClientCapabilities::new().terminal(true),
+            )
+            .await;
 
         // Create test session
         let session_id = session_manager
@@ -3147,7 +3140,14 @@ mod tests {
         use crate::session::SessionManager;
 
         let session_manager = Arc::new(SessionManager::new());
-        let terminal_manager = create_test_terminal_manager().await;
+        let terminal_manager = Arc::new(TerminalManager::new());
+        // Grant the terminal capability so creation reaches the session-ID
+        // validation this test is asserting on, rather than the capability gate.
+        terminal_manager
+            .set_client_capabilities(
+                agent_client_protocol::schema::ClientCapabilities::new().terminal(true),
+            )
+            .await;
 
         let params = TerminalCreateParams {
             session_id: "invalid-session-id".to_string(),
@@ -3163,8 +3163,15 @@ mod tests {
             .await;
 
         assert!(result.is_err());
+        // ACP session IDs are opaque strings: an id this agent did not mint
+        // (a non-ULID string) cannot match any live session, so it is treated
+        // exactly like any other session lookup miss — "Session not found"
+        // rather than a separate "invalid format" error.
         let error = result.unwrap_err().to_string();
-        assert!(error.contains("Invalid session ID format"));
+        assert!(
+            error.contains("Session not found"),
+            "expected a session-not-found error, got: {error}"
+        );
     }
 
     #[tokio::test]
@@ -3172,7 +3179,14 @@ mod tests {
         use crate::session::SessionManager;
 
         let session_manager = Arc::new(SessionManager::new());
-        let terminal_manager = create_test_terminal_manager().await;
+        let terminal_manager = Arc::new(TerminalManager::new());
+        // Grant the terminal capability so creation reaches the session-ID
+        // validation this test is asserting on, rather than the capability gate.
+        terminal_manager
+            .set_client_capabilities(
+                agent_client_protocol::schema::ClientCapabilities::new().terminal(true),
+            )
+            .await;
 
         let params = TerminalCreateParams {
             session_id: ulid::Ulid::new().to_string(), // Valid ULID but non-existent
@@ -3322,7 +3336,14 @@ mod tests {
 
         let temp_dir = TempDir::new().unwrap();
         let session_manager = Arc::new(SessionManager::new());
-        let terminal_manager = create_test_terminal_manager().await;
+        let terminal_manager = Arc::new(TerminalManager::new());
+        // Terminal operations are gated behind the client `terminal` capability,
+        // which a real client declares during `initialize`.
+        terminal_manager
+            .set_client_capabilities(
+                agent_client_protocol::schema::ClientCapabilities::new().terminal(true),
+            )
+            .await;
         let handler = TerminalMethodHandler::new(terminal_manager.clone(), session_manager.clone());
 
         // Create test session
@@ -3830,11 +3851,11 @@ mod tests {
             .update_tool_call_report(&session_id, &report.tool_call_id, |r| {
                 r.update_status(ToolCallStatus::InProgress);
                 r.add_content(ToolCallContent::Content {
-                    content: Box::new(agent_client_protocol::schema::ContentBlock::Text(
+                    content: agent_client_protocol::schema::ContentBlock::Text(
                         agent_client_protocol::schema::TextContent::new(
                             "Reading file...".to_string(),
                         ),
-                    )),
+                    ),
                 });
             })
             .await;
@@ -3930,9 +3951,9 @@ mod tests {
 
         // Add different types of content
         report.add_content(ToolCallContent::Content {
-            content: Box::new(agent_client_protocol::schema::ContentBlock::Text(
+            content: agent_client_protocol::schema::ContentBlock::Text(
                 agent_client_protocol::schema::TextContent::new("Operation completed".to_string()),
-            )),
+            ),
         });
 
         report.add_content(ToolCallContent::Diff {
@@ -3953,7 +3974,7 @@ mod tests {
         // Test content types
         match &report.content[0] {
             ToolCallContent::Content { content } => {
-                if let agent_client_protocol::schema::ContentBlock::Text(text) = content.as_ref() {
+                if let agent_client_protocol::schema::ContentBlock::Text(text) = content {
                     assert_eq!(text.text, "Operation completed");
                 } else {
                     panic!("Expected text content");

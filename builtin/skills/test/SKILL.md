@@ -11,6 +11,8 @@ metadata:
 ---
 
 {% include "_partials/coding-standards" %}
+{% include "_partials/code-context-checkpoints" %}
+{% include "_partials/architecture-awareness" %}
 
 # Test
 
@@ -33,6 +35,8 @@ Find any skipped or ignored tests. Fix or delete each one — skipped tests are 
 ### 4. Fix every failure and warning
 
 Fix every failure and every warning, re-running after each fix. Understanding why something fails is not the end — it's the start. The reason it fails is the path to making it pass. Follow that path.
+
+Before editing anything, trace the failure with `code_context`: `get symbol` on the failing function or type to read it, `get callgraph` (inbound) to see what reaches it, and `get blastradius` on the file before you change it so the fix does not break a passing test elsewhere.
 
 ### 5. Track failures on the kanban board
 
@@ -58,6 +62,7 @@ Report: pass/fail, what was fixed, what's left. If you get stuck, report what yo
 - ALL compiler and linter warnings must be resolved. Warnings are bugs that haven't bitten yet.
 - Skipped tests are not acceptable. A skipped test is either broken (fix it) or dead (delete it).
 - Every failing test is your responsibility to fix. No exceptions.
+- When a fix adds new code or relocates existing code, place it per `ARCHITECTURE.md` if one exists — a fix that passes but violates a documented boundary is not done.
 - Do not add `#[allow(...)]`, `@suppress`, `// eslint-disable`, or any other mechanism to silence warnings.
 - Do not add `#[ignore]` or `skip` to make a test stop failing.
 

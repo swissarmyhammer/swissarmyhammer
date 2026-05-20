@@ -24,9 +24,11 @@ serde_yaml_ng.workspace = true
 regex.workspace = true
 model-context-protocol-extras = { workspace = true }
 swissarmyhammer-common = { workspace = true }
+swissarmyhammer-directory = { workspace = true }
 
 [dev-dependencies]
 avp-common = { workspace = true }
+serial_test = { workspace = true }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["sync", "rt", "net", "process", "time", "macros"] }
 
