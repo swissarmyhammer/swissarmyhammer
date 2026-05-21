@@ -12,32 +12,33 @@ title: 'Builtin plugin: entity + clipboard commands (port entity.yaml)'
 ---
 ## What
 
-Port `crates/swissarmyhammer-commands/builtin/commands/entity.yaml` to a builtin TypeScript plugin. This is the cross-cutting entity CRUD layer plus clipboard ops.
+Port `crates/swissarmyhammer-commands/builtin/commands/entity.yaml` to a builtin TypeScript plugin. Cross-cutting entity CRUD + clipboard — all routing to the new generic **`entity` MCP server** (see the entity-service plan), not `kanban`.
 
-Commands (8): `entity.add`, `entity.update_field`, `entity.delete`, `entity.archive`, `entity.unarchive`, `entity.cut`, `entity.copy`, `entity.paste` (plus the dynamic `entity.add:type` variants — those are runtime-expanded; figure out if they belong here or stay dynamic, see notes).
+Commands (8): `entity.add`, `entity.update_field`, `entity.delete`, `entity.archive`, `entity.unarchive`, `entity.cut`, `entity.copy`, `entity.paste`.
 
 Files:
-- `builtin/plugins/entity-commands/index.ts` — entry; `load()` calls `ensureServices(this, ["commands"])` then `registerCommands(this, [...])` with all 8 cross-cutting entity commands
+- `builtin/plugins/entity-commands/index.ts` — `load()` calls `ensureServices(this, ["commands", "entity"])` then `registerCommands(this, [...])`.
 
-These commands use `from: target` rather than `from: scope_chain` — they operate on whatever entity the user is targeting. Preserve this exactly in the `params` field of the registration. Frontend dispatch resolves `target` before invocation.
+Backend routing (all → `entity` server):
+- `entity.add` → `entity` `AddEntity { type, fields }`
+- `entity.update_field` → `entity` `UpdateField { type, id, field, value }`
+- `entity.delete` → `entity` `DeleteEntity`
+- `entity.archive` / `entity.unarchive` → `entity` `ArchiveEntity` / `UnarchiveEntity`
+- `entity.cut` / `entity.copy` / `entity.paste` → `entity` `Cut` / `Copy` / `Paste`
 
-Dynamic `entity.add:type` commands: today the dispatcher generates these at runtime from registered entity types. Two options to evaluate during implementation:
-1. The plugin registers a static `entity.add` and the frontend's palette UI synthesizes the per-type variants by reading the entity-type registry. (Simpler — keeps the registry small.)
-2. The plugin enumerates entity types at load and registers one per type. (Discoverable via `list command` — preferable if other code wants to ask "what entity types can I create?")
+These commands use `from: target` (operate on whatever entity the user targets); preserve that in `params`. Dynamic `entity.add:type` variants are synthesized client-side by the palette from the entity-type registry (option 1) unless a test shows a consumer needs the static enumeration.
 
-Pick option 1 unless an integration test reveals a consumer that needs the static enumeration.
+Drag-vs-paste distinction (memory: drag-vs-paste) preserved — external paste creates via PasteMatrix (the `entity` server's `Paste`), not the internal-drag property mutation.
 
 ## Acceptance Criteria
 - [ ] `builtin/plugins/entity-commands/` discoverable
-- [ ] All 8 cross-cutting entity commands registered with original metadata
-- [ ] `entity.paste`, `entity.cut`, `entity.copy` work end-to-end against the entity store
-- [ ] Drag-vs-paste distinction (see memory: drag-vs-paste) preserved — internal drag is property mutation, external paste creates via PasteMatrix
+- [ ] All 8 commands registered with original metadata
+- [ ] Each routes to the `entity` server; CRUD + archive + clipboard work end-to-end and are undoable via the shared stack
+- [ ] `load()` calls `ensureServices(this, ["commands", "entity"])` before `registerCommands`
 - [ ] Metadata fidelity per YAML baseline
-- [ ] `load()` calls `ensureServices` before `registerCommands` (the convention)
 
 ## Tests
-- [ ] `crates/swissarmyhammer-command-service/tests/integration/builtin_entity_commands_e2e.rs` — load plugin; assert all 8 commands registered; exercise the CRUD round-trip (add → update_field → delete → unarchive)
-- [ ] Clipboard round-trip test: copy a task; paste; assert duplicate exists in store
+- [ ] `crates/swissarmyhammer-command-service/tests/integration/builtin_entity_commands_e2e.rs` — load plugin; assert all 8 registered; CRUD round-trip (add → update_field → delete → unarchive) via `entity`; clipboard copy→paste creates a duplicate
 - [ ] Metadata fidelity table-test
 - [ ] `cargo test -p swissarmyhammer-command-service --test integration builtin_entity_commands_e2e` passes
 

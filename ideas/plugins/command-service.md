@@ -248,12 +248,20 @@ as MCP servers. Per the "fewer, consolidated servers" decision:
 
 | Server | Status | Backs |
 | ------ | ------ | ----- |
-| `kanban` | exists, **extended** | task/column/tag/project/attachment CRUD, move/complete/tag/untag; new work adds `archive/unarchive` + clipboard `cut/copy/paste` (wraps `PasteMatrix`) |
+| `entity` | **new** | **generic** face over the entity kernel: get/list/add/update/delete + archive/unarchive + clipboard `cut/copy/paste` + **search** for *any* type (wraps `EntityContext`/`EntityCache` + `PasteMatrix` + `EntitySearchIndex`) |
+| `kanban` | exists, unchanged surface | **domain** face over the SAME kernel: keeps ALL its ops (`add/update/delete/get` task/column/tag/project/actor, `move task`, `next/complete`, `assign`, `tag/untag`, board lifecycle); generic CRUD passes through to the kernel. **Nothing removed** |
 | `views` | **new** | `perspective.*` + `view.set` (wraps `PerspectiveContext`/`ViewsContext`) |
-| `ui_state` | **new** | `ui.*` + `settings.keymap.*` + `drag.*` + `app.command/palette/search/dismiss` (wraps the relocated `UIState`) |
+| `ui_state` | **new** | `ui.*` (minus setFocus) + `settings.keymap.*` + `drag.*` + `app.command/palette/search/dismiss` (wraps the relocated `UIState`) |
 | `window` | **new** | `window.new` + `file.*` board lifecycle + `attachment.open/reveal` (wraps tauri `AppHandle` + OS file ops) |
 | `app` | **new** | `app.quit/about/help` only — genuine app-shell actions |
 | `store` | **new** | **`undo`/`redo`** (unified stack), transaction grouping, per-item history; store-scoped ops take a `store` param (wraps the shared `StoreContext`) |
+| `focus` | **new** (spatial-nav project) | `ui.setFocus` + spatial nav (wraps `SpatialRegistry`/`SpatialState`) |
+
+**Kernel + two faces:** `EntityContext` is the entity kernel; `entity` is the
+generic, type-agnostic face (incl. search), and `kanban` is the domain face that
+**keeps its full operation surface** and delegates generic CRUD to the kernel.
+Nothing is removed from kanban; `entity` is additive. Search is an entity
+capability, not a separate server.
 
 **Undo/redo is cross-cutting, and lives on its own `store` server — not `app`.**
 `store.undo`/`store.redo` operate on the single unified stack (the
@@ -278,11 +286,11 @@ plus each backend its callbacks invoke.
 | Plugin dir | Commands | `ensureServices` | Source YAML(s) |
 | ---------- | -------: | ---------------- | -------------- |
 | `task-commands` | 3 | `[commands, kanban]` | task.yaml |
-| `kanban-misc-commands` | 5 | `[commands, kanban, window, views]` | column, attachment, tag, view |
+| `kanban-misc-commands` | 5 | `[commands, kanban, entity, window, views]` | column, attachment, tag, view |
 | `file-commands` | 4 | `[commands, window]` | file.yaml |
 | `perspective-commands` | 17 | `[commands, views]` | perspective.yaml |
-| `entity-commands` | 8 | `[commands, kanban]` | entity.yaml |
-| `ui-commands` | 10 | `[commands, ui_state, window]` | ui.yaml (incl. `window.new`) |
+| `entity-commands` | 8 | `[commands, entity]` | entity.yaml |
+| `ui-commands` | 10 | `[commands, ui_state, window, focus]` | ui.yaml (incl. `window.new`) |
 | `app-shell-commands` | 15 | `[commands, app, ui_state, store]` | app, settings, drag |
 
 A checked-in `crates/swissarmyhammer-command-service/tests/baseline/plugins.yaml`
@@ -322,8 +330,8 @@ per-task breakdown. Tiers (parallel within a tier):
 - **Tier 0 (foundational):** `store-service` (shared substrate + `store` MCP),
   `command-service` (the engine: verbs, override stack, callbacks, SDK helpers,
   execute's txn-bracket).
-- **Tier 1:** `command-backends` (`views`, `ui_state`, `window`, `app`, kanban
-  extension).
+- **Tier 1:** `entity-service` (generic `entity` MCP — CRUD/clipboard/archive/
+  search), `command-backends` (`views`, `ui_state`, `window`, `app`).
 - **Tier 2:** `builtin-commands` (catalog + 7 plugins + frontend dispatch),
   `command-events` (notification surface + undo/redo propagation + frontend
   subscription).
@@ -331,6 +339,6 @@ per-task breakdown. Tiers (parallel within a tier):
   `swissarmyhammer-commands` and all 12 YAMLs; `cargo build/test --workspace` +
   the full-baseline e2e are the gate).
 
-Platform prerequisites live in `plugin-arch`: idempotent server registration
-(so plugins can `ensureServices` the same server) and the already-merged
-`operation_tool!` macro.
+Prerequisites in other projects: `plugin-arch` — idempotent server registration
+(so plugins can `ensureServices` the same server) + the already-merged
+`operation_tool!` macro; `spatial-nav` — a `focus` MCP server for `ui.setFocus`.

@@ -13,32 +13,31 @@ title: 'Builtin plugin: column/attachment/tag/view commands (port 4 small YAMLs)
 ---
 ## What
 
-Port the four small kanban-domain YAML files to a single builtin TypeScript plugin (they're small individually — 1-2 commands each — and tightly coupled to the same kanban server, so bundling reduces plugin overhead).
+Port the four small kanban-domain YAML files to one builtin TypeScript plugin (5 commands).
 
-Source YAMLs (5 commands total):
-- `crates/swissarmyhammer-kanban/builtin/commands/column.yaml` — `column.reorder`
-- `crates/swissarmyhammer-kanban/builtin/commands/attachment.yaml` — `attachment.open`, `attachment.reveal`
-- `crates/swissarmyhammer-kanban/builtin/commands/tag.yaml` — `tag.update`
-- `crates/swissarmyhammer-kanban/builtin/commands/view.yaml` — `view.set`
+Source YAMLs: `column.yaml` (`column.reorder`), `attachment.yaml` (`attachment.open`, `attachment.reveal`), `tag.yaml` (`tag.update`), `view.yaml` (`view.set`).
 
 Files:
-- `builtin/plugins/kanban-misc-commands/index.ts` — entry; `load()` calls `ensureServices(this, ["commands"])` then `registerCommands(this, [...])` with all 5 commands grouped by their domain (column, attachment, tag, view)
+- `builtin/plugins/kanban-misc-commands/index.ts` — `load()` calls `ensureServices(this, ["commands", "kanban", "window", "views"])` then `registerCommands(this, [...])`.
 
-Each registration must preserve the original YAML's metadata 1:1 (keys, scope, params, undoable, context_menu, tab_button). The implementation pattern matches `task-commands`: callbacks call into the kanban MCP server.
+Backend routing:
+- `column.reorder` → **kanban** `update column` (positioning is a kanban domain op)
+- `tag.update` → **kanban** `update tag` (kanban keeps its typed domain ops; it delegates generic CRUD to the entity kernel internally)
+- `attachment.open` → **window** `OpenPath`; `attachment.reveal` → **window** `RevealPath`
+- `view.set` → **views** `SetView`
 
-`attachment.open` and `attachment.reveal` may need to call out to a `files` or `shell` MCP server (whichever the host exposes for opening files in the OS default app and revealing in Finder). Reuse whatever the current YAML-driven implementation calls.
+Each registration preserves the YAML metadata 1:1 (keys, scope, params, undoable, context_menu, tab_button).
 
 ## Acceptance Criteria
-- [ ] `builtin/plugins/kanban-misc-commands/` discoverable by the builtin layer
-- [ ] After load, all 5 commands appear in `list command` with metadata matching the YAML baselines
-- [ ] `execute command` for each of the 5 ids produces the same observable effect as today's YAML-driven version
-- [ ] `available` reflects each command's original preconditions
-- [ ] `load()` calls `ensureServices` before `registerCommands` (the convention)
+- [ ] `builtin/plugins/kanban-misc-commands/` discoverable
+- [ ] All 5 commands registered with metadata matching the YAML baselines
+- [ ] Each routes to the backend above and produces the same observable effect as today
+- [ ] `load()` calls `ensureServices` before `registerCommands`
 
 ## Tests
-- [ ] `crates/swissarmyhammer-command-service/tests/integration/builtin_kanban_misc_e2e.rs` — load `kanban-misc-commands`; assert all 5 commands registered with correct metadata; execute each and observe effect
-- [ ] Metadata-fidelity tests for each command (one assertion per YAML field)
+- [ ] `crates/swissarmyhammer-command-service/tests/integration/builtin_kanban_misc_e2e.rs` — load; assert 5 registered with metadata; execute each and observe effect (column reorder + tag.update via kanban, attachment via window, view.set via views)
+- [ ] Metadata-fidelity tests per command
 - [ ] `cargo test -p swissarmyhammer-command-service --test integration builtin_kanban_misc_e2e` passes
 
 ## Workflow
-- Use `/tdd` — metadata fidelity tests first; then implementation.
+- Use `/tdd` — metadata fidelity first.

@@ -9,19 +9,20 @@ Goal: replace the YAML command architecture (`swissarmyhammer-commands` +
 commands are TypeScript plugins, on the swissarmyhammer plugin platform. Source
 design: [`../command-service.md`](../command-service.md).
 
-## The six plans (build order)
+## The seven plans (build order)
 
 ```
 Tier 0 (foundational, parallel)
   store-service ────────────┐
   command-service (engine) ─┤
                             │
-Tier 1 (domain servers)     │
-  command-backends ◄────────┘   (views + kanban-ext need store-service)
+Tier 1 (data + domain servers)
+  entity-service ◄──────────┤   (generic entity CRUD/clipboard/search; needs store-service)
+  command-backends ◄────────┘   (views needs store-service; window/app/ui_state independent)
                             │
 Tier 2 (parallel)           │
-  builtin-commands ◄────────┤   (needs command-service + command-backends)
-  command-events ◄──────────┘   (needs store-service + command-service + backends)
+  builtin-commands ◄────────┤   (needs command-service + entity-service + command-backends)
+  command-events ◄──────────┘   (needs store-service + command-service + entity + backends)
                             │
 Tier 3 (terminal)           │
   command-cutover ◄─────────┘   (needs builtin-commands + command-events)
@@ -31,16 +32,28 @@ Tier 3 (terminal)           │
 | ---- | ---------- | ----: | ------- |
 | [Store Service](./01-store-service.md) | `store-service` | 2 | Shared `StoreContext` substrate + `store` MCP (undo/redo/txn/history) |
 | [Command Service (engine)](./02-command-service-engine.md) | `command-service` | 7 | The Command MCP engine: verbs, registry/override-stack, callbacks, SDK helpers |
-| [Command Backends](./03-command-backends.md) | `command-backends` | 5 | Domain servers commands call: views, ui_state, window, app, kanban-ext |
+| [Entity Service](./07-entity-service.md) | `entity-service` | 1 | Generic `entity` MCP: type-agnostic CRUD + archive + clipboard + **search** |
+| [Command Backends](./03-command-backends.md) | `command-backends` | 4 | Domain servers: views, ui_state, window, app |
 | [Builtin Commands](./04-builtin-commands.md) | `builtin-commands` | 10 | Catalog + 7 command plugins + frontend command dispatch |
 | [Command Events](./05-command-events.md) | `command-events` | 3 | MCP notification surface, undo/redo propagation, frontend subscription |
 | [Command Cut-over](./06-command-cutover.md) | `command-cutover` | 2 | Tauri `invoke()` migration + delete the old crate/YAML |
 
-Related platform work lives in the existing **`plugin-arch`** project:
-- `01KS371KNY4YARZ67KWVSXPDFP` — make `ServerRegistry::register` idempotent for
-  same-`(name, source)` (so multiple plugins can `ensureServices` the same server).
-- `operation_tool!` macro + `generate_operations_meta` — **already merged**;
-  every operation tool here uses them.
+**Service taxonomy (kernel + two faces):** `EntityContext` is the entity kernel;
+both faces sit over it and kanban keeps its full surface.
+- **`entity`** — the *generic* face: get/list/add/update/delete, archive/unarchive,
+  clipboard cut/copy/paste, and **search**, for any type (search is an entity
+  capability, not a separate server).
+- **`kanban`** — the *domain* face: keeps ALL its ops (`add task`/`add project`/
+  `update column`/…, `move task`, `next/complete`, `assign`, `tag/untag`, board
+  lifecycle); generic CRUD delegates to the kernel. **Nothing is removed from kanban.**
+
+Related work in **other projects**:
+- `plugin-arch` · `01KS371KNY4YARZ67KWVSXPDFP` — idempotent `ServerRegistry::register`
+  (so multiple plugins can `ensureServices` the same server).
+- `plugin-arch` — `operation_tool!` macro + `generate_operations_meta` **already merged**.
+- `spatial-nav` · `01KS5MYQRB1E5HQ9JJ6TC7Z59S` — a `focus` MCP server over
+  `SpatialRegistry`/`SpatialState`; `ui.setFocus` + the `spatial_*` frontend calls
+  route to it. Owned by spatial-nav; the command plans consume it.
 
 ## Cross-cutting concepts (read once, referenced everywhere)
 
@@ -76,4 +89,6 @@ Related platform work lives in the existing **`plugin-arch`** project:
 Each plan doc has a task table: **kanban id · title · depends_on · acceptance
 one-liner**. Run `kanban list tasks --filter '$<project-id>'` (or open the
 board) and confirm: every task in the project appears here, deps match, and no
-task is orphaned. Tallies: 29 tasks across 6 plans (+1 in plugin-arch).
+task is orphaned. Tallies: **29 tasks across 7 command plans**, plus 2 related
+tasks in other projects (`plugin-arch` idempotent registration; `spatial-nav`
+focus MCP server).

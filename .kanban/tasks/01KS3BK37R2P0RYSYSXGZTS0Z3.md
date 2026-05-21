@@ -13,24 +13,26 @@ title: 'Plugin catalog: enumerate every builtin plugin + lock cut-over baseline'
 Locked-in catalog of every builtin command plugin: directory, `ensureServices`, the backend MCP server each command calls, source YAML(s), and exact command roster. Contract for every plugin-port task and the cut-over e2e test.
 
 Files to create:
-- `crates/swissarmyhammer-command-service/tests/baseline/plugins.yaml` — machine-readable mirror of this catalog.
-- `crates/swissarmyhammer-command-service/tests/baseline/mod.rs` — loader → typed `PluginSpec { dir, ensure_services, backends, commands }`.
+- `crates/swissarmyhammer-command-service/tests/baseline/plugins.yaml`
+- `crates/swissarmyhammer-command-service/tests/baseline/mod.rs` — loader → typed `PluginSpec`.
 
 ## Backend services (where the work happens)
 
-Only `kanban` exists today; the rest are net-new server tasks. All store-backed servers share ONE `Arc<StoreContext>` (the single undo substrate).
+All store-backed servers share ONE `Arc<StoreContext>` (single undo substrate). `EntityContext` is the entity **kernel**; both `entity` and `kanban` are MCP faces over it.
 
 | Server | Status | Backs |
 | ------ | ------ | ----- |
 | `commands` | built here | the registry every plugin registers into |
-| `kanban` | EXISTS (+extended) | task/column/tag/project/attachment CRUD, move/complete/tag/untag; **+ archive/unarchive + cut/copy/paste** |
+| `store` | NEW (store-service) | undo/redo (unified stack), transaction grouping, per-store history |
+| `entity` | NEW (entity-service) | **generic** MCP face over the kernel: get/list/add/update/delete + archive/unarchive + clipboard cut/copy/paste + **search**, for any type |
+| `kanban` | EXISTS (unchanged surface) | domain facade over the SAME kernel: keeps ALL its ops — `add/update/delete/get` task/column/tag/project/actor, `move task`, `next/complete task`, `assign`, `tag/untag`, board lifecycle. Generic CRUD delegates to the kernel internally |
 | `views` | NEW | perspective.* + view.set |
-| `ui_state` | NEW | ui.* + settings.keymap.* + drag.* + app.command/palette/search/dismiss |
+| `ui_state` | NEW | ui.* (minus setFocus) + settings.keymap.* + drag.* + app.command/palette/search/dismiss |
 | `window` | NEW | window.new + file.* board lifecycle + attachment.open/reveal |
-| `app` | NEW | app.quit/about/help only (app-shell) |
-| `store` | NEW | **undo/redo** (unified stack), transaction grouping, per-store history; store-scoped ops take a `store` param |
+| `app` | NEW | app.quit/about/help only |
+| `focus` | NEW (spatial-nav project) | ui.setFocus + spatial nav (SpatialRegistry/SpatialState) |
 
-`undoable` flag note: it is **declarative metadata**, not the undo gate. Undo is recorded at the store layer on every tracked write; `store.undo` reverts the last entry/group across whatever stores it touched. Change propagation: undo emits the same thin events as edits, so caches + UI react through their normal paths (see the change-propagation task).
+Notes: **kanban does not lose operations** — `entity` is an additive generic face over the shared `EntityContext` kernel; kanban keeps its full domain surface and passes generic CRUD through to the kernel. **Search is an entity capability** (on `entity`, not a separate server). `undoable` is declarative metadata, not the undo gate.
 
 ## The 7 plugins
 
@@ -51,26 +53,25 @@ Only `kanban` exists today; the rest are net-new server tasks. All store-backed 
 | `view.set` | — | — | — | views `SetView` |
 
 ### 3. `file-commands` — 4 — ensureServices `[commands, window]` — file.yaml
-`file.switchBoard/closeBoard/newBoard/openBoard` (all undoable:false) → window board lifecycle.
+`file.switchBoard/closeBoard/newBoard/openBoard` (undoable:false) → window board lifecycle.
 
 ### 4. `perspective-commands` — 17 — ensureServices `[commands, views]` — perspective.yaml
-All → `views`. subfiles: `commands/{filter,group,sort,nav,lifecycle}.ts`.
-load, save(undoable), delete(scope perspective,undoable,ctx_menu), rename(undoable), filter.focus(scope), filter(scope,undoable), clearFilter(scope,undoable,ctx_menu), group(scope,undoable), clearGroup(scope,undoable,ctx_menu), sort.set(scope,undoable), sort.clear(scope,undoable,ctx_menu), sort.toggle(scope,undoable), next, prev, goto, list, switch.
+All → `views`. subfiles `commands/{filter,group,sort,nav,lifecycle}.ts`.
 
-### 5. `entity-commands` — 8 — ensureServices `[commands, kanban]` — entity.yaml
-Cross-cutting, `from: target`; dynamic `entity.add:type` synthesized client-side.
+### 5. `entity-commands` — 8 — ensureServices `[commands, entity]` — entity.yaml
+Cross-cutting, `from: target`; dynamic `entity.add:type` synthesized client-side. ALL → `entity` server (generic, type-agnostic).
 | id | undoable | ctx_menu | backend |
 |----|---------:|:--------:|---------|
-| `entity.add` | true | — | kanban `add <type>` |
-| `entity.update_field` | true | — | kanban `update <type>` |
-| `entity.delete` | true | ✓ | kanban `delete <type>` |
-| `entity.archive` | true | ✓ | kanban `archive task` (ext) |
-| `entity.unarchive` | true | ✓ | kanban `unarchive task` (ext) |
-| `entity.cut` | true | ✓ | kanban `cut` (ext) |
-| `entity.copy` | false | ✓ | kanban `copy` (ext) |
-| `entity.paste` | true | ✓ | kanban `paste` (ext) |
+| `entity.add` | true | — | entity `AddEntity` |
+| `entity.update_field` | true | — | entity `UpdateField` |
+| `entity.delete` | true | ✓ | entity `DeleteEntity` |
+| `entity.archive` | true | ✓ | entity `ArchiveEntity` |
+| `entity.unarchive` | true | ✓ | entity `UnarchiveEntity` |
+| `entity.cut` | true | ✓ | entity `Cut` |
+| `entity.copy` | false | ✓ | entity `Copy` |
+| `entity.paste` | true | ✓ | entity `Paste` |
 
-### 6. `ui-commands` — 10 — ensureServices `[commands, ui_state, window]` — ui.yaml
+### 6. `ui-commands` — 10 — ensureServices `[commands, ui_state, window, focus]` — ui.yaml
 | id | scope | undoable | ctx_menu | backend |
 |----|-------|---------:|:--------:|---------|
 | `ui.inspect` | — | — | ✓ | ui_state `Inspect` |
@@ -81,44 +82,32 @@ Cross-cutting, `from: target`; dynamic `entity.add:type` synthesized client-side
 | `ui.palette.close` | — | — | — | ui_state `PaletteClose` |
 | `ui.entity.startRename` | `entity:perspective` | — | — | ui_state `StartRename` |
 | `ui.mode.set` | — | false | — | ui_state `SetKeymapMode` |
-| `ui.setFocus` | — | false | — | ui_state `SetFocus` |
+| `ui.setFocus` | — | false | — | **focus** (spatial-nav project) |
 | `window.new` | — | — | — | window `OpenNewWindow` |
 
 ### 7. `app-shell-commands` — 15 — ensureServices `[commands, app, ui_state, store]` — app/settings/drag.yaml
 | id | undoable | backend |
 |----|---------:|---------|
-| `app.about` | — | app `ShowAbout` |
-| `app.help` | — | app `ShowHelp` |
-| `app.quit` | — | app `QuitApp` |
-| `app.undo` | false | **store `Undo`** (unified stack) |
-| `app.redo` | false | **store `Redo`** (unified stack) |
-| `app.command` | — | ui_state `ShowCommand` |
-| `app.palette` | — | ui_state `ShowPalette` |
-| `app.search` | — | ui_state `ShowSearch` |
-| `app.dismiss` | — | ui_state `Dismiss` |
-| `settings.keymap.vim` | — | ui_state `SetKeymapMode{vim}` |
-| `settings.keymap.cua` | — | ui_state `SetKeymapMode{cua}` |
-| `settings.keymap.emacs` | — | ui_state `SetKeymapMode{emacs}` |
-| `drag.start` | false | ui_state `DragStart` |
-| `drag.cancel` | false | ui_state `DragCancel` |
-| `drag.complete` | false | ui_state `DragComplete` |
+| `app.about`/`app.help`/`app.quit` | — | app |
+| `app.undo`/`app.redo` | false | store `Undo`/`Redo` |
+| `app.command`/`app.palette`/`app.search`/`app.dismiss` | — | ui_state (UI toggles; search QUERY uses `entity` `Search`) |
+| `settings.keymap.{vim,cua,emacs}` | — | ui_state `SetKeymapMode` |
+| `drag.{start,cancel,complete}` | false | ui_state `Drag*` |
 
 ## Tallies
 - Plugins: 7; source YAMLs: 12; commands: 3+5+4+17+8+10+15 = **62**
-- Backend servers: `kanban`, `views`, `ui_state`, `window`, `app`, `store` (+ `commands`)
+- Backend servers referenced: `commands`, `store`, `entity`, `kanban`, `views`, `ui_state`, `window`, `app`, `focus`
 
 ## Acceptance Criteria
 - [ ] `plugins.yaml` has all 7 plugins, 62 commands, full metadata, `ensure_services`, per-command `backend`
-- [ ] `baseline/mod.rs` loads it into typed structs
-- [ ] Self-check test: tallies (7/12/62), id uniqueness, per-plugin counts, every `backend` server in the known set {kanban,views,ui_state,window,app,store}
+- [ ] Self-check: tallies (7/12/62), id uniqueness, every `backend` in the known server set
 - [ ] Drift test: source-YAML command-id set == catalog command-id set
 
 ## Tests
-- [ ] `crates/swissarmyhammer-command-service/tests/baseline/catalog_self_check.rs`
-- [ ] `crates/swissarmyhammer-command-service/tests/baseline/yaml_vs_catalog.rs`
+- [ ] `tests/baseline/catalog_self_check.rs`, `tests/baseline/yaml_vs_catalog.rs`
 - [ ] `cargo test -p swissarmyhammer-command-service --test baseline` passes
 
 ## Workflow
 - Use `/tdd` — self-check + drift tests first.
 
-Gates every plugin-port task. Each plugin port also depends on its backend server task(s) per the ensureServices column.
+Gates every plugin-port task.

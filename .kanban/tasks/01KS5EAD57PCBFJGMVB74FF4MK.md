@@ -5,36 +5,48 @@ depends_on:
 - 01KS5F5ZNA0621X8KM2NPERXNV
 position_column: todo
 position_ordinal: '9880'
-project: command-backends
-title: 'Extend `kanban` MCP tool: clipboard (cut/copy/paste) + archive/unarchive'
+project: entity-service
+title: '`entity` MCP server: generic CRUD + archive + clipboard + search'
 ---
 ## What
 
-Add the operations the entity-commands plugin needs that the existing `kanban` MCP tool does not yet expose: clipboard (cut/copy/paste via `PasteMatrix`) and `archive`/`unarchive`. The `kanban` tool already covers add/update/delete/get for task/column/tag/project/actor/attachment, move/complete/tag/untag/assign task — verified in `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs`. These are the gaps.
+Build the `entity` MCP server — the generic, type-agnostic MCP face over the entity **kernel** (`EntityContext`/`EntityCache`/`EntityTypeStore` in `swissarmyhammer-entity`), plus `PasteMatrix` (`swissarmyhammer-kanban`) and `EntitySearchIndex` (`swissarmyhammer-entity-search`). Today this state is reached via Tauri commands (`get_entity`) and `ctx.require_extension` — no MCP surface. This server exposes it generically.
+
+### Kernel + faces — kanban's OPERATIONS ARE FROZEN
+
+`EntityContext` is the **kernel** (one CRUD implementation), and both faces already sit over it today:
+- **`entity`** (this task, NEW) — generic, type-agnostic: get/list/add/update/delete + archive/unarchive + clipboard + search for ANY type. For cross-cutting `entity.*` commands, the frontend's generic reads, and the search UI.
+- **`kanban`** (EXISTS) — domain face: `add task`, `add project`, `update column`, `get tag`, `move task`, `next/complete task`, `assign`, `tag/untag`, board lifecycle.
+
+**Hard constraint (per the user): this work does NOT change kanban's operations.** No operation is added to or removed from the `kanban` tool. The `entity` server is purely additive. kanban already reaches `EntityContext` today, so it needs no change to share the kernel. Refactoring kanban's internals to delegate to the kernel more explicitly is **optional and out of scope right now** — implementation may change later; the operation surface may not.
 
 Files:
-- `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs` — add operations:
-  - `archive task`, `unarchive task` (entity.archive/unarchive map to these; today archive lives in `EntityContext` but is not exposed as a kanban op — confirm and wire it)
-  - `cut`, `copy`, `paste` (clipboard) — wraps the `PasteMatrix` (`Arc<PasteMatrix>`, today in `swissarmyhammer-kanban`, reached via `ctx.kanban.paste_matrix()`). These operate on whatever entity is targeted, mirroring today's `clipboard_commands.rs`.
-- Update the kanban tool's operation set + `description.md` so the new ops appear in `tools/list` and `_meta`.
+- `crates/swissarmyhammer-entity/src/server.rs` (or a thin `swissarmyhammer-entity-mcp` crate) — `EntityServer` over `Arc<EntityContext>` + shared `Arc<StoreContext>` + `EntitySearchIndex`
+- `operations.rs` — `#[operation]` structs (entity-type param where relevant):
+  - **read**: `GetEntity { type, id }`, `ListEntities { type, filter? }` (replaces the `get_entity` Tauri command + board-load)
+  - **write**: `AddEntity { type, fields }`, `UpdateField { type, id, field, value }`, `DeleteEntity { type, id }`
+  - **archive**: `ArchiveEntity`, `UnarchiveEntity`
+  - **clipboard**: `Cut`, `Copy`, `Paste` (wraps `PasteMatrix`; preserves drag-vs-paste)
+  - **search**: `Search { query, type? }` (wraps `EntitySearchIndex`)
+- `service.rs` — bootstrap `host.expose_rust_module("entity", EntityServer::new(...))`
 
-Design note (from the user): clipboard cut/copy/paste and archive are **entity-cross-cutting** — they work on any entity type, same as undo/redo. They belong on the `kanban` tool (which already owns generic entity CRUD) rather than a separate `clipboard` server, keeping the consolidated-server design. Paste must preserve the drag-vs-paste distinction (memory: drag-vs-paste) — external paste creates via PasteMatrix; it is not the internal-drag property mutation.
-
-Archive/unarchive and paste are undoable — they write through the unified changelog so `app.undo` reverts them.
+Writes go through `EntityContext`, which already pushes onto the shared `StoreContext` (undoable) and broadcasts `EntityEvent`s — so undo + the notification surface work for free. Share the SAME `Arc<StoreContext>` as `kanban`/`views`/`store`.
 
 ## Acceptance Criteria
-- [ ] `kanban` tool exposes `archive task`, `unarchive task`, `cut`, `copy`, `paste`
-- [ ] `tools/list` + `_meta` reflect the new operations
-- [ ] `cut`/`copy`/`paste` round-trip against the real `PasteMatrix`; paste creates the duplicate entity in the store
-- [ ] `archive task`/`unarchive task` move the task in/out of the archive as today's `EntityContext` does
-- [ ] New ops are captured by the unified changelog (undoable)
+- [ ] `entity` registered as an in-process server over `EntityContext` + shared `StoreContext` + `EntitySearchIndex`
+- [ ] Generic read/write/archive/clipboard/search work for any entity type; writes undoable + emit entity events
+- [ ] **kanban's operation surface is byte-for-byte unchanged** — no op added or removed; a snapshot guard test asserts kanban's `tools/list` + `_meta` operations tree is identical before and after this work
+- [ ] `entity` and `kanban` resolve through the one `EntityContext` kernel (no duplicate CRUD)
+- [ ] `_meta` operations tree complete
 
 ## Tests
-- [ ] `crates/swissarmyhammer-tools/tests/integration/kanban_clipboard_archive_e2e.rs` — real kanban store; copy a task → paste → assert duplicate; cut → paste → assert moved; archive → assert in archive; unarchive → assert restored
-- [ ] Undo integration: paste a task; `app.undo`; assert the paste reverted
-- [ ] `cargo test -p swissarmyhammer-tools` passes
+- [ ] `crates/swissarmyhammer-entity/tests/integration/entity_server_e2e.rs` — add → get → update_field → delete across two types; archive/unarchive; clipboard copy→paste duplicates; `Search` finds by text
+- [ ] **kanban-surface-frozen guard**: snapshot the `kanban` tool's `_meta` operations tree; assert this work leaves it unchanged
+- [ ] Parity: `kanban add task` and `entity AddEntity{type:task}` produce the same on-disk result (both via the kernel)
+- [ ] Undo: update_field via `entity`; `store.undo`; assert reverted
+- [ ] `cargo test -p swissarmyhammer-entity` passes
 
 ## Workflow
-- Use `/tdd`
+- Use `/tdd` — write the kanban-surface-frozen guard + the CRUD/search test first.
 
-Prerequisite for: entity-commands plugin. Depends on the operation-struct foundation.
+Prerequisite for: entity-commands plugin, the frontend's generic reads + search UI. Depends on store-service substrate.
