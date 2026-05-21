@@ -1646,41 +1646,16 @@ mod tests {
     // Per-board in-process MCP server tests
     // =========================================================================
 
-    /// Build an rmcp streamable-HTTP client connected to a per-board MCP URL.
-    ///
-    /// Mirrors the canonical client pattern from
-    /// `swissarmyhammer-tools/tests/integration/final_http.rs`.
-    #[cfg(test)]
-    async fn connect_mcp_client(
-        url: &str,
-    ) -> rmcp::service::RunningService<rmcp::RoleClient, rmcp::model::ClientInfo> {
-        use rmcp::transport::streamable_http_client::{
-            StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
-        };
-        use rmcp::ServiceExt;
-
-        let mut config = StreamableHttpClientTransportConfig::default();
-        config.uri = url.to_string().into();
-        config.auth_header = None;
-        let transport =
-            StreamableHttpClientTransport::with_client(reqwest::Client::default(), config);
-
-        let client_info = rmcp::model::ClientInfo::new(
-            rmcp::model::ClientCapabilities::default(),
-            rmcp::model::Implementation::new("kanban-app board mcp test", "0.0.1"),
-        );
-        client_info
-            .serve(transport)
-            .await
-            .expect("MCP client should connect to the board's loopback URL")
-    }
-
     /// Opening a board starts an in-process full-SAH-toolset MCP server rooted
     /// at the board folder. An MCP client connected to the board's URL sees
     /// `tools/list` carrying `kanban` plus other SAH tools, a `kanban`
     /// `add task` call mutates that board's `.kanban`, and closing the board
     /// shuts the server down so its URL stops answering.
-    #[tokio::test]
+    // multi_thread required: this test hosts the in-process board MCP server and
+    // drives an RMCP client on the same runtime. A current-thread runtime cannot
+    // advance the server's SSE response task while blocked awaiting the client
+    // handshake — see `test_client_handshake_is_fast` in `swissarmyhammer-tools`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_open_board_serves_full_sah_mcp_toolset() {
         let tmp = TempDir::new().unwrap();
         let state = AppState::new_for_test();
@@ -1715,7 +1690,7 @@ mod tests {
         //   - `kanban`, `git`, `code_context` — always-on domain tools
         //   - `skill`, `files`, `web` — agent tools, present only because the
         //     board server runs with `agent_mode = true`
-        let client = connect_mcp_client(&mcp_url).await;
+        let client = swissarmyhammer_tools::mcp::test_utils::create_test_client(&mcp_url).await;
         let tools = client
             .list_tools(Default::default())
             .await
