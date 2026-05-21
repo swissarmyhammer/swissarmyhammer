@@ -186,3 +186,151 @@ Every non-trivial behavior of the Command service is built on platform primitive
 - Soft latency budgets — service-internal concern.
 
 None of it requires plugin-platform changes. The one piece that is new work — generating the `_meta` operations tree and auto-attaching it to operation tools — lands in `swissarmyhammer-operations`, and benefits every operation tool, not just this service. The same toolkit is available to any service the host or a plugin wants to build.
+
+## Implementation plan
+
+This section summarizes the work to ship the Command service and migrate the
+existing system onto it. The authoritative, decomposed plan lives on the
+kanban board across **six layered projects** (`store-service`,
+`command-service`, `command-backends`, `builtin-commands`, `command-events`,
+`command-cutover`); a frozen, reviewable mirror with per-task IDs is in
+[`command-service-plans/`](./command-service-plans/README.md). This is the
+readable overview.
+
+### What we are replacing
+
+Today commands are declared in **12 YAML files / 62 commands** loaded by the
+`swissarmyhammer-commands` Rust crate, dispatched through a `Command` trait
+(`available()` + `execute(ctx)`):
+
+- **Kanban-domain** (`crates/swissarmyhammer-kanban/builtin/commands/`, 7 files,
+  29 commands): `task.yaml` (3), `column.yaml` (1), `attachment.yaml` (2),
+  `tag.yaml` (1), `view.yaml` (1), `file.yaml` (4), `perspective.yaml` (17).
+- **Platform-shell** (`crates/swissarmyhammer-commands/builtin/commands/`,
+  5 files, 33 commands): `entity.yaml` (8), `ui.yaml` (10, includes
+  `window.new`), `app.yaml` (9), `settings.yaml` (3), `drag.yaml` (3).
+
+The kanban app's frontend dispatches via a `useDispatchCommand` hook against
+the Rust registry, and reaches host capabilities through ~36 inline
+`#[tauri::command]` handlers.
+
+### Target architecture (decisions)
+
+- **Built-ins become plugins on disk.** Every formerly-YAML command ships as a
+  builtin TypeScript plugin under `builtin/plugins/`. The host has no
+  command-specific code; built-ins ride the same path as user plugins.
+- **UI metadata travels on the registration payload.** `keys`, `menu`,
+  `contextMenu`, `tabButton`, `scope`, `params`, `undoable`, `visible` are
+  fields on the `register command` call — single source of truth, read by the
+  palette / hotkey / menu systems via `list command`.
+- **Cut-over, not transitional.** The Command service, the builtin plugins, and
+  the frontend dispatcher land together; the YAML loader and the
+  `swissarmyhammer-commands` crate are deleted in the same change set.
+- **Tauri commands become MCP servers.** Window/app handlers split into `window`
+  and `app` in-process MCP servers; the frontend talks only MCP (except the
+  `mcp_call` / `mcp_subscribe` transport itself, which stays Tauri).
+- **Plugins register the services they depend on.** A command-registering
+  plugin's `load()` calls `ensureServices(this, ["commands", ...])` before
+  `registerCommands(...)`. This relies on **idempotent server registration**
+  (a `swissarmyhammer-plugin` change): registering the same `(name, source)`
+  is a no-op so any number of plugins can declare the same dependency; only a
+  *different* source under an existing name errors with `ServerNameTaken`.
+
+### Backend services (where the work actually happens)
+
+A command's `execute` callback doesn't do the work itself — it calls a backend
+MCP server. Investigation of the current code found that **only `kanban` exists
+today**; the rest are state held in in-process Rust contexts
+(`UIState`, `PerspectiveContext`/`ViewsContext`, `StoreContext`, `PasteMatrix`)
+that the commands reach via `ctx.require_extension::<T>()` with no MCP surface.
+Making the commands work as plugins therefore requires exposing those contexts
+as MCP servers. Per the "fewer, consolidated servers" decision:
+
+| Server | Status | Backs |
+| ------ | ------ | ----- |
+| `kanban` | exists, **extended** | task/column/tag/project/attachment CRUD, move/complete/tag/untag; new work adds `archive/unarchive` + clipboard `cut/copy/paste` (wraps `PasteMatrix`) |
+| `views` | **new** | `perspective.*` + `view.set` (wraps `PerspectiveContext`/`ViewsContext`) |
+| `ui_state` | **new** | `ui.*` + `settings.keymap.*` + `drag.*` + `app.command/palette/search/dismiss` (wraps the relocated `UIState`) |
+| `window` | **new** | `window.new` + `file.*` board lifecycle + `attachment.open/reveal` (wraps tauri `AppHandle` + OS file ops) |
+| `app` | **new** | `app.quit/about/help` only — genuine app-shell actions |
+| `store` | **new** | **`undo`/`redo`** (unified stack), transaction grouping, per-item history; store-scoped ops take a `store` param (wraps the shared `StoreContext`) |
+
+**Undo/redo is cross-cutting, and lives on its own `store` server — not `app`.**
+`store.undo`/`store.redo` operate on the single unified stack (the
+`single-changelog` / `StoreContext` kernel, one `Arc<StoreContext>` shared by
+`kanban`/`views`/`store`). Every tracked write — entity edits via `kanban`,
+perspective changes via `views`, clipboard/archive via `kanban` — pushes onto
+that one stack, so `store.undo` reverts the last entry/group regardless of which
+server produced it. The `app.undo`/`app.redo` *commands* route to
+`store.undo`/`store.redo`. Note `undoable` (the YAML flag) is **declarative
+metadata**, not the undo gate — undo is recorded by the store layer on every
+tracked write.
+
+Two relocations are forced by the cut-over (which deletes `swissarmyhammer-commands`):
+`UIState` (and `window_info` if used) must move to surviving crates before that
+deletion — owned by the `ui_state` and `window` server tasks respectively.
+
+### Builtin plugin catalog (7 plugins, 62 commands)
+
+`ensureServices` lists every server a plugin needs — `commands` to register into,
+plus each backend its callbacks invoke.
+
+| Plugin dir | Commands | `ensureServices` | Source YAML(s) |
+| ---------- | -------: | ---------------- | -------------- |
+| `task-commands` | 3 | `[commands, kanban]` | task.yaml |
+| `kanban-misc-commands` | 5 | `[commands, kanban, window, views]` | column, attachment, tag, view |
+| `file-commands` | 4 | `[commands, window]` | file.yaml |
+| `perspective-commands` | 17 | `[commands, views]` | perspective.yaml |
+| `entity-commands` | 8 | `[commands, kanban]` | entity.yaml |
+| `ui-commands` | 10 | `[commands, ui_state, window]` | ui.yaml (incl. `window.new`) |
+| `app-shell-commands` | 15 | `[commands, app, ui_state, store]` | app, settings, drag |
+
+A checked-in `crates/swissarmyhammer-command-service/tests/baseline/plugins.yaml`
+captures this catalog with each command's full metadata. A drift test reads the
+source YAML files and fails CI if the catalog and the YAML ever disagree, so no
+command is silently dropped during the port. The cut-over end-to-end test
+(`full_baseline_e2e.rs`) runs every catalogued command through the service and
+asserts it produces the same effect as the YAML-driven version did.
+
+### Events: how changes reach the UI and agents
+
+A command's effects reach every dependent through **MCP notifications**, not
+Tauri-specific events — so the webview and AI agents subscribe to the same
+stream. Four planes, all carrying a `txn` (transaction correlation) and
+`origin` (provenance):
+
+1. **`store/changed {store,item,op,changes?,txn,origin}`** — data, for every
+   stored thing (entities carry field-level `changes`; views/perspectives are
+   reload-item until `single-changelog` unifies diff formats).
+2. **`commands/executed {id,ctx,result,txn,origin}`** — the semantic action
+   plane reactive (Obsidian-style) plugins subscribe to.
+3. **registry/lifecycle** — `commands/changed`, `tools/list_changed`, board/plugin lifecycle.
+4. **ephemeral** — `ui_state/changed`, `store/undo_changed`.
+
+The Command service opens a `txn` around each `execute`; every store write
+stamps both its undo `group_id` and its change events with it, so a command's N
+changes form one undo group and one atomic UI batch. **Undo == edit downstream**:
+undo/redo emit the same events as a forward edit (derived from the byte
+transition), so the existing entity/field reload reducer is reused — only its
+source changes (Tauri → MCP), plus `txn` batching.
+
+### Build order — six layered plans
+
+See [`command-service-plans/`](./command-service-plans/README.md) for the full
+per-task breakdown. Tiers (parallel within a tier):
+
+- **Tier 0 (foundational):** `store-service` (shared substrate + `store` MCP),
+  `command-service` (the engine: verbs, override stack, callbacks, SDK helpers,
+  execute's txn-bracket).
+- **Tier 1:** `command-backends` (`views`, `ui_state`, `window`, `app`, kanban
+  extension).
+- **Tier 2:** `builtin-commands` (catalog + 7 plugins + frontend dispatch),
+  `command-events` (notification surface + undo/redo propagation + frontend
+  subscription).
+- **Tier 3 (terminal):** `command-cutover` (Tauri `invoke()` migration + delete
+  `swissarmyhammer-commands` and all 12 YAMLs; `cargo build/test --workspace` +
+  the full-baseline e2e are the gate).
+
+Platform prerequisites live in `plugin-arch`: idempotent server registration
+(so plugins can `ensureServices` the same server) and the already-merged
+`operation_tool!` macro.

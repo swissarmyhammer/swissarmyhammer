@@ -6,7 +6,7 @@ depends_on:
 - 01KS3BK37R2P0RYSYSXGZTS0Z3
 position_column: todo
 position_ordinal: '8780'
-project: command-service
+project: builtin-commands
 title: 'Builtin plugin: task commands (port task.yaml)'
 ---
 ## What

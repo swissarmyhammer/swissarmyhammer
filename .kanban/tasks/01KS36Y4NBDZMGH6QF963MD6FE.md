@@ -6,7 +6,7 @@ depends_on:
 - 01KS36W7VTKXXS4Z1C0P4SHZDT
 position_column: todo
 position_ordinal: '9280'
-project: command-service
+project: command-cutover
 title: 'Frontend: replace direct `invoke()` calls with `window` / `app` MCP dispatcher'
 ---
 ## What

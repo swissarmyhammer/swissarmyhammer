@@ -4,9 +4,10 @@ assignees:
 depends_on:
 - 01KS36QGEVVP064EKW0JDGD94B
 - 01KS3BK37R2P0RYSYSXGZTS0Z3
+- 01KS5EA17K4KDANFFRGW92QARF
 position_column: todo
 position_ordinal: 8a80
-project: command-service
+project: builtin-commands
 title: 'Builtin plugin: perspective commands (port perspective.yaml, 17 commands)'
 ---
 ## What

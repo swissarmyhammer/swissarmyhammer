@@ -4,9 +4,10 @@ assignees:
 depends_on:
 - 01KS36QGEVVP064EKW0JDGD94B
 - 01KS3BK37R2P0RYSYSXGZTS0Z3
+- 01KS36VTN9K8C41P20SJ2WQA6X
 position_column: todo
 position_ordinal: '8980'
-project: command-service
+project: builtin-commands
 title: 'Builtin plugin: file/board commands (port file.yaml)'
 ---
 ## What

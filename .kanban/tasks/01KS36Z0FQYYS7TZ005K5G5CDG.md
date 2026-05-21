@@ -11,9 +11,19 @@ depends_on:
 - 01KS36V80DXK2BFDDSHSWP131W
 - 01KS36XGKCQ36QM7P6MH3FHMBJ
 - 01KS36Y4NBDZMGH6QF963MD6FE
+- 01KS5E9M7ZNPNA0E7GR1C9N42R
+- 01KS5EA17K4KDANFFRGW92QARF
+- 01KS5EAD57PCBFJGMVB74FF4MK
+- 01KS36VTN9K8C41P20SJ2WQA6X
+- 01KS36W7VTKXXS4Z1C0P4SHZDT
+- 01KS5F5ZNA0621X8KM2NPERXNV
+- 01KS5F7BR6850RKT67X4CNHPAZ
+- 01KS5F8THM5EQMKFSF6GFAE55C
+- 01KS5G3AKZXDN7K6YR415E0V4K
+- 01KS5G3S1MR6Y77RXPHZP4SZB1
 position_column: todo
 position_ordinal: '9380'
-project: command-service
+project: command-cutover
 title: 'Cut-over: delete `swissarmyhammer-commands` crate + YAML files + loader'
 ---
 ## What
@@ -31,7 +41,7 @@ Files to edit:
 - Every `use swissarmyhammer_commands::...` — delete or migrate to equivalent in `swissarmyhammer-command-service`
 
 Pre-flight: before the deletion lands, every consumer of `Command` / `CommandRegistry` / `CommandContext` types from `swissarmyhammer-commands` must already be migrated. The forward-progress sequence:
-1. New types in `swissarmyhammer-command-service` (already done in task #1)
+1. New types in `swissarmyhammer-command-service` (already done in task
 2. All 7 builtin command plugins live (already done — task-commands, kanban-misc-commands, file-commands, perspective-commands, entity-commands, ui-commands, app-shell-commands)
 3. Frontend uses `useDispatchCommand` via Command service (already done)
 4. THIS task: delete the old crate; fix every remaining compile error by either deleting dead code or porting to the new types

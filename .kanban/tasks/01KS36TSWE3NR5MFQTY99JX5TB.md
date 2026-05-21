@@ -4,9 +4,11 @@ assignees:
 depends_on:
 - 01KS36QGEVVP064EKW0JDGD94B
 - 01KS3BK37R2P0RYSYSXGZTS0Z3
+- 01KS5E9M7ZNPNA0E7GR1C9N42R
+- 01KS36VTN9K8C41P20SJ2WQA6X
 position_column: todo
 position_ordinal: 8c80
-project: command-service
+project: builtin-commands
 title: 'Builtin plugin: ui commands (port ui.yaml — 10 commands incl. window.new)'
 ---
 ## What

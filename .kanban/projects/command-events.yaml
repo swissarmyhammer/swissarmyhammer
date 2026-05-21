@@ -1,0 +1,3 @@
+color: e7791f
+description: 'Tier 2. Event propagation to UI + agents. The MCP notification surface (four planes: store-keyed data events for all stored things, commands/executed action plane, commands/changed registry, ui_state — all carrying txn correlation + origin provenance), undo/redo change propagation (transition-derived events + stack-state), and the frontend swapping its event SOURCE to MCP. Reuses the existing entity/field reload reducer, adding txn batching for atomic per-command re-renders. Depends on store-service + command-service + command-backends.'
+name: Command Events (notifications → UI)

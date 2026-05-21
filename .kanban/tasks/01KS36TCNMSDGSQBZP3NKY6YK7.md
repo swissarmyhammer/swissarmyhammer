@@ -4,9 +4,10 @@ assignees:
 depends_on:
 - 01KS36QGEVVP064EKW0JDGD94B
 - 01KS3BK37R2P0RYSYSXGZTS0Z3
+- 01KS5EAD57PCBFJGMVB74FF4MK
 position_column: todo
 position_ordinal: 8b80
-project: command-service
+project: builtin-commands
 title: 'Builtin plugin: entity + clipboard commands (port entity.yaml)'
 ---
 ## What

@@ -5,7 +5,7 @@ depends_on:
 - 01KS36WW3Q3N8518ZZJR431E7K
 position_column: todo
 position_ordinal: '9180'
-project: command-service
+project: builtin-commands
 title: 'Frontend: palette + hotkey + menu wiring via `list command`'
 ---
 ## What
