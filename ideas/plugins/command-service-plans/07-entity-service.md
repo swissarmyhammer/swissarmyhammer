@@ -15,8 +15,11 @@ faces sit over it:
 
 - **`entity`** (this service) — the **generic** face: get/list/add/update/delete,
   archive/unarchive, clipboard cut/copy/paste, and **search**, for **any** type.
-  Backed by `EntityContext`/`EntityCache`/`EntityTypeStore` + `PasteMatrix` +
-  `EntitySearchIndex`.
+  Backed by `EntityContext`/`EntityCache`/`EntityTypeStore` (in
+  `swissarmyhammer-entity`) + `PasteMatrix` (in **`swissarmyhammer-kanban`**) +
+  `EntitySearchIndex` (in **`swissarmyhammer-entity-search`**). Because clipboard
+  and search wrap types in OTHER crates, they are split into their own tasks (the
+  crate-dependency direction must be chosen deliberately — see below).
 - **`kanban`** — the **domain** face. It **keeps its full surface** (`add task`,
   `add project`, `update column`, `get tag`, `move task`, `next/complete`,
   `assign`, `tag/untag`, board lifecycle) — agents and the CLI rely on these.
@@ -33,7 +36,9 @@ notification bus.
 
 | Kanban id | Title | depends_on | Acceptance (one-liner) |
 | --------- | ----- | ---------- | ---------------------- |
-| `01KS5EAD57PCBFJGMVB74FF4MK` | `entity` MCP server: generic CRUD + archive + clipboard + search | store-service substrate | `entity` over EntityContext + shared StoreContext + EntitySearchIndex; generic get/list/add/update/delete + archive/unarchive + cut/copy/paste + search for any type; writes undoable + emit entity events; replaces the `get_entity` Tauri command. |
+| `01KS5EAD57PCBFJGMVB74FF4MK` | `entity` MCP server: generic CRUD + archive + kanban-frozen guard | store-service substrate | `entity` server over `EntityContext` + shared `StoreContext`; generic get/list/add/update/delete + archive/unarchive for any type; writes undoable + emit entity events; replaces the `get_entity` Tauri command; snapshot guard asserts kanban's op surface unchanged. |
+| `01KS614S1YAVEWVR1RHP62SQF0` | `entity` server: clipboard (cut/copy/paste via PasteMatrix) | entity CRUD core | `Cut`/`Copy`/`Paste` on the `entity` server wrapping `PasteMatrix` (lives in `swissarmyhammer-kanban`); drag-vs-paste preserved; paste undoable; crate-dep direction chosen (no entity↔kanban cycle). |
+| `01KS61511W6EGZ88043S261RSH` | `entity` server: search (Search via EntitySearchIndex) | entity CRUD core | `Search { query, type? }` on the `entity` server wrapping `EntitySearchIndex` (lives in `swissarmyhammer-entity-search`); no standalone `search` server; backs the search UI. |
 
 ## Consumed by
 
@@ -57,4 +62,4 @@ delegates to this same kernel — not to `entity` directly.)
 
 ## Cross-check
 
-`kanban list tasks --filter '$entity-service'` → expect exactly this 1 task.
+`kanban list tasks --filter '$entity-service'` → expect exactly these 3 tasks.

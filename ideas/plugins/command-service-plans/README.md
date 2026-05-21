@@ -17,8 +17,8 @@ Tier 0 (foundational, parallel)
   command-service (engine) ─┤
                             │
 Tier 1 (data + domain servers)
-  entity-service ◄──────────┤   (generic entity CRUD/clipboard/search; needs store-service)
-  command-backends ◄────────┘   (views needs store-service; window/app/ui_state independent)
+  entity-service ◄──────────┤   (CRUD core needs store-service; clipboard + search build on the core)
+  command-backends ◄────────┘   (only `views` needs store-service; window/app/ui_state have depends_on: [] — scheduled in Tier 1 but not hard-blocked)
                             │
 Tier 2 (parallel)           │
   builtin-commands ◄────────┤   (needs command-service + entity-service + command-backends)
@@ -31,12 +31,12 @@ Tier 3 (terminal)           │
 | Plan | Project id | Tasks | Purpose |
 | ---- | ---------- | ----: | ------- |
 | [Store Service](./01-store-service.md) | `store-service` | 2 | Shared `StoreContext` substrate + `store` MCP (undo/redo/txn/history) |
-| [Command Service (engine)](./02-command-service-engine.md) | `command-service` | 7 | The Command MCP engine: verbs, registry/override-stack, callbacks, SDK helpers |
-| [Entity Service](./07-entity-service.md) | `entity-service` | 1 | Generic `entity` MCP: type-agnostic CRUD + archive + clipboard + **search** |
-| [Command Backends](./03-command-backends.md) | `command-backends` | 4 | Domain servers: views, ui_state, window, app |
+| [Command Service (engine)](./02-command-service-engine.md) | `command-service` | 8 | The Command MCP engine: verbs, registry/override-stack, callbacks, txn+action-event, SDK helpers |
+| [Entity Service](./07-entity-service.md) | `entity-service` | 3 | Generic `entity` MCP: type-agnostic CRUD + archive (core), clipboard, **search** |
+| [Command Backends](./03-command-backends.md) | `command-backends` | 5 | Domain servers: views, ui_state, window (ops + board lifecycle), app |
 | [Builtin Commands](./04-builtin-commands.md) | `builtin-commands` | 10 | Catalog + 7 command plugins + frontend command dispatch |
 | [Command Events](./05-command-events.md) | `command-events` | 3 | MCP notification surface, undo/redo propagation, frontend subscription |
-| [Command Cut-over](./06-command-cutover.md) | `command-cutover` | 2 | Tauri `invoke()` migration + delete the old crate/YAML |
+| [Command Cut-over](./06-command-cutover.md) | `command-cutover` | 3 | `invoke()` migration + pre-flight consumer relocation + delete the old crate/YAML |
 
 **Service taxonomy (kernel + two faces):** `EntityContext` is the entity kernel;
 both faces sit over it and kanban keeps its full surface.
@@ -89,6 +89,7 @@ Related work in **other projects**:
 Each plan doc has a task table: **kanban id · title · depends_on · acceptance
 one-liner**. Run `kanban list tasks --filter '$<project-id>'` (or open the
 board) and confirm: every task in the project appears here, deps match, and no
-task is orphaned. Tallies: **29 tasks across 7 command plans**, plus 2 related
-tasks in other projects (`plugin-arch` idempotent registration; `spatial-nav`
-focus MCP server).
+task is orphaned. Tallies: **34 tasks across 7 command plans** (store 2,
+command-service 8, entity 3, backends 5, builtin 10, events 3, cutover 3), plus
+2 related tasks in other projects (`plugin-arch` idempotent registration;
+`spatial-nav` focus MCP server).

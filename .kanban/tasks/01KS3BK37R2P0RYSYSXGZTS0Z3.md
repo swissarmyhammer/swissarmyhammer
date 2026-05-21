@@ -60,16 +60,16 @@ All → `views`. subfiles `commands/{filter,group,sort,nav,lifecycle}.ts`.
 
 ### 5. `entity-commands` — 8 — ensureServices `[commands, entity]` — entity.yaml
 Cross-cutting, `from: target`; dynamic `entity.add:type` synthesized client-side. ALL → `entity` server (generic, type-agnostic).
-| id | undoable | ctx_menu | backend |
-|----|---------:|:--------:|---------|
-| `entity.add` | true | — | entity `AddEntity` |
-| `entity.update_field` | true | — | entity `UpdateField` |
-| `entity.delete` | true | ✓ | entity `DeleteEntity` |
-| `entity.archive` | true | ✓ | entity `ArchiveEntity` |
-| `entity.unarchive` | true | ✓ | entity `UnarchiveEntity` |
-| `entity.cut` | true | ✓ | entity `Cut` |
-| `entity.copy` | false | ✓ | entity `Copy` |
-| `entity.paste` | true | ✓ | entity `Paste` |
+| id | undoable | ctx_menu | visible | backend |
+|----|---------:|:--------:|:-------:|---------|
+| `entity.add` | true | — | false | entity `AddEntity` |
+| `entity.update_field` | true | — | false | entity `UpdateField` |
+| `entity.delete` | true | ✓ | — | entity `DeleteEntity` |
+| `entity.archive` | true | ✓ | — | entity `ArchiveEntity` |
+| `entity.unarchive` | true | ✓ | — | entity `UnarchiveEntity` |
+| `entity.cut` | true | ✓ | — | entity `Cut` |
+| `entity.copy` | false | ✓ | — | entity `Copy` |
+| `entity.paste` | true | ✓ | — | entity `Paste` |
 
 ### 6. `ui-commands` — 10 — ensureServices `[commands, ui_state, window, focus]` — ui.yaml
 | id | scope | undoable | ctx_menu | backend |
@@ -82,7 +82,7 @@ Cross-cutting, `from: target`; dynamic `entity.add:type` synthesized client-side
 | `ui.palette.close` | — | — | — | ui_state `PaletteClose` |
 | `ui.entity.startRename` | `entity:perspective` | — | — | ui_state `StartRename` |
 | `ui.mode.set` | — | false | — | ui_state `SetKeymapMode` |
-| `ui.setFocus` | — | false | — | **focus** (spatial-nav project) |
+| `ui.setFocus` | — | false | — | **focus** (spatial-nav project) — SOURCE YAML is ui.yaml; BACKEND is `focus`. The two are independent dimensions; the drift test must not assume source-file ⇒ backend. |
 | `window.new` | — | — | — | window `OpenNewWindow` |
 
 ### 7. `app-shell-commands` — 15 — ensureServices `[commands, app, ui_state, store]` — app/settings/drag.yaml
@@ -98,13 +98,27 @@ Cross-cutting, `from: target`; dynamic `entity.add:type` synthesized client-side
 - Plugins: 7; source YAMLs: 12; commands: 3+5+4+17+8+10+15 = **62**
 - Backend servers referenced: `commands`, `store`, `entity`, `kanban`, `views`, `ui_state`, `window`, `app`, `focus`
 
+## Drift-test source set (PIN THIS — do not glob blindly)
+
+The drift test compares the catalog's command-id set against the source YAMLs. It MUST scan exactly these **12 files in 2 crates**, and MUST NOT glob `**/builtin/commands/*.yaml` (that would wrongly pick up the 13th YAML):
+- `crates/swissarmyhammer-kanban/builtin/commands/`: `task.yaml`, `tag.yaml`, `view.yaml`, `column.yaml`, `attachment.yaml`, `file.yaml`, `perspective.yaml` (7)
+- `crates/swissarmyhammer-commands/builtin/commands/`: `entity.yaml`, `ui.yaml`, `app.yaml`, `settings.yaml`, `drag.yaml` (5)
+
+EXCLUDED on purpose: `crates/swissarmyhammer-focus/builtin/commands/nav.yaml` (9 `nav.*` commands) — it belongs to the spatial-nav project, NOT builtin-commands. The drift test must assert nav.* is NOT in this catalog (a negative assertion), so an accidental future glob change is caught.
+
+Metadata fidelity: the drift/fidelity test must lock EVERY metadata field carried per command, not just id/backend. The locked field set is at minimum: `scope`, `undoable`, `context_menu` (incl. `context_menu_group`/`context_menu_order`), `keys`/keybindings (per keymap), `tab_button`, `visible`, `from`, params, and any `menu.path`. Enumerate the union of fields actually present across the 12 YAMLs and assert each is preserved 1:1.
+
 ## Acceptance Criteria
 - [ ] `plugins.yaml` has all 7 plugins, 62 commands, full metadata, `ensure_services`, per-command `backend`
 - [ ] Self-check: tallies (7/12/62), id uniqueness, every `backend` in the known server set
-- [ ] Drift test: source-YAML command-id set == catalog command-id set
+- [ ] Drift test scans EXACTLY the pinned 12-file source set (2 crates), NOT a blind glob; asserts source-YAML command-id set == catalog command-id set
+- [ ] Drift test asserts the 13th YAML (`swissarmyhammer-focus/.../nav.yaml`, the 9 `nav.*` commands) is NOT present in this catalog
+- [ ] `ui.setFocus` is recorded with source=`ui.yaml` and backend=`focus`; the fidelity check treats source-file membership and backend as independent dimensions
+- [ ] Fidelity test locks the full per-command metadata field set (incl. `visible`, `context_menu_group/order`, `menu.path`), not just id/backend
 
 ## Tests
-- [ ] `tests/baseline/catalog_self_check.rs`, `tests/baseline/yaml_vs_catalog.rs`
+- [ ] `tests/baseline/catalog_self_check.rs` — tallies, id uniqueness, backend-set membership
+- [ ] `tests/baseline/yaml_vs_catalog.rs` — drift over the pinned 12-file set; positive (all 62 present) + negative (no `nav.*`) + full metadata-field fidelity
 - [ ] `cargo test -p swissarmyhammer-command-service --test baseline` passes
 
 ## Workflow

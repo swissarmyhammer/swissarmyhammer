@@ -18,8 +18,8 @@ on the `store` server + this shared Arc.
 
 | Kanban id | Title | depends_on | Acceptance (one-liner) |
 | --------- | ----- | ---------- | ---------------------- |
-| `01KS5F5ZNA0621X8KM2NPERXNV` | Shared StoreContext substrate: single undo stack across all command-backing servers | — | One `StoreContext` Arc shared by kanban/views/store/app; cross-server `store.undo` reverts entity + view + perspective changes on one stack; guard test asserts a single instance. |
-| `01KS5F7BR6850RKT67X4CNHPAZ` | `store` MCP server: undo/redo/transaction/history over the shared StoreContext | substrate | `store` exposes `Undo`/`Redo`/`CanUndo`/`CanRedo`/`UndoDepth` (stack-wide) + `History`/`GetItem` (store-scoped, take a `store` param); ambient transaction id replaces the global `current_group` mutex; concurrent txns independent. |
+| `01KS5F5ZNA0621X8KM2NPERXNV` | Shared StoreContext substrate: single undo stack across all command-backing servers | — | One `StoreContext` Arc shared by kanban/views/store; cross-server `store.undo` reverts entity + view + perspective changes on one stack; guard test asserts a single instance. (`store` exposes undo — not `app`.) |
+| `01KS5F7BR6850RKT67X4CNHPAZ` | `store` MCP server: undo/redo/transaction/history over the shared StoreContext | substrate | `store` exposes `Undo`/`Redo`/`CanUndo`/`CanRedo`/`UndoDepth` (stack-wide) + `History`/`GetItem` (store-scoped, take a `store` param). NOTE `History`/`GetItem` need NET-NEW `ErasedStore`/`StoreContext` accessors (no per-item bytes/changelog reader exists today). Ambient transaction id replaces the global `current_group` mutex internals; concurrent txns independent. |
 
 ## Key decisions baked in
 

@@ -10,7 +10,7 @@ title: Implement `execute` + `available command` verbs (callback round-trip + la
 ---
 ## What
 
-The two verbs that cross the host/plugin boundary, plus the transaction/action-event bracketing that makes a command a coherent unit. Both look up the active stack entry for the id, then invoke `available` then `execute` callbacks in the registering caller's isolate.
+The two verbs that cross the host/plugin boundary. Both look up the active stack entry for the id, then invoke `available` then `execute` callbacks in the registering caller's isolate. (Transaction bracketing + the `commands/executed` action event are SPLIT into a follow-up task — `01KS613VPH2G4ZWKZPGW9ZCJAA` — because they hard-depend on the `store` server and the MCP notification surface, which are higher up the build order. This task lands first and is Tier-0-clean: a command executes; grouping/events arrive later.)
 
 Files:
 - `crates/swissarmyhammer-command-service/src/service.rs` — `execute` and `available` arms
@@ -20,34 +20,29 @@ Files:
 ### available
 Look up the active entry; no `available` callback → `{ ok: true }`. Else invoke with `ctx`, enforcing the budget: >5ms warn, >50ms force `{ ok:false, reason:"available timeout" }` and cancel. Return boolean | `{ ok:false, reason }`.
 
-### execute (with transaction bracketing + action event)
+### execute
 1. Recheck `available` unless `force:true`; reject `CommandUnavailable { reason }` if false.
-2. **Open a transaction**: generate a `txn` id and stamp it into the call context (`RequestContext::extensions`, alongside `CallerId`) so every downstream store write the callback makes shares one undo group AND tags its emitted change events with this `txn` (see the `store` server + notification-surface tasks). Also set `origin` from `CallerId` (user/agent).
-3. Invoke the `execute` callback with `ctx`.
-4. **Close the transaction** after the callback resolves (success or error).
-5. On success, **emit the action event** `notifications/commands/executed { id, ctx, result, txn, origin }` via the notification surface — the semantic plane reactive plugins subscribe to. The data changes the command produced were already emitted as `store/changed` carrying the same `txn`, so consumers can correlate action → data.
+2. Invoke the `execute` callback with `ctx`.
+3. Return its result.
 
-Bracketing is generic and automatic: any command, hitting any combination of stores/servers, produces one undo group + one correlated event batch with zero plugin effort. A command that writes nothing (e.g. a pure `ui.palette.open`) just yields an empty group (free) and still emits `commands/executed`.
+(The txn open/close around step 2 and the `commands/executed` emission after step 3 are added by the follow-up task `01KS613VPH2G4ZWKZPGW9ZCJAA` once `store` + notification surface exist. This task deliberately does NOT open a txn or emit an action event — keeping it free of higher-tier deps.)
 
-The callback dispatcher and the `txn`-in-context propagation come from the plugin platform; the service receives an `Arc<dyn CallbackDispatcher>` and a handle to set/clear the ambient `txn`. Tests can fake both.
+The callback dispatcher comes from the plugin platform; the service receives an `Arc<dyn CallbackDispatcher>`. Tests can fake it.
 
 ## Acceptance Criteria
-- [ ] `execute` invokes `execute` callback and returns its result; rechecks `available` unless `force:true`
-- [ ] `execute` opens a `txn` before and closes it after the callback; all store writes during the callback share that `txn` (one undo group)
-- [ ] On success, `commands/executed { id, ctx, result, txn, origin }` is emitted; its `txn` matches the `store/changed` events the command produced
-- [ ] `origin` reflects the caller (user vs agent)
+- [ ] `execute` invokes the `execute` callback and returns its result; rechecks `available` unless `force:true`
 - [ ] `available` budget: >50ms → forced `{ok:false, reason:"available timeout"}` + warn; 5–50ms → warn but real result
 - [ ] `execute`/`available` for unknown id → `UnknownCommand`; no `available` callback → `{ok:true}`
+- [ ] No txn/event coupling in this task (those are the follow-up's concern); this task has no `store`/notification-surface dependency
 
 ## Tests
-- [ ] `execute_happy_path.rs` — echo `execute` callback; verify result + a `commands/executed` event with matching `txn`
-- [ ] `execute_transaction_grouping.rs` — a command whose callback makes two store writes; assert both share one `txn` and undo reverts them as one group
+- [ ] `execute_happy_path.rs` — echo `execute` callback; verify result returned
 - [ ] `execute_rechecks_available.rs` — `available:false` blocks execute (reason surfaced); `force:true` runs anyway
 - [ ] `available_latency_budget.rs` — 60ms fake → forced false + warn
 - [ ] `execute_unknown.rs`, `available_no_callback.rs`
 - [ ] `cargo test -p swissarmyhammer-command-service` passes
 
 ## Workflow
-- Use `/tdd` — write `execute_transaction_grouping.rs` first; it pins the command-as-unit contract (one action → one txn → one undo group → correlated events).
+- Use `/tdd` — write `execute_rechecks_available.rs` first; it pins the available→execute gating.
 
-Depends on the list/schema verbs task, and (for txn + action emission) the `store` server and MCP notification-surface tasks.
+Depends on the list/schema verbs task. The txn-bracketing + action-event follow-up (`01KS613VPH2G4ZWKZPGW9ZCJAA`) depends additionally on the `store` server and the MCP notification-surface task.

@@ -21,6 +21,11 @@ depends_on:
 - 01KS5F8THM5EQMKFSF6GFAE55C
 - 01KS5G3AKZXDN7K6YR415E0V4K
 - 01KS5G3S1MR6Y77RXPHZP4SZB1
+- 01KS615SAVY176H2XWFC3ARR32
+- 01KS614S1YAVEWVR1RHP62SQF0
+- 01KS61511W6EGZ88043S261RSH
+- 01KS612DV4W0N1X1RPXWAKMT4B
+- 01KS613VPH2G4ZWKZPGW9ZCJAA
 position_column: todo
 position_ordinal: '9380'
 project: command-cutover
@@ -35,22 +40,25 @@ Files to delete (total: 12 YAML files, 62 commands):
 - `crates/swissarmyhammer-kanban/builtin/commands/*.yaml` (7 files: attachment.yaml, column.yaml, file.yaml, perspective.yaml, tag.yaml, task.yaml, view.yaml)
 - Any code in `swissarmyhammer-kanban` that loaded those YAMLs
 
+NOT deleted here: `crates/swissarmyhammer-focus/builtin/commands/nav.yaml` (the 9 `nav.*` commands) — owned by the spatial-nav project, handled separately.
+
 Files to edit:
 - Root `Cargo.toml` — remove `swissarmyhammer-commands` from workspace members
 - Every other crate's `Cargo.toml` — remove the `swissarmyhammer-commands` dependency
 - Every `use swissarmyhammer_commands::...` — delete or migrate to equivalent in `swissarmyhammer-command-service`
 
-Pre-flight: before the deletion lands, every consumer of `Command` / `CommandRegistry` / `CommandContext` types from `swissarmyhammer-commands` must already be migrated. The forward-progress sequence:
-1. New types in `swissarmyhammer-command-service` (already done in task
-2. All 7 builtin command plugins live (already done — task-commands, kanban-misc-commands, file-commands, perspective-commands, entity-commands, ui-commands, app-shell-commands)
-3. Frontend uses `useDispatchCommand` via Command service (already done)
-4. THIS task: delete the old crate; fix every remaining compile error by either deleting dead code or porting to the new types
+Pre-flight (forward-progress sequence) — ALL must already be done before the deletion lands:
+1. New types in `swissarmyhammer-command-service` (the engine tasks).
+2. All 7 builtin command plugins live (task-commands, kanban-misc-commands, file-commands, perspective-commands, entity-commands, ui-commands, app-shell-commands).
+3. Frontend uses `useDispatchCommand` via the Command service + the non-transport `invoke()` migration.
+4. **Non-plugin Rust consumers migrated off the crate** — the dedicated pre-flight task (`01KS615SAVY176H2XWFC3ARR32`) handles `swissarmyhammer-entity` (undo_commands), `swissarmyhammer-views`/`swissarmyhammer-perspectives` (`OptionsRegistry`/`OptionsResolver`), and `swissarmyhammer-focus` (test), and relocates `UIState` (ui-state server task), `window_info`/`WindowInfo` (window server task), and the `reconcile_post_undo_caches` convergence logic. This task depends on it; do not delete the crate until that task is green.
+5. THIS task: delete the old crate; fix any remaining compile error by deleting dead code.
 
 Memory `commands-in-rust`: kept — commands still live in Rust/plugin code. Memory `command-organization`: cross-cutting `entity.*` and `ui.*` lived once in entity.yaml/ui.yaml; those now live once in their respective builtin plugins.
 
 ## Acceptance Criteria
 - [ ] `crates/swissarmyhammer-commands/` does not exist
-- [ ] No YAML files under `crates/swissarmyhammer-*/builtin/commands/` (all 12 deleted: 7 kanban-domain + 5 platform-shell)
+- [ ] No YAML files under `crates/swissarmyhammer-*/builtin/commands/` EXCEPT `swissarmyhammer-focus/.../nav.yaml` (the 12 command YAMLs deleted: 7 kanban-domain + 5 platform-shell; nav.yaml stays)
 - [ ] No `use swissarmyhammer_commands::` appears anywhere
 - [ ] `cargo build --workspace` succeeds
 - [ ] `cargo test --workspace` passes
@@ -58,11 +66,11 @@ Memory `commands-in-rust`: kept — commands still live in Rust/plugin code. Mem
 - [ ] No `swissarmyhammer-commands` in `Cargo.lock`
 
 ## Tests
-- [ ] `crates/swissarmyhammer-command-service/tests/integration/full_baseline_e2e.rs` — runs every YAML-defined command (from a checked-in baseline list of all 62 commands and their expected metadata, broken down by source YAML file) through the Command service; asserts every command is registered with the right metadata and that `execute` produces the same effect as the YAML-driven version did. This is the cut-over gate.
+- [ ] `crates/swissarmyhammer-command-service/tests/integration/full_baseline_e2e.rs` — runs every YAML-defined command (from the checked-in baseline catalog of all 62 commands + expected metadata, by source YAML) through the Command service; asserts every command is registered with the right metadata and that `execute` produces the same effect as the YAML-driven version. The cut-over gate.
 - [ ] `tests/no-stale-imports.rs` (or a CI grep step) — fail the build if `swissarmyhammer_commands::` appears in any non-deleted file
 - [ ] `cargo build --workspace && cargo test --workspace` is the final acceptance
 
 ## Workflow
-- Use `/tdd` — the `full_baseline_e2e.rs` test, written against the baseline command list, is the cut-over contract. Implement until it passes; then delete the old crate.
+- Use `/tdd` — the `full_baseline_e2e.rs` test, written against the baseline catalog, is the cut-over contract. Implement until it passes; then delete the old crate.
 
-Depends on every builtin plugin port + the frontend dispatcher refactor + the Tauri replacement.
+Depends on every builtin plugin port + the frontend dispatcher refactor + the non-transport invoke migration + the pre-flight consumer-migration task (`01KS615SAVY176H2XWFC3ARR32`).

@@ -191,9 +191,10 @@ None of it requires plugin-platform changes. The one piece that is new work — 
 
 This section summarizes the work to ship the Command service and migrate the
 existing system onto it. The authoritative, decomposed plan lives on the
-kanban board across **six layered projects** (`store-service`,
-`command-service`, `command-backends`, `builtin-commands`, `command-events`,
-`command-cutover`); a frozen, reviewable mirror with per-task IDs is in
+kanban board across **seven layered projects** (`store-service`,
+`command-service`, `entity-service`, `command-backends`, `builtin-commands`,
+`command-events`, `command-cutover`); a frozen, reviewable mirror with per-task
+IDs is in
 [`command-service-plans/`](./command-service-plans/README.md). This is the
 readable overview.
 
@@ -322,7 +323,7 @@ undo/redo emit the same events as a forward edit (derived from the byte
 transition), so the existing entity/field reload reducer is reused — only its
 source changes (Tauri → MCP), plus `txn` batching.
 
-### Build order — six layered plans
+### Build order — seven layered plans
 
 See [`command-service-plans/`](./command-service-plans/README.md) for the full
 per-task breakdown. Tiers (parallel within a tier):
