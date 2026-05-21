@@ -322,10 +322,12 @@ describe("AiPanelContainer", () => {
       expect(document.querySelector("[data-slot='ai-panel']")).not.toBeNull();
     });
     // The selector — now the AI Elements `PromptInputSelect` in the composer
-    // footer — is enabled once `ai_list_models` resolves; opening it surfaces
-    // the fetched Claude Code entry.
+    // footer — is enabled once `ai_list_models` resolves. With the
+    // auto-select default in place, the trigger reads the picked model's
+    // label ("Claude Code") rather than the placeholder; opening it still
+    // surfaces the fetched Claude Code entry.
     const selector = await waitFor(() => {
-      const btn = screen.getByRole("combobox", { name: /select a model/i });
+      const btn = screen.getByRole("combobox", { name: /claude code/i });
       expect(btn).not.toBeDisabled();
       return btn;
     });
@@ -799,45 +801,243 @@ describe("AiPanelContainer", () => {
   });
 
   it("persists and reapplies the per-board model choice", async () => {
+    // With two available models in the list, the auto-select default lands on
+    // the first (Claude Code). This test then drives a user-initiated pick of
+    // the *second* model through the composer's footer select, asserting that
+    // the user pick overrides the auto-selected default and is persisted —
+    // and that a fresh mount reapplies the user's choice, not the default.
+    const TWO_MODELS: AiModel[] = [
+      {
+        id: "claude-code",
+        label: "Claude Code",
+        kind: "claude-code",
+        available: true,
+        hint: "Claude Code CLI: /usr/local/bin/claude",
+      },
+      {
+        id: "qwen-coder",
+        label: "Qwen Coder",
+        kind: "local-llama",
+        available: true,
+        hint: null,
+      },
+    ];
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "ai_list_models") return TWO_MODELS;
+      return undefined;
+    });
+
     await renderContainer();
     await screen.findByTestId("ai-panel-container");
 
-    // No model is chosen yet — nothing persisted.
-    expect(localStorage.getItem(aiPanelStateStorageKey(BOARD))).toBeNull();
-
-    // The container persists the choice when the View reports one. Drive
-    // `onSelectModel` through the composer's footer model select: the trigger
-    // reads "Select a model" until a model is picked.
+    // The auto-select default landed on Claude Code; the trigger reads its
+    // label now (not the placeholder).
     const selector = await waitFor(() => {
-      const btn = screen.getByRole("combobox", { name: /select a model/i });
+      const btn = screen.getByRole("combobox", { name: /claude code/i });
       expect(btn).not.toBeDisabled();
       return btn;
     });
+
+    // User picks the second model — the explicit choice overrides the
+    // auto-selected default.
     await act(async () => {
       await userEvent.click(selector);
     });
     const listbox = await screen.findByRole("listbox");
     await act(async () => {
       await userEvent.click(
-        within(listbox).getByRole("option", { name: /claude code/i }),
+        within(listbox).getByRole("option", { name: /qwen coder/i }),
       );
     });
 
-    // The Container persisted the per-board model id.
+    // The Container persisted the user-picked per-board model id.
     await waitFor(() => {
       const stored = JSON.parse(
         localStorage.getItem(aiPanelStateStorageKey(BOARD))!,
       );
+      expect(stored.modelId).toBe("qwen-coder");
+    });
+
+    // A fresh mount reapplies the user's pick — the selector reads its label.
+    await renderContainer();
+    await waitFor(() => {
+      const triggers = screen.getAllByRole("combobox", {
+        name: /qwen coder/i,
+      });
+      expect(triggers.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("auto-selects the first available model on a fresh mount with no persisted modelId", async () => {
+    // The panel must never land in the dead-end `NoModelState` when
+    // `ai_list_models` already returned a usable model. On a board with no
+    // persisted `ai-panel-state:<path>` entry, the Container picks the first
+    // `available: true` model — Claude Code in this fixture — and persists it
+    // through the same `saveAiPanelState` path a user click would take. The
+    // panel transitions out of the no-model state within one render, and a
+    // remount reads the model id back from `localStorage`.
+    const AVAILABLE_MODELS: AiModel[] = [
+      {
+        id: "claude-code",
+        label: "Claude Code",
+        kind: "claude-code",
+        available: true,
+        hint: "Claude Code CLI: /usr/local/bin/claude",
+      },
+      {
+        id: "qwen-coder",
+        label: "Qwen Coder",
+        kind: "local-llama",
+        available: true,
+        hint: null,
+      },
+    ];
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "ai_list_models") return AVAILABLE_MODELS;
+      return undefined;
+    });
+
+    // No persisted state for this board.
+    expect(localStorage.getItem(aiPanelStateStorageKey(BOARD))).toBeNull();
+
+    await renderContainer();
+    await screen.findByTestId("ai-panel-container");
+
+    // After `ai_list_models` resolves, the per-board modelId becomes
+    // `claude-code`, persisted to the board's `localStorage` snapshot.
+    await waitFor(() => {
+      const raw = localStorage.getItem(aiPanelStateStorageKey(BOARD));
+      expect(raw).not.toBeNull();
+      const stored = JSON.parse(raw!);
       expect(stored.modelId).toBe("claude-code");
     });
 
-    // A fresh mount reapplies the persisted model — the selector now shows it.
-    await renderContainer();
+    // The panel left the no-model state — its composer trigger now reads the
+    // selected model label, the same surface as the persisted-model test
+    // above. The `NoModelState` "No AI models are configured." copy must not
+    // be rendered.
     await waitFor(() => {
       const triggers = screen.getAllByRole("combobox", {
         name: /claude code/i,
       });
       expect(triggers.length).toBeGreaterThan(0);
     });
+    expect(document.body.textContent).not.toContain(
+      "No AI models are configured.",
+    );
+  });
+
+  it("does not auto-select when every model is unavailable; renders the no-models empty state", async () => {
+    // The "no available models" case is a genuine empty-config state, not the
+    // dead-end the auto-select fix targets. When every entry in
+    // `ai_list_models` has `available: false`, the Container must leave
+    // `modelId` as `null`, render `NoModelState` with its "No AI models are
+    // configured." copy, and write nothing to `localStorage` for the modelId.
+    const UNAVAILABLE_MODELS: AiModel[] = [
+      {
+        id: "claude-code",
+        label: "Claude Code",
+        kind: "claude-code",
+        available: false,
+        hint: "Install the Claude Code CLI to enable this model.",
+      },
+      {
+        id: "qwen-coder",
+        label: "Qwen Coder",
+        kind: "local-llama",
+        available: false,
+        hint: null,
+      },
+    ];
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "ai_list_models") return UNAVAILABLE_MODELS;
+      return undefined;
+    });
+
+    await renderContainer();
+    await screen.findByTestId("ai-panel-container");
+
+    // The panel stays in the `NoModelState` branch — its stable "Choose a
+    // model" heading renders, and `AiPanelConversation` (which only mounts
+    // when `modelId !== null`) does not. The specific empty-state copy below
+    // the heading is owned by `NoModelState` itself (out of scope for this
+    // task); the marker we assert here is the heading + the absence of a
+    // connected conversation.
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("Choose a model");
+    });
+
+    // Settle any post-load effects so a delayed write would be visible.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Nothing was written for this board's modelId. Other fields (open, width)
+    // may or may not be present depending on which effects fired; what matters
+    // is that no `modelId` was ever persisted, since none was selected.
+    const raw = localStorage.getItem(aiPanelStateStorageKey(BOARD));
+    if (raw !== null) {
+      const stored = JSON.parse(raw);
+      expect(stored.modelId).toBeUndefined();
+    }
+  });
+
+  it("does not overwrite a persisted modelId, even when the persisted model is unavailable", async () => {
+    // A persisted `modelId` is an explicit prior user pick — the auto-select
+    // effect must be a no-op against it. Even if the persisted model is
+    // currently `available: false`, the user's choice wins; the Container
+    // must not silently swap them onto the first available model.
+    localStorage.setItem(
+      aiPanelStateStorageKey(BOARD),
+      JSON.stringify({ modelId: "qwen-coder" }),
+    );
+
+    const MIXED_MODELS: AiModel[] = [
+      {
+        id: "claude-code",
+        label: "Claude Code",
+        kind: "claude-code",
+        available: true,
+        hint: "Claude Code CLI: /usr/local/bin/claude",
+      },
+      {
+        id: "qwen-coder",
+        label: "Qwen Coder",
+        kind: "local-llama",
+        available: false,
+        hint: null,
+      },
+    ];
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "ai_list_models") return MIXED_MODELS;
+      return undefined;
+    });
+
+    await renderContainer();
+    await screen.findByTestId("ai-panel-container");
+
+    // Settle the model-list effect.
+    await waitFor(() => {
+      const triggers = screen.queryAllByRole("combobox");
+      expect(triggers.length).toBeGreaterThan(0);
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The persisted `qwen-coder` choice survives — the composer trigger shows
+    // its label, and `localStorage` still holds the original id.
+    await waitFor(() => {
+      const triggers = screen.getAllByRole("combobox", {
+        name: /qwen coder/i,
+      });
+      expect(triggers.length).toBeGreaterThan(0);
+    });
+    const stored = JSON.parse(
+      localStorage.getItem(aiPanelStateStorageKey(BOARD))!,
+    );
+    expect(stored.modelId).toBe("qwen-coder");
   });
 });

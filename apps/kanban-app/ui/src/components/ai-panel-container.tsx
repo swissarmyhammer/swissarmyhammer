@@ -291,15 +291,6 @@ function AiPanelContainerBody({
     };
   }, []);
 
-  /** Flip the panel open-state and persist it for this board. */
-  const handleToggle = useCallback(() => {
-    setOpen((prev) => {
-      const next = !prev;
-      saveAiPanelState(boardPath, { open: next });
-      return next;
-    });
-  }, [boardPath]);
-
   /** Persist the user's model choice per board, then feed it back to the View. */
   const handleSelectModel = useCallback(
     (id: string) => {
@@ -308,6 +299,50 @@ function AiPanelContainerBody({
     },
     [boardPath],
   );
+
+  /**
+   * Auto-select a sensible default model when none is persisted for the board.
+   *
+   * The panel can otherwise land in the dead-end `NoModelState` whenever a
+   * board has no persisted `modelId` (every fresh board, or any board whose
+   * `localStorage` snapshot was cleared) even though `ai_list_models` has
+   * already returned a usable model. To avoid that, once the model list has
+   * resolved and the per-board `modelId` is still `null`, pick the first
+   * `available: true` entry and route it through `handleSelectModel` — the
+   * same path a user click takes, so the choice is persisted via
+   * `saveAiPanelState` and a remount reads it back from `localStorage`.
+   *
+   * Rules:
+   *
+   *   - Only runs when `modelId === null`. A persisted or user-picked id is
+   *     never overwritten — even if that model is `available: false`, the
+   *     user's explicit prior choice wins.
+   *   - Picks the first `available: true` model in the list. The backend
+   *     orders Claude Code first when its CLI is detected, then local llamas
+   *     (see `apps/kanban-app/src/ai/models.rs::ai_list_models`), so the
+   *     default reflects the same priority.
+   *   - When every entry is `available: false`, leaves `modelId` as `null`
+   *     so `NoModelState` continues to render — that is a genuine
+   *     empty-config case, not a dead-end the user can fix by clicking the
+   *     picker.
+   */
+  useEffect(() => {
+    if (modelId !== null) return;
+    if (!models) return;
+    const firstAvailable = models.find((model) => model.available);
+    if (firstAvailable) {
+      handleSelectModel(firstAvailable.id);
+    }
+  }, [models, modelId, handleSelectModel]);
+
+  /** Flip the panel open-state and persist it for this board. */
+  const handleToggle = useCallback(() => {
+    setOpen((prev) => {
+      const next = !prev;
+      saveAiPanelState(boardPath, { open: next });
+      return next;
+    });
+  }, [boardPath]);
 
   /**
    * Expand the panel (if collapsed) and move keyboard focus into its prompt
