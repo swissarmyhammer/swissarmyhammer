@@ -204,6 +204,35 @@ impl SnapshotHarness {
 // Snapshot file IO
 // =============================================================================
 
+/// Recursively rewrite every JSON object with its keys in sorted order.
+///
+/// Snapshot output must be byte-stable across builds, but `serde_json`'s
+/// object key order depends on whether the `preserve_order` feature is
+/// active anywhere in the workspace's unified dependency graph: without it,
+/// `serde_json::Value::Object` is a `BTreeMap` (alphabetical); with it (this
+/// branch enables it transitively through the plugin platform's `deno_core`
+/// dependency) it is an insertion-ordered map, so a serialized struct keeps
+/// its declaration field order instead.
+///
+/// Canonicalizing to sorted keys here makes the committed snapshots a
+/// function of content alone — identical whether or not `preserve_order` is
+/// enabled — so the same snapshot files pass on a workspace with the plugin
+/// platform and one without it.
+fn canonicalize(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut entries: Vec<(String, Value)> = map
+                .iter()
+                .map(|(key, val)| (key.clone(), canonicalize(val)))
+                .collect();
+            entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+            Value::Object(entries.into_iter().collect())
+        }
+        Value::Array(items) => Value::Array(items.iter().map(canonicalize).collect()),
+        other => other.clone(),
+    }
+}
+
 /// Path to the committed snapshot for a given name.
 fn snapshot_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -233,7 +262,7 @@ fn update_mode() -> bool {
 #[track_caller]
 fn assert_snapshot(name: &str, snapshot: &Value) {
     let path = snapshot_path(name);
-    let pretty = serde_json::to_string_pretty(snapshot).expect("serialize");
+    let pretty = serde_json::to_string_pretty(&canonicalize(snapshot)).expect("serialize");
 
     if update_mode() {
         if let Some(parent) = path.parent() {
