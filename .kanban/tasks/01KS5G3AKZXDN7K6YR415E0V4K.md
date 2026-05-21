@@ -35,7 +35,7 @@ Entity stores populate `changes` (value:null = removed); views/perspectives omit
 ```
 notifications/commands/executed { id, ctx, result, txn, origin }
 ```
-Emitted by the Command service after a successful `execute` (see the execute-verb task). Lets reactive (Obsidian-style) plugins subscribe to intent — "on task created", "on perspective switched" — not raw diffs. Shares the `txn` with the data changes the command produced, so a consumer can correlate "this action → these data changes."
+**Emission is owned by the Command engine's txn task (`01KS613VPH2G4ZWKZPGW9ZCJAA`), NOT this task.** This bridge's job for plane 2 is only to **deliver/fan-out** the engine-emitted event to subscribed MCP clients (in-process + external), normalized alongside the other planes. Whether/when `commands/executed` fires is gated by the engine task; this task does not re-implement or re-gate it. It lets reactive (Obsidian-style) plugins subscribe to intent — "on task created", "on perspective switched" — not raw diffs. Shares the `txn` with the data changes the command produced, so a consumer can correlate "this action → these data changes."
 
 ### 3. Registry / lifecycle
 - `notifications/commands/changed` — command registry changed (palette refresh); already in command-service.md.
@@ -54,7 +54,7 @@ Plus `notifications/store/undo_changed { can_undo, can_redo, undo_label?, redo_l
 
 ## Mechanism
 
-In-process broadcast channel stays the **bus**. A **notification bridge** subscribes (entity `EntityEvent` + store `ChangeEvent` + ui_state + command-service action events), normalizes to the schemas above with `txn`/`origin`, and fans out as MCP server→client `notifications/…` over every transport (in-process for the webview/host; stdio/URL for agents). Per-client subscription registry.
+In-process broadcast channel stays the **bus**. A **notification bridge** subscribes (entity `EntityEvent` + store `ChangeEvent` + ui_state + the engine's command action events), normalizes to the schemas above with `txn`/`origin`, and fans out as MCP server→client `notifications/…` over every transport (in-process for the webview/host; stdio/URL for agents). Per-client subscription registry.
 
 Files:
 - New notification-bridge module (host/plugin layer)
@@ -63,19 +63,19 @@ Files:
 
 ## Acceptance Criteria
 - [ ] One generic `store/changed { store, item, op, changes?, txn, origin }` covers entities AND views AND perspectives
-- [ ] `commands/executed { id, ctx, result, txn, origin }` fires after each successful command execute
+- [ ] The bridge **delivers** the engine-emitted `commands/executed { id, ctx, result, txn, origin }` to subscribed clients (delivery + normalization only; emission timing is owned by `01KS613VPH2G4ZWKZPGW9ZCJAA`)
 - [ ] Every notification carries `txn` and `origin`; a command's N data changes share the command's `txn`; undo emits the inverse set under a new `txn` with `origin:"undo"`
 - [ ] `commands/changed`, `ui_state/changed`, `store/undo_changed` are distinct families
 - [ ] In-process AND external (stdio/URL) MCP clients receive the stream
 - [ ] Bridge sources from existing buses — no duplicate event production
 
 ## Tests
-- [ ] `crates/swissarmyhammer-command-service/tests/integration/mcp_notifications_e2e.rs` — subscribe in-process client; execute a multi-write command; assert (a) `commands/executed` fires, (b) all its `store/changed` events share that command's `txn`, (c) `origin:"user"`; edit a perspective → `store/changed{store:"perspective"}` no `changes`; toggle palette → `ui_state/changed`
+- [ ] `crates/swissarmyhammer-command-service/tests/integration/mcp_notifications_e2e.rs` — subscribe in-process client; execute a multi-write command; assert (a) the client RECEIVES a `commands/executed` (delivery — the engine task owns the emission gate), (b) all its `store/changed` events share that command's `txn`, (c) `origin:"user"`; edit a perspective → `store/changed{store:"perspective"}` no `changes`; toggle palette → `ui_state/changed`
 - [ ] correlation test: `store.undo` the command; assert the inverse `store/changed` batch shares one new `txn` with `origin:"undo"`
 - [ ] external CliServer client receives the same stream
 - [ ] `cargo test -p swissarmyhammer-command-service --test integration mcp_notifications_e2e` passes
 
 ## Workflow
-- Use `/tdd` — write the correlation test (one command → many `store/changed` sharing a `txn` + a `commands/executed`) first; it pins the model.
+- Use `/tdd` — write the correlation test (one command → many `store/changed` sharing a `txn` + delivery of the `commands/executed`) first; it pins the model.
 
-Prerequisite for change-propagation and frontend-migration. Depends on the `store` server (txn id) and plugin-platform transport. Coordinates with `single-changelog`.
+Prerequisite for change-propagation and frontend-migration. Depends on the `store` server (txn id) and plugin-platform transport. The engine txn task (`01KS613VPH2G4ZWKZPGW9ZCJAA`) depends on THIS task (it needs the delivery surface to emit into). Coordinates with `single-changelog`.
