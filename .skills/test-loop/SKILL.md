@@ -5,7 +5,7 @@ license: MIT OR Apache-2.0
 compatibility: Requires the `kanban` and `ralph` MCP tools , plus a Stop-hook-capable harness (e.g. Claude Code) so the declared Stop hook can re-invoke the agent across iterations. Will not function on harnesses that lack Stop hooks or these MCP tools.
 metadata:
   author: swissarmyhammer
-  version: 0.12.11
+  version: 0.13.5
 ---
 
 # Test Loop

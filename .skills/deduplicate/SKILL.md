@@ -5,7 +5,7 @@ license: MIT OR Apache-2.0
 compatibility: Requires the `code_context` MCP tool for `find duplicates` and symbol/blast-radius analysis, plus the `kanban` MCP tool for tracking refactor work.
 metadata:
   author: swissarmyhammer
-  version: 0.12.11
+  version: 0.13.5
 ---
 
 ## Validator Feedback

@@ -5,7 +5,7 @@ license: MIT OR Apache-2.0
 compatibility: Requires the `code_context` MCP tool for researching symbols and impact before writing the task, and the `kanban` MCP tool to persist the task on the board. Both are provided by the swissarmyhammer `sah` MCP server; will not function on a harness that does not expose them.
 metadata:
   author: swissarmyhammer
-  version: 0.12.11
+  version: 0.13.5
 ---
 
 ## Validator Feedback

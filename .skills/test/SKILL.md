@@ -5,7 +5,7 @@ license: MIT OR Apache-2.0
 compatibility: Requires the `kanban` MCP tool  for recording test failures as tasks.
 metadata:
   author: swissarmyhammer
-  version: 0.12.11
+  version: 0.13.5
 ---
 
 ## Validator Feedback
@@ -65,6 +65,62 @@ If a validator flags something you genuinely believe is a false positive, explai
 - Don't add defensive code for scenarios that can't happen
 - Trust internal code and framework guarantees
 
+## Code-Context Checkpoints
+
+The `code_context` tool is structural code intelligence — indexed symbol lookup,
+call graphs, and blast-radius analysis backed by tree-sitter and live LSP. It is
+not optional background. Treat the checkpoints below as gates: hitting them is
+part of doing the task, not extra work on top of it.
+
+Do not read files top to bottom, and do not guess where a symbol lives or who
+calls it. `code_context` answers those questions precisely and cheaply.
+
+- **Before reading a file** — `{"op": "list symbols", "file_path": "<file>"}` for a
+  table of contents, then `{"op": "get symbol", "query": "<symbol>"}` to pull only
+  the code you need. Reading a whole file is the fallback, not the default.
+- **Before changing a symbol** — `{"op": "get blastradius", "file_path": "<file>"}`
+  and `{"op": "get callgraph", "symbol": "<symbol>", "direction": "inbound"}`. If the
+  result surprises you, you do not yet understand the change well enough to make it.
+- **After changing a signature or behavior** — re-check the inbound callers the
+  blast radius surfaced, and confirm each one still holds.
+- **When a test or build fails** — `{"op": "get callgraph", "symbol": "<failing
+  symbol>"}` to see what the failure actually reaches before you start fixing it.
+- **To find code by name or pattern** — `search symbol` / `grep code` instead of
+  raw text search; they query the index, with kind and language filters.
+
+If `{"op": "get status"}` shows indexing incomplete, the live LSP ops
+(`get definition`, `get hover`, `get references`, `search workspace_symbol`) still
+work immediately — do not wait on the index. If callgraph or blast radius comes
+back empty for code that clearly compiles, the language server is missing or
+warming up: check `{"op": "lsp status"}` and invoke `/lsp` if needed.
+
+Fall back to raw Read/Grep/Glob only for non-code files (TOML, YAML, Markdown),
+string literals and config values not in the symbol index, or confirming exact
+syntax once code_context has already given you the location.
+
+## Architecture Awareness
+
+If an `ARCHITECTURE.md` file exists at the project root, read it before you act.
+It is the project's own description of how the system is structured — its
+modules and layers, the boundaries between them, and which direction
+dependencies are allowed to flow. Treat it as authoritative context, the same
+way you treat the code itself.
+
+- **Orient with it.** Use it to place what you find — or what you build — inside
+  the documented structure, instead of reconstructing the architecture from
+  scratch by reading files.
+- **Respect its boundaries.** Code should land in the module or layer the
+  document assigns to it, and must not create dependency edges the document
+  forbids (for example, a handler reaching past a service layer straight into
+  storage).
+- **Flag divergence.** If the work genuinely diverges from or extends the
+  documented architecture — a new module, a new dependency direction, a new
+  component — say so, and note that `ARCHITECTURE.md` needs an update to match.
+  A stale architecture document is worse than none.
+
+If no `ARCHITECTURE.md` exists, skip this — do not create one as a side effect.
+The `/map` skill generates it deliberately when that is the goal.
+
 
 # Test
 
@@ -87,6 +143,8 @@ Find any skipped or ignored tests. Fix or delete each one — skipped tests are 
 ### 4. Fix every failure and warning
 
 Fix every failure and every warning, re-running after each fix. Understanding why something fails is not the end — it's the start. The reason it fails is the path to making it pass. Follow that path.
+
+Before editing anything, trace the failure with `code_context`: `get symbol` on the failing function or type to read it, `get callgraph` (inbound) to see what reaches it, and `get blastradius` on the file before you change it so the fix does not break a passing test elsewhere.
 
 ### 5. Track failures on the kanban board
 
@@ -112,6 +170,7 @@ Report: pass/fail, what was fixed, what's left. If you get stuck, report what yo
 - ALL compiler and linter warnings must be resolved. Warnings are bugs that haven't bitten yet.
 - Skipped tests are not acceptable. A skipped test is either broken (fix it) or dead (delete it).
 - Every failing test is your responsibility to fix. No exceptions.
+- When a fix adds new code or relocates existing code, place it per `ARCHITECTURE.md` if one exists — a fix that passes but violates a documented boundary is not done.
 - Do not add `#[allow(...)]`, `@suppress`, `// eslint-disable`, or any other mechanism to silence warnings.
 - Do not add `#[ignore]` or `skip` to make a test stop failing.
 

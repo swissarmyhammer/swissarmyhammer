@@ -5,7 +5,7 @@ license: MIT OR Apache-2.0
 compatibility: Requires the `code_context` MCP tool for project detection and the `kanban` MCP tool for creating coverage-gap tasks. Also requires a language-appropriate coverage tool on the system PATH (e.g. cargo-llvm-cov for Rust, pytest-cov for Python, go test -cover for Go).
 metadata:
   author: swissarmyhammer
-  version: 0.12.11
+  version: 0.13.5
 ---
 
 # Coverage

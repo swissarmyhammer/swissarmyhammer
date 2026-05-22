@@ -284,6 +284,8 @@ use the skill tool to load the full instructions, then follow them.
 ### Available Skills
 
 
+- **ci**: Check that CI is green for the current work and diagnose it when it is not. Detects the CI provider in use (GitHub Actions, GitLab, or any provider that reports commit checks back to GitHub) and reads the matching reference for the exact commands. Use when the user says "check ci", "is ci passing", "did the build pass", "are the checks green", "ci status", "did my push pass", or before claiming a branch/PR is ready to merge. (local)
+
 - **code-context**: Code context operations for symbol lookup, search, grep, call graph, and blast radius analysis. Use when the user says "blast radius", "who calls this", "find symbol", "find references", "go to definition", "symbol lookup", "callgraph", "find callers", "what calls this function", or "what's affected if I change this". Also use proactively before modifying code to understand structure, dependencies, and impact — list symbols, get callgraph (inbound), and get blastradius before touching any function, type, or file. Provides indexed, structural code intelligence that is faster and more precise than raw text search. (local)
 
 - **commit**: Git commit workflow. Use this skill whenever the user says "commit", "save changes", "check in", or otherwise wants to commit code. Always use this skill instead of running git commands directly. (local)
@@ -296,7 +298,7 @@ use the skill tool to load the full instructions, then follow them.
 
 - **double-check**: Double check your work by reviewing changes, asking clarifying questions, and verifying correctness before proceeding. Use when the user says "double check", "verify", "sanity check", or wants validation of recent work. (local)
 
-- **explore**: Use this skill before planning or implementing when you need to understand code — how something works, why it behaves a certain way, or what a change would affect. Exploration is not done until you can articulate the test you would write. Use when the user says "explore", "investigate", "how does X work", "what would it take to change X", or when you need to understand code before acting. (local)
+- **explore**: Understand how unfamiliar code works before planning or changing it — its structure, behavior, data flow, and the blast radius of a change. Use when the user says "explore", "investigate", "how does X work", "why does X happen", "where is X handled", "what calls X", "what would it take to change X", or whenever you need to understand code before acting on it. Drives exploration with the code_context MCP tool — symbol search, callgraph traversal, and blast-radius analysis — instead of reading files top to bottom. (local)
 
 - **finish**: Drive kanban tasks from ready to done by looping implement → test → review until each task is clean. Use when the user says "/finish", "drive tasks to done", "work the board", "finish the tasks", "finish the batch", or otherwise wants to orchestrate tasks through the full pipeline to done. Supports single-task mode (one task id) and scoped-batch mode (all ready tasks in a tag, project, or filter). Uses ralph to prevent stopping between iterations. (local)
 

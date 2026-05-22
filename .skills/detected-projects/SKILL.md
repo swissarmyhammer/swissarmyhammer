@@ -5,7 +5,7 @@ license: MIT OR Apache-2.0
 compatibility: Requires the `code_context` MCP tool; project detection is implemented as `code_context` `detect projects`.
 metadata:
   author: swissarmyhammer
-  version: 0.12.11
+  version: 0.13.5
 ---
 
 # Project Detection

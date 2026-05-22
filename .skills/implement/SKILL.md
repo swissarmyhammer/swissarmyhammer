@@ -5,7 +5,7 @@ license: MIT OR Apache-2.0
 compatibility: Requires the `kanban` MCP tool (to read, move, and complete tasks) and the `code_context` MCP tool (to research symbols and blast-radius before coding).
 metadata:
   author: swissarmyhammer
-  version: 0.12.11
+  version: 0.13.5
 ---
 
 ## Validator Feedback
@@ -97,6 +97,62 @@ This procedure is **idempotent** — run it every time; it is a no-op when the c
 
 The resulting column order is: `... → doing → review → done` (or whatever the terminal column is).
 
+## Code-Context Checkpoints
+
+The `code_context` tool is structural code intelligence — indexed symbol lookup,
+call graphs, and blast-radius analysis backed by tree-sitter and live LSP. It is
+not optional background. Treat the checkpoints below as gates: hitting them is
+part of doing the task, not extra work on top of it.
+
+Do not read files top to bottom, and do not guess where a symbol lives or who
+calls it. `code_context` answers those questions precisely and cheaply.
+
+- **Before reading a file** — `{"op": "list symbols", "file_path": "<file>"}` for a
+  table of contents, then `{"op": "get symbol", "query": "<symbol>"}` to pull only
+  the code you need. Reading a whole file is the fallback, not the default.
+- **Before changing a symbol** — `{"op": "get blastradius", "file_path": "<file>"}`
+  and `{"op": "get callgraph", "symbol": "<symbol>", "direction": "inbound"}`. If the
+  result surprises you, you do not yet understand the change well enough to make it.
+- **After changing a signature or behavior** — re-check the inbound callers the
+  blast radius surfaced, and confirm each one still holds.
+- **When a test or build fails** — `{"op": "get callgraph", "symbol": "<failing
+  symbol>"}` to see what the failure actually reaches before you start fixing it.
+- **To find code by name or pattern** — `search symbol` / `grep code` instead of
+  raw text search; they query the index, with kind and language filters.
+
+If `{"op": "get status"}` shows indexing incomplete, the live LSP ops
+(`get definition`, `get hover`, `get references`, `search workspace_symbol`) still
+work immediately — do not wait on the index. If callgraph or blast radius comes
+back empty for code that clearly compiles, the language server is missing or
+warming up: check `{"op": "lsp status"}` and invoke `/lsp` if needed.
+
+Fall back to raw Read/Grep/Glob only for non-code files (TOML, YAML, Markdown),
+string literals and config values not in the symbol index, or confirming exact
+syntax once code_context has already given you the location.
+
+## Architecture Awareness
+
+If an `ARCHITECTURE.md` file exists at the project root, read it before you act.
+It is the project's own description of how the system is structured — its
+modules and layers, the boundaries between them, and which direction
+dependencies are allowed to flow. Treat it as authoritative context, the same
+way you treat the code itself.
+
+- **Orient with it.** Use it to place what you find — or what you build — inside
+  the documented structure, instead of reconstructing the architecture from
+  scratch by reading files.
+- **Respect its boundaries.** Code should land in the module or layer the
+  document assigns to it, and must not create dependency edges the document
+  forbids (for example, a handler reaching past a service layer straight into
+  storage).
+- **Flag divergence.** If the work genuinely diverges from or extends the
+  documented architecture — a new module, a new dependency direction, a new
+  component — say so, and note that `ARCHITECTURE.md` needs an update to match.
+  A stale architecture document is worse than none.
+
+If no `ARCHITECTURE.md` exists, skip this — do not create one as a side effect.
+The `/map` skill generates it deliberately when that is the goal.
+
 
 # Implement
 
@@ -173,12 +229,13 @@ Get the full description and subtasks. Understand the task before writing code.
 
 ### 4. Research before writing
 
-**Do not guess.** Use `code_context` to understand the code before changing it:
+**Do not guess.** Run the **Code-Context Checkpoints** above before changing any code:
 
 - **Find symbols** — `op: "search symbol"` to locate functions, types, and modules mentioned in the task
 - **Read implementations** — `op: "get symbol"` to see actual source code, not just names
-- **Map blast radius** — `op: "get blastradius"` on files you plan to change, to find callers, tests, and downstream consumers you might break
-- **Trace call chains** — `op: "get callgraph"` to understand how code flows before inserting yourself into it
+- **Map blast radius** — `op: "get blastradius"` on every file you plan to change. This is a gate, not a suggestion: if you have not run blast radius on a file, you are not ready to edit it. It surfaces the callers, tests, and downstream consumers you must keep working.
+- **Trace call chains** — `op: "get callgraph"` (inbound) on every symbol whose signature or behavior you will change, so you know who depends on it before you touch it
+- **Check the architecture** — if `ARCHITECTURE.md` exists at the project root, read it (see the **Architecture Awareness** guidance above) to confirm where the change belongs and which boundaries it must respect
 - **Fall back to text search** — Glob, Grep, Read for string literals, config values, or patterns not in the index
 
 If the task references a file path, function name, or type — **verify it still exists before acting on it.** Tasks can go stale. A function may have been renamed, moved, or deleted since the task was written. If something doesn't match, investigate before proceeding.
@@ -189,7 +246,9 @@ Never modify code you haven't read. Never assume you know what a function does �
 
 ### 5. Implement the work
 
-Do the work described in the task and its subtasks.
+Do the work described in the task and its subtasks. After changing any symbol's
+signature or behavior, re-run `get callgraph` (inbound) on it and confirm every
+caller the blast radius surfaced still holds.
 
 ### 6. Move the task to review
 
