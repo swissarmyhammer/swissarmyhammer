@@ -118,8 +118,23 @@ jobs:
           # be present, executable, and version-reporting (--require-cli), and
           # the bundle must pass codesign verification. A failure here fails
           # the release before the DMG is uploaded.
-          APP=$(find target/aarch64-apple-darwin/release/bundle/macos -name "*.app" | head -1)
+          #
+          # `cargo tauri build` deletes bundle/macos/*.app once the .dmg is
+          # built (it logs "Cleaning ...app"), so the .app no longer exists on
+          # disk by the time this step runs. Verify it *inside* the freshly
+          # built DMG instead -- that is also the exact artifact users install.
+          # The DMG is mounted read-only and always detached on exit.
+          DMG=$(find target/aarch64-apple-darwin/release/bundle/dmg -name "*.dmg" | head -1)
+          [ -n "$DMG" ] || { echo "no .dmg found under bundle/dmg" >&2; exit 1; }
+          echo "Verifying app inside DMG: $DMG"
+
+          MOUNT=$(mktemp -d)
+          hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MOUNT"
+          trap 'hdiutil detach "$MOUNT" -quiet >/dev/null 2>&1 || hdiutil detach "$MOUNT" -force >/dev/null 2>&1 || true' EXIT
+
+          APP=$(find "$MOUNT" -maxdepth 1 -name "*.app" | head -1)
           echo "Found app bundle: $APP"
+          [ -n "$APP" ] || { echo "no .app found inside DMG: $DMG" >&2; exit 1; }
 
           # --require-cli is only passed for apps that bundle the kanban CLI
           # sidecar; apps without a CLI (e.g. mirdan) omit it.

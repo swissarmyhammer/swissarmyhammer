@@ -142,7 +142,8 @@ Simple mock implementation used for testing the test framework itself.
 ┌──────────────┴──────────────────────┐
 │  Agent Implementations               │
 │  - llama-agent::acp::AcpServer       │
-│  - claude-agent::ClaudeAgentServer   │
+│  - claude-agent::ClaudeAgent         │
+│    (served via swissarmyhammer-agent)│
 └─────────────────────────────────────┘
 ```
 

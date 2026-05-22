@@ -290,6 +290,26 @@ pub(crate) fn xdg_base_dir(env_var: &str, default_subdir: &str) -> Result<PathBu
     Ok(home.join(default_subdir))
 }
 
+/// Resolve the XDG state base directory.
+///
+/// State data is information that should persist between application restarts
+/// but is not important or portable enough to live in the data directory —
+/// transcripts, session records, logs, and similar runtime artifacts.
+///
+/// Uses `$XDG_STATE_HOME` if it is set to an absolute path, otherwise falls
+/// back to `~/.local/state` per the XDG Base Directory specification.
+///
+/// Unlike [`ManagedDirectory::xdg_config`] and friends, this returns the bare
+/// XDG base directory — callers append their own application/session segment.
+///
+/// # Errors
+///
+/// Returns [`DirectoryError::NoHomeDirectory`] if `$XDG_STATE_HOME` is unset
+/// (or relative) and the home directory cannot be determined.
+pub fn xdg_state_dir() -> Result<PathBuf> {
+    xdg_base_dir("XDG_STATE_HOME", ".local/state")
+}
+
 /// Check for legacy dot-directory paths and warn if they exist.
 ///
 /// Detects old `~/.swissarmyhammer`, `~/.avp`, `~/.shell`, and `~/.code-context`
@@ -900,6 +920,32 @@ mod tests {
 
         assert_eq!(dir.root(), xdg_cache.join("avp"));
         assert_eq!(*dir.root_type(), DirectoryRootType::XdgCache);
+    }
+
+    /// xdg_state_dir uses $XDG_STATE_HOME when it is set to an absolute path.
+    #[test]
+    #[serial]
+    fn test_xdg_state_dir_uses_env_var() {
+        let temp = TempDir::new().unwrap();
+        let xdg_state = temp.path().join("state");
+
+        std::env::set_var("XDG_STATE_HOME", &xdg_state);
+        let result = xdg_state_dir();
+        std::env::remove_var("XDG_STATE_HOME");
+
+        assert_eq!(result.unwrap(), xdg_state);
+    }
+
+    /// xdg_state_dir falls back to ~/.local/state when $XDG_STATE_HOME is unset.
+    #[test]
+    #[serial]
+    fn test_xdg_state_dir_fallback_uses_home() {
+        std::env::remove_var("XDG_STATE_HOME");
+        let result = xdg_state_dir();
+
+        let path = result.unwrap();
+        assert!(path.is_absolute());
+        assert!(path.ends_with(".local/state"));
     }
 
     /// find_git_repository_root_from with max depth exceeded returns None.

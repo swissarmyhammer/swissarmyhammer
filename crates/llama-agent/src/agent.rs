@@ -740,7 +740,20 @@ impl AgentServer {
         Ok(results)
     }
 
-    async fn render_session_prompt(&self, session: &Session) -> Result<String, AgentError> {
+    /// Render a [`Session`] into the fully realized prompt text the model
+    /// would see, using the model's chat template.
+    ///
+    /// This applies the chat template to the session's messages (and available
+    /// tools), producing the complete rendered prompt — system prompt, the
+    /// conversation turns, and the generation prompt. It is used both by the
+    /// live prompt path and by `session/resume` / `session/load` to re-render a
+    /// restored conversation so the model is primed to continue it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentError::Model`] if no model is currently loaded, or
+    /// [`AgentError::Template`] if the chat template fails to render.
+    pub async fn render_session_prompt(&self, session: &Session) -> Result<String, AgentError> {
         self.model_manager
             .with_model(|model| {
                 self.chat_template.render_session_with_config(
@@ -1849,6 +1862,7 @@ impl AgentServer {
                     client_capabilities: None,
                     cached_message_count: 0,
                     cached_token_count: 0,
+                    title: None,
                 };
 
                 model_manager
@@ -1917,6 +1931,156 @@ impl AgentServer {
                     })?
             })
         })
+    }
+
+    /// Generate a short human-readable session title with a single model call.
+    ///
+    /// This is llama-agent's title-generation source (see the shared contract
+    /// in [`agent_client_protocol_extras::session_title`]). It asks the model
+    /// to summarize the first user message into a <= 6 word title, which is
+    /// better quality than a first-N-words heuristic.
+    ///
+    /// The call runs against a throwaway [`Session`] containing the user's
+    /// opening message followed by the
+    /// [`TITLE_GENERATION_INSTRUCTION`](agent_client_protocol_extras::TITLE_GENERATION_INSTRUCTION);
+    /// it never touches the caller's real session or its KV cache. The model
+    /// output is normalized (whitespace collapsed, truncated to the title cap)
+    /// by [`normalize_title`](agent_client_protocol_extras::normalize_title).
+    ///
+    /// On any model error the method falls back to the shared
+    /// first-user-message heuristic so a title is always produced when there is
+    /// user text to title.
+    ///
+    /// # Parameters
+    ///
+    /// * `first_user_message` - The text of the session's first user message.
+    ///
+    /// # Returns
+    ///
+    /// The generated title, or `None` when `first_user_message` has no
+    /// non-whitespace content.
+    pub async fn generate_session_title(&self, first_user_message: &str) -> Option<String> {
+        let heuristic =
+            agent_client_protocol_extras::title_from_first_user_message(first_user_message);
+        // No user text means there is nothing to title — skip the model call.
+        heuristic.as_ref()?;
+
+        match self.title_via_model(first_user_message).await {
+            Ok(Some(title)) => Some(title),
+            Ok(None) => {
+                tracing::debug!("Title model call returned empty output; using heuristic title");
+                heuristic
+            }
+            Err(e) => {
+                tracing::warn!("Title model call failed ({e}); using heuristic title");
+                heuristic
+            }
+        }
+    }
+
+    /// Run the single title-generation model call.
+    ///
+    /// Returns `Ok(None)` when the model produced no usable text. Errors are
+    /// surfaced so [`generate_session_title`](Self::generate_session_title) can
+    /// fall back to the heuristic.
+    async fn title_via_model(
+        &self,
+        first_user_message: &str,
+    ) -> Result<Option<String>, AgentError> {
+        let messages = vec![
+            Message {
+                role: crate::types::MessageRole::User,
+                content: first_user_message.to_string(),
+                tool_call_id: None,
+                tool_name: None,
+                timestamp: SystemTime::now(),
+            },
+            Message {
+                role: crate::types::MessageRole::System,
+                content: agent_client_protocol_extras::TITLE_GENERATION_INSTRUCTION.to_string(),
+                tool_call_id: None,
+                tool_name: None,
+                timestamp: SystemTime::now(),
+            },
+        ];
+
+        let temp_session = Session {
+            id: SessionId::new(),
+            messages,
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
+            mcp_servers: Vec::new(),
+            available_tools: Vec::new(),
+            available_prompts: Vec::new(),
+            created_at: SystemTime::now(),
+            updated_at: SystemTime::now(),
+            compaction_history: Vec::new(),
+            transcript_path: None,
+            context_state: None,
+            available_commands: Vec::new(),
+            current_mode: None,
+            client_capabilities: None,
+            cached_message_count: 0,
+            cached_token_count: 0,
+            title: None,
+        };
+
+        let model_manager = Arc::clone(&self.model_manager);
+        let chat_template = Arc::clone(&self.chat_template);
+
+        let raw = model_manager
+            .with_model(|model| {
+                let prompt = chat_template
+                    .render_session_with_config(
+                        &temp_session,
+                        model,
+                        Some(model_manager.get_config()),
+                    )
+                    .map_err(|e| {
+                        crate::types::SessionError::InvalidState(format!(
+                            "Failed to render title prompt: {e}"
+                        ))
+                    })?;
+
+                let mut ctx = model_manager
+                    .create_session_context(model, &temp_session.id)
+                    .map_err(|e| {
+                        crate::types::SessionError::InvalidState(format!(
+                            "Failed to create title context: {e}"
+                        ))
+                    })?;
+
+                // A title is a handful of tokens; cap generation tightly.
+                let request = GenerationRequest {
+                    session_id: SessionId::new(),
+                    max_tokens: Some(32),
+                    temperature: None,
+                    top_p: None,
+                    stop_tokens: Vec::new(),
+                    stopping_config: None,
+                };
+
+                let batch_size = model_manager.get_batch_size();
+                let result = GenerationHelper::generate_text_with_borrowed_model(
+                    model,
+                    &mut ctx,
+                    &prompt,
+                    &request,
+                    &tokio_util::sync::CancellationToken::new(),
+                    batch_size,
+                )
+                .map_err(|e| {
+                    crate::types::SessionError::InvalidState(format!(
+                        "Title generation failed: {e}"
+                    ))
+                })?;
+
+                Ok(result.generated_text)
+            })
+            .await
+            .map_err(AgentError::Model)?
+            .map_err(AgentError::Session)?;
+
+        Ok(agent_client_protocol_extras::normalize_title(&raw))
     }
 
     /// Execute a tool call with retry logic for transient failures

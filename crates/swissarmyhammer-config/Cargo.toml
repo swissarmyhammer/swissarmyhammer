@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 description = "Configuration management for SwissArmyHammer using Figment"
 documentation = "https://docs.rs/swissarmyhammer-config"
-readme = "../README.md"
+readme = "../../README.md"
 keywords = ["config", "figment", "toml", "yaml", "json"]
 categories = ["config", "development-tools"]
 

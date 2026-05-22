@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 description = "Prompt management domain crate for SwissArmyHammer with template integration"
 documentation = "https://docs.rs/swissarmyhammer-prompts"
-readme = "../README.md"
+readme = "../../README.md"
 keywords = ["prompt", "template", "ai", "assistant", "domain"]
 categories = ["template-engine", "development-tools"]
 

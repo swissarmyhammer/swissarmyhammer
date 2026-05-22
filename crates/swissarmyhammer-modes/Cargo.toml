@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 description = "Mode management domain crate for SwissArmyHammer agent types"
 documentation = "https://docs.rs/swissarmyhammer-modes"
-readme = "../README.md"
+readme = "../../README.md"
 keywords = ["mode", "agent", "ai", "assistant", "domain"]
 categories = ["development-tools"]
 

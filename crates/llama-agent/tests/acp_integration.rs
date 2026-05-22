@@ -896,3 +896,437 @@ mod acp_tests {
         );
     }
 }
+
+/// Integration tests for `session/resume` and `session/load`.
+///
+/// These exercise the chat-template-re-render resume path end to end:
+/// persist a [`SessionRecord`] to the shared [`SessionStore`], then drive
+/// `session/resume` (restore only) and `session/load` (restore plus replay)
+/// against it.
+///
+/// The server is built without loading a model — the chat-template re-render
+/// inside `ResumeStrategy::restore` is best-effort and is skipped (with a
+/// warning) when no model is loaded. The load-bearing step under test is the
+/// reconstruction of the in-memory llama session from the durable record, and
+/// the `session/load` history replay.
+mod session_resume_tests {
+    use agent_client_protocol::schema::{
+        ContentBlock, ContentChunk, LoadSessionRequest, ResumeSessionRequest, SessionId,
+        SessionUpdate, TextContent,
+    };
+    use agent_client_protocol_extras::{SessionRecord, SessionStore};
+    use llama_agent::acp::config::AcpConfig;
+    use llama_agent::acp::AcpServer;
+    use llama_agent::types::ids::SessionId as LlamaSessionId;
+    use llama_agent::types::{
+        AgentConfig, MessageRole, ModelConfig, ModelSource, ParallelConfig, QueueConfig,
+        RetryConfig, SessionConfig,
+    };
+    use llama_agent::AgentServer;
+    use serial_test::serial;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    /// RAII guard returned by [`with_temp_state`]: points `XDG_STATE_HOME` at a
+    /// fresh temp directory and, on drop, restores the env var to whatever it
+    /// was before (removing it if it was unset).
+    struct TempState {
+        /// The temp directory backing the isolated state tree; dropped last.
+        _temp: TempDir,
+        /// The `XDG_STATE_HOME` value captured before the override, restored on
+        /// drop. `None` means the variable was unset.
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl Drop for TempState {
+        fn drop(&mut self) {
+            // SAFETY: callers are `#[serial]`, so no other thread reads or
+            // writes the env var concurrently.
+            match self.previous.take() {
+                Some(value) => std::env::set_var("XDG_STATE_HOME", value),
+                None => std::env::remove_var("XDG_STATE_HOME"),
+            }
+        }
+    }
+
+    /// Point `XDG_STATE_HOME` at a fresh temp directory so the shared
+    /// `SessionStore` resolves into isolated, disposable state.
+    ///
+    /// Returns a [`TempState`] RAII guard: the caller must bind it (e.g.
+    /// `let _state = with_temp_state();`) so the temp directory stays alive for
+    /// the test and the prior `XDG_STATE_HOME` value is restored on drop.
+    ///
+    /// Serialized at the call site with `#[serial]`: this mutates the
+    /// process-global `XDG_STATE_HOME` env var.
+    fn with_temp_state() -> TempState {
+        let temp = TempDir::new().expect("temp dir for XDG_STATE_HOME");
+        let previous = std::env::var_os("XDG_STATE_HOME");
+        // SAFETY: callers are `#[serial]`, so no other thread reads or writes
+        // the env var concurrently; the previous value is restored on drop.
+        std::env::set_var("XDG_STATE_HOME", temp.path());
+        TempState {
+            _temp: temp,
+            previous,
+        }
+    }
+
+    /// Build an `AcpServer` for resume/load tests without loading a model.
+    ///
+    /// Returns the server and the broadcast receiver so a test can observe the
+    /// `session/update` notifications a `session/load` replays.
+    async fn build_server() -> (
+        Arc<AcpServer>,
+        tokio::sync::broadcast::Receiver<agent_client_protocol::schema::SessionNotification>,
+    ) {
+        let temp_dir = TempDir::new().expect("temp dir for model folder");
+        let agent_config = AgentConfig {
+            model: ModelConfig {
+                source: ModelSource::Local {
+                    folder: temp_dir.path().to_path_buf(),
+                    filename: Some("test.gguf".to_string()),
+                },
+                batch_size: 512,
+                n_seq_max: 1,
+                n_threads: 1,
+                n_threads_batch: 1,
+                use_hf_params: false,
+                retry_config: RetryConfig::default(),
+                debug: false,
+            },
+            queue_config: QueueConfig::default(),
+            mcp_servers: Vec::new(),
+            session_config: SessionConfig::default(),
+            parallel_execution_config: ParallelConfig::default(),
+        };
+
+        let model_manager = Arc::new(
+            llama_agent::model::ModelManager::new(agent_config.model.clone())
+                .expect("model manager"),
+        );
+        let request_queue = Arc::new(llama_agent::queue::RequestQueue::new(
+            model_manager.clone(),
+            agent_config.queue_config.clone(),
+            agent_config.session_config.clone(),
+        ));
+        let session_manager = Arc::new(llama_agent::session::SessionManager::new(
+            agent_config.session_config.clone(),
+        ));
+        let mcp_client: Arc<dyn llama_agent::mcp::MCPClient> =
+            Arc::new(llama_agent::mcp::NoOpMCPClient::new());
+        let chat_template = Arc::new(llama_agent::chat_template::ChatTemplateEngine::new());
+        let dependency_analyzer =
+            Arc::new(llama_agent::dependency_analysis::DependencyAnalyzer::new(
+                agent_config.parallel_execution_config.clone(),
+            ));
+
+        let agent_server = Arc::new(AgentServer::new(
+            model_manager,
+            request_queue,
+            session_manager,
+            mcp_client,
+            chat_template,
+            dependency_analyzer,
+            agent_config,
+        ));
+
+        let (server, rx) = AcpServer::new(agent_server, AcpConfig::default());
+        (Arc::new(server), rx)
+    }
+
+    /// Persist a `SessionRecord` carrying a user/assistant exchange under a
+    /// fresh llama ULID id, and return that id as a string.
+    fn persist_record_with_exchange() -> String {
+        let id = LlamaSessionId::new().to_string();
+        let mut record = SessionRecord::new(&id, PathBuf::from("/tmp"), "2026-05-18T12:00:00Z");
+        record.updates = vec![
+            SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(
+                TextContent::new("remember the number is 42".to_string()),
+            ))),
+            SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+                TextContent::new("understood, the number is 42".to_string()),
+            ))),
+        ];
+        SessionStore::new()
+            .persist(&record)
+            .expect("persist session record");
+        id
+    }
+
+    /// `session/resume` reconstructs the in-memory llama session from a durable
+    /// record and returns — it must NOT replay history to the client.
+    #[tokio::test]
+    #[serial]
+    async fn resume_restores_session_without_replay() {
+        let _state = with_temp_state();
+        let (server, mut rx) = build_server().await;
+        let id = persist_record_with_exchange();
+
+        let response = server
+            .resume_session(ResumeSessionRequest::new(
+                SessionId::new(id.clone()),
+                PathBuf::from("/tmp"),
+            ))
+            .await
+            .expect("resume should succeed for a persisted record");
+
+        // The resume response carries no replayed conversation.
+        assert!(response.modes.is_none());
+
+        // The in-memory llama session must now hold the restored conversation
+        // so the next `session/prompt` can continue it.
+        let llama_id: LlamaSessionId = id.parse().expect("record id is a llama ULID");
+        let restored = server
+            .agent_server()
+            .session_manager()
+            .get_session(&llama_id)
+            .await
+            .expect("session lookup")
+            .expect("resumed session must be in the session manager");
+        assert_eq!(restored.messages.len(), 2);
+        assert_eq!(restored.messages[0].role, MessageRole::User);
+        assert_eq!(restored.messages[0].content, "remember the number is 42");
+        assert_eq!(restored.messages[1].role, MessageRole::Assistant);
+
+        // No `session/update` notifications were emitted — resume does not replay.
+        assert!(
+            rx.try_recv().is_err(),
+            "session/resume must not replay history to the client"
+        );
+    }
+
+    /// `session/resume` for an id with no persisted record fails with an error
+    /// — the opaque id is never rejected on format, only on absence.
+    #[tokio::test]
+    #[serial]
+    async fn resume_missing_record_errors() {
+        let _state = with_temp_state();
+        let (server, _rx) = build_server().await;
+
+        let id = LlamaSessionId::new().to_string();
+        let result = server
+            .resume_session(ResumeSessionRequest::new(
+                SessionId::new(id),
+                PathBuf::from("/tmp"),
+            ))
+            .await;
+
+        assert!(
+            result.is_err(),
+            "resuming a session with no persisted record must error"
+        );
+    }
+
+    /// `session/load` restores the session AND replays the recorded
+    /// conversation to the client as `session/update` notifications.
+    #[tokio::test]
+    #[serial]
+    async fn load_restores_and_replays_history() {
+        let _state = with_temp_state();
+        let (server, mut rx) = build_server().await;
+        let id = persist_record_with_exchange();
+
+        server
+            .load_session(LoadSessionRequest::new(
+                SessionId::new(id.clone()),
+                PathBuf::from("/tmp"),
+            ))
+            .await
+            .expect("load should succeed for a persisted record");
+
+        // The llama session is restored, exactly as for `session/resume`.
+        let llama_id: LlamaSessionId = id.parse().expect("record id is a llama ULID");
+        let restored = server
+            .agent_server()
+            .session_manager()
+            .get_session(&llama_id)
+            .await
+            .expect("session lookup")
+            .expect("loaded session must be in the session manager");
+        assert_eq!(restored.messages.len(), 2);
+
+        // Unlike resume, load replays the recorded conversation: two updates
+        // (a user chunk, then an agent chunk) reach the client.
+        let first = rx.try_recv().expect("first replayed update");
+        assert_eq!(first.session_id.0.as_ref(), id.as_str());
+        assert!(matches!(first.update, SessionUpdate::UserMessageChunk(_)));
+
+        let second = rx.try_recv().expect("second replayed update");
+        assert!(matches!(second.update, SessionUpdate::AgentMessageChunk(_)));
+
+        assert!(
+            rx.try_recv().is_err(),
+            "load should replay exactly the two recorded updates"
+        );
+
+        // Each replayed notification carries `_meta` tagging it as historical
+        // replay — identical to claude-agent — so a client can distinguish
+        // replayed history from live updates. The shape matches claude's
+        // `build_replay_notification`: `message_type`, `message_index`,
+        // `total_messages`.
+        for (index, notification) in [&first, &second].into_iter().enumerate() {
+            let meta = notification
+                .meta
+                .as_ref()
+                .expect("replayed notification must carry historical-replay _meta");
+            assert_eq!(
+                meta.get("message_type").and_then(|v| v.as_str()),
+                Some("historical_replay"),
+                "replayed notification must be tagged historical_replay"
+            );
+            assert_eq!(
+                meta.get("message_index").and_then(|v| v.as_u64()),
+                Some(index as u64),
+                "replayed notification must carry its message_index"
+            );
+            assert_eq!(
+                meta.get("total_messages").and_then(|v| v.as_u64()),
+                Some(2),
+                "replayed notification must carry the total message count"
+            );
+        }
+    }
+
+    /// `session/load` for an id with no persisted record fails with an error.
+    #[tokio::test]
+    #[serial]
+    async fn load_missing_record_errors() {
+        let _state = with_temp_state();
+        let (server, _rx) = build_server().await;
+
+        let id = LlamaSessionId::new().to_string();
+        let result = server
+            .load_session(LoadSessionRequest::new(
+                SessionId::new(id),
+                PathBuf::from("/tmp"),
+            ))
+            .await;
+
+        assert!(
+            result.is_err(),
+            "loading a session with no persisted record must error"
+        );
+    }
+
+    /// `initialize` advertises the `session/resume` capability so clients know
+    /// the agent supports resuming sessions.
+    #[tokio::test]
+    #[serial]
+    async fn initialize_advertises_resume_capability() {
+        let _state = with_temp_state();
+        let (server, _rx) = build_server().await;
+
+        let response = server
+            .initialize(agent_client_protocol::schema::InitializeRequest::new(
+                agent_client_protocol::schema::ProtocolVersion::V1,
+            ))
+            .await
+            .expect("initialize");
+
+        assert!(
+            response
+                .agent_capabilities
+                .session_capabilities
+                .resume
+                .is_some(),
+            "agent must advertise the session/resume capability"
+        );
+    }
+
+    /// `session/set_mode` emits a `CurrentModeUpdate` notification on every
+    /// successful call — parity with claude-agent, which also emits
+    /// `CurrentModeUpdate` whenever the mode is successfully set.
+    #[tokio::test]
+    #[serial]
+    async fn set_session_mode_emits_current_mode_update() {
+        use agent_client_protocol::schema::{
+            NewSessionRequest, SessionModeId, SetSessionModeRequest,
+        };
+
+        let _state = with_temp_state();
+        let (server, mut rx) = build_server().await;
+
+        let session = server
+            .new_session(NewSessionRequest::new(PathBuf::from("/tmp")))
+            .await
+            .expect("new_session");
+
+        // Drain any notifications emitted by session creation so the assertion
+        // observes only the mode-change notification.
+        while rx.try_recv().is_ok() {}
+
+        server
+            .set_session_mode(SetSessionModeRequest::new(
+                session.session_id.clone(),
+                SessionModeId::new("planning"),
+            ))
+            .await
+            .expect("set_session_mode");
+
+        let notification = rx
+            .try_recv()
+            .expect("set_session_mode must emit a notification");
+        assert_eq!(notification.session_id, session.session_id);
+        match notification.update {
+            SessionUpdate::CurrentModeUpdate(update) => {
+                assert_eq!(
+                    update.current_mode_id.0.as_ref(),
+                    "planning",
+                    "CurrentModeUpdate must carry the newly set mode id"
+                );
+            }
+            other => panic!("expected CurrentModeUpdate, got {other:?}"),
+        }
+    }
+
+    /// `session/cancel` emits a final status update on the notification stream
+    /// — parity with claude-agent, so a client cancelling a turn observes the
+    /// same cancellation notification from both agents.
+    #[tokio::test]
+    #[serial]
+    async fn cancel_emits_final_status_update() {
+        use agent_client_protocol::schema::{CancelNotification, NewSessionRequest};
+
+        let _state = with_temp_state();
+        let (server, mut rx) = build_server().await;
+
+        let session = server
+            .new_session(NewSessionRequest::new(PathBuf::from("/tmp")))
+            .await
+            .expect("new_session");
+
+        // Drain any notifications emitted by session creation.
+        while rx.try_recv().is_ok() {}
+
+        server
+            .cancel(CancelNotification::new(session.session_id.clone()))
+            .await
+            .expect("cancel");
+
+        let notification = rx
+            .try_recv()
+            .expect("cancel must emit a final status update");
+        assert_eq!(notification.session_id, session.session_id);
+
+        // The final update is an AgentMessageChunk tagged as a cancellation —
+        // identical in shape to claude-agent's `send_final_cancellation_updates`.
+        assert!(
+            matches!(notification.update, SessionUpdate::AgentMessageChunk(_)),
+            "cancellation final update must be an AgentMessageChunk"
+        );
+        let meta = notification
+            .meta
+            .as_ref()
+            .expect("cancellation notification must carry _meta");
+        assert_eq!(
+            meta.get("final_update").and_then(|v| v.as_bool()),
+            Some(true),
+            "cancellation notification must be tagged final_update"
+        );
+        assert_eq!(
+            meta.get("cancellation").and_then(|v| v.as_bool()),
+            Some(true),
+            "cancellation notification must be tagged cancellation"
+        );
+    }
+}

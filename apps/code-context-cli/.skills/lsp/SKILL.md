@@ -4,6 +4,10 @@ description: 'Diagnose and install missing LSP servers for your project. Use whe
 license: MIT OR Apache-2.0
 compatibility: Requires the `code_context` MCP tool for `lsp status` and `detect projects`. Also needs locally installed LSP servers (e.g. rust-analyzer, pyright, gopls, typescript-language-server) on the system PATH for the languages present in the workspace.
 metadata:
+<<<<<<< HEAD
+=======
+  version: 0.13.1
+>>>>>>> b292ef050bed38635a2e768e95ea90d00b759de8
   author: swissarmyhammer
   version: 0.12.11
 ---
