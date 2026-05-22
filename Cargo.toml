@@ -185,6 +185,15 @@ rmcp = { version = "1.5", features = [
     "schemars",
 ] }
 agent-client-protocol = "0.11"
+# Depend on the schema crate directly with `unstable_elicitation` so Cargo feature
+# unification turns the elicitation types (CreateElicitationRequest /
+# CreateElicitationResponse / ElicitationAction) on through the main crate's
+# `agent_client_protocol::schema` re-export. The main crate does NOT forward an
+# `unstable_elicitation` feature, so it must be enabled on the schema crate. The
+# `=0.12.0` pin matches the exact version `agent-client-protocol` 0.11 resolves to,
+# keeping the two crates unified. This is always-on (no SAH feature flag): "all
+# functionality all the time".
+agent-client-protocol-schema = { version = "=0.12.0", features = ["unstable_elicitation"] }
 dirs = "6.0"
 comfy-table = "7"
 crossterm = "0.29"

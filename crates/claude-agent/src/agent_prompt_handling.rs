@@ -919,22 +919,25 @@ impl crate::agent::ClaudeAgent {
                 if let Some(stored_kind) = self.permission_storage.get_preference(&tool_name).await
                 {
                     self.handle_stored_permission_preference(&tool_name, stored_kind);
-                } else if let Some(ref client) = self.client {
-                    self.request_user_permission(
-                        session_id,
-                        session_id_str,
-                        &tool_call_id,
-                        &tool_name,
-                        client,
-                        &options,
-                    )
-                    .await;
                 } else {
-                    tracing::warn!(
-                        "Permission required for tool '{}' but no client connection available",
-                        tool_name
-                    );
-                    // TODO: Send tool completion with error status
+                    let client_guard = self.client.read().await;
+                    if let Some(client) = client_guard.as_ref() {
+                        self.request_user_permission(
+                            session_id,
+                            session_id_str,
+                            &tool_call_id,
+                            &tool_name,
+                            client,
+                            &options,
+                        )
+                        .await;
+                    } else {
+                        tracing::warn!(
+                            "Permission required for tool '{}' but no client connection available",
+                            tool_name
+                        );
+                        // TODO: Send tool completion with error status
+                    }
                 }
             }
         }

@@ -86,6 +86,7 @@ name = "agent-client-protocol-extras"
 version = "0.12.11"
 dependencies = [
  "agent-client-protocol",
+ "agent-client-protocol-schema",
  "async-trait",
  "avp-common",
  "axum",
@@ -1168,6 +1169,7 @@ version = "0.12.11"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-extras",
+ "agent-client-protocol-schema",
  "anyhow",
  "async-trait",
  "base64 0.22.1",
@@ -4413,6 +4415,7 @@ version = "0.12.11"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-extras",
+ "agent-client-protocol-schema",
  "anyhow",
  "async-trait",
  "axum",

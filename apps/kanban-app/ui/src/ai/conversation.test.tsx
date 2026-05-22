@@ -14,7 +14,10 @@
 import { describe, it, expect } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import type {
+  CompleteElicitationNotification,
   ContentBlock,
+  CreateElicitationRequest,
+  CreateElicitationResponse,
   PromptResponse,
   RequestPermissionRequest,
   RequestPermissionResponse,
@@ -22,6 +25,8 @@ import type {
 } from "@agentclientprotocol/sdk";
 import type {
   AcpSession,
+  CompleteElicitationHandler,
+  ElicitationHandler,
   KanbanAcpClient,
   RequestPermissionHandler,
   SessionUpdateHandler,
@@ -90,12 +95,18 @@ function fakeConnect(script: {
   connect: ConversationConnect;
   sessions: () => FakeSession[];
   permission: () => RequestPermissionHandler;
+  elicitation: () => ElicitationHandler;
+  completeElicitation: () => CompleteElicitationHandler;
 } {
   const sessions: FakeSession[] = [];
   let capturedPermission: RequestPermissionHandler | undefined;
+  let capturedElicitation: ElicitationHandler | undefined;
+  let capturedCompleteElicitation: CompleteElicitationHandler | undefined;
 
   const connect: ConversationConnect = async (handlers) => {
     capturedPermission = handlers.onRequestPermission;
+    capturedElicitation = handlers.onElicitation;
+    capturedCompleteElicitation = handlers.onCompleteElicitation;
     const client: KanbanAcpClient = {
       protocolVersion: 1,
       initializeResponse: {
@@ -120,6 +131,28 @@ function fakeConnect(script: {
       }
       return capturedPermission;
     },
+    elicitation: () => {
+      if (!capturedElicitation) {
+        throw new Error("connect was never invoked");
+      }
+      return capturedElicitation;
+    },
+    completeElicitation: () => {
+      if (!capturedCompleteElicitation) {
+        throw new Error("connect was never invoked");
+      }
+      return capturedCompleteElicitation;
+    },
+  };
+}
+
+/** A minimal form-mode elicitation request the agent might raise. */
+function formElicitation(message: string): CreateElicitationRequest {
+  return {
+    mode: "form",
+    sessionId: "fake-session",
+    requestedSchema: { properties: {} },
+    message,
   };
 }
 
@@ -131,9 +164,11 @@ describe("useConversation", () => {
     expect(Object.keys(result.current).sort()).toEqual(
       [
         "cancel",
+        "elicitationRequest",
         "messages",
         "newConversation",
         "permissionRequest",
+        "respondElicitation",
         "respondPermission",
         "sendPrompt",
         "state",
@@ -143,6 +178,7 @@ describe("useConversation", () => {
     expect(result.current.status).toBe("idle");
     expect(result.current.messages).toEqual([]);
     expect(result.current.permissionRequest).toBeNull();
+    expect(result.current.elicitationRequest).toBeNull();
   });
 
   it("sendPrompt streams updates into messages and ends idle", async () => {
@@ -318,5 +354,84 @@ describe("useConversation", () => {
     await expect(decision).resolves.toEqual({
       outcome: { outcome: "selected", optionId: "deny" },
     });
+  });
+
+  it("surfaces an elicitation request and resolves it via respondElicitation", async () => {
+    const { connect, elicitation } = fakeConnect({});
+    const { result } = renderHook(() => useConversation({ connect }));
+
+    // Prime the client connection so the elicitation handler is captured.
+    await act(async () => {
+      await result.current.sendPrompt([textBlock("trigger")]);
+    });
+
+    const request = formElicitation("Confirm the destructive action?");
+
+    let decision: Promise<CreateElicitationResponse> | undefined;
+    act(() => {
+      decision = elicitation()(request);
+    });
+
+    await waitFor(() => {
+      expect(result.current.elicitationRequest).toEqual(request);
+    });
+
+    const response: CreateElicitationResponse = {
+      action: "accept",
+      content: { confirm: true },
+    };
+    act(() => {
+      result.current.respondElicitation(response);
+    });
+
+    expect(result.current.elicitationRequest).toBeNull();
+    await expect(decision).resolves.toEqual(response);
+  });
+
+  it("onCompleteElicitation clears the pending elicitation request", async () => {
+    const { connect, elicitation, completeElicitation } = fakeConnect({});
+    const { result } = renderHook(() => useConversation({ connect }));
+
+    await act(async () => {
+      await result.current.sendPrompt([textBlock("trigger")]);
+    });
+
+    act(() => {
+      void elicitation()(formElicitation("Open the linked page"));
+    });
+    await waitFor(() => {
+      expect(result.current.elicitationRequest).not.toBeNull();
+    });
+
+    const completion: CompleteElicitationNotification = {
+      elicitationId: "elicit-1",
+    };
+    act(() => {
+      completeElicitation()(completion);
+    });
+
+    expect(result.current.elicitationRequest).toBeNull();
+  });
+
+  it("newConversation clears a pending elicitation request", async () => {
+    const { connect, elicitation } = fakeConnect({});
+    const { result } = renderHook(() => useConversation({ connect }));
+
+    await act(async () => {
+      await result.current.sendPrompt([textBlock("trigger")]);
+    });
+
+    act(() => {
+      void elicitation()(formElicitation("Provide a value"));
+    });
+    await waitFor(() => {
+      expect(result.current.elicitationRequest).not.toBeNull();
+    });
+
+    act(() => {
+      result.current.newConversation();
+    });
+
+    expect(result.current.elicitationRequest).toBeNull();
   });
 });

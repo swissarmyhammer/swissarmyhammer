@@ -48,6 +48,11 @@ pub struct AcpServer {
 
     /// Raw message recorder for debugging/auditing
     raw_message_manager: Option<RawMessageManager>,
+
+    /// Shared endpoint that relays MCP elicitation requests to the connected ACP
+    /// client. Populated once a client connects (see `start_with_streams`); read
+    /// by each per-session MCP [`crate::mcp_client_handler::NotifyingClientHandler`].
+    elicitation_endpoint: crate::mcp_client_handler::ElicitationEndpoint,
 }
 
 impl AcpServer {
@@ -110,6 +115,7 @@ impl AcpServer {
             filesystem_ops,
             terminal_manager,
             raw_message_manager,
+            elicitation_endpoint: Arc::new(RwLock::new(None)),
         };
 
         (server, notification_rx)
@@ -300,6 +306,18 @@ impl AcpServer {
                 agent_client_protocol::on_receive_notification!(),
             )
             .connect_with(transport, async move |cx| {
+                // Publish the live connection as the elicitation endpoint so MCP
+                // client handlers can redirect inbound `elicitation/create`
+                // requests to this connected ACP client. `cx` is the agent's
+                // `ConnectionTo<Client>`; the endpoint is cleared when the bridge
+                // exits below so a disconnected client falls back to declining.
+                {
+                    let sender: Arc<dyn crate::acp::elicitation::ElicitationSender> = Arc::new(
+                        crate::acp::elicitation::ConnectionElicitationSender::new(cx.clone()),
+                    );
+                    *self.elicitation_endpoint.write().await = Some(sender);
+                }
+
                 // Bridge: forward broadcast `SessionNotification`s to the client.
                 //
                 // The bridge exits cleanly when any of the following happens:
@@ -314,14 +332,14 @@ impl AcpServer {
                 // dispatch loop and return — i.e. `start_with_streams`
                 // completes.
                 let mut rx = self.notification_tx.subscribe();
-                loop {
+                let bridge_result = loop {
                     tokio::select! {
                         biased;
                         () = connection_closed.cancelled() => {
                             tracing::info!(
                                 "Transport closed (reader EOF); shutting down notification bridge"
                             );
-                            return Ok(());
+                            break Ok(());
                         }
                         recv_result = rx.recv() => {
                             match recv_result {
@@ -331,14 +349,14 @@ impl AcpServer {
                                             "Failed to forward session/update: {}",
                                             e
                                         );
-                                        return Err(e);
+                                        break Err(e);
                                     }
                                 }
                                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                                     tracing::info!(
                                         "Session notification channel closed; shutting down connection"
                                     );
-                                    return Ok(());
+                                    break Ok(());
                                 }
                                 Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                                     tracing::warn!(
@@ -349,7 +367,12 @@ impl AcpServer {
                             }
                         }
                     }
-                }
+                };
+
+                // Tear down the elicitation endpoint: no client is connected once
+                // the bridge returns, so further elicitations should decline.
+                *self.elicitation_endpoint.write().await = None;
+                bridge_result
             })
             .await
     }
@@ -905,9 +928,17 @@ impl AcpServer {
             );
 
             // Create notifying handler that forwards MCP notifications as ACP
-            let handler = Arc::new(crate::mcp_client_handler::NotifyingClientHandler::new(
-                self.notification_tx.clone(),
-            ));
+            // and relays MCP elicitation requests to the connected ACP client
+            // through the shared, late-populated endpoint. The shared client
+            // capabilities let the handler decline elicitations the client never
+            // advertised support for, matching claude-agent's bridge.
+            let handler = Arc::new(
+                crate::mcp_client_handler::NotifyingClientHandler::with_elicitation_endpoint(
+                    self.notification_tx.clone(),
+                    self.elicitation_endpoint.clone(),
+                    self.client_capabilities.clone(),
+                ),
+            );
 
             let mut clients = Vec::new();
             for server in &all_mcp_servers {

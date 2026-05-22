@@ -23,6 +23,8 @@ import {
   type Agent,
   type AuthenticateRequest,
   type CancelNotification,
+  type CompleteElicitationNotification,
+  type CreateElicitationResponse,
   type InitializeRequest,
   type InitializeResponse,
   type NewSessionRequest,
@@ -36,6 +38,8 @@ import {
 import {
   AcpProtocolVersionError,
   createKanbanClient,
+  type CompleteElicitationHandler,
+  type ElicitationHandler,
   type RequestPermissionHandler,
   type SessionUpdateHandler,
 } from "./acp-client";
@@ -180,6 +184,18 @@ const selectFirstOption: RequestPermissionHandler = async (params) => ({
   outcome: { outcome: "selected", optionId: params.options[0].optionId },
 });
 
+/**
+ * A default `onElicitation` handler used by tests that don't exercise
+ * elicitation. It declines — a valid {@link CreateElicitationResponse} that
+ * keeps the agent from hanging if a stray elicitation arrives.
+ */
+const declineElicitation: ElicitationHandler = async () => ({
+  action: "decline",
+});
+
+/** A no-op `onCompleteElicitation` handler for tests that don't assert on it. */
+const ignoreCompleteElicitation: CompleteElicitationHandler = () => {};
+
 describe("createKanbanClient", () => {
   it("completes the initialize handshake with honest, fs/terminal-free capabilities", async () => {
     const { clientStream, agentFor } = wireMockAgent();
@@ -191,6 +207,8 @@ describe("createKanbanClient", () => {
       mcpUrl: MCP_URL,
       onSessionUpdate: handler,
       onRequestPermission: selectFirstOption,
+      onElicitation: declineElicitation,
+      onCompleteElicitation: ignoreCompleteElicitation,
     });
 
     expect(client.protocolVersion).toBe(PROTOCOL_VERSION);
@@ -205,6 +223,29 @@ describe("createKanbanClient", () => {
     expect(request.clientCapabilities?.terminal ?? false).toBe(false);
   });
 
+  it("advertises form and url elicitation capability in the initialize handshake", async () => {
+    const { clientStream, agentFor } = wireMockAgent();
+    const { handler } = recordingSessionUpdates();
+
+    await createKanbanClient({
+      stream: clientStream,
+      boardDir: BOARD_DIR,
+      mcpUrl: MCP_URL,
+      onSessionUpdate: handler,
+      onRequestPermission: selectFirstOption,
+      onElicitation: declineElicitation,
+      onCompleteElicitation: ignoreCompleteElicitation,
+    });
+
+    const [request] = agentFor().initializeRequests;
+    // Elicitation is now advertised: both form and url sub-capabilities so the
+    // agent may drive either flavor.
+    expect(request.clientCapabilities?.elicitation).toEqual({
+      form: {},
+      url: {},
+    });
+  });
+
   it("sends an HTTP mcpServers entry for the board toolset in newSession", async () => {
     const { clientStream, agentFor } = wireMockAgent();
     const { handler } = recordingSessionUpdates();
@@ -215,6 +256,8 @@ describe("createKanbanClient", () => {
       mcpUrl: MCP_URL,
       onSessionUpdate: handler,
       onRequestPermission: selectFirstOption,
+      onElicitation: declineElicitation,
+      onCompleteElicitation: ignoreCompleteElicitation,
     });
     await client.startSession();
 
@@ -239,6 +282,8 @@ describe("createKanbanClient", () => {
       mcpUrl: null,
       onSessionUpdate: handler,
       onRequestPermission: selectFirstOption,
+      onElicitation: declineElicitation,
+      onCompleteElicitation: ignoreCompleteElicitation,
     });
     await client.startSession();
 
@@ -266,6 +311,8 @@ describe("createKanbanClient", () => {
       mcpUrl: MCP_URL,
       onSessionUpdate: handler,
       onRequestPermission: selectFirstOption,
+      onElicitation: declineElicitation,
+      onCompleteElicitation: ignoreCompleteElicitation,
     });
     const session = await client.startSession();
 
@@ -316,6 +363,8 @@ describe("createKanbanClient", () => {
       mcpUrl: MCP_URL,
       onSessionUpdate: handler,
       onRequestPermission: pickReject,
+      onElicitation: declineElicitation,
+      onCompleteElicitation: ignoreCompleteElicitation,
     });
     const session = await client.startSession();
     await session.prompt([{ type: "text", text: "Change the config" }]);
@@ -324,30 +373,67 @@ describe("createKanbanClient", () => {
     expect(agentOutcome).toEqual({ outcome: "selected", optionId: "reject" });
   });
 
-  it("refuses elicitation: rejects unstable_createElicitation and silently accepts unstable_completeElicitation", async () => {
-    // v1 advertises no elicitation capability. An agent that ignores that and
-    // calls the `unstable_` elicitation methods anyway must get a clear
-    // `method not found` for the request and a silent ack for the
-    // notification — the same shape as the fs/terminal refusals.
-    let createError: unknown;
-    let completeResolved = false;
+  it("forwards unstable_createElicitation to the handler and returns an accept-with-content response", async () => {
+    // The agent issues a form elicitation; the injected handler accepts with
+    // user-provided content, and the agent must receive exactly that response.
+    let agentResponse: CreateElicitationResponse | undefined;
     const { clientStream } = wireMockAgent({
       async runTurn(conn, params) {
-        try {
-          await conn.unstable_createElicitation({
-            mode: "url",
-            sessionId: params.sessionId,
-            elicitationId: "elic-1",
-            url: "https://example.com/elicit",
-            message: "More input needed",
-          });
-        } catch (error) {
-          createError = error;
-        }
-        // A notification — fire-and-forget, so this resolves regardless of
-        // whether the client implements a handler.
-        await conn.unstable_completeElicitation({ elicitationId: "elic-1" });
-        completeResolved = true;
+        agentResponse = await conn.unstable_createElicitation({
+          mode: "form",
+          sessionId: params.sessionId,
+          requestedSchema: {
+            type: "object",
+            properties: { name: { type: "string" } },
+          },
+          message: "What is your name?",
+        });
+        return { stopReason: "end_turn" };
+      },
+    });
+    const { handler } = recordingSessionUpdates();
+
+    let elicitationParams: unknown;
+    const acceptWithName: ElicitationHandler = async (params) => {
+      elicitationParams = params;
+      return { action: "accept", content: { name: "Ada" } };
+    };
+
+    const client = await createKanbanClient({
+      stream: clientStream,
+      boardDir: BOARD_DIR,
+      mcpUrl: MCP_URL,
+      onSessionUpdate: handler,
+      onRequestPermission: selectFirstOption,
+      onElicitation: acceptWithName,
+      onCompleteElicitation: ignoreCompleteElicitation,
+    });
+    const session = await client.startSession();
+    await session.prompt([{ type: "text", text: "Trigger elicitation" }]);
+
+    // The handler saw the request the agent sent.
+    expect(elicitationParams).toMatchObject({
+      mode: "form",
+      message: "What is your name?",
+    });
+    // The agent received the handler's accept-with-content response.
+    expect(agentResponse).toEqual({
+      action: "accept",
+      content: { name: "Ada" },
+    });
+  });
+
+  it("forwards a declined elicitation response to the agent", async () => {
+    let agentResponse: CreateElicitationResponse | undefined;
+    const { clientStream } = wireMockAgent({
+      async runTurn(conn, params) {
+        agentResponse = await conn.unstable_createElicitation({
+          mode: "url",
+          sessionId: params.sessionId,
+          elicitationId: "elic-1",
+          url: "https://example.com/elicit",
+          message: "More input needed",
+        });
         return { stopReason: "end_turn" };
       },
     });
@@ -359,15 +445,77 @@ describe("createKanbanClient", () => {
       mcpUrl: MCP_URL,
       onSessionUpdate: handler,
       onRequestPermission: selectFirstOption,
+      onElicitation: declineElicitation,
+      onCompleteElicitation: ignoreCompleteElicitation,
     });
     const session = await client.startSession();
     await session.prompt([{ type: "text", text: "Trigger elicitation" }]);
 
-    // The request was refused: the agent received an error, not a value.
-    expect(createError).toBeInstanceOf(Error);
-    expect((createError as Error).message).toMatch(/method not found/i);
-    // The notification was acknowledged silently — the turn ran to completion.
-    expect(completeResolved).toBe(true);
+    expect(agentResponse).toEqual({ action: "decline" });
+  });
+
+  it("forwards a cancelled elicitation response to the agent", async () => {
+    let agentResponse: CreateElicitationResponse | undefined;
+    const { clientStream } = wireMockAgent({
+      async runTurn(conn, params) {
+        agentResponse = await conn.unstable_createElicitation({
+          mode: "url",
+          sessionId: params.sessionId,
+          elicitationId: "elic-1",
+          url: "https://example.com/elicit",
+          message: "More input needed",
+        });
+        return { stopReason: "end_turn" };
+      },
+    });
+    const { handler } = recordingSessionUpdates();
+
+    const cancelElicitation: ElicitationHandler = async () => ({
+      action: "cancel",
+    });
+
+    const client = await createKanbanClient({
+      stream: clientStream,
+      boardDir: BOARD_DIR,
+      mcpUrl: MCP_URL,
+      onSessionUpdate: handler,
+      onRequestPermission: selectFirstOption,
+      onElicitation: cancelElicitation,
+      onCompleteElicitation: ignoreCompleteElicitation,
+    });
+    const session = await client.startSession();
+    await session.prompt([{ type: "text", text: "Trigger elicitation" }]);
+
+    expect(agentResponse).toEqual({ action: "cancel" });
+  });
+
+  it("forwards unstable_completeElicitation to the completion handler", async () => {
+    const completions: CompleteElicitationNotification[] = [];
+    const { clientStream } = wireMockAgent({
+      async runTurn(conn) {
+        await conn.unstable_completeElicitation({ elicitationId: "elic-1" });
+        return { stopReason: "end_turn" };
+      },
+    });
+    const { handler } = recordingSessionUpdates();
+
+    const recordCompletion: CompleteElicitationHandler = (params) => {
+      completions.push(params);
+    };
+
+    const client = await createKanbanClient({
+      stream: clientStream,
+      boardDir: BOARD_DIR,
+      mcpUrl: MCP_URL,
+      onSessionUpdate: handler,
+      onRequestPermission: selectFirstOption,
+      onElicitation: declineElicitation,
+      onCompleteElicitation: recordCompletion,
+    });
+    const session = await client.startSession();
+    await session.prompt([{ type: "text", text: "Complete elicitation" }]);
+
+    expect(completions).toEqual([{ elicitationId: "elic-1" }]);
   });
 
   it("cancels an in-flight prompt turn without throwing", async () => {
@@ -380,6 +528,8 @@ describe("createKanbanClient", () => {
       mcpUrl: MCP_URL,
       onSessionUpdate: handler,
       onRequestPermission: selectFirstOption,
+      onElicitation: declineElicitation,
+      onCompleteElicitation: ignoreCompleteElicitation,
     });
     const session = await client.startSession();
 
@@ -397,6 +547,8 @@ describe("createKanbanClient", () => {
       mcpUrl: MCP_URL,
       onSessionUpdate: handler,
       onRequestPermission: selectFirstOption,
+      onElicitation: declineElicitation,
+      onCompleteElicitation: ignoreCompleteElicitation,
     });
     const session = await client.startSession();
 
@@ -417,6 +569,8 @@ describe("createKanbanClient", () => {
       mcpUrl: MCP_URL,
       onSessionUpdate: handler,
       onRequestPermission: selectFirstOption,
+      onElicitation: declineElicitation,
+      onCompleteElicitation: ignoreCompleteElicitation,
     });
 
     await expect(attempt).rejects.toBeInstanceOf(AcpProtocolVersionError);

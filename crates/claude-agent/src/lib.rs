@@ -11,6 +11,7 @@ pub mod acp_error_conversion;
 pub mod agent;
 pub mod agent_cancellation;
 pub mod agent_commands;
+pub mod agent_elicitation;
 pub mod agent_file_handlers;
 pub mod agent_file_operations;
 pub mod agent_notifications;
@@ -34,6 +35,7 @@ pub mod content_capability_validator;
 pub mod content_security_validator;
 pub mod conversation_manager;
 pub mod editor_state;
+pub mod elicitation_bridge;
 pub mod json_rpc_codes;
 pub mod mime_type_validator;
 

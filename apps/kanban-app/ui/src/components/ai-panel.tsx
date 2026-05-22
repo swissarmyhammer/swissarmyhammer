@@ -41,6 +41,8 @@ import {
 } from "react";
 import type {
   ContentBlock,
+  CreateElicitationRequest,
+  CreateElicitationResponse,
   PlanEntry,
   PlanEntryStatus,
   RequestPermissionRequest,
@@ -69,6 +71,18 @@ import {
   type ConversationMessage,
   type PlanPartData,
 } from "@/ai/conversation";
+import {
+  cancelResponse,
+  declineResponse,
+  initialFormState,
+  parseElicitation,
+  toAcceptResponse,
+  validateForm,
+  type ElicitationField,
+  type ElicitationFieldValue,
+  type FormErrors,
+  type FormValues,
+} from "@/ai/elicitation";
 import { registerAiCommandHandlers, setAiStatus } from "@/ai/commands";
 import {
   Conversation,
@@ -76,6 +90,7 @@ import {
   ConversationEmptyState,
   ConversationScrollButton,
 } from "@/components/ai-elements/conversation";
+import { ElicitationFields } from "@/components/ai-elements/elicitation";
 import { Loader } from "@/components/ai-elements/loader";
 import {
   Message,
@@ -167,6 +182,8 @@ export function aiPanelConnectFactory(
       mcpUrl: endpoint.mcpUrl,
       onSessionUpdate: handlers.onSessionUpdate,
       onRequestPermission: handlers.onRequestPermission,
+      onElicitation: handlers.onElicitation,
+      onCompleteElicitation: handlers.onCompleteElicitation,
     });
   };
 }
@@ -396,6 +413,8 @@ function AiPanelConversation({
     newConversation,
     permissionRequest,
     respondPermission,
+    elicitationRequest,
+    respondElicitation,
   } = conversation;
 
   // Register the conversation-owned `ai.*` command handlers into the
@@ -500,6 +519,12 @@ function AiPanelConversation({
               <PermissionPrompt
                 request={permissionRequest}
                 onRespond={respondPermission}
+              />
+            )}
+            {elicitationRequest && (
+              <ElicitationPrompt
+                request={elicitationRequest}
+                onRespond={respondElicitation}
               />
             )}
           </ConversationContent>
@@ -859,6 +884,221 @@ function PermissionPrompt({
         ))}
       </div>
     </div>
+  );
+}
+
+/** Props for {@link ElicitationPrompt}. */
+interface ElicitationPromptProps {
+  request: CreateElicitationRequest;
+  onRespond: (response: CreateElicitationResponse) => void;
+}
+
+/**
+ * The inline elicitation UI — the structured-input sibling of
+ * {@link PermissionPrompt}.
+ *
+ * When the agent calls `unstable_createElicitation`, the conversation hook
+ * surfaces the request here. {@link parseElicitation} splits it into a
+ * renderable view: a *form* (a schema of fields to fill in) or a *url* (a link
+ * to follow). Form mode delegates the fields to {@link ElicitationFormPrompt};
+ * url mode renders the link via {@link ElicitationUrlPrompt}. Both wrap the same
+ * bordered card chrome as the permission prompt so the two read as siblings.
+ */
+function ElicitationPrompt({
+  request,
+  onRespond,
+}: ElicitationPromptProps): ReactNode {
+  const parsed = useMemo(() => parseElicitation(request), [request]);
+  if (parsed.mode === "url") {
+    return (
+      <ElicitationUrlPrompt
+        message={parsed.message}
+        url={parsed.url}
+        onRespond={onRespond}
+      />
+    );
+  }
+  return (
+    <ElicitationFormPrompt
+      // Re-seed the form when the agent issues a different request. The request
+      // object identity is the reset key: the hook stores a fresh request per
+      // elicitation, so a new object means a new form to fill from scratch.
+      key={elicitationResetKey(request)}
+      message={parsed.message}
+      fields={parsed.fields}
+      onRespond={onRespond}
+    />
+  );
+}
+
+/**
+ * The bordered card shell shared by the elicitation form and url prompts.
+ *
+ * Mirrors {@link PermissionPrompt}'s card — `data-slot="ai-elicitation-prompt"`,
+ * `role="group"`, a heading, and the agent's `message` — so the elicitation UI
+ * sits beside the permission UI as a visual sibling. The mode-specific body
+ * (fields or link) and the action row are passed as `children`.
+ */
+function ElicitationCard({
+  message,
+  children,
+}: {
+  message: string;
+  children: ReactNode;
+}): ReactNode {
+  return (
+    <div
+      className="rounded-md border border-blue-500/40 bg-blue-500/5 p-3"
+      data-slot="ai-elicitation-prompt"
+      role="group"
+    >
+      <p className="font-medium text-sm">Input requested</p>
+      <p className="mt-1 text-muted-foreground text-sm">{message}</p>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * A stable reset key for an elicitation request.
+ *
+ * The form re-seeds whenever this key changes. A url-mode `elicitationId`
+ * uniquely names the request; form-mode requests carry a session/request scope
+ * instead, so the scope's session id plus the JSON-serialized requested schema
+ * form a key that changes exactly when the agent asks for a different form.
+ */
+function elicitationResetKey(request: CreateElicitationRequest): string {
+  if (request.mode === "url") {
+    return request.elicitationId;
+  }
+  const scope = "sessionId" in request ? request.sessionId : request.requestId;
+  return `${scope}:${JSON.stringify(request.requestedSchema)}`;
+}
+
+/** Props for {@link ElicitationFormPrompt}. */
+interface ElicitationFormPromptProps {
+  message: string;
+  fields: ElicitationField[];
+  onRespond: (response: CreateElicitationResponse) => void;
+}
+
+/**
+ * The form-mode elicitation prompt: fields plus Submit / Decline / Cancel.
+ *
+ * Owns the editable {@link FormValues} (seeded once by {@link initialFormState}
+ * — the parent remounts this component via a `key` to re-seed on a new request)
+ * and the {@link FormErrors} surfaced on a failed submit. Submit runs
+ * {@link validateForm}: a clean form coerces to an `accept` response via
+ * {@link toAcceptResponse}; an invalid form shows the errors and does NOT
+ * respond. Decline and Cancel respond immediately with their respective action.
+ */
+function ElicitationFormPrompt({
+  message,
+  fields,
+  onRespond,
+}: ElicitationFormPromptProps): ReactNode {
+  const [values, setValues] = useState<FormValues>(() =>
+    initialFormState(fields),
+  );
+  const [errors, setErrors] = useState<FormErrors>({});
+
+  const handleChange = useCallback(
+    (key: string, value: ElicitationFieldValue) => {
+      setValues((prev) => ({ ...prev, [key]: value }));
+    },
+    [],
+  );
+
+  const handleSubmit = useCallback(() => {
+    const found = validateForm(fields, values);
+    if (Object.keys(found).length > 0) {
+      setErrors(found);
+      return;
+    }
+    onRespond(toAcceptResponse(fields, values));
+  }, [fields, values, onRespond]);
+
+  return (
+    <ElicitationCard message={message}>
+      <div className="mt-3">
+        <ElicitationFields
+          fields={fields}
+          values={values}
+          onChange={handleChange}
+          errors={errors}
+        />
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button onClick={handleSubmit} size="sm" variant="default">
+          Submit
+        </Button>
+        <Button
+          onClick={() => onRespond(declineResponse())}
+          size="sm"
+          variant="outline"
+        >
+          Decline
+        </Button>
+        <Button
+          onClick={() => onRespond(cancelResponse())}
+          size="sm"
+          variant="ghost"
+        >
+          Cancel
+        </Button>
+      </div>
+    </ElicitationCard>
+  );
+}
+
+/** Props for {@link ElicitationUrlPrompt}. */
+interface ElicitationUrlPromptProps {
+  message: string;
+  url: string;
+  onRespond: (response: CreateElicitationResponse) => void;
+}
+
+/**
+ * The url-mode elicitation prompt: the agent's message, a link, and
+ * Done / Cancel.
+ *
+ * There is no form to fill — the agent directs the user to an external page.
+ * The link opens in a new tab; Done resolves the request as `accept` (the user
+ * completed the out-of-band flow) and Cancel as `cancel` (the user dismissed
+ * it). A url accept carries no `content`, matching the schema.
+ */
+function ElicitationUrlPrompt({
+  message,
+  url,
+  onRespond,
+}: ElicitationUrlPromptProps): ReactNode {
+  return (
+    <ElicitationCard message={message}>
+      <a
+        className="mt-3 inline-block break-all text-blue-600 text-sm underline hover:text-blue-700"
+        href={url}
+        rel="noreferrer"
+        target="_blank"
+      >
+        {url}
+      </a>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button
+          onClick={() => onRespond({ action: "accept", content: {} })}
+          size="sm"
+          variant="default"
+        >
+          Done
+        </Button>
+        <Button
+          onClick={() => onRespond(cancelResponse())}
+          size="sm"
+          variant="ghost"
+        >
+          Cancel
+        </Button>
+      </div>
+    </ElicitationCard>
   );
 }
 

@@ -27,6 +27,13 @@
  * agent that ignores the advertised capabilities and calls them anyway gets a
  * clear `method not found` error rather than a silent hang.
  *
+ * Elicitation, by contrast, **is** advertised: `initialize` sends
+ * `elicitation: { form: {}, url: {} }`, and the `unstable_` elicitation methods
+ * forward to the injected {@link ElicitationHandler} /
+ * {@link CompleteElicitationHandler} — the genuine integration points that let
+ * the UI ask the user for structured input. Refusing elicitation was the bug
+ * where the agent saw "declined to respond" but the UI never actually asked.
+ *
  * # Stateless
  *
  * Nothing is persisted. Every chat is a fresh {@link AcpSession} backed by its
@@ -44,6 +51,7 @@ import {
   type CompleteElicitationNotification,
   type ContentBlock,
   type CreateElicitationRequest,
+  type CreateElicitationResponse,
   type CreateTerminalRequest,
   type InitializeResponse,
   type KillTerminalRequest,
@@ -94,6 +102,33 @@ export type RequestPermissionHandler = (
   params: RequestPermissionRequest,
 ) => Promise<RequestPermissionResponse>;
 
+/**
+ * Handler invoked when the agent requests structured user input via
+ * `unstable_createElicitation`.
+ *
+ * The kanban UI presents the elicitation (a form built from
+ * {@link CreateElicitationRequest}'s `requestedSchema`, or a link for url mode)
+ * and resolves with the user's decision. A {@link CreateElicitationResponse}
+ * with `action: "decline"` or `action: "cancel"` is valid — e.g. when the user
+ * dismisses the prompt or the surrounding turn is cancelled.
+ */
+export type ElicitationHandler = (
+  params: CreateElicitationRequest,
+) => Promise<CreateElicitationResponse>;
+
+/**
+ * Handler invoked when the agent reports a url-mode elicitation finished via the
+ * `unstable_completeElicitation` notification.
+ *
+ * Fire-and-forget: like every ACP notification it expects no response, so the
+ * handler returns nothing. The UI uses it to dismiss the in-flight
+ * url-elicitation prompt identified by
+ * {@link CompleteElicitationNotification.elicitationId}.
+ */
+export type CompleteElicitationHandler = (
+  params: CompleteElicitationNotification,
+) => void;
+
 /** Dependencies injected into {@link createKanbanClient}. */
 export interface KanbanClientOptions {
   /** The ACP message stream — typically from {@link connectAcpStream}. */
@@ -114,6 +149,10 @@ export interface KanbanClientOptions {
   onSessionUpdate: SessionUpdateHandler;
   /** Resolves `session/request_permission` requests via the UI. */
   onRequestPermission: RequestPermissionHandler;
+  /** Resolves `unstable_createElicitation` requests via the UI. */
+  onElicitation: ElicitationHandler;
+  /** Handles `unstable_completeElicitation` notifications via the UI. */
+  onCompleteElicitation: CompleteElicitationHandler;
 }
 
 /**
@@ -212,22 +251,25 @@ export class AcpProtocolVersionError extends Error {
  *
  * - `sessionUpdate` / `requestPermission` are forwarded to the injected
  *   handlers — the genuine integration points with the UI and the store.
+ * - The `unstable_` elicitation methods are forwarded to the injected
+ *   {@link ElicitationHandler} / {@link CompleteElicitationHandler}. Elicitation
+ *   *is* advertised (see this module's docstring), so this is a real
+ *   integration point: the agent can ask the user for structured input and the
+ *   UI answers.
  * - The filesystem and terminal methods are *deliberate refusals*. v1 does not
  *   advertise `fs` or `terminal` capabilities (see this module's docstring),
  *   so a well-behaved agent never calls them. Should one try anyway, it gets a
  *   clear `RequestError.methodNotFound` instead of a silent hang — exactly the
  *   response the SDK would synthesize for an unimplemented optional method,
  *   but explicit and self-documenting here.
- * - The `unstable_` elicitation methods are likewise *deliberate refusals*. v1
- *   advertises no elicitation capability, so a well-behaved agent never calls
- *   them; implementing them explicitly makes this `Client` enumerate the full
- *   SDK interface and self-document the v1 stance.
  * - `extMethod` / `extNotification` likewise refuse: this client defines no
  *   ACP extensions.
  */
 function buildClient(
   onSessionUpdate: SessionUpdateHandler,
   onRequestPermission: RequestPermissionHandler,
+  onElicitation: ElicitationHandler,
+  onCompleteElicitation: CompleteElicitationHandler,
 ): Client {
   /**
    * Reject an agent->client call for a capability v1 does not advertise.
@@ -278,19 +320,21 @@ function buildClient(
       return Promise.reject(refuseCapability("terminal/kill"));
     },
 
-    // Elicitation methods (`unstable_`, experimental) — refused. v1 advertises
-    // no elicitation capability, so a well-behaved agent never calls these.
+    // Elicitation methods (`unstable_`, experimental) — forwarded. The
+    // `elicitation` capability is advertised in `initialize`, so the agent may
+    // ask the user for structured input and the UI handler answers.
     unstable_createElicitation(
-      _params: CreateElicitationRequest,
-    ): Promise<never> {
-      return Promise.reject(refuseCapability("elicitation/create"));
+      params: CreateElicitationRequest,
+    ): Promise<CreateElicitationResponse> {
+      return onElicitation(params);
     },
     unstable_completeElicitation(
-      _params: CompleteElicitationNotification,
+      params: CompleteElicitationNotification,
     ): Promise<void> {
-      // A notification — like `extNotification`, it expects no response, so an
-      // unsupported elicitation-complete is silently dropped rather than
-      // erroring a fire-and-forget message.
+      // A notification — it expects no response. Forward to the completion
+      // handler so the UI can dismiss the in-flight url elicitation, then
+      // resolve the fire-and-forget message.
+      onCompleteElicitation(params);
       return Promise.resolve();
     },
 
@@ -363,10 +407,10 @@ function makeSession(agent: Agent, sessionId: string): AcpSession {
  * Drives the full client-side handshake:
  *
  * 1. Constructs a `ClientSideConnection` with a {@link Client} that forwards
- *    `sessionUpdate`/`requestPermission` to the injected handlers and refuses
- *    the unadvertised fs/terminal capabilities.
+ *    `sessionUpdate`/`requestPermission`/elicitation to the injected handlers
+ *    and refuses the unadvertised fs/terminal capabilities.
  * 2. Sends `initialize` with honest capabilities — `fs` read/write `false`,
- *    `terminal` omitted.
+ *    `terminal` omitted, and `elicitation` advertising both form and url modes.
  * 3. Verifies the negotiated protocol version: any version other than the one
  *    this client offered rejects with {@link AcpProtocolVersionError} so the
  *    mismatch surfaces immediately and clearly.
@@ -374,7 +418,7 @@ function makeSession(agent: Agent, sessionId: string): AcpSession {
  * The returned {@link KanbanAcpClient} can then open stateless chat sessions
  * via {@link KanbanAcpClient.startSession}.
  *
- * @param options - The stream, board directory, MCP URL, and the two handlers.
+ * @param options - The stream, board directory, MCP URL, and the handlers.
  * @returns A connected, initialized {@link KanbanAcpClient}.
  * @throws AcpProtocolVersionError when the agent negotiates an unsupported
  *   protocol version.
@@ -382,19 +426,33 @@ function makeSession(agent: Agent, sessionId: string): AcpSession {
 export async function createKanbanClient(
   options: KanbanClientOptions,
 ): Promise<KanbanAcpClient> {
-  const { stream, boardDir, mcpUrl, onSessionUpdate, onRequestPermission } =
-    options;
+  const {
+    stream,
+    boardDir,
+    mcpUrl,
+    onSessionUpdate,
+    onRequestPermission,
+    onElicitation,
+    onCompleteElicitation,
+  } = options;
 
-  const client = buildClient(onSessionUpdate, onRequestPermission);
+  const client = buildClient(
+    onSessionUpdate,
+    onRequestPermission,
+    onElicitation,
+    onCompleteElicitation,
+  );
   const connection = new ClientSideConnection(() => client, stream);
 
   const initializeResponse = await connection.initialize({
     protocolVersion: PROTOCOL_VERSION,
     clientInfo: CLIENT_INFO,
     // Honest capabilities: v1 does not do client-side files or shell. The
-    // agent uses the SAH MCP toolset for both.
+    // agent uses the SAH MCP toolset for both. Elicitation is supported in
+    // both form and url modes so the agent can ask the user for input.
     clientCapabilities: {
       fs: { readTextFile: false, writeTextFile: false },
+      elicitation: { form: {}, url: {} },
     },
   });
 

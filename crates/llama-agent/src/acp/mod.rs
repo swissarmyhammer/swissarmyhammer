@@ -253,6 +253,7 @@
 
 pub mod commands;
 pub mod config;
+pub mod elicitation;
 pub mod error;
 pub mod filesystem;
 pub mod mcp_client_factory;

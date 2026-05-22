@@ -53,7 +53,10 @@
 import { useCallback, useMemo, useReducer, useRef, useState } from "react";
 import type {
   AvailableCommand,
+  CompleteElicitationNotification,
   ContentBlock,
+  CreateElicitationRequest,
+  CreateElicitationResponse,
   PlanEntry,
   RequestPermissionRequest,
   RequestPermissionResponse,
@@ -948,6 +951,17 @@ export function conversationReducer(
 export type PermissionRequestState = RequestPermissionRequest | null;
 
 /**
+ * A pending elicitation request awaiting the user's structured input.
+ *
+ * When the agent calls `unstable_createElicitation`, the hook stores the request
+ * here and the panel renders the form (or the url link). {@link ConversationApi.respondElicitation}
+ * resolves it. `null` means no elicitation is pending. The agent may also
+ * dismiss it out-of-band via `unstable_completeElicitation`, which clears this
+ * back to `null` without a user response.
+ */
+export type ElicitationRequestState = CreateElicitationRequest | null;
+
+/**
  * The hook surface the AI panel consumes.
  *
  * This is exactly the surface the task specifies — no more, no less.
@@ -985,15 +999,24 @@ export interface ConversationApi {
    * @param response - The user's permission outcome to return to the agent.
    */
   respondPermission(response: RequestPermissionResponse): void;
+  /** The pending elicitation request, or `null` when none is awaiting. */
+  elicitationRequest: ElicitationRequestState;
+  /**
+   * Resolve the pending elicitation request with the user's input.
+   *
+   * @param response - The user's elicitation outcome to return to the agent —
+   *   an `accept` with content, or a `decline`/`cancel`.
+   */
+  respondElicitation(response: CreateElicitationResponse): void;
 }
 
 /**
  * The pair of agent->client handlers `createKanbanClient` needs.
  *
  * `useConversation` owns these handlers — they fold the `sessionUpdate` stream
- * into the store and surface permission requests to the panel — and hands them
- * to the {@link ConversationConnect} factory so the ACP client routes its
- * callbacks straight into the conversation store.
+ * into the store and surface permission and elicitation requests to the panel —
+ * and hands them to the {@link ConversationConnect} factory so the ACP client
+ * routes its callbacks straight into the conversation store.
  */
 export interface ConversationHandlers {
   /** Forwards each `session/update` notification into the conversation store. */
@@ -1002,22 +1025,30 @@ export interface ConversationHandlers {
   onRequestPermission: (
     request: RequestPermissionRequest,
   ) => Promise<RequestPermissionResponse>;
+  /** Surfaces an agent elicitation request and awaits the user's input. */
+  onElicitation: (
+    request: CreateElicitationRequest,
+  ) => Promise<CreateElicitationResponse>;
+  /** Dismisses a pending elicitation the agent reports finished out-of-band. */
+  onCompleteElicitation: (
+    notification: CompleteElicitationNotification,
+  ) => void;
 }
 
 /**
  * Factory that builds (or reuses) the connected ACP client.
  *
  * The panel owns the WebSocket and the `createKanbanClient` call, but the
- * client's `onSessionUpdate`/`onRequestPermission` handlers belong to the
- * conversation hook. So the panel passes a factory: {@link useConversation}
- * supplies its handlers, and the factory builds a {@link KanbanAcpClient}
- * wired to them.
+ * client's `onSessionUpdate`/`onRequestPermission`/elicitation handlers belong
+ * to the conversation hook. So the panel passes a factory:
+ * {@link useConversation} supplies its handlers, and the factory builds a
+ * {@link KanbanAcpClient} wired to them.
  *
  * The factory may return `null` before the agent has started — the hook then
  * stays inert until a later `sendPrompt` succeeds in connecting.
  *
- * @param handlers - The conversation hook's session-update and permission
- *   handlers, to pass through to `createKanbanClient`.
+ * @param handlers - The conversation hook's session-update, permission, and
+ *   elicitation handlers, to pass through to `createKanbanClient`.
  * @returns The connected ACP client, or `null` when the agent is not ready.
  */
 export type ConversationConnect = (
@@ -1043,8 +1074,8 @@ export interface UseConversationOptions {
  * React hook: a live conversation folded from one ACP client's update stream.
  *
  * The hook owns the conversation store and the turn-status machine, *is* the
- * source of the ACP client's `sessionUpdate`/`requestPermission` handlers, and
- * exposes the {@link ConversationApi} the AI panel renders.
+ * source of the ACP client's `sessionUpdate`/`requestPermission`/elicitation
+ * handlers, and exposes the {@link ConversationApi} the AI panel renders.
  *
  * The ACP client is built lazily through the injected {@link ConversationConnect}
  * factory so the client's handlers route straight into this hook's reducer.
@@ -1064,6 +1095,8 @@ export function useConversation(
   );
   const [permissionRequest, setPermissionRequest] =
     useState<PermissionRequestState>(null);
+  const [elicitationRequest, setElicitationRequest] =
+    useState<ElicitationRequestState>(null);
 
   /**
    * The connected ACP client, built lazily on first `sendPrompt`. A ref, not
@@ -1088,6 +1121,15 @@ export function useConversation(
   >(null);
 
   /**
+   * Resolver for the in-flight elicitation request. The ACP client's
+   * `onElicitation` handler returns this promise; `respondElicitation` resolves
+   * it. A ref so the handler and the responder share one slot.
+   */
+  const elicitationResolverRef = useRef<
+    ((response: CreateElicitationResponse) => void) | null
+  >(null);
+
+  /**
    * Surface an agent permission request to the panel and await the decision.
    *
    * Passed to `createKanbanClient` as `onRequestPermission`. Stores the request
@@ -1105,19 +1147,55 @@ export function useConversation(
   );
 
   /**
-   * The handler pair handed to the {@link ConversationConnect} factory.
+   * Surface an agent elicitation request to the panel and await the input.
    *
-   * `dispatch` from `useReducer` is referentially stable, and
-   * `handleRequestPermission` is memoized, so this pair is stable for the
-   * hook's lifetime — the ACP client never needs rebuilding to refresh it.
+   * Passed to `createKanbanClient` as `onElicitation`. Stores the request for
+   * the panel to render and returns a promise resolved by
+   * {@link ConversationApi.respondElicitation}.
+   */
+  const handleElicitation = useCallback(
+    (request: CreateElicitationRequest): Promise<CreateElicitationResponse> => {
+      setElicitationRequest(request);
+      return new Promise<CreateElicitationResponse>((resolve) => {
+        elicitationResolverRef.current = resolve;
+      });
+    },
+    [],
+  );
+
+  /**
+   * Dismiss a pending elicitation the agent reports finished out-of-band.
+   *
+   * Passed to `createKanbanClient` as `onCompleteElicitation`. A
+   * `unstable_completeElicitation` notification means the agent resolved the
+   * elicitation itself (typically a url-mode flow completing in the browser),
+   * so the in-flight prompt is cleared. The resolver is dropped without being
+   * called — the agent expects no client response to a completion.
+   */
+  const handleCompleteElicitation = useCallback(
+    (_notification: CompleteElicitationNotification): void => {
+      elicitationResolverRef.current = null;
+      setElicitationRequest(null);
+    },
+    [],
+  );
+
+  /**
+   * The handler set handed to the {@link ConversationConnect} factory.
+   *
+   * `dispatch` from `useReducer` is referentially stable, and the permission and
+   * elicitation handlers are memoized, so this set is stable for the hook's
+   * lifetime — the ACP client never needs rebuilding to refresh it.
    */
   const handlers = useMemo<ConversationHandlers>(
     () => ({
       onSessionUpdate: (notification) =>
         dispatch({ kind: "update", notification }),
       onRequestPermission: handleRequestPermission,
+      onElicitation: handleElicitation,
+      onCompleteElicitation: handleCompleteElicitation,
     }),
-    [handleRequestPermission],
+    [handleRequestPermission, handleElicitation, handleCompleteElicitation],
   );
 
   /**
@@ -1131,6 +1209,22 @@ export function useConversation(
       const resolve = permissionResolverRef.current;
       permissionResolverRef.current = null;
       setPermissionRequest(null);
+      resolve?.(response);
+    },
+    [],
+  );
+
+  /**
+   * Resolve the pending elicitation request.
+   *
+   * Clears the stored request and fulfils the promise the ACP client is
+   * awaiting. A no-op when nothing is pending.
+   */
+  const respondElicitation = useCallback(
+    (response: CreateElicitationResponse) => {
+      const resolve = elicitationResolverRef.current;
+      elicitationResolverRef.current = null;
+      setElicitationRequest(null);
       resolve?.(response);
     },
     [],
@@ -1198,6 +1292,10 @@ export function useConversation(
     sessionRef.current = null;
     permissionResolverRef.current = null;
     setPermissionRequest(null);
+    // An elicitation left pending when the conversation is reset is abandoned;
+    // drop its resolver (the agent's session is gone) and clear the prompt.
+    elicitationResolverRef.current = null;
+    setElicitationRequest(null);
     dispatch({ kind: "reset" });
   }, []);
 
@@ -1211,6 +1309,8 @@ export function useConversation(
       newConversation,
       permissionRequest,
       respondPermission,
+      elicitationRequest,
+      respondElicitation,
     }),
     [
       state.conversation,
@@ -1220,6 +1320,8 @@ export function useConversation(
       newConversation,
       permissionRequest,
       respondPermission,
+      elicitationRequest,
+      respondElicitation,
     ],
   );
 }

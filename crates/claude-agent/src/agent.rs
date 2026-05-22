@@ -68,9 +68,14 @@ pub struct ClaudeAgent {
     /// Per ACP protocol, Agent can send requests TO the Client. In ACP 0.11 the
     /// `Client` trait is gone — `agent_client_protocol::Client` is a unit Role
     /// marker, and outbound calls flow over a typed [`ConnectionTo<Client>`]
-    /// handle obtained from the connection builder. The handle is `Clone`, so
-    /// it does not need to be wrapped in an `Arc`.
-    pub(crate) client: Option<agent_client_protocol::ConnectionTo<agent_client_protocol::Client>>,
+    /// handle obtained from the connection builder. The handle is `Clone`.
+    ///
+    /// Stored in a shared `Arc<RwLock<Option<..>>>` cell rather than a bare
+    /// `Option` because the connection is set *after* construction (via
+    /// [`Self::set_client`]) yet must also be readable by the elicitation
+    /// bridge handler, which is installed on the Claude client at construction
+    /// time. The shared cell is the single source of truth both paths read.
+    pub(crate) client: crate::agent_elicitation::SharedClient,
     /// Storage for user permission preferences
     ///
     /// Stores "always" decisions (allow-always, reject-always) across tool calls
@@ -159,11 +164,21 @@ impl ClaudeAgent {
         let permission_engine = Self::create_permission_engine();
         let protocol_translator = Arc::new(ProtocolTranslator::new(permission_engine.clone()));
 
+        // Shared cells for the client connection and capabilities. Created here
+        // so the elicitation bridge handler (installed on the Claude client
+        // below) and the agent itself read the same live values once the
+        // connection is set and `initialize` reports capabilities.
+        let client: crate::agent_elicitation::SharedClient = Arc::new(RwLock::new(None));
+        let client_capabilities: crate::agent_elicitation::SharedClientCapabilities =
+            Arc::new(RwLock::new(None));
+
         let (claude_client, raw_message_manager) = Self::create_claude_client(
             &config,
             protocol_translator,
             &notification_sender,
             raw_message_manager,
+            client.clone(),
+            client_capabilities.clone(),
         )?;
 
         let mcp_manager = Arc::new(crate::mcp::McpServerManager::new());
@@ -192,6 +207,8 @@ impl ClaudeAgent {
             permission_engine,
             raw_message_manager,
             path_validator,
+            client,
+            client_capabilities,
         );
 
         Ok((agent, notification_receiver))
@@ -208,11 +225,17 @@ impl ClaudeAgent {
     }
 
     /// Create and configure the Claude client with optional raw message manager.
+    ///
+    /// The shared `client` and `client_capabilities` cells are used to build the
+    /// elicitation bridge handler and install it on the client, so a CLI
+    /// elicitation surfaced on the streaming loop is relayed to the ACP client.
     fn create_claude_client(
         config: &AgentConfig,
         protocol_translator: Arc<ProtocolTranslator>,
         notification_sender: &NotificationSender,
         raw_message_manager: Option<RawMessageManager>,
+        client: crate::agent_elicitation::SharedClient,
+        client_capabilities: crate::agent_elicitation::SharedClientCapabilities,
     ) -> crate::Result<(Arc<ClaudeClient>, Option<RawMessageManager>)> {
         let mut claude_client = ClaudeClient::new_with_config(&config.claude, protocol_translator)?;
         claude_client.set_notification_sender(Arc::new(notification_sender.clone()));
@@ -221,6 +244,11 @@ impl ClaudeAgent {
         if let Some(ref manager) = raw_message_manager {
             claude_client.set_raw_message_manager(manager.clone());
         }
+
+        let elicitation_handler = Arc::new(
+            crate::agent_elicitation::ElicitationBridgeHandler::new(client, client_capabilities),
+        );
+        claude_client.set_elicitation_handler(elicitation_handler);
 
         Ok((Arc::new(claude_client), raw_message_manager))
     }
@@ -370,6 +398,8 @@ impl ClaudeAgent {
         permission_engine: Arc<PermissionPolicyEngine>,
         raw_message_manager: Option<RawMessageManager>,
         path_validator: Arc<PathValidator>,
+        client: crate::agent_elicitation::SharedClient,
+        client_capabilities: crate::agent_elicitation::SharedClientCapabilities,
     ) -> Self {
         let base64_processor = Arc::new(Base64Processor::default());
         let content_block_processor = Arc::new(ContentBlockProcessor::new(
@@ -387,7 +417,7 @@ impl ClaudeAgent {
             mcp_manager: Some(mcp_manager),
             config,
             capabilities,
-            client_capabilities: Arc::new(RwLock::new(None)),
+            client_capabilities,
             notification_sender: Arc::new(notification_sender),
             cancellation_manager: Arc::new(cancellation_manager),
             permission_engine,
@@ -395,7 +425,7 @@ impl ClaudeAgent {
             content_block_processor,
             editor_state_manager,
             raw_message_manager,
-            client: None,
+            client,
             permission_storage: Arc::new(permission_storage::PermissionStorage::new()),
             plan_manager: Arc::new(RwLock::new(crate::plan::PlanManager::new())),
             available_agents: Arc::new(RwLock::new(None)),
@@ -410,13 +440,18 @@ impl ClaudeAgent {
     /// This should be called with a [`ConnectionTo<Client>`] after creating the
     /// agent — typically the handle obtained inside the
     /// `Agent.builder().on_receive_request(...).connect_with(...)` closure. It
-    /// is required for the agent to send `session/request_permission` and
-    /// other client-bound requests outside of a per-request handler context.
-    pub fn set_client(
-        &mut self,
+    /// is required for the agent to send `session/request_permission`,
+    /// `elicitation/create`, and other client-bound requests outside of a
+    /// per-request handler context.
+    ///
+    /// Writes the shared client cell, so the elicitation bridge handler
+    /// installed on the Claude client sees the connection too. `&self` because
+    /// the connection lives behind an `Arc<RwLock<..>>`.
+    pub async fn set_client(
+        &self,
         client: agent_client_protocol::ConnectionTo<agent_client_protocol::Client>,
     ) {
-        self.client = Some(client);
+        *self.client.write().await = Some(client);
     }
 
     /// Set available agents (modes) from Claude CLI init message
@@ -2332,7 +2367,8 @@ impl ClaudeAgent {
         request: &PermissionRequest,
         permission_options: &[crate::tools::PermissionOption],
     ) -> crate::tools::PermissionOutcome {
-        let Some(ref client) = self.client else {
+        let client_guard = self.client.read().await;
+        let Some(client) = client_guard.as_ref() else {
             tracing::warn!(
                 "Permission required for tool '{}' but no client connection available",
                 tool_name

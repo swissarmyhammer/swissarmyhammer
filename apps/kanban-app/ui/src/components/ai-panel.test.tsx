@@ -18,6 +18,8 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "vitest/browser";
 import type {
   ContentBlock,
+  CreateElicitationRequest,
+  CreateElicitationResponse,
   PromptResponse,
   RequestPermissionRequest,
   RequestPermissionResponse,
@@ -26,6 +28,7 @@ import type {
 import { renderInAct } from "@/test/act-render";
 import type {
   AcpSession,
+  ElicitationHandler,
   KanbanAcpClient,
   RequestPermissionHandler,
   SessionUpdateHandler,
@@ -128,6 +131,8 @@ interface MockHarness {
   sessions: () => FakeSession[];
   /** The `onRequestPermission` handler the latest client captured. */
   permission: () => RequestPermissionHandler;
+  /** The `onElicitation` handler the latest client captured. */
+  elicitation: () => ElicitationHandler;
 }
 
 /**
@@ -141,11 +146,13 @@ function mockHarness(script: SessionScript = {}): MockHarness {
   const connectedModels: string[] = [];
   const sessions: FakeSession[] = [];
   let capturedPermission: RequestPermissionHandler | undefined;
+  let capturedElicitation: ElicitationHandler | undefined;
 
   const createConnect: AiPanelConnectFactory = (modelId) => {
     connectedModels.push(modelId);
     const connect: ConversationConnect = async (handlers) => {
       capturedPermission = handlers.onRequestPermission;
+      capturedElicitation = handlers.onElicitation;
       const client: KanbanAcpClient = {
         protocolVersion: 1,
         initializeResponse: { protocolVersion: 1, agentCapabilities: {} },
@@ -169,6 +176,12 @@ function mockHarness(script: SessionScript = {}): MockHarness {
         throw new Error("createConnect was never invoked");
       }
       return capturedPermission;
+    },
+    elicitation: () => {
+      if (!capturedElicitation) {
+        throw new Error("createConnect was never invoked");
+      }
+      return capturedElicitation;
     },
   };
 }
@@ -949,5 +962,228 @@ describe("AiPanel: ai.* command integration", () => {
     await waitFor(() => {
       expect(aiStreaming()).toBe(false);
     });
+  });
+});
+
+/**
+ * The inline elicitation prompt — the sibling of the permission prompt.
+ *
+ * When the agent calls `unstable_createElicitation`, `useConversation` surfaces
+ * the request and the panel renders an `ElicitationPrompt`: the agent's message,
+ * the `ElicitationFields` form (form mode) or a link (url mode), and the
+ * Submit / Decline / Cancel actions. These tests prime the connection (a first
+ * prompt captures the elicitation handler), fire a request through the captured
+ * handler, drive the rendered form, and assert the {@link CreateElicitationResponse}
+ * the agent receives.
+ */
+describe("AiPanel: elicitation prompt", () => {
+  /** A form-mode request with a required text field and an optional select. */
+  function formRequest(): CreateElicitationRequest {
+    return {
+      sessionId: "fake-session",
+      mode: "form",
+      message: "Tell me about the deploy",
+      requestedSchema: {
+        type: "object",
+        properties: {
+          summary: { type: "string", title: "Summary" },
+          severity: {
+            type: "string",
+            title: "Severity",
+            enum: ["low", "high"],
+          },
+        },
+        required: ["summary"],
+      },
+    };
+  }
+
+  /** A url-mode request directing the user to an external page. */
+  function urlRequest(): CreateElicitationRequest {
+    return {
+      sessionId: "fake-session",
+      mode: "url",
+      message: "Authorize the integration",
+      url: "https://example.com/authorize",
+      elicitationId: "elicit-1",
+    };
+  }
+
+  /**
+   * The rendered elicitation prompt card.
+   *
+   * Scopes button/field queries to the prompt so they never collide with the
+   * composer's own `Submit` button (the composer's send control shares that
+   * accessible name).
+   */
+  function elicitationPrompt(): HTMLElement {
+    const card = document.querySelector<HTMLElement>(
+      "[data-slot='ai-elicitation-prompt']",
+    );
+    if (!card) {
+      throw new Error("elicitation prompt is not rendered");
+    }
+    return card;
+  }
+
+  /**
+   * Render the panel and send a first prompt so the connection — and thus the
+   * elicitation handler — is captured. Returns the harness for the test to
+   * fire elicitation requests through.
+   */
+  async function primedPanel(): Promise<MockHarness> {
+    const harness = mockHarness({
+      updates: [
+        { sessionUpdate: "agent_message_chunk", content: textBlock("working") },
+      ],
+    });
+    await renderInAct(
+      <AiPanel
+        boardDir="/tmp/board"
+        models={MODELS}
+        modelId="claude-code"
+        onSelectModel={() => {}}
+        onCollapse={() => {}}
+        createConnect={harness.createConnect}
+      />,
+    );
+    const textarea = screen.getByRole("textbox");
+    await act(async () => {
+      await userEvent.type(textarea, "prime the connection");
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /submit/i }));
+    });
+    return harness;
+  }
+
+  it("renders the form and a valid submit returns the typed accept content", async () => {
+    const harness = await primedPanel();
+
+    let outcome: Promise<CreateElicitationResponse> | undefined;
+    await act(async () => {
+      outcome = harness.elicitation()(formRequest());
+    });
+
+    // The agent's message and the field labels render.
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("Tell me about the deploy");
+    });
+    expect(screen.getByLabelText(/summary/i)).toBeInTheDocument();
+
+    // Fill the required text field, then submit.
+    await act(async () => {
+      await userEvent.type(screen.getByLabelText(/summary/i), "all green");
+    });
+    await act(async () => {
+      await userEvent.click(
+        within(elicitationPrompt()).getByRole("button", { name: /submit/i }),
+      );
+    });
+
+    // The agent receives an `accept` whose content matches the schema — the
+    // optional, untouched select is omitted entirely.
+    await expect(outcome).resolves.toEqual({
+      action: "accept",
+      content: { summary: "all green" },
+    });
+    // The prompt is dismissed once answered.
+    await waitFor(() => {
+      expect(document.body.textContent).not.toContain(
+        "Tell me about the deploy",
+      );
+    });
+  });
+
+  it("a missing required field blocks submit and shows an error", async () => {
+    const harness = await primedPanel();
+
+    let outcome: Promise<CreateElicitationResponse> | undefined;
+    let settled = false;
+    await act(async () => {
+      outcome = harness.elicitation()(formRequest());
+      void outcome.then(() => {
+        settled = true;
+      });
+    });
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("Tell me about the deploy");
+    });
+
+    // Submit with the required field left empty.
+    await act(async () => {
+      await userEvent.click(
+        within(elicitationPrompt()).getByRole("button", { name: /submit/i }),
+      );
+    });
+
+    // An error renders and the agent's request is NOT resolved — the prompt
+    // stays on screen.
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("summary is required");
+    });
+    expect(settled).toBe(false);
+    expect(document.body.textContent).toContain("Tell me about the deploy");
+  });
+
+  it("Decline sends a decline action", async () => {
+    const harness = await primedPanel();
+
+    let outcome: Promise<CreateElicitationResponse> | undefined;
+    await act(async () => {
+      outcome = harness.elicitation()(formRequest());
+    });
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("Tell me about the deploy");
+    });
+
+    await act(async () => {
+      await userEvent.click(
+        within(elicitationPrompt()).getByRole("button", { name: /decline/i }),
+      );
+    });
+
+    await expect(outcome).resolves.toEqual({ action: "decline" });
+  });
+
+  it("Cancel sends a cancel action", async () => {
+    const harness = await primedPanel();
+
+    let outcome: Promise<CreateElicitationResponse> | undefined;
+    await act(async () => {
+      outcome = harness.elicitation()(formRequest());
+    });
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("Tell me about the deploy");
+    });
+
+    await act(async () => {
+      await userEvent.click(
+        within(elicitationPrompt()).getByRole("button", { name: /cancel/i }),
+      );
+    });
+
+    await expect(outcome).resolves.toEqual({ action: "cancel" });
+  });
+
+  it("url mode renders a link and no form fields", async () => {
+    const harness = await primedPanel();
+
+    await act(async () => {
+      void harness.elicitation()(urlRequest());
+    });
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("Authorize the integration");
+    });
+
+    // The link points at the agent's url; no form fields are invented.
+    const link = screen.getByRole("link", { name: /authorize/i });
+    expect(link.getAttribute("href")).toBe("https://example.com/authorize");
+    expect(
+      document.querySelector("[data-slot='elicitation-fields']"),
+      "url mode must render no form fields",
+    ).toBeNull();
   });
 });

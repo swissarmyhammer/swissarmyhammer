@@ -2,6 +2,7 @@
 
 mod concurrent_session;
 mod coverage_tests;
+mod elicitation_bridge_flow;
 mod integrations;
 mod mcp_http_session;
 mod session_persistence;

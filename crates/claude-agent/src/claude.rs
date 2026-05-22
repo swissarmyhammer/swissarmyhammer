@@ -37,6 +37,11 @@ struct StreamContext {
     protocol_translator: Arc<ProtocolTranslator>,
     /// Channel sender for emitting parsed message chunks to the stream consumer.
     tx: tokio::sync::mpsc::UnboundedSender<MessageChunk>,
+    /// Handler for relaying CLI elicitation control requests to the ACP client.
+    ///
+    /// `None` when no ACP client is wired (e.g. some test paths); in that case
+    /// elicitation requests are declined so the CLI is not left hanging.
+    elicitation_handler: Option<Arc<dyn crate::elicitation_bridge::ElicitationHandler>>,
 }
 
 /// State tracked during streaming to detect duplicates and accumulate text.
@@ -63,6 +68,7 @@ pub struct ClaudeClient {
     protocol_translator: Arc<ProtocolTranslator>,
     notification_sender: Option<Arc<crate::agent::NotificationSender>>,
     raw_message_manager: Option<crate::agent::RawMessageManager>,
+    elicitation_handler: Option<Arc<dyn crate::elicitation_bridge::ElicitationHandler>>,
 }
 
 impl ClaudeClient {
@@ -74,6 +80,18 @@ impl ClaudeClient {
     /// Set raw message manager for recording JSON-RPC messages
     pub fn set_raw_message_manager(&mut self, manager: crate::agent::RawMessageManager) {
         self.raw_message_manager = Some(manager);
+    }
+
+    /// Set the handler that relays CLI elicitation requests to the ACP client.
+    ///
+    /// Installed by [`crate::agent::ClaudeAgent`] once a client connection is
+    /// available so the streaming loop can complete the `elicitation/create`
+    /// round-trip. When unset, elicitation requests are declined.
+    pub fn set_elicitation_handler(
+        &mut self,
+        handler: Arc<dyn crate::elicitation_bridge::ElicitationHandler>,
+    ) {
+        self.elicitation_handler = Some(handler);
     }
 
     /// Terminate the Claude process for a session
@@ -513,6 +531,7 @@ impl ClaudeClient {
             protocol_translator,
             notification_sender: None,
             raw_message_manager: None,
+            elicitation_handler: None,
         })
     }
 
@@ -527,6 +546,7 @@ impl ClaudeClient {
             protocol_translator,
             notification_sender: None,
             raw_message_manager: None,
+            elicitation_handler: None,
         })
     }
 
@@ -726,6 +746,7 @@ impl ClaudeClient {
             raw_message_manager: self.raw_message_manager.clone(),
             protocol_translator: self.protocol_translator.clone(),
             tx,
+            elicitation_handler: self.elicitation_handler.clone(),
         };
 
         tokio::task::spawn(Self::run_stream_loop(ctx));
@@ -747,6 +768,13 @@ impl ClaudeClient {
 
             Self::record_raw_message(&ctx.raw_message_manager, &line);
             Self::write_debug_log(&line);
+
+            // CLI elicitation control requests are a bidirectional side-channel
+            // on the same stdout stream: they must be relayed to the ACP client
+            // and answered on the CLI's stdin, not translated into a chunk.
+            if Self::try_handle_elicitation(&ctx, &line).await {
+                continue;
+            }
 
             if Self::is_end_of_stream(&line) {
                 Self::send_final_chunk(&ctx, &line);
@@ -776,6 +804,109 @@ impl ClaudeClient {
             if !Self::process_notification(&ctx, notification, &mut state) {
                 break;
             }
+        }
+    }
+
+    /// Relay a CLI elicitation control request, if `line` is one.
+    ///
+    /// Returns `true` when the line was an elicitation control request (and was
+    /// thus consumed by this side-channel), `false` otherwise so the caller
+    /// continues normal chunk translation.
+    ///
+    /// When an elicitation is recognized, this dispatches it to the installed
+    /// [`ElicitationHandler`] (or declines when none is wired) via
+    /// [`Self::elicitation_response_for_line`], then writes the resulting
+    /// `control_response` back to the CLI's stdin. The CLI blocks awaiting that
+    /// response, so it is always written — even on the decline path — to avoid
+    /// leaving the CLI hanging.
+    ///
+    /// [`ElicitationHandler`]: crate::elicitation_bridge::ElicitationHandler
+    async fn try_handle_elicitation(ctx: &StreamContext, line: &str) -> bool {
+        let Some(response_json) = Self::elicitation_response_for_line(
+            ctx.elicitation_handler.as_deref(),
+            &ctx.acp_session_id,
+            line,
+        )
+        .await
+        else {
+            return false;
+        };
+
+        Self::write_control_response(&ctx.process, response_json).await;
+        true
+    }
+
+    /// Compute the CLI `control_response` JSON for a stream line, if it is an
+    /// elicitation control request.
+    ///
+    /// Returns `None` when `line` is not an elicitation control request (the
+    /// caller then continues normal chunk translation). Otherwise returns the
+    /// `control_response` JSON to write back to the CLI: the handler's mapped
+    /// outcome when one is wired, or a decline when none is.
+    ///
+    /// Pure with respect to the process — it performs no stdin I/O — so the
+    /// dispatch decision can be unit-tested without a live CLI process.
+    ///
+    /// # Arguments
+    ///
+    /// * `handler` - The installed elicitation handler, if any.
+    /// * `acp_session_id` - The ACP session id for the elicitation scope.
+    /// * `line` - A single stream-json line from the CLI's stdout.
+    async fn elicitation_response_for_line(
+        handler: Option<&dyn crate::elicitation_bridge::ElicitationHandler>,
+        acp_session_id: &agent_client_protocol::schema::SessionId,
+        line: &str,
+    ) -> Option<serde_json::Value> {
+        let request = crate::elicitation_bridge::CliElicitationRequest::parse(line)?;
+
+        tracing::info!(
+            "Received CLI elicitation control request: request_id={}, message={:?}",
+            request.request_id,
+            request.message
+        );
+
+        let response_json = match handler {
+            Some(handler) => {
+                let outcome = handler
+                    .handle_elicitation(&request, acp_session_id.clone())
+                    .await;
+                request.control_response_for_outcome(&outcome)
+            }
+            None => {
+                tracing::warn!(
+                    "No elicitation handler wired; declining elicitation request_id={}",
+                    request.request_id
+                );
+                request.decline_control_response()
+            }
+        };
+
+        Some(response_json)
+    }
+
+    /// Write a `control_response` JSON value to the CLI's stdin.
+    ///
+    /// Serialization failures and write failures are logged rather than
+    /// propagated: the streaming loop must keep running, and a failure here only
+    /// means the CLI will time out this one elicitation.
+    async fn write_control_response(
+        process: &Arc<Mutex<ClaudeProcess>>,
+        response: serde_json::Value,
+    ) {
+        let line = match serde_json::to_string(&response) {
+            Ok(line) => line,
+            Err(e) => {
+                tracing::error!("Failed to serialize elicitation control_response: {}", e);
+                return;
+            }
+        };
+
+        let mut proc = process.lock().await;
+        if let Err(e) = proc.write_line(&line).await {
+            tracing::error!(
+                "Failed to write elicitation control_response to CLI stdin: {}",
+                e
+            );
         }
     }
 
@@ -1411,5 +1542,123 @@ mod tests {
         let update = ToolCallUpdate::new(ToolCallId::new("toolu_nostatus"), fields);
 
         assert!(ClaudeClient::tool_call_update_to_chunk(update).is_none());
+    }
+
+    /// A stub elicitation handler that always returns a fixed outcome, so the
+    /// stream-loop dispatch decision can be tested without a real ACP client.
+    struct StubElicitationHandler {
+        outcome: crate::elicitation_bridge::ElicitationOutcome,
+    }
+
+    impl StubElicitationHandler {
+        /// Build a stub that responds with the given action (success envelope).
+        fn with_action(action: agent_client_protocol::schema::ElicitationAction) -> Self {
+            Self {
+                outcome: crate::elicitation_bridge::ElicitationOutcome::Responded(
+                    agent_client_protocol::schema::CreateElicitationResponse::new(action),
+                ),
+            }
+        }
+
+        /// Build a stub that reports an infrastructure error (error envelope).
+        fn with_error(message: &str) -> Self {
+            Self {
+                outcome: crate::elicitation_bridge::ElicitationOutcome::Error(message.to_string()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::elicitation_bridge::ElicitationHandler for StubElicitationHandler {
+        async fn handle_elicitation(
+            &self,
+            _request: &crate::elicitation_bridge::CliElicitationRequest,
+            _session_id: agent_client_protocol::schema::SessionId,
+        ) -> crate::elicitation_bridge::ElicitationOutcome {
+            self.outcome.clone()
+        }
+    }
+
+    fn elicitation_line() -> String {
+        serde_json::json!({
+            "type": "control_request",
+            "request_id": "req_loop",
+            "request": { "subtype": "elicitation", "message": "hi" }
+        })
+        .to_string()
+    }
+
+    /// A non-elicitation line must not be diverted by the elicitation path.
+    #[tokio::test]
+    async fn elicitation_response_for_line_ignores_non_elicitation() {
+        let session_id = agent_client_protocol::schema::SessionId::new("s");
+        let line = r#"{"type":"assistant","message":{"content":[]}}"#;
+
+        let result = ClaudeClient::elicitation_response_for_line(None, &session_id, line).await;
+        assert!(result.is_none());
+    }
+
+    /// With no handler wired, an elicitation line yields a decline
+    /// control_response (so the CLI is unblocked rather than hanging).
+    #[tokio::test]
+    async fn elicitation_response_for_line_declines_without_handler() {
+        let session_id = agent_client_protocol::schema::SessionId::new("s");
+        let response =
+            ClaudeClient::elicitation_response_for_line(None, &session_id, &elicitation_line())
+                .await
+                .expect("an elicitation line must produce a control_response");
+
+        assert_eq!(response["type"], "control_response");
+        assert_eq!(response["response"]["subtype"], "success");
+        assert_eq!(response["response"]["request_id"], "req_loop");
+        assert_eq!(response["response"]["response"]["action"], "decline");
+    }
+
+    /// With a handler wired, the elicitation line yields the handler's mapped
+    /// outcome in the control_response.
+    #[tokio::test]
+    async fn elicitation_response_for_line_uses_handler_outcome() {
+        let session_id = agent_client_protocol::schema::SessionId::new("s");
+        let handler = StubElicitationHandler::with_action(
+            agent_client_protocol::schema::ElicitationAction::Cancel,
+        );
+
+        let response = ClaudeClient::elicitation_response_for_line(
+            Some(&handler),
+            &session_id,
+            &elicitation_line(),
+        )
+        .await
+        .expect("an elicitation line must produce a control_response");
+
+        assert_eq!(response["response"]["request_id"], "req_loop");
+        assert_eq!(response["response"]["response"]["action"], "cancel");
+    }
+
+    /// An infrastructure failure from the handler must surface to the CLI as the
+    /// `error` envelope — never as a `success`/`cancel`, which would be
+    /// indistinguishable from a clean user cancellation.
+    #[tokio::test]
+    async fn elicitation_response_for_line_emits_error_envelope_on_handler_error() {
+        let session_id = agent_client_protocol::schema::SessionId::new("s");
+        let handler = StubElicitationHandler::with_error("failed to relay elicitation to client");
+
+        let response = ClaudeClient::elicitation_response_for_line(
+            Some(&handler),
+            &session_id,
+            &elicitation_line(),
+        )
+        .await
+        .expect("an elicitation line must produce a control_response");
+
+        assert_eq!(response["type"], "control_response");
+        assert_eq!(response["response"]["subtype"], "error");
+        assert_eq!(response["response"]["request_id"], "req_loop");
+        assert_eq!(
+            response["response"]["error"],
+            "failed to relay elicitation to client"
+        );
+        // The error envelope must NOT carry a success/action payload.
+        assert!(response["response"]["response"].is_null());
     }
 }
