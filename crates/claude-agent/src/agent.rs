@@ -2575,9 +2575,8 @@ mod tests {
         use agent_client_protocol::schema::{McpServer, McpServerHttp};
 
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
-        NewSessionRequest::new(cwd).mcp_servers(vec![McpServer::Http(McpServerHttp::new(
-            name, url,
-        ))])
+        NewSessionRequest::new(cwd)
+            .mcp_servers(vec![McpServer::Http(McpServerHttp::new(name, url))])
     }
 
     /// Verifies the per-session MCP server from `request.mcp_servers` is
@@ -2594,10 +2593,8 @@ mod tests {
             .await
             .expect("agent construction must succeed");
 
-        let request = new_session_request_with_http_server(
-            "per-board-kanban",
-            "http://127.0.0.1:54321/mcp",
-        );
+        let request =
+            new_session_request_with_http_server("per-board-kanban", "http://127.0.0.1:54321/mcp");
 
         let session_id = crate::session::SessionId::new();
         let protocol_session_id = SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV");
@@ -2653,10 +2650,8 @@ mod tests {
             .await
             .expect("agent construction must succeed");
 
-        let request = new_session_request_with_http_server(
-            "session-server",
-            "http://127.0.0.1:54322/mcp",
-        );
+        let request =
+            new_session_request_with_http_server("session-server", "http://127.0.0.1:54322/mcp");
 
         let session_id = crate::session::SessionId::new();
         let protocol_session_id = SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAW");
@@ -2664,11 +2659,7 @@ mod tests {
         let spawn_config =
             agent.build_session_spawn_config(&session_id, &protocol_session_id, &request);
 
-        let names: Vec<&str> = spawn_config
-            .mcp_servers
-            .iter()
-            .map(|s| s.name())
-            .collect();
+        let names: Vec<&str> = spawn_config.mcp_servers.iter().map(|s| s.name()).collect();
         assert!(
             names.contains(&"static-server"),
             "Static server from self.config.mcp_servers must still appear in SpawnConfig, got: {:?}",

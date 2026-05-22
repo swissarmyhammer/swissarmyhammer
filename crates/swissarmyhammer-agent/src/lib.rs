@@ -2380,15 +2380,11 @@ mod tests {
         // serialization → WebSocket frame — are the production path being
         // verified.
         let session_id = SessionId::new(std::sync::Arc::from("test-session-001"));
-        let tool_call_id = ToolCallId::new(std::sync::Arc::from(
-            "toolu_01DrhKGoTS6bBL9KkZqigfM1",
-        ));
+        let tool_call_id = ToolCallId::new(std::sync::Arc::from("toolu_01DrhKGoTS6bBL9KkZqigfM1"));
         let fields = ToolCallUpdateFields::new().status(ToolCallStatus::Completed);
         let update = ToolCallUpdate::new(tool_call_id, fields);
-        let notification = SessionNotification::new(
-            session_id,
-            SessionUpdate::ToolCallUpdate(update),
-        );
+        let notification =
+            SessionNotification::new(session_id, SessionUpdate::ToolCallUpdate(update));
 
         sender
             .send_update(notification)
@@ -2451,16 +2447,12 @@ mod tests {
             .get("update")
             .expect("params must carry an update object");
         assert_eq!(
-            update_payload
-                .get("sessionUpdate")
-                .and_then(|v| v.as_str()),
+            update_payload.get("sessionUpdate").and_then(|v| v.as_str()),
             Some("tool_call_update"),
             "update.sessionUpdate must be tool_call_update, got: {update_payload}"
         );
         assert_eq!(
-            update_payload
-                .get("toolCallId")
-                .and_then(|v| v.as_str()),
+            update_payload.get("toolCallId").and_then(|v| v.as_str()),
             Some("toolu_01DrhKGoTS6bBL9KkZqigfM1"),
             "update.toolCallId must round-trip end-to-end, got: {update_payload}"
         );
@@ -2498,11 +2490,11 @@ mod tests {
                 Err(e) => Some(Err(std::io::Error::other(e))),
             }
         });
-        let outgoing = sink.sink_map_err(std::io::Error::other).with(
-            |line: String| async move {
-                Ok(tokio_tungstenite::tungstenite::Message::text(line))
-            },
-        );
+        let outgoing =
+            sink.sink_map_err(std::io::Error::other)
+                .with(|line: String| async move {
+                    Ok(tokio_tungstenite::tungstenite::Message::text(line))
+                });
         agent_client_protocol::Lines::new(outgoing, incoming)
     }
 }

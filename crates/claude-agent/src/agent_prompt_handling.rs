@@ -347,9 +347,7 @@ impl crate::agent::ClaudeAgent {
                 claude_stop_reason = Some(reason.clone());
             }
 
-            if chunk.content.is_empty()
-                && chunk.tool_call.is_none()
-                && chunk.tool_result.is_none()
+            if chunk.content.is_empty() && chunk.tool_call.is_none() && chunk.tool_result.is_none()
             {
                 continue;
             }
@@ -429,11 +427,7 @@ impl crate::agent::ClaudeAgent {
         let mut output_tokens: u64 = 0;
 
         while let Some(chunk) = futures::StreamExt::next(stream).await {
-            if self
-                .cancellation_manager
-                .is_cancelled(session_id_str)
-                .await
-            {
+            if self.cancellation_manager.is_cancelled(session_id_str).await {
                 tracing::info!(
                     "Session {} cancelled during Claude API response",
                     session_id
@@ -458,9 +452,7 @@ impl crate::agent::ClaudeAgent {
             // Skip protocol-metadata-only chunks the same way the streaming
             // path does — anything that carries no payload (no text, no
             // tool_call, no tool_result) is uninteresting to subscribers.
-            if chunk.content.is_empty()
-                && chunk.tool_call.is_none()
-                && chunk.tool_result.is_none()
+            if chunk.content.is_empty() && chunk.tool_call.is_none() && chunk.tool_result.is_none()
             {
                 continue;
             }
@@ -473,13 +465,8 @@ impl crate::agent::ClaudeAgent {
             // we already accumulated `chunk.content` above to preserve the
             // non-streaming path's `claude_response` semantics.
             let mut accumulated_content = String::new();
-            self.process_single_chunk(
-                session_id,
-                session_id_str,
-                &chunk,
-                &mut accumulated_content,
-            )
-            .await?;
+            self.process_single_chunk(session_id, session_id_str, &chunk, &mut accumulated_content)
+                .await?;
 
             // Accumulate output tokens against the effective cap. We count
             // text deltas only (tool-call chunks are protocol metadata, not
@@ -1917,8 +1904,8 @@ mod tests {
     /// the non-streaming path produces matching ids end-to-end.
     #[tokio::test]
     async fn test_non_streaming_tool_call_uses_real_tool_call_id() {
-        use agent_client_protocol::schema::ToolCallStatus;
         use crate::claude::{ChunkType, MessageChunk, ToolCallInfo};
+        use agent_client_protocol::schema::ToolCallStatus;
 
         let config = AgentConfig::default();
         let (agent, mut rx) = crate::agent::ClaudeAgent::new(config)
@@ -1944,9 +1931,8 @@ mod tests {
             token_usage: None,
             stop_reason: None,
         };
-        let mut stream: std::pin::Pin<
-            Box<dyn Stream<Item = MessageChunk> + Send>,
-        > = Box::pin(tokio_stream::iter(vec![chunk]));
+        let mut stream: std::pin::Pin<Box<dyn Stream<Item = MessageChunk> + Send>> =
+            Box::pin(tokio_stream::iter(vec![chunk]));
 
         agent
             .process_non_streaming_chunks(&session_id, &session_id_str, &mut stream, 100_000, None)
@@ -1985,8 +1971,8 @@ mod tests {
     /// while still leaving the live app broken.
     #[tokio::test]
     async fn test_real_cli_tool_result_line_round_trips_to_tool_call_update() {
-        use agent_client_protocol::schema::{SessionId, ToolCallStatus};
         use crate::claude::ClaudeClient;
+        use agent_client_protocol::schema::{SessionId, ToolCallStatus};
 
         // Step 1: A real CLI `tool_result` line, copied verbatim from a live
         // session debug log (/tmp/claude_stdout_debug.jsonl). The matching
@@ -2043,7 +2029,10 @@ mod tests {
         // before the prior commit this returned no chunk at all.
         let chunk = ClaudeClient::tool_call_update_to_chunk(tool_call_update)
             .expect("a Completed ToolCallUpdate must produce a ToolResult chunk");
-        assert!(matches!(chunk.chunk_type, crate::claude::ChunkType::ToolResult));
+        assert!(matches!(
+            chunk.chunk_type,
+            crate::claude::ChunkType::ToolResult
+        ));
         let info = chunk
             .tool_result
             .as_ref()
@@ -2060,9 +2049,8 @@ mod tests {
             .create_session(cwd, None)
             .expect("session creation must succeed");
         let session_id_str = session_id.to_string();
-        let mut stream: std::pin::Pin<
-            Box<dyn Stream<Item = crate::claude::MessageChunk> + Send>,
-        > = Box::pin(tokio_stream::iter(vec![chunk]));
+        let mut stream: std::pin::Pin<Box<dyn Stream<Item = crate::claude::MessageChunk> + Send>> =
+            Box::pin(tokio_stream::iter(vec![chunk]));
 
         agent
             .process_non_streaming_chunks(&session_id, &session_id_str, &mut stream, 100_000, None)
@@ -2073,11 +2061,9 @@ mod tests {
         // carrying the original tool_call_id and `Completed` status. This is
         // what the webview adapter expects to fold onto the pending tool
         // card in the AI panel.
-        let out = rx
-            .try_recv()
-            .expect(
-                "non-streaming pipeline must broadcast a ToolCallUpdate for a real CLI tool_result",
-            );
+        let out = rx.try_recv().expect(
+            "non-streaming pipeline must broadcast a ToolCallUpdate for a real CLI tool_result",
+        );
         match out.update {
             SessionUpdate::ToolCallUpdate(update) => {
                 assert_eq!(
@@ -2116,8 +2102,8 @@ mod tests {
     /// reported.
     #[tokio::test]
     async fn test_real_cli_tool_result_round_trips_through_streaming_pipeline() {
-        use agent_client_protocol::schema::{SessionId, ToolCallStatus};
         use crate::claude::{ClaudeClient, MessageChunk};
+        use agent_client_protocol::schema::{SessionId, ToolCallStatus};
 
         // Step 1: A real CLI `tool_result` line copied verbatim from
         // /tmp/claude_stdout_debug.jsonl. The matching `tool_use` arrived
@@ -2197,11 +2183,9 @@ mod tests {
         let (tx, channel_rx) = tokio::sync::mpsc::unbounded_channel::<MessageChunk>();
         tx.send(chunk).expect("channel send must succeed");
         drop(tx); // close so process_stream_chunks terminates after one chunk
-        let mut stream: std::pin::Pin<
-            Box<dyn Stream<Item = MessageChunk> + Send>,
-        > = Box::pin(tokio_stream::wrappers::UnboundedReceiverStream::new(
-            channel_rx,
-        ));
+        let mut stream: std::pin::Pin<Box<dyn Stream<Item = MessageChunk> + Send>> = Box::pin(
+            tokio_stream::wrappers::UnboundedReceiverStream::new(channel_rx),
+        );
 
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
         let session_id = agent
