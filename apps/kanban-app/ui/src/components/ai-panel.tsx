@@ -1043,15 +1043,36 @@ function ElicitationFormPrompt({
         />
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
-        <Button onClick={handleSubmit} size="sm" variant="default">
-          Submit
-        </Button>
-        <Button onClick={handleDecline} size="sm" variant="outline">
-          Decline
-        </Button>
-        <Button onClick={handleCancel} size="sm" variant="ghost">
-          Cancel
-        </Button>
+        <AiPanelPressable
+          asChild
+          moniker={asSegment("ui:ai-panel.elicitation.action:submit")}
+          ariaLabel="Submit"
+          onPress={handleSubmit}
+        >
+          <Button size="sm" variant="default">
+            Submit
+          </Button>
+        </AiPanelPressable>
+        <AiPanelPressable
+          asChild
+          moniker={asSegment("ui:ai-panel.elicitation.action:decline")}
+          ariaLabel="Decline"
+          onPress={handleDecline}
+        >
+          <Button size="sm" variant="outline">
+            Decline
+          </Button>
+        </AiPanelPressable>
+        <AiPanelPressable
+          asChild
+          moniker={asSegment("ui:ai-panel.elicitation.action:cancel")}
+          ariaLabel="Cancel"
+          onPress={handleCancel}
+        >
+          <Button size="sm" variant="ghost">
+            Cancel
+          </Button>
+        </AiPanelPressable>
       </div>
     </ElicitationCard>
   );
@@ -1078,6 +1099,16 @@ function ElicitationUrlPrompt({
   url,
   onRespond,
 }: ElicitationUrlPromptProps): ReactNode {
+  const handleDone = useCallback(() => {
+    console.info("[elicitation] url flow done: accepting");
+    onRespond({ action: "accept", content: {} });
+  }, [onRespond]);
+
+  const handleCancel = useCallback(() => {
+    console.info("[elicitation] url flow cancelled");
+    onRespond(cancelResponse());
+  }, [onRespond]);
+
   return (
     <ElicitationCard message={message}>
       <a
@@ -1089,26 +1120,26 @@ function ElicitationUrlPrompt({
         {url}
       </a>
       <div className="mt-3 flex flex-wrap gap-2">
-        <Button
-          onClick={() => {
-            console.info("[elicitation] url flow done: accepting");
-            onRespond({ action: "accept", content: {} });
-          }}
-          size="sm"
-          variant="default"
+        <AiPanelPressable
+          asChild
+          moniker={asSegment("ui:ai-panel.elicitation.action:done")}
+          ariaLabel="Done"
+          onPress={handleDone}
         >
-          Done
-        </Button>
-        <Button
-          onClick={() => {
-            console.info("[elicitation] url flow cancelled");
-            onRespond(cancelResponse());
-          }}
-          size="sm"
-          variant="ghost"
+          <Button size="sm" variant="default">
+            Done
+          </Button>
+        </AiPanelPressable>
+        <AiPanelPressable
+          asChild
+          moniker={asSegment("ui:ai-panel.elicitation.action:cancel")}
+          ariaLabel="Cancel"
+          onPress={handleCancel}
         >
-          Cancel
-        </Button>
+          <Button size="sm" variant="ghost">
+            Cancel
+          </Button>
+        </AiPanelPressable>
       </div>
     </ElicitationCard>
   );
