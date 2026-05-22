@@ -31,8 +31,7 @@ fn create_test_environment() -> (
     TempDir,
 ) {
     let temp_dir = TempDir::new().unwrap();
-    let storage_path = temp_dir.path().join("sessions");
-    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
+    let session_manager = Arc::new(SessionManager::new());
     let permission_engine = create_test_permission_engine();
 
     // Create permissions that use the policy engine (no auto-approved tools)
@@ -229,8 +228,7 @@ async fn test_stored_permission_allows_tool_without_prompt() {
     let storage = FilePermissionStorage::new(temp_dir.path().to_path_buf());
     let permission_engine = Arc::new(PermissionPolicyEngine::new(Box::new(storage)));
 
-    let storage_path = temp_dir.path().join("sessions");
-    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
+    let session_manager = Arc::new(SessionManager::new());
     let permissions = ToolPermissions {
         require_permission_for: vec![],
         auto_approved: vec![],
@@ -304,8 +302,7 @@ async fn test_stored_permission_denies_tool() {
     let storage = FilePermissionStorage::new(temp_dir.path().to_path_buf());
     let permission_engine = Arc::new(PermissionPolicyEngine::new(Box::new(storage)));
 
-    let storage_path = temp_dir.path().join("sessions");
-    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
+    let session_manager = Arc::new(SessionManager::new());
     let permissions = ToolPermissions {
         require_permission_for: vec![],
         auto_approved: vec![],
@@ -384,8 +381,7 @@ async fn test_custom_policy_denies_tool() {
         custom_policies,
     ));
 
-    let storage_path = temp_dir.path().join("sessions");
-    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
+    let session_manager = Arc::new(SessionManager::new());
     let permissions = ToolPermissions {
         require_permission_for: vec![],
         auto_approved: vec![],
@@ -455,8 +451,7 @@ async fn test_custom_policy_allows_tool() {
         custom_policies,
     ));
 
-    let storage_path = temp_dir.path().join("sessions");
-    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
+    let session_manager = Arc::new(SessionManager::new());
     let permissions = ToolPermissions {
         require_permission_for: vec![],
         auto_approved: vec![],
@@ -523,8 +518,7 @@ async fn test_pattern_matching_in_permissions() {
         .await
         .unwrap();
 
-    let storage_path = temp_dir.path().join("sessions");
-    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
+    let session_manager = Arc::new(SessionManager::new());
     let permissions = ToolPermissions {
         require_permission_for: vec![],
         auto_approved: vec![],
@@ -613,8 +607,7 @@ async fn test_permission_expiration() {
     // Wait a moment to ensure expiration
     tokio::time::sleep(Duration::from_millis(10)).await;
 
-    let storage_path = temp_dir.path().join("sessions");
-    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
+    let session_manager = Arc::new(SessionManager::new());
     let permissions = ToolPermissions {
         require_permission_for: vec![],
         auto_approved: vec![],
@@ -669,8 +662,7 @@ async fn test_permission_expiration() {
 async fn test_auto_approved_fs_read_bypasses_policy() {
     // Create permissions with fs_read in auto_approved list
     let test_dir = TempDir::new().unwrap();
-    let storage_path = test_dir.path().join("sessions");
-    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
+    let session_manager = Arc::new(SessionManager::new());
     let permission_engine = create_test_permission_engine();
 
     let permissions = ToolPermissions {
@@ -730,8 +722,7 @@ async fn test_auto_approved_fs_read_bypasses_policy() {
 #[serial]
 async fn test_auto_approved_fs_write_bypasses_policy() {
     let test_dir = TempDir::new().unwrap();
-    let storage_path = test_dir.path().join("sessions");
-    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
+    let session_manager = Arc::new(SessionManager::new());
     let permission_engine = create_test_permission_engine();
 
     // Create permissions with fs_write in auto_approved list
@@ -794,8 +785,7 @@ async fn test_auto_approved_fs_write_bypasses_policy() {
 #[serial]
 async fn test_auto_approved_terminal_bypasses_policy() {
     let test_dir = TempDir::new().unwrap();
-    let storage_path = test_dir.path().join("sessions");
-    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
+    let session_manager = Arc::new(SessionManager::new());
     let permission_engine = create_test_permission_engine();
 
     // Create permissions with terminal_create in auto_approved list
@@ -854,8 +844,7 @@ async fn test_auto_approved_terminal_bypasses_policy() {
 #[serial]
 async fn test_auto_approved_multiple_tools() {
     let test_dir = TempDir::new().unwrap();
-    let storage_path = test_dir.path().join("sessions");
-    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
+    let session_manager = Arc::new(SessionManager::new());
     let permission_engine = create_test_permission_engine();
 
     // Create permissions with multiple tools in auto_approved list
@@ -946,8 +935,7 @@ async fn test_auto_approved_multiple_tools() {
 #[serial]
 async fn test_non_auto_approved_tool_still_requires_permission() {
     let test_dir = TempDir::new().unwrap();
-    let storage_path = test_dir.path().join("sessions");
-    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
+    let session_manager = Arc::new(SessionManager::new());
     let permission_engine = create_test_permission_engine();
 
     // Create permissions with only fs_read in auto_approved list
@@ -1021,8 +1009,7 @@ async fn test_auto_approved_with_deny_policy_still_denied() {
         custom_policies,
     ));
 
-    let storage_path = temp_dir.path().join("sessions");
-    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
+    let session_manager = Arc::new(SessionManager::new());
 
     // Even though fs_write is in auto_approved, the deny policy should not be bypassed
     // (auto_approved bypasses policy evaluation, so this actually tests that behavior)

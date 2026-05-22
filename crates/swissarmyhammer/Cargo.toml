@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 description = "A flexible prompt management library for AI assistants"
 documentation = "https://docs.rs/swissarmyhammer"
-readme = "../README.md"
+readme = "../../README.md"
 keywords = ["prompt", "template", "ai", "assistant", "liquid"]
 categories = ["template-engine", "development-tools"]
 

@@ -46,6 +46,7 @@ fn test_session_creation_without_acp() {
         client_capabilities: None,
         cached_message_count: 0,
         cached_token_count: 0,
+        title: None,
     };
 
     // Verify basic session properties
@@ -274,6 +275,7 @@ fn test_no_acp_dependencies_required() {
         client_capabilities: None,
         cached_message_count: 0,
         cached_token_count: 0,
+        title: None,
     };
 
     assert!(session.messages.is_empty());

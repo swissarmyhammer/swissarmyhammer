@@ -201,15 +201,7 @@ impl crate::agent::ClaudeAgent {
                 session_id,
                 capability_error
             );
-            let acp_error_data = capability_error.to_acp_error();
-            return Err(agent_client_protocol::Error::new(
-                acp_error_data["code"].as_i64().unwrap_or(-32602) as i32,
-                acp_error_data["message"]
-                    .as_str()
-                    .unwrap_or("Content capability validation failed")
-                    .to_string(),
-            )
-            .data(acp_error_data["data"].clone()));
+            return Err(capability_error.to_acp_error());
         }
         Ok(())
     }
@@ -225,7 +217,9 @@ impl crate::agent::ClaudeAgent {
             .process_content_blocks(&request.prompt)
             .map_err(|e| {
                 tracing::error!("Failed to process content blocks: {}", e);
-                agent_client_protocol::Error::invalid_params()
+                crate::acp_error::invalid_params(format!(
+                    "Failed to process prompt content blocks: {e}"
+                ))
             })?;
 
         if content_summary.has_binary_content {
@@ -263,7 +257,12 @@ impl crate::agent::ClaudeAgent {
             .update_session(session_id, |s| {
                 s.turn_request_count = updated_session.turn_request_count;
             })
-            .map_err(|_| agent_client_protocol::Error::internal_error())?;
+            .map_err(|e| {
+                tracing::error!("Failed to update turn request count: {}", e);
+                crate::acp_error::internal_error(format!(
+                    "Failed to update session turn request count: {e}"
+                ))
+            })?;
 
         Ok(None)
     }
@@ -306,7 +305,9 @@ impl crate::agent::ClaudeAgent {
             .await
             .map_err(|e| {
                 tracing::error!("Failed to create streaming query: {}", e);
-                agent_client_protocol::Error::internal_error()
+                crate::acp_error::internal_error(format!(
+                    "Failed to start streaming query to the Claude process: {e}"
+                ))
             })
     }
 
@@ -711,7 +712,12 @@ impl crate::agent::ClaudeAgent {
             .update_session(session_id, |session| {
                 session.add_message(chunk_message);
             })
-            .map_err(|_| agent_client_protocol::Error::internal_error())?;
+            .map_err(|e| {
+                tracing::error!("Failed to store streaming text chunk: {}", e);
+                crate::acp_error::internal_error(format!(
+                    "Failed to store streamed message chunk in session: {e}"
+                ))
+            })?;
 
         let notification =
             SessionNotification::new(SessionId::new(session_id_str.to_string()), update);
@@ -800,7 +806,12 @@ impl crate::agent::ClaudeAgent {
             .update_session(session_id, |session| {
                 session.add_message(tool_call_message);
             })
-            .map_err(|_| agent_client_protocol::Error::internal_error())?;
+            .map_err(|e| {
+                tracing::error!("Failed to store streaming tool call: {}", e);
+                crate::acp_error::internal_error(format!(
+                    "Failed to store streamed tool call in session: {e}"
+                ))
+            })?;
 
         let notification =
             SessionNotification::new(SessionId::new(session_id_str.to_string()), update);
@@ -899,7 +910,9 @@ impl crate::agent::ClaudeAgent {
             .await
             .map_err(|e| {
                 tracing::error!("Permission evaluation failed: {}", e);
-                agent_client_protocol::Error::internal_error()
+                crate::acp_error::internal_error(format!(
+                    "Failed to evaluate the tool-call permission policy: {e}"
+                ))
             })?;
 
         match policy_eval {
@@ -1187,16 +1200,8 @@ impl crate::agent::ClaudeAgent {
                 capability_error
             );
 
-            // Convert to ACP-compliant error response
-            let acp_error_data = capability_error.to_acp_error();
-            return Err(agent_client_protocol::Error::new(
-                acp_error_data["code"].as_i64().unwrap_or(-32602) as i32,
-                acp_error_data["message"]
-                    .as_str()
-                    .unwrap_or("Content capability validation failed")
-                    .to_string(),
-            )
-            .data(acp_error_data["data"].clone()));
+            // Convert to ACP-compliant error response.
+            return Err(capability_error.to_acp_error());
         }
 
         // Extract and process all content from the prompt
@@ -1215,7 +1220,9 @@ impl crate::agent::ClaudeAgent {
                         .decode_image_data(&image_content.data, &image_content.mime_type)
                         .map_err(|e| {
                             tracing::error!("Failed to decode image data: {}", e);
-                            agent_client_protocol::Error::invalid_params()
+                            crate::acp_error::invalid_params(format!(
+                                "Failed to decode image content from the prompt: {e}"
+                            ))
                         })?;
 
                     // Add descriptive text for now until full multimodal support
@@ -1237,7 +1244,9 @@ impl crate::agent::ClaudeAgent {
                         .decode_audio_data(&audio_content.data, &audio_content.mime_type)
                         .map_err(|e| {
                             tracing::error!("Failed to decode audio data: {}", e);
-                            agent_client_protocol::Error::invalid_params()
+                            crate::acp_error::invalid_params(format!(
+                                "Failed to decode audio content from the prompt: {e}"
+                            ))
                         })?;
 
                     // Add descriptive text for now until full multimodal support
@@ -1299,7 +1308,7 @@ impl crate::agent::ClaudeAgent {
             .await
             .map_err(|e| {
                 tracing::error!("Claude API error: {}", Pretty(&e));
-                agent_client_protocol::Error::internal_error()
+                crate::acp_error::internal_error(format!("Claude API request failed: {e}"))
             })?;
 
         let effective_cap =
@@ -1375,7 +1384,12 @@ impl crate::agent::ClaudeAgent {
             .update_session(session_id, |session| {
                 session.add_message(assistant_message);
             })
-            .map_err(|_| agent_client_protocol::Error::internal_error())?;
+            .map_err(|e| {
+                tracing::error!("Failed to store assistant response: {}", e);
+                crate::acp_error::internal_error(format!(
+                    "Failed to store the assistant response in session: {e}"
+                ))
+            })?;
 
         let mut meta = serde_json::Map::new();
         meta.insert("processed".to_string(), serde_json::json!(true));

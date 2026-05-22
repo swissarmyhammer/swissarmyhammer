@@ -3157,8 +3157,15 @@ mod tests {
             .await;
 
         assert!(result.is_err());
+        // ACP session IDs are opaque strings: an id this agent did not mint
+        // (a non-ULID string) cannot match any live session, so it is treated
+        // exactly like any other session lookup miss — "Session not found"
+        // rather than a separate "invalid format" error.
         let error = result.unwrap_err().to_string();
-        assert!(error.contains("Invalid session ID format"));
+        assert!(
+            error.contains("Session not found"),
+            "expected a session-not-found error, got: {error}"
+        );
     }
 
     #[tokio::test]

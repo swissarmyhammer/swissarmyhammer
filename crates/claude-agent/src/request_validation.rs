@@ -73,7 +73,12 @@ impl RequestValidator {
         Ok(())
     }
 
-    /// Validate session ID parameter format and content
+    /// Validate that a session ID parameter is present.
+    ///
+    /// A session ID is an opaque string — it is not validated against any
+    /// format (it is *not* required to be a ULID). The only constraint is that
+    /// it is non-empty; whether it names a live session is settled later by
+    /// resolve-by-existence in the handler, not here.
     fn validate_session_id_parameter(
         session_id: &SessionId,
         request_type: &str,
@@ -83,12 +88,9 @@ impl RequestValidator {
             return Err(SessionSetupError::MissingRequiredParameter {
                 request_type: request_type.to_string(),
                 parameter_name: "sessionId".to_string(),
-                parameter_type: "SessionId (ULID)".to_string(),
+                parameter_type: "SessionId".to_string(),
             });
         }
-
-        // Validate ULID format
-        crate::session_validation::validate_session_id(&session_id.0)?;
 
         Ok(())
     }
@@ -392,23 +394,13 @@ impl RequestValidator {
             )));
         }
 
-        // Additional validation for specific types
+        // Additional validation for specific types.
+        //
+        // A `SessionId` is an opaque string and needs no format check here —
+        // the `type_matches` test above already confirmed it is a string, and
+        // whether it names a live session is settled by resolve-by-existence
+        // in the handler.
         match expected_property.type_name.as_str() {
-            "SessionId" => {
-                if let Some(session_id_str) = param_value.as_str() {
-                    if crate::session_validation::validate_session_id(session_id_str).is_err() {
-                        return Err(SessionSetupError::InvalidParameterType(Box::new(
-                            crate::session_errors::InvalidParameterTypeDetails {
-                                request_type: request_type.to_string(),
-                                parameter_name: param_name.to_string(),
-                                expected_type: "valid ULID format".to_string(),
-                                actual_type: "invalid ULID".to_string(),
-                                provided_value: param_value.clone(),
-                            },
-                        )));
-                    }
-                }
-            }
             "PathBuf" => {
                 if let Some(path_str) = param_value.as_str() {
                     // Check for empty path
@@ -576,18 +568,34 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_load_session_request_invalid_session_id() {
+    fn test_validate_load_session_request_accepts_non_ulid_session_id() {
+        // A session id is an opaque string: a non-ULID id must pass request
+        // validation. Whether it names a live session is decided later by
+        // resolve-by-existence in the handler, never by an up-front format gate.
         let validator = RequestValidator::new();
         let mut request = create_test_load_session_request();
-        request.session_id = SessionId::new("invalid-session-id".to_string());
+        request.session_id = SessionId::new("my-custom-session".to_string());
+
+        let result = validator.validate_load_session_request(&request);
+        assert!(
+            result.is_ok(),
+            "non-ULID session id must not be format-rejected, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_validate_load_session_request_rejects_empty_session_id() {
+        // The only session-id constraint at request validation is non-emptiness.
+        let validator = RequestValidator::new();
+        let mut request = create_test_load_session_request();
+        request.session_id = SessionId::new(String::new());
 
         let result = validator.validate_load_session_request(&request);
         assert!(result.is_err());
-
-        if let Err(SessionSetupError::InvalidSessionId { .. }) = result {
+        if let Err(SessionSetupError::MissingRequiredParameter { .. }) = result {
             // Expected error type
         } else {
-            panic!("Expected InvalidSessionId error");
+            panic!("Expected MissingRequiredParameter error");
         }
     }
 

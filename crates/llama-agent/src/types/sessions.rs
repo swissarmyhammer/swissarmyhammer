@@ -332,6 +332,17 @@ pub struct Session {
     /// contains all previous tokens and only new tokens need to be processed.
     #[serde(default)]
     pub cached_token_count: usize,
+
+    /// Human-readable session title, generated after the first meaningful
+    /// exchange.
+    ///
+    /// `None` until a title has been generated; once set it is kept for the
+    /// life of the session (see the shared title-generation contract in
+    /// [`agent_client_protocol_extras::session_title`]). This field is the
+    /// source of truth for
+    /// [`SessionRecord::title`](agent_client_protocol_extras::SessionRecord).
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 /// Prompt template for session compaction.

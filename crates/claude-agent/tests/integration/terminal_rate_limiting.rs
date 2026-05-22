@@ -13,11 +13,9 @@ use serial_test::serial;
 use std::time::Duration;
 use swissarmyhammer_common::rate_limiter::{RateLimiter, RateLimiterConfig};
 
-/// Create a session manager with explicit temp storage to avoid depending
-/// on `current_dir()`, which can fail under heavy concurrent test load.
+/// Create an in-memory session manager for terminal rate-limiting tests.
 fn create_test_session_manager() -> claude_agent::session::SessionManager {
-    let tmp = std::env::temp_dir().join(format!("sah-test-sessions-{}", ulid::Ulid::new()));
-    claude_agent::session::SessionManager::new().with_storage_path(Some(tmp))
+    claude_agent::session::SessionManager::new()
 }
 
 fn create_client_capabilities_with_terminal() -> agent_client_protocol::schema::ClientCapabilities {

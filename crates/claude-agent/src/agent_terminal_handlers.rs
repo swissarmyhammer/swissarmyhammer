@@ -40,18 +40,16 @@ impl ClaudeAgent {
                 }
                 Some(_) => {
                     tracing::error!("terminal capability not declared by client");
-                    return Err(agent_client_protocol::Error::new(
-                        -32602,
-                        "Terminal capability not declared by client. Set client_capabilities.terminal = true during initialization.".to_string(),
+                    return Err(crate::acp_error::invalid_params(
+                        "Terminal capability not declared by client. Set client_capabilities.terminal = true during initialization.",
                     ));
                 }
                 None => {
                     tracing::error!(
                         "No client capabilities available for terminal operation validation"
                     );
-                    return Err(agent_client_protocol::Error::new(
-                        -32602,
-                        "Client capabilities not initialized. Cannot perform terminal operations without capability declaration.".to_string(),
+                    return Err(crate::acp_error::invalid_params(
+                        "Client capabilities not initialized. Cannot perform terminal operations without capability declaration.",
                     ));
                 }
             }
@@ -104,18 +102,16 @@ impl ClaudeAgent {
                 }
                 Some(_) => {
                     tracing::error!("terminal capability not declared by client");
-                    return Err(agent_client_protocol::Error::new(
-                        -32602,
-                        "Terminal capability not declared by client. Set client_capabilities.terminal = true during initialization.".to_string(),
+                    return Err(crate::acp_error::invalid_params(
+                        "Terminal capability not declared by client. Set client_capabilities.terminal = true during initialization.",
                     ));
                 }
                 None => {
                     tracing::error!(
                         "No client capabilities available for terminal operation validation"
                     );
-                    return Err(agent_client_protocol::Error::new(
-                        -32602,
-                        "Client capabilities not initialized. Cannot perform terminal operations without capability declaration.".to_string(),
+                    return Err(crate::acp_error::invalid_params(
+                        "Client capabilities not initialized. Cannot perform terminal operations without capability declaration.",
                     ));
                 }
             }
@@ -173,18 +169,16 @@ impl ClaudeAgent {
                 }
                 Some(_) => {
                     tracing::error!("terminal capability not declared by client");
-                    return Err(agent_client_protocol::Error::new(
-                        -32602,
-                        "Terminal capability not declared by client. Set client_capabilities.terminal = true during initialization.".to_string(),
+                    return Err(crate::acp_error::invalid_params(
+                        "Terminal capability not declared by client. Set client_capabilities.terminal = true during initialization.",
                     ));
                 }
                 None => {
                     tracing::error!(
                         "No client capabilities available for terminal operation validation"
                     );
-                    return Err(agent_client_protocol::Error::new(
-                        -32602,
-                        "Client capabilities not initialized. Cannot perform terminal operations without capability declaration.".to_string(),
+                    return Err(crate::acp_error::invalid_params(
+                        "Client capabilities not initialized. Cannot perform terminal operations without capability declaration.",
                     ));
                 }
             }
@@ -237,18 +231,16 @@ impl ClaudeAgent {
                 }
                 Some(_) => {
                     tracing::error!("terminal capability not declared by client");
-                    return Err(agent_client_protocol::Error::new(
-                        -32602,
-                        "Terminal capability not declared by client. Set client_capabilities.terminal = true during initialization.".to_string(),
+                    return Err(crate::acp_error::invalid_params(
+                        "Terminal capability not declared by client. Set client_capabilities.terminal = true during initialization.",
                     ));
                 }
                 None => {
                     tracing::error!(
                         "No client capabilities available for terminal operation validation"
                     );
-                    return Err(agent_client_protocol::Error::new(
-                        -32602,
-                        "Client capabilities not initialized. Cannot perform terminal operations without capability declaration.".to_string(),
+                    return Err(crate::acp_error::invalid_params(
+                        "Client capabilities not initialized. Cannot perform terminal operations without capability declaration.",
                     ));
                 }
             }
@@ -301,18 +293,16 @@ impl ClaudeAgent {
                 }
                 Some(_) => {
                     tracing::error!("terminal capability not declared by client");
-                    return Err(agent_client_protocol::Error::new(
-                        -32602,
-                        "Terminal capability not declared by client. Set client_capabilities.terminal = true during initialization.".to_string(),
+                    return Err(crate::acp_error::invalid_params(
+                        "Terminal capability not declared by client. Set client_capabilities.terminal = true during initialization.",
                     ));
                 }
                 None => {
                     tracing::error!(
                         "No client capabilities available for terminal operation validation"
                     );
-                    return Err(agent_client_protocol::Error::new(
-                        -32602,
-                        "Client capabilities not initialized. Cannot perform terminal operations without capability declaration.".to_string(),
+                    return Err(crate::acp_error::invalid_params(
+                        "Client capabilities not initialized. Cannot perform terminal operations without capability declaration.",
                     ));
                 }
             }

@@ -17,7 +17,6 @@
 //! - **Terminal Execution**: Controlled command execution with output capture
 //! - **Agent Plans**: Structured task tracking and progress reporting
 //! - **Session Modes**: Switch between Code, Plan, and Test modes
-//! - **Slash Commands**: Editor-exposed workflow integration
 //!
 //! # Architecture
 //!
@@ -161,7 +160,6 @@
 //!   supportsSessionLoading: true
 //!   supportsModes: true
 //!   supportsPlans: true
-//!   supportsSlashCommands: true
 //!   terminal: true
 //!   filesystem:
 //!     readTextFile: true
@@ -251,17 +249,20 @@
 //! - [llama-agent README](../../README.md)
 //! - [swissarmyhammer Documentation](../../../README.md)
 
+pub mod acp_error;
 pub mod commands;
 pub mod config;
+pub mod content_validation;
 pub mod elicitation;
 pub mod error;
 pub mod filesystem;
 pub mod mcp_client_factory;
 pub mod permissions;
 pub mod plan;
-pub mod raw_message_manager;
 pub mod server;
 pub mod session;
+pub mod session_record;
+pub mod session_resume;
 pub mod terminal;
 pub mod translation;
 
@@ -277,6 +278,5 @@ pub use permissions::{
     PermissionAction, PermissionEvaluation, PermissionPolicy, PermissionPolicyEngine,
     PermissionRule, PermissionStorage, ToolPattern,
 };
-pub use raw_message_manager::RawMessageManager;
 pub use server::AcpServer;
 pub use session::{AcpSessionState, SessionMode};

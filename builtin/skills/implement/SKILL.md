@@ -12,6 +12,8 @@ metadata:
 
 {% include "_partials/coding-standards" %}
 {% include "_partials/review-column" %}
+{% include "_partials/code-context-checkpoints" %}
+{% include "_partials/architecture-awareness" %}
 
 # Implement
 
@@ -88,12 +90,13 @@ Get the full description and subtasks. Understand the task before writing code.
 
 ### 4. Research before writing
 
-**Do not guess.** Use `code_context` to understand the code before changing it:
+**Do not guess.** Run the **Code-Context Checkpoints** above before changing any code:
 
 - **Find symbols** — `op: "search symbol"` to locate functions, types, and modules mentioned in the task
 - **Read implementations** — `op: "get symbol"` to see actual source code, not just names
-- **Map blast radius** — `op: "get blastradius"` on files you plan to change, to find callers, tests, and downstream consumers you might break
-- **Trace call chains** — `op: "get callgraph"` to understand how code flows before inserting yourself into it
+- **Map blast radius** — `op: "get blastradius"` on every file you plan to change. This is a gate, not a suggestion: if you have not run blast radius on a file, you are not ready to edit it. It surfaces the callers, tests, and downstream consumers you must keep working.
+- **Trace call chains** — `op: "get callgraph"` (inbound) on every symbol whose signature or behavior you will change, so you know who depends on it before you touch it
+- **Check the architecture** — if `ARCHITECTURE.md` exists at the project root, read it (see the **Architecture Awareness** guidance above) to confirm where the change belongs and which boundaries it must respect
 - **Fall back to text search** — Glob, Grep, Read for string literals, config values, or patterns not in the index
 
 If the task references a file path, function name, or type — **verify it still exists before acting on it.** Tasks can go stale. A function may have been renamed, moved, or deleted since the task was written. If something doesn't match, investigate before proceeding.
@@ -104,7 +107,9 @@ Never modify code you haven't read. Never assume you know what a function does �
 
 ### 5. Implement the work
 
-Do the work described in the task and its subtasks.
+Do the work described in the task and its subtasks. After changing any symbol's
+signature or behavior, re-run `get callgraph` (inbound) on it and confirm every
+caller the blast radius surfaced still holds.
 
 ### 6. Move the task to review
 

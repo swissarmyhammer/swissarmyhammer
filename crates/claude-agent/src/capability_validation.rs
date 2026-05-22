@@ -159,9 +159,11 @@ impl CapabilityValidator {
     /// * `Err(SessionSetupError::CapabilityFormatError)` if validation fails
     ///
     /// # Errors
-    /// Returns `CapabilityFormatError` if:
-    /// - Meta is not a JSON object
-    /// - Known meta capabilities (`streaming`, `notifications`, `progress`) have wrong types (must be boolean)
+    /// Returns `CapabilityFormatError` if known meta capabilities (`streaming`,
+    /// `notifications`, `progress`) have wrong types (must be boolean).
+    ///
+    /// The `meta` field is already typed as a JSON object map by the protocol
+    /// schema, so it cannot be a non-object value.
     ///
     /// Unknown meta capabilities are logged but don't fail validation (lenient approach for forward compatibility).
     fn validate_client_meta_capabilities(
@@ -202,11 +204,10 @@ impl CapabilityValidator {
     /// * `Err(SessionSetupError::CapabilityFormatError)` if validation fails
     ///
     /// # Errors
-    /// Returns `CapabilityFormatError` if:
-    /// - fs.meta field (if present) is not a JSON object
-    ///
-    /// The boolean fields (`read_text_file`, `write_text_file`) are always valid.
-    /// Unknown fs.meta capabilities are logged but don't fail validation.
+    /// Currently never returns an error: the `fs.meta` field is already typed as
+    /// a JSON object map by the protocol schema, and the boolean fields
+    /// (`read_text_file`, `write_text_file`) are always valid. Unknown `fs.meta`
+    /// capabilities are logged but don't fail validation.
     fn validate_client_filesystem_capabilities(
         &self,
         fs_caps: &agent_client_protocol::schema::FileSystemCapabilities,

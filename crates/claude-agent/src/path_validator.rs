@@ -108,7 +108,7 @@ impl PathValidator {
     /// Create a path validator with allowed root directories
     pub fn with_allowed_roots(roots: Vec<PathBuf>) -> Self {
         Self {
-            allowed_roots: roots,
+            allowed_roots: Self::canonicalize_roots(roots),
             ..Self::new()
         }
     }
@@ -116,7 +116,7 @@ impl PathValidator {
     /// Create a path validator with blocked paths
     pub fn with_blocked_paths(blocked: Vec<PathBuf>) -> Self {
         Self {
-            blocked_paths: blocked,
+            blocked_paths: Self::canonicalize_roots(blocked),
             ..Self::new()
         }
     }
@@ -124,10 +124,29 @@ impl PathValidator {
     /// Create a path validator with both allowed roots and blocked paths
     pub fn with_allowed_and_blocked(allowed: Vec<PathBuf>, blocked: Vec<PathBuf>) -> Self {
         Self {
-            allowed_roots: allowed,
-            blocked_paths: blocked,
+            allowed_roots: Self::canonicalize_roots(allowed),
+            blocked_paths: Self::canonicalize_roots(blocked),
             ..Self::new()
         }
+    }
+
+    /// Canonicalize configured boundary roots (allowed/blocked).
+    ///
+    /// Input paths are canonicalized before boundary checks (symlinks resolved,
+    /// `.`/`..` collapsed). The configured roots must be canonicalized the same
+    /// way, otherwise a `starts_with` comparison can silently fail to match —
+    /// e.g. on macOS where `/tmp` and `/var` are symlinks into `/private`, a
+    /// blocked root of `/tmp/secret` would never match a canonicalized
+    /// `/private/tmp/secret/...` path, defeating the boundary entirely.
+    ///
+    /// Roots that cannot be canonicalized (e.g. they do not exist yet) are kept
+    /// as-is on a best-effort basis: a non-existent blocked root cannot match a
+    /// real file anyway, and a non-existent allowed root simply admits nothing.
+    fn canonicalize_roots(roots: Vec<PathBuf>) -> Vec<PathBuf> {
+        roots
+            .into_iter()
+            .map(|root| root.canonicalize().unwrap_or(root))
+            .collect()
     }
 
     /// Create a path validator with custom strict canonicalization setting
@@ -759,7 +778,10 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let root = temp_dir.path().to_path_buf();
         let validator = PathValidator::with_allowed_roots(vec![root.clone()]);
-        assert_eq!(validator.allowed_roots, vec![root]);
+        // Boundary roots are canonicalized at construction so they compare
+        // consistently against canonicalized input paths.
+        let expected = root.canonicalize().unwrap_or(root);
+        assert_eq!(validator.allowed_roots, vec![expected]);
     }
 
     #[test]

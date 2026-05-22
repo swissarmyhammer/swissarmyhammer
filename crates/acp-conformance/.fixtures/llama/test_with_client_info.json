@@ -22,8 +22,7 @@
           "_meta": {
             "streaming": true,
             "supports_modes": true,
-            "supports_plans": true,
-            "supports_slash_commands": true
+            "supports_plans": true
           },
           "loadSession": true,
           "mcpCapabilities": {

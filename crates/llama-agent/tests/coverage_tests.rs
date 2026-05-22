@@ -43,6 +43,7 @@ fn make_session() -> Session {
         client_capabilities: None,
         cached_message_count: 0,
         cached_token_count: 0,
+        title: None,
     }
 }
 

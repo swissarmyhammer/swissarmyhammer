@@ -105,7 +105,7 @@ pub struct TerminalSession {
 /// following the Anthropic Computer Protocol (ACP) specification.
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct TerminalCreateParams {
-    /// Session identifier that must exist and be a valid ULID format
+    /// Session identifier — an opaque string resolved by existence, not format
     #[serde(rename = "sessionId")]
     pub session_id: String,
     /// Command to execute in the terminal (e.g., "bash", "python", "echo")
@@ -467,23 +467,48 @@ impl TerminalManager {
         Ok(terminal_id)
     }
 
-    /// Validate session ID exists and is properly formatted
+    /// Resolve a session by its opaque id, returning the live [`Session`]
+    /// or a uniform "session not found" error.
+    ///
+    /// (crate::session::Session is the live session record.)
+    ///
+    /// The session id is an opaque string: it is never rejected on ULID
+    /// format. A non-ULID id cannot key any session this agent created, so it
+    /// resolves to the same not-found outcome as a ULID with no live session.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentError::InvalidRequest`] when no live session exists for
+    /// the id. That variant maps to JSON-RPC `-32602` (`invalid_params`) — the
+    /// same code returned by [`crate::agent::ClaudeAgent::resolve_session`] and
+    /// the fs ext handlers, so a terminal call with an unknown session id fails
+    /// with one uniform "session not found" code across every handler.
+    async fn resolve_terminal_session(
+        &self,
+        session_manager: &crate::session::SessionManager,
+        session_id: &str,
+    ) -> crate::Result<crate::session::Session> {
+        // An id this agent did not mint (non-ULID) cannot match any live
+        // session — treat that exactly like a ULID lookup miss.
+        let resolved = crate::session::SessionId::parse(session_id)
+            .ok()
+            .and_then(|parsed| session_manager.get_session(&parsed).transpose())
+            .transpose()?;
+
+        resolved.ok_or_else(|| {
+            crate::AgentError::InvalidRequest(format!("Session not found: {}", session_id))
+        })
+    }
+
+    /// Validate that a session exists for the given opaque id.
     async fn validate_session_id(
         &self,
         session_manager: &crate::session::SessionManager,
         session_id: &str,
     ) -> crate::Result<()> {
-        let parsed_session_id = crate::session::SessionId::parse(session_id).map_err(|e| {
-            crate::AgentError::Protocol(format!("Invalid session ID format: {}", e))
-        })?;
-
-        session_manager
-            .get_session(&parsed_session_id)?
-            .ok_or_else(|| {
-                crate::AgentError::Protocol(format!("Session not found: {}", session_id))
-            })?;
-
-        Ok(())
+        self.resolve_terminal_session(session_manager, session_id)
+            .await
+            .map(|_| ())
     }
 
     /// Resolve working directory from session or parameter
@@ -504,16 +529,11 @@ impl TerminalManager {
             }
             Ok(path)
         } else {
-            // Use session's working directory
-            let parsed_session_id = crate::session::SessionId::parse(session_id).map_err(|e| {
-                crate::AgentError::Protocol(format!("Invalid session ID format: {}", e))
-            })?;
-
-            let session = session_manager
-                .get_session(&parsed_session_id)?
-                .ok_or_else(|| {
-                    crate::AgentError::Protocol(format!("Session not found: {}", session_id))
-                })?;
+            // Use the session's working directory, resolving the opaque id by
+            // existence (no ULID-format gate).
+            let session = self
+                .resolve_terminal_session(session_manager, session_id)
+                .await?;
 
             Ok(session.cwd)
         }
@@ -711,7 +731,8 @@ impl TerminalManager {
     ///
     /// # Errors
     ///
-    /// * `AgentError::Protocol` - Invalid session ID, session not found, terminal not found, or terminal released
+    /// * `AgentError::InvalidRequest` - Session not found (maps to `invalid_params`, -32602)
+    /// * `AgentError::Protocol` - Terminal not found or terminal released
     async fn get_terminal<'a>(
         &'a self,
         session_manager: &crate::session::SessionManager,
@@ -1292,10 +1313,11 @@ mod tests {
 
     /// Build a `TerminalManager` initialized with terminal client capabilities.
     ///
-    /// ACP requires the client to declare `terminal = true` during initialization
-    /// before any terminal operation is permitted. Production wiring sets this from
-    /// the `initialize` request; tests must mirror it so capability-checked methods
-    /// (create/get/release/kill/wait/cleanup) behave as they do at runtime.
+    /// Every terminal operation (`create`, `get`, `release`, `wait_for_exit`,
+    /// `kill`, cleanup) is gated behind `validate_terminal_capability`, which a
+    /// real client satisfies by sending an `initialize` request declaring
+    /// `terminal: true`. Tests use this helper instead of `TerminalManager::new()`
+    /// so they reach the behavior under test rather than the capability gate.
     async fn create_test_terminal_manager() -> TerminalManager {
         let manager = TerminalManager::new();
         let caps = agent_client_protocol::schema::ClientCapabilities::new()
@@ -1369,7 +1391,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_terminal_invalid_session() {
-        let manager = TerminalManager::new();
+        use crate::error::ToJsonRpcError;
+
+        let manager = create_test_terminal_manager().await;
         let session_manager = create_test_session_manager().await;
 
         // A well-formed ULID (26 Crockford base32 chars) that was never created,
@@ -1380,15 +1404,21 @@ mod tests {
             .await;
 
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Session not found"));
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Session not found"));
+        // The terminal handlers' session-not-found path must use the same
+        // JSON-RPC code as `resolve_session` and the fs ext handlers:
+        // `invalid_params` (-32602), not `Invalid Request` (-32600).
+        assert!(
+            matches!(err, crate::AgentError::InvalidRequest(_)),
+            "session-not-found must be InvalidRequest, got: {err:?}"
+        );
+        assert_eq!(err.to_json_rpc_code(), -32602);
     }
 
     #[tokio::test]
     async fn test_get_terminal_not_found() {
-        let manager = TerminalManager::new();
+        let manager = create_test_terminal_manager().await;
         let session_manager = create_test_session_manager().await;
 
         let cwd = std::env::current_dir()
@@ -1502,7 +1532,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_release_terminal_invalid_session() {
-        let manager = TerminalManager::new();
+        use crate::error::ToJsonRpcError;
+
+        // `create_test_terminal_manager` grants the terminal capability;
+        // `release_terminal` checks it before resolving the session, so the
+        // test deterministically reaches the session-not-found path it asserts.
+        let manager = create_test_terminal_manager().await;
         let session_manager = create_test_session_manager().await;
 
         let params = TerminalReleaseParams {
@@ -1512,6 +1547,14 @@ mod tests {
 
         let result = manager.release_terminal(&session_manager, params).await;
         assert!(result.is_err());
+        // Unknown session id resolves to the unified `invalid_params` (-32602)
+        // code, consistent with every other `sessionId`-accepting handler.
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, crate::AgentError::InvalidRequest(_)),
+            "session-not-found must be InvalidRequest, got: {err:?}"
+        );
+        assert_eq!(err.to_json_rpc_code(), -32602);
     }
 
     #[tokio::test]
@@ -2335,7 +2378,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cleanup_session_terminals_no_terminals() {
-        let manager = TerminalManager::new();
+        let manager = create_test_terminal_manager().await;
 
         // Clean up terminals for a session that has none
         let cleanup_count = manager
@@ -2730,11 +2773,14 @@ mod tests {
             terminal_ids.push(terminal_id);
         }
 
-        // Perform concurrent operations on different terminals.
+        // Add output to and read output from every terminal concurrently.
+        // These are spawned together so the manager handles overlapping work
+        // across distinct terminals; releases come afterwards so each
+        // terminal's get reliably observes a live terminal (a release removes
+        // the terminal, which would otherwise race the get on the same id).
         let mut add_handles = Vec::new();
         let mut get_handles = Vec::new();
 
-        // Add output to each terminal concurrently
         for (i, terminal_id) in terminal_ids.iter().enumerate() {
             let terminals = manager.terminals.clone();
             let terminal_id_clone = terminal_id.clone();
@@ -2750,7 +2796,6 @@ mod tests {
             add_handles.push(handle);
         }
 
-        // Get output from each terminal concurrently
         for terminal_id in terminal_ids.iter() {
             let manager_clone = manager.clone();
             let session_manager_clone = session_manager.clone();
@@ -2782,7 +2827,7 @@ mod tests {
             assert!(result.is_ok());
         }
 
-        // Release each terminal concurrently
+        // Release each terminal concurrently, once the reads above are done.
         let mut release_handles = Vec::new();
         for terminal_id in terminal_ids.iter() {
             let manager_clone = manager.clone();
@@ -2807,8 +2852,9 @@ mod tests {
             assert!(result.is_ok());
         }
 
-        // Per the ACP spec, releasing invalidates the terminal ID and removes it
-        // from storage, so none of the released terminals remain registered.
+        // Verify all terminals were released. Per the ACP spec, releasing
+        // invalidates the terminal ID and removes it from storage, so none of
+        // the released terminals remain registered.
         let terminals = manager.terminals.read().await;
         for terminal_id in terminal_ids.iter() {
             assert!(

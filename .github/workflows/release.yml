@@ -56,9 +56,14 @@ jobs:
     runs-on: "ubuntu-22.04"
     outputs:
       val: ${{ steps.plan.outputs.manifest }}
-      tag: ${{ (inputs.tag != 'dry-run' && inputs.tag) || '' }}
-      tag-flag: ${{ inputs.tag && inputs.tag != 'dry-run' && format('--tag={0}', inputs.tag) || '' }}
-      publishing: ${{ inputs.tag && inputs.tag != 'dry-run' }}
+      # A release publishes when triggered by a tag push (github.ref_type ==
+      # 'tag') OR by a workflow_dispatch with a real tag input. The earlier
+      # form keyed only off inputs.tag, which is empty on tag pushes -- so
+      # every tag-push release since silently skipped build/host/announce and
+      # published nothing (no GitHub Release for v0.13.0..v0.13.4).
+      tag: ${{ !github.event.pull_request && ((github.ref_type == 'tag' && github.ref_name) || (inputs.tag != 'dry-run' && inputs.tag)) || '' }}
+      tag-flag: ${{ !github.event.pull_request && ((github.ref_type == 'tag' && format('--tag={0}', github.ref_name)) || (inputs.tag != 'dry-run' && inputs.tag != '' && format('--tag={0}', inputs.tag))) || '' }}
+      publishing: ${{ !github.event.pull_request && (github.ref_type == 'tag' || (inputs.tag && inputs.tag != 'dry-run')) }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:

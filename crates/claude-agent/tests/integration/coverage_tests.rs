@@ -1652,17 +1652,13 @@ fn test_message_new_system() {
 
 #[test]
 fn test_session_manager_new_isolated() {
-    let tmp = tempfile::tempdir().unwrap();
-    let mgr = claude_agent::session::SessionManager::new()
-        .with_storage_path(Some(tmp.path().to_path_buf()));
+    let mgr = claude_agent::session::SessionManager::new();
     assert!(mgr.list_sessions().unwrap().is_empty());
 }
 
 #[test]
 fn test_session_manager_create_and_get_session() {
-    let tmp = tempfile::tempdir().unwrap();
-    let mgr = claude_agent::session::SessionManager::new()
-        .with_storage_path(Some(tmp.path().to_path_buf()));
+    let mgr = claude_agent::session::SessionManager::new();
     let id = mgr.create_session(PathBuf::from("/tmp"), None).unwrap();
     let session = mgr.get_session(&id).unwrap();
     assert!(session.is_some());
@@ -1672,9 +1668,7 @@ fn test_session_manager_create_and_get_session() {
 
 #[test]
 fn test_session_manager_list_sessions() {
-    let tmp = tempfile::tempdir().unwrap();
-    let mgr = claude_agent::session::SessionManager::new()
-        .with_storage_path(Some(tmp.path().to_path_buf()));
+    let mgr = claude_agent::session::SessionManager::new();
     mgr.create_session(PathBuf::from("/tmp"), None).unwrap();
     mgr.create_session(PathBuf::from("/tmp"), None).unwrap();
     let sessions = mgr.list_sessions().unwrap();
@@ -1683,9 +1677,7 @@ fn test_session_manager_list_sessions() {
 
 #[test]
 fn test_session_manager_remove_session() {
-    let tmp = tempfile::tempdir().unwrap();
-    let mgr = claude_agent::session::SessionManager::new()
-        .with_storage_path(Some(tmp.path().to_path_buf()));
+    let mgr = claude_agent::session::SessionManager::new();
     let id = mgr.create_session(PathBuf::from("/tmp"), None).unwrap();
     assert!(mgr.get_session(&id).unwrap().is_some());
     let _ = mgr.remove_session(&id);

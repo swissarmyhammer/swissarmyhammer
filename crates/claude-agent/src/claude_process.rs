@@ -130,6 +130,15 @@ pub struct SpawnConfig {
     /// This is used for validator agents that should only have MCP-provided tools.
     #[builder(default)]
     pub tools_override: Option<String>,
+    /// Resume mode: when `true`, the process is spawned with `--resume <uuid>`
+    /// instead of `--session-id <uuid>`, picking up the claude CLI's own
+    /// transcript for the deterministic session UUID rather than starting a
+    /// fresh conversation. The UUID used is always
+    /// [`SessionId::to_uuid_string`](crate::session::SessionId::to_uuid_string)
+    /// of [`session_id`](Self::session_id), so a session can be resumed with no
+    /// stored CLI-uuid mapping.
+    #[builder(default)]
+    pub resume: bool,
 }
 
 /// Claude CLI command-line arguments for stream-json communication
@@ -287,6 +296,48 @@ impl ClaudeProcessManager {
         })
     }
 
+    /// Spawn (or re-spawn) a claude process for a session in resume mode.
+    ///
+    /// This is the resume counterpart of [`spawn_process`](Self::spawn_process):
+    /// it forces `config.resume = true` so the claude CLI is started with
+    /// `--resume <uuid>`, reattaching to its own transcript for the session's
+    /// deterministic UUID rather than starting a fresh conversation.
+    ///
+    /// Unlike `spawn_for_session`, an already-running process for the session
+    /// is **not** a no-op: it is terminated first so the new process resumes
+    /// from the persisted transcript. This is what makes resume work after a
+    /// process restart — and also makes it idempotent within one process.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if terminating the existing process fails, or if the
+    /// claude CLI cannot be spawned with `--resume` (for example, when the CLI
+    /// has no transcript for the session's UUID).
+    pub async fn resume_process(
+        &self,
+        mut config: SpawnConfig,
+    ) -> Result<Arc<Mutex<ClaudeProcess>>> {
+        config.resume = true;
+        let session_id = config.session_id;
+
+        // Drop any live process so the resumed one replaces it. A missing
+        // process is expected — after a restart there is nothing to terminate.
+        if self.has_session(&session_id).await {
+            tracing::debug!(
+                "Terminating existing process for session {} before resume",
+                session_id
+            );
+            self.terminate_session(&session_id).await?;
+        }
+
+        tracing::info!(
+            "Resuming Claude process for session {} in {}",
+            session_id,
+            config.cwd.display()
+        );
+        self.spawn_process(config).await
+    }
+
     /// Terminate a session's process
     ///
     /// # Errors
@@ -349,6 +400,14 @@ pub struct ClaudeProcess {
 impl ClaudeProcess {
     /// Spawn a new claude process with stream-json flags
     ///
+    /// The claude CLI session UUID is always
+    /// [`SessionId::to_uuid_string`](crate::session::SessionId::to_uuid_string)
+    /// of the session id — a deterministic, 1:1 mapping from the session ULID.
+    /// A new session is spawned with `--session-id <uuid>`; a resumed session
+    /// (`config.resume == true`) is spawned with `--resume <uuid>`. Because the
+    /// UUID is derived, not random, a session can be resumed across process
+    /// restarts with no stored CLI-uuid mapping.
+    ///
     /// # Arguments
     /// * `config` - Spawn configuration containing session_id, cwd, agent_mode, system_prompt, etc.
     ///
@@ -359,11 +418,14 @@ impl ClaudeProcess {
     /// - stdin/stdout/stderr not available
     pub fn spawn(config: SpawnConfig) -> Result<Self> {
         let test_context = std::thread::current().name().map(|n| n.to_string());
-        let claude_session_uuid = uuid::Uuid::new_v4().to_string();
+        // Deterministic CLI UUID derived from the session ULID. `--resume`
+        // depends on this being the same UUID the session was first spawned
+        // under, so it must never be random.
+        let claude_session_uuid = config.session_id.to_uuid_string();
 
         Self::log_spawn_info(&config, &claude_session_uuid);
 
-        let mut command = Self::build_base_command(&claude_session_uuid);
+        let mut command = Self::build_base_command(&claude_session_uuid, config.resume);
         Self::configure_agent_mode(&mut command, &config);
         Self::configure_system_prompt(&mut command, &config);
         Self::configure_ephemeral_mode(&mut command, &config);
@@ -378,21 +440,30 @@ impl ClaudeProcess {
     /// Log spawn configuration info.
     fn log_spawn_info(config: &SpawnConfig, claude_session_uuid: &str) {
         tracing::info!(
-            "ClaudeProcess::spawn for session {} with Claude UUID {}, {} MCP servers, ephemeral={}",
+            "ClaudeProcess::spawn for session {} with Claude UUID {}, {} MCP servers, ephemeral={}, resume={}",
             config.session_id,
             claude_session_uuid,
             config.mcp_servers.len(),
-            config.ephemeral
+            config.ephemeral,
+            config.resume
         );
     }
 
     /// Build the base command with required args.
-    fn build_base_command(claude_session_uuid: &str) -> Command {
+    ///
+    /// When `resume` is `true` the process is started with `--resume <uuid>`
+    /// so the claude CLI reattaches to its own transcript for that UUID;
+    /// otherwise it is started with `--session-id <uuid>` to begin a fresh
+    /// conversation keyed by that UUID.
+    fn build_base_command(claude_session_uuid: &str, resume: bool) -> Command {
         let mut command = Command::new("claude");
+        command.args(CLAUDE_CLI_ARGS);
+        if resume {
+            command.arg("--resume").arg(claude_session_uuid);
+        } else {
+            command.arg("--session-id").arg(claude_session_uuid);
+        }
         command
-            .args(CLAUDE_CLI_ARGS)
-            .arg("--session-id")
-            .arg(claude_session_uuid)
             .env("CLAUDE_ACP", "1")
             // Allow spawning Claude from within a Claude Code session
             .env_remove("CLAUDECODE");
@@ -1005,7 +1076,7 @@ mod tests {
     /// Claude loads by default.
     #[test]
     fn test_base_command_loads_filesystem_setting_sources() {
-        let command = ClaudeProcess::build_base_command("test-session-uuid");
+        let command = ClaudeProcess::build_base_command("test-session-uuid", false);
         let args: Vec<String> = command
             .as_std()
             .get_args()
@@ -1034,7 +1105,7 @@ mod tests {
     /// still pass `--print` and the stream-json input/output format flags.
     #[test]
     fn test_base_command_retains_core_streamjson_args() {
-        let command = ClaudeProcess::build_base_command("test-session-uuid");
+        let command = ClaudeProcess::build_base_command("test-session-uuid", false);
         let args: Vec<String> = command
             .as_std()
             .get_args()

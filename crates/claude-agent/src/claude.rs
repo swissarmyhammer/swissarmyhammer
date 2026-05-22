@@ -1,6 +1,7 @@
 //! Claude process wrapper providing session-aware interactions
 
 use agent_client_protocol::schema::{ContentBlock, SessionUpdate, TextContent};
+use agent_client_protocol_extras::RawMessageManager;
 use futures::stream::Stream;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -22,6 +23,11 @@ const INIT_TIMEOUT_SECS: u64 = 15;
 /// Maximum time in seconds to wait for init result message consumption.
 const MAX_INIT_WAIT_SECS: u64 = 30;
 
+/// Delay in milliseconds before checking whether a `--resume` process is still
+/// alive. The claude CLI exits almost immediately when it has no transcript
+/// for the resume UUID, so a short pause is enough to catch that failure.
+const RESUME_LIVENESS_CHECK_MS: u64 = 300;
+
 /// Context for streaming operations from the Claude CLI process.
 ///
 /// This struct bundles together all the resources needed during a streaming
@@ -32,7 +38,7 @@ struct StreamContext {
     /// ACP session ID for correlating responses with the protocol translator.
     acp_session_id: agent_client_protocol::schema::SessionId,
     /// Optional manager for recording raw JSON-RPC messages for debugging.
-    raw_message_manager: Option<crate::agent::RawMessageManager>,
+    raw_message_manager: Option<RawMessageManager>,
     /// Translator for converting Claude CLI output to ACP protocol messages.
     protocol_translator: Arc<ProtocolTranslator>,
     /// Channel sender for emitting parsed message chunks to the stream consumer.
@@ -67,7 +73,18 @@ pub struct ClaudeClient {
     process_manager: Arc<ClaudeProcessManager>,
     protocol_translator: Arc<ProtocolTranslator>,
     notification_sender: Option<Arc<crate::agent::NotificationSender>>,
-    raw_message_manager: Option<crate::agent::RawMessageManager>,
+    /// Per-session raw JSON-RPC transcript recorder.
+    ///
+    /// The manager is created at `new_session` time (once the session ULID is
+    /// known), so it is installed after the client is already wrapped in an
+    /// `Arc`. The `Mutex` provides the interior mutability that allows the
+    /// shared client to be wired up post-construction.
+    raw_message_manager: std::sync::Mutex<Option<RawMessageManager>>,
+    /// Handler that relays CLI elicitation requests to the connected ACP client.
+    ///
+    /// Set before the client is wrapped in an `Arc` (see
+    /// [`crate::agent::ClaudeAgent::create_claude_client`]); when unset, the
+    /// streaming loop declines `elicitation/create` requests.
     elicitation_handler: Option<Arc<dyn crate::elicitation_bridge::ElicitationHandler>>,
 }
 
@@ -77,9 +94,17 @@ impl ClaudeClient {
         self.notification_sender = Some(sender);
     }
 
-    /// Set raw message manager for recording JSON-RPC messages
-    pub fn set_raw_message_manager(&mut self, manager: crate::agent::RawMessageManager) {
-        self.raw_message_manager = Some(manager);
+    /// Install the per-session raw message manager for recording JSON-RPC messages.
+    ///
+    /// Takes `&self` because the manager is wired up at `new_session` time,
+    /// after the client has been shared behind an `Arc`.
+    pub fn set_raw_message_manager(&self, manager: RawMessageManager) {
+        *self.raw_message_manager.lock().unwrap() = Some(manager);
+    }
+
+    /// Snapshot the currently installed raw message manager, if any.
+    fn raw_message_manager(&self) -> Option<RawMessageManager> {
+        self.raw_message_manager.lock().unwrap().clone()
     }
 
     /// Set the handler that relays CLI elicitation requests to the ACP client.
@@ -100,6 +125,78 @@ impl ClaudeClient {
     /// The process will be automatically respawned on the next prompt.
     pub async fn terminate_session(&self, session_id: &crate::session::SessionId) -> Result<()> {
         self.process_manager.terminate_session(session_id).await
+    }
+
+    /// Re-spawn the Claude CLI for a session in resume mode.
+    ///
+    /// Restarts the claude CLI with `--resume <uuid>` (the deterministic UUID
+    /// of the session ULID) so it reattaches to its own transcript instead of
+    /// starting a fresh conversation. The process is left registered in the
+    /// process manager, ready for the next `session/prompt`.
+    ///
+    /// Unlike [`spawn_process_and_consume_init`](Self::spawn_process_and_consume_init),
+    /// this sends no init-trigger message — that would inject a spurious turn
+    /// into the resumed conversation — and replays no history.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Spawn configuration for the session being resumed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the claude CLI cannot be spawned, or if the spawned
+    /// process exits immediately — the symptom of the CLI having no transcript
+    /// for the session's UUID. The error message carries the CLI's stderr.
+    pub async fn resume_process(&self, config: SpawnConfig) -> Result<()> {
+        let session_id = config.session_id;
+        tracing::info!("Resuming Claude process for session {}", session_id);
+
+        let process = self.process_manager.resume_process(config).await?;
+        Self::verify_resume_started(&process, &session_id).await
+    }
+
+    /// Confirm a `--resume` process actually started rather than exiting
+    /// immediately because the CLI had no transcript for the UUID.
+    ///
+    /// The claude CLI exits with an error when `--resume` is given a UUID it
+    /// has no transcript for. The spawn itself still succeeds (the binary is
+    /// found), so the only signal is the process dying right away. This waits
+    /// briefly, checks liveness, and on early exit drains stderr into a clear
+    /// error.
+    async fn verify_resume_started(
+        process: &Arc<Mutex<ClaudeProcess>>,
+        session_id: &SessionId,
+    ) -> Result<()> {
+        // Give the CLI a moment to either load the transcript or bail out.
+        tokio::time::sleep(std::time::Duration::from_millis(RESUME_LIVENESS_CHECK_MS)).await;
+
+        let mut proc = process.lock().await;
+        if proc.is_alive().await {
+            tracing::debug!(
+                "Resumed Claude process is running for session {}",
+                session_id
+            );
+            return Ok(());
+        }
+
+        // The process is gone — collect whatever the CLI wrote to stderr so the
+        // caller can tell the client the transcript is unavailable.
+        let mut stderr = String::new();
+        while let Ok(Some(line)) = proc.read_stderr_line().await {
+            stderr.push_str(&line);
+            stderr.push('\n');
+        }
+        let detail = stderr.trim();
+        Err(crate::error::AgentError::Process(format!(
+            "Claude CLI could not resume session {}: its transcript for this \
+             session is unavailable or has been removed{}",
+            session_id,
+            if detail.is_empty() {
+                String::new()
+            } else {
+                format!(" ({detail})")
+            }
+        )))
     }
 
     /// Spawn Claude process and consume init message during session creation
@@ -220,7 +317,7 @@ impl ClaudeClient {
     ) {
         tracing::info!("Received init line from Claude CLI ({} bytes)", line.len());
 
-        if let Some(ref manager) = self.raw_message_manager {
+        if let Some(manager) = self.raw_message_manager() {
             manager.record(line.to_string());
         }
 
@@ -380,7 +477,7 @@ impl ClaudeClient {
 
     /// Check if line is a result message and log accordingly.
     fn is_result_message(&self, line: &str, lines_consumed: usize) -> bool {
-        if let Some(ref manager) = self.raw_message_manager {
+        if let Some(manager) = self.raw_message_manager() {
             manager.record(line.to_string());
         }
 
@@ -530,7 +627,7 @@ impl ClaudeClient {
             process_manager: Arc::new(ClaudeProcessManager::new()),
             protocol_translator,
             notification_sender: None,
-            raw_message_manager: None,
+            raw_message_manager: std::sync::Mutex::new(None),
             elicitation_handler: None,
         })
     }
@@ -545,7 +642,7 @@ impl ClaudeClient {
             process_manager: Arc::new(ClaudeProcessManager::new()),
             protocol_translator,
             notification_sender: None,
-            raw_message_manager: None,
+            raw_message_manager: std::sync::Mutex::new(None),
             elicitation_handler: None,
         })
     }
@@ -743,7 +840,7 @@ impl ClaudeClient {
         let ctx = StreamContext {
             process: process.clone(),
             acp_session_id: Self::to_acp_session_id(session_id),
-            raw_message_manager: self.raw_message_manager.clone(),
+            raw_message_manager: self.raw_message_manager(),
             protocol_translator: self.protocol_translator.clone(),
             tx,
             elicitation_handler: self.elicitation_handler.clone(),
@@ -927,7 +1024,7 @@ impl ClaudeClient {
     }
 
     /// Record raw message to manager.
-    fn record_raw_message(manager: &Option<crate::agent::RawMessageManager>, line: &str) {
+    fn record_raw_message(manager: &Option<RawMessageManager>, line: &str) {
         if let Some(ref m) = manager {
             m.record(line.to_string());
         }

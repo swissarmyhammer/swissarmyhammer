@@ -35,6 +35,17 @@ pub struct AcpSessionState {
 
     /// Creation timestamp
     pub created_at: SystemTime,
+
+    /// Timestamp of the most recent access to this session.
+    ///
+    /// The ACP-layer session map is a bounded in-memory cache over the durable
+    /// [`SessionStore`](agent_client_protocol_extras::SessionStore); this field
+    /// is the cache's recency key. Every cache hit refreshes it, and the
+    /// periodic cleanup task evicts entries whose `last_accessed` age exceeds
+    /// the configured `max_session_age`. It is the direct counterpart of
+    /// claude-agent's `Session::last_accessed`, so both agents expire
+    /// in-memory session state on the same idle-time policy.
+    pub last_accessed: SystemTime,
 }
 
 /// Session mode
@@ -65,6 +76,7 @@ impl SessionMode {
 impl AcpSessionState {
     /// Create a new ACP session state
     pub fn new(llama_session_id: LlamaSessionId) -> Self {
+        let now = SystemTime::now();
         Self {
             session_id: AcpSessionId::new(llama_session_id.to_string()),
             llama_session_id,
@@ -72,7 +84,8 @@ impl AcpSessionState {
             client_capabilities: ClientCapabilities::default(),
             permissions: PermissionStorage::new(),
             available_commands: Vec::new(),
-            created_at: SystemTime::now(),
+            created_at: now,
+            last_accessed: now,
         }
     }
 
@@ -81,6 +94,7 @@ impl AcpSessionState {
         llama_session_id: LlamaSessionId,
         client_capabilities: ClientCapabilities,
     ) -> Self {
+        let now = SystemTime::now();
         Self {
             session_id: AcpSessionId::new(llama_session_id.to_string()),
             llama_session_id,
@@ -88,8 +102,18 @@ impl AcpSessionState {
             client_capabilities,
             permissions: PermissionStorage::new(),
             available_commands: Vec::new(),
-            created_at: SystemTime::now(),
+            created_at: now,
+            last_accessed: now,
         }
+    }
+
+    /// Mark this session as accessed now.
+    ///
+    /// Refreshes [`last_accessed`](Self::last_accessed) so the periodic
+    /// cleanup task treats the session as recently used and does not evict it.
+    /// Called by the cache resolver on every cache hit.
+    pub fn touch(&mut self) {
+        self.last_accessed = SystemTime::now();
     }
 }
 

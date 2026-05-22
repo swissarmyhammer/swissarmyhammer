@@ -50,10 +50,6 @@ swissarmyhammer-config = { workspace = true }
 nix = { workspace = true }
 libc = { workspace = true }
 
-[features]
-# Feature to enable disabled tests that need ACP 0.9.0 fixes
-fix_tests_for_acp_0_9_0 = []
-
 [dev-dependencies]
 tokio-test = { workspace = true }
 tempfile = { workspace = true }

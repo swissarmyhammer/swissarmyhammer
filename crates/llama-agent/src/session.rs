@@ -152,6 +152,7 @@ impl SessionManager {
             client_capabilities: None,
             cached_message_count: 0,
             cached_token_count: 0,
+            title: None,
         };
 
         // If transcript path is provided, initialize the transcript file
@@ -372,6 +373,44 @@ impl SessionManager {
         }
     }
 
+    /// Insert a fully-formed [`Session`] into the in-memory cache, replacing
+    /// any session already cached under the same id.
+    ///
+    /// This is the rehydration counterpart of [`create_session`](Self::create_session):
+    /// where `create_session` mints a brand-new session, `restore_session`
+    /// re-populates the cache from a session reconstructed elsewhere — namely
+    /// from a durable [`SessionRecord`](agent_client_protocol_extras::SessionRecord)
+    /// during `session/resume` and `session/load`. After a process restart the
+    /// in-memory cache is empty, so a resumed session must be inserted here for
+    /// the subsequent `session/prompt` to find it.
+    ///
+    /// Unlike [`update_session`](Self::update_session), the session need not
+    /// already exist — the record is the source of truth, and the in-memory
+    /// cache is being populated from it. The session is also persisted to
+    /// storage (when persistence is enabled) so a subsequent cold lookup hits
+    /// the same conversation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError`] if persisting the restored session to storage
+    /// fails. The in-memory insertion itself is infallible.
+    pub async fn restore_session(&self, session: Session) -> Result<(), SessionError> {
+        let session_id = session.id;
+        {
+            let mut sessions = self.sessions.write().await;
+            sessions.insert(session_id, session.clone());
+        }
+        debug!("Restored session into in-memory cache: {}", session_id);
+
+        // Mirror the restored session into durable storage so a later cold
+        // `get_session` (which falls back to storage) resolves the same
+        // conversation rather than missing it.
+        if let Some(ref storage) = self.storage {
+            storage.save_session(&session).await?;
+        }
+        Ok(())
+    }
+
     pub async fn update_session(&self, updated_session: Session) -> Result<(), SessionError> {
         let session_id = updated_session.id;
         let mut sessions = self.sessions.write().await;
@@ -389,6 +428,57 @@ impl SessionManager {
                 // Check if auto-save is needed
                 if self.should_auto_save(&session_id).await {
                     if let Err(e) = self.save_session(&session_id).await {
+                        warn!("Auto-save failed for session {}: {}", session_id, e);
+                        // Continue operation even if save fails
+                    }
+                }
+
+                Ok(())
+            }
+            None => Err(SessionError::NotFound(session_id.to_string())),
+        }
+    }
+
+    /// Apply an in-place mutation to a cached session under the write lock.
+    ///
+    /// Unlike [`update_session`](Self::update_session), which wholesale-replaces
+    /// the cached [`Session`] with a caller-supplied copy, this method hands the
+    /// live entry to `mutator` so only the fields the closure touches change.
+    /// A read-modify-write through `get_session` + `update_session` can silently
+    /// discard any concurrent mutation that landed between the read and the
+    /// write; mutating in place under the lock cannot.
+    ///
+    /// `session.updated_at` is bumped automatically, exactly as
+    /// [`update_session`](Self::update_session) does, so callers must not set it
+    /// themselves.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError::NotFound`] if no session is cached under
+    /// `session_id`.
+    pub async fn mutate_session<F>(
+        &self,
+        session_id: &SessionId,
+        mutator: F,
+    ) -> Result<(), SessionError>
+    where
+        F: FnOnce(&mut Session),
+    {
+        let mut sessions = self.sessions.write().await;
+
+        match sessions.get_mut(session_id) {
+            Some(session) => {
+                mutator(session);
+                session.updated_at = SystemTime::now();
+                debug!("Mutated session: {}", session_id);
+
+                // Track changes for auto-save
+                drop(sessions);
+                self.increment_changes(session_id).await;
+
+                // Check if auto-save is needed
+                if self.should_auto_save(session_id).await {
+                    if let Err(e) = self.save_session(session_id).await {
                         warn!("Auto-save failed for session {}: {}", session_id, e);
                         // Continue operation even if save fails
                     }
@@ -836,6 +926,83 @@ mod tests {
         let updated_session = manager.get_session(&session_id).await.unwrap().unwrap();
         assert_eq!(updated_session.messages.len(), 1);
         assert_eq!(updated_session.messages[0].content, "Hello, world!");
+    }
+
+    /// `mutate_session` applies an in-place field mutation without discarding
+    /// other session state.
+    #[tokio::test]
+    async fn test_mutate_session_applies_in_place() {
+        let manager = SessionManager::new(create_test_config());
+        let session = manager.create_session().await.unwrap();
+        let session_id = session.id;
+
+        manager
+            .add_message(&session_id, create_test_message())
+            .await
+            .unwrap();
+
+        manager
+            .mutate_session(&session_id, |session| {
+                session.title = Some("A generated title".to_string());
+            })
+            .await
+            .unwrap();
+
+        let updated = manager.get_session(&session_id).await.unwrap().unwrap();
+        assert_eq!(updated.title.as_deref(), Some("A generated title"));
+        assert_eq!(
+            updated.messages.len(),
+            1,
+            "mutate_session must not drop unrelated session state"
+        );
+    }
+
+    /// `mutate_session` is the lost-update fix: a message appended concurrently
+    /// with a title mutation survives, because each operation mutates the live
+    /// session under the write lock rather than overwriting a stale copy.
+    ///
+    /// A read-modify-write (`get_session` -> set title -> `update_session`)
+    /// would lose whichever change landed between its read and its write; this
+    /// test would fail under that pattern and passes under `mutate_session`.
+    #[tokio::test]
+    async fn test_mutate_session_does_not_clobber_concurrent_change() {
+        let manager = Arc::new(SessionManager::new(create_test_config()));
+        let session = manager.create_session().await.unwrap();
+        let session_id = session.id;
+
+        // Race a title mutation against a concurrent message append on the
+        // same session. Whatever the interleaving, the write lock serializes
+        // them, so neither change is lost.
+        let title_manager = Arc::clone(&manager);
+        let title_task = tokio::spawn(async move {
+            title_manager
+                .mutate_session(&session_id, |session| {
+                    session.title = Some("Generated title".to_string());
+                })
+                .await
+                .unwrap();
+        });
+        let message_manager = Arc::clone(&manager);
+        let message_task = tokio::spawn(async move {
+            message_manager
+                .add_message(&session_id, create_test_message())
+                .await
+                .unwrap();
+        });
+        title_task.await.unwrap();
+        message_task.await.unwrap();
+
+        let final_session = manager.get_session(&session_id).await.unwrap().unwrap();
+        assert_eq!(
+            final_session.title.as_deref(),
+            Some("Generated title"),
+            "the title mutation must survive the concurrent append"
+        );
+        assert_eq!(
+            final_session.messages.len(),
+            1,
+            "the concurrently appended message must survive the title mutation"
+        );
     }
 
     #[tokio::test]

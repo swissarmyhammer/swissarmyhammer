@@ -47,6 +47,7 @@ pub fn create_empty_session() -> Session {
         client_capabilities: None,
         cached_message_count: 0,
         cached_token_count: 0,
+        title: None,
     }
 }
 
@@ -129,6 +130,7 @@ pub fn create_session_with_message(content: &str) -> Session {
         client_capabilities: None,
         cached_message_count: 0,
         cached_token_count: 0,
+        title: None,
     }
 }
 
@@ -197,6 +199,7 @@ pub fn create_session_with_messages_and_tools(
         client_capabilities: None,
         cached_message_count: 0,
         cached_token_count: 0,
+        title: None,
     }
 }
 
@@ -244,6 +247,7 @@ pub fn create_session_with_tools(tools: Vec<ToolDefinition>) -> Session {
         client_capabilities: None,
         cached_message_count: 0,
         cached_token_count: 0,
+        title: None,
     }
 }
 

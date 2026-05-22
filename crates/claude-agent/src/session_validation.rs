@@ -136,26 +136,6 @@ fn find_invalid_path_characters(path_str: &str) -> Vec<String> {
     invalid_chars
 }
 
-/// Validate session ID format according to ACP requirements
-///
-/// Validates that the session ID follows the required format: raw ULID
-///
-/// # Examples
-/// Valid: `01ARZ3NDEKTSV4RRFFQ69G5FAV`
-/// Invalid: `sess_01ARZ3NDEKTSV4RRFFQ69G5FAV` (old format with prefix)
-/// Invalid: `session_123` (invalid format)
-pub fn validate_session_id(session_id: &str) -> SessionSetupResult<crate::session::SessionId> {
-    // ACP requires consistent session ID format as raw ULID
-    match crate::session::SessionId::parse(session_id) {
-        Ok(id) => Ok(id),
-        Err(_) => Err(SessionSetupError::InvalidSessionId {
-            provided_id: session_id.to_string(),
-            expected_format: "26-character ULID".to_string(),
-            example: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
-        }),
-    }
-}
-
 /// Validate MCP server configuration before attempting connection
 pub fn validate_mcp_server_config(
     server_config: &crate::config::McpServerConfig,
@@ -311,47 +291,6 @@ mod tests {
             assert!(!invalid_chars.is_empty());
             assert!(invalid_chars.contains(&"'<'".to_string()));
             assert!(invalid_chars.contains(&"'>'".to_string()));
-        }
-    }
-
-    #[test]
-    fn test_validate_session_id_valid() {
-        let valid_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
-        let result = validate_session_id(valid_id);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_validate_session_id_raw_ulid() {
-        let valid_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
-        let result = validate_session_id(valid_id);
-
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_validate_session_id_invalid_ulid() {
-        let invalid_id = "invalid-session-id";
-        let result = validate_session_id(invalid_id);
-
-        assert!(result.is_err());
-        if let Err(SessionSetupError::InvalidSessionId { .. }) = result {
-            // Expected error type
-        } else {
-            panic!("Expected InvalidSessionId error");
-        }
-    }
-
-    #[test]
-    fn test_validate_session_id_empty() {
-        let invalid_id = "";
-        let result = validate_session_id(invalid_id);
-
-        assert!(result.is_err());
-        if let Err(SessionSetupError::InvalidSessionId { .. }) = result {
-            // Expected error type
-        } else {
-            panic!("Expected InvalidSessionId error");
         }
     }
 

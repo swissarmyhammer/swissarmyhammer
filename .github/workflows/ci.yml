@@ -69,6 +69,38 @@ jobs:
         working-directory: ${{ matrix.app }}/ui
         run: npm test --if-present
 
+  apps:
+    name: Tauri Apps
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "swissarmyhammer-ci"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked || true
+      - uses: taiki-e/install-action@just
+      - name: Build Tauri apps
+        # Runs the same just recipe developers use, so a broken app build
+        # (e.g. mismatched tauri / @tauri-apps/api versions) fails CI instead
+        # of slipping through to release. The justfile owns the app list --
+        # adding an app there is enough, no CI edit needed.
+        #
+        # APPLE_SIGNING_IDENTITY="-" forces ad-hoc signing, which needs no
+        # keychain identity. It overrides the real Developer ID in each app's
+        # tauri.conf.json so this job verifies the build compiles and bundles
+        # without depending on signing certs. Release signing is handled by
+        # the separate Release App workflow.
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
+        run: just build
+
   fmt:
     name: Rustfmt
     runs-on: self-hosted

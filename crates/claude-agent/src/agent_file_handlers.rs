@@ -42,24 +42,23 @@ impl crate::agent::ClaudeAgent {
                 }
                 Some(_) => {
                     tracing::error!("fs/read_text_file capability not declared by client");
-                    return Err(agent_client_protocol::Error::new(-32602,
-                        "File system read capability not declared by client. Set client_capabilities.fs.read_text_file = true during initialization."
+                    return Err(crate::acp_error::invalid_params(
+                        "File system read capability not declared by client. Set client_capabilities.fs.read_text_file = true during initialization.",
                     ));
                 }
                 None => {
                     tracing::error!(
                         "No client capabilities available for fs/read_text_file validation"
                     );
-                    return Err(agent_client_protocol::Error::new(-32602,
-                        "Client capabilities not initialized. Cannot perform file system operations without capability declaration."
+                    return Err(crate::acp_error::invalid_params(
+                        "Client capabilities not initialized. Cannot perform file system operations without capability declaration.",
                     ));
                 }
             }
         }
 
-        // Validate session ID
-        self.parse_session_id(&SessionId::new(params.session_id.clone()))
-            .map_err(|_| agent_client_protocol::Error::invalid_params())?;
+        // Resolve the opaque session id by existence — no ULID-format gate.
+        self.resolve_session(&SessionId::new(params.session_id.clone()))?;
 
         // Validate path security using PathValidator
         // This checks: absolute path, no traversal, no symlinks, blocked paths
@@ -75,13 +74,15 @@ impl crate::agent::ClaudeAgent {
                     "Path validation failed for read operation"
                 );
                 // Use generic error message to avoid leaking security policy details
-                agent_client_protocol::Error::new(-32602, "Invalid file path".to_string())
+                crate::acp_error::invalid_params("Invalid file path")
             })?;
 
         // Validate line and limit parameters
         if let Some(line) = params.line {
             if line == 0 {
-                return Err(agent_client_protocol::Error::invalid_params());
+                return Err(crate::acp_error::invalid_params(
+                    "Line offset must be 1-based; line 0 is not a valid starting line.",
+                ));
             }
         }
 
@@ -154,24 +155,23 @@ impl crate::agent::ClaudeAgent {
                 }
                 Some(_) => {
                     tracing::error!("fs/write_text_file capability not declared by client");
-                    return Err(agent_client_protocol::Error::new(-32602,
-                        "File system write capability not declared by client. Set client_capabilities.fs.write_text_file = true during initialization."
+                    return Err(crate::acp_error::invalid_params(
+                        "File system write capability not declared by client. Set client_capabilities.fs.write_text_file = true during initialization.",
                     ));
                 }
                 None => {
                     tracing::error!(
                         "No client capabilities available for fs/write_text_file validation"
                     );
-                    return Err(agent_client_protocol::Error::new(-32602,
-                        "Client capabilities not initialized. Cannot perform file system operations without capability declaration."
+                    return Err(crate::acp_error::invalid_params(
+                        "Client capabilities not initialized. Cannot perform file system operations without capability declaration.",
                     ));
                 }
             }
         }
 
-        // Validate session ID
-        self.parse_session_id(&SessionId::new(params.session_id.clone()))
-            .map_err(|_| agent_client_protocol::Error::invalid_params())?;
+        // Resolve the opaque session id by existence — no ULID-format gate.
+        self.resolve_session(&SessionId::new(params.session_id.clone()))?;
 
         // Validate path security using PathValidator with non-strict canonicalization
         // For write operations, the file may not exist yet, so we use non-strict mode
@@ -191,7 +191,7 @@ impl crate::agent::ClaudeAgent {
                     "Path validation failed for write operation"
                 );
                 // Use generic error message to avoid leaking security policy details
-                agent_client_protocol::Error::new(-32602, "Invalid file path".to_string())
+                crate::acp_error::invalid_params("Invalid file path")
             })?;
 
         // Validate content size before write to prevent disk exhaustion
@@ -207,14 +207,11 @@ impl crate::agent::ClaudeAgent {
                 "Content size exceeds maximum allowed for write operation"
             );
             // Return error with size information for client debugging
-            return Err(agent_client_protocol::Error::new(
-                -32602,
-                format!(
-                    "Content size {} bytes exceeds maximum {} bytes (limit is exclusive)",
-                    content_size,
-                    sizes::content::MAX_RESOURCE_MODERATE
-                ),
-            )
+            return Err(crate::acp_error::invalid_params(format!(
+                "Content size {} bytes exceeds maximum {} bytes (limit is exclusive)",
+                content_size,
+                sizes::content::MAX_RESOURCE_MODERATE
+            ))
             .data(serde_json::json!({
                 "error": "content_too_large",
                 "size": content_size,
@@ -259,11 +256,15 @@ impl crate::agent::ClaudeAgent {
                 "Failed to get file metadata"
             );
             match e.kind() {
-                std::io::ErrorKind::NotFound => agent_client_protocol::Error::invalid_params(),
-                std::io::ErrorKind::PermissionDenied => {
-                    agent_client_protocol::Error::invalid_params()
+                std::io::ErrorKind::NotFound => {
+                    crate::acp_error::invalid_params(format!("File not found: {path}"))
                 }
-                _ => agent_client_protocol::Error::internal_error(),
+                std::io::ErrorKind::PermissionDenied => crate::acp_error::invalid_params(format!(
+                    "Permission denied reading file: {path}"
+                )),
+                _ => crate::acp_error::internal_error(format!(
+                    "Failed to read file metadata for {path}: {e}"
+                )),
             }
         })?;
 
@@ -279,7 +280,11 @@ impl crate::agent::ClaudeAgent {
                 limit = sizes::content::MAX_RESOURCE_MODERATE,
                 "File size exceeds maximum allowed for read operation"
             );
-            return Err(agent_client_protocol::Error::invalid_params());
+            return Err(crate::acp_error::invalid_params(format!(
+                "File size {} bytes exceeds maximum {} bytes (limit is exclusive)",
+                file_size,
+                sizes::content::MAX_RESOURCE_MODERATE
+            )));
         }
 
         // Read the entire file
@@ -291,11 +296,15 @@ impl crate::agent::ClaudeAgent {
                 "Failed to read file content"
             );
             match e.kind() {
-                std::io::ErrorKind::NotFound => agent_client_protocol::Error::invalid_params(),
-                std::io::ErrorKind::PermissionDenied => {
-                    agent_client_protocol::Error::invalid_params()
+                std::io::ErrorKind::NotFound => {
+                    crate::acp_error::invalid_params(format!("File not found: {path}"))
                 }
-                _ => agent_client_protocol::Error::internal_error(),
+                std::io::ErrorKind::PermissionDenied => crate::acp_error::invalid_params(format!(
+                    "Permission denied reading file: {path}"
+                )),
+                _ => crate::acp_error::internal_error(format!(
+                    "Failed to read file content for {path}: {e}"
+                )),
             }
         })?;
 
@@ -323,7 +332,9 @@ impl crate::agent::ClaudeAgent {
         let start_index = match start_line {
             Some(line) => {
                 if line == 0 {
-                    return Err(agent_client_protocol::Error::invalid_params());
+                    return Err(crate::acp_error::invalid_params(
+                        "Line offset must be 1-based; line 0 is not a valid starting line.",
+                    ));
                 }
                 (line - 1) as usize // Convert to 0-based index
             }
@@ -349,7 +360,11 @@ impl crate::agent::ClaudeAgent {
                 // Use checked_add to prevent integer overflow
                 start_index
                     .checked_add(limit_count as usize)
-                    .ok_or_else(agent_client_protocol::Error::invalid_params)?
+                    .ok_or_else(|| {
+                        crate::acp_error::invalid_params(
+                            "Line offset plus limit overflows the addressable line range.",
+                        )
+                    })?
                     .min(lines.len())
             }
             None => lines.len(),
@@ -380,7 +395,10 @@ impl crate::agent::ClaudeAgent {
                         error = %e,
                         "Failed to create parent directory"
                     );
-                    agent_client_protocol::Error::internal_error()
+                    crate::acp_error::internal_error(format!(
+                        "Failed to create parent directory {}: {e}",
+                        parent_dir.display()
+                    ))
                 })?;
             }
         }
@@ -404,7 +422,9 @@ impl crate::agent::ClaudeAgent {
                 path = %temp_path.display(),
                 "Temporary file path must be absolute"
             );
-            return Err(agent_client_protocol::Error::internal_error());
+            return Err(crate::acp_error::internal_error(
+                "Temporary file path for atomic write is not absolute.",
+            ));
         }
 
         // Validate temp file path to prevent symlink manipulation in parent directories
@@ -421,7 +441,9 @@ impl crate::agent::ClaudeAgent {
                             resolved_path = %resolved.display(),
                             "Resolved temp path is not absolute"
                         );
-                        return Err(agent_client_protocol::Error::internal_error());
+                        return Err(crate::acp_error::internal_error(
+                            "Resolved temporary file path for atomic write is not absolute.",
+                        ));
                     }
 
                     // Additional validation: ensure the resolved temp path is within allowed boundaries
@@ -436,7 +458,9 @@ impl crate::agent::ClaudeAgent {
                                 resolved_path = %resolved.display(),
                                 "Resolved temp path contains invalid UTF-8"
                             );
-                            agent_client_protocol::Error::internal_error()
+                            crate::acp_error::internal_error(
+                                "Resolved temporary file path contains invalid UTF-8.",
+                            )
                         })?,
                     ) {
                         tracing::error!(
@@ -445,7 +469,9 @@ impl crate::agent::ClaudeAgent {
                             error = %e,
                             "Resolved temp path failed security validation - possible symlink attack"
                         );
-                        return Err(agent_client_protocol::Error::internal_error());
+                        return Err(crate::acp_error::internal_error(
+                            "Temporary file path failed security validation during atomic write.",
+                        ));
                     }
 
                     resolved
@@ -457,7 +483,10 @@ impl crate::agent::ClaudeAgent {
                         error = %e,
                         "Failed to canonicalize parent directory for temp file"
                     );
-                    return Err(agent_client_protocol::Error::internal_error());
+                    return Err(crate::acp_error::internal_error(format!(
+                        "Failed to canonicalize parent directory {} for atomic write: {e}",
+                        parent.display()
+                    )));
                 }
             }
         } else {
@@ -516,7 +545,9 @@ impl crate::agent::ClaudeAgent {
                             error = %e,
                             "Failed to rename temp file"
                         );
-                        Err(agent_client_protocol::Error::internal_error())
+                        Err(crate::acp_error::internal_error(format!(
+                            "Failed to atomically rename temporary file into {path}: {e}"
+                        )))
                     }
                 }
             }
@@ -528,10 +559,12 @@ impl crate::agent::ClaudeAgent {
                     "Failed to write temp file"
                 );
                 match e.kind() {
-                    std::io::ErrorKind::PermissionDenied => {
-                        Err(agent_client_protocol::Error::invalid_params())
-                    }
-                    _ => Err(agent_client_protocol::Error::internal_error()),
+                    std::io::ErrorKind::PermissionDenied => Err(crate::acp_error::invalid_params(
+                        format!("Permission denied writing file: {path}"),
+                    )),
+                    _ => Err(crate::acp_error::internal_error(format!(
+                        "Failed to write temporary file for {path}: {e}"
+                    ))),
                 }
             }
         }

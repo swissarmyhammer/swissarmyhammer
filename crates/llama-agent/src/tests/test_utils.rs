@@ -42,6 +42,7 @@ pub fn create_test_session_with_messages_and_tools(
         client_capabilities: None,
         cached_message_count: 0,
         cached_token_count: 0,
+        title: None,
     };
 
     // Add alternating user/assistant messages
@@ -93,6 +94,7 @@ pub fn create_large_content_session(message_count: usize, words_per_message: usi
         client_capabilities: None,
         cached_message_count: 0,
         cached_token_count: 0,
+        title: None,
     };
 
     for i in 0..message_count {
@@ -132,6 +134,7 @@ pub fn create_session_with_tool_calls() -> Session {
         client_capabilities: None,
         cached_message_count: 0,
         cached_token_count: 0,
+        title: None,
     };
 
     // Add user message
@@ -184,6 +187,7 @@ pub fn create_session_with_incomplete_tool_calls() -> Session {
         client_capabilities: None,
         cached_message_count: 0,
         cached_token_count: 0,
+        title: None,
     };
 
     // Add user message
@@ -501,6 +505,7 @@ pub fn create_session_with_messages_and_tools(count: usize, tools: Vec<ToolDefin
         client_capabilities: None,
         cached_message_count: 0,
         cached_token_count: 0,
+        title: None,
     }
 }
 
@@ -555,6 +560,7 @@ pub fn create_session_with_sample_conversation() -> Session {
         client_capabilities: None,
         cached_message_count: 0,
         cached_token_count: 0,
+        title: None,
     }
 }
 
