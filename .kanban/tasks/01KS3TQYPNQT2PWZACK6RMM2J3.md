@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8380'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffff9780
 title: 'Decide: keep or delete intentionally #[ignore]d llama-agent test'
 ---
 **File**: `crates/llama-agent/tests/integration/tool_use_multi_turn.rs:356`
