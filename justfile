@@ -9,6 +9,9 @@ install:
     just mirdan-build
     just kanban-build
 
+sah:
+    cargo install --path apps/swissarmyhammer-cli
+
 # Build the Mirdan tray app (debug) and install to /Applications for deep link testing
 mirdan-build:
     cd apps/mirdan-app && cargo tauri build --debug

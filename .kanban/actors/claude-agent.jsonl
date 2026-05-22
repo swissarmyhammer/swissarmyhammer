@@ -1,0 +1,1 @@
+{"id":"01KS3NWHRMJSYPP1WY7CST2WW7","timestamp":"2026-05-20T21:50:21.460538Z","op":"create","item_id":"claude-agent","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: 6b46c1\n+name: claude-agent\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: 6b46c1\n-name: claude-agent\n","transaction_id":null}
