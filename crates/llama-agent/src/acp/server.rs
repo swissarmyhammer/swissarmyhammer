@@ -1399,14 +1399,13 @@ impl AcpServer {
     ) -> agent_client_protocol::schema::ProtocolVersion {
         // If client's requested version is supported, use it
         if Self::SUPPORTED_PROTOCOL_VERSIONS.contains(client_requested_version) {
-            client_requested_version.clone()
+            *client_requested_version
         } else {
             // Otherwise, return agent's latest supported version
-            Self::SUPPORTED_PROTOCOL_VERSIONS
+            *Self::SUPPORTED_PROTOCOL_VERSIONS
                 .iter()
                 .max()
                 .unwrap_or(&agent_client_protocol::schema::ProtocolVersion::V1)
-                .clone()
         }
     }
 
