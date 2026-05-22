@@ -1155,6 +1155,12 @@ export function useConversation(
    */
   const handleElicitation = useCallback(
     (request: CreateElicitationRequest): Promise<CreateElicitationResponse> => {
+      console.info(
+        "[elicitation] handleElicitation: surfacing request to panel",
+        {
+          mode: request.mode,
+        },
+      );
       setElicitationRequest(request);
       return new Promise<CreateElicitationResponse>((resolve) => {
         elicitationResolverRef.current = resolve;
@@ -1223,6 +1229,13 @@ export function useConversation(
   const respondElicitation = useCallback(
     (response: CreateElicitationResponse) => {
       const resolve = elicitationResolverRef.current;
+      console.info(
+        "[elicitation] respondElicitation: resolving pending request",
+        {
+          action: response.action,
+          hasPendingResolver: resolve !== null,
+        },
+      );
       elicitationResolverRef.current = null;
       setElicitationRequest(null);
       resolve?.(response);

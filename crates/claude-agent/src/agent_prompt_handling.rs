@@ -1040,10 +1040,13 @@ impl crate::agent::ClaudeAgent {
 
         // ACP 0.11: dispatch to the counterpart Client role over the
         // ConnectionTo handle. Calling `block_task` here is safe iff the caller
-        // has already spawned this work off the JSON-RPC event loop (e.g. via
-        // `cx.spawn(...)` from the `prompt` dispatch handler) — invoking it
-        // directly inside an `on_receive_request` handler would deadlock. The
-        // dispatch-layer wiring landing in B5/B6/B9 must uphold this contract.
+        // has already spawned this work off the JSON-RPC event loop — invoking
+        // it directly inside an `on_receive_request` handler would deadlock,
+        // because the single dispatch loop that routes this request's response
+        // would be the very loop blocked awaiting the handler. That contract is
+        // upheld by `swissarmyhammer-agent::dispatch_claude_request`, which runs
+        // the whole prompt turn (this permission round-trip included) via
+        // `cx.spawn(...)` instead of awaiting `agent.prompt(...)` on the loop.
         match client.send_request(acp_request).block_task().await {
             Ok(response) => {
                 self.handle_permission_response(tool_name, response, options)

@@ -323,10 +323,21 @@ function buildClient(
     // Elicitation methods (`unstable_`, experimental) — forwarded. The
     // `elicitation` capability is advertised in `initialize`, so the agent may
     // ask the user for structured input and the UI handler answers.
-    unstable_createElicitation(
+    async unstable_createElicitation(
       params: CreateElicitationRequest,
     ): Promise<CreateElicitationResponse> {
-      return onElicitation(params);
+      // Log the await boundary so a manual GUI test can see the request arrive
+      // and confirm the answer is serialized back to the agent.
+      console.info(
+        "[elicitation] unstable_createElicitation: request received",
+        { mode: params.mode },
+      );
+      const response = await onElicitation(params);
+      console.info(
+        "[elicitation] unstable_createElicitation: resolving response to agent",
+        { action: response.action },
+      );
+      return response;
     },
     unstable_completeElicitation(
       params: CompleteElicitationNotification,

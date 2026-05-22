@@ -140,14 +140,31 @@ impl ElicitationHandler for ElicitationBridgeHandler {
         };
 
         // ACP 0.11: dispatch to the counterpart Client role over the stored
-        // `ConnectionTo<Client>` handle. `block_task` is safe here because this
-        // runs on the spawned streaming task, not inside an `on_receive_request`
-        // callback — the same contract the permission round-trip relies on.
-        // `UntypedMessage::Response` is a raw JSON value, deserialized into the
-        // concrete ACP response type below.
+        // `ConnectionTo<Client>` handle. `block_task` is safe here only because
+        // the prompt turn that drives this code runs *off* the connection's
+        // dispatch loop (the prompt request is dispatched via `cx.spawn` in
+        // `swissarmyhammer-agent::dispatch_claude_request`). If the prompt turn
+        // were awaited inline on the dispatch loop, that loop could never route
+        // this request's response back here and the await would hang forever —
+        // the original production bug. `UntypedMessage::Response` is a raw JSON
+        // value, deserialized into the concrete ACP response type below.
+        //
+        // Log the await boundary so the unified log shows when we hand the
+        // elicitation to the client and when (or whether) the answer comes back.
+        tracing::info!(
+            "Relaying elicitation to client; awaiting response request_id={}",
+            request.request_id
+        );
         match client.send_request(untyped).block_task().await {
             Ok(value) => match serde_json::from_value::<CreateElicitationResponse>(value) {
-                Ok(response) => ElicitationOutcome::Responded(response),
+                Ok(response) => {
+                    tracing::info!(
+                        "Elicitation answered action={:?} request_id={}",
+                        response.action,
+                        request.request_id
+                    );
+                    ElicitationOutcome::Responded(response)
+                }
                 Err(e) => {
                     tracing::error!("Failed to decode elicitation/create response: {}", e);
                     ElicitationOutcome::Error(format!(

@@ -577,7 +577,7 @@ fn current_timestamp() -> u64 {
 }
 
 /// Default permission policies for common tool patterns
-fn default_permission_policies() -> Vec<PermissionPolicy> {
+pub(crate) fn default_permission_policies() -> Vec<PermissionPolicy> {
     vec![
         // File system read operations - low risk
         PermissionPolicy {
@@ -990,6 +990,55 @@ mod tests {
         // Verify valid permission remains
         let result = engine.lookup_permission("valid_tool").await.unwrap();
         assert!(result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_mcp_auto_allow_policy_prepended_before_catch_all() {
+        let storage = create_test_storage();
+
+        // Mirror the kanban wiring: an `mcp__*` Allow policy prepended ahead of
+        // the built-in defaults (which end in a `"*"` ask catch-all).
+        let mut policies = vec![PermissionPolicy {
+            tool_pattern: "mcp__*".to_string(),
+            default_action: PolicyAction::Allow,
+            require_user_consent: false,
+            allow_always_option: true,
+            risk_level: RiskLevel::Low,
+        }];
+        policies.extend(default_permission_policies());
+
+        let engine = PermissionPolicyEngine::with_policies(Box::new(storage), policies);
+
+        // The app's per-board MCP tool should be auto-allowed, no consent.
+        let result = engine
+            .evaluate_tool_call(
+                "mcp__swissarmyhammer-kanban__question",
+                &serde_json::json!({}),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(result, PolicyEvaluation::Allowed));
+
+        // An unrelated network tool still falls through to the high-risk policy
+        // and requires user consent (first-match-wins ordering preserved).
+        let result = engine
+            .evaluate_tool_call("http_request", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            PolicyEvaluation::RequireUserConsent { .. }
+        ));
+
+        // A terminal tool likewise still requires consent.
+        let result = engine
+            .evaluate_tool_call("terminal_create", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            PolicyEvaluation::RequireUserConsent { .. }
+        ));
     }
 
     #[tokio::test]

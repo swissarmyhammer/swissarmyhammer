@@ -18,7 +18,10 @@ use crate::{
     constants::sizes,
     content_block_processor::ContentBlockProcessor,
     path_validator::PathValidator,
-    permissions::{FilePermissionStorage, PermissionPolicyEngine, PolicyEvaluation},
+    permissions::{
+        default_permission_policies, FilePermissionStorage, PermissionPolicy,
+        PermissionPolicyEngine, PolicyAction, PolicyEvaluation, RiskLevel,
+    },
     protocol_translator::ProtocolTranslator,
     session::SessionManager,
     size_validator::{SizeLimits, SizeValidator},
@@ -161,7 +164,7 @@ impl ClaudeAgent {
         let (notification_sender, notification_receiver) =
             NotificationSender::new(config.notification_buffer_size);
 
-        let permission_engine = Self::create_permission_engine();
+        let permission_engine = Self::create_permission_engine(&config);
         let protocol_translator = Arc::new(ProtocolTranslator::new(permission_engine.clone()));
 
         // Shared cells for the client connection and capabilities. Created here
@@ -215,13 +218,43 @@ impl ClaudeAgent {
     }
 
     /// Create the permission policy engine with file-based storage.
-    fn create_permission_engine() -> Arc<PermissionPolicyEngine> {
+    ///
+    /// Any `auto_allow_tool_patterns` configured on the agent are turned into
+    /// low-risk `Allow` policies and prepended ahead of the built-in default
+    /// policies. Because [`PermissionPolicyEngine::evaluate_tool_call`] uses
+    /// first-match-wins ordering, this guarantees a matching tool (e.g.
+    /// `mcp__*`) is auto-approved before the catch-all `"*"` ask policy is
+    /// reached, so no consent dialog is surfaced for those tools.
+    fn create_permission_engine(config: &AgentConfig) -> Arc<PermissionPolicyEngine> {
         let storage_path = std::env::current_dir()
             .unwrap_or_else(|_| std::path::PathBuf::from("."))
             .join(".claude-agent")
             .join("permissions");
         let storage = FilePermissionStorage::new(storage_path);
-        Arc::new(PermissionPolicyEngine::new(Box::new(storage)))
+
+        let mut policies: Vec<PermissionPolicy> = config
+            .auto_allow_tool_patterns
+            .iter()
+            .map(|pattern| {
+                tracing::debug!(
+                    tool_pattern = %pattern,
+                    "Auto-allowing tools matching configured pattern without user consent"
+                );
+                PermissionPolicy {
+                    tool_pattern: pattern.clone(),
+                    default_action: PolicyAction::Allow,
+                    require_user_consent: false,
+                    allow_always_option: true,
+                    risk_level: RiskLevel::Low,
+                }
+            })
+            .collect();
+        policies.extend(default_permission_policies());
+
+        Arc::new(PermissionPolicyEngine::with_policies(
+            Box::new(storage),
+            policies,
+        ))
     }
 
     /// Create and configure the Claude client with optional raw message manager.
@@ -452,6 +485,17 @@ impl ClaudeAgent {
         client: agent_client_protocol::ConnectionTo<agent_client_protocol::Client>,
     ) {
         *self.client.write().await = Some(client);
+    }
+
+    /// Report whether an outbound client connection has been wired in.
+    ///
+    /// Reads the shared `client` cell populated by [`Self::set_client`]. This
+    /// is an observability accessor for tests and diagnostics that need to
+    /// confirm the agent can issue client-bound requests (e.g. the
+    /// `elicitation/create` round-trip) before relying on them. Returns `true`
+    /// once a connection is present, `false` while the cell is still empty.
+    pub async fn is_client_connected(&self) -> bool {
+        self.client.read().await.is_some()
     }
 
     /// Set available agents (modes) from Claude CLI init message
@@ -2730,6 +2774,73 @@ mod tests {
         assert!(
             spawn_config.mcp_servers.is_empty(),
             "With no static or per-session MCP servers, SpawnConfig.mcp_servers must be empty"
+        );
+    }
+
+    /// A `ClaudeAgent` built from an `AgentConfig` carrying an `mcp__*`
+    /// auto-allow pattern must evaluate MCP tools as allowed (no consent
+    /// dialog), while unrelated tools still require user consent. This is the
+    /// end-to-end guard for the kanban "no permission dialog for our own
+    /// tools" fix.
+    #[tokio::test]
+    async fn test_auto_allow_tool_patterns_skip_consent_for_mcp_tools() {
+        let config = AgentConfig {
+            auto_allow_tool_patterns: vec!["mcp__*".to_string()],
+            ..AgentConfig::default()
+        };
+        let (agent, _rx) = ClaudeAgent::new(config)
+            .await
+            .expect("agent construction must succeed");
+
+        let result = agent
+            .permission_engine
+            .evaluate_tool_call(
+                "mcp__swissarmyhammer-kanban__question",
+                &serde_json::json!({}),
+            )
+            .await
+            .expect("evaluation must succeed");
+        assert!(
+            matches!(result, PolicyEvaluation::Allowed),
+            "mcp__* tools must be auto-allowed without consent, got: {:?}",
+            result
+        );
+
+        let result = agent
+            .permission_engine
+            .evaluate_tool_call("http_request", &serde_json::json!({}))
+            .await
+            .expect("evaluation must succeed");
+        assert!(
+            matches!(result, PolicyEvaluation::RequireUserConsent { .. }),
+            "Unrelated tools must still require user consent, got: {:?}",
+            result
+        );
+    }
+
+    /// Without any configured auto-allow patterns, MCP tools fall through to the
+    /// default catch-all policy and require user consent. This pins the
+    /// opt-in nature of the feature so the default behaviour for other
+    /// consumers is unchanged.
+    #[tokio::test]
+    async fn test_default_config_requires_consent_for_mcp_tools() {
+        let config = AgentConfig::default();
+        let (agent, _rx) = ClaudeAgent::new(config)
+            .await
+            .expect("agent construction must succeed");
+
+        let result = agent
+            .permission_engine
+            .evaluate_tool_call(
+                "mcp__swissarmyhammer-kanban__question",
+                &serde_json::json!({}),
+            )
+            .await
+            .expect("evaluation must succeed");
+        assert!(
+            matches!(result, PolicyEvaluation::RequireUserConsent { .. }),
+            "With no auto-allow patterns, mcp__* tools must require consent, got: {:?}",
+            result
         );
     }
 }

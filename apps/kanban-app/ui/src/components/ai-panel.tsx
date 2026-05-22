@@ -1012,11 +1012,25 @@ function ElicitationFormPrompt({
   const handleSubmit = useCallback(() => {
     const found = validateForm(fields, values);
     if (Object.keys(found).length > 0) {
+      console.info("[elicitation] form submit blocked by validation errors", {
+        invalidFields: Object.keys(found),
+      });
       setErrors(found);
       return;
     }
+    console.info("[elicitation] form submit: accepting");
     onRespond(toAcceptResponse(fields, values));
   }, [fields, values, onRespond]);
+
+  const handleDecline = useCallback(() => {
+    console.info("[elicitation] form declined");
+    onRespond(declineResponse());
+  }, [onRespond]);
+
+  const handleCancel = useCallback(() => {
+    console.info("[elicitation] form cancelled");
+    onRespond(cancelResponse());
+  }, [onRespond]);
 
   return (
     <ElicitationCard message={message}>
@@ -1032,18 +1046,10 @@ function ElicitationFormPrompt({
         <Button onClick={handleSubmit} size="sm" variant="default">
           Submit
         </Button>
-        <Button
-          onClick={() => onRespond(declineResponse())}
-          size="sm"
-          variant="outline"
-        >
+        <Button onClick={handleDecline} size="sm" variant="outline">
           Decline
         </Button>
-        <Button
-          onClick={() => onRespond(cancelResponse())}
-          size="sm"
-          variant="ghost"
-        >
+        <Button onClick={handleCancel} size="sm" variant="ghost">
           Cancel
         </Button>
       </div>
@@ -1084,14 +1090,20 @@ function ElicitationUrlPrompt({
       </a>
       <div className="mt-3 flex flex-wrap gap-2">
         <Button
-          onClick={() => onRespond({ action: "accept", content: {} })}
+          onClick={() => {
+            console.info("[elicitation] url flow done: accepting");
+            onRespond({ action: "accept", content: {} });
+          }}
           size="sm"
           variant="default"
         >
           Done
         </Button>
         <Button
-          onClick={() => onRespond(cancelResponse())}
+          onClick={() => {
+            console.info("[elicitation] url flow cancelled");
+            onRespond(cancelResponse());
+          }}
           size="sm"
           variant="ghost"
         >

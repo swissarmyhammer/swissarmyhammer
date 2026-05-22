@@ -50,6 +50,14 @@ pub struct AgentConfig {
     /// Maximum language model requests per turn (default: 50) - triggers MaxTurnRequests stop reason
     #[serde(default = "default_max_turn_requests")]
     pub max_turn_requests: u64,
+    /// Tool-name glob patterns that are allowed without user consent (e.g. `mcp__*`).
+    ///
+    /// Each pattern is turned into a low-risk `Allow` permission policy that is
+    /// evaluated ahead of the built-in default policies (first-match-wins), so a
+    /// matching tool call is auto-approved instead of surfacing a consent dialog.
+    /// Defaults to empty, leaving the standard ask-on-unknown behaviour intact.
+    #[serde(default)]
+    pub auto_allow_tool_patterns: Vec<String>,
 }
 
 /// Mode for Claude agent operation
@@ -600,6 +608,7 @@ impl Default for AgentConfig {
             cancellation_buffer_size: default_cancellation_buffer_size(),
             max_tokens_per_turn: default_max_tokens_per_turn(),
             max_turn_requests: default_max_turn_requests(),
+            auto_allow_tool_patterns: vec![],
         }
     }
 }
