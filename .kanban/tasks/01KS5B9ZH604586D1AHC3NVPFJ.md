@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8780'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffff9480
 title: 'Fix flaky timeout: swissarmyhammer-entity watcher::tests (parallel contention)'
 ---
 **File**: `crates/swissarmyhammer-entity` (inside `watcher::tests`)

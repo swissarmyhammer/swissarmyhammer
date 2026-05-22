@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: doing
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffff9380
 title: 'Fix flaky timeout: test_mcp_server_prompt_loading (parallel contention)'
 ---
 **File**: `apps/swissarmyhammer-cli/tests/integration/mcp_integration.rs:43`

@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffff9580
 title: 'Fix flaky timeout: test_file_watcher_start_watching_replaces_previous'
 ---
 **File**: `crates/swissarmyhammer-tools/src/mcp/file_watcher.rs` (inside `mcp::file_watcher::tests`)

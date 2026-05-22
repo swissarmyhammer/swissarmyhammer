@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8580'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffff9180
 title: 'Fix flaky timeout: kanban-app state::tests open-board MCP tests (parallel contention)'
 ---
 **File**: `apps/kanban-app` `state::tests` (binary `kanban-app`)
