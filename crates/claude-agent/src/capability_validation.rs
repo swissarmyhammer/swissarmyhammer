@@ -809,33 +809,12 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_validate_client_capabilities_with_invalid_meta_type() {
-        use agent_client_protocol::schema::{ClientCapabilities, FileSystemCapabilities};
-
-        let validator = CapabilityValidator::new();
-        let capabilities = ClientCapabilities::new()
-            .fs(FileSystemCapabilities::new()
-                .read_text_file(true)
-                .write_text_file(true))
-            .terminal(true)
-            .meta(serde_json::json!("not_an_object").as_object().cloned());
-
-        let result = validator.validate_client_capabilities(Some(&capabilities));
-        assert!(result.is_err());
-
-        match result {
-            Err(SessionSetupError::CapabilityFormatError {
-                capability_name,
-                expected_format,
-                ..
-            }) => {
-                assert_eq!(capability_name, "meta");
-                assert_eq!(expected_format, "object");
-            }
-            _ => panic!("Expected CapabilityFormatError for invalid meta type"),
-        }
-    }
+    // Note: there is no "invalid meta type" test because the ACP schema types
+    // `ClientCapabilities::meta` as `Option<Meta>` where `Meta = Map<String, Value>`.
+    // A non-object meta is unrepresentable through the typed builder, so the former
+    // runtime "meta must be an object" check (and its test) is obsolete — the type
+    // system now enforces it at compile time. Invalid meta *values* are still
+    // covered by `test_validate_client_capabilities_with_invalid_meta_value`.
 
     #[test]
     fn test_validate_client_capabilities_with_invalid_meta_value() {
@@ -916,33 +895,10 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_validate_client_capabilities_with_invalid_fs_meta() {
-        use agent_client_protocol::schema::{ClientCapabilities, FileSystemCapabilities};
-
-        let validator = CapabilityValidator::new();
-        let capabilities = ClientCapabilities::new()
-            .fs(FileSystemCapabilities::new()
-                .read_text_file(true)
-                .write_text_file(false)
-                .meta(serde_json::json!("not_an_object").as_object().cloned()))
-            .terminal(false);
-
-        let result = validator.validate_client_capabilities(Some(&capabilities));
-        assert!(result.is_err());
-
-        match result {
-            Err(SessionSetupError::CapabilityFormatError {
-                capability_name,
-                expected_format,
-                ..
-            }) => {
-                assert_eq!(capability_name, "fs.meta");
-                assert_eq!(expected_format, "object");
-            }
-            _ => panic!("Expected CapabilityFormatError for invalid fs.meta type"),
-        }
-    }
+    // Note: there is no "invalid fs.meta type" test for the same reason as the
+    // top-level meta: `FileSystemCapabilities::meta` is typed as `Option<Meta>`
+    // (an object map), so a non-object fs.meta cannot be constructed. Valid fs.meta
+    // is covered by `test_validate_client_capabilities_with_fs_meta`.
 
     #[test]
     fn test_validate_client_capabilities_with_all_optional_fields_populated() {

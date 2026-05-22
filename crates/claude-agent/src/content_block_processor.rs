@@ -1359,8 +1359,9 @@ mod tests {
     fn test_process_resource_link_content() {
         let processor = create_test_processor();
 
-        // Create a proper ResourceLink with the builder pattern
-        let resource_link = ResourceLink::new("https://example.com/document.pdf", "document.pdf");
+        // Create a proper ResourceLink. ResourceLink::new takes (name, uri), so
+        // the URI goes in the second argument.
+        let resource_link = ResourceLink::new("document.pdf", "https://example.com/document.pdf");
 
         let content_block = ContentBlock::ResourceLink(resource_link);
         let result = processor.process_content_block(&content_block);

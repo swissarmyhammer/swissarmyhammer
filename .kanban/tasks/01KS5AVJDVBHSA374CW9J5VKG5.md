@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8680'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffff9680
 title: Spawned claude CLI ignores board cwd's .claude/settings.json permission deny rules
 ---
 ## What

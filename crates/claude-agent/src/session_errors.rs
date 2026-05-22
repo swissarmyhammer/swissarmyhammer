@@ -653,9 +653,12 @@ mod tests {
         };
 
         let protocol_error = error.to_protocol_error();
+        // The ACP schema normalizes the JSON-RPC code -32602 to the named
+        // ErrorCode::InvalidParams variant (see `From<i32> for ErrorCode`), rather
+        // than carrying it as ErrorCode::Other(-32602).
         assert_eq!(
             protocol_error.code,
-            agent_client_protocol::ErrorCode::Other(-32602)
+            agent_client_protocol::ErrorCode::InvalidParams
         );
         assert!(protocol_error.message.contains("Invalid session ID format"));
         assert!(protocol_error.data.is_some());

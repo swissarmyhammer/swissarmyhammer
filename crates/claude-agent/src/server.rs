@@ -194,6 +194,23 @@ impl ClaudeAgentServer {
         Ok(())
     }
 
+    /// Deserialize JSON-RPC request params into the method's request type.
+    ///
+    /// A deserialization failure means the caller sent malformed/invalid params, so
+    /// it is mapped to a JSON-RPC `Invalid params` (-32602) error. Returning this as
+    /// an `agent_client_protocol::Error` (rather than propagating with `?`) lets the
+    /// caller fold it into the error-response path and still reply to the client,
+    /// instead of silently dropping the request and leaving the client waiting.
+    fn parse_request_params<T>(params: serde_json::Value) -> Result<T, agent_client_protocol::Error>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        serde_json::from_value(params).map_err(|e| {
+            agent_client_protocol::Error::invalid_params()
+                .data(serde_json::json!({ "detail": e.to_string() }))
+        })
+    }
+
     /// Handle a single JSON-RPC request
     async fn handle_single_request<W>(
         line: String,
@@ -230,54 +247,60 @@ impl ClaudeAgentServer {
             id
         );
 
-        // Route to appropriate agent method
+        // Route to appropriate agent method.
+        //
+        // Param deserialization failures must not be propagated with `?`: that would
+        // skip the response-sending code below and leave a client waiting forever for
+        // a reply that never comes. Instead, `parse_request_params` maps them to an
+        // Invalid params error that flows into `response_result` and is sent back as a
+        // proper JSON-RPC error response.
         let response_result = match method {
-            "initialize" => {
-                let req = serde_json::from_value(params)?;
-                agent
+            "initialize" => match Self::parse_request_params(params) {
+                Ok(req) => agent
                     .initialize(req)
                     .await
-                    .map(|r| serde_json::to_value(r).unwrap())
-            }
-            "authenticate" => {
-                let req = serde_json::from_value(params)?;
-                agent
+                    .map(|r| serde_json::to_value(r).unwrap()),
+                Err(e) => Err(e),
+            },
+            "authenticate" => match Self::parse_request_params(params) {
+                Ok(req) => agent
                     .authenticate(req)
                     .await
-                    .map(|r| serde_json::to_value(r).unwrap())
-            }
-            "session/new" => {
-                let req = serde_json::from_value(params)?;
-                agent
+                    .map(|r| serde_json::to_value(r).unwrap()),
+                Err(e) => Err(e),
+            },
+            "session/new" => match Self::parse_request_params(params) {
+                Ok(req) => agent
                     .new_session(req)
                     .await
-                    .map(|r| serde_json::to_value(r).unwrap())
-            }
-            "session/load" => {
-                let req = serde_json::from_value(params)?;
-                agent
+                    .map(|r| serde_json::to_value(r).unwrap()),
+                Err(e) => Err(e),
+            },
+            "session/load" => match Self::parse_request_params(params) {
+                Ok(req) => agent
                     .load_session(req)
                     .await
-                    .map(|r| serde_json::to_value(r).unwrap())
-            }
-            "session/set-mode" => {
-                let req = serde_json::from_value(params)?;
-                agent
+                    .map(|r| serde_json::to_value(r).unwrap()),
+                Err(e) => Err(e),
+            },
+            "session/set-mode" => match Self::parse_request_params(params) {
+                Ok(req) => agent
                     .set_session_mode(req)
                     .await
-                    .map(|r| serde_json::to_value(r).unwrap())
-            }
-            "session/prompt" => {
-                let req = serde_json::from_value(params)?;
-                agent
+                    .map(|r| serde_json::to_value(r).unwrap()),
+                Err(e) => Err(e),
+            },
+            "session/prompt" => match Self::parse_request_params(params) {
+                Ok(req) => agent
                     .prompt(req)
                     .await
-                    .map(|r| serde_json::to_value(r).unwrap())
-            }
-            "session/cancel" => {
-                let req = serde_json::from_value(params)?;
-                agent.cancel(req).await.map(|_| serde_json::Value::Null)
-            }
+                    .map(|r| serde_json::to_value(r).unwrap()),
+                Err(e) => Err(e),
+            },
+            "session/cancel" => match Self::parse_request_params(params) {
+                Ok(req) => agent.cancel(req).await.map(|_| serde_json::Value::Null),
+                Err(e) => Err(e),
+            },
             // Handle extension methods through ext_method
             _ => {
                 let params_raw =
@@ -332,13 +355,20 @@ impl ClaudeAgentServer {
             }
             Err(e) => {
                 error!("Method {} failed: {}", method, e);
+                // Preserve the error's own JSON-RPC code, message, and optional data
+                // so the client receives an accurate error (e.g. -32602 Invalid
+                // params) rather than a blanket internal error.
+                let mut error_obj = serde_json::json!({
+                    "code": i32::from(e.code),
+                    "message": e.message,
+                });
+                if let Some(data) = e.data {
+                    error_obj["data"] = data;
+                }
                 serde_json::json!({
                     "jsonrpc": "2.0",
                     "id": id,
-                    "error": {
-                        "code": -32603,
-                        "message": e.to_string()
-                    }
+                    "error": error_obj
                 })
             }
         };

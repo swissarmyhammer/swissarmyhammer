@@ -295,10 +295,27 @@ impl PathValidator {
         Ok(())
     }
 
+    /// Canonicalize a configured prefix (blocked path or allowed root) so it can
+    /// be compared against an already-canonicalized input path.
+    ///
+    /// The input path passed to validation is canonicalized (symlinks resolved),
+    /// but configured prefixes are stored verbatim. On platforms where the prefix
+    /// itself traverses a symlink — e.g. macOS resolves `/var` to `/private/var` —
+    /// a raw `starts_with` comparison would never match. Canonicalizing the prefix
+    /// here puts both sides on equal footing. If the prefix does not exist (so it
+    /// cannot be canonicalized), fall back to the raw path; a non-existent prefix
+    /// cannot be a parent of any existing, canonicalized input path anyway.
+    fn canonical_prefix(prefix: &Path) -> PathBuf {
+        prefix
+            .canonicalize()
+            .unwrap_or_else(|_| prefix.to_path_buf())
+    }
+
     /// Validate that path is not in the blocked list
     fn validate_not_blocked(&self, path: &Path) -> Result<(), PathValidationError> {
         for blocked in &self.blocked_paths {
-            if path.starts_with(blocked) {
+            let blocked = Self::canonical_prefix(blocked);
+            if path.starts_with(&blocked) {
                 tracing::warn!(
                     security_event = "blocked_path_access",
                     path = %path.display(),
@@ -320,7 +337,7 @@ impl PathValidator {
         }
 
         for allowed_root in &self.allowed_roots {
-            if path.starts_with(allowed_root) {
+            if path.starts_with(Self::canonical_prefix(allowed_root)) {
                 return Ok(());
             }
         }

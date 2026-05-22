@@ -141,8 +141,17 @@ const CLAUDE_CLI_ARGS: &[&str] = &[
     "--output-format",
     "stream-json",                    // emit newline-delimited JSON on stdout
     "--dangerously-skip-permissions", // ACP server handles permission checks
-    "--include-partial-messages",     // Emit partial messages for immediate streaming
-    "--no-session-persistence", // Disable built-in session persistence (we manage it ourselves)
+    // Load filesystem settings so the board's `.claude/settings.json` (project)
+    // and `.claude/settings.local.json` (local) are honored. In `--print` mode
+    // the CLI loads NO settings sources by default, so without this the board's
+    // `permissions.deny`/`allow` rules are silently ignored. `user` is included
+    // to match the sources interactive Claude loads by default. Note: even under
+    // `--dangerously-skip-permissions`, `permissions.deny` is a hard rule the CLI
+    // still enforces — once these sources are actually loaded.
+    "--setting-sources",
+    "user,project,local",
+    "--include-partial-messages", // Emit partial messages for immediate streaming
+    "--no-session-persistence",   // Disable built-in session persistence (we manage it ourselves)
     // NOTE: This causes Claude to send a duplicate final combined message and empty terminator
     // We filter these out in the streaming loop (skip large chunks and empty chunks)
     "--replay-user-messages", // Re-emit user messages for transcript recording
@@ -877,7 +886,9 @@ mod tests {
         })];
 
         let map = ClaudeProcess::build_mcp_servers_map(&servers);
-        let entry = map.get("events-server").expect("SSE server must be present");
+        let entry = map
+            .get("events-server")
+            .expect("SSE server must be present");
         assert_eq!(entry["type"], "sse");
         assert_eq!(entry["url"], "https://events.example.com/sse");
     }
@@ -940,8 +951,7 @@ mod tests {
             cfg_path.display()
         );
 
-        let written = std::fs::read_to_string(&cfg_path)
-            .expect("MCP config file must be readable");
+        let written = std::fs::read_to_string(&cfg_path).expect("MCP config file must be readable");
         let parsed: serde_json::Value =
             serde_json::from_str(&written).expect("MCP config file must be valid JSON");
         let server_entry = parsed
@@ -982,6 +992,78 @@ mod tests {
             !args.iter().any(|a| a == "--strict-mcp-config"),
             "Empty MCP server list must not add --strict-mcp-config, got args: {:?}",
             args
+        );
+    }
+
+    /// The spawned headless `claude` runs in `--print` mode, which does NOT
+    /// load project/local `.claude/settings.json` unless `--setting-sources`
+    /// is passed. Without it the board's `permissions.deny`/`allow` rules are
+    /// silently ignored, so the agent runs tools the board meant to block.
+    /// The base command must pass `--setting-sources` with a value covering
+    /// `project` (board `.claude/settings.json`) and `local`
+    /// (`.claude/settings.local.json`) — matching the sources interactive
+    /// Claude loads by default.
+    #[test]
+    fn test_base_command_loads_filesystem_setting_sources() {
+        let command = ClaudeProcess::build_base_command("test-session-uuid");
+        let args: Vec<String> = command
+            .as_std()
+            .get_args()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect();
+
+        let pos = args
+            .iter()
+            .position(|a| a == "--setting-sources")
+            .unwrap_or_else(|| panic!("Expected --setting-sources flag, got args: {args:?}"));
+        let value = args
+            .get(pos + 1)
+            .expect("--setting-sources must be followed by a value");
+        assert!(
+            value.split(',').any(|s| s == "project"),
+            "--setting-sources value must include 'project', got: {value:?}"
+        );
+        assert!(
+            value.split(',').any(|s| s == "local"),
+            "--setting-sources value must include 'local', got: {value:?}"
+        );
+    }
+
+    /// Regression guard: adding `--setting-sources` must not disturb the core
+    /// stream-json contract the ACP pipeline depends on. The base command must
+    /// still pass `--print` and the stream-json input/output format flags.
+    #[test]
+    fn test_base_command_retains_core_streamjson_args() {
+        let command = ClaudeProcess::build_base_command("test-session-uuid");
+        let args: Vec<String> = command
+            .as_std()
+            .get_args()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect();
+
+        assert!(
+            args.iter().any(|a| a == "--print"),
+            "missing --print, got args: {args:?}"
+        );
+
+        let in_pos = args
+            .iter()
+            .position(|a| a == "--input-format")
+            .expect("missing --input-format");
+        assert_eq!(
+            args.get(in_pos + 1).map(String::as_str),
+            Some("stream-json"),
+            "--input-format must be followed by stream-json, got args: {args:?}"
+        );
+
+        let out_pos = args
+            .iter()
+            .position(|a| a == "--output-format")
+            .expect("missing --output-format");
+        assert_eq!(
+            args.get(out_pos + 1).map(String::as_str),
+            Some("stream-json"),
+            "--output-format must be followed by stream-json, got args: {args:?}"
         );
     }
 }

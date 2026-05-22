@@ -8,9 +8,6 @@ repository.workspace = true
 homepage.workspace = true
 description = "Claude agent implementation for SwissArmyHammer"
 
-[lib]
-test = false  # Disable lib cfg(test) modules - need ACP 0.9.0 fixes
-
 [dependencies]
 agent-client-protocol = { workspace = true }
 agent-client-protocol-extras = { workspace = true }
