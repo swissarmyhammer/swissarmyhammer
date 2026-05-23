@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffa580
 title: 'AI composer: slash-command autocomplete from ACP `availableCommands`'
 ---
 ## What
@@ -54,3 +54,14 @@ Note: a local-llama model advertises no commands (`agent_trait_impl.rs`), so `/`
 ## Workflow
 
 - `/tdd` throughout — failing test first, watched RED, GREEN, refactor — for every layer including the warm-up follow-up.
+
+## Review Findings (2026-05-23 10:34)
+
+Task-mode review of commit `b792ceec8` (reviewer subagent, layered + JS/TS guidelines). 0 blockers, 1 warning, 2 nits — all resolved in commit `a31efde5`.
+
+### Warnings
+- [x] `conversation.ts` `ensureSession` — a `newConversation` (ai.newChat) firing while a warm-up's `startSession` was still in flight let the abandoned start write its session back into `sessionRef`, so a fresh chat silently reused the prior ACP session (breaks brand-new-session-per-chat). Fixed: a `sessionGenerationRef` bumped on `newConversation`; a start refuses to cache its session if the generation changed; in-flight-promise cleanup guarded so an abandoned start can't clear a newer start's slot. Regression test added (`newConversation during an in-flight warm-up does not cache the abandoned session`).
+
+### Nits
+- [x] `hooks/use-command-completion.ts` — renamed single-letter `q` → `lowerQuery` per the JS/TS no-abbreviations guideline.
+- [x] `lib/cm-mention-autocomplete.ts` `isCommandResult` — declined: the `"name" in result` structural narrowing is correct for this 2-member union; an explicit `kind` discriminant would be speculative over-engineering. Noted for if the union grows.
