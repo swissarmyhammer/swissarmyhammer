@@ -305,6 +305,36 @@ pub struct CreateAgentOptions {
     /// Override for Claude's built-in tools. When set to Some(""), disables all built-in tools.
     /// This is used for validator agents that should only have MCP-provided tools.
     pub tools_override: Option<String>,
+    /// Auto-approve *every* tool call (including Claude's built-in
+    /// Write/Edit/Bash/terminal tools), not just the app's MCP toolset.
+    ///
+    /// When `true`, the Claude `AgentConfig` is built with an
+    /// `auto_allow_tool_patterns` of `["*"]`, so the permission engine returns
+    /// `Allowed` for every tool and never emits a `session/request_permission`
+    /// consent dialog. When `false` (the default), only the MCP toolset
+    /// (`mcp__*`) is auto-allowed and everything else falls through to the
+    /// default ask-on-unknown behaviour.
+    ///
+    /// The kanban app opts in to this; other consumers (e.g. validator agents)
+    /// keep the conservative default.
+    pub auto_allow_all: bool,
+}
+
+/// Resolve the `auto_allow_tool_patterns` glob set for the Claude
+/// `AgentConfig`.
+///
+/// When `auto_allow_all` is `true`, returns `["*"]`, which auto-approves every
+/// tool the agent may call (the kanban app's posture: the Claude CLI already
+/// runs with `--dangerously-skip-permissions`, so claude-agent's policy engine
+/// is the only remaining gate and this keeps it fully open). When `false`,
+/// returns `["mcp__*"]`, auto-approving only the app's own MCP toolset while
+/// leaving all other tools subject to the default ask-on-unknown behaviour.
+fn resolve_auto_allow_patterns(auto_allow_all: bool) -> Vec<String> {
+    if auto_allow_all {
+        vec!["*".to_string()]
+    } else {
+        vec![MCP_AUTO_ALLOW_PATTERN.to_string()]
+    }
 }
 
 /// Create an ACP agent based on model configuration
@@ -343,6 +373,7 @@ pub async fn create_agent_with_options(
                 mcp_config,
                 options.ephemeral,
                 options.tools_override.clone(),
+                options.auto_allow_all,
             )
             .await
         }
@@ -732,6 +763,7 @@ async fn create_claude_agent(
     mcp_config: Option<McpServerConfig>,
     ephemeral: bool,
     tools_override: Option<String>,
+    auto_allow_all: bool,
 ) -> AcpResult<AcpAgentHandle> {
     // Check if Claude CLI is available (claude-agent requires this)
     if which::which("claude").is_err() {
@@ -741,22 +773,49 @@ async fn create_claude_agent(
         ));
     }
 
-    // Create Claude agent configuration with MCP servers
-    // Increase max prompt length for rule checking which may include very large files
-    //
-    // Auto-allow the MCP toolset this app provides (Claude sees these as
-    // `mcp__*`, e.g. `mcp__swissarmyhammer-kanban__question`) so the
-    // claude-agent permission engine approves them without surfacing a consent
-    // dialog. The app already runs the Claude CLI with
-    // `--dangerously-skip-permissions`, making claude-agent's own policy engine
-    // the sole gate; this pattern keeps that gate open for our own tools while
-    // leaving everything else subject to the default ask-on-unknown behaviour.
-    let auto_allow_tool_patterns = vec![MCP_AUTO_ALLOW_PATTERN.to_string()];
+    let agent_config =
+        build_claude_agent_config(mcp_config, ephemeral, tools_override, auto_allow_all);
+
+    // Create the Claude agent
+    let (agent, notification_rx) =
+        claude_agent::ClaudeAgent::new(agent_config)
+            .await
+            .map_err(|e| {
+                AcpError::InitializationError(format!("Failed to create Claude agent: {}", e))
+            })?;
+
+    Ok(wrap_claude_into_handle(Arc::new(agent), notification_rx))
+}
+
+/// Build the `claude_agent::AgentConfig` for a Claude ACP agent.
+///
+/// Pure (no I/O, no process spawn) so the wiring is unit-testable without the
+/// Claude CLI: which tools the permission engine auto-approves, whether the
+/// per-board MCP server is attached, and the ephemeral / tools-override
+/// carry-through. [`create_claude_agent`] calls this and then spawns
+/// `ClaudeAgent::new`.
+///
+/// Auto-allow resolution: the app runs the Claude CLI with
+/// `--dangerously-skip-permissions`, making claude-agent's own policy engine
+/// the sole gate. With `auto_allow_all` the gate is fully open (`*`) — every
+/// tool, including the CLI's built-ins, is approved without a consent dialog.
+/// Otherwise only the MCP toolset this app provides (Claude sees these as
+/// `mcp__*`, e.g. `mcp__swissarmyhammer-kanban__question`) is auto-allowed,
+/// leaving everything else subject to the default ask-on-unknown behaviour.
+/// `max_prompt_length` is raised because rule checking may include very large
+/// files.
+fn build_claude_agent_config(
+    mcp_config: Option<McpServerConfig>,
+    ephemeral: bool,
+    tools_override: Option<String>,
+    auto_allow_all: bool,
+) -> claude_agent::AgentConfig {
+    let auto_allow_tool_patterns = resolve_auto_allow_patterns(auto_allow_all);
 
     let mut agent_config = if let Some(mcp) = mcp_config {
         claude_agent::AgentConfig {
             max_prompt_length: MAX_PROMPT_LENGTH_BYTES,
-            auto_allow_tool_patterns: auto_allow_tool_patterns.clone(),
+            auto_allow_tool_patterns,
             mcp_servers: vec![claude_agent::config::McpServerConfig::Http(
                 claude_agent::config::HttpTransport {
                     transport_type: "http".to_string(),
@@ -777,16 +836,7 @@ async fn create_claude_agent(
 
     agent_config.claude.ephemeral = ephemeral;
     agent_config.claude.tools_override = tools_override;
-
-    // Create the Claude agent
-    let (agent, notification_rx) =
-        claude_agent::ClaudeAgent::new(agent_config)
-            .await
-            .map_err(|e| {
-                AcpError::InitializationError(format!("Failed to create Claude agent: {}", e))
-            })?;
-
-    Ok(wrap_claude_into_handle(Arc::new(agent), notification_rx))
+    agent_config
 }
 
 /// Convert swissarmyhammer model source to llama-agent model source
@@ -1582,6 +1632,189 @@ mod tests {
         assert_eq!(config.auto_allow_tool_patterns, vec!["mcp__*".to_string()]);
     }
 
+    /// `resolve_auto_allow_patterns` selects the auto-allow glob set fed into
+    /// the Claude `AgentConfig`. `true` (the kanban app's choice) auto-approves
+    /// every tool via `"*"`; `false` (the default for all other callers) keeps
+    /// the conservative `"mcp__*"` scope.
+    #[test]
+    fn test_resolve_auto_allow_patterns() {
+        assert_eq!(
+            resolve_auto_allow_patterns(true),
+            vec!["*".to_string()],
+            "auto_allow_all=true must auto-approve every tool"
+        );
+        assert_eq!(
+            resolve_auto_allow_patterns(false),
+            vec!["mcp__*".to_string()],
+            "auto_allow_all=false must keep the conservative MCP-only scope"
+        );
+    }
+
+    /// `auto_allow_all` must flow into the `auto_allow_tool_patterns` of the
+    /// built `AgentConfig` in BOTH construction branches — with and without an
+    /// MCP server. This is the wiring the helper test alone can't catch: a
+    /// regression that updated only one branch would still pass
+    /// `test_resolve_auto_allow_patterns`.
+    #[test]
+    fn test_build_claude_agent_config_threads_auto_allow_all_in_both_branches() {
+        // No-MCP branch.
+        let no_mcp = build_claude_agent_config(None, false, None, true);
+        assert_eq!(
+            no_mcp.auto_allow_tool_patterns,
+            vec!["*".to_string()],
+            "no-MCP branch must use the resolved wildcard patterns"
+        );
+
+        // MCP branch.
+        let with_mcp = build_claude_agent_config(
+            Some(McpServerConfig::new("http://localhost:1/mcp")),
+            false,
+            None,
+            true,
+        );
+        assert_eq!(
+            with_mcp.auto_allow_tool_patterns,
+            vec!["*".to_string()],
+            "MCP branch must use the resolved wildcard patterns too"
+        );
+    }
+
+    /// The default (`auto_allow_all == false`) keeps the conservative
+    /// `mcp__*`-only scope in both branches — the behavior every non-kanban
+    /// caller relies on.
+    #[test]
+    fn test_build_claude_agent_config_default_is_mcp_only_in_both_branches() {
+        let no_mcp = build_claude_agent_config(None, false, None, false);
+        assert_eq!(no_mcp.auto_allow_tool_patterns, vec!["mcp__*".to_string()]);
+
+        let with_mcp = build_claude_agent_config(
+            Some(McpServerConfig::new("http://localhost:1/mcp")),
+            false,
+            None,
+            false,
+        );
+        assert_eq!(
+            with_mcp.auto_allow_tool_patterns,
+            vec!["mcp__*".to_string()]
+        );
+    }
+
+    /// A `Some(McpServerConfig)` attaches exactly one HTTP MCP server carrying
+    /// the supplied URL under the `swissarmyhammer` name; `None` attaches none.
+    #[test]
+    fn test_build_claude_agent_config_attaches_mcp_http_server() {
+        let with_mcp = build_claude_agent_config(
+            Some(McpServerConfig::new("http://example.com/mcp")),
+            false,
+            None,
+            false,
+        );
+        assert_eq!(with_mcp.mcp_servers.len(), 1);
+        match &with_mcp.mcp_servers[0] {
+            claude_agent::config::McpServerConfig::Http(http) => {
+                assert_eq!(http.url, "http://example.com/mcp");
+                assert_eq!(http.name, "swissarmyhammer");
+            }
+            _ => panic!("expected an HTTP MCP server variant"),
+        }
+
+        let no_mcp = build_claude_agent_config(None, false, None, false);
+        assert!(
+            no_mcp.mcp_servers.is_empty(),
+            "no MCP config must attach no servers"
+        );
+    }
+
+    /// `ephemeral` and `tools_override` are carried through onto the nested
+    /// Claude config in both branches.
+    #[test]
+    fn test_build_claude_agent_config_threads_ephemeral_and_tools_override() {
+        let custom = build_claude_agent_config(None, true, Some(String::new()), false);
+        assert!(custom.claude.ephemeral);
+        assert_eq!(custom.claude.tools_override, Some(String::new()));
+
+        let plain = build_claude_agent_config(None, false, None, false);
+        assert!(!plain.claude.ephemeral);
+        assert_eq!(plain.claude.tools_override, None);
+    }
+
+    /// End-to-end behavioral guard for `auto_allow_all == true`: the patterns
+    /// the kanban app configures (`resolve_auto_allow_patterns(true)`), fed into
+    /// claude-agent's real permission engine the way `create_permission_engine`
+    /// wires them (Allow policies prepended ahead of the ask-on-everything
+    /// defaults), auto-approve EVERY tool class — MCP, CLI built-ins, and
+    /// arbitrary unknowns. That means no `session/request_permission` is ever
+    /// emitted: no per-tool nag.
+    #[tokio::test]
+    async fn test_wildcard_pattern_allows_all_tools_via_claude_engine() {
+        use claude_agent::permissions::{
+            FilePermissionStorage, PermissionPolicy, PermissionPolicyEngine, PolicyAction,
+            PolicyEvaluation, RiskLevel,
+        };
+
+        let temp_dir =
+            std::env::temp_dir().join(format!("sah-agent-perm-wild-{}", std::process::id()));
+        let storage = FilePermissionStorage::new(temp_dir);
+
+        // Source the Allow patterns from the production helper so this test
+        // tracks what the kanban app actually configures.
+        let mut policies: Vec<PermissionPolicy> = resolve_auto_allow_patterns(true)
+            .into_iter()
+            .map(|pattern| PermissionPolicy {
+                tool_pattern: pattern,
+                default_action: PolicyAction::Allow,
+                require_user_consent: false,
+                allow_always_option: true,
+                risk_level: RiskLevel::Low,
+            })
+            .collect();
+        // Representative defaults that would otherwise force a consent dialog
+        // for the CLI's built-in tools (mirrors `default_permission_policies`).
+        policies.extend([
+            PermissionPolicy {
+                tool_pattern: "fs_write*".to_string(),
+                default_action: PolicyAction::AskUser,
+                require_user_consent: true,
+                allow_always_option: true,
+                risk_level: RiskLevel::Medium,
+            },
+            PermissionPolicy {
+                tool_pattern: "terminal*".to_string(),
+                default_action: PolicyAction::AskUser,
+                require_user_consent: true,
+                allow_always_option: true,
+                risk_level: RiskLevel::High,
+            },
+            PermissionPolicy {
+                tool_pattern: "*".to_string(),
+                default_action: PolicyAction::AskUser,
+                require_user_consent: true,
+                allow_always_option: true,
+                risk_level: RiskLevel::Medium,
+            },
+        ]);
+        let engine = PermissionPolicyEngine::with_policies(Box::new(storage), policies);
+
+        for tool in [
+            "mcp__swissarmyhammer-kanban__question",
+            "terminal_create",
+            "fs_write_file",
+            "http_request",
+            "bash",
+            "some_unknown_tool",
+        ] {
+            let outcome = engine
+                .evaluate_tool_call(tool, &serde_json::json!({}))
+                .await
+                .expect("evaluation must succeed");
+            assert!(
+                matches!(outcome, PolicyEvaluation::Allowed),
+                "auto_allow_all must auto-approve `{tool}` without consent, got: {:?}",
+                outcome
+            );
+        }
+    }
+
     /// End-to-end check that the `mcp__*` pattern, fed into claude-agent's
     /// public permission engine the way the agent wiring does, auto-allows the
     /// app's MCP tools while unrelated tools still require user consent.
@@ -2148,6 +2381,7 @@ mod tests {
         let options = CreateAgentOptions {
             ephemeral: false,
             tools_override: Some("".to_string()),
+            ..Default::default()
         };
         assert_eq!(options.tools_override, Some("".to_string()));
     }
@@ -2157,6 +2391,7 @@ mod tests {
         let options = CreateAgentOptions {
             ephemeral: true,
             tools_override: Some("custom".to_string()),
+            ..Default::default()
         };
         let debug = format!("{:?}", options);
         assert!(debug.contains("ephemeral: true"));
@@ -2168,6 +2403,7 @@ mod tests {
         let options = CreateAgentOptions {
             ephemeral: true,
             tools_override: Some("tools".to_string()),
+            ..Default::default()
         };
         let cloned = options.clone();
         assert!(cloned.ephemeral);

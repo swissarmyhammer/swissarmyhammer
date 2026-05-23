@@ -42,7 +42,7 @@ use std::net::SocketAddr;
 
 use agent_client_protocol::{Agent, ConnectTo, Lines};
 use futures_util::{SinkExt, StreamExt};
-use swissarmyhammer_agent::{create_agent, AcpAgentHandle};
+use swissarmyhammer_agent::{create_agent_with_options, AcpAgentHandle, CreateAgentOptions};
 use swissarmyhammer_config::model::ModelConfig;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::Message;
@@ -160,7 +160,16 @@ async fn handle_connection(stream: TcpStream, model_config: ModelConfig) -> io::
         .await
         .map_err(io::Error::other)?;
 
-    let handle = match create_agent(&model_config, None).await {
+    // Auto-approve every tool call for the kanban agent — no per-tool consent
+    // dialog, including the Claude CLI's built-in Write/Edit/Bash tools. The CLI
+    // already runs with `--dangerously-skip-permissions`, so claude-agent's own
+    // policy engine is the sole gate; opening it fully here keeps the AI panel
+    // from nagging on every tool.
+    let agent_options = CreateAgentOptions {
+        auto_allow_all: true,
+        ..Default::default()
+    };
+    let handle = match create_agent_with_options(&model_config, None, agent_options).await {
         Ok(handle) => handle,
         Err(e) => {
             tracing::warn!(error = %e, "failed to build in-process ACP agent");

@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffa780
 title: 'Kanban agent: auto-approve all tool permissions (no per-tool nag)'
 ---
 ## What
@@ -35,17 +35,17 @@ This auto-approves ALL tools (including Bash/terminal/network), matching the use
 
 ## Acceptance Criteria
 
-- [ ] `CreateAgentOptions` has an `auto_allow_all` field; when `true`, the Claude `AgentConfig` is built with `auto_allow_tool_patterns == ["*"]`; when `false`, it is `["mcp__*"]` (unchanged default).
-- [ ] A `ClaudeAgent` built with `auto_allow_tool_patterns: ["*"]` evaluates a non-MCP built-in tool (e.g. `fs_write_file` / `terminal_create`) to an auto-allowed outcome — NOT `RequireUserConsent`.
-- [ ] The kanban app's `agent_ws::handle_connection` creates the agent with `auto_allow_all: true`.
-- [ ] Other `create_agent` callers (default options) are unaffected: `auto_allow_tool_patterns` stays `["mcp__*"]`.
+- [x] `CreateAgentOptions` has an `auto_allow_all` field; when `true`, the Claude `AgentConfig` is built with `auto_allow_tool_patterns == ["*"]`; when `false`, it is `["mcp__*"]` (unchanged default).
+- [x] A `ClaudeAgent` built with `auto_allow_tool_patterns: ["*"]` evaluates a non-MCP built-in tool (e.g. `fs_write_file` / `terminal_create`) to an auto-allowed outcome — NOT `RequireUserConsent`.
+- [x] The kanban app's `agent_ws::handle_connection` creates the agent with `auto_allow_all: true`.
+- [x] Other `create_agent` callers (default options) are unaffected: `auto_allow_tool_patterns` stays `["mcp__*"]`.
 
 ## Tests
 
-- [ ] `crates/swissarmyhammer-agent/src/lib.rs`: unit test for `resolve_auto_allow_patterns` — `true → ["*"]`, `false → ["mcp__*"]` (mirrors the existing config test near line 1579). Run `cargo test -p swissarmyhammer-agent resolve_auto_allow` → green.
-- [ ] `crates/claude-agent/src/agent.rs`: add a sibling to `test_auto_allow_tool_patterns_skip_consent_for_mcp_tools` (~line 3014) that builds a `ClaudeAgent` with `auto_allow_tool_patterns: vec!["*".to_string()]` and asserts a non-MCP built-in tool (e.g. `terminal_create`) is auto-allowed (no `RequireUserConsent`). Run `cargo test -p claude-agent auto_allow` → green.
-- [ ] Build/typecheck the kanban app wiring: `cargo check -p kanban-app` (or the app's package name) green with the `create_agent_with_options` call.
-- [ ] `cargo test -p swissarmyhammer-agent -p claude-agent` green.
+- [x] `crates/swissarmyhammer-agent/src/lib.rs`: unit test for `resolve_auto_allow_patterns` — `true → ["*"]`, `false → ["mcp__*"]` (mirrors the existing config test near line 1579). Run `cargo test -p swissarmyhammer-agent resolve_auto_allow` → green.
+- [x] `crates/claude-agent/src/agent.rs`: add a sibling to `test_auto_allow_tool_patterns_skip_consent_for_mcp_tools` (~line 3014) that builds a `ClaudeAgent` with `auto_allow_tool_patterns: vec!["*".to_string()]` and asserts a non-MCP built-in tool (e.g. `terminal_create`) is auto-allowed (no `RequireUserConsent`). Run `cargo test -p claude-agent auto_allow` → green.
+- [x] Build/typecheck the kanban app wiring: `cargo check -p kanban-app` (or the app's package name) green with the `create_agent_with_options` call.
+- [x] `cargo test -p swissarmyhammer-agent -p claude-agent` green. (New/affected tests all green; 3 pre-existing `session::tests::test_remove_session_with_cleanup*` flakes fail only under parallel execution — confirmed pre-existing via `git stash` on the unmodified tree, unrelated to this change.)
 
 ## Workflow
 

@@ -3046,6 +3046,46 @@ mod tests {
         );
     }
 
+    /// A `ClaudeAgent` built with the wildcard auto-allow pattern (`"*"`) must
+    /// auto-allow *every* tool — including the Claude CLI's non-MCP built-ins
+    /// like `terminal_create` — without surfacing a consent dialog. This is the
+    /// end-to-end guard for the kanban "auto-approve all tool permissions"
+    /// behaviour driven by `CreateAgentOptions::auto_allow_all`.
+    #[tokio::test]
+    async fn test_auto_allow_wildcard_skips_consent_for_builtin_tools() {
+        let config = AgentConfig {
+            auto_allow_tool_patterns: vec!["*".to_string()],
+            ..AgentConfig::default()
+        };
+        let (agent, _rx) = ClaudeAgent::new(config)
+            .await
+            .expect("agent construction must succeed");
+
+        // A non-MCP built-in tool must be auto-allowed (no consent dialog).
+        let result = agent
+            .permission_engine
+            .evaluate_tool_call("terminal_create", &serde_json::json!({}))
+            .await
+            .expect("evaluation must succeed");
+        assert!(
+            matches!(result, PolicyEvaluation::Allowed),
+            "with the \"*\" pattern, built-in tools must be auto-allowed, got: {:?}",
+            result
+        );
+
+        // Another built-in (file write) must likewise be auto-allowed.
+        let result = agent
+            .permission_engine
+            .evaluate_tool_call("fs_write_file", &serde_json::json!({}))
+            .await
+            .expect("evaluation must succeed");
+        assert!(
+            matches!(result, PolicyEvaluation::Allowed),
+            "with the \"*\" pattern, fs_write_file must be auto-allowed, got: {:?}",
+            result
+        );
+    }
+
     /// Without any configured auto-allow patterns, MCP tools fall through to the
     /// default catch-all policy and require user consent. This pins the
     /// opt-in nature of the feature so the default behaviour for other

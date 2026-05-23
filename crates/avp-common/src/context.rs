@@ -863,6 +863,7 @@ impl AvpContext {
         let options = swissarmyhammer_agent::CreateAgentOptions {
             ephemeral: true,
             tools_override: Some(tools_override),
+            ..Default::default()
         };
         let handle = swissarmyhammer_agent::create_agent_with_options(
             &self.model_config,
