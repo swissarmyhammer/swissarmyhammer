@@ -87,6 +87,7 @@ import { useEnclosingLayerFq } from "./layer-fq-context";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { asSegment } from "@/types/spatial";
+import { mkRect, stubScopeGeometry } from "@/test/stub-scope-geometry";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -120,34 +121,6 @@ function installInvokeStub(jumpCodes: string[]) {
     return undefined;
   });
   return { pushedLayers, poppedLayers, registeredScopes };
-}
-
-function mkRect(x: number, y: number, w: number, h: number): DOMRect {
-  return {
-    x,
-    y,
-    left: x,
-    top: y,
-    width: w,
-    height: h,
-    right: x + w,
-    bottom: y + h,
-    toJSON: () => ({}),
-  } as DOMRect;
-}
-
-function stubScopeRects(rects: Map<string, DOMRect>): () => void {
-  const orig = Element.prototype.getBoundingClientRect;
-  Element.prototype.getBoundingClientRect = function () {
-    const testId = (this as HTMLElement).dataset?.testid;
-    if (testId !== undefined && rects.has(testId)) {
-      return rects.get(testId)!;
-    }
-    return orig.call(this);
-  };
-  return () => {
-    Element.prototype.getBoundingClientRect = orig;
-  };
 }
 
 /**
@@ -230,7 +203,7 @@ describe("<JumpToOverlay> — over inspector (inspector layer is topmost)", () =
       ["seed-field-1", mkRect(500, 50, 100, 30)],
       ["seed-field-2", mkRect(500, 90, 100, 30)],
     ]);
-    const cleanup = stubScopeRects(rects);
+    const cleanup = stubScopeGeometry(rects);
 
     const onClose = vi.fn();
     const { unmount } = render(
