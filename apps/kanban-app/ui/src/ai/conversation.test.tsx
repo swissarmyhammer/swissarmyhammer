@@ -247,6 +247,60 @@ describe("useConversation", () => {
     expect(sessions()[0].prompts).toEqual([[textBlock("hi")]]);
   });
 
+  it("newConversation during an in-flight warm-up does not cache the abandoned session", async () => {
+    // Race: a new chat (ai.newChat) fires while the warm-up's startSession is
+    // still resolving. The abandoned start must NOT write its session back into
+    // the cache — otherwise the "fresh" chat would silently reuse the prior
+    // ACP session, breaking the brand-new-session-per-chat contract.
+    let releaseFirstStart: (() => void) | undefined;
+    let startCount = 0;
+    const sessions: FakeSession[] = [];
+    const connect: ConversationConnect = async (handlers) => ({
+      protocolVersion: 1,
+      initializeResponse: { protocolVersion: 1, agentCapabilities: {} },
+      async startSession(): Promise<AcpSession> {
+        startCount += 1;
+        // Gate only the first start so we can interleave a reset while it is
+        // in flight.
+        if (startCount === 1) {
+          await new Promise<void>((resolve) => {
+            releaseFirstStart = resolve;
+          });
+        }
+        const session = new FakeSession(handlers.onSessionUpdate, {});
+        sessions.push(session);
+        return session;
+      },
+    });
+    const { result } = renderHook(() => useConversation({ connect }));
+
+    // Warm up — the first startSession is now pending on the gate.
+    await act(async () => {
+      result.current.warmUp();
+    });
+    await waitFor(() => {
+      expect(startCount).toBe(1);
+    });
+
+    // Reset mid-start, then release the abandoned first start.
+    await act(async () => {
+      result.current.newConversation();
+    });
+    await act(async () => {
+      releaseFirstStart?.();
+      await Promise.resolve();
+    });
+
+    // The next send must open a brand-new session (start #2), not reuse the
+    // abandoned one. The abandoned session #0 is never used.
+    await act(async () => {
+      await result.current.sendPrompt([textBlock("hi")]);
+    });
+    expect(sessions).toHaveLength(2);
+    expect(sessions[1].prompts).toEqual([[textBlock("hi")]]);
+    expect(sessions[0].prompts).toEqual([]);
+  });
+
   it("sendPrompt streams updates into messages and ends idle", async () => {
     const { connect, sessions } = fakeConnect({
       updates: [

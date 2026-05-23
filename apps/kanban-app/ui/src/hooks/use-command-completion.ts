@@ -34,9 +34,9 @@ export function buildCommandSearch(
   commands: AvailableCommand[],
 ): MentionSearchSync {
   return (query: string) => {
-    const q = query.toLowerCase();
+    const lowerQuery = query.toLowerCase();
     return commands
-      .filter((c) => !q || c.name.toLowerCase().includes(q))
+      .filter((c) => !lowerQuery || c.name.toLowerCase().includes(lowerQuery))
       .map((c) => ({ name: c.name, description: c.description }));
   };
 }

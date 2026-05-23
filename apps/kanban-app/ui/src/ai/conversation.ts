@@ -1131,6 +1131,14 @@ export function useConversation(
   const sessionPromiseRef = useRef<Promise<AcpSession | null> | null>(null);
 
   /**
+   * Bumped by {@link newConversation} to abandon any session start still in
+   * flight. A start captures the generation at its outset and refuses to cache
+   * its session if the generation has since changed — otherwise a new chat
+   * begun mid-start would silently reuse the prior session.
+   */
+  const sessionGenerationRef = useRef(0);
+
+  /**
    * Resolver for the in-flight permission request. The ACP client's
    * `onRequestPermission` handler returns this promise; `respondPermission`
    * resolves it. A ref so the handler and the responder share one slot.
@@ -1279,6 +1287,8 @@ export function useConversation(
     if (sessionPromiseRef.current !== null) {
       return sessionPromiseRef.current;
     }
+    // Snapshot the generation so a `newConversation` mid-start can be detected.
+    const generation = sessionGenerationRef.current;
     const start = (async (): Promise<AcpSession | null> => {
       if (clientRef.current === null) {
         clientRef.current = await connect(handlers);
@@ -1288,15 +1298,26 @@ export function useConversation(
         return null;
       }
       if (sessionRef.current === null) {
-        sessionRef.current = await client.startSession();
+        const session = await client.startSession();
+        // A `newConversation` that fired while `startSession` was in flight
+        // bumped the generation, abandoning this start. Don't cache the
+        // session — doing so would let the "fresh" chat silently reuse the
+        // prior session. Return it un-cached so the next caller opens a new one.
+        if (sessionGenerationRef.current !== generation) {
+          return session;
+        }
+        sessionRef.current = session;
       }
       return sessionRef.current;
     })();
     sessionPromiseRef.current = start;
-    // Drop the in-flight cache once settled so a failed attempt can be retried
-    // by the next caller.
+    // Drop the in-flight cache once settled so a failed attempt can be retried,
+    // but only if this start still owns the slot — a newer start (after a
+    // reset) must not have its in-flight promise cleared by an abandoned one.
     void start.finally(() => {
-      sessionPromiseRef.current = null;
+      if (sessionPromiseRef.current === start) {
+        sessionPromiseRef.current = null;
+      }
     });
     return start;
   }, [connect, handlers]);
@@ -1354,8 +1375,11 @@ export function useConversation(
   const newConversation = useCallback(() => {
     sessionRef.current = null;
     // Drop any in-flight session start so the next send/warm-up opens a fresh
-    // one rather than awaiting the abandoned session.
+    // one rather than awaiting the abandoned session. Bumping the generation
+    // also tells a start still resolving to discard its session rather than
+    // caching it into the freshly reset conversation.
     sessionPromiseRef.current = null;
+    sessionGenerationRef.current += 1;
     permissionResolverRef.current = null;
     setPermissionRequest(null);
     // An elicitation left pending when the conversation is reset is abandoned;
