@@ -57,6 +57,7 @@
       "icons/icon.png"
     ],
     "macOS": {
+      "minimumSystemVersion": "10.15",
       "entitlements": "./entitlements.plist",
       "signingIdentity": "Developer ID Application: Will Ballard (S675BK92KH)",
       "files": {
