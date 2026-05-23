@@ -40,6 +40,7 @@ import {
   type ReactNode,
 } from "react";
 import type {
+  AvailableCommand,
   ContentBlock,
   CreateElicitationRequest,
   CreateElicitationResponse,
@@ -408,7 +409,9 @@ function AiPanelConversation({
   const {
     messages,
     status,
+    state,
     sendPrompt,
+    warmUp,
     cancel,
     newConversation,
     permissionRequest,
@@ -416,6 +419,21 @@ function AiPanelConversation({
     elicitationRequest,
     respondElicitation,
   } = conversation;
+
+  // Eagerly start the session whenever the conversation is empty and the model
+  // is ready, so the agent's `available_commands_update` arrives before the
+  // user's first message — that is what makes the composer's `/` slash-command
+  // menu work on a fresh conversation. Keying on the empty-conversation state
+  // (rather than mount alone) re-warms after `ai.newChat` resets the session,
+  // so `/` keeps working in the new chat. `warmUp` is fire-and-forget and
+  // idempotent; it shares the in-flight session with the first `sendPrompt` if
+  // the user types before it resolves, and is a no-op once a session exists.
+  const isEmptyConversation = messages.length === 0;
+  useEffect(() => {
+    if (modelReady && isEmptyConversation) {
+      warmUp();
+    }
+  }, [modelReady, isEmptyConversation, warmUp]);
 
   // Register the conversation-owned `ai.*` command handlers into the
   // `ai/commands.ts` registry so the window-layer `ai.newChat` / `ai.cancel`
@@ -540,6 +558,9 @@ function AiPanelConversation({
         onSelectModel={onSelectModel}
         onCancel={handleCancel}
         onSend={handleSend}
+        // The agent's live slash commands (ACP `available_commands_update`),
+        // folded into conversation state — drives the composer's `/` menu.
+        availableCommands={state.availableCommands}
       />
     </div>
   );
@@ -1160,6 +1181,8 @@ interface ComposerAreaProps {
   /** Submit the composed prompt — called with the trimmed buffer text. */
   onSend: (text: string) => void;
   onCancel: () => void;
+  /** The agent's live slash commands — drives the composer's `/` autocomplete. */
+  availableCommands?: AvailableCommand[];
 }
 
 /**
@@ -1190,6 +1213,7 @@ function ComposerArea({
   onSelectModel,
   onSend,
   onCancel,
+  availableCommands,
 }: ComposerAreaProps): ReactNode {
   return (
     <div className="flex shrink-0 flex-col p-2">
@@ -1213,6 +1237,7 @@ function ComposerArea({
           onSelectModel={onSelectModel}
           onSend={onSend}
           onCancel={onCancel}
+          availableCommands={availableCommands}
         />
       </div>
     </div>

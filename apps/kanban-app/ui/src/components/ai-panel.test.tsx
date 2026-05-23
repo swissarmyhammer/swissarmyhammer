@@ -51,6 +51,13 @@ function textBlock(text: string): ContentBlock {
 interface SessionScript {
   /** `session/update` notifications streamed before `prompt` resolves. */
   updates?: SessionNotification["update"][];
+  /**
+   * Ambient `session/update`s streamed during `startSession` — before any
+   * prompt — mirroring how the real claude backend forwards the CLI's slash
+   * commands as an `available_commands_update` at session start. The warm-up
+   * path relies on these arriving without a prompt being sent.
+   */
+  initUpdates?: SessionNotification["update"][];
   /** The stop reason `prompt` resolves with (default `end_turn`). */
   stopReason?: PromptResponse["stopReason"];
 }
@@ -159,6 +166,15 @@ function mockHarness(script: SessionScript = {}): MockHarness {
         async startSession(): Promise<AcpSession> {
           const session = new FakeSession(handlers.onSessionUpdate, script);
           sessions.push(session);
+          // Replay init-time ambient updates (e.g. available_commands_update)
+          // exactly as the real agent does during `session/new`, before any
+          // prompt — this is what the warm-up path depends on.
+          for (const update of script.initUpdates ?? []) {
+            await handlers.onSessionUpdate({
+              sessionId: session.sessionId,
+              update,
+            });
+          }
           return session;
         },
       };
@@ -771,6 +787,130 @@ describe("AiPanel: collapse control", () => {
   });
 });
 
+describe("AiPanel: slash-command autocomplete from availableCommands", () => {
+  it("a streamed available_commands_update drives the composer's `/` menu", async () => {
+    // The agent advertises its slash commands via `available_commands_update`;
+    // `useConversation` folds them into `state.availableCommands`, which the
+    // panel threads down to the composer's `/` autocomplete.
+    const harness = mockHarness({
+      updates: [
+        {
+          sessionUpdate: "available_commands_update",
+          availableCommands: [
+            { name: "plan", description: "Draft an execution plan" },
+            { name: "review", description: "Review the diff" },
+          ],
+        },
+        { sessionUpdate: "agent_message_chunk", content: textBlock("ok") },
+      ],
+    });
+
+    const { container } = await renderInAct(
+      <AiPanel
+        boardDir="/tmp/board"
+        models={MODELS}
+        modelId="claude-code"
+        onSelectModel={() => {}}
+        onCollapse={() => {}}
+        createConnect={harness.createConnect}
+      />,
+    );
+
+    // Send a prompt so the fake session streams the available_commands_update.
+    const textarea = screen.getByRole("textbox");
+    await act(async () => {
+      await userEvent.type(textarea, "hello");
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /submit/i }));
+    });
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("ok");
+    });
+
+    // Type `/` in the (now-cleared) composer and assert the menu lists the
+    // streamed commands — proof the availableCommands threaded all the way to
+    // the composer's autocomplete.
+    const { EditorView } = await import("@codemirror/view");
+    const { completionStatus, currentCompletions } =
+      await import("@codemirror/autocomplete");
+    const cmEditor = container.querySelector(".cm-editor") as HTMLElement;
+    const view = EditorView.findFromDOM(cmEditor)!;
+    view.contentDOM.focus();
+
+    await act(async () => {
+      await userEvent.type(view.contentDOM, "/");
+    });
+    await waitFor(
+      () => {
+        expect(completionStatus(view.state)).toBe("active");
+      },
+      { timeout: 2000 },
+    );
+
+    const labels = currentCompletions(view.state).map((c) => c.label);
+    expect(labels).toContain("/plan");
+    expect(labels).toContain("/review");
+  });
+
+  it("warms up the session on model select so `/` works before any message", async () => {
+    // The composer's `/` menu must work on a fresh conversation. The panel
+    // warms up the session when the model is ready, so the agent's init
+    // available_commands_update arrives without the user sending a message.
+    const harness = mockHarness({
+      initUpdates: [
+        {
+          sessionUpdate: "available_commands_update",
+          availableCommands: [
+            { name: "plan", description: "Draft an execution plan" },
+            { name: "review", description: "Review the diff" },
+          ],
+        },
+      ],
+    });
+
+    const { container } = await renderInAct(
+      <AiPanel
+        boardDir="/tmp/board"
+        models={MODELS}
+        modelId="claude-code"
+        onSelectModel={() => {}}
+        onCollapse={() => {}}
+        createConnect={harness.createConnect}
+      />,
+    );
+
+    // No prompt sent — the warm-up effect starts the session, which streams the
+    // init available_commands_update.
+    await waitFor(() => {
+      expect(harness.sessions()).toHaveLength(1);
+    });
+
+    const { EditorView } = await import("@codemirror/view");
+    const { completionStatus, currentCompletions } =
+      await import("@codemirror/autocomplete");
+    const cmEditor = container.querySelector(".cm-editor") as HTMLElement;
+    const view = EditorView.findFromDOM(cmEditor)!;
+    view.contentDOM.focus();
+
+    await act(async () => {
+      await userEvent.type(view.contentDOM, "/");
+    });
+    await waitFor(
+      () => {
+        expect(completionStatus(view.state)).toBe("active");
+      },
+      { timeout: 2000 },
+    );
+
+    const labels = currentCompletions(view.state).map((c) => c.label);
+    expect(labels).toContain("/plan");
+    expect(labels).toContain("/review");
+    // The menu opened without any message being sent.
+    expect(harness.sessions()[0].prompts).toEqual([]);
+  });
+});
+
 describe("AiPanel: permission prompt", () => {
   it("renders an inline prompt and a click resolves the request", async () => {
     const harness = mockHarness({
@@ -908,6 +1048,81 @@ describe("AiPanel: ai.* command integration", () => {
     await waitFor(() => {
       expect(harness.sessions().length).toBe(2);
     });
+  });
+
+  it("re-warms the session after ai.newChat so `/` works in the fresh chat", async () => {
+    // After a new chat resets the session, the composer's `/` menu must work
+    // again without sending a message — the warm-up re-fires because the
+    // conversation is empty again.
+    const harness = mockHarness({
+      initUpdates: [
+        {
+          sessionUpdate: "available_commands_update",
+          availableCommands: [
+            { name: "plan", description: "Draft an execution plan" },
+          ],
+        },
+      ],
+      updates: [
+        { sessionUpdate: "agent_message_chunk", content: textBlock("a reply") },
+      ],
+    });
+
+    const { container } = await renderInAct(
+      <AiPanel
+        boardDir="/tmp/board"
+        models={MODELS}
+        modelId="claude-code"
+        onSelectModel={() => {}}
+        onCollapse={() => {}}
+        createConnect={harness.createConnect}
+      />,
+    );
+
+    // Run a turn so the conversation is non-empty (warm-up #1 already ran).
+    await act(async () => {
+      await userEvent.type(screen.getByRole("textbox"), "hello");
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /submit/i }));
+    });
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("a reply");
+    });
+
+    // New chat — drops the session and clears the log.
+    await act(async () => {
+      triggerAiNewChat();
+    });
+    await waitFor(() => {
+      expect(document.body.textContent).not.toContain("a reply");
+    });
+
+    // The empty conversation re-warms: a fresh session starts (#2) and replays
+    // the init available_commands_update — without any new message.
+    await waitFor(() => {
+      expect(harness.sessions().length).toBe(2);
+    });
+
+    const { EditorView } = await import("@codemirror/view");
+    const { completionStatus, currentCompletions } =
+      await import("@codemirror/autocomplete");
+    const cmEditor = container.querySelector(".cm-editor") as HTMLElement;
+    const view = EditorView.findFromDOM(cmEditor)!;
+    view.contentDOM.focus();
+
+    await act(async () => {
+      await userEvent.type(view.contentDOM, "/");
+    });
+    await waitFor(
+      () => {
+        expect(completionStatus(view.state)).toBe("active");
+      },
+      { timeout: 2000 },
+    );
+    expect(currentCompletions(view.state).map((c) => c.label)).toContain(
+      "/plan",
+    );
   });
 
   it("ai.cancel availability tracks streaming, and the handler cancels the turn", async () => {

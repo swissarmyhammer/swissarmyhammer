@@ -26,6 +26,8 @@ vi.mock("@/lib/ui-state-context", () => ({
   useUIState: () => ({ keymap_mode: mockKeymapMode }),
 }));
 
+import { completionStatus, currentCompletions } from "@codemirror/autocomplete";
+import type { AvailableCommand } from "@agentclientprotocol/sdk";
 import { AiPromptComposer } from "./ai-prompt-composer";
 import type { AiModel } from "./ai-panel";
 
@@ -289,6 +291,193 @@ describe("AiPromptComposer — CM6 instance honoring the active keymap", () => {
     expect(content, "the CM6 content DOM must be present").not.toBeNull();
     // A disabled composer's CM6 editor is not editable.
     expect(content.getAttribute("contenteditable")).toBe("false");
+  });
+});
+
+/** Two ACP slash commands the agent advertises via `available_commands_update`. */
+const COMMANDS: AvailableCommand[] = [
+  { name: "plan", description: "Draft an execution plan" },
+  { name: "review", description: "Review the diff" },
+];
+
+describe("AiPromptComposer — slash-command autocomplete", () => {
+  beforeEach(() => {
+    mockKeymapMode = "cua";
+  });
+
+  it("typing / opens a command menu listing every available command", async () => {
+    const { container } = await renderInAct(
+      <AiPromptComposer
+        disabled={false}
+        placeholder="Ask the AI agent..."
+        streaming={false}
+        onSend={() => {}}
+        onCancel={() => {}}
+        models={MODELS}
+        selectedModel={MODELS[0]}
+        onSelectModel={() => {}}
+        availableCommands={COMMANDS}
+      />,
+    );
+    const view = await getView(container);
+    view.contentDOM.focus();
+
+    await act(async () => {
+      await userEvent.type(view.contentDOM, "/");
+    });
+
+    // The menu activates after the activate-on-typing delay; poll for it.
+    await vi.waitFor(
+      () => {
+        expect(completionStatus(view.state)).toBe("active");
+      },
+      { timeout: 2000 },
+    );
+
+    const labels = currentCompletions(view.state).map((c) => c.label);
+    expect(labels).toContain("/plan");
+    expect(labels).toContain("/review");
+  });
+
+  it("typing / opens no menu when availableCommands is empty", async () => {
+    const { container } = await renderInAct(
+      <AiPromptComposer
+        disabled={false}
+        placeholder="Ask the AI agent..."
+        streaming={false}
+        onSend={() => {}}
+        onCancel={() => {}}
+        models={MODELS}
+        selectedModel={MODELS[0]}
+        onSelectModel={() => {}}
+        availableCommands={[]}
+      />,
+    );
+    const view = await getView(container);
+    view.contentDOM.focus();
+
+    await act(async () => {
+      await userEvent.type(view.contentDOM, "/");
+    });
+    // Give the activate-on-typing delay time to elapse, then assert no menu.
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    expect(completionStatus(view.state)).toBeNull();
+  });
+
+  it("plain Enter with the menu open accepts the completion and does not submit", async () => {
+    const onSend = vi.fn();
+    const { container } = await renderInAct(
+      <AiPromptComposer
+        disabled={false}
+        placeholder="Ask the AI agent..."
+        streaming={false}
+        onSend={onSend}
+        onCancel={() => {}}
+        models={MODELS}
+        selectedModel={MODELS[0]}
+        onSelectModel={() => {}}
+        availableCommands={COMMANDS}
+      />,
+    );
+    const view = await getView(container);
+    view.contentDOM.focus();
+
+    await act(async () => {
+      await userEvent.type(view.contentDOM, "/");
+    });
+    await vi.waitFor(
+      () => {
+        expect(completionStatus(view.state)).toBe("active");
+      },
+      { timeout: 2000 },
+    );
+    // CM6 refuses `acceptCompletion` within `interactionDelay` (~75ms) of the
+    // menu opening, to guard against an Enter landing as the menu appears.
+    // Wait past that window so Enter accepts rather than falling through.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    await act(async () => {
+      await userEvent.keyboard("{Enter}");
+    });
+
+    // Enter accepted the highlighted completion (the first command) into the
+    // buffer — it did NOT submit.
+    expect(onSend).not.toHaveBeenCalled();
+    expect(view.state.doc.toString()).toBe("/plan");
+  });
+
+  it("plain Enter with the menu closed still submits the buffer", async () => {
+    const onSend = vi.fn();
+    const { container } = await renderInAct(
+      <AiPromptComposer
+        disabled={false}
+        placeholder="Ask the AI agent..."
+        streaming={false}
+        onSend={onSend}
+        onCancel={() => {}}
+        models={MODELS}
+        selectedModel={MODELS[0]}
+        onSelectModel={() => {}}
+        availableCommands={COMMANDS}
+      />,
+    );
+    const view = await getView(container);
+    view.contentDOM.focus();
+
+    await act(async () => {
+      await userEvent.type(view.contentDOM, "ship it");
+    });
+    // No slash typed — the command menu never opens. `activateOnTyping`
+    // reports a transient "pending" while it debounces over the prose, so wait
+    // for it to settle to "not active" before asserting the menu is closed.
+    await vi.waitFor(
+      () => {
+        expect(completionStatus(view.state)).not.toBe("active");
+      },
+      { timeout: 2000 },
+    );
+
+    await act(async () => {
+      await userEvent.keyboard("{Enter}");
+    });
+    expect(onSend).toHaveBeenCalledExactlyOnceWith("ship it");
+  });
+
+  it("Shift+Enter inserts a newline even with the command menu open", async () => {
+    const onSend = vi.fn();
+    const { container } = await renderInAct(
+      <AiPromptComposer
+        disabled={false}
+        placeholder="Ask the AI agent..."
+        streaming={false}
+        onSend={onSend}
+        onCancel={() => {}}
+        models={MODELS}
+        selectedModel={MODELS[0]}
+        onSelectModel={() => {}}
+        availableCommands={COMMANDS}
+      />,
+    );
+    const view = await getView(container);
+    view.contentDOM.focus();
+
+    await act(async () => {
+      await userEvent.type(view.contentDOM, "/");
+    });
+    await vi.waitFor(
+      () => {
+        expect(completionStatus(view.state)).toBe("active");
+      },
+      { timeout: 2000 },
+    );
+
+    await act(async () => {
+      await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+    });
+    // Shift+Enter grew the buffer with a newline — it neither submitted nor
+    // accepted a completion.
+    expect(onSend).not.toHaveBeenCalled();
+    expect(view.state.doc.toString()).toContain("\n");
   });
 });
 

@@ -89,6 +89,12 @@ class FakeSession implements AcpSession {
  */
 function fakeConnect(script: {
   updates?: SessionNotification["update"][];
+  /**
+   * Ambient `session/update`s streamed during `startSession` — before any
+   * prompt — mirroring how the real claude backend forwards the CLI's slash
+   * commands as an `available_commands_update` at session start.
+   */
+  initUpdates?: SessionNotification["update"][];
   stopReason?: PromptResponse["stopReason"];
   reject?: boolean;
 }): {
@@ -116,6 +122,14 @@ function fakeConnect(script: {
       async startSession(): Promise<AcpSession> {
         const session = new FakeSession(handlers.onSessionUpdate, script);
         sessions.push(session);
+        // Replay any init-time ambient updates (e.g. available_commands_update)
+        // exactly as the real agent does during `session/new`.
+        for (const update of script.initUpdates ?? []) {
+          await handlers.onSessionUpdate({
+            sessionId: session.sessionId,
+            update,
+          });
+        }
         return session;
       },
     };
@@ -173,12 +187,64 @@ describe("useConversation", () => {
         "sendPrompt",
         "state",
         "status",
+        "warmUp",
       ].sort(),
     );
     expect(result.current.status).toBe("idle");
     expect(result.current.messages).toEqual([]);
     expect(result.current.permissionRequest).toBeNull();
     expect(result.current.elicitationRequest).toBeNull();
+  });
+
+  it("warmUp starts the session and folds the init available_commands_update into state without a prompt", async () => {
+    const { connect, sessions } = fakeConnect({
+      initUpdates: [
+        {
+          sessionUpdate: "available_commands_update",
+          availableCommands: [{ name: "plan", description: "Plan the work" }],
+        },
+      ],
+    });
+    const { result } = renderHook(() => useConversation({ connect }));
+
+    await act(async () => {
+      result.current.warmUp();
+    });
+
+    // The session started — without any prompt — and the agent's init
+    // available_commands_update folded into state.
+    await waitFor(() => {
+      expect(sessions()).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(result.current.state.availableCommands).toEqual([
+        { name: "plan", description: "Plan the work" },
+      ]);
+    });
+    expect(sessions()[0].prompts).toEqual([]);
+    expect(result.current.messages).toEqual([]);
+    expect(result.current.status).toBe("idle");
+  });
+
+  it("a warmUp racing a sendPrompt starts only one session", async () => {
+    // The warm-up effect and a fast first send must share one session, not
+    // spawn two agent processes.
+    const { connect, sessions } = fakeConnect({
+      updates: [
+        { sessionUpdate: "agent_message_chunk", content: textBlock("ok") },
+      ],
+    });
+    const { result } = renderHook(() => useConversation({ connect }));
+
+    await act(async () => {
+      result.current.warmUp();
+      await result.current.sendPrompt([textBlock("hi")]);
+    });
+
+    await waitFor(() => {
+      expect(sessions()).toHaveLength(1);
+    });
+    expect(sessions()[0].prompts).toEqual([[textBlock("hi")]]);
   });
 
   it("sendPrompt streams updates into messages and ends idle", async () => {

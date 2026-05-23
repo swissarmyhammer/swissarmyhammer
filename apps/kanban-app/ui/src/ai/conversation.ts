@@ -982,6 +982,18 @@ export interface ConversationApi {
    * @param prompt - The user message content blocks.
    */
   sendPrompt(prompt: ContentBlock[]): Promise<void>;
+  /**
+   * Eagerly start the session without sending a prompt.
+   *
+   * Fire-and-forget: connects the client and opens the `newSession` so the
+   * agent's session-start notifications — notably the
+   * `available_commands_update` that drives the composer's `/` slash-command
+   * menu — arrive before the user's first message. Idempotent and safe to race
+   * with {@link sendPrompt}: both share one in-flight session, so the agent is
+   * started exactly once. A warm-up failure is swallowed (the next
+   * {@link sendPrompt} retries and surfaces errors through the turn status).
+   */
+  warmUp(): void;
   /** Cancel the in-flight prompt turn, if any. */
   cancel(): Promise<void>;
   /**
@@ -1110,6 +1122,13 @@ export function useConversation(
    * log it produces.
    */
   const sessionRef = useRef<AcpSession | null>(null);
+
+  /**
+   * The in-flight {@link ensureSession} promise, cached so concurrent callers
+   * (e.g. a warm-up effect racing the user's first send) share one session
+   * start instead of each spawning an agent. Cleared once settled.
+   */
+  const sessionPromiseRef = useRef<Promise<AcpSession | null> | null>(null);
 
   /**
    * Resolver for the in-flight permission request. The ACP client's
@@ -1250,19 +1269,50 @@ export function useConversation(
    * once via `startSession`; both are cached. Returns `null` when the factory
    * reports the agent is not ready.
    */
-  const ensureSession = useCallback(async (): Promise<AcpSession | null> => {
-    if (clientRef.current === null) {
-      clientRef.current = await connect(handlers);
+  const ensureSession = useCallback((): Promise<AcpSession | null> => {
+    // A started session is reused directly.
+    if (sessionRef.current !== null) {
+      return Promise.resolve(sessionRef.current);
     }
-    const client = clientRef.current;
-    if (client === null) {
-      return null;
+    // A start already in flight is shared, so a warm-up racing the first send
+    // does not spawn two agents.
+    if (sessionPromiseRef.current !== null) {
+      return sessionPromiseRef.current;
     }
-    if (sessionRef.current === null) {
-      sessionRef.current = await client.startSession();
-    }
-    return sessionRef.current;
+    const start = (async (): Promise<AcpSession | null> => {
+      if (clientRef.current === null) {
+        clientRef.current = await connect(handlers);
+      }
+      const client = clientRef.current;
+      if (client === null) {
+        return null;
+      }
+      if (sessionRef.current === null) {
+        sessionRef.current = await client.startSession();
+      }
+      return sessionRef.current;
+    })();
+    sessionPromiseRef.current = start;
+    // Drop the in-flight cache once settled so a failed attempt can be retried
+    // by the next caller.
+    void start.finally(() => {
+      sessionPromiseRef.current = null;
+    });
+    return start;
   }, [connect, handlers]);
+
+  /**
+   * Eagerly start the session without sending a prompt — see
+   * {@link ConversationApi.warmUp}. Fire-and-forget; warm-up failures are
+   * swallowed because the next {@link sendPrompt} retries and reports errors
+   * through the turn status.
+   */
+  const warmUp = useCallback((): void => {
+    void ensureSession().catch(() => {
+      // Best-effort: a failed warm-up is not surfaced. The first real send
+      // re-attempts and lands the turn in `error` if it still fails.
+    });
+  }, [ensureSession]);
 
   /**
    * Send a prompt and run the turn.
@@ -1303,6 +1353,9 @@ export function useConversation(
    */
   const newConversation = useCallback(() => {
     sessionRef.current = null;
+    // Drop any in-flight session start so the next send/warm-up opens a fresh
+    // one rather than awaiting the abandoned session.
+    sessionPromiseRef.current = null;
     permissionResolverRef.current = null;
     setPermissionRequest(null);
     // An elicitation left pending when the conversation is reset is abandoned;
@@ -1318,6 +1371,7 @@ export function useConversation(
       status: state.status,
       state: state.conversation,
       sendPrompt,
+      warmUp,
       cancel,
       newConversation,
       permissionRequest,
@@ -1329,6 +1383,7 @@ export function useConversation(
       state.conversation,
       state.status,
       sendPrompt,
+      warmUp,
       cancel,
       newConversation,
       permissionRequest,

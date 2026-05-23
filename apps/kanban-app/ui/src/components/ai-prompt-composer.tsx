@@ -100,11 +100,19 @@
  * Shift-Enter always inserts a newline". So the composer calls
  * `buildSubmitCancelExtensions` with `singleLine: false` — the helper then
  * contributes only its Escape handling — and supplies its own `Prec.highest`
- * Enter binding (see {@link buildEnterSubmitExtension}). The Enter binding
- * intentionally omits the helper's `completionStatus` autocomplete-yield
- * guard because the composer has no autocomplete (`TextEditor`'s
- * `BASIC_SETUP` disables it and the composer adds no mention extensions); a
- * future maintainer adding autocomplete here must re-introduce that guard.
+ * Enter binding (see {@link buildEnterSubmitExtension}).
+ *
+ * # Slash-command autocomplete
+ *
+ * The composer hosts a `/` slash-command completion menu fed by the agent's
+ * live ACP `availableCommands` (the {@link AiPromptComposerProps.availableCommands}
+ * prop), assembled by {@link useCommandCompletionExtension} on the same shared
+ * CM6 autocomplete primitive as the filter editor's `#`/`@`/`^` mentions. Because
+ * the menu can be open when Enter is pressed, {@link buildEnterSubmitExtension}
+ * carries the `completionStatus` autocomplete-yield guard: with the menu open
+ * (or an async source pending) plain Enter accepts the highlighted completion
+ * instead of submitting. Accepting `/plan` inserts the literal text `/plan` —
+ * the agent owns command execution; the composer only aids discoverability.
  */
 
 import {
@@ -117,11 +125,14 @@ import {
 } from "react";
 import { EditorView, keymap } from "@codemirror/view";
 import { Prec, type Extension } from "@codemirror/state";
+import { completionStatus } from "@codemirror/autocomplete";
+import type { AvailableCommand } from "@agentclientprotocol/sdk";
 import { SquareIcon, CornerDownLeftIcon } from "lucide-react";
 import {
   TextEditor,
   type TextEditorHandle,
 } from "@/components/fields/text-editor";
+import { useCommandCompletionExtension } from "@/hooks/use-command-completion";
 import {
   AiPanelFocusScope,
   AiPanelPressable,
@@ -168,6 +179,13 @@ export interface AiPromptComposerProps {
    * container persists it per board and feeds the new id back down.
    */
   onSelectModel: (modelId: string) => void;
+  /**
+   * The slash commands the agent currently advertises (ACP
+   * `available_commands_update`). Drives the composer's `/` autocomplete menu.
+   * Defaults to `[]` — typing `/` then opens no menu and Enter submits
+   * normally.
+   */
+  availableCommands?: AvailableCommand[];
 }
 
 /**
@@ -184,6 +202,24 @@ export interface AiPromptComposerProps {
  * Without this, repeated `Enter` on an empty composer would pile up blank
  * lines.
  *
+ * # Autocomplete-yield guard
+ *
+ * The composer now hosts a `/` slash-command autocomplete (see {@link
+ * useCommandCompletionExtension}). When the completion menu is open, plain
+ * `Enter` must accept the highlighted completion, not submit the buffer. The
+ * binding returns `false` in that case so it yields to CM6's completion keymap
+ * (which binds `Enter` to `acceptCompletion`).
+ *
+ * The guard tests `completionStatus(view.state) === "active"` — NOT `!== null`
+ * like the shared `cm-submit-cancel.ts` helper. The difference is deliberate:
+ * `activateOnTyping` transiently reports `"pending"` while it debounces over
+ * ordinary (non-`/`) prose, and a chat composer must still submit on Enter in
+ * that window. Only an actually-open menu (`"active"`) yields. (CM6's own
+ * `interactionDelay` still guards against an Enter landing in the first ~75ms
+ * after the menu opens; within that window acceptance is refused and Enter
+ * falls through to a newline, exactly as everywhere else CM6 autocomplete is
+ * used.)
+ *
  * The submit callback is read through a ref so the extension identity stays
  * stable across re-renders and never reconfigures the live `EditorView`.
  */
@@ -195,6 +231,11 @@ function buildEnterSubmitExtension(
       {
         key: "Enter",
         run: (view) => {
+          // Yield to autocomplete so Enter accepts the highlighted completion
+          // instead of submitting — only when the menu is actually open.
+          if (completionStatus(view.state) === "active") {
+            return false;
+          }
           // An empty (or whitespace-only) buffer has nothing to send. Swallow
           // the keystroke (return true) so it neither submits nor inserts a
           // blank line — a stray Enter on an empty composer is a true no-op.
@@ -481,8 +522,14 @@ export function AiPromptComposer({
   models,
   selectedModel,
   onSelectModel,
+  availableCommands = [],
 }: AiPromptComposerProps): ReactNode {
   const editorRef = useRef<TextEditorHandle>(null);
+
+  // The `/` slash-command autocomplete extension, fed by the live ACP
+  // `availableCommands`. An empty list yields an empty array, so typing `/`
+  // opens no menu and Enter submits per the normal policy.
+  const commandExtensions = useCommandCompletionExtension(availableCommands);
 
   // The live buffer is the source of truth (the `TextEditor` primitive does
   // not re-apply `value` after mount), so submit reads it imperatively.
@@ -520,8 +567,12 @@ export function AiPromptComposer({
       EditorView.contentAttributes.of({
         "aria-label": "Message the AI agent",
       }),
+      // The `/` slash-command autocomplete — empty when the agent advertises
+      // no commands. Assembled on the same shared CM6 autocomplete primitive
+      // as the filter editor's mention completions.
+      ...commandExtensions,
     ],
-    [disabled],
+    [disabled, commandExtensions],
   );
 
   // Per-scope drill-in command for the CM6 body's `ui:ai-panel.composer`
