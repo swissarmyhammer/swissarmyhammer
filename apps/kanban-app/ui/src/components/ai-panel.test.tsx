@@ -220,6 +220,55 @@ const MODELS: AiModel[] = [
   },
 ];
 
+/**
+ * The width-determining Tailwind utilities, translated to real CSS.
+ *
+ * The browser test project does not load `@tailwindcss/vite` (the plugin runs
+ * only at app build time), so utility classes like `w-fit` / `w-full` carry no
+ * CSS during tests — every element falls back to `display: block; width: auto`
+ * and fills its parent, which makes `w-fit` and `w-full` indistinguishable by
+ * layout. This shim is the same pattern the spatial/layout tests use (e.g.
+ * `app-layout.test.tsx`): it defines exactly the classes that drive the
+ * message-width relationship — the `Message` wrapper, the role-conditional
+ * `MessageContent` width, and the tool card — so the `getBoundingClientRect()`
+ * assertions exercise real Chromium layout.
+ *
+ * The role-conditional variants are matched via `[class~="…"]` attribute
+ * selectors (whole-token match) scoped under `.is-user` / `.is-assistant`,
+ * mirroring how Tailwind compiles `group-[.is-*]:` against the `group`
+ * ancestor — without reproducing Tailwind's escaped class-name selectors.
+ */
+const MESSAGE_WIDTH_SHIM = `
+.flex { display: flex; }
+.flex-col { flex-direction: column; }
+.w-full { width: 100%; }
+.w-fit { width: fit-content; }
+.min-w-0 { min-width: 0; }
+.max-w-full { max-width: 100%; }
+.max-w-\\[95\\%\\] { max-width: 95%; }
+.overflow-hidden { overflow: hidden; }
+.rounded-md { border-radius: 0.375rem; }
+.border { border-width: 1px; border-style: solid; }
+.is-assistant [class~="group-[.is-assistant]:w-full"] { width: 100%; }
+.is-user [class~="group-[.is-user]:w-fit"] { width: fit-content; }
+`;
+
+/**
+ * Inject {@link MESSAGE_WIDTH_SHIM} into the document head and return a cleanup
+ * that removes it. Each test installs the shim for the duration of its render
+ * and tears it down in a `finally` so the global stylesheet does not leak into
+ * sibling tests (which assert on unstyled layout).
+ */
+function installMessageWidthShim(): () => void {
+  const style = document.createElement("style");
+  style.setAttribute("data-test", "ai-panel-message-width-shim");
+  style.textContent = MESSAGE_WIDTH_SHIM;
+  document.head.appendChild(style);
+  return () => {
+    style.remove();
+  };
+}
+
 describe("AiPanel: conversation rendering", () => {
   it("renders streamed assistant text, a reasoning block, and a tool card", async () => {
     const harness = mockHarness({
@@ -297,6 +346,145 @@ describe("AiPanel: conversation rendering", () => {
     expect(harness.sessions()[0].prompts).toEqual([
       [textBlock("what is in progress?")],
     ]);
+  });
+
+  it("renders an assistant tool-call card at the full assistant message width", async () => {
+    // Layout regression guard: assistant block content (tool folds) must span
+    // the assistant message region, not shrink to the tool card's intrinsic
+    // content width. A short tool name + tiny input/output keeps the card's
+    // natural width well under the conversation column, so a `w-fit` wrapper
+    // (the pre-fix behavior) collapses the card to that narrow content and this
+    // assertion fails; the role-conditional `group-[.is-assistant]:w-full`
+    // wrapper makes it span the column and pass.
+    //
+    // The browser test project does not load `@tailwindcss/vite`, so utility
+    // classes carry no CSS on their own — see `installMessageWidthShim`. The
+    // shim translates exactly the width-determining utilities (including the
+    // role-conditional `group-[.is-*]:w-*` variants) into real CSS so the
+    // `w-fit` vs `w-full` distinction lays out for real in Chromium.
+    const cleanup = installMessageWidthShim();
+    try {
+      const harness = mockHarness({
+        updates: [
+          {
+            sessionUpdate: "tool_call",
+            toolCallId: "call-1",
+            title: "ls",
+            kind: "other",
+            status: "completed",
+            rawInput: { p: "." },
+            rawOutput: { n: 1 },
+          },
+        ],
+      });
+
+      // A wide, finite-height host so the conversation column is far wider than
+      // the collapsed tool header's intrinsic width — leaving room for `w-fit`
+      // to shrink the card and `w-full` to fill the column.
+      const { container } = await renderInAct(
+        <div style={{ width: 1000, height: 600 }}>
+          <AiPanel
+            boardDir="/tmp/board"
+            models={MODELS}
+            modelId="claude-code"
+            onSelectModel={() => {}}
+            onCollapse={() => {}}
+            createConnect={harness.createConnect}
+          />
+        </div>,
+      );
+
+      const textarea = screen.getByRole("textbox");
+      await act(async () => {
+        await userEvent.type(textarea, "run ls");
+      });
+      await act(async () => {
+        await userEvent.click(screen.getByRole("button", { name: /submit/i }));
+      });
+
+      // Wait for the assistant tool card to mount.
+      await waitFor(() => {
+        expect(
+          container.querySelector(".is-assistant [data-slot='collapsible']"),
+        ).not.toBeNull();
+      });
+
+      const assistantMessage = container.querySelector(
+        ".is-assistant",
+      ) as HTMLElement;
+      const toolCard = container.querySelector(
+        ".is-assistant [data-slot='collapsible']",
+      ) as HTMLElement;
+
+      const messageRect = assistantMessage.getBoundingClientRect();
+      const toolRect = toolCard.getBoundingClientRect();
+
+      // The tool's intrinsic content ("ls" header + status badge) is far
+      // narrower than the column; this only holds if the assistant content
+      // wrapper went full-width. The 2px slack absorbs sub-pixel/border
+      // rounding between the two rects.
+      expect(toolRect.width).toBeGreaterThanOrEqual(messageRect.width - 2);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("renders a short user message as a fit-width bubble, narrower than its column", async () => {
+    // Companion guard to the assistant full-width test: the role-conditional
+    // width fix must NOT make user messages full-width. A short user bubble
+    // keeps `w-fit`, so its content box hugs the text and stays strictly
+    // narrower than the conversation column. Same Tailwind shim as above so the
+    // `w-fit` user-bubble path lays out for real.
+    const cleanup = installMessageWidthShim();
+    try {
+      const harness = mockHarness({
+        updates: [
+          { sessionUpdate: "agent_message_chunk", content: textBlock("ok") },
+        ],
+      });
+
+      const { container } = await renderInAct(
+        <div style={{ width: 1000, height: 600 }}>
+          <AiPanel
+            boardDir="/tmp/board"
+            models={MODELS}
+            modelId="claude-code"
+            onSelectModel={() => {}}
+            onCollapse={() => {}}
+            createConnect={harness.createConnect}
+          />
+        </div>,
+      );
+
+      const textarea = screen.getByRole("textbox");
+      await act(async () => {
+        await userEvent.type(textarea, "hi");
+      });
+      await act(async () => {
+        await userEvent.click(screen.getByRole("button", { name: /submit/i }));
+      });
+
+      // Wait for the user message to render.
+      await waitFor(() => {
+        expect(container.querySelector(".is-user")).not.toBeNull();
+      });
+
+      const userMessage = container.querySelector(".is-user") as HTMLElement;
+      // The user bubble's content box is the `MessageContent` element — the
+      // first child div of the message wrapper.
+      const userContent = userMessage.querySelector(
+        ":scope > div",
+      ) as HTMLElement;
+
+      const messageRect = userMessage.getBoundingClientRect();
+      const contentRect = userContent.getBoundingClientRect();
+
+      // A two-character bubble must hug its text — strictly narrower than the
+      // (95%-of-column) message wrapper.
+      expect(contentRect.width).toBeLessThan(messageRect.width);
+    } finally {
+      cleanup();
+    }
   });
 
   it("stop button cancels the in-flight turn", async () => {
