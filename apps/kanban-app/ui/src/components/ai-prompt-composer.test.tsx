@@ -30,6 +30,7 @@ import { completionStatus, currentCompletions } from "@codemirror/autocomplete";
 import type { AvailableCommand } from "@agentclientprotocol/sdk";
 import { AiPromptComposer } from "./ai-prompt-composer";
 import type { AiModel } from "./ai-panel";
+import { copyText } from "@/lib/clipboard";
 
 /** The Claude Code + a disabled local model fixture for the footer select. */
 const MODELS: AiModel[] = [
@@ -626,5 +627,54 @@ describe("AiPromptComposer — footer model select", () => {
     });
 
     expect(onSelectModel).toHaveBeenCalledWith("qwen-coder");
+  });
+});
+
+describe("AiPromptComposer — chat copy populates the vim register", () => {
+  beforeEach(() => {
+    mockKeymapMode = "vim";
+  });
+
+  it("a bare `p` pastes text put on the clipboard via copyText", async () => {
+    // Mount the composer's vim-mode CM6 editor (it exits insert on mount, so
+    // it starts in normal mode).
+    const { container } = await renderInAct(
+      <AiPromptComposer
+        disabled={false}
+        placeholder="Ask the AI agent..."
+        streaming={false}
+        onSend={() => {}}
+        onCancel={() => {}}
+        models={MODELS}
+        selectedModel={MODELS[0]}
+        onSelectModel={() => {}}
+      />,
+    );
+    const view = await getView(container);
+
+    // Headless Chromium denies the `clipboard-write` permission, so the real
+    // OS-clipboard write is not exercisable here — stub it (the unit test pins
+    // the real `writeText` call with a spy). What this test drives is the other
+    // half of `copyText`: the vim-register mirror, proven by a real `p`
+    // keystroke pasting the text. Before the fix the mirror does not exist, so
+    // `p` pastes nothing; after the fix `p` pastes the copied text.
+    vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+
+    // Copy text the way the chat's Copy buttons do — through the shared helper.
+    await act(async () => {
+      await copyText("PASTE_ME");
+    });
+
+    // The editor starts in normal mode (TextEditor exits insert on mount);
+    // focus it and press a bare `p` to paste.
+    view.contentDOM.focus();
+    await act(async () => {
+      await userEvent.type(view.contentDOM, "p");
+    });
+
+    expect(
+      view.state.doc.toString(),
+      "a bare `p` must paste the externally-copied text from the vim register",
+    ).toContain("PASTE_ME");
   });
 });

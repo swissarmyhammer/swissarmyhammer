@@ -64,6 +64,7 @@ import {
   AiPanelPressable,
 } from "@/components/ai-panel-focus";
 import { asSegment } from "@/types/spatial";
+import { copyText } from "@/lib/clipboard";
 import { createKanbanClient } from "@/ai/acp-client";
 import { connectAcpStream } from "@/ai/acp-stream";
 import {
@@ -660,8 +661,10 @@ function MessageActionBar({
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(() => {
-    void navigator.clipboard
-      .writeText(text)
+    // `copyText` writes the OS clipboard and mirrors the text into the vim
+    // registers so a bare `p` in a CM6 vim editor pastes it (see
+    // `@/lib/clipboard`).
+    void copyText(text)
       .then(() => {
         setCopied(true);
         // Revert the checkmark to the copy glyph after a short beat so the
