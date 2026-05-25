@@ -314,25 +314,29 @@ function AiPanelContainerBody({
    *
    * Rules:
    *
-   *   - Only runs when `modelId === null`. A persisted or user-picked id is
-   *     never overwritten — even if that model is `available: false`, the
-   *     user's explicit prior choice wins.
-   *   - Picks the first `available: true` model in the list. The backend
-   *     orders Claude Code first when its CLI is detected, then local llamas
-   *     (see `apps/kanban-app/src/ai/models.rs::ai_list_models`), so the
-   *     default reflects the same priority.
-   *   - When every entry is `available: false`, leaves `modelId` as `null`
-   *     so `NoModelState` continues to render — that is a genuine
-   *     empty-config case, not a dead-end the user can fix by clicking the
-   *     picker.
+   *   - Runs when no model is selected (`modelId === null`) *or* when the
+   *     persisted id is no longer offered (e.g. a model that lost its `kanban`
+   *     tag dropped out of `ai_list_models`). A persisted id that is still in
+   *     the list is never overwritten — even if that model is
+   *     `available: false`, the user's explicit prior choice wins.
+   *   - Prefers the first `available: true` model. The backend orders Claude
+   *     Code first when its CLI is detected, then local llamas (see
+   *     `apps/kanban-app/src/ai/models.rs::ai_list_models`), so the default
+   *     reflects the same priority.
+   *   - Falls back to the first model when none are available, so a lone
+   *     currently-unavailable entry — Claude Code before its CLI is detected —
+   *     is still selected and surfaces its install hint, rather than stranding
+   *     the panel in `NoModelState`. Only a genuinely empty list (`length 0`)
+   *     leaves `modelId` as `null`.
    */
   useEffect(() => {
-    if (modelId !== null) return;
-    if (!models) return;
-    const firstAvailable = models.find((model) => model.available);
-    if (firstAvailable) {
-      handleSelectModel(firstAvailable.id);
+    if (!models || models.length === 0) return;
+    // A still-offered persisted/user choice wins — don't override it.
+    if (modelId !== null && models.some((model) => model.id === modelId)) {
+      return;
     }
+    const selected = models.find((model) => model.available) ?? models[0];
+    handleSelectModel(selected.id);
   }, [models, modelId, handleSelectModel]);
 
   /** Flip the panel open-state and persist it for this board. */

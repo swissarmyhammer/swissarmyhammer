@@ -94,34 +94,33 @@ pub struct Model {
     pub label: String,
     /// Which agent backend this model drives.
     pub kind: ModelKind,
-    /// Whether the model can actually be started right now. A Claude Code entry
-    /// is `false` when the `claude` CLI is not detected; local llama models are
-    /// always `true` (the model weights are fetched lazily on first use).
+    /// Whether the model can actually be started right now. The Claude Code
+    /// entry is always `true` — the agent spawns the `claude` CLI lazily at use
+    /// time, so the entry is offered regardless of CLI detection. Local llama
+    /// models are also always `true` (the model weights are fetched lazily on
+    /// first use).
     pub available: bool,
-    /// Optional human-readable note. Carries the "install Claude Code" hint
-    /// when the entry is present-but-disabled, or a model description otherwise.
+    /// Optional human-readable note. For Claude Code it carries the resolved
+    /// CLI path when the `claude` executable is detected, and is `None`
+    /// otherwise; for local llama entries it carries a model description.
     pub hint: Option<String>,
 }
 
-/// Build the Claude Code model entry, reflecting CLI detection.
+/// Build the Claude Code model entry.
 ///
-/// The entry is always present so the picker can show Claude Code as an
-/// option; `available` and `hint` reflect whether the CLI was found.
+/// Claude Code is always `available` when offered: the agent spawns the
+/// `claude` CLI at use time, so the entry must not be pre-gated on a separate
+/// `which("claude")` probe. That probe is unreliable — a GUI app launched from
+/// Finder does not inherit the shell `PATH`, so it reports Claude Code
+/// unavailable even when `claude` runs fine. CLI detection is now best-effort
+/// and only enriches the `hint` with the resolved path when it succeeds.
 fn claude_code_model() -> Model {
-    let detected = detect_claude_cli();
-    let hint = match &detected {
-        Some(path) => Some(format!("Claude Code CLI: {}", path.display())),
-        None => Some(
-            "Claude Code CLI not found — install it and ensure `claude` is on \
-             your PATH (or set the CLAUDE_CLI environment variable)."
-                .to_string(),
-        ),
-    };
+    let hint = detect_claude_cli().map(|path| format!("Claude Code CLI: {}", path.display()));
     Model {
         id: CLAUDE_CODE_MODEL_ID.to_string(),
         label: "Claude Code".to_string(),
         kind: ModelKind::ClaudeCode,
-        available: detected.is_some(),
+        available: true,
         hint,
     }
 }
@@ -152,16 +151,22 @@ fn local_llama_model(info: &ModelInfo) -> Model {
     }
 }
 
+/// The tag a model config must carry to surface in the AI panel selector.
+const KANBAN_TAG: &str = "kanban";
+
 /// List the models the user can select.
 ///
-/// Always yields a Claude Code entry (present-but-disabled with a hint when the
-/// `claude` CLI is not detected), followed by every configured local llama chat
-/// model discovered by `swissarmyhammer-config`.
+/// A model appears **iff** its `swissarmyhammer-config` definition carries the
+/// [`KANBAN_TAG`] tag — this lets the built-in model set grow without
+/// cluttering the panel. The set is driven entirely by configuration on this
+/// machine, never by a compile-time feature.
 ///
-/// Local-model enumeration is unconditional: it is driven entirely by what
-/// configuration defines on this machine, never by a compile-time feature.
-/// Embedding-only models (`llama-embedding`, `ane-embedding`) are excluded —
-/// they cannot back a chat agent.
+/// - The Claude Code entry is offered when the built-in `claude-code` config is
+///   `kanban`-tagged. It is always `available` (the agent spawns the CLI at use
+///   time); CLI detection only enriches its `hint`.
+/// - Each `kanban`-tagged local llama chat model is offered. Embedding
+///   executors (`llama-embedding`, `ane-embedding`) cannot back a chat agent
+///   and are excluded regardless of tag.
 ///
 /// # Errors
 ///
@@ -169,13 +174,27 @@ fn local_llama_model(info: &ModelInfo) -> Model {
 /// malformed agent file is skipped, not fatal.
 #[tauri::command]
 pub fn ai_list_models() -> Result<Vec<Model>, String> {
-    let mut models = vec![claude_code_model()];
-
     let agents = ModelManager::list_agents().map_err(|e| format!("failed to list models: {e}"))?;
+
+    let mut models = Vec::new();
+
+    // The Claude Code entry is synthesized below; it is offered only when the
+    // built-in `claude-code` config opts into the panel via the `kanban` tag.
+    let claude_code_tagged = agents
+        .iter()
+        .any(|a| a.name == CLAUDE_CODE_MODEL_ID && a.tags.iter().any(|t| t == KANBAN_TAG));
+    if claude_code_tagged {
+        models.push(claude_code_model());
+    }
+
     for agent in &agents {
-        // The Claude Code entry is synthesized above with live CLI detection;
-        // skip the built-in `claude-code` agent file so it is not duplicated.
+        // The Claude Code entry is synthesized above; skip the built-in
+        // `claude-code` agent file so it is not duplicated.
         if agent.name == CLAUDE_CODE_MODEL_ID {
+            continue;
+        }
+        // Only models opted into the panel via the `kanban` tag are offered.
+        if !agent.tags.iter().any(|t| t == KANBAN_TAG) {
             continue;
         }
         // Only `llama-agent` executors back a chat agent. `claude-code` is
@@ -568,10 +587,11 @@ mod tests {
     }
 
     #[test]
-    fn list_models_marks_claude_unavailable_when_absent() {
+    fn list_models_claude_code_available_even_when_cli_not_detected() {
         let _env = EnvGuard::acquire();
         let dir = tempfile::tempdir().unwrap();
         std::env::remove_var(CLAUDE_CLI_ENV);
+        // An empty PATH directory — `claude` is not detectable here.
         std::env::set_var("PATH", dir.path());
 
         let models = ai_list_models().expect("model enumeration must succeed");
@@ -579,52 +599,96 @@ mod tests {
             .iter()
             .find(|m| m.id == CLAUDE_CODE_MODEL_ID)
             .expect("a Claude Code entry must always be present");
+        // Claude Code stays available even when the CLI is not detected — the
+        // agent spawns `claude` at use time, so a flaky `which` probe (e.g. a
+        // GUI app with a stripped PATH) must not disable the entry.
         assert!(
-            !claude.available,
-            "Claude Code must be unavailable when `claude` is absent"
+            claude.available,
+            "Claude Code must be available regardless of CLI detection"
         );
+        // With no CLI detected there is no resolved path to show.
         assert!(
-            claude
-                .hint
-                .as_deref()
-                .unwrap_or_default()
-                .to_lowercase()
-                .contains("not found"),
-            "the disabled hint should explain Claude Code was not found"
+            claude.hint.is_none(),
+            "no CLI path hint when claude is not detected, got {:?}",
+            claude.hint
         );
     }
 
     #[test]
-    fn list_models_enumerates_local_llama_models() {
+    fn list_models_excludes_local_llama_models_for_now() {
+        let _env = EnvGuard::acquire();
+        let dir = tempfile::tempdir().unwrap();
+        write_fake_executable(dir.path(), "claude");
+        std::env::remove_var(CLAUDE_CLI_ENV);
+        std::env::set_var("PATH", dir.path());
+
+        let models = ai_list_models().expect("model enumeration must succeed");
+
+        // For now only `claude-code` carries the `kanban` tag, so the panel
+        // must not surface any local llama models — even though the built-in
+        // set still ships them.
+        assert!(
+            !models.iter().any(|m| m.kind == ModelKind::LocalLlama),
+            "no local llama model should be listed while only `claude-code` is \
+             kanban-tagged, got {models:?}"
+        );
+
+        // The Claude Code entry is still offered (and embedding models stay out).
+        assert!(
+            models.iter().any(|m| m.id == CLAUDE_CODE_MODEL_ID),
+            "the Claude Code entry must still be listed, got {models:?}"
+        );
+        assert!(
+            !models.iter().any(|m| m.id == "qwen-embedding"),
+            "embedding-only models must be excluded from agent enumeration"
+        );
+    }
+
+    #[test]
+    fn list_models_returns_exactly_kanban_tagged_models() {
+        use std::collections::BTreeSet;
+
+        let _env = EnvGuard::acquire();
+        let dir = tempfile::tempdir().unwrap();
+        write_fake_executable(dir.path(), "claude");
+        std::env::remove_var(CLAUDE_CLI_ENV);
+        std::env::set_var("PATH", dir.path());
+
+        let returned: BTreeSet<String> = ai_list_models()
+            .expect("model enumeration must succeed")
+            .into_iter()
+            .map(|m| m.id)
+            .collect();
+
+        // The selector must list exactly the configured agents whose config
+        // carries the `kanban` tag — no untagged llama models, no embedding
+        // models, and the Claude Code entry only when `claude-code` is tagged.
+        let expected: BTreeSet<String> = ModelManager::list_agents()
+            .expect("agent discovery must succeed")
+            .into_iter()
+            .filter(|a| a.tags.iter().any(|t| t == "kanban"))
+            .map(|a| a.name)
+            .collect();
+
+        assert_eq!(
+            returned, expected,
+            "the AI panel selector must list exactly the kanban-tagged models"
+        );
+    }
+
+    #[test]
+    fn list_models_excludes_untagged_llama_model() {
         let _env = EnvGuard::acquire();
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("PATH", dir.path());
 
         let models = ai_list_models().expect("model enumeration must succeed");
 
-        // The built-in model set ships local llama chat models (e.g.
-        // `qwen-coder`). Enumeration is unconditional — no Cargo feature —
-        // so they must surface as `LocalLlama` entries here.
-        let llama_models: Vec<_> = models
-            .iter()
-            .filter(|m| m.kind == ModelKind::LocalLlama)
-            .collect();
+        // `qwen-0.6b-test` is a built-in `llama-agent` model with no `kanban`
+        // tag — it is a runnable chat executor but must not clutter the panel.
         assert!(
-            !llama_models.is_empty(),
-            "configured local llama models must be enumerated, got {models:?}"
-        );
-        for m in &llama_models {
-            assert!(m.available, "local llama models are always selectable");
-            assert_ne!(
-                m.id, CLAUDE_CODE_MODEL_ID,
-                "a llama entry must not reuse the Claude Code id"
-            );
-        }
-
-        // Embedding-only models must NOT be offered as chat agents.
-        assert!(
-            !models.iter().any(|m| m.id == "qwen-embedding"),
-            "embedding-only models must be excluded from agent enumeration"
+            !models.iter().any(|m| m.id == "qwen-0.6b-test"),
+            "an untagged llama model must be excluded from the selector, got {models:?}"
         );
     }
 

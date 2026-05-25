@@ -927,26 +927,20 @@ describe("AiPanelContainer", () => {
     );
   });
 
-  it("does not auto-select when every model is unavailable; renders the no-models empty state", async () => {
-    // The "no available models" case is a genuine empty-config state, not the
-    // dead-end the auto-select fix targets. When every entry in
-    // `ai_list_models` has `available: false`, the Container must leave
-    // `modelId` as `null`, render `NoModelState` with its "No AI models are
-    // configured." copy, and write nothing to `localStorage` for the modelId.
+  it("auto-selects the lone model even when it is unavailable", async () => {
+    // Regression: once the panel is filtered down to only `claude-code`, the
+    // sole entry is `available: false` whenever the running app can't find the
+    // `claude` CLI on its PATH (the bundled macOS GUI does not inherit the
+    // shell PATH). The Container must still select it — the only option — so
+    // the panel surfaces the model and its install hint instead of stranding
+    // the user in `NoModelState` with no idea why nothing is selected.
     const UNAVAILABLE_MODELS: AiModel[] = [
       {
         id: "claude-code",
         label: "Claude Code",
         kind: "claude-code",
         available: false,
-        hint: "Install the Claude Code CLI to enable this model.",
-      },
-      {
-        id: "qwen-coder",
-        label: "Qwen Coder",
-        kind: "local-llama",
-        available: false,
-        hint: null,
+        hint: "Claude Code CLI not found — install it and ensure `claude` is on your PATH.",
       },
     ];
     mockInvoke.mockImplementation(async (cmd: string) => {
@@ -957,30 +951,57 @@ describe("AiPanelContainer", () => {
     await renderContainer();
     await screen.findByTestId("ai-panel-container");
 
-    // The panel stays in the `NoModelState` branch — its stable "Choose a
-    // model" heading renders, and `AiPanelConversation` (which only mounts
-    // when `modelId !== null`) does not. The specific empty-state copy below
-    // the heading is owned by `NoModelState` itself (out of scope for this
-    // task); the marker we assert here is the heading + the absence of a
-    // connected conversation.
+    // The lone (unavailable) model is auto-selected and persisted, exactly as
+    // an available default would be.
     await waitFor(() => {
-      expect(document.body.textContent).toContain("Choose a model");
+      const raw = localStorage.getItem(aiPanelStateStorageKey(BOARD));
+      expect(raw).not.toBeNull();
+      const stored = JSON.parse(raw!);
+      expect(stored.modelId).toBe("claude-code");
     });
 
-    // Settle any post-load effects so a delayed write would be visible.
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
+    // The panel left the `NoModelState` branch — its "Choose a model" heading
+    // is gone because `AiPanelConversation` (mounted only when a model is
+    // selected) renders instead.
+    await waitFor(() => {
+      expect(document.body.textContent).not.toContain("Choose a model");
+    });
+  });
+
+  it("re-selects a default when the persisted model is no longer offered", async () => {
+    // A previously-picked model can drop out of `ai_list_models` — e.g. a
+    // llama model that lost its `kanban` tag. A stale persisted id must not
+    // strand the panel: when the persisted id is absent from the current list,
+    // the Container falls back to a default just as if nothing were persisted.
+    localStorage.setItem(
+      aiPanelStateStorageKey(BOARD),
+      JSON.stringify({ modelId: "qwen-coder" }),
+    );
+
+    const MODELS: AiModel[] = [
+      {
+        id: "claude-code",
+        label: "Claude Code",
+        kind: "claude-code",
+        available: false,
+        hint: "Claude Code CLI not found — install it and ensure `claude` is on your PATH.",
+      },
+    ];
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "ai_list_models") return MODELS;
+      return undefined;
     });
 
-    // Nothing was written for this board's modelId. Other fields (open, width)
-    // may or may not be present depending on which effects fired; what matters
-    // is that no `modelId` was ever persisted, since none was selected.
-    const raw = localStorage.getItem(aiPanelStateStorageKey(BOARD));
-    if (raw !== null) {
-      const stored = JSON.parse(raw);
-      expect(stored.modelId).toBeUndefined();
-    }
+    await renderContainer();
+    await screen.findByTestId("ai-panel-container");
+
+    // The stale `qwen-coder` id is replaced by the only offered model.
+    await waitFor(() => {
+      const stored = JSON.parse(
+        localStorage.getItem(aiPanelStateStorageKey(BOARD))!,
+      );
+      expect(stored.modelId).toBe("claude-code");
+    });
   });
 
   it("does not overwrite a persisted modelId, even when the persisted model is unavailable", async () => {
