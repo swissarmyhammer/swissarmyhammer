@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffab80
 title: 'AI panel: right-align the copy/retry action bar on user prompts'
 ---
 ## What
@@ -26,16 +26,16 @@ Do not change `ai-elements/message.tsx` (it is a shared/vendored AI Elements pri
 
 ## Acceptance Criteria
 
-- [ ] On a **user** message, the copy + retry buttons are right-aligned — flush with the right edge of the message column, under the right-aligned prompt bubble (the `MessageActions` container carries `justify-end`).
-- [ ] On an **assistant** message, the action bar stays left-aligned (no `justify-end`) — unchanged behavior.
-- [ ] No change to `ai-elements/message.tsx`; the fix lives in `ai-panel.tsx`'s `MessageActionBar`.
+- [x] On a **user** message, the copy + retry buttons are right-aligned — flush with the right edge of the message column, under the right-aligned prompt bubble (the `MessageActions` container carries `justify-end`).
+- [x] On an **assistant** message, the action bar stays left-aligned (no `justify-end`) — unchanged behavior.
+- [x] No change to `ai-elements/message.tsx`; the fix lives in `ai-panel.tsx`'s `MessageActionBar`.
 
 ## Tests
 
-- [ ] In `apps/kanban-app/ui/src/components/ai-panel.test.tsx`, add a test that drives a user prompt through the existing `mockHarness`/`AiPanel` send-prompt flow (type into the composer + click submit, as the existing session tests do), then locates the "Copy message" button (`getByRole("button", { name: /copy message/i })`) and asserts its enclosing `MessageActions` container (`closest("div")` wrapping the action buttons) has the `justify-end` class.
-- [ ] Assert the **negative**: an assistant message's action bar container does **not** carry `justify-end` (drive/await an assistant text response via the harness, or assert on the assistant turn the harness emits).
-- [ ] `cd apps/kanban-app/ui && npx vitest run ai-panel.test.tsx` passes.
-- [ ] Regression: the new user-message assertion fails before the `justify-end` change and passes after.
+- [x] In `apps/kanban-app/ui/src/components/ai-panel.test.tsx`, add a test that drives a user prompt through the existing `mockHarness`/`AiPanel` send-prompt flow (type into the composer + click submit, as the existing session tests do), then locates the "Copy message" button (`getByRole("button", { name: /copy message/i })`) and asserts its enclosing `MessageActions` container (`closest("div")` wrapping the action buttons) has the `justify-end` class.
+- [x] Assert the **negative**: an assistant message's action bar container does **not** carry `justify-end` (drive/await an assistant text response via the harness, or assert on the assistant turn the harness emits).
+- [x] `cd apps/kanban-app/ui && npx vitest run ai-panel.test.tsx` passes.
+- [x] Regression: the new user-message assertion fails before the `justify-end` change and passes after.
 
 ## Workflow
 

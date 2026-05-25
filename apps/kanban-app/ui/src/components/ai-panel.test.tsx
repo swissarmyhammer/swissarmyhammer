@@ -487,6 +487,70 @@ describe("AiPanel: conversation rendering", () => {
     }
   });
 
+  it("right-aligns the user action bar and left-aligns the assistant action bar", async () => {
+    // The per-message action bar (`MessageActions`) is a column child of the
+    // `Message` flex column. A user prompt bubble is right-aligned (`w-fit`,
+    // `ml-auto`), so its copy/retry buttons must right-align too — the
+    // `MessageActions` container carries `justify-end`. An assistant message is
+    // left-aligned content, so its action bar stays at the default left
+    // alignment (no `justify-end`). One send-prompt turn yields both a user
+    // message and a streamed assistant reply, so both action bars are present.
+    const harness = mockHarness({
+      updates: [
+        {
+          sessionUpdate: "agent_message_chunk",
+          content: textBlock("the assistant reply"),
+        },
+      ],
+    });
+
+    await renderInAct(
+      <AiPanel
+        boardDir="/tmp/board"
+        models={MODELS}
+        modelId="claude-code"
+        onSelectModel={() => {}}
+        onCollapse={() => {}}
+        createConnect={harness.createConnect}
+      />,
+    );
+
+    const textarea = screen.getByRole("textbox");
+    await act(async () => {
+      await userEvent.type(textarea, "a user prompt");
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /submit/i }));
+    });
+
+    // Both messages render: the user prompt and the streamed assistant reply.
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("a user prompt");
+    });
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("the assistant reply");
+    });
+
+    // The user message's action bar (the `MessageActions` div wrapping its copy
+    // button) is right-aligned.
+    const userMessage = document.querySelector(".is-user") as HTMLElement;
+    const userCopy = within(userMessage).getByRole("button", {
+      name: /copy message/i,
+    });
+    const userActionBar = userCopy.closest("div") as HTMLElement;
+    expect(userActionBar.classList.contains("justify-end")).toBe(true);
+
+    // The assistant message's action bar stays left-aligned (no `justify-end`).
+    const assistantMessage = document.querySelector(
+      ".is-assistant",
+    ) as HTMLElement;
+    const assistantCopy = within(assistantMessage).getByRole("button", {
+      name: /copy message/i,
+    });
+    const assistantActionBar = assistantCopy.closest("div") as HTMLElement;
+    expect(assistantActionBar.classList.contains("justify-end")).toBe(false);
+  });
+
   it("stop button cancels the in-flight turn", async () => {
     // A turn that never resolves on its own — `prompt` hangs so the panel
     // stays in the streaming state and the stop button is the only way out.

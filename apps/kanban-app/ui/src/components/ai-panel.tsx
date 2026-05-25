@@ -683,7 +683,10 @@ function MessageActionBar({
   const isUser = message.role === "user";
 
   return (
-    <MessageActions>
+    // A user prompt bubble is right-aligned (`w-fit`, `ml-auto`), so its action
+    // bar must right-align too; assistant content is left-aligned, so it keeps
+    // the default left alignment. `MessageActions` merges this class via `cn`.
+    <MessageActions className={isUser ? "justify-end" : undefined}>
       <AiPanelPressable
         moniker={asSegment(`ui:ai-panel.message-action:${message.id}:copy`)}
         ariaLabel="Copy message"
