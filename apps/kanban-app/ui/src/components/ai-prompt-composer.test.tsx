@@ -275,6 +275,39 @@ describe("AiPromptComposer — CM6 instance honoring the active keymap", () => {
     expect(onCancel).toHaveBeenCalledOnce();
   });
 
+  it("shows the stop control as an icon button, not verbose status text, while streaming", async () => {
+    const { container } = await renderInAct(
+      <AiPromptComposer
+        disabled={false}
+        placeholder="Ask the AI agent..."
+        streaming={true}
+        onSend={() => {}}
+        onCancel={() => {}}
+        models={MODELS}
+        selectedModel={MODELS[0]}
+        onSelectModel={() => {}}
+      />,
+    );
+
+    // The hard-to-read inline status prose must be gone — the stop affordance is
+    // the icon button (with an accessible "Stop" label / hover tooltip), not text.
+    expect(
+      container.textContent ?? "",
+      "the verbose 'click to stop' status text must not render",
+    ).not.toMatch(/click to stop/i);
+
+    // The stop control is still present as an icon button.
+    const stop = container.querySelector("button[aria-label='Stop']");
+    expect(
+      stop,
+      "a stop icon button must render while streaming",
+    ).not.toBeNull();
+    expect(
+      stop?.querySelector("svg"),
+      "the stop control must render an icon, not text",
+    ).not.toBeNull();
+  });
+
   it("is inert when disabled — the CM6 editor is not editable", async () => {
     const { container } = await renderInAct(
       <AiPromptComposer

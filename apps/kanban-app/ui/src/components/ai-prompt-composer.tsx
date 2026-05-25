@@ -148,6 +148,12 @@ import {
   PromptInputSelectTrigger,
   PromptInputSelectValue,
 } from "@/components/ai-elements/prompt-input";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { asSegment } from "@/types/spatial";
 import { cn } from "@/lib/utils";
 import type { AiModel } from "@/components/ai-panel";
@@ -548,6 +554,10 @@ export function AiPromptComposer({
     editorRef.current?.setValue("");
   }, [streaming, onCancel, onSend]);
 
+  // One label drives both the accessible name and the hover tooltip so they
+  // never drift: "Stop" cancels the in-flight turn, "Submit" sends the prompt.
+  const actionLabel = streaming ? "Stop" : "Submit";
+
   // Stable ref to the latest submit handler — keeps the Enter-submit keymap
   // extension identity stable so the `EditorView` is never reconfigured
   // mid-typing.
@@ -657,28 +667,33 @@ export function AiPromptComposer({
           selectedModel={selectedModel}
           onSelectModel={onSelectModel}
         />
-        <div className="flex items-center gap-2">
-          <span className="text-muted-foreground text-xs">
-            {streaming ? "Streaming - click to stop" : ""}
-          </span>
-          <button
-            type="button"
-            aria-label={streaming ? "Stop" : "Submit"}
-            disabled={disabled}
-            onClick={handleSubmit}
-            className={cn(
-              "inline-flex size-7 items-center justify-center rounded-md",
-              "bg-primary text-primary-foreground transition-colors",
-              "hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50",
-            )}
-          >
-            {streaming ? (
-              <SquareIcon className="size-4" />
-            ) : (
-              <CornerDownLeftIcon className="size-4" />
-            )}
-          </button>
-        </div>
+        {/* The action button reads as an icon, with the streaming/submit
+            affordance carried by a hover tooltip and the accessible name —
+            inline status prose is too hard to read in the cramped footer. */}
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label={actionLabel}
+                disabled={disabled}
+                onClick={handleSubmit}
+                className={cn(
+                  "inline-flex size-7 items-center justify-center rounded-md",
+                  "bg-primary text-primary-foreground transition-colors",
+                  "hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50",
+                )}
+              >
+                {streaming ? (
+                  <SquareIcon className="size-4" />
+                ) : (
+                  <CornerDownLeftIcon className="size-4" />
+                )}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>{actionLabel}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
     </div>
   );
