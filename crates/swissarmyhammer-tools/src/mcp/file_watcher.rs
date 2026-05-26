@@ -1016,22 +1016,51 @@ mod tests {
     // FileWatcher start_watching with callback
     // ---------------------------------------------------------------------------
 
-    /// Test that `start_watching` succeeds with a mock callback and sets up the debouncer.
+    /// Test that `start_watching` sets up the debouncer when there is at least
+    /// one prompt directory to watch.
+    ///
+    /// The `start_watching` contract has two legitimate `Ok` outcomes:
+    /// 1. There are prompt directories — the debouncer is created and stored.
+    /// 2. There are no prompt directories — a warning is logged and the
+    ///    function returns `Ok(())` without creating a debouncer.
+    ///
+    /// Asserting `debouncer.is_some()` on every `Ok` would conflate the two
+    /// cases, so this test pins the precondition: it creates a temp directory
+    /// with a `.git` marker (so it anchors as the git root) and a `.prompts`
+    /// subdirectory (so `PromptResolver::get_prompt_directories()` returns it),
+    /// then changes CWD into it via `CurrentDirGuard`. With at least one
+    /// directory to watch, the success path must produce a debouncer.
     #[tokio::test]
     #[serial_test::serial(cwd)]
     async fn test_file_watcher_start_watching_sets_up_debouncer() {
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+        use tempfile::TempDir;
+
+        // Set up a deterministic prompt directory:
+        //   <temp>/.git           — anchors the temp dir as the git root so
+        //                           `find_git_repository_root_from()` returns it
+        //                           regardless of where the host TempDir lives.
+        //   <temp>/.prompts/      — the dot-directory the prompt resolver
+        //                           returns from `get_prompt_directories()`.
+        let temp = TempDir::new().expect("create temp dir");
+        std::fs::create_dir(temp.path().join(".git")).expect("create .git marker");
+        std::fs::create_dir(temp.path().join(".prompts")).expect("create .prompts dir");
+
+        let _cwd_guard = CurrentDirGuard::new(temp.path()).expect("change cwd into temp dir");
+
         let cb = MockCallback::new();
         let mut watcher = FileWatcher::new();
 
-        // start_watching may succeed or fail depending on the environment's
-        // prompt directories. We test both code paths.
-        let result = watcher.start_watching(cb).await;
-        if result.is_ok() {
-            // If it succeeded, the debouncer should be set
-            assert!(watcher.debouncer.is_some());
-            assert!(watcher.event_handle.is_some());
-        }
-        // Either way, stop_watching should be safe
+        // With a deterministic prompt directory present, `start_watching` must
+        // succeed and install the debouncer.
+        watcher
+            .start_watching(cb)
+            .await
+            .expect("start_watching should succeed with a non-empty prompt directory list");
+        assert!(watcher.debouncer.is_some());
+        assert!(watcher.event_handle.is_some());
+
+        // stop_watching tears the debouncer back down.
         watcher.stop_watching();
         assert!(watcher.debouncer.is_none());
         assert!(watcher.event_handle.is_none());

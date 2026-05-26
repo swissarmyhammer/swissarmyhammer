@@ -75,6 +75,18 @@ pub struct AgentDef {
     /// Global agent (subagent) directory (e.g. `~/.claude/agents`).
     #[serde(default)]
     pub global_agent_path: Option<String>,
+    /// Project-level preamble/instructions file (e.g. Claude Code: `CLAUDE.md`).
+    #[serde(default)]
+    pub instructions_path: Option<String>,
+    /// Global preamble/instructions file (e.g. Claude Code: `~/.claude/CLAUDE.md`).
+    #[serde(default)]
+    pub global_instructions_path: Option<String>,
+    /// Project-level settings/permissions file (e.g. Claude Code: `.claude/settings.json`).
+    #[serde(default)]
+    pub settings_path: Option<String>,
+    /// Global settings/permissions file (e.g. Claude Code: `~/.claude/settings.json`).
+    #[serde(default)]
+    pub global_settings_path: Option<String>,
 }
 
 /// How to detect if an agent is installed.
@@ -264,6 +276,29 @@ pub fn agent_global_agent_dir(agent: &AgentDef) -> Option<PathBuf> {
     agent.global_agent_path.as_ref().map(|p| expand_tilde(p))
 }
 
+/// Resolve the project-level preamble/instructions file for an agent (if configured).
+pub fn agent_project_instructions_file(agent: &AgentDef) -> Option<PathBuf> {
+    agent.instructions_path.as_ref().map(PathBuf::from)
+}
+
+/// Resolve the global preamble/instructions file for an agent (if configured).
+pub fn agent_global_instructions_file(agent: &AgentDef) -> Option<PathBuf> {
+    agent
+        .global_instructions_path
+        .as_ref()
+        .map(|p| expand_tilde(p))
+}
+
+/// Resolve the project-level settings/permissions file for an agent (if configured).
+pub fn agent_project_settings_file(agent: &AgentDef) -> Option<PathBuf> {
+    agent.settings_path.as_ref().map(PathBuf::from)
+}
+
+/// Resolve the global settings/permissions file for an agent (if configured).
+pub fn agent_global_settings_file(agent: &AgentDef) -> Option<PathBuf> {
+    agent.global_settings_path.as_ref().map(|p| expand_tilde(p))
+}
+
 /// Run the `mirdan agents` command.
 pub fn run_agents(all: bool, json: bool) -> Result<(), RegistryError> {
     let config = load_agents_config()?;
@@ -426,6 +461,10 @@ mod tests {
                 global_plugin_path: None,
                 agent_path: None,
                 global_agent_path: None,
+                instructions_path: None,
+                global_instructions_path: None,
+                settings_path: None,
+                global_settings_path: None,
             }],
         };
         let detected = get_detected_agents(&config);
@@ -447,8 +486,141 @@ mod tests {
             global_plugin_path: None,
             agent_path: None,
             global_agent_path: None,
+            instructions_path: None,
+            global_instructions_path: None,
+            settings_path: None,
+            global_settings_path: None,
         };
         assert_eq!(agent_project_skill_dir(&def), PathBuf::from(".test/skills"));
+    }
+
+    #[test]
+    fn test_claude_code_has_instructions_and_settings_paths() {
+        let config = load_agents_config().unwrap();
+        let claude = config
+            .agents
+            .iter()
+            .find(|a| a.id == "claude-code")
+            .expect("claude-code agent should exist");
+        assert_eq!(
+            claude.instructions_path.as_deref(),
+            Some("CLAUDE.md"),
+            "claude-code should set instructions_path"
+        );
+        assert_eq!(
+            claude.global_instructions_path.as_deref(),
+            Some("~/.claude/CLAUDE.md"),
+            "claude-code should set global_instructions_path"
+        );
+        assert_eq!(
+            claude.settings_path.as_deref(),
+            Some(".claude/settings.json"),
+            "claude-code should set settings_path"
+        );
+        assert_eq!(
+            claude.global_settings_path.as_deref(),
+            Some("~/.claude/settings.json"),
+            "claude-code should set global_settings_path"
+        );
+    }
+
+    #[test]
+    fn test_other_agents_have_no_instructions_or_settings_paths() {
+        let config = load_agents_config().unwrap();
+        let aider = config
+            .agents
+            .iter()
+            .find(|a| a.id == "aider")
+            .expect("aider agent should exist");
+        assert!(aider.instructions_path.is_none());
+        assert!(aider.global_instructions_path.is_none());
+        assert!(aider.settings_path.is_none());
+        assert!(aider.global_settings_path.is_none());
+    }
+
+    #[test]
+    fn test_agent_global_instructions_file_expands_tilde() {
+        let def = AgentDef {
+            id: "test".to_string(),
+            name: "Test".to_string(),
+            project_path: ".test/skills".to_string(),
+            global_path: "~/.test/skills".to_string(),
+            detect: vec![],
+            symlink_policy: SymlinkPolicy::default(),
+            mcp_config: None,
+            plugin_path: None,
+            global_plugin_path: None,
+            agent_path: None,
+            global_agent_path: None,
+            instructions_path: Some("CLAUDE.md".to_string()),
+            global_instructions_path: Some("~/.claude/CLAUDE.md".to_string()),
+            settings_path: Some(".claude/settings.json".to_string()),
+            global_settings_path: Some("~/.claude/settings.json".to_string()),
+        };
+        let global = agent_global_instructions_file(&def).expect("should be Some");
+        assert!(
+            !global.to_string_lossy().starts_with('~'),
+            "global instructions path should be tilde-expanded: {}",
+            global.display()
+        );
+        assert!(global.to_string_lossy().ends_with(".claude/CLAUDE.md"));
+        assert_eq!(
+            agent_project_instructions_file(&def),
+            Some(PathBuf::from("CLAUDE.md"))
+        );
+    }
+
+    #[test]
+    fn test_agent_settings_file_accessors() {
+        let def = AgentDef {
+            id: "test".to_string(),
+            name: "Test".to_string(),
+            project_path: ".test/skills".to_string(),
+            global_path: "~/.test/skills".to_string(),
+            detect: vec![],
+            symlink_policy: SymlinkPolicy::default(),
+            mcp_config: None,
+            plugin_path: None,
+            global_plugin_path: None,
+            agent_path: None,
+            global_agent_path: None,
+            instructions_path: None,
+            global_instructions_path: None,
+            settings_path: Some(".claude/settings.json".to_string()),
+            global_settings_path: Some("~/.claude/settings.json".to_string()),
+        };
+        assert_eq!(
+            agent_project_settings_file(&def),
+            Some(PathBuf::from(".claude/settings.json"))
+        );
+        let global = agent_global_settings_file(&def).expect("should be Some");
+        assert!(!global.to_string_lossy().starts_with('~'));
+        assert!(global.to_string_lossy().ends_with(".claude/settings.json"));
+    }
+
+    #[test]
+    fn test_instructions_settings_default_none_when_omitted() {
+        let def = AgentDef {
+            id: "test".to_string(),
+            name: "Test".to_string(),
+            project_path: ".test/skills".to_string(),
+            global_path: "~/.test/skills".to_string(),
+            detect: vec![],
+            symlink_policy: SymlinkPolicy::default(),
+            mcp_config: None,
+            plugin_path: None,
+            global_plugin_path: None,
+            agent_path: None,
+            global_agent_path: None,
+            instructions_path: None,
+            global_instructions_path: None,
+            settings_path: None,
+            global_settings_path: None,
+        };
+        assert!(agent_project_instructions_file(&def).is_none());
+        assert!(agent_global_instructions_file(&def).is_none());
+        assert!(agent_project_settings_file(&def).is_none());
+        assert!(agent_global_settings_file(&def).is_none());
     }
 
     fn mock_config() -> AgentsConfig {
@@ -468,6 +640,10 @@ mod tests {
                     global_plugin_path: None,
                     agent_path: Some(".claude/agents".to_string()),
                     global_agent_path: Some("~/.claude/agents".to_string()),
+                    instructions_path: None,
+                    global_instructions_path: None,
+                    settings_path: None,
+                    global_settings_path: None,
                 },
                 AgentDef {
                     id: "cursor".to_string(),
@@ -483,6 +659,10 @@ mod tests {
                     global_plugin_path: None,
                     agent_path: None,
                     global_agent_path: None,
+                    instructions_path: None,
+                    global_instructions_path: None,
+                    settings_path: None,
+                    global_settings_path: None,
                 },
             ],
         }

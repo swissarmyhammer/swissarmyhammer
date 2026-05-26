@@ -13,8 +13,6 @@ use crate::cli::InstallTarget;
 use swissarmyhammer_common::lifecycle::{InitRegistry, InitScope, InitStatus};
 use swissarmyhammer_common::reporter::{CliReporter, InitEvent, InitReporter};
 
-use super::settings;
-
 /// Install sah for all detected AI coding agents.
 ///
 /// Creates an `InitRegistry`, registers all components via
@@ -35,16 +33,6 @@ pub fn install(target: InstallTarget) -> Result<(), String> {
     crate::commands::registry::register_all(&mut registry, false);
 
     let results = registry.run_all_init(&scope, &reporter);
-
-    // Deny built-in Bash tool in Claude Code settings (project-level)
-    if matches!(target, InstallTarget::Project | InstallTarget::Local) {
-        install_deny_bash(&reporter)?;
-    }
-
-    // Install statusline in Claude Code settings
-    if matches!(target, InstallTarget::Project | InstallTarget::Local) {
-        install_statusline(&reporter)?;
-    }
 
     // Display results and check for errors
     let mut has_errors = false;
@@ -74,42 +62,4 @@ pub fn install(target: InstallTarget) -> Result<(), String> {
     } else {
         Ok(())
     }
-}
-
-/// Install statusline configuration in .claude/settings.json.
-#[allow(deprecated)]
-fn install_statusline(reporter: &dyn InitReporter) -> Result<(), String> {
-    let path = settings::claude_settings_path();
-    let mut claude_settings = settings::read_settings(&path)?;
-    let changed = settings::merge_statusline(&mut claude_settings);
-    settings::write_settings(&path, &claude_settings)?;
-
-    if changed {
-        reporter.emit(&InitEvent::Action {
-            verb: "Installed".to_string(),
-            message: format!("statusline in {}", path.display()),
-        });
-    }
-    Ok(())
-}
-
-/// Add "Bash" to permissions.deny in .claude/settings.json.
-/// This ensures the agent uses our shell tool instead of the built-in Bash tool.
-#[allow(deprecated)]
-fn install_deny_bash(reporter: &dyn InitReporter) -> Result<(), String> {
-    let path = settings::claude_settings_path();
-    let mut claude_settings = settings::read_settings(&path)?;
-    let changed = settings::merge_deny_bash(&mut claude_settings);
-    settings::write_settings(&path, &claude_settings)?;
-
-    if changed {
-        reporter.emit(&InitEvent::Action {
-            verb: "Configured".to_string(),
-            message: format!(
-                "Bash tool denied in {} (use shell tool instead)",
-                path.display()
-            ),
-        });
-    }
-    Ok(())
 }

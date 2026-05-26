@@ -323,6 +323,19 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help]' \
 && ret=0
 ;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+'--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
+'--all[Include components that do not apply to an agent at a scope]' \
+'--json[Output as JSON]' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-y[Skip confirmation prompts (useful for CI/CD)]' \
+'--yes[Skip confirmation prompts (useful for CI/CD)]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
 (doctor)
 _arguments "${_arguments_options[@]}" : \
 '--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
@@ -459,6 +472,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (doctor)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -502,6 +519,7 @@ _mirdan_commands() {
 'outdated:Check for available package updates' \
 'update:Update installed packages to latest versions' \
 'sync:Reconcile .skills/ with agent directories and verify lockfile' \
+'status:Report the install-status of sah-managed components per agent and scope' \
 'doctor:Diagnose Mirdan setup and configuration' \
 'start:Start the Mirdan tray/accessory app' \
 'completion:Generate shell completion scripts' \
@@ -542,6 +560,7 @@ _mirdan__help_commands() {
 'outdated:Check for available package updates' \
 'update:Update installed packages to latest versions' \
 'sync:Reconcile .skills/ with agent directories and verify lockfile' \
+'status:Report the install-status of sah-managed components per agent and scope' \
 'doctor:Diagnose Mirdan setup and configuration' \
 'start:Start the Mirdan tray/accessory app' \
 'completion:Generate shell completion scripts' \
@@ -643,6 +662,11 @@ _mirdan__help__search_commands() {
 _mirdan__help__start_commands() {
     local commands; commands=()
     _describe -t commands 'mirdan help start commands' commands "$@"
+}
+(( $+functions[_mirdan__help__status_commands] )) ||
+_mirdan__help__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan help status commands' commands "$@"
 }
 (( $+functions[_mirdan__help__sync_commands] )) ||
 _mirdan__help__sync_commands() {
@@ -780,6 +804,11 @@ _mirdan__search_commands() {
 _mirdan__start_commands() {
     local commands; commands=()
     _describe -t commands 'mirdan start commands' commands "$@"
+}
+(( $+functions[_mirdan__status_commands] )) ||
+_mirdan__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'mirdan status commands' commands "$@"
 }
 (( $+functions[_mirdan__sync_commands] )) ||
 _mirdan__sync_commands() {

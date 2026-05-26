@@ -58,6 +58,9 @@ _mirdan() {
             mirdan,start)
                 cmd="mirdan__start"
                 ;;
+            mirdan,status)
+                cmd="mirdan__status"
+                ;;
             mirdan,sync)
                 cmd="mirdan__sync"
                 ;;
@@ -114,6 +117,9 @@ _mirdan() {
                 ;;
             mirdan__help,start)
                 cmd="mirdan__help__start"
+                ;;
+            mirdan__help,status)
+                cmd="mirdan__help__status"
                 ;;
             mirdan__help,sync)
                 cmd="mirdan__help__sync"
@@ -179,7 +185,7 @@ _mirdan() {
 
     case "${cmd}" in
         mirdan)
-            opts="-d -y -h -V --debug --yes --agent --help --version agents new install uninstall list search info login logout whoami publish unpublish outdated update sync doctor start completion help"
+            opts="-d -y -h -V --debug --yes --agent --help --version agents new install uninstall list search info login logout whoami publish unpublish outdated update sync status doctor start completion help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -251,7 +257,7 @@ _mirdan() {
             return 0
             ;;
         mirdan__help)
-            opts="agents new install uninstall list search info login logout whoami publish unpublish outdated update sync doctor start completion help"
+            opts="agents new install uninstall list search info login logout whoami publish unpublish outdated update sync status doctor start completion help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -503,6 +509,20 @@ _mirdan() {
             return 0
             ;;
         mirdan__help__start)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        mirdan__help__status)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -918,6 +938,24 @@ _mirdan() {
             ;;
         mirdan__start)
             opts="-d -y -h --debug --yes --agent --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --agent)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        mirdan__status)
+            opts="-d -y -h --all --json --debug --yes --agent --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

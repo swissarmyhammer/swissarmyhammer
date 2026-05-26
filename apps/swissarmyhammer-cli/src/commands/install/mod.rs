@@ -7,4 +7,3 @@
 pub mod components;
 pub mod deinit;
 pub mod init;
-pub mod settings;

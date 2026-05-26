@@ -30,9 +30,6 @@ pub mod check_names {
     /// Human-readable check name for AVP hooks installation
     pub const AVP_HOOKS_INSTALLED: &str = "AVP Hooks Installed";
 
-    /// Human-readable check name for CLAUDE.md preamble verification
-    pub const CLAUDE_MD: &str = "CLAUDE.md Preamble";
-
     /// Build a dynamic check name for an LSP server
     pub fn lsp_server(command: &str) -> String {
         format!("{command} (LSP)")
@@ -192,9 +189,14 @@ pub fn check_claude_config(checks: &mut Vec<Check>) -> Result<()> {
 
     if claude_path.is_none() {
         let path_var = env::var("PATH").unwrap_or_default();
+        // Claude Code is optional infrastructure — missing claude binary is a
+        // Warning, not an Error. Matches the pattern used by
+        // `check_avp_in_path` and `check_single_lsp_server` for absent optional
+        // tools, and keeps `sah doctor` runnable on CI hosts that don't have
+        // Claude installed.
         checks.push(Check {
             name: check_names::CLAUDE_CONFIG.to_string(),
-            status: CheckStatus::Error,
+            status: CheckStatus::Warning,
             message: "Claude Code command not found in PATH".to_string(),
             fix: Some(format!(
                 "Install Claude Code from https://claude.ai/code or ensure the 'claude' command is in your PATH\nCurrent PATH: {}",
@@ -226,12 +228,17 @@ fn check_claude_mcp_list(claude_path: &Option<PathBuf>) -> Check {
     let display_path = claude_path.as_deref().unwrap_or(fallback_path);
     let command_path = claude_path.as_deref().unwrap_or(fallback_path);
 
+    // Claude Code is optional infrastructure: failures to invoke `claude mcp
+    // list` (binary present but unexecutable, or non-zero exit) downgrade to
+    // Warning so `sah doctor` stays useful on hosts where Claude isn't a
+    // first-class dependency. Matches the optional-tool pattern used by
+    // `check_avp_in_path` and `check_single_lsp_server`.
     let output = match Command::new(command_path).arg("mcp").arg("list").output() {
         Ok(o) => o,
         Err(e) => {
             return Check {
                 name: check_names::CLAUDE_CONFIG.to_string(),
-                status: CheckStatus::Error,
+                status: CheckStatus::Warning,
                 message: format!(
                     "Found claude at {:?} but failed to execute it: {}",
                     display_path, e
@@ -247,7 +254,7 @@ fn check_claude_mcp_list(claude_path: &Option<PathBuf>) -> Check {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Check {
             name: check_names::CLAUDE_CONFIG.to_string(),
-            status: CheckStatus::Error,
+            status: CheckStatus::Warning,
             message: format!("Failed to run 'claude mcp list': {}", stderr.trim()),
             fix: Some(
                 "Ensure Claude Code is installed and the 'claude' command is available".to_string(),
@@ -480,65 +487,69 @@ fn has_avp_hooks_in_file(path: &std::path::Path) -> bool {
     })
 }
 
-/// Check that CLAUDE.md exists and has the required preamble.
+/// Check the full sah install stack for every detected agent at project and user scope.
 ///
-/// Uses `find_git_repository_root()` to locate the git root, then delegates
-/// to `check_claude_md_at()` for the actual file inspection.
-pub fn check_claude_md(checks: &mut Vec<Check>) -> Result<()> {
-    let root = match swissarmyhammer_common::utils::find_git_repository_root() {
-        Some(r) => r,
-        None => return Ok(()), // git check earlier already reported this
-    };
-    check_claude_md_at(&root, checks);
-    Ok(())
-}
-
-/// Check CLAUDE.md preamble at a specific root path.
+/// This is the agent-agnostic replacement for the old, Claude-specific,
+/// project-only preamble check. It loads the host's agents config and delegates
+/// to [`check_install_stack_with`], which runs [`mirdan::status::check_all`]
+/// across [`InitScope::Project`] and [`InitScope::User`] and converts each
+/// applicable [`ComponentStatus`] into a doctor [`Check`] via
+/// [`mirdan::status::to_check`]. The check name produced by `to_check` already
+/// encodes agent, scope, and component (e.g. `"Claude Code · user · Preamble"`),
+/// so project and user rows are distinct.
 ///
-/// This is the testable core of the check — it takes a root directory
-/// instead of relying on `find_git_repository_root()`.
-fn check_claude_md_at(root: &std::path::Path, checks: &mut Vec<Check>) {
-    use crate::commands::install::components::CLAUDE_MD_PREAMBLE;
-
-    let path = root.join("CLAUDE.md");
-    if !path.exists() {
-        checks.push(Check {
-            name: check_names::CLAUDE_MD.to_string(),
-            status: CheckStatus::Warning,
-            message: "CLAUDE.md not found at git root".to_string(),
-            fix: Some("Run `sah init` to create CLAUDE.md".to_string()),
-        });
-        return;
-    }
-
-    let content = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
+/// [`ComponentState::NotApplicable`] statuses are skipped entirely rather than
+/// shown as passing rows. When the agents config fails to load, a single Error
+/// check is pushed (mirroring `MirdanDoctor::check_agents_detected`).
+///
+/// The stack is scope-independent: it does not require a surrounding Git
+/// repository, so user-scope rows surface even when `sah doctor` runs from `~`.
+pub fn check_install_stack(checks: &mut Vec<Check>) -> Result<()> {
+    let config = match mirdan::agents::load_agents_config() {
+        Ok(config) => config,
         Err(e) => {
             checks.push(Check {
-                name: check_names::CLAUDE_MD.to_string(),
+                name: "Install Stack".to_string(),
                 status: CheckStatus::Error,
-                message: format!("Failed to read CLAUDE.md: {}", e),
-                fix: None,
+                message: format!("Failed to load agents config: {}", e),
+                // load_agents_config() reads MIRDAN_AGENTS_CONFIG, then
+                // ~/.mirdan/agents.yaml, then an embedded default — it never
+                // consults $XDG_CONFIG_HOME/mirdan or ~/.config/mirdan, so the
+                // fix hint points users at the locations that actually load.
+                fix: Some(
+                    "Check $MIRDAN_AGENTS_CONFIG or ~/.mirdan/agents.yaml for syntax errors"
+                        .to_string(),
+                ),
             });
-            return;
+            return Ok(());
         }
     };
 
-    let first_non_empty = content.lines().find(|l| !l.trim().is_empty());
-    if first_non_empty.is_some_and(|line| line.contains(CLAUDE_MD_PREAMBLE)) {
-        checks.push(Check {
-            name: check_names::CLAUDE_MD.to_string(),
-            status: CheckStatus::Ok,
-            message: "CLAUDE.md has the required preamble".to_string(),
-            fix: None,
-        });
-    } else {
-        checks.push(Check {
-            name: check_names::CLAUDE_MD.to_string(),
-            status: CheckStatus::Warning,
-            message: "CLAUDE.md is missing the required preamble".to_string(),
-            fix: Some("Run `sah init` to add the required preamble".to_string()),
-        });
+    check_install_stack_with(&config, checks);
+    Ok(())
+}
+
+/// Push install-stack checks for an explicitly provided agents config.
+///
+/// This is the config-injectable core of [`check_install_stack`]: it runs
+/// [`mirdan::status::check_all`] across [`InitScope::Project`] and
+/// [`InitScope::User`], skips [`ComponentState::NotApplicable`] statuses, and
+/// converts the rest into doctor [`Check`]s via [`mirdan::status::to_check`].
+///
+/// Splitting this out gives tests a seam to drive the real skip-and-convert loop
+/// with a synthetic config (e.g. a bare agent that yields NotApplicable rows),
+/// without depending on what happens to be installed on the host. The public
+/// [`check_install_stack`] is the thin wrapper that loads the host's real config.
+fn check_install_stack_with(config: &mirdan::agents::AgentsConfig, checks: &mut Vec<Check>) {
+    use mirdan::status::{check_all, to_check, ComponentState};
+    use swissarmyhammer_common::lifecycle::InitScope;
+
+    let statuses = check_all(config, &[InitScope::Project, InitScope::User]);
+    for status in &statuses {
+        if status.state == ComponentState::NotApplicable {
+            continue;
+        }
+        checks.push(to_check(status));
     }
 }
 
@@ -549,6 +560,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    #[serial_test::serial(path_env)]
     fn test_claude_path_detection() {
         let temp_dir = TempDir::new().unwrap();
         let fake_bin_dir = temp_dir.path().join("bin");
@@ -573,12 +585,10 @@ mod tests {
             path_separator,
             original_path
         );
-        env::set_var("PATH", &new_path);
+        let _path_guard = PathGuard::set(&new_path);
 
         let mut checks = Vec::new();
         let result = check_claude_config(&mut checks);
-
-        env::set_var("PATH", original_path);
 
         assert!(result.is_ok());
         assert!(!checks.is_empty());
@@ -591,6 +601,69 @@ mod tests {
         assert!(!claude_check
             .message
             .contains("Claude Code command not found in PATH"));
+    }
+
+    /// RAII guard that scopes a PATH override for the duration of a test and
+    /// restores the original value on drop. Pair with
+    /// `#[serial_test::serial(path_env)]` so concurrent tests don't see each
+    /// other's PATH mutations.
+    struct PathGuard {
+        original: Option<std::ffi::OsString>,
+    }
+
+    impl PathGuard {
+        fn set(new_path: &str) -> Self {
+            let original = env::var_os("PATH");
+            env::set_var("PATH", new_path);
+            PathGuard { original }
+        }
+    }
+
+    impl Drop for PathGuard {
+        fn drop(&mut self) {
+            match self.original.take() {
+                Some(value) => env::set_var("PATH", value),
+                None => env::remove_var("PATH"),
+            }
+        }
+    }
+
+    /// Regression test for CI: when the `claude` binary is absent from PATH,
+    /// `check_claude_config` must produce a Warning (not an Error). CI runners
+    /// don't have Claude installed, and `test_run_diagnostics_outside_git_repo`
+    /// asserts no Error-status checks exist when run outside a repo.
+    #[test]
+    #[serial_test::serial(path_env)]
+    fn test_check_claude_config_missing_claude_is_warning() {
+        // Empty PATH guarantees `which::which("claude")` cannot find anything.
+        let _path_guard = PathGuard::set("");
+
+        let mut checks = Vec::new();
+        let result = check_claude_config(&mut checks);
+
+        assert!(result.is_ok(), "check_claude_config must not return Err");
+
+        let claude_check = checks
+            .iter()
+            .find(|c| c.name == check_names::CLAUDE_CONFIG)
+            .expect("expected a Claude Code MCP configuration check");
+
+        assert_eq!(
+            claude_check.status,
+            CheckStatus::Warning,
+            "missing claude binary should be a Warning, not an Error (status was {:?}, message: {})",
+            claude_check.status,
+            claude_check.message
+        );
+        assert!(
+            claude_check.message.contains("not found in PATH"),
+            "warning message should mention PATH; got: {}",
+            claude_check.message
+        );
+        assert!(
+            claude_check.fix.is_some(),
+            "warning should carry an actionable install hint"
+        );
     }
 
     /// `check_lsp_servers` reads process-global CWD (`std::env::current_dir`)
@@ -693,48 +766,153 @@ mod tests {
         assert!(checks[0].fix.as_ref().unwrap().contains("avp init"));
     }
 
+    /// With an isolated HOME that contains a detectable Claude Code layout, the
+    /// install stack must report both project and user rows per component, map an
+    /// installed user-scope preamble to Ok, and map a missing user-scope
+    /// permissions file to Warning.
     #[test]
-    fn test_check_claude_md_healthy() {
-        use crate::commands::install::components::CLAUDE_MD_PREAMBLE;
+    #[serial_test::serial(cwd)]
+    fn test_check_install_stack_user_scope_rows() {
+        use mirdan::status::PREAMBLE_MARKER;
+        use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
-        let temp_dir = TempDir::new().unwrap();
-        let claude_md = temp_dir.path().join("CLAUDE.md");
-        fs::write(&claude_md, format!("{}\nother stuff\n", CLAUDE_MD_PREAMBLE)).unwrap();
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let home = env.home_path();
+
+        // A detectable Claude Code layout: the presence of `~/.claude` makes the
+        // claude-code agent detected (independent of any `claude` binary on PATH).
+        let claude_dir = home.join(".claude");
+        fs::create_dir_all(&claude_dir).unwrap();
+
+        // Install the user-scope preamble (Ok), leave user-scope permissions
+        // (`~/.claude/settings.json`) missing (Warning).
+        fs::write(
+            claude_dir.join("CLAUDE.md"),
+            format!("{}\n\nnotes\n", PREAMBLE_MARKER),
+        )
+        .unwrap();
 
         let mut checks = Vec::new();
-        check_claude_md_at(temp_dir.path(), &mut checks);
+        check_install_stack(&mut checks).expect("install stack should not error");
 
-        assert_eq!(checks.len(), 1);
-        assert_eq!(checks[0].name, check_names::CLAUDE_MD);
-        assert_eq!(checks[0].status, CheckStatus::Ok);
+        // User-scope preamble is installed -> Ok.
+        let user_preamble = checks
+            .iter()
+            .find(|c| c.name == "Claude Code · user · Preamble")
+            .expect("expected a user-scope Preamble row");
+        assert_eq!(
+            user_preamble.status,
+            CheckStatus::Ok,
+            "installed preamble should be Ok, got: {}",
+            user_preamble.message
+        );
+
+        // User-scope permissions are missing -> Warning with an actionable fix.
+        let user_permissions = checks
+            .iter()
+            .find(|c| c.name == "Claude Code · user · Permissions")
+            .expect("expected a user-scope Permissions row");
+        assert_eq!(
+            user_permissions.status,
+            CheckStatus::Warning,
+            "missing permissions should be a Warning"
+        );
+        assert!(user_permissions
+            .fix
+            .as_ref()
+            .expect("missing component should carry a fix")
+            .contains("sah init user"));
+
+        // Both project and user rows are present for the agent.
+        assert!(
+            checks
+                .iter()
+                .any(|c| c.name == "Claude Code · project · Preamble"),
+            "expected a project-scope Preamble row"
+        );
+        assert!(
+            checks
+                .iter()
+                .any(|c| c.name == "Claude Code · user · Preamble"),
+            "expected a user-scope Preamble row"
+        );
     }
 
+    /// NotApplicable component statuses (an agent with no path defined for a
+    /// component) must produce no doctor check at all.
     #[test]
-    fn test_check_claude_md_missing() {
-        let temp_dir = TempDir::new().unwrap();
+    #[serial_test::serial(cwd)]
+    fn test_check_install_stack_skips_not_applicable() {
+        use mirdan::agents::{AgentDef, AgentsConfig, DetectMethod, SymlinkPolicy};
+        use mirdan::status::{check_all, to_check, ComponentState};
+        use swissarmyhammer_common::lifecycle::InitScope;
+        use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
+        let _env = IsolatedTestEnvironment::new().expect("isolated env");
+
+        // A "bare" agent that is detected (claude-code id => fallback) but defines
+        // no MCP/agent/instructions/settings paths, so those components resolve to
+        // NotApplicable.
+        let bare = AgentDef {
+            id: "claude-code".to_string(),
+            name: "Bare".to_string(),
+            project_path: "skills".to_string(),
+            global_path: "~/global-skills".to_string(),
+            detect: vec![DetectMethod::Dir {
+                dir: "/nonexistent/path/that/should/not/exist".to_string(),
+            }],
+            symlink_policy: SymlinkPolicy::default(),
+            mcp_config: None,
+            plugin_path: None,
+            global_plugin_path: None,
+            agent_path: None,
+            global_agent_path: None,
+            instructions_path: None,
+            global_instructions_path: None,
+            settings_path: None,
+            global_settings_path: None,
+        };
+        let config = AgentsConfig { agents: vec![bare] };
+
+        // Establish the ground truth independently: check_all over the bare config
+        // must yield at least one NotApplicable status (e.g. MCP has no path).
+        let statuses = check_all(&config, &[InitScope::Project, InitScope::User]);
+        assert!(
+            statuses
+                .iter()
+                .any(|s| s.state == ComponentState::NotApplicable),
+            "expected at least one NotApplicable status in the fixture"
+        );
+
+        // Drive the *production* skip-and-convert loop with the synthetic config.
+        // This exercises check_install_stack's real NotApplicable branch — not a
+        // local re-implementation of it.
         let mut checks = Vec::new();
-        check_claude_md_at(temp_dir.path(), &mut checks);
+        check_install_stack_with(&config, &mut checks);
 
-        assert_eq!(checks.len(), 1);
-        assert_eq!(checks[0].name, check_names::CLAUDE_MD);
-        assert_eq!(checks[0].status, CheckStatus::Warning);
-        assert!(checks[0].fix.as_ref().unwrap().contains("sah init"));
-    }
+        // Every NotApplicable status's would-be check name must be absent from the
+        // checks the production loop emitted.
+        for status in &statuses {
+            if status.state == ComponentState::NotApplicable {
+                let na_name = to_check(status).name;
+                assert!(
+                    !checks.iter().any(|c| c.name == na_name),
+                    "NotApplicable component must not appear as a check: {}",
+                    na_name
+                );
+            }
+        }
 
-    #[test]
-    fn test_check_claude_md_no_preamble() {
-        let temp_dir = TempDir::new().unwrap();
-        let claude_md = temp_dir.path().join("CLAUDE.md");
-        fs::write(&claude_md, "some other content\n").unwrap();
-
-        let mut checks = Vec::new();
-        check_claude_md_at(temp_dir.path(), &mut checks);
-
-        assert_eq!(checks.len(), 1);
-        assert_eq!(checks[0].name, check_names::CLAUDE_MD);
-        assert_eq!(checks[0].status, CheckStatus::Warning);
-        assert!(checks[0].message.contains("missing"));
-        assert!(checks[0].fix.as_ref().unwrap().contains("sah init"));
+        // Sanity: the production loop did emit the applicable (Installed/Missing)
+        // rows, so the absence above is real filtering, not an empty result.
+        let applicable_count = statuses
+            .iter()
+            .filter(|s| s.state != ComponentState::NotApplicable)
+            .count();
+        assert_eq!(
+            checks.len(),
+            applicable_count,
+            "production loop should emit exactly the applicable rows"
+        );
     }
 }

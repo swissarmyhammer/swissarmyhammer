@@ -925,9 +925,17 @@ capabilities:
             "system prompt should not be empty"
         );
 
-        // The "test" skill's instructions should be appended
+        // The "test" skill's instructions should be appended. We compare
+        // against a snippet of the *rendered* skill text (not the raw
+        // template) because `resolve_mode_from_agent` renders Liquid
+        // partials (`{% include %}`) before concatenating, so the raw
+        // skill body's leading characters do not appear verbatim in the
+        // final system prompt.
         let test_skill = skill_library.get("test").expect("test skill should exist");
-        let skill_snippet = &test_skill.instructions[..test_skill.instructions.len().min(50)];
+        let rendered_skill = prompt_library
+            .render_text(&test_skill.instructions, &template_context)
+            .expect("rendering the test skill should succeed");
+        let skill_snippet = &rendered_skill[..rendered_skill.len().min(50)];
         assert!(
             system_prompt.contains(skill_snippet),
             "system prompt should contain test skill instructions"

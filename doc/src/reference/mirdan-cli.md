@@ -30,6 +30,7 @@ brew install swissarmyhammer/tap/mirdan-cli
 * [`mirdan outdated`↴](#mirdan-outdated)
 * [`mirdan update`↴](#mirdan-update)
 * [`mirdan sync`↴](#mirdan-sync)
+* [`mirdan status`↴](#mirdan-status)
 * [`mirdan doctor`↴](#mirdan-doctor)
 * [`mirdan start`↴](#mirdan-start)
 * [`mirdan completion`↴](#mirdan-completion)
@@ -68,6 +69,7 @@ Environment variables:
 * `outdated` — Check for available package updates
 * `update` — Update installed packages to latest versions
 * `sync` — Reconcile .skills/ with agent directories and verify lockfile
+* `status` — Report the install-status of sah-managed components per agent and scope
 * `doctor` — Diagnose Mirdan setup and configuration
 * `start` — Start the Mirdan tray/accessory app
 * `completion` — Generate shell completion scripts
@@ -346,6 +348,21 @@ Reconcile .skills/ with agent directories and verify lockfile
 ###### **Options:**
 
 * `--global` — Sync global locations
+
+
+
+## `mirdan status`
+
+Report the install-status of sah-managed components per agent and scope
+
+Shows, for each detected agent and scope (project, user), whether the sah MCP server, skills, subagents, preamble, and permissions are installed.
+
+**Usage:** `mirdan status [OPTIONS]`
+
+###### **Options:**
+
+* `--all` — Include components that do not apply to an agent at a scope
+* `--json` — Output as JSON
 
 
 

@@ -21,6 +21,7 @@ pub mod agent_loader;
 pub mod agent_resolver;
 pub mod context;
 pub mod error;
+pub mod format;
 pub mod operations;
 pub mod parse;
 pub mod schema;

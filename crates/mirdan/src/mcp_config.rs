@@ -4,9 +4,11 @@
 //! JSON configuration files (e.g. `.mcp.json`, `.cursor/mcp.json`).
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 use crate::registry::RegistryError;
 
@@ -85,6 +87,55 @@ pub fn parse_tool_frontmatter(
     })
 }
 
+/// Set the MCP server entry for `tool_name` under `servers_key` in
+/// `root`, returning `true` if the in-memory value changed.
+///
+/// Creates the `servers_key` object if it does not yet exist. Returns a
+/// `Validation` error when `root` or `servers_key` exists but is not a
+/// JSON object. The boolean indicates whether the resulting value differs
+/// from what was already there (so `false` means the entry was already
+/// equal to `entry`).
+pub fn set_mcp_server_entry(
+    root: &mut Value,
+    servers_key: &str,
+    tool_name: &str,
+    entry: &McpServerEntry,
+) -> Result<bool, RegistryError> {
+    let obj = root.as_object_mut().ok_or_else(|| {
+        RegistryError::Validation("MCP config root is not a JSON object".to_string())
+    })?;
+
+    let servers = obj
+        .entry(servers_key)
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+
+    let servers_map = servers
+        .as_object_mut()
+        .ok_or_else(|| RegistryError::Validation(format!("'{}' is not an object", servers_key)))?;
+
+    let serialized = serde_json::to_value(entry)
+        .map_err(|e| RegistryError::Validation(format!("Failed to serialize MCP entry: {}", e)))?;
+
+    if servers_map.get(tool_name) == Some(&serialized) {
+        return Ok(false);
+    }
+    servers_map.insert(tool_name.to_string(), serialized);
+    Ok(true)
+}
+
+/// Remove the MCP server entry for `tool_name` from `root[servers_key]`,
+/// returning `true` if an entry was removed.
+///
+/// Returns `false` (no error) when `servers_key` is absent, is not an
+/// object, or does not contain `tool_name`.
+pub fn remove_mcp_server_entry(root: &mut Value, servers_key: &str, tool_name: &str) -> bool {
+    root.as_object_mut()
+        .and_then(|obj| obj.get_mut(servers_key))
+        .and_then(|servers| servers.as_object_mut())
+        .map(|servers_map| servers_map.remove(tool_name).is_some())
+        .unwrap_or(false)
+}
+
 /// Register an MCP server in a JSON config file.
 ///
 /// Reads the existing config (or creates a new one), merges the entry into
@@ -96,35 +147,9 @@ pub fn register_mcp_server(
     tool_name: &str,
     entry: &McpServerEntry,
 ) -> Result<(), RegistryError> {
-    let mut root = read_json_config(config_path)?;
-
-    let servers = root
-        .as_object_mut()
-        .ok_or_else(|| {
-            RegistryError::Validation(format!(
-                "MCP config is not a JSON object: {}",
-                config_path.display()
-            ))
-        })?
-        .entry(servers_key)
-        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
-
-    let servers_map = servers.as_object_mut().ok_or_else(|| {
-        RegistryError::Validation(format!(
-            "'{}' is not an object in {}",
-            servers_key,
-            config_path.display()
-        ))
-    })?;
-
-    servers_map.insert(
-        tool_name.to_string(),
-        serde_json::to_value(entry).map_err(|e| {
-            RegistryError::Validation(format!("Failed to serialize MCP entry: {}", e))
-        })?,
-    );
-
-    write_json_config(config_path, &root)
+    let mut root = crate::settings::read_json(config_path)?;
+    set_mcp_server_entry(&mut root, servers_key, tool_name, entry)?;
+    crate::settings::write_json(config_path, &root)
 }
 
 /// Unregister an MCP server from a JSON config file.
@@ -139,48 +164,12 @@ pub fn unregister_mcp_server(
         return Ok(false);
     }
 
-    let mut root = read_json_config(config_path)?;
-
-    let removed = root
-        .as_object_mut()
-        .and_then(|obj| obj.get_mut(servers_key))
-        .and_then(|servers| servers.as_object_mut())
-        .map(|servers_map| servers_map.remove(tool_name).is_some())
-        .unwrap_or(false);
-
+    let mut root = crate::settings::read_json(config_path)?;
+    let removed = remove_mcp_server_entry(&mut root, servers_key, tool_name);
     if removed {
-        write_json_config(config_path, &root)?;
+        crate::settings::write_json(config_path, &root)?;
     }
-
     Ok(removed)
-}
-
-/// Read a JSON config file, returning an empty object if the file doesn't exist.
-fn read_json_config(path: &Path) -> Result<serde_json::Value, RegistryError> {
-    if !path.exists() {
-        return Ok(serde_json::Value::Object(serde_json::Map::new()));
-    }
-
-    let content = std::fs::read_to_string(path)?;
-    let content = content.trim();
-    if content.is_empty() {
-        return Ok(serde_json::Value::Object(serde_json::Map::new()));
-    }
-
-    serde_json::from_str(content).map_err(|e| {
-        RegistryError::Validation(format!("Invalid JSON in {}: {}", path.display(), e))
-    })
-}
-
-/// Write a JSON config file with pretty-printing. Creates parent dirs if needed.
-fn write_json_config(path: &Path, value: &serde_json::Value) -> Result<(), RegistryError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let json = serde_json::to_string_pretty(value)
-        .map_err(|e| RegistryError::Validation(format!("Failed to serialize JSON: {}", e)))?;
-    std::fs::write(path, format!("{}\n", json))?;
-    Ok(())
 }
 
 /// Parse raw YAML frontmatter from a markdown file, returning the YAML Value.
@@ -222,6 +211,78 @@ pub fn read_plugin_json(plugin_json_path: &Path) -> Result<String, RegistryError
         .ok_or_else(|| {
             RegistryError::Validation(format!("Missing 'name' in {}", plugin_json_path.display()))
         })
+}
+
+// ── Claude Code local-scope helpers ──────────────────────────────────
+//
+// Claude Code's local scope stores MCP servers in `~/.claude.json` under
+// `projects.<absolute-project-path>.mcpServers`. The helpers below are the
+// minimum primitives a caller needs to compose that path and ensure the
+// nested project entry exists before mutating its `mcpServers` map.
+
+/// Path to `~/.claude.json` — the file Claude Code reads for user-level
+/// and local-scope MCP server configuration.
+///
+/// Honors `dirs::home_dir()`, which is overridden by `HOME` on Unix and by
+/// the `USERPROFILE` family on Windows. Panics if no home directory can be
+/// determined.
+pub fn claude_json_path() -> PathBuf {
+    dirs::home_dir()
+        .expect("Could not find home directory")
+        .join(".claude.json")
+}
+
+/// Compute the absolute project path used as the key in
+/// `~/.claude.json`'s `projects` map.
+///
+/// Prefers the git working-tree root (`git rev-parse --show-toplevel`)
+/// when run inside a repository; falls back to the current working
+/// directory otherwise. Returns a `Validation` error when the current
+/// directory cannot be resolved.
+pub fn project_key() -> Result<String, RegistryError> {
+    if let Ok(output) = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+    {
+        if output.status.success() {
+            let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !root.is_empty() {
+                return Ok(root);
+            }
+        }
+    }
+    std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .map_err(|e| RegistryError::Validation(format!("Failed to get current directory: {}", e)))
+}
+
+/// Ensure that `root["projects"][key]` exists as an empty object and
+/// return a mutable reference to it.
+///
+/// Creates the `projects` map and the nested project entry if either is
+/// missing; preserves any existing fields under the project entry when it
+/// already exists. `root` must be a JSON object.
+pub fn ensure_project_entry<'a>(root: &'a mut Value, key: &str) -> &'a mut Value {
+    if root.get("projects").is_none() {
+        root.as_object_mut()
+            .expect("ensure_project_entry requires root to be a JSON object")
+            .insert("projects".to_string(), json!({}));
+    }
+
+    let projects = root
+        .get_mut("projects")
+        .expect("just inserted")
+        .as_object_mut()
+        .expect("projects must be an object");
+
+    if !projects.contains_key(key) {
+        projects.insert(key.to_string(), json!({}));
+    }
+
+    root.get_mut("projects")
+        .expect("projects exists")
+        .get_mut(key)
+        .expect("just ensured")
 }
 
 #[cfg(test)]
@@ -370,6 +431,125 @@ mcp:
         std::fs::write(&plugin_json, r#"{"description": "no name"}"#).unwrap();
 
         assert!(read_plugin_json(&plugin_json).is_err());
+    }
+
+    #[test]
+    fn test_set_mcp_server_entry_creates_servers_key_when_missing() {
+        let mut root = json!({});
+        let entry = McpServerEntry {
+            command: "sah".to_string(),
+            args: vec!["serve".to_string()],
+            env: BTreeMap::new(),
+        };
+        let changed = set_mcp_server_entry(&mut root, "mcpServers", "sah", &entry).unwrap();
+        assert!(changed);
+        assert_eq!(root["mcpServers"]["sah"]["command"], "sah");
+        assert_eq!(root["mcpServers"]["sah"]["args"], json!(["serve"]));
+    }
+
+    #[test]
+    fn test_set_mcp_server_entry_is_idempotent_for_equal_value() {
+        let entry = McpServerEntry {
+            command: "sah".to_string(),
+            args: vec!["serve".to_string()],
+            env: BTreeMap::new(),
+        };
+        let mut root = json!({});
+        set_mcp_server_entry(&mut root, "mcpServers", "sah", &entry).unwrap();
+        let changed = set_mcp_server_entry(&mut root, "mcpServers", "sah", &entry).unwrap();
+        assert!(!changed);
+    }
+
+    #[test]
+    fn test_set_mcp_server_entry_preserves_siblings() {
+        let mut root = json!({
+            "mcpServers": { "other": { "command": "node" } },
+            "otherKey": "value"
+        });
+        let entry = McpServerEntry {
+            command: "sah".to_string(),
+            args: vec![],
+            env: BTreeMap::new(),
+        };
+        set_mcp_server_entry(&mut root, "mcpServers", "sah", &entry).unwrap();
+        assert_eq!(root["mcpServers"]["other"]["command"], "node");
+        assert_eq!(root["mcpServers"]["sah"]["command"], "sah");
+        assert_eq!(root["otherKey"], "value");
+    }
+
+    #[test]
+    fn test_remove_mcp_server_entry_returns_true_when_present() {
+        let mut root = json!({
+            "mcpServers": { "sah": { "command": "sah" }, "other": { "command": "n" } }
+        });
+        let removed = remove_mcp_server_entry(&mut root, "mcpServers", "sah");
+        assert!(removed);
+        assert!(!root["mcpServers"].as_object().unwrap().contains_key("sah"));
+        assert!(root["mcpServers"]["other"].is_object());
+    }
+
+    #[test]
+    fn test_remove_mcp_server_entry_returns_false_when_absent() {
+        let mut root = json!({"mcpServers": {"other": {"command": "node"}}});
+        assert!(!remove_mcp_server_entry(&mut root, "mcpServers", "sah"));
+    }
+
+    #[test]
+    fn test_remove_mcp_server_entry_returns_false_when_servers_key_missing() {
+        let mut root = json!({"otherKey": "value"});
+        assert!(!remove_mcp_server_entry(&mut root, "mcpServers", "sah"));
+    }
+
+    #[test]
+    fn test_claude_json_path_is_absolute_and_named() {
+        let path = claude_json_path();
+        assert!(path.is_absolute(), "claude_json_path should be absolute");
+        assert!(
+            path.ends_with(".claude.json"),
+            "claude_json_path should end in .claude.json: {}",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn test_project_key_returns_nonempty_path() {
+        let key = project_key().expect("project_key should not fail in a real cwd");
+        assert!(!key.is_empty(), "project key should not be empty");
+    }
+
+    #[test]
+    fn test_ensure_project_entry_creates_missing_structure() {
+        let mut root = json!({});
+        let entry = ensure_project_entry(&mut root, "/abs/project/path");
+        assert_eq!(entry, &json!({}));
+        assert!(root["projects"]["/abs/project/path"].is_object());
+    }
+
+    #[test]
+    fn test_ensure_project_entry_preserves_existing_entry_fields() {
+        let mut root = json!({
+            "projects": {
+                "/abs/project/path": { "allowedTools": ["Read"], "mcpServers": {} }
+            },
+            "otherKey": "value"
+        });
+        let entry = ensure_project_entry(&mut root, "/abs/project/path");
+        assert_eq!(entry["allowedTools"], json!(["Read"]));
+        assert!(entry["mcpServers"].is_object());
+        // Sibling keys preserved.
+        assert_eq!(root["otherKey"], json!("value"));
+    }
+
+    #[test]
+    fn test_ensure_project_entry_adds_only_requested_key() {
+        let mut root = json!({
+            "projects": {
+                "/other/project": { "allowedTools": [] }
+            }
+        });
+        ensure_project_entry(&mut root, "/new/project");
+        assert!(root["projects"]["/other/project"].is_object());
+        assert!(root["projects"]["/new/project"].is_object());
     }
 
     #[test]
