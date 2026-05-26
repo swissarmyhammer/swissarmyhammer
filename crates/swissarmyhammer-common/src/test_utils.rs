@@ -237,6 +237,26 @@ pub fn acquire_semantic_db_lock() -> std::sync::MutexGuard<'static, ()> {
     })
 }
 
+/// Acquire the global HOME environment lock.
+///
+/// `IsolatedTestHome` (and therefore `IsolatedTestEnvironment`) already
+/// acquires this lock internally for the lifetime of the guard. Tests that
+/// need to read or compare `HOME` *around* an `IsolatedTestEnvironment` —
+/// for example, to assert that drop restored the prior value — should
+/// acquire this lock *first* so that the surrounding read happens atomically
+/// with respect to any other parallel test currently mutating `HOME`.
+///
+/// Without this, a parallel `IsolatedTestEnvironment` can be holding the
+/// lock and temporarily overriding `HOME` at the moment of the pre-test read,
+/// then restore the *real* `HOME` when it drops — leaving the calling test
+/// with a `pre` value that no longer matches the eventual `post` value.
+pub fn acquire_home_env_lock() -> std::sync::MutexGuard<'static, ()> {
+    HOME_ENV_LOCK.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("HOME environment lock was poisoned, recovering");
+        poisoned.into_inner()
+    })
+}
+
 /// Create an isolated test home directory for parallel-safe testing
 ///
 /// This creates a temporary directory with a mock SwissArmyHammer setup,
@@ -799,18 +819,57 @@ mod tests {
         assert!(complete.ends_with("complete"));
     }
 
+    /// Verify that `IsolatedTestEnvironment::drop` restores `HOME` to whatever
+    /// was set when the environment was created.
+    ///
+    /// The naive version of this test was racy: it read `HOME` *outside* the
+    /// global `HOME_ENV_LOCK`, then dropped an `IsolatedTestEnvironment` and
+    /// read `HOME` again. When another parallel test was inside its own
+    /// `IsolatedTestEnvironment` at the moment of the first read, the test
+    /// would observe that other test's `HOME` override, then later — after
+    /// the other test had restored the *real* `HOME` — see a different
+    /// value and fail.
+    ///
+    /// To make this test deterministic we pick a sentinel value, stamp it
+    /// into `HOME` while holding the lock (so no other test can interpose),
+    /// release the lock so `IsolatedTestEnvironment::new` can acquire it,
+    /// then re-acquire after drop to read `HOME` atomically. The lock
+    /// serialises the final read against any other parallel `HOME` mutator.
+    /// We restore the *real* `HOME` before releasing so we don't leak the
+    /// sentinel value into the rest of the suite.
     #[test]
     fn test_isolated_test_environment_drop_restores_home() {
-        let original_home = std::env::var("HOME").ok();
+        const SENTINEL: &str = "/swissarmyhammer-test-home-restoration-sentinel";
 
+        // Phase 1: under the lock, capture the real HOME and stamp the sentinel.
+        let real_home = {
+            let _lock = acquire_home_env_lock();
+            let real = std::env::var("HOME").ok();
+            std::env::set_var("HOME", SENTINEL);
+            real
+        };
+
+        // Phase 2: create + drop the environment outside the lock so it can
+        // acquire the lock itself. It will capture SENTINEL as its baseline
+        // and restore HOME to SENTINEL on drop.
         {
             let _env = IsolatedTestEnvironment::new().unwrap();
-            // HOME is now set to the isolated directory
         }
 
-        // After drop, HOME should be restored
-        let restored_home = std::env::var("HOME").ok();
-        assert_eq!(original_home, restored_home);
+        // Phase 3: re-acquire the lock, read HOME atomically against any
+        // other parallel mutator, then restore the real HOME so this test
+        // does not pollute the rest of the suite.
+        let restored = {
+            let _lock = acquire_home_env_lock();
+            let observed = std::env::var("HOME").ok();
+            match &real_home {
+                Some(h) => std::env::set_var("HOME", h),
+                None => std::env::remove_var("HOME"),
+            }
+            observed
+        };
+
+        assert_eq!(restored, Some(SENTINEL.to_string()));
     }
 
     #[test]

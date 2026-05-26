@@ -32,6 +32,7 @@ pub mod package_type;
 pub mod publish;
 pub mod registry;
 pub mod search;
+pub mod settings;
 pub mod status;
 pub mod store;
 pub mod sync;

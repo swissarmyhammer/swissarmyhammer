@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffff8a80
 title: Move path-safety + store-cleanup helpers to mirdan::store; delete dead MCP legacy fallback
 ---
 ## What
@@ -40,3 +40,11 @@ Move + delete:
 
 ## Workflow
 - Use `/tdd` — write the moved-helpers tests in mirdan first, then move and delete. #init-doctor
+
+## Review Findings (2026-05-26 13:50)
+
+### Nits
+- [x] `apps/swissarmyhammer-cli/src/commands/install/components/mod.rs:1949-1957` — `test_mcp_registration_init_warns_when_no_agent_has_mcp_config` sets `MIRDAN_AGENTS_CONFIG` with `std::env::set_var` and only clears it after the assertion block. If any assert above `std::env::remove_var` panics, the env var leaks to subsequent in-process tests that read `MIRDAN_AGENTS_CONFIG`. `#[serial_test::serial(home_env)]` serializes against home-env tests but doesn't cover this variable. Consider a small RAII guard (e.g. set in a `struct EnvGuard(&'static str)` whose `Drop` calls `remove_var`) so cleanup happens on panic too. Same pattern already exists for `CurrentDirGuard` / `IsolatedTestEnvironment` elsewhere.
+
+### Resolution (2026-05-26)
+Added a local `EnvGuard(&'static str)` RAII struct in the `tests` module of `apps/swissarmyhammer-cli/src/commands/install/components/mod.rs`. `EnvGuard::set` calls `std::env::set_var` on construction; `Drop` calls `std::env::remove_var`. The `test_mcp_registration_init_warns_when_no_agent_has_mcp_config` test now binds the guard with `let _env_guard = EnvGuard::set("MIRDAN_AGENTS_CONFIG", &custom_config);` so the env var is cleared even if an assertion panics. `cargo test -p swissarmyhammer-cli --lib commands::install::components` — 20/20 pass; `cargo clippy -p swissarmyhammer-cli --tests -- -D warnings` clean.

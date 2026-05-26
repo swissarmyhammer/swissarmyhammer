@@ -101,8 +101,24 @@ impl InitResult {
 /// - Sync, not async — init operations are filesystem work. `start()` can spawn
 ///   tokio tasks internally if needed.
 pub trait Initializable {
-    /// Human-readable name of this component.
+    /// Stable machine-readable identifier for this component.
+    ///
+    /// Used for log/test selectors and lockfile entries — kept as a slug
+    /// (`"deny-bash"`, `"skill-deployment"`, …) so external consumers do not
+    /// break when the user-facing display label is reworded. For a
+    /// human-readable label, override [`Initializable::display_name`].
     fn name(&self) -> &str;
+
+    /// Human-readable label for this component.
+    ///
+    /// Defaults to [`Initializable::name`] so existing components keep their
+    /// slug as the display string. Components in the canonical install
+    /// pipeline override this to surface a narrative label
+    /// (e.g. `"Permissions"`, `"Project workspace"`) without disturbing
+    /// the stable `name()` slug that lockfiles and tests grep on.
+    fn display_name(&self) -> &str {
+        self.name()
+    }
 
     /// Category (e.g., "tools", "system", "configuration").
     fn category(&self) -> &str;
@@ -170,19 +186,14 @@ impl InitRegistry {
 
     /// Run init on all registered components in priority order.
     ///
+    /// Applicable components run in priority order; inapplicable components
+    /// are recorded as `Skipped` results without running.
+    ///
     /// Pass `&NullReporter` when no output is desired (e.g. tests).
     pub fn run_all_init(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        self.sorted_indices()
-            .into_iter()
-            .flat_map(|i| {
-                let c = &self.components[i];
-                if c.is_applicable(scope) {
-                    c.init(scope, reporter)
-                } else {
-                    vec![InitResult::skipped(c.name(), "not applicable")]
-                }
-            })
-            .collect()
+        self.run_lifecycle(scope, reporter, false, |c, scope, reporter| {
+            c.init(scope, reporter)
+        })
     }
 
     /// Run deinit on all registered components in reverse priority order.
@@ -193,20 +204,38 @@ impl InitRegistry {
         scope: &InitScope,
         reporter: &dyn InitReporter,
     ) -> Vec<InitResult> {
-        // Deinit in reverse priority order
+        self.run_lifecycle(scope, reporter, true, |c, scope, reporter| {
+            c.deinit(scope, reporter)
+        })
+    }
+
+    /// Shared driver for `run_all_init` / `run_all_deinit`.
+    ///
+    /// Walks components in priority order (or reverse, for deinit) and
+    /// invokes each applicable component's lifecycle method via `action`.
+    /// Inapplicable components are recorded as `Skipped` results.
+    fn run_lifecycle(
+        &self,
+        scope: &InitScope,
+        reporter: &dyn InitReporter,
+        reverse: bool,
+        action: impl Fn(&dyn Initializable, &InitScope, &dyn InitReporter) -> Vec<InitResult>,
+    ) -> Vec<InitResult> {
         let mut indices = self.sorted_indices();
-        indices.reverse();
-        indices
-            .into_iter()
-            .flat_map(|i| {
-                let c = &self.components[i];
-                if c.is_applicable(scope) {
-                    c.deinit(scope, reporter)
-                } else {
-                    vec![InitResult::skipped(c.name(), "not applicable")]
-                }
-            })
-            .collect()
+        if reverse {
+            indices.reverse();
+        }
+
+        let mut results = Vec::new();
+        for i in indices {
+            let c = self.components[i].as_ref();
+            if c.is_applicable(scope) {
+                results.extend(action(c, scope, reporter));
+            } else {
+                results.push(InitResult::skipped(c.name(), "not applicable"));
+            }
+        }
+        results
     }
 
     pub fn run_all_start(&self) -> Vec<InitResult> {
@@ -247,6 +276,7 @@ mod tests {
 
     struct TestComponent {
         name: &'static str,
+        display_name: Option<&'static str>,
         category: &'static str,
         priority: i32,
         applicable_scopes: Option<Vec<InitScope>>,
@@ -256,6 +286,7 @@ mod tests {
         fn new(name: &'static str, priority: i32) -> Self {
             Self {
                 name,
+                display_name: None,
                 category: "test",
                 priority,
                 applicable_scopes: None,
@@ -266,11 +297,19 @@ mod tests {
             self.applicable_scopes = Some(scopes);
             self
         }
+
+        fn with_display_name(mut self, display_name: &'static str) -> Self {
+            self.display_name = Some(display_name);
+            self
+        }
     }
 
     impl Initializable for TestComponent {
         fn name(&self) -> &str {
             self.name
+        }
+        fn display_name(&self) -> &str {
+            self.display_name.unwrap_or(self.name)
         }
         fn category(&self) -> &str {
             self.category
@@ -445,5 +484,21 @@ mod tests {
         reg.register(TestComponent::new("b", 0));
         assert_eq!(reg.len(), 2);
         assert!(!reg.is_empty());
+    }
+
+    #[test]
+    fn test_default_display_name_returns_name_slug() {
+        // Components that do not override display_name fall back to name().
+        let c = TestComponent::new("deny-bash", 10);
+        assert_eq!(c.display_name(), "deny-bash");
+    }
+
+    #[test]
+    fn test_override_display_name_returns_label() {
+        // Components that override display_name surface the human-readable
+        // label, while the slug returned by name() is preserved.
+        let c = TestComponent::new("deny-bash", 10).with_display_name("Permissions");
+        assert_eq!(c.display_name(), "Permissions");
+        assert_eq!(c.name(), "deny-bash");
     }
 }

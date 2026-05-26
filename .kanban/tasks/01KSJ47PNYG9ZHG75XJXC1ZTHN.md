@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffff8780
 title: 'Init: lockfile path must be scope-aware (don''t pollute cwd in user mode)'
 ---
 ## What
@@ -22,15 +22,25 @@ Fix:
 This is a real correctness bug introduced by the user-scope work — not cosmetic.
 
 ## Acceptance Criteria
-- [ ] `sah init user` writes the lockfile to the global location (in `~`), not the current working directory; `<cwd>/mirdan-lock.json` is not created.
-- [ ] `sah init` / `sah init local` still write `<git-root>/mirdan-lock.json` (no regression).
-- [ ] `sah deinit user` cleans up the global lockfile, not a cwd-relative one.
-- [ ] Exactly one helper resolves the lockfile root by scope; no `std::env::current_dir()` call remains in the lockfile flow.
+- [x] `sah init user` writes the lockfile to the global location (in `~`), not the current working directory; `<cwd>/mirdan-lock.json` is not created.
+- [x] `sah init` / `sah init local` still write `<git-root>/mirdan-lock.json` (no regression).
+- [x] `sah deinit user` cleans up the global lockfile, not a cwd-relative one.
+- [x] Exactly one helper resolves the lockfile root by scope; no `std::env::current_dir()` call remains in the lockfile flow.
 
 ## Tests
-- [ ] `#[serial_test::serial(home_env)]` test in `components/mod.rs` (or a dedicated lockfile test): `IsolatedTestEnvironment` + `CurrentDirGuard` into a temp non-HOME cwd; run the relevant component(s) with `InitScope::User`; assert `~/mirdan-lock.json` (or whatever the helper chooses) exists and the cwd has no `mirdan-lock.json`.
-- [ ] Add a mirdan unit test for `lockfile_root_for_scope(User)` / `(Project)` returning the expected paths.
-- [ ] `cargo test -p mirdan -p swissarmyhammer-cli` green.
+- [x] `#[serial_test::serial(home_env)]` test in `components/mod.rs` (or a dedicated lockfile test): `IsolatedTestEnvironment` + `CurrentDirGuard` into a temp non-HOME cwd; run the relevant component(s) with `InitScope::User`; assert `~/mirdan-lock.json` (or whatever the helper chooses) exists and the cwd has no `mirdan-lock.json`.
+- [x] Add a mirdan unit test for `lockfile_root_for_scope(User)` / `(Project)` returning the expected paths.
+- [x] `cargo test -p mirdan -p swissarmyhammer-cli` green.
 
 ## Workflow
 - Use `/tdd` — write the cwd-pollution regression first. #init-doctor
+
+## Implementation Notes
+
+- Helper `mirdan::lockfile::lockfile_root_for_scope(scope: &InitScope) -> Result<PathBuf, String>` added in `crates/mirdan/src/lockfile.rs`. Returns `dirs::home_dir()` for `User`, `std::env::current_dir()` for `Project`/`Local`.
+- `deploy_all_skills` and `load_project_lockfile` in `apps/swissarmyhammer-cli/src/commands/skill.rs` now take `&InitScope` and use the helper.
+- `init_all_agents` and `load_agent_project_lockfile` in `apps/swissarmyhammer-cli/src/commands/install/components/mod.rs` now take `&InitScope` and use the helper.
+- `LockfileCleanup::deinit` uses the helper instead of `std::env::current_dir()`.
+- Regression tests in `components/mod.rs`: `test_agent_deployment_user_scope_lockfile_in_home_not_cwd` and `test_lockfile_cleanup_user_scope_targets_home_not_cwd` both use `IsolatedTestEnvironment` + `CurrentDirGuard` to prove cwd is never polluted in user scope.
+- Unit tests in `crates/mirdan/src/lockfile.rs`: `test_lockfile_root_for_scope_user` and `test_lockfile_root_for_scope_project` verify the helper directly.
+- `cargo test -p mirdan -p swissarmyhammer-cli` green: 1434 tests, 0 failures. `cargo clippy -p mirdan -p swissarmyhammer-cli --all-targets -- -D warnings` clean.
