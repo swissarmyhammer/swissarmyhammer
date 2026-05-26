@@ -1,0 +1,58 @@
+---
+assignees:
+- claude-code
+position_column: todo
+position_ordinal: '80'
+title: 'AI composer: slash-command autocomplete from ACP `availableCommands`'
+---
+## What
+
+The AI panel's prompt composer (`apps/kanban-app/ui/src/components/ai-prompt-composer.tsx`) currently has **no autocomplete** — the composer's docstring (the "Why we still hand-roll the Enter-submit binding" section) calls this out and warns that any future maintainer adding autocomplete must re-introduce the `completionStatus` Enter-yield guard. Today, when an ACP agent advertises slash commands via `session/update`'s `available_commands_update` (e.g. `/plan`, `/review`, `/finish` from this very board's skills), the user can type `/` in the composer but gets no completion menu — they have to remember every command by hand.
+
+We already have a smart shared mention-autocomplete component that powers `#tag`, `@actor`, and `^task` completions in the filter editor and the markdown field editor: `apps/kanban-app/ui/src/lib/cm-mention-autocomplete.ts` (parameterized by prefix character) and `apps/kanban-app/ui/src/hooks/use-mention-extensions.ts` (the React hook that wires it to CodeMirror). The job is to **reuse that same shared component for `/` slash-command completions in the composer**, fed by the live ACP `availableCommands` list — not to special-case slash handling in the composer.
+
+### Approach
+
+1. **Extend the shared mention infrastructure to support a slash-command flavor**, in `apps/kanban-app/ui/src/lib/cm-mention-autocomplete.ts`. The existing `createMentionCompletionSource(prefix, search)` already accepts any prefix string and a sync or async search function — slash commands are just `prefix = "/"` with a sync search over the live `availableCommands` array. The pieces that **don't** transfer cleanly are the entity-shaped `MentionSearchResult` (`{ slug, displayName, color }`) and the colored-dot `info()` widget — commands carry a `description` instead of a color. Add a second result shape or extend the existing one so a command result can supply a `description` and skip the color dot. Keep one shared source builder; do not fork into a parallel implementation.
+
+2. **Add a `useCommandCompletionExtension` hook** (or extend the existing `useMentionExtensions` hook in `apps/kanban-app/ui/src/hooks/use-mention-extensions.ts`) that takes an `AvailableCommand[]` (from `@agentclientprotocol/sdk`) and returns the CM6 extension assembled via the same shared `createMentionAutocomplete(sources)` helper. The hook lives in `hooks/` so it has the right React boundary, but the heavy lifting stays in `lib/cm-mention-autocomplete.ts`.
+
+3. **Wire the new extension into the composer.** `apps/kanban-app/ui/src/components/ai-prompt-composer.tsx`:
+   - Accept the `availableCommands: AvailableCommand[]` list as a new prop on `AiPromptComposerProps` (defaulting to `[]` so existing tests stay green).
+   - Build the autocomplete extension via the new hook and append it to `baseExtensions`.
+   - **Re-introduce the autocomplete-yield guard on the Enter-submit binding** that the composer's docstring already warns about: import `completionStatus` from `@codemirror/autocomplete` and have `buildEnterSubmitExtension`'s `run` return `false` when `completionStatus(view.state) === "active"`, so Enter accepts the highlighted completion instead of submitting. Update the docstring to reflect that autocomplete is now present.
+
+4. **Thread `availableCommands` from the conversation to the composer.** In `apps/kanban-app/ui/src/components/ai-panel.tsx`, `AiPanelConversation` already destructures the live `useConversation` result; pull `state.availableCommands` and pass it down through `ComposerArea` to `AiPromptComposer`. `ComposerArea` is in the same file — add the prop pass-through there too.
+
+### Non-goals
+
+- Do **not** intercept slash commands locally or invoke them through any client-side router. Submitting `/plan` should still send the literal text `/plan` to the agent via `sendPrompt`, exactly as it does today — the agent owns command execution. This task is purely about discoverability via autocomplete.
+- Do **not** add a color dot, color picker, or any other mention-specific chrome to command completions. The completion menu for `/` should show the command name and its description; the existing `info()` callback shape is enough to render a description without a color dot.
+- Do not change the `#`/`@`/`^` mention sources or their behavior.
+
+### Why this fits the existing pattern
+
+`createMentionCompletionSource` is already prefix-parameterized and accepts a sync search function (the `MentionSearchSync` type) — the slash-command source is the smallest possible extension of the existing component, not a new component. `createMentionAutocomplete(sources)` already collapses multiple sources into one `autocompletion()` call to avoid the "Config merge conflict for field override" error, so adding a `/` source to the same array stays one autocompletion extension. Reusing the shared component is what keeps the composer's editor, the filter editor, and the markdown field editor on one CM6 autocomplete primitive.
+
+## Acceptance Criteria
+
+- [ ] Typing `/` (anywhere in the composer) opens a completion menu listing every entry in the current `availableCommands` from the live ACP conversation; typing additional characters filters by name prefix/substring (mirroring the existing mention autocomplete filter behavior).
+- [ ] Each completion shows the command `name` (with the `/` prefix) and its `description` in the info area. No color dot is rendered for slash completions.
+- [ ] Accepting a completion (Enter or click) inserts the literal text `/<name>` into the buffer. The composer does NOT intercept or transform the command — `sendPrompt` is called with the literal text on the next plain Enter.
+- [ ] When the completion menu is open, plain Enter accepts the highlighted completion and does NOT submit the buffer. With the menu closed, plain Enter still submits per the existing policy. Shift-Enter still inserts a newline regardless of menu state.
+- [ ] Escape with the menu open closes the menu (CM6 default); Escape with the menu closed still drills out via the existing `buildSubmitCancelExtensions` path.
+- [ ] No regressions to the filter editor or markdown field editor: `#tag`, `@actor`, and `^task` completions still work identically there.
+- [ ] When `availableCommands` is empty (a model that advertises no commands, or before the first `available_commands_update`), typing `/` produces no menu and Enter submits normally.
+- [ ] The shared `createMentionCompletionSource` / `createMentionAutocomplete` helpers remain the single completion-source assembly point in `lib/cm-mention-autocomplete.ts`; slash support is added by extending result-shape handling, not by forking into a parallel `cm-slash-autocomplete.ts`.
+
+## Tests
+
+- [ ] Extend `apps/kanban-app/ui/src/lib/cm-mention-autocomplete.test.ts` with cases for the `/` prefix: an empty `availableCommands` array yields `null`, a populated one yields a `CompletionResult` whose options' `label` is `/${name}`, `apply` is `/${name}`, and `info()` renders the description text. Run `pnpm --filter ./apps/kanban-app/ui test cm-mention-autocomplete` and expect green.
+- [ ] Add a unit test in `apps/kanban-app/ui/src/hooks/__tests__/use-mention-extensions.test.ts` (or a sibling test file for the new hook) that mounts the hook with a fixture `AvailableCommand[]` and asserts the returned extension array contains a single `autocompletion` config wired to the `/` source plus the existing mention sources.
+- [ ] Extend `apps/kanban-app/ui/src/components/ai-prompt-composer.test.tsx` with: (a) typing `/` opens the menu when `availableCommands` is non-empty and does not when it is empty; (b) plain Enter with the menu open does NOT call `onSend` and instead accepts the highlighted completion (assert the buffer contents); (c) plain Enter with the menu closed still calls `onSend`; (d) Shift-Enter always inserts a newline. Run `pnpm --filter ./apps/kanban-app/ui test ai-prompt-composer` and expect green.
+- [ ] Add an `ai-panel` integration test (extend `ai-panel.test.tsx` or `ai-panel-container.test.tsx`) that pushes a fake `available_commands_update` through the conversation store and asserts the composer's autocomplete fires for `/`. Run `pnpm --filter ./apps/kanban-app/ui test ai-panel` and expect green.
+- [ ] Full UI suite: `pnpm --filter ./apps/kanban-app/ui test` runs green.
+
+## Workflow
+
+- Use `/tdd` — write failing tests first (the autocomplete-yield behavior on Enter is the most important regression guard), then implement to make them pass.

@@ -4,7 +4,11 @@ description: Code context operations for symbol lookup, search, grep, call graph
 license: MIT OR Apache-2.0
 compatibility: Requires the `code_context` MCP tool  for indexed symbol lookup, grep, callgraph, and blast-radius operations.
 metadata:
+<<<<<<< HEAD
+  version: 0.12.11
+=======
   version: 0.13.1
+>>>>>>> b292ef050bed38635a2e768e95ea90d00b759de8
   author: swissarmyhammer
 ---
 
