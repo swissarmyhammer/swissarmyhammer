@@ -282,7 +282,16 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_run_diagnostics() {
+        // Isolate HOME + CWD — `run_diagnostics_without_output` exercises the
+        // full check pipeline, which inspects/creates `.sah/` and other on-disk
+        // artifacts relative to cwd and would otherwise leak them into the host
+        // crate directory. Mirrors the pattern in
+        // `commands::registry::tests::test_init_runs_without_panic`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         let mut doctor = Doctor::new();
         let result = doctor.run_diagnostics_without_output().await;
         assert!(result.is_ok());

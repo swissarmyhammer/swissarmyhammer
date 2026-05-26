@@ -1,0 +1,1 @@
+{"id":"01KSK2EB0813AH2MB39NPTC8ZR","timestamp":"2026-05-26T21:18:23.752716Z","op":"create","item_id":"01KSK2EB085H573EE51Y6NMW22","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: d876e3\n+tag_name: test-isolation\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: d876e3\n-tag_name: test-isolation\n","transaction_id":null}

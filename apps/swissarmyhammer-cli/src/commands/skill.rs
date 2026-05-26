@@ -401,6 +401,7 @@ fn build_metadata_mapping(
 mod tests {
     use super::*;
     use swissarmyhammer_common::reporter::NullReporter;
+    use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
 
     #[test]
     fn test_skill_deployment_name_and_priority() {
@@ -618,9 +619,19 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_skill_deployment_init_returns_one_result() {
         // init() should return exactly one result, either Ok or Error depending
         // on the environment (e.g., whether any agents are detected).
+        //
+        // Isolate HOME + CWD so `SkillDeployment::init` writes its `.skills/`
+        // tree (and the empty `.claude/`, `.github/`, `.zed/` parent dirs left
+        // by iterating detected agents) into a tempdir instead of the host
+        // crate directory. Mirrors the pattern in
+        // `commands::registry::tests::test_init_runs_without_panic`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         let component = SkillDeployment;
         let reporter = NullReporter;
         let results = component.init(&InitScope::Project, &reporter);
@@ -628,7 +639,14 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_skill_deployment_deinit_returns_one_result() {
+        // Isolate HOME + CWD — `SkillDeployment::deinit` reads/removes from
+        // cwd and would otherwise touch the host crate directory. Mirrors the
+        // pattern in `commands::registry::tests::test_deinit_runs_without_panic`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         let component = SkillDeployment;
         let reporter = NullReporter;
         let results = component.deinit(&InitScope::Project, &reporter);

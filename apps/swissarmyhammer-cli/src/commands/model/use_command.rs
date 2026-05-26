@@ -168,11 +168,10 @@ pub async fn execute_use_command(
 mod tests {
     use super::*;
     use crate::context::CliContextBuilder;
-    use std::env;
     use std::fs;
+    use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
     use swissarmyhammer_common::SwissarmyhammerDirectory;
     use swissarmyhammer_config::TemplateContext;
-    use tempfile::TempDir;
 
     /// Helper to create a test CliContext
     async fn create_test_context() -> CliContext {
@@ -195,7 +194,16 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_execute_use_command_empty_agent_name() {
+        // Isolate HOME + CWD — `create_test_context()` calls
+        // `CliContextBuilder::build_async()`, which in turn calls
+        // `get_swissarmyhammer_dir()` and creates `.sah/` at cwd. Without
+        // isolation, even error-path tests leak `.sah/` into the host crate
+        // directory.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         let context = create_test_context().await;
 
         // Test empty string
@@ -210,7 +218,13 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_execute_use_command_nonexistent_agent() {
+        // Isolate HOME + CWD — see `test_execute_use_command_empty_agent_name`
+        // for why `create_test_context()` requires this guard.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         let context = create_test_context().await;
 
         let result = execute_use_command("nonexistent-agent-xyz".to_string(), &context).await;
@@ -219,7 +233,15 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_execute_use_command_builtin_agent() {
+        // Isolate HOME + CWD — `ModelManager::use_agent(.., &ModelPaths::sah())`
+        // writes `.sah/sah.yaml` at cwd and would otherwise leak a `.sah/`
+        // skeleton into the host crate directory. Mirrors the pattern in
+        // `commands::registry::tests::test_init_runs_without_panic`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         let context = create_test_context().await;
 
         // Get the first available builtin agent dynamically
@@ -251,7 +273,15 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_execute_use_command_builtin_agent_explicit_empty_validation() {
+        // Isolate HOME + CWD — `ModelManager::use_agent(.., &ModelPaths::sah())`
+        // writes `.sah/sah.yaml` at cwd and would otherwise leak a `.sah/`
+        // skeleton into the host crate directory. Mirrors the pattern in
+        // `commands::registry::tests::test_init_runs_without_panic`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         let context = create_test_context().await;
 
         // Get the first available builtin agent dynamically
@@ -283,24 +313,14 @@ mod tests {
         }
     }
 
-    /// RAII guard that restores CWD on drop (panic-safe).
-    struct DirGuard(std::path::PathBuf);
-    impl Drop for DirGuard {
-        fn drop(&mut self) {
-            let _ = env::set_current_dir(&self.0);
-        }
-    }
-
     #[tokio::test]
     #[serial_test::serial(cwd)]
     async fn test_execute_use_command_with_temp_config() {
-        // Create a temporary directory for testing
-        let temp_dir = TempDir::new().unwrap();
-        let temp_path = temp_dir.path().to_path_buf();
-
-        // Change to temp directory so config gets created there (guard restores on drop/panic)
-        let _guard = DirGuard(env::current_dir().unwrap());
-        env::set_current_dir(&temp_path).unwrap();
+        // Isolate HOME + CWD using the canonical pattern. Mirrors the pattern
+        // in `commands::registry::tests::test_init_runs_without_panic`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let temp_path = env.temp_dir();
+        let _cwd = CurrentDirGuard::new(&temp_path).expect("cwd guard");
 
         let context = create_test_context().await;
 
@@ -369,7 +389,13 @@ mod tests {
 
     // Integration-style test for error message formatting
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_error_message_format() {
+        // Isolate HOME + CWD — see `test_execute_use_command_empty_agent_name`
+        // for why `create_test_context()` requires this guard.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         let context = create_test_context().await;
 
         // Test that error messages are properly formatted

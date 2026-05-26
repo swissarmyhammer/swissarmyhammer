@@ -270,18 +270,28 @@ impl CliExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+    use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_executor_creation() {
+        // Isolate CWD in addition to HOME — `CliToolContext::new_with_config`
+        // (called by `CliExecutor::new`) reaches into `get_swissarmyhammer_dir()`
+        // somewhere downstream and creates `.sah/` at cwd. Without the CWD
+        // guard the empty `.sah/` directory leaks into the host crate
+        // directory.
         let env = IsolatedTestEnvironment::new().unwrap();
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
         let executor = CliExecutor::new(&env.temp_dir()).await;
         assert!(executor.is_ok(), "Failed to create CliExecutor");
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_help_command() {
+        // Isolate CWD in addition to HOME — see `test_executor_creation`.
         let env = IsolatedTestEnvironment::new().unwrap();
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
         let executor = CliExecutor::new(&env.temp_dir()).await.unwrap();
 
         let result = executor.execute(&["--help"]).await;
