@@ -189,9 +189,14 @@ pub fn check_claude_config(checks: &mut Vec<Check>) -> Result<()> {
 
     if claude_path.is_none() {
         let path_var = env::var("PATH").unwrap_or_default();
+        // Claude Code is optional infrastructure — missing claude binary is a
+        // Warning, not an Error. Matches the pattern used by
+        // `check_avp_in_path` and `check_single_lsp_server` for absent optional
+        // tools, and keeps `sah doctor` runnable on CI hosts that don't have
+        // Claude installed.
         checks.push(Check {
             name: check_names::CLAUDE_CONFIG.to_string(),
-            status: CheckStatus::Error,
+            status: CheckStatus::Warning,
             message: "Claude Code command not found in PATH".to_string(),
             fix: Some(format!(
                 "Install Claude Code from https://claude.ai/code or ensure the 'claude' command is in your PATH\nCurrent PATH: {}",
@@ -223,12 +228,17 @@ fn check_claude_mcp_list(claude_path: &Option<PathBuf>) -> Check {
     let display_path = claude_path.as_deref().unwrap_or(fallback_path);
     let command_path = claude_path.as_deref().unwrap_or(fallback_path);
 
+    // Claude Code is optional infrastructure: failures to invoke `claude mcp
+    // list` (binary present but unexecutable, or non-zero exit) downgrade to
+    // Warning so `sah doctor` stays useful on hosts where Claude isn't a
+    // first-class dependency. Matches the optional-tool pattern used by
+    // `check_avp_in_path` and `check_single_lsp_server`.
     let output = match Command::new(command_path).arg("mcp").arg("list").output() {
         Ok(o) => o,
         Err(e) => {
             return Check {
                 name: check_names::CLAUDE_CONFIG.to_string(),
-                status: CheckStatus::Error,
+                status: CheckStatus::Warning,
                 message: format!(
                     "Found claude at {:?} but failed to execute it: {}",
                     display_path, e
@@ -244,7 +254,7 @@ fn check_claude_mcp_list(claude_path: &Option<PathBuf>) -> Check {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Check {
             name: check_names::CLAUDE_CONFIG.to_string(),
-            status: CheckStatus::Error,
+            status: CheckStatus::Warning,
             message: format!("Failed to run 'claude mcp list': {}", stderr.trim()),
             fix: Some(
                 "Ensure Claude Code is installed and the 'claude' command is available".to_string(),
@@ -550,6 +560,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    #[serial_test::serial(path_env)]
     fn test_claude_path_detection() {
         let temp_dir = TempDir::new().unwrap();
         let fake_bin_dir = temp_dir.path().join("bin");
@@ -574,12 +585,10 @@ mod tests {
             path_separator,
             original_path
         );
-        env::set_var("PATH", &new_path);
+        let _path_guard = PathGuard::set(&new_path);
 
         let mut checks = Vec::new();
         let result = check_claude_config(&mut checks);
-
-        env::set_var("PATH", original_path);
 
         assert!(result.is_ok());
         assert!(!checks.is_empty());
@@ -592,6 +601,69 @@ mod tests {
         assert!(!claude_check
             .message
             .contains("Claude Code command not found in PATH"));
+    }
+
+    /// RAII guard that scopes a PATH override for the duration of a test and
+    /// restores the original value on drop. Pair with
+    /// `#[serial_test::serial(path_env)]` so concurrent tests don't see each
+    /// other's PATH mutations.
+    struct PathGuard {
+        original: Option<std::ffi::OsString>,
+    }
+
+    impl PathGuard {
+        fn set(new_path: &str) -> Self {
+            let original = env::var_os("PATH");
+            env::set_var("PATH", new_path);
+            PathGuard { original }
+        }
+    }
+
+    impl Drop for PathGuard {
+        fn drop(&mut self) {
+            match self.original.take() {
+                Some(value) => env::set_var("PATH", value),
+                None => env::remove_var("PATH"),
+            }
+        }
+    }
+
+    /// Regression test for CI: when the `claude` binary is absent from PATH,
+    /// `check_claude_config` must produce a Warning (not an Error). CI runners
+    /// don't have Claude installed, and `test_run_diagnostics_outside_git_repo`
+    /// asserts no Error-status checks exist when run outside a repo.
+    #[test]
+    #[serial_test::serial(path_env)]
+    fn test_check_claude_config_missing_claude_is_warning() {
+        // Empty PATH guarantees `which::which("claude")` cannot find anything.
+        let _path_guard = PathGuard::set("");
+
+        let mut checks = Vec::new();
+        let result = check_claude_config(&mut checks);
+
+        assert!(result.is_ok(), "check_claude_config must not return Err");
+
+        let claude_check = checks
+            .iter()
+            .find(|c| c.name == check_names::CLAUDE_CONFIG)
+            .expect("expected a Claude Code MCP configuration check");
+
+        assert_eq!(
+            claude_check.status,
+            CheckStatus::Warning,
+            "missing claude binary should be a Warning, not an Error (status was {:?}, message: {})",
+            claude_check.status,
+            claude_check.message
+        );
+        assert!(
+            claude_check.message.contains("not found in PATH"),
+            "warning message should mention PATH; got: {}",
+            claude_check.message
+        );
+        assert!(
+            claude_check.fix.is_some(),
+            "warning should carry an actionable install hint"
+        );
     }
 
     #[test]
