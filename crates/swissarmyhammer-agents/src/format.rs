@@ -4,18 +4,20 @@
 //! (YAML frontmatter + rendered body). This is the inverse of
 //! [`crate::agent_loader::parse_agent_md`] up to field-presence rules:
 //! optional fields that were absent in the source stay absent in the output,
-//! and empty collections (tools, disallowed_tools, metadata) are omitted.
+//! and empty collections (tools, disallowed_tools, metadata, skills) are
+//! omitted.
 //!
-//! Skills are intentionally **not** serialized here. Several builtin agents
-//! (e.g. `reviewer`, `explore`, `implementer`, `tester`) do carry a `skills:`
-//! frontmatter list that `parse_agent_md` reads into [`Agent::skills`], but the
-//! deploy pipeline does not need that list to survive the round-trip to disk:
-//! `mirdan::install::deploy_agent_to_agents` only copies and symlinks the
-//! materialized file, and the runtime consumers use the parsed in-memory
-//! [`Agent`] (with `skills` intact) rather than re-parsing the on-disk
-//! AGENT.md. Dropping the field on output keeps the serializer focused on the
-//! fields the deploy artifact actually needs. See `parse_agent_md` for the
-//! symmetric read side.
+//! Skills are serialized as a YAML sequence when non-empty. This matters
+//! because the CLI's deploy pipeline writes the materialized AGENT.md into
+//! sah's own mirdan agent store (`~/.agents/<name>/AGENT.md` for the User
+//! scope, `.agents/<name>/AGENT.md` for Project/Local), and
+//! [`crate::agent_resolver::AgentResolver`] then re-reads those files with
+//! precedence `builtin < user < local`. If `skills:` is dropped on output,
+//! the deployed override silently strips the field — so a builtin agent
+//! that ships with `skills: [test]` becomes a skills-less agent on disk
+//! that overrides the builtin in the resolver, and runtime skill resolution
+//! fails. Emitting `skills:` preserves the field across the
+//! serialize → deploy → re-parse round-trip the resolver actually walks.
 //!
 //! Used by the CLI's agent install/deploy flow to materialize an `AGENT.md`
 //! in a temp directory before `mirdan::install::deploy_agent_to_agents`
@@ -48,6 +50,7 @@ impl Agent {
     /// - `background` is emitted only when `true`.
     /// - `metadata` is emitted only when non-empty, with keys sorted
     ///   for deterministic output.
+    /// - `skills` is emitted only when non-empty, as a YAML sequence.
     ///
     /// # Arguments
     /// * `rendered_body` - The agent instructions to embed after the
@@ -77,6 +80,13 @@ impl Agent {
         if !self.disallowed_tools.is_empty() {
             let tools = self.disallowed_tools.join(" ");
             content.push_str(&format!("disallowed-tools: \"{}\"\n", tools));
+        }
+
+        if !self.skills.is_empty() {
+            content.push_str("skills:\n");
+            for skill in &self.skills {
+                content.push_str(&format!("  - {}\n", skill));
+            }
         }
 
         if let Some(ref isolation) = self.isolation {
@@ -128,6 +138,9 @@ description: An agent exercising every serialized field
 model: sonnet
 tools: "read write bash"
 disallowed-tools: "web-fetch"
+skills:
+  - test
+  - implement
 isolation: worktree
 max-turns: 42
 background: true
@@ -152,11 +165,67 @@ Body content with **markdown**.
         assert_eq!(reparsed.model, agent.model);
         assert_eq!(reparsed.tools, agent.tools);
         assert_eq!(reparsed.disallowed_tools, agent.disallowed_tools);
+        assert_eq!(reparsed.skills, agent.skills);
         assert_eq!(reparsed.isolation, agent.isolation);
         assert_eq!(reparsed.max_turns, agent.max_turns);
         assert_eq!(reparsed.background, agent.background);
         assert_eq!(reparsed.metadata, agent.metadata);
         assert_eq!(reparsed.instructions, agent.instructions);
+    }
+
+    /// An agent with a non-empty `skills` vec must round-trip
+    /// parse → serialize → parse with the `skills` field preserved.
+    ///
+    /// This guards against the resolver-override bug: the CLI's deploy
+    /// pipeline writes this serialized AGENT.md into the mirdan store, and
+    /// `AgentResolver` re-reads it with precedence `builtin < user < local`.
+    /// If `skills:` is dropped on output, the deployed file overrides the
+    /// builtin with an empty `skills` vec and runtime skill resolution
+    /// silently fails.
+    #[test]
+    fn test_roundtrip_preserves_skills() {
+        let original = r#"---
+name: skilled
+description: Agent with skills frontmatter
+skills:
+  - test
+  - implement
+---
+
+Body.
+"#;
+
+        let agent = parse_agent_md(original, AgentSource::Builtin).unwrap();
+        assert_eq!(agent.skills, vec!["test", "implement"]);
+
+        let serialized = agent.to_agent_md(&agent.instructions);
+        assert!(
+            serialized.contains("skills:\n  - test\n  - implement\n"),
+            "serialized output should contain the skills sequence, got:\n{}",
+            serialized
+        );
+
+        let reparsed = parse_agent_md(&serialized, AgentSource::Builtin).unwrap();
+        assert_eq!(reparsed.skills, vec!["test", "implement"]);
+    }
+
+    /// An agent with no skills must omit the `skills:` key entirely,
+    /// keeping the serializer symmetric with the `#[serde(default)]` shape
+    /// on the parse side.
+    #[test]
+    fn test_empty_skills_is_omitted() {
+        let original = r#"---
+name: skill-less
+description: No skills field
+---
+
+Body.
+"#;
+        let agent = parse_agent_md(original, AgentSource::Builtin).unwrap();
+        assert!(agent.skills.is_empty());
+
+        let serialized = agent.to_agent_md(&agent.instructions);
+        assert!(!serialized.contains("skills:"));
     }
 
     /// Minimal agent (only required fields) roundtrips cleanly, and no
@@ -178,6 +247,7 @@ Just a body.
         assert!(!serialized.contains("model:"));
         assert!(!serialized.contains("tools:"));
         assert!(!serialized.contains("disallowed-tools:"));
+        assert!(!serialized.contains("skills:"));
         assert!(!serialized.contains("isolation:"));
         assert!(!serialized.contains("max-turns:"));
         assert!(!serialized.contains("background:"));
