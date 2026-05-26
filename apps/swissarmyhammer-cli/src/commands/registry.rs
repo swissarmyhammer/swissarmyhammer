@@ -18,7 +18,8 @@ use swissarmyhammer_common::lifecycle::InitRegistry;
 /// Components are registered in priority order:
 /// - priority 10: `McpRegistration` (MCP server config for detected agents)
 /// - priority 11: `ClaudeLocalScope` (`~/.claude.json` local scope)
-/// - priority 15: `DenyBash` (deny built-in Bash tool in Claude Code settings)
+/// - priority 15: `DenyBash` (deny built-in Bash tool in each agent's settings file)
+/// - priority 16: `Statusline` (statusLine configuration in each agent's settings file)
 /// - priority 20: `ProjectStructure` (`.sah/`, `.prompts/` directory management)
 /// - priority 22: `ClaudeMd` (`CLAUDE.md` preamble management)
 /// - priority 30: `SkillDeployment` (builtin skill deployment via mirdan)
@@ -43,9 +44,9 @@ mod tests {
     fn test_register_all_populates_registry() {
         let mut registry = InitRegistry::new();
         register_all(&mut registry, false);
-        // 8 components from components::register_all (the 7 installable components
-        // + KanbanTool) + 1 SkillDeployment (from commands::skill) = 9
-        assert_eq!(registry.len(), 9);
+        // 9 components from components::register_all (the 8 installable components
+        // + KanbanTool) + 1 SkillDeployment (from commands::skill) = 10
+        assert_eq!(registry.len(), 10);
     }
 
     #[test]
@@ -53,7 +54,7 @@ mod tests {
         let mut registry = InitRegistry::new();
         register_all(&mut registry, true);
         // Same component count regardless of remove_directory flag
-        assert_eq!(registry.len(), 9);
+        assert_eq!(registry.len(), 10);
     }
 
     #[test]

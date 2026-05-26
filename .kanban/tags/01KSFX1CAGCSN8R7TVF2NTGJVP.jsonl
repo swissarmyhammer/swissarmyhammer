@@ -1,0 +1,1 @@
+{"id":"01KSFX1CAJ13TRN27M3CTQHKQH","timestamp":"2026-05-25T15:46:12.946920Z","op":"create","item_id":"01KSFX1CAGCSN8R7TVF2NTGJVP","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: bfd4f2\n+tag_name: init-doctor\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: bfd4f2\n-tag_name: init-doctor\n","transaction_id":null}

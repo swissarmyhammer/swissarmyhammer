@@ -48,38 +48,46 @@ impl Doctor {
     }
 
     /// Run diagnostic checks without printing results (for CliContext integration)
+    ///
+    /// A surrounding Git repository is informational, not required: the only
+    /// project-scoped check (the `.sah` directory) runs when a repo is detected.
+    /// The install-stack checks (preamble, permissions, skills, agents, MCP)
+    /// cover both project and user scope agent-agnostically and always run. In a
+    /// user-mode install (e.g. running `sah doctor` from `~`) the missing repo is
+    /// reported as a Warning and all scope-independent checks still run. The exit
+    /// code is driven solely by the resulting check statuses.
     pub async fn run_diagnostics_without_output(&mut self) -> Result<i32> {
-        // First, ensure we're in a Git repository
         use swissarmyhammer_common::utils::find_git_repository_root;
 
-        let git_root = match find_git_repository_root() {
-            Some(path) => {
-                self.checks.push(Check {
-                    name: "Git Repository".to_string(),
-                    status: CheckStatus::Ok,
-                    message: format!("Detected at {}", path.display()),
-                    fix: None,
-                });
-                path
-            }
-            None => {
-                self.checks.push(Check {
-                    name: "Git Repository".to_string(),
-                    status: CheckStatus::Error,
-                    message: "SwissArmyHammer requires a Git repository".to_string(),
-                    fix: Some("Run this command from within a Git repository or create one with: git init".to_string()),
-                });
-                return Ok(ExitCode::Error.into());
-            }
-        };
+        let git_root: Option<std::path::PathBuf> = find_git_repository_root();
+        match &git_root {
+            Some(path) => self.checks.push(Check {
+                name: "Git Repository".to_string(),
+                status: CheckStatus::Ok,
+                message: format!("Detected at {}", path.display()),
+                fix: None,
+            }),
+            None => self.checks.push(Check {
+                name: "Git Repository".to_string(),
+                status: CheckStatus::Warning,
+                message: "Not inside a Git repository; project-scoped checks skipped".to_string(),
+                fix: Some(
+                    "Run from within a Git repository (or `git init`) to enable project checks"
+                        .to_string(),
+                ),
+            }),
+        }
 
-        // Check .sah directory
-        self.check_swissarmyhammer_directory(&git_root)?;
+        // Project-scoped checks only make sense with a repository root.
+        if let Some(root) = &git_root {
+            self.check_swissarmyhammer_directory(root)?;
+        }
 
-        // Run all checks
+        // Scope-independent checks always run.
         self.run_system_checks()?;
         self.run_tool_health_checks().await?;
         self.run_configuration_checks()?;
+        self.run_install_stack_checks()?;
 
         // Return exit code without printing results
         Ok(self.get_exit_code())
@@ -122,10 +130,24 @@ impl Doctor {
         Ok(())
     }
 
-    /// Run configuration checks
+    /// Run scope-independent configuration checks (Claude Code CLI/config).
+    ///
+    /// This is the runtime probe (`claude mcp list`) that confirms the agent
+    /// actually loads sah; it is complementary to the install-stack checks, which
+    /// inspect on-disk artifacts.
     fn run_configuration_checks(&mut self) -> Result<()> {
-        checks::check_claude_md(&mut self.checks)?;
         checks::check_claude_config(&mut self.checks)?;
+        Ok(())
+    }
+
+    /// Run the agent-agnostic install-stack checks for project and user scope.
+    ///
+    /// Reports one row per applicable (agent, scope, component) — preamble,
+    /// permissions, skills, subagents, and MCP — for every detected agent. This
+    /// is scope-independent and runs regardless of whether a Git repository is
+    /// present, so user-scope rows surface even from `~`.
+    fn run_install_stack_checks(&mut self) -> Result<()> {
+        checks::check_install_stack(&mut self.checks)?;
         Ok(())
     }
 
@@ -251,6 +273,7 @@ async fn run_doctor_diagnostics(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
 
     #[test]
     fn test_doctor_creation() {
@@ -270,5 +293,68 @@ mod tests {
         // Exit code should be 0, 1, or 2
         let exit_code = doctor.get_exit_code();
         assert!(exit_code <= 2);
+    }
+
+    /// In a user-mode install (no surrounding Git repository), doctor must not
+    /// hard-fail: it should record the missing repo as a Warning, still run all
+    /// scope-independent checks, and not short-circuit with an error exit code.
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_run_diagnostics_outside_git_repo() {
+        let _env = IsolatedTestEnvironment::new().expect("isolated env");
+
+        // A temp dir with no .git anywhere up the tree.
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let _cwd_guard = CurrentDirGuard::new(temp_dir.path()).expect("cwd guard");
+
+        // Guard against the temp dir somehow resolving inside a repo (e.g. /tmp
+        // being part of one): if a git root is still found, the premise of this
+        // test does not hold and we skip rather than assert a false negative.
+        if swissarmyhammer_common::utils::find_git_repository_root().is_some() {
+            return;
+        }
+
+        let mut doctor = Doctor::new();
+        let result = doctor.run_diagnostics_without_output().await;
+
+        // Must not short-circuit / error out just because there's no repo.
+        assert!(result.is_ok(), "diagnostics should succeed outside a repo");
+
+        // Exactly one "Git Repository" check, and it must be a Warning.
+        let git_checks: Vec<&Check> = doctor
+            .checks
+            .iter()
+            .filter(|c| c.name == "Git Repository")
+            .collect();
+        assert_eq!(git_checks.len(), 1, "expected one Git Repository check");
+        assert_eq!(
+            git_checks[0].status,
+            CheckStatus::Warning,
+            "missing repo should be a Warning, not an Error"
+        );
+
+        // The missing repo alone must not produce any Error-status check.
+        assert!(
+            !doctor.checks.iter().any(|c| c.status == CheckStatus::Error),
+            "missing git repo must not add Error-status checks"
+        );
+
+        // Scope-independent checks still ran (e.g. installation method).
+        assert!(
+            doctor
+                .checks
+                .iter()
+                .any(|c| c.name == checks::check_names::INSTALLATION_METHOD),
+            "scope-independent installation check should still be present"
+        );
+
+        // Project-scoped checks must be skipped (no .sah directory check).
+        assert!(
+            !doctor
+                .checks
+                .iter()
+                .any(|c| c.name == "SwissArmyHammer Directory"),
+            "project-scoped .sah check should be skipped outside a repo"
+        );
     }
 }

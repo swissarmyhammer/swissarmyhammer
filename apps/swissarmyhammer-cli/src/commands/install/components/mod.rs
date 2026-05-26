@@ -22,6 +22,7 @@ pub fn register_all(registry: &mut InitRegistry, remove_directory: bool) {
     registry.register(McpRegistration);
     registry.register(ClaudeLocalScope);
     registry.register(DenyBash);
+    registry.register(Statusline);
     registry.register(ProjectStructure::new(remove_directory));
     registry.register(ClaudeMd);
     registry.register(AgentDeployment);
@@ -420,7 +421,14 @@ fn remove_mcp_from_project_entry(root: &mut serde_json::Value, key: &str) -> boo
 
 // ── DenyBash (priority 15) ───────────────────────────────────────────
 
-/// Manages the "Bash" deny rule in `.claude/settings.json`.
+/// Manages the "Bash" deny rule in each detected agent's settings file.
+///
+/// Iterates every detected agent and, for the requested scope, resolves the
+/// agent's settings file from `AgentDef` (project-relative `settings_path` or
+/// absolute `global_settings_path`). Agents without a settings path for the
+/// scope are skipped — today only Claude Code has them, so the natural
+/// outcome is `<git-root>/.claude/settings.json` for project/local and
+/// `~/.claude/settings.json` for user.
 pub struct DenyBash;
 
 impl Initializable for DenyBash {
@@ -439,61 +447,283 @@ impl Initializable for DenyBash {
         15
     }
 
-    /// This component only applies in user (global) scope.
+    /// Applicable to project, local, and user scope installations.
+    ///
+    /// User scope targets each agent's global settings file (e.g.
+    /// `~/.claude/settings.json`); project/local target the agent's
+    /// project settings file resolved against the git root.
     fn is_applicable(&self, scope: &InitScope) -> bool {
-        matches!(scope, InitScope::Project | InitScope::Local)
+        matches!(
+            scope,
+            InitScope::Project | InitScope::Local | InitScope::User
+        )
     }
 
-    /// Add "Bash" to permissions.deny in .claude/settings.json.
-    #[allow(deprecated)]
-    fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        let path = settings::claude_settings_path();
-        let mut claude_settings = match settings::read_settings(&path) {
-            Ok(s) => s,
-            Err(e) => return vec![InitResult::error(self.name(), e)],
-        };
-        let changed = settings::merge_deny_bash(&mut claude_settings);
-        if let Err(e) = settings::write_settings(&path, &claude_settings) {
-            return vec![InitResult::error(self.name(), e)];
-        }
-
-        if changed {
-            reporter.emit(&InitEvent::Action {
-                verb: "Configured".to_string(),
-                message: format!(
-                    "Bash tool denied in {} (use shell tool instead)",
-                    path.display()
-                ),
-            });
-        }
-        vec![InitResult::ok(self.name(), "Bash deny rule configured")]
+    /// Add "Bash" to permissions.deny in each detected agent's settings file.
+    fn init(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
+        for_each_detected_agent_settings_file(
+            self.name(),
+            scope,
+            reporter,
+            install_deny_bash_for_agent,
+        )
     }
 
-    /// Remove "Bash" from permissions.deny in .claude/settings.json.
-    #[allow(deprecated)]
-    fn deinit(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        let path = settings::claude_settings_path();
-        if !path.exists() {
-            return vec![InitResult::ok(self.name(), "Settings file not found")];
+    /// Remove "Bash" from permissions.deny in each detected agent's settings file.
+    fn deinit(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
+        for_each_detected_agent_settings_file(
+            self.name(),
+            scope,
+            reporter,
+            uninstall_deny_bash_for_agent,
+        )
+    }
+}
+
+/// Add the Bash deny rule to a single agent's settings file.
+fn install_deny_bash_for_agent(
+    component_name: &str,
+    def: &mirdan::agents::AgentDef,
+    path: &std::path::Path,
+    reporter: &dyn InitReporter,
+) -> InitResult {
+    let mut claude_settings = match settings::read_settings(path) {
+        Ok(s) => s,
+        Err(e) => return InitResult::error(component_name, e),
+    };
+    let changed = settings::merge_deny_bash(&mut claude_settings);
+    if let Err(e) = settings::write_settings(path, &claude_settings) {
+        return InitResult::error(component_name, e);
+    }
+    if changed {
+        reporter.emit(&InitEvent::Action {
+            verb: "Configured".to_string(),
+            message: format!(
+                "Bash tool denied for {} ({}) — use shell tool instead",
+                def.name,
+                path.display()
+            ),
+        });
+    }
+    InitResult::ok(component_name, "Bash deny rule configured")
+}
+
+/// Remove the Bash deny rule from a single agent's settings file.
+fn uninstall_deny_bash_for_agent(
+    component_name: &str,
+    def: &mirdan::agents::AgentDef,
+    path: &std::path::Path,
+    reporter: &dyn InitReporter,
+) -> InitResult {
+    if !path.exists() {
+        return InitResult::ok(component_name, "Settings file not found");
+    }
+    let mut claude_settings = match settings::read_settings(path) {
+        Ok(s) => s,
+        Err(e) => return InitResult::error(component_name, e),
+    };
+    let changed = settings::remove_deny_bash(&mut claude_settings);
+    if changed {
+        if let Err(e) = settings::write_settings(path, &claude_settings) {
+            return InitResult::error(component_name, e);
         }
+        reporter.emit(&InitEvent::Action {
+            verb: "Removed".to_string(),
+            message: format!("Bash tool deny rule for {} ({})", def.name, path.display()),
+        });
+    }
+    InitResult::ok(component_name, "Bash deny rule removed")
+}
 
-        let mut claude_settings = match settings::read_settings(&path) {
-            Ok(s) => s,
-            Err(e) => return vec![InitResult::error(self.name(), e)],
-        };
-        let changed = settings::remove_deny_bash(&mut claude_settings);
+// ── Statusline (priority 16) ─────────────────────────────────────────
 
-        if changed {
-            if let Err(e) = settings::write_settings(&path, &claude_settings) {
-                return vec![InitResult::error(self.name(), e)];
+/// Manages the `statusLine` block in each detected agent's settings file.
+///
+/// Follows the same agent-iterating pattern as `DenyBash`: resolves each
+/// detected agent's per-scope settings file via `AgentDef`, then calls
+/// `merge_statusline` / `remove_statusline`. Agents without a settings path
+/// for the scope are skipped.
+pub struct Statusline;
+
+impl Initializable for Statusline {
+    /// The component name for statusline configuration.
+    fn name(&self) -> &str {
+        "statusline"
+    }
+
+    /// Component category: configuration tasks.
+    fn category(&self) -> &str {
+        "configuration"
+    }
+
+    /// Component priority: 16 (runs immediately after `DenyBash`).
+    fn priority(&self) -> i32 {
+        16
+    }
+
+    /// Applicable to project, local, and user scope installations.
+    fn is_applicable(&self, scope: &InitScope) -> bool {
+        matches!(
+            scope,
+            InitScope::Project | InitScope::Local | InitScope::User
+        )
+    }
+
+    /// Add the statusline configuration to each detected agent's settings file.
+    fn init(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
+        for_each_detected_agent_settings_file(
+            self.name(),
+            scope,
+            reporter,
+            install_statusline_for_agent,
+        )
+    }
+
+    /// Remove the statusline configuration from each detected agent's settings file.
+    fn deinit(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
+        for_each_detected_agent_settings_file(
+            self.name(),
+            scope,
+            reporter,
+            uninstall_statusline_for_agent,
+        )
+    }
+}
+
+/// Add the statusline block to a single agent's settings file.
+fn install_statusline_for_agent(
+    component_name: &str,
+    def: &mirdan::agents::AgentDef,
+    path: &std::path::Path,
+    reporter: &dyn InitReporter,
+) -> InitResult {
+    let mut claude_settings = match settings::read_settings(path) {
+        Ok(s) => s,
+        Err(e) => return InitResult::error(component_name, e),
+    };
+    let changed = settings::merge_statusline(&mut claude_settings);
+    if let Err(e) = settings::write_settings(path, &claude_settings) {
+        return InitResult::error(component_name, e);
+    }
+    if changed {
+        reporter.emit(&InitEvent::Action {
+            verb: "Installed".to_string(),
+            message: format!("statusline for {} ({})", def.name, path.display()),
+        });
+    }
+    InitResult::ok(component_name, "Statusline configured")
+}
+
+/// Remove the statusline block from a single agent's settings file.
+fn uninstall_statusline_for_agent(
+    component_name: &str,
+    def: &mirdan::agents::AgentDef,
+    path: &std::path::Path,
+    reporter: &dyn InitReporter,
+) -> InitResult {
+    if !path.exists() {
+        return InitResult::ok(component_name, "Settings file not found");
+    }
+    let mut claude_settings = match settings::read_settings(path) {
+        Ok(s) => s,
+        Err(e) => return InitResult::error(component_name, e),
+    };
+    let changed = settings::remove_statusline(&mut claude_settings);
+    if changed {
+        if let Err(e) = settings::write_settings(path, &claude_settings) {
+            return InitResult::error(component_name, e);
+        }
+        reporter.emit(&InitEvent::Action {
+            verb: "Removed".to_string(),
+            message: format!("statusline for {} ({})", def.name, path.display()),
+        });
+    }
+    InitResult::ok(component_name, "Statusline removed")
+}
+
+// ── Shared agent-settings iteration ──────────────────────────────────
+
+/// Resolve the per-agent settings file path for `scope`.
+///
+/// * `User` → the agent's absolute global settings file (e.g.
+///   `~/.claude/settings.json`).
+/// * `Project`/`Local` → the agent's project-relative settings file joined
+///   onto `git_root` (e.g. `<git-root>/.claude/settings.json`).
+///
+/// Returns `None` when the agent has no settings path for the scope.
+fn resolve_settings_file(
+    agent: &mirdan::agents::AgentDef,
+    scope: &InitScope,
+    git_root: Option<&std::path::Path>,
+) -> Option<std::path::PathBuf> {
+    if matches!(scope, InitScope::User) {
+        mirdan::agents::agent_global_settings_file(agent)
+    } else {
+        let relative = mirdan::agents::agent_project_settings_file(agent)?;
+        git_root.map(|root| root.join(relative))
+    }
+}
+
+/// Iterate every detected agent that has a settings file for `scope` and
+/// invoke `action` against it, collecting per-agent results.
+///
+/// In project/local scope, paths are resolved against the git root; if no
+/// git root is found, a warning is reported and no files are touched.
+/// Agents without a settings path for the scope are skipped (not applicable),
+/// so today this naturally targets Claude Code only.
+fn for_each_detected_agent_settings_file(
+    component_name: &str,
+    scope: &InitScope,
+    reporter: &dyn InitReporter,
+    action: fn(&str, &mirdan::agents::AgentDef, &std::path::Path, &dyn InitReporter) -> InitResult,
+) -> Vec<InitResult> {
+    let config = match mirdan::agents::load_agents_config() {
+        Ok(c) => c,
+        Err(e) => {
+            return vec![InitResult::error(
+                component_name,
+                format!("Failed to load agents config: {}", e),
+            )];
+        }
+    };
+    let agents = mirdan::agents::get_detected_agents(&config);
+
+    let git_root = if matches!(scope, InitScope::User) {
+        None
+    } else {
+        match swissarmyhammer_common::utils::find_git_repository_root() {
+            Some(r) => Some(r),
+            None => {
+                reporter.emit(&InitEvent::Warning {
+                    message: format!(
+                        "No git repository found; skipping {} settings update",
+                        component_name
+                    ),
+                });
+                return vec![InitResult::error(
+                    component_name,
+                    "No git repository found".to_string(),
+                )];
             }
-            reporter.emit(&InitEvent::Action {
-                verb: "Removed".to_string(),
-                message: format!("Bash tool deny rule from {}", path.display()),
-            });
         }
-        vec![InitResult::ok(self.name(), "Bash deny rule removed")]
+    };
+
+    let mut results = Vec::new();
+    for agent in &agents {
+        let path = match resolve_settings_file(&agent.def, scope, git_root.as_deref()) {
+            Some(p) => p,
+            None => continue,
+        };
+        results.push(action(component_name, &agent.def, &path, reporter));
     }
+
+    if results.is_empty() {
+        return vec![InitResult::skipped(
+            component_name,
+            "No agents with a settings file for this scope",
+        )];
+    }
+    results
 }
 
 // ── ProjectStructure (priority 20) ───────────────────────────────────
@@ -987,60 +1217,74 @@ impl Initializable for LockfileCleanup {
 // ── ClaudeMd (priority 22) ──────────────────────────────────────────
 
 /// The preamble line that must appear at the top of CLAUDE.md.
-pub const CLAUDE_MD_PREAMBLE: &str = "MANDATORY: load the thoughtful skill";
+///
+/// Re-exported from [`mirdan::status::PREAMBLE_MARKER`], which is the single
+/// source of truth for the marker string.
+pub use mirdan::status::PREAMBLE_MARKER as CLAUDE_MD_PREAMBLE;
 
 /// Ensures a `CLAUDE.md` file exists at the git root with the required preamble.
 pub struct ClaudeMd;
 
-/// Check if `CLAUDE.md` at the given root has the required preamble as its first non-empty line.
+/// Check if the instructions file at `path` has the required preamble as its first non-empty line.
+///
+/// `path` is the full path to the instructions file (e.g. `<git-root>/CLAUDE.md`
+/// or `~/.claude/CLAUDE.md`), not a directory.
 ///
 /// Returns `None` if the file does not exist, `Some(true)` if the preamble is present,
 /// and `Some(false)` if it is missing.
 #[cfg(test)]
-fn claude_md_has_preamble(root: &std::path::Path) -> Option<bool> {
-    let path = root.join("CLAUDE.md");
+fn preamble_file_has_preamble(path: &std::path::Path) -> Option<bool> {
     if !path.exists() {
         return None;
     }
-    let content = std::fs::read_to_string(&path).ok()?;
+    let content = std::fs::read_to_string(path).ok()?;
     let first_non_empty = content.lines().find(|l| !l.trim().is_empty());
     Some(first_non_empty.is_some_and(|line| line.contains(CLAUDE_MD_PREAMBLE)))
 }
 
-/// Ensure `CLAUDE.md` at the given root has the required preamble.
+/// Ensure the instructions file at `path` has the required preamble.
+///
+/// `path` is the full path to the instructions file. Parent directories are
+/// created as needed so this works for both the project `CLAUDE.md` and an
+/// absolute global file like `~/.claude/CLAUDE.md`.
 ///
 /// Returns `"created"` if the file was created, `"already present"` if
 /// no change was needed, or `"prepended"` if the preamble was prepended.
-fn ensure_claude_md_preamble(root: &std::path::Path) -> Result<&'static str, String> {
-    let path = root.join("CLAUDE.md");
+fn ensure_preamble(path: &std::path::Path) -> Result<&'static str, String> {
     if !path.exists() {
-        std::fs::write(&path, format!("{}\n", CLAUDE_MD_PREAMBLE))
-            .map_err(|e| format!("Failed to create CLAUDE.md: {}", e))?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create {}: {}", parent.display(), e))?;
+        }
+        std::fs::write(path, format!("{}\n", CLAUDE_MD_PREAMBLE))
+            .map_err(|e| format!("Failed to create {}: {}", path.display(), e))?;
         return Ok("created");
     }
-    let content =
-        std::fs::read_to_string(&path).map_err(|e| format!("Failed to read CLAUDE.md: {}", e))?;
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
     let first_non_empty = content.lines().find(|l| !l.trim().is_empty());
     if first_non_empty.is_some_and(|line| line.contains(CLAUDE_MD_PREAMBLE)) {
         return Ok("already present");
     }
     let new_content = format!("{}\n\n{}", CLAUDE_MD_PREAMBLE, content);
-    std::fs::write(&path, new_content).map_err(|e| format!("Failed to update CLAUDE.md: {}", e))?;
+    std::fs::write(path, new_content)
+        .map_err(|e| format!("Failed to update {}: {}", path.display(), e))?;
     Ok("prepended")
 }
 
-/// Remove the preamble from `CLAUDE.md`. Deletes the file if it becomes empty.
+/// Remove the preamble from the instructions file at `path`. Deletes the file if it becomes empty.
+///
+/// `path` is the full path to the instructions file.
 ///
 /// Returns `"removed"` if the preamble was stripped, `"deleted"` if the file
 /// was deleted (only contained the preamble), `"not found"` if no file exists,
 /// or `"no preamble"` if the file exists but has no preamble.
-fn remove_claude_md_preamble(root: &std::path::Path) -> Result<&'static str, String> {
-    let path = root.join("CLAUDE.md");
+fn remove_preamble(path: &std::path::Path) -> Result<&'static str, String> {
     if !path.exists() {
         return Ok("not found");
     }
-    let content =
-        std::fs::read_to_string(&path).map_err(|e| format!("Failed to read CLAUDE.md: {}", e))?;
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
     let first_non_empty = content.lines().find(|l| !l.trim().is_empty());
     if !first_non_empty.is_some_and(|line| line.contains(CLAUDE_MD_PREAMBLE)) {
         return Ok("no preamble");
@@ -1063,11 +1307,13 @@ fn remove_claude_md_preamble(root: &std::path::Path) -> Result<&'static str, Str
         after_preamble.remove(0);
     }
     if after_preamble.is_empty() {
-        std::fs::remove_file(&path).map_err(|e| format!("Failed to delete CLAUDE.md: {}", e))?;
+        std::fs::remove_file(path)
+            .map_err(|e| format!("Failed to delete {}: {}", path.display(), e))?;
         return Ok("deleted");
     }
     let new_content = after_preamble.join("\n") + "\n";
-    std::fs::write(&path, new_content).map_err(|e| format!("Failed to update CLAUDE.md: {}", e))?;
+    std::fs::write(path, new_content)
+        .map_err(|e| format!("Failed to update {}: {}", path.display(), e))?;
     Ok("removed")
 }
 
@@ -1087,97 +1333,187 @@ impl Initializable for ClaudeMd {
         22
     }
 
-    /// Only applicable to project and local scope installations.
+    /// Applicable to project, local, and user scope installations.
+    ///
+    /// User scope targets each agent's global instructions file (e.g.
+    /// `~/.claude/CLAUDE.md`); project/local target the agent's project
+    /// instructions file resolved against the git root.
     fn is_applicable(&self, scope: &InitScope) -> bool {
-        matches!(scope, InitScope::Project | InitScope::Local)
+        matches!(
+            scope,
+            InitScope::Project | InitScope::Local | InitScope::User
+        )
     }
 
-    /// Ensure CLAUDE.md exists at the git root with the required preamble.
-    fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        let root = match swissarmyhammer_common::utils::find_git_repository_root() {
-            Some(r) => r,
-            None => {
+    /// Ensure each detected agent's instructions file has the required preamble.
+    fn init(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
+        self.for_each_agent_path(scope, reporter, ensure_preamble_for_agent)
+    }
+
+    /// Remove the preamble from each detected agent's instructions file.
+    fn deinit(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
+        self.for_each_agent_path(scope, reporter, remove_preamble_for_agent)
+    }
+}
+
+impl ClaudeMd {
+    /// Resolve each detected agent's instructions file for `scope` and apply
+    /// `action` to it, collecting per-agent results.
+    ///
+    /// Agents whose instructions path is `None` for the scope are skipped (not
+    /// applicable). In project/local scope, the agent's project-relative path is
+    /// resolved against the git root; if no git root is found, a Warning is
+    /// reported and no files are touched.
+    fn for_each_agent_path(
+        &self,
+        scope: &InitScope,
+        reporter: &dyn InitReporter,
+        action: fn(
+            &ClaudeMd,
+            &mirdan::agents::AgentDef,
+            &std::path::Path,
+            &dyn InitReporter,
+        ) -> InitResult,
+    ) -> Vec<InitResult> {
+        let config = match mirdan::agents::load_agents_config() {
+            Ok(c) => c,
+            Err(e) => {
                 return vec![InitResult::error(
                     self.name(),
-                    "No git repository found".to_string(),
+                    format!("Failed to load agents config: {}", e),
                 )];
             }
         };
+        let agents = mirdan::agents::get_detected_agents(&config);
 
-        match ensure_claude_md_preamble(&root) {
-            Ok("created") => {
-                reporter.emit(&InitEvent::Action {
-                    verb: "Created".to_string(),
-                    message: format!("CLAUDE.md at {}", root.display()),
-                });
-                vec![InitResult::ok(
-                    self.name(),
-                    "CLAUDE.md created with preamble",
-                )]
-            }
-            Ok("prepended") => {
-                reporter.emit(&InitEvent::Action {
-                    verb: "Updated".to_string(),
-                    message: format!("CLAUDE.md at {}", root.display()),
-                });
-                vec![InitResult::ok(
-                    self.name(),
-                    "Preamble prepended to CLAUDE.md",
-                )]
-            }
-            Ok(_) => {
-                reporter.emit(&InitEvent::Skipped {
-                    component: self.name().to_string(),
-                    reason: "CLAUDE.md already has the required preamble".to_string(),
-                });
-                vec![InitResult::ok(
-                    self.name(),
-                    "CLAUDE.md already has preamble",
-                )]
-            }
-            Err(e) => vec![InitResult::error(self.name(), e)],
-        }
-    }
-
-    /// Remove the preamble from CLAUDE.md (or delete the file if only preamble).
-    fn deinit(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        let root = match swissarmyhammer_common::utils::find_git_repository_root() {
-            Some(r) => r,
-            None => {
-                return vec![InitResult::error(
-                    self.name(),
-                    "No git repository found".to_string(),
-                )];
+        // Project/local scope resolves agent paths relative to the git root.
+        let git_root = if matches!(scope, InitScope::User) {
+            None
+        } else {
+            match swissarmyhammer_common::utils::find_git_repository_root() {
+                Some(r) => Some(r),
+                None => {
+                    reporter.emit(&InitEvent::Warning {
+                        message: "No git repository found; skipping CLAUDE.md preamble".to_string(),
+                    });
+                    return vec![InitResult::error(
+                        self.name(),
+                        "No git repository found".to_string(),
+                    )];
+                }
             }
         };
 
-        match remove_claude_md_preamble(&root) {
-            Ok("deleted") => {
-                reporter.emit(&InitEvent::Action {
-                    verb: "Removed".to_string(),
-                    message: format!("CLAUDE.md from {}", root.display()),
-                });
-                vec![InitResult::ok(self.name(), "CLAUDE.md deleted")]
-            }
-            Ok("removed") => {
-                reporter.emit(&InitEvent::Action {
-                    verb: "Updated".to_string(),
-                    message: format!("removed preamble from CLAUDE.md at {}", root.display()),
-                });
-                vec![InitResult::ok(
-                    self.name(),
-                    "Preamble removed from CLAUDE.md",
-                )]
-            }
-            Ok(_) => {
-                reporter.emit(&InitEvent::Skipped {
-                    component: self.name().to_string(),
-                    reason: "CLAUDE.md not found or has no preamble".to_string(),
-                });
-                vec![InitResult::ok(self.name(), "Nothing to remove")]
-            }
-            Err(e) => vec![InitResult::error(self.name(), e)],
+        let mut results = Vec::new();
+        for agent in &agents {
+            let path = match resolve_instructions_file(&agent.def, scope, git_root.as_deref()) {
+                Some(p) => p,
+                None => continue,
+            };
+            results.push(action(self, &agent.def, &path, reporter));
         }
+
+        if results.is_empty() {
+            return vec![InitResult::skipped(
+                self.name(),
+                "No agents with an instructions file for this scope",
+            )];
+        }
+        results
+    }
+}
+
+/// Resolve the instructions file path for `agent` in the given `scope`.
+///
+/// * `User` → the agent's absolute global instructions file (e.g. `~/.claude/CLAUDE.md`).
+/// * `Project`/`Local` → the agent's project-relative instructions file joined
+///   onto `git_root` (so Claude Code keeps writing `<git-root>/CLAUDE.md`).
+///
+/// Returns `None` when the agent has no instructions path for the scope.
+fn resolve_instructions_file(
+    agent: &mirdan::agents::AgentDef,
+    scope: &InitScope,
+    git_root: Option<&std::path::Path>,
+) -> Option<std::path::PathBuf> {
+    if matches!(scope, InitScope::User) {
+        mirdan::agents::agent_global_instructions_file(agent)
+    } else {
+        let relative = mirdan::agents::agent_project_instructions_file(agent)?;
+        git_root.map(|root| root.join(relative))
+    }
+}
+
+/// Ensure a single agent's instructions file has the preamble and report the outcome.
+fn ensure_preamble_for_agent(
+    component: &ClaudeMd,
+    def: &mirdan::agents::AgentDef,
+    path: &std::path::Path,
+    reporter: &dyn InitReporter,
+) -> InitResult {
+    match ensure_preamble(path) {
+        Ok("created") => {
+            reporter.emit(&InitEvent::Action {
+                verb: "Created".to_string(),
+                message: format!("instructions for {} ({})", def.name, path.display()),
+            });
+            InitResult::ok(component.name(), "Instructions file created with preamble")
+        }
+        Ok("prepended") => {
+            reporter.emit(&InitEvent::Action {
+                verb: "Updated".to_string(),
+                message: format!("instructions for {} ({})", def.name, path.display()),
+            });
+            InitResult::ok(component.name(), "Preamble prepended to instructions file")
+        }
+        Ok(_) => {
+            reporter.emit(&InitEvent::Skipped {
+                component: component.name().to_string(),
+                reason: format!(
+                    "{} already has the required preamble ({})",
+                    def.name,
+                    path.display()
+                ),
+            });
+            InitResult::ok(component.name(), "Instructions file already has preamble")
+        }
+        Err(e) => InitResult::error(component.name(), e),
+    }
+}
+
+/// Remove the preamble from a single agent's instructions file and report the outcome.
+fn remove_preamble_for_agent(
+    component: &ClaudeMd,
+    def: &mirdan::agents::AgentDef,
+    path: &std::path::Path,
+    reporter: &dyn InitReporter,
+) -> InitResult {
+    match remove_preamble(path) {
+        Ok("deleted") => {
+            reporter.emit(&InitEvent::Action {
+                verb: "Removed".to_string(),
+                message: format!("instructions for {} ({})", def.name, path.display()),
+            });
+            InitResult::ok(component.name(), "Instructions file deleted")
+        }
+        Ok("removed") => {
+            reporter.emit(&InitEvent::Action {
+                verb: "Updated".to_string(),
+                message: format!("removed preamble for {} ({})", def.name, path.display()),
+            });
+            InitResult::ok(component.name(), "Preamble removed from instructions file")
+        }
+        Ok(_) => {
+            reporter.emit(&InitEvent::Skipped {
+                component: component.name().to_string(),
+                reason: format!(
+                    "{} instructions file not found or has no preamble ({})",
+                    def.name,
+                    path.display()
+                ),
+            });
+            InitResult::ok(component.name(), "Nothing to remove")
+        }
+        Err(e) => InitResult::error(component.name(), e),
     }
 }
 
@@ -1387,12 +1723,27 @@ mod tests {
     #[test]
     fn test_claude_md_creates_file_when_absent() {
         let temp = tempfile::TempDir::new().unwrap();
-        let result = ensure_claude_md_preamble(temp.path()).unwrap();
+        let path = temp.path().join("CLAUDE.md");
+        let result = ensure_preamble(&path).unwrap();
         assert_eq!(result, "created");
 
-        let content = std::fs::read_to_string(temp.path().join("CLAUDE.md")).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.starts_with(CLAUDE_MD_PREAMBLE));
         assert!(content.ends_with('\n'));
+    }
+
+    #[test]
+    fn test_claude_md_creates_parent_dirs() {
+        // ensure_preamble must create missing parent directories so it works
+        // for an absolute global file like ~/.claude/CLAUDE.md.
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("nested").join("dir").join("CLAUDE.md");
+        let result = ensure_preamble(&path).unwrap();
+        assert_eq!(result, "created");
+        assert!(path.exists());
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.starts_with(CLAUDE_MD_PREAMBLE));
     }
 
     #[test]
@@ -1401,7 +1752,7 @@ mod tests {
         let claude_md = temp.path().join("CLAUDE.md");
         std::fs::write(&claude_md, "existing content\n").unwrap();
 
-        let result = ensure_claude_md_preamble(temp.path()).unwrap();
+        let result = ensure_preamble(&claude_md).unwrap();
         assert_eq!(result, "prepended");
 
         let content = std::fs::read_to_string(&claude_md).unwrap();
@@ -1415,7 +1766,7 @@ mod tests {
         let claude_md = temp.path().join("CLAUDE.md");
         std::fs::write(&claude_md, format!("{}\n", CLAUDE_MD_PREAMBLE)).unwrap();
 
-        let result = ensure_claude_md_preamble(temp.path()).unwrap();
+        let result = ensure_preamble(&claude_md).unwrap();
         assert_eq!(result, "already present");
 
         let content = std::fs::read_to_string(&claude_md).unwrap();
@@ -1426,7 +1777,10 @@ mod tests {
     #[test]
     fn test_claude_md_has_preamble_absent() {
         let temp = tempfile::TempDir::new().unwrap();
-        assert_eq!(claude_md_has_preamble(temp.path()), None);
+        assert_eq!(
+            preamble_file_has_preamble(&temp.path().join("CLAUDE.md")),
+            None
+        );
     }
 
     #[test]
@@ -1434,7 +1788,7 @@ mod tests {
         let temp = tempfile::TempDir::new().unwrap();
         let claude_md = temp.path().join("CLAUDE.md");
         std::fs::write(&claude_md, format!("{}\nother stuff\n", CLAUDE_MD_PREAMBLE)).unwrap();
-        assert_eq!(claude_md_has_preamble(temp.path()), Some(true));
+        assert_eq!(preamble_file_has_preamble(&claude_md), Some(true));
     }
 
     #[test]
@@ -1442,7 +1796,7 @@ mod tests {
         let temp = tempfile::TempDir::new().unwrap();
         let claude_md = temp.path().join("CLAUDE.md");
         std::fs::write(&claude_md, "some other content\n").unwrap();
-        assert_eq!(claude_md_has_preamble(temp.path()), Some(false));
+        assert_eq!(preamble_file_has_preamble(&claude_md), Some(false));
     }
 
     #[test]
@@ -1451,7 +1805,7 @@ mod tests {
         let claude_md = temp.path().join("CLAUDE.md");
         std::fs::write(&claude_md, format!("{}\n", CLAUDE_MD_PREAMBLE)).unwrap();
 
-        let result = remove_claude_md_preamble(temp.path()).unwrap();
+        let result = remove_preamble(&claude_md).unwrap();
         assert_eq!(result, "deleted");
         assert!(!claude_md.exists());
     }
@@ -1466,7 +1820,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = remove_claude_md_preamble(temp.path()).unwrap();
+        let result = remove_preamble(&claude_md).unwrap();
         assert_eq!(result, "removed");
         let content = std::fs::read_to_string(&claude_md).unwrap();
         assert!(!content.contains(CLAUDE_MD_PREAMBLE));
@@ -1477,7 +1831,7 @@ mod tests {
     #[test]
     fn test_claude_md_deinit_no_file() {
         let temp = tempfile::TempDir::new().unwrap();
-        let result = remove_claude_md_preamble(temp.path()).unwrap();
+        let result = remove_preamble(&temp.path().join("CLAUDE.md")).unwrap();
         assert_eq!(result, "not found");
     }
 
@@ -1487,10 +1841,222 @@ mod tests {
         let claude_md = temp.path().join("CLAUDE.md");
         std::fs::write(&claude_md, "just user content\n").unwrap();
 
-        let result = remove_claude_md_preamble(temp.path()).unwrap();
+        let result = remove_preamble(&claude_md).unwrap();
         assert_eq!(result, "no preamble");
         // File should be untouched
         let content = std::fs::read_to_string(&claude_md).unwrap();
         assert_eq!(content, "just user content\n");
+    }
+
+    #[test]
+    fn test_claude_md_is_applicable_user_scope() {
+        // Regression: the preamble component must run in user scope so
+        // `sah init user` installs the global instructions file.
+        assert!(ClaudeMd.is_applicable(&InitScope::User));
+        assert!(ClaudeMd.is_applicable(&InitScope::Project));
+        assert!(ClaudeMd.is_applicable(&InitScope::Local));
+    }
+
+    #[test]
+    #[serial_test::serial(home_env)]
+    fn test_claude_md_user_scope_writes_global_file() {
+        use swissarmyhammer_common::lifecycle::InitStatus;
+        use swissarmyhammer_common::reporter::NullReporter;
+        use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+
+        let env = IsolatedTestEnvironment::new().unwrap();
+        // claude-code's global instructions file is ~/.claude/CLAUDE.md, which
+        // resolves under the isolated HOME.
+        let global_claude_md = env.home_path().join(".claude").join("CLAUDE.md");
+        assert!(!global_claude_md.exists());
+
+        let reporter = NullReporter;
+
+        // init in user scope must create ~/.claude/CLAUDE.md with the marker.
+        let results = ClaudeMd.init(&InitScope::User, &reporter);
+        assert!(
+            results.iter().all(|r| r.status != InitStatus::Error),
+            "init produced errors: {:?}",
+            results
+        );
+        assert!(
+            global_claude_md.exists(),
+            "expected {} to exist after init user",
+            global_claude_md.display()
+        );
+        assert_eq!(preamble_file_has_preamble(&global_claude_md), Some(true));
+
+        // Idempotent: running init again makes no change to the marker count.
+        ClaudeMd.init(&InitScope::User, &reporter);
+        let content = std::fs::read_to_string(&global_claude_md).unwrap();
+        assert_eq!(content.matches(CLAUDE_MD_PREAMBLE).count(), 1);
+
+        // deinit removes the preamble-only file.
+        let results = ClaudeMd.deinit(&InitScope::User, &reporter);
+        assert!(
+            results.iter().all(|r| r.status != InitStatus::Error),
+            "deinit produced errors: {:?}",
+            results
+        );
+        assert!(
+            !global_claude_md.exists(),
+            "expected {} to be removed after deinit user",
+            global_claude_md.display()
+        );
+    }
+
+    // ── DenyBash component tests ────────────────────────────────────────
+
+    #[test]
+    fn test_deny_bash_is_applicable_all_scopes() {
+        // Regression: the DenyBash component must run in user scope so
+        // `sah init user` writes permissions.deny to the global settings file.
+        assert!(DenyBash.is_applicable(&InitScope::User));
+        assert!(DenyBash.is_applicable(&InitScope::Project));
+        assert!(DenyBash.is_applicable(&InitScope::Local));
+    }
+
+    #[test]
+    #[serial_test::serial(home_env)]
+    fn test_deny_bash_user_scope_writes_global_settings() {
+        use swissarmyhammer_common::lifecycle::InitStatus;
+        use swissarmyhammer_common::reporter::NullReporter;
+        use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+
+        let env = IsolatedTestEnvironment::new().unwrap();
+        // claude-code's global settings file is ~/.claude/settings.json, which
+        // resolves under the isolated HOME.
+        let global_settings = env.home_path().join(".claude").join("settings.json");
+        assert!(!global_settings.exists());
+
+        let reporter = NullReporter;
+
+        // init in user scope must create ~/.claude/settings.json with Bash deny.
+        let results = DenyBash.init(&InitScope::User, &reporter);
+        assert!(
+            results.iter().all(|r| r.status != InitStatus::Error),
+            "init produced errors: {:?}",
+            results
+        );
+        assert!(
+            global_settings.exists(),
+            "expected {} to exist after DenyBash init user",
+            global_settings.display()
+        );
+        let content = std::fs::read_to_string(&global_settings).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        let deny = parsed
+            .pointer("/permissions/deny")
+            .and_then(|v| v.as_array())
+            .expect("permissions.deny must exist as an array");
+        assert!(
+            deny.iter().any(|v| v.as_str() == Some("Bash")),
+            "expected Bash in permissions.deny, got {:?}",
+            deny
+        );
+
+        // Idempotent: running init again leaves a single Bash entry.
+        DenyBash.init(&InitScope::User, &reporter);
+        let content = std::fs::read_to_string(&global_settings).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        let deny = parsed
+            .pointer("/permissions/deny")
+            .and_then(|v| v.as_array())
+            .unwrap();
+        let bash_count = deny.iter().filter(|v| v.as_str() == Some("Bash")).count();
+        assert_eq!(
+            bash_count, 1,
+            "Bash should appear exactly once after re-init"
+        );
+
+        // deinit removes the Bash entry.
+        let results = DenyBash.deinit(&InitScope::User, &reporter);
+        assert!(
+            results.iter().all(|r| r.status != InitStatus::Error),
+            "deinit produced errors: {:?}",
+            results
+        );
+        let content = std::fs::read_to_string(&global_settings).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        let deny_after = parsed
+            .pointer("/permissions/deny")
+            .and_then(|v| v.as_array());
+        if let Some(arr) = deny_after {
+            assert!(
+                !arr.iter().any(|v| v.as_str() == Some("Bash")),
+                "Bash should be gone from permissions.deny after deinit user"
+            );
+        }
+    }
+
+    // ── Statusline component tests ──────────────────────────────────────
+
+    #[test]
+    fn test_statusline_is_applicable_all_scopes() {
+        // Regression: the Statusline component must run in user scope so
+        // `sah init user` writes the statusLine block to the global settings file.
+        assert!(Statusline.is_applicable(&InitScope::User));
+        assert!(Statusline.is_applicable(&InitScope::Project));
+        assert!(Statusline.is_applicable(&InitScope::Local));
+    }
+
+    #[test]
+    #[serial_test::serial(home_env)]
+    fn test_statusline_user_scope_writes_global_settings() {
+        use swissarmyhammer_common::lifecycle::InitStatus;
+        use swissarmyhammer_common::reporter::NullReporter;
+        use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+
+        let env = IsolatedTestEnvironment::new().unwrap();
+        let global_settings = env.home_path().join(".claude").join("settings.json");
+        assert!(!global_settings.exists());
+
+        let reporter = NullReporter;
+
+        // init in user scope must write statusLine to ~/.claude/settings.json.
+        let results = Statusline.init(&InitScope::User, &reporter);
+        assert!(
+            results.iter().all(|r| r.status != InitStatus::Error),
+            "init produced errors: {:?}",
+            results
+        );
+        assert!(
+            global_settings.exists(),
+            "expected {} to exist after Statusline init user",
+            global_settings.display()
+        );
+        let content = std::fs::read_to_string(&global_settings).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(
+            parsed.pointer("/statusLine/type").and_then(|v| v.as_str()),
+            Some("command")
+        );
+        assert_eq!(
+            parsed
+                .pointer("/statusLine/command")
+                .and_then(|v| v.as_str()),
+            Some("sah statusline")
+        );
+
+        // Idempotent: re-running init keeps the statusLine block intact.
+        Statusline.init(&InitScope::User, &reporter);
+        let content = std::fs::read_to_string(&global_settings).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert!(parsed.get("statusLine").is_some());
+
+        // deinit removes the statusLine block.
+        let results = Statusline.deinit(&InitScope::User, &reporter);
+        assert!(
+            results.iter().all(|r| r.status != InitStatus::Error),
+            "deinit produced errors: {:?}",
+            results
+        );
+        let content = std::fs::read_to_string(&global_settings).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert!(
+            parsed.get("statusLine").is_none(),
+            "statusLine should be gone after deinit user, got {:?}",
+            parsed
+        );
     }
 }

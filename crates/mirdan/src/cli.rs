@@ -191,6 +191,20 @@ pub enum Commands {
         global: bool,
     },
 
+    /// Report the install-status of sah-managed components per agent and scope
+    ///
+    /// Shows, for each detected agent and scope (project, user), whether the
+    /// sah MCP server, skills, subagents, preamble, and permissions are
+    /// installed.
+    Status {
+        /// Include components that do not apply to an agent at a scope
+        #[arg(long)]
+        all: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Diagnose Mirdan setup and configuration
     Doctor {
         /// Show detailed output including fix suggestions

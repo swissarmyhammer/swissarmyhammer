@@ -123,15 +123,6 @@ pub fn ensure_project_entry<'a>(root: &'a mut Value, key: &str) -> &'a mut Value
     root.get_mut("projects").unwrap().get_mut(key).unwrap()
 }
 
-/// Path to the project-level Claude Code settings file.
-///
-/// Delegates to `InitScope::Project.claude_settings_path()` so path logic
-/// lives in one place (`swissarmyhammer-common`).
-#[deprecated(note = "use InitScope::Project.claude_settings_path() directly")]
-pub fn claude_settings_path() -> PathBuf {
-    swissarmyhammer_common::lifecycle::InitScope::Project.claude_settings_path()
-}
-
 /// Add "Bash" to permissions.deny in settings, idempotent.
 /// Returns true if a change was made.
 pub fn merge_deny_bash(settings: &mut Value) -> bool {

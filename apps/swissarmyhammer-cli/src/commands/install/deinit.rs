@@ -9,8 +9,6 @@ use crate::cli::InstallTarget;
 use swissarmyhammer_common::lifecycle::{InitRegistry, InitScope, InitStatus};
 use swissarmyhammer_common::reporter::{CliReporter, InitEvent, InitReporter};
 
-use super::settings;
-
 /// Uninstall sah from all detected AI coding agents.
 ///
 /// Creates an `InitRegistry`, registers all components via
@@ -31,16 +29,6 @@ pub fn uninstall(target: InstallTarget, remove_directory: bool) -> Result<(), St
     crate::commands::registry::register_all(&mut registry, remove_directory);
 
     let results = registry.run_all_deinit(&scope, &reporter);
-
-    // Remove Bash deny rule from Claude Code settings
-    if matches!(target, InstallTarget::Project | InstallTarget::Local) {
-        uninstall_deny_bash(&reporter)?;
-    }
-
-    // Remove statusline from Claude Code settings
-    if matches!(target, InstallTarget::Project | InstallTarget::Local) {
-        uninstall_statusline(&reporter)?;
-    }
 
     // Display results and check for errors
     let mut has_errors = false;
@@ -70,48 +58,6 @@ pub fn uninstall(target: InstallTarget, remove_directory: bool) -> Result<(), St
     } else {
         Ok(())
     }
-}
-
-/// Remove statusline configuration from .claude/settings.json.
-#[allow(deprecated)]
-fn uninstall_statusline(reporter: &dyn InitReporter) -> Result<(), String> {
-    let path = settings::claude_settings_path();
-    if !path.exists() {
-        return Ok(());
-    }
-
-    let mut claude_settings = settings::read_settings(&path)?;
-    let changed = settings::remove_statusline(&mut claude_settings);
-
-    if changed {
-        settings::write_settings(&path, &claude_settings)?;
-        reporter.emit(&InitEvent::Action {
-            verb: "Removed".to_string(),
-            message: format!("statusline from {}", path.display()),
-        });
-    }
-    Ok(())
-}
-
-/// Remove "Bash" from permissions.deny in .claude/settings.json.
-#[allow(deprecated)]
-fn uninstall_deny_bash(reporter: &dyn InitReporter) -> Result<(), String> {
-    let path = settings::claude_settings_path();
-    if !path.exists() {
-        return Ok(());
-    }
-
-    let mut claude_settings = settings::read_settings(&path)?;
-    let changed = settings::remove_deny_bash(&mut claude_settings);
-
-    if changed {
-        settings::write_settings(&path, &claude_settings)?;
-        reporter.emit(&InitEvent::Action {
-            verb: "Removed".to_string(),
-            message: format!("Bash tool deny rule from {}", path.display()),
-        });
-    }
-    Ok(())
 }
 
 #[cfg(test)]
