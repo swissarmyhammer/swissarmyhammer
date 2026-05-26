@@ -17,85 +17,85 @@ _avp() {
                 cmd="avp"
                 ;;
             avp,completion)
-                cmd="avp__subcmd__completion"
+                cmd="avp__completion"
                 ;;
             avp,deinit)
-                cmd="avp__subcmd__deinit"
+                cmd="avp__deinit"
                 ;;
             avp,doctor)
-                cmd="avp__subcmd__doctor"
+                cmd="avp__doctor"
                 ;;
             avp,edit)
-                cmd="avp__subcmd__edit"
+                cmd="avp__edit"
                 ;;
             avp,help)
-                cmd="avp__subcmd__help"
+                cmd="avp__help"
                 ;;
             avp,init)
-                cmd="avp__subcmd__init"
+                cmd="avp__init"
                 ;;
             avp,model)
-                cmd="avp__subcmd__model"
+                cmd="avp__model"
                 ;;
             avp,new)
-                cmd="avp__subcmd__new"
+                cmd="avp__new"
                 ;;
-            avp__subcmd__help,completion)
-                cmd="avp__subcmd__help__subcmd__completion"
+            avp__help,completion)
+                cmd="avp__help__completion"
                 ;;
-            avp__subcmd__help,deinit)
-                cmd="avp__subcmd__help__subcmd__deinit"
+            avp__help,deinit)
+                cmd="avp__help__deinit"
                 ;;
-            avp__subcmd__help,doctor)
-                cmd="avp__subcmd__help__subcmd__doctor"
+            avp__help,doctor)
+                cmd="avp__help__doctor"
                 ;;
-            avp__subcmd__help,edit)
-                cmd="avp__subcmd__help__subcmd__edit"
+            avp__help,edit)
+                cmd="avp__help__edit"
                 ;;
-            avp__subcmd__help,help)
-                cmd="avp__subcmd__help__subcmd__help"
+            avp__help,help)
+                cmd="avp__help__help"
                 ;;
-            avp__subcmd__help,init)
-                cmd="avp__subcmd__help__subcmd__init"
+            avp__help,init)
+                cmd="avp__help__init"
                 ;;
-            avp__subcmd__help,model)
-                cmd="avp__subcmd__help__subcmd__model"
+            avp__help,model)
+                cmd="avp__help__model"
                 ;;
-            avp__subcmd__help,new)
-                cmd="avp__subcmd__help__subcmd__new"
+            avp__help,new)
+                cmd="avp__help__new"
                 ;;
-            avp__subcmd__help__subcmd__model,list)
-                cmd="avp__subcmd__help__subcmd__model__subcmd__list"
+            avp__help__model,list)
+                cmd="avp__help__model__list"
                 ;;
-            avp__subcmd__help__subcmd__model,show)
-                cmd="avp__subcmd__help__subcmd__model__subcmd__show"
+            avp__help__model,show)
+                cmd="avp__help__model__show"
                 ;;
-            avp__subcmd__help__subcmd__model,use)
-                cmd="avp__subcmd__help__subcmd__model__subcmd__use"
+            avp__help__model,use)
+                cmd="avp__help__model__use"
                 ;;
-            avp__subcmd__model,help)
-                cmd="avp__subcmd__model__subcmd__help"
+            avp__model,help)
+                cmd="avp__model__help"
                 ;;
-            avp__subcmd__model,list)
-                cmd="avp__subcmd__model__subcmd__list"
+            avp__model,list)
+                cmd="avp__model__list"
                 ;;
-            avp__subcmd__model,show)
-                cmd="avp__subcmd__model__subcmd__show"
+            avp__model,show)
+                cmd="avp__model__show"
                 ;;
-            avp__subcmd__model,use)
-                cmd="avp__subcmd__model__subcmd__use"
+            avp__model,use)
+                cmd="avp__model__use"
                 ;;
-            avp__subcmd__model__subcmd__help,help)
-                cmd="avp__subcmd__model__subcmd__help__subcmd__help"
+            avp__model__help,help)
+                cmd="avp__model__help__help"
                 ;;
-            avp__subcmd__model__subcmd__help,list)
-                cmd="avp__subcmd__model__subcmd__help__subcmd__list"
+            avp__model__help,list)
+                cmd="avp__model__help__list"
                 ;;
-            avp__subcmd__model__subcmd__help,show)
-                cmd="avp__subcmd__model__subcmd__help__subcmd__show"
+            avp__model__help,show)
+                cmd="avp__model__help__show"
                 ;;
-            avp__subcmd__model__subcmd__help,use)
-                cmd="avp__subcmd__model__subcmd__help__subcmd__use"
+            avp__model__help,use)
+                cmd="avp__model__help__use"
                 ;;
             *)
                 ;;
@@ -117,7 +117,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__completion)
+        avp__completion)
             opts="-d -h --debug --help bash elvish fish powershell zsh"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -131,7 +131,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__deinit)
+        avp__deinit)
             opts="-d -h --debug --help project local user"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -145,7 +145,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__doctor)
+        avp__doctor)
             opts="-v -d -h --verbose --debug --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -159,7 +159,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__edit)
+        avp__edit)
             opts="-d -h --project --local --user --global --debug --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -173,7 +173,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__help)
+        avp__help)
             opts="init deinit doctor edit new model completion help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -187,7 +187,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__help__subcmd__completion)
+        avp__help__completion)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -201,7 +201,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__help__subcmd__deinit)
+        avp__help__deinit)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -215,7 +215,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__help__subcmd__doctor)
+        avp__help__doctor)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -229,7 +229,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__help__subcmd__edit)
+        avp__help__edit)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -243,7 +243,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__help__subcmd__help)
+        avp__help__help)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -257,7 +257,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__help__subcmd__init)
+        avp__help__init)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -271,7 +271,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__help__subcmd__model)
+        avp__help__model)
             opts="list show use"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -285,7 +285,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__help__subcmd__model__subcmd__list)
+        avp__help__model__list)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -299,7 +299,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__help__subcmd__model__subcmd__show)
+        avp__help__model__show)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -313,7 +313,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__help__subcmd__model__subcmd__use)
+        avp__help__model__use)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -327,7 +327,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__help__subcmd__new)
+        avp__help__new)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -341,7 +341,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__init)
+        avp__init)
             opts="-d -h --debug --help project local user"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -355,7 +355,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__model)
+        avp__model)
             opts="-d -h --debug --help list show use help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -369,7 +369,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__model__subcmd__help)
+        avp__model__help)
             opts="list show use help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -383,7 +383,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__model__subcmd__help__subcmd__help)
+        avp__model__help__help)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -397,7 +397,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__model__subcmd__help__subcmd__list)
+        avp__model__help__list)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -411,7 +411,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__model__subcmd__help__subcmd__show)
+        avp__model__help__show)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -425,7 +425,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__model__subcmd__help__subcmd__use)
+        avp__model__help__use)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -439,7 +439,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__model__subcmd__list)
+        avp__model__list)
             opts="-d -h --debug --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -453,7 +453,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__model__subcmd__show)
+        avp__model__show)
             opts="-d -h --debug --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -467,7 +467,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__model__subcmd__use)
+        avp__model__use)
             opts="-d -h --debug --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -481,7 +481,7 @@ _avp() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        avp__subcmd__new)
+        avp__new)
             opts="-d -h --project --local --user --global --debug --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
