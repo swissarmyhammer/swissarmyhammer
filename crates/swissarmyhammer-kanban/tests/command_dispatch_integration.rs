@@ -382,6 +382,69 @@ async fn entity_update_field() {
     assert_eq!(task.get_str("title"), Some("New Title"));
 }
 
+/// Regression: `update.board` MUST resolve through the command registry and
+/// persist the supplied `model` to the board entity (and therefore to
+/// `.kanban/boards/board.yaml`).
+///
+/// The bug fixed by `01KSNJ6AE18EQYDC2WSYFSSAY1`: the frontend AI panel
+/// dispatches `update.board` with `args: { model }`, but no command was
+/// registered under the id `"update.board"`, so the Tauri dispatcher
+/// rejected the call with `Unknown command: update.board` and the model
+/// never reached disk. The prior frontend test mocked `useDispatchCommand`
+/// and therefore could not catch the missing registration — this test
+/// drives the real registry by the literal string `"update.board"` so any
+/// future regression that drops the registration fails here.
+#[tokio::test]
+async fn update_board_via_command_dispatch_persists_model() {
+    let engine = TestEngine::new().await;
+
+    let mut args = HashMap::new();
+    args.insert("model".to_string(), json!("claude-code"));
+
+    engine
+        .dispatch("update.board", &[], None, args)
+        .await
+        .expect("`update.board` must be a registered command");
+
+    // Verify the model field was written to the board entity.
+    let board = engine
+        .kanban
+        .read_entity_generic("board", "board")
+        .await
+        .expect("board entity must exist");
+    assert_eq!(
+        board.get_str("model"),
+        Some("claude-code"),
+        "board entity must carry `model: claude-code` after `update.board`",
+    );
+}
+
+/// `update.board` must also update `name` and `description` when those args
+/// are supplied — mirrors the per-field optionality of the `UpdateBoard`
+/// operation so a future refactor doesn't accidentally drop one of the
+/// three supported fields.
+#[tokio::test]
+async fn update_board_via_command_dispatch_updates_name_and_description() {
+    let engine = TestEngine::new().await;
+
+    let mut args = HashMap::new();
+    args.insert("name".to_string(), json!("Renamed Board"));
+    args.insert("description".to_string(), json!("New description"));
+
+    engine
+        .dispatch("update.board", &[], None, args)
+        .await
+        .expect("`update.board` must succeed with name + description");
+
+    let board = engine
+        .kanban
+        .read_entity_generic("board", "board")
+        .await
+        .unwrap();
+    assert_eq!(board.get_str("name"), Some("Renamed Board"));
+    assert_eq!(board.get_str("description"), Some("New description"));
+}
+
 // ===========================================================================
 // Availability tests
 // ===========================================================================

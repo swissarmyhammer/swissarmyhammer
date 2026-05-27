@@ -232,7 +232,8 @@ mod builtin_commands_tests {
     fn builtin_yaml_sources_has_kanban_specific_files() {
         let sources = builtin_yaml_sources();
         // The kanban-specific YAML files live here — the original six plus
-        // `view` and `ai` (the AI panel command scope).
+        // `view`, `ai` (the AI panel command scope), and `board` (the
+        // `update.board` dispatch-layer wrapper).
         let names: Vec<&str> = sources.iter().map(|(n, _)| *n).collect();
         for expected in [
             "task",
@@ -242,6 +243,7 @@ mod builtin_commands_tests {
             "perspective",
             "file",
             "ai",
+            "board",
         ] {
             assert!(
                 names.contains(&expected),

@@ -16,7 +16,8 @@ use swissarmyhammer_commands::{compose_registry, CommandsRegistry};
 /// `ui.inspector.set_width` lifts it to 70; adding
 /// `perspective.filter.focus` (the first command-driven tab button, task
 /// 01KRE1YA65MMG29RDQDQ0VPJQG) lifts it to 71; adding the five `ai.*`
-/// AI-panel commands (task 01KRRN69YDB2B03RB1N9G6RR3J) lifts it to 76.
+/// AI-panel commands (task 01KRRN69YDB2B03RB1N9G6RR3J) lifts it to 76;
+/// adding `update.board` (task 01KSNJ6AE18EQYDC2WSYFSSAY1) lifts it to 77.
 #[test]
 fn composed_registry_matches_manual_composition() {
     let registry: CommandsRegistry = compose_registry![
@@ -27,7 +28,7 @@ fn composed_registry_matches_manual_composition() {
 
     assert_eq!(
         registry.all_commands().len(),
-        76,
+        77,
         "composed registry must contain the full generic + focus + kanban command set",
     );
 
@@ -127,9 +128,12 @@ fn composed_registry_command_id_set_snapshot() {
     // `perspective.filter.focus` joined as the first command-driven
     // tab button (task `01KRE1YA65MMG29RDQDQ0VPJQG`). Bumped to 76
     // when the five `ai.*` AI-panel commands joined (task
-    // `01KRRN69YDB2B03RB1N9G6RR3J`). If you intentionally add or
-    // remove a command, update this list and explain why in the
-    // commit message.
+    // `01KRRN69YDB2B03RB1N9G6RR3J`). Bumped to 77 when `update.board`
+    // joined as the dispatch-layer wrapper around `UpdateBoard` (task
+    // `01KSNJ6AE18EQYDC2WSYFSSAY1`) so the AI panel's model picker can
+    // persist its selection through the unified dispatcher. If you
+    // intentionally add or remove a command, update this list and
+    // explain why in the commit message.
     let expected: Vec<&str> = vec![
         "ai.cancel",
         "ai.focus",
@@ -205,10 +209,11 @@ fn composed_registry_command_id_set_snapshot() {
         "ui.palette.close",
         "ui.palette.open",
         "ui.setFocus",
+        "update.board",
         "view.set",
         "window.new",
     ];
 
     assert_eq!(ids, expected, "command id set drifted; ids = {ids:?}",);
-    assert_eq!(ids.len(), 76);
+    assert_eq!(ids.len(), 77);
 }

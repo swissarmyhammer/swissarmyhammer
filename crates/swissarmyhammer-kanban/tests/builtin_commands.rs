@@ -4,8 +4,9 @@
 //!
 //! 1. `swissarmyhammer_kanban::builtin_yaml_sources()` embeds every kanban-
 //!    specific command YAML and parses into a registry with the expected
-//!    34 command IDs (was 29; +5 for the `ai.*` AI-panel command scope added
-//!    by 01KRRN69YDB2B03RB1N9G6RR3J).
+//!    35 command IDs (was 29; +5 for the `ai.*` AI-panel command scope added
+//!    by 01KRRN69YDB2B03RB1N9G6RR3J; +1 for `update.board` added by
+//!    01KSNJ6AE18EQYDC2WSYFSSAY1).
 //! 2. When the app composes both the generic
 //!    (`swissarmyhammer_commands::builtin_yaml_sources`) and kanban
 //!    (`swissarmyhammer_kanban::builtin_yaml_sources`) sources — the pattern
@@ -17,7 +18,7 @@
 
 use swissarmyhammer_commands::CommandsRegistry;
 
-/// The 34 kanban-specific command IDs shipped under
+/// The 35 kanban-specific command IDs shipped under
 /// `swissarmyhammer-kanban/builtin/commands/`.
 ///
 /// Grouped by source file for quick auditing against the YAMLs on disk.
@@ -31,6 +32,11 @@ const KANBAN_COMMAND_IDS: &[&str] = &[
     "ai.newChat",
     "ai.model",
     "ai.cancel",
+    // board.yaml (1) — `update.board` is the dispatch-layer wrapper around
+    // `crate::board::UpdateBoard`. Added by 01KSNJ6AE18EQYDC2WSYFSSAY1 to
+    // fix the regression where the AI panel dispatched `update.board` but
+    // no command was registered under that id.
+    "update.board",
     // task.yaml (3)
     "task.move",
     "task.untag",
@@ -180,7 +186,7 @@ fn kanban_yaml_preserves_command_metadata() {
 /// Proves that the file moves and the focus-crate addition lost no
 /// commands.
 ///
-/// Count: 32 (commands-crate) + 9 (focus-crate nav.*) + 34 (kanban-crate) = 75.
+/// Count: 32 (commands-crate) + 9 (focus-crate nav.*) + 35 (kanban-crate) = 76.
 ///
 /// The 34/26 → 32/28 shift came from relocating `ui.view.set` and
 /// `ui.perspective.set` into the kanban domain (new ids `view.set` and
@@ -193,9 +199,12 @@ fn kanban_yaml_preserves_command_metadata() {
 /// (01KQSE8TT79XC3KJGEHX6DW99G). The +1 to 71 came from adding
 /// `perspective.filter.focus` as the first command-driven tab button
 /// (01KRE1YA65MMG29RDQDQ0VPJQG). The +5 to 76 came from adding the `ai.*`
-/// AI-panel command scope (01KRRN69YDB2B03RB1N9G6RR3J).
+/// AI-panel command scope (01KRRN69YDB2B03RB1N9G6RR3J). The +1 to 77 came
+/// from adding `update.board` (01KSNJ6AE18EQYDC2WSYFSSAY1) — the dispatch-
+/// layer wrapper around `crate::board::UpdateBoard` that lets the AI panel
+/// persist board metadata through the unified dispatcher.
 #[test]
-fn composed_builtins_register_all_seventy_six_commands() {
+fn composed_builtins_register_all_seventy_seven_commands() {
     let commands_sources = swissarmyhammer_commands::builtin_yaml_sources();
     let focus_sources = swissarmyhammer_focus::builtin_yaml_sources();
     let kanban_sources = swissarmyhammer_kanban::builtin_yaml_sources();
@@ -210,7 +219,7 @@ fn composed_builtins_register_all_seventy_six_commands() {
 
     assert_eq!(
         registry.all_commands().len(),
-        76,
+        77,
         "composed registry must match the post-focus command count",
     );
 

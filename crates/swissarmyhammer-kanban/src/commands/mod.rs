@@ -6,6 +6,7 @@
 
 pub mod ai_commands;
 pub mod app_commands;
+pub mod board_commands;
 pub mod clipboard_commands;
 pub mod column_commands;
 pub mod drag_commands;
@@ -90,6 +91,20 @@ fn register_entity_and_tag(map: &mut CmdMap) {
         Arc::new(entity_commands::UnarchiveEntityCmd),
     );
     map.insert("tag.update".into(), Arc::new(entity_commands::TagUpdateCmd));
+}
+
+/// Register the `update.board` board-metadata command.
+///
+/// The frontend AI panel and any future board-metadata editor dispatch
+/// `update.board` with whichever of `name`, `description`, and `model` it
+/// needs to change. The Rust impl wraps the [`crate::board::UpdateBoard`]
+/// operation so the underlying read-modify-write contract (untouched fields
+/// survive) is preserved through the command surface.
+fn register_board(map: &mut CmdMap) {
+    map.insert(
+        "update.board".into(),
+        Arc::new(board_commands::UpdateBoardCmd),
+    );
 }
 
 fn register_attachment(map: &mut CmdMap) {
@@ -336,6 +351,7 @@ pub fn register_commands() -> CmdMap {
     register_task(&mut map);
     register_clipboard(&mut map);
     register_entity_and_tag(&mut map);
+    register_board(&mut map);
     register_attachment(&mut map);
     register_column(&mut map);
     register_ui(&mut map);
@@ -414,8 +430,16 @@ mod tests {
         //   commands driving the AI panel; backend impls are no-ops, the
         //   frontend resolves a local `execute` handler. Added by
         //   01KRRN69YDB2B03RB1N9G6RR3J.
-        // = 67 (62 prior, +5 for the `ai.*` window-layer command scope).
-        assert_eq!(cmds.len(), 67);
+        // + 1 board (update.board) — wraps `crate::board::UpdateBoard` so
+        //   the AI panel and future board-metadata editors can persist
+        //   `name`/`description`/`model` through the unified dispatcher.
+        //   Added by 01KSNJ6AE18EQYDC2WSYFSSAY1 to fix the regression where
+        //   `update.board` was dispatched by the AI panel but had no
+        //   registered impl — every model selection was rejected with
+        //   `Unknown command: update.board` and the model never reached
+        //   `.kanban/boards/board.yaml`.
+        // = 68 (67 prior, +1 for `update.board`).
+        assert_eq!(cmds.len(), 68);
     }
 
     // =========================================================================
