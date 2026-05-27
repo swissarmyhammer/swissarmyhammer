@@ -44,17 +44,97 @@ import type {
 } from "@/ai/acp-client";
 import type { ConversationConnect } from "@/ai/conversation";
 import type { AiModel, AiPanelConnectFactory } from "./ai-panel";
+import type { BoardData, Entity } from "@/types/kanban";
+import {
+  resetAiCommandsForTest,
+  triggerAiFocus,
+  triggerAiToggle,
+} from "@/ai/commands";
+
+// ---------------------------------------------------------------------------
+// Board entity / dispatch mocks.
+//
+// The container reads the selected model from the active board entity (via
+// `useBoardData()` exposed by `WindowContainer`) and writes user picks back
+// through `useDispatchCommand("update.board")`. Both seams are stubbed here:
+//
+//   - `mockBoardDataByPath` maps each tested board path → a fake `BoardData`
+//     whose `board.fields.model` carries the desired model id. The
+//     `useBoardData` mock looks up the active path the same way the
+//     production hook reads `BoardDataContext`.
+//   - `mockDispatchUpdateBoard` records each `update.board` call so the
+//     tests can assert the dispatched payload — the contract that replaces
+//     the old `localStorage.modelId` writes.
+//
+// Both must be declared via `vi.hoisted` because Vitest hoists `vi.mock`
+// factories above imports, and the factories close over these references.
+// ---------------------------------------------------------------------------
+
+/** Build a fake `BoardData` whose board entity carries the given `model` id. */
+function buildBoardData(boardId: string, modelId: string | null): BoardData {
+  const fields: Record<string, unknown> = {};
+  if (modelId !== null) fields.model = modelId;
+  const board: Entity = {
+    entity_type: "board",
+    id: boardId,
+    moniker: `board:${boardId}`,
+    fields,
+  };
+  return {
+    board,
+    columns: [],
+    tags: [],
+    virtualTagMeta: [],
+    summary: {
+      total_tasks: 0,
+      total_actors: 0,
+      ready_tasks: 0,
+      blocked_tasks: 0,
+      done_tasks: 0,
+      percent_complete: 0,
+    },
+  };
+}
+
+const mockBoardDataByPath = vi.hoisted(
+  () => new Map<string, BoardData | null>(),
+);
+const mockActiveBoardPathRef = vi.hoisted(() => ({
+  current: undefined as string | undefined,
+}));
+
+vi.mock("@/components/window-container", () => ({
+  useBoardData: (): BoardData | null => {
+    const path = mockActiveBoardPathRef.current;
+    if (path === undefined) return null;
+    return mockBoardDataByPath.get(path) ?? null;
+  },
+}));
+
+const mockDispatchUpdateBoard = vi.hoisted(() =>
+  vi.fn(async (_opts?: unknown) => undefined),
+);
+
+vi.mock("@/lib/command-scope", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/command-scope")>();
+  return {
+    ...actual,
+    useDispatchCommand: ((cmd?: string) => {
+      if (cmd === "update.board") return mockDispatchUpdateBoard;
+      // Fall through to the real hook for any other command — the container
+      // only pre-binds `update.board` here, but other code paths (the
+      // conversation, etc.) keep their real dispatch.
+      return actual.useDispatchCommand(cmd as string);
+    }) as typeof actual.useDispatchCommand,
+  };
+});
+
 import {
   AiPanelContainer,
   AI_PANEL_DEFAULT_WIDTH,
   aiPanelStateStorageKey,
 } from "./ai-panel-container";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
-import {
-  resetAiCommandsForTest,
-  triggerAiFocus,
-  triggerAiToggle,
-} from "@/ai/commands";
 
 // ---------------------------------------------------------------------------
 // Tauri API mocks.
@@ -264,14 +344,31 @@ function setViewportWidth(px: number) {
 }
 
 /**
+ * Seed the mocked `useBoardData()` to return a board with the given `model`
+ * id for the given board path. Pass `modelId: null` to leave `board.model`
+ * unset (the fresh-board case the auto-default-selection effect handles).
+ *
+ * Mirrors what `WindowContainer`'s `BoardDataContext` would expose if the
+ * Rust engine had loaded the board's YAML — the container's only source of
+ * truth for the selected model, since the previous `localStorage.modelId`
+ * path was removed.
+ */
+function setBoardModel(boardPath: string, modelId: string | null): void {
+  mockBoardDataByPath.set(boardPath, buildBoardData(boardPath, modelId));
+}
+
+/**
  * Render `AiPanelContainer` inside an `ActiveBoardPathProvider` so the
  * container resolves the per-board persistence key, mirroring the production
- * tree where `WindowContainer` provides the active board path.
+ * tree where `WindowContainer` provides the active board path. Also updates
+ * the shared `mockActiveBoardPathRef` so the mocked `useBoardData()` knows
+ * which board's entity to return.
  */
 function renderContainer(
   props: Partial<React.ComponentProps<typeof AiPanelContainer>> = {},
   boardPath: string | undefined = BOARD,
 ) {
+  mockActiveBoardPathRef.current = boardPath;
   return renderInAct(
     <ActiveBoardPathProvider value={boardPath}>
       <AiPanelContainer createConnect={noopConnect} {...props} />
@@ -284,6 +381,9 @@ function renderContainer(
  * tests. The wrapper takes the current `boardPath` and `createConnect` so the
  * test can rerender with a different board and a freshly-bound factory in one
  * pass — mirroring the production `useProductionConnect(boardPath)` pattern.
+ *
+ * Updates `mockActiveBoardPathRef` on every render so the mocked
+ * `useBoardData()` follows the active board across rerenders.
  */
 function BoardScopedContainer({
   boardPath,
@@ -292,11 +392,44 @@ function BoardScopedContainer({
   boardPath: string;
   createConnect: AiPanelConnectFactory;
 }) {
+  mockActiveBoardPathRef.current = boardPath;
   return (
     <ActiveBoardPathProvider value={boardPath}>
       <AiPanelContainer createConnect={createConnect} />
     </ActiveBoardPathProvider>
   );
+}
+
+/**
+ * Default behavior for the mocked `update.board` dispatcher: when called with
+ * `{ args: { model } }`, mirror what the real backend would do — update the
+ * active board entity's `model` field. The container's `useBoardData()` mock
+ * reads from `mockBoardDataByPath`, so this in-process "round-trip" mimics
+ * the `entity-field-changed` patch that `useBoardDataSync` would normally
+ * apply in production.
+ */
+function applyDefaultDispatchBehavior(): void {
+  mockDispatchUpdateBoard.mockImplementation(async (opts?: unknown) => {
+    const args = (opts as { args?: { model?: string } } | undefined)?.args;
+    if (args?.model !== undefined) {
+      const path = mockActiveBoardPathRef.current;
+      if (path !== undefined) {
+        const existing = mockBoardDataByPath.get(path);
+        if (existing) {
+          mockBoardDataByPath.set(path, {
+            ...existing,
+            board: {
+              ...existing.board,
+              fields: { ...existing.board.fields, model: args.model },
+            },
+          });
+        } else {
+          mockBoardDataByPath.set(path, buildBoardData(path, args.model));
+        }
+      }
+    }
+    return undefined;
+  });
 }
 
 describe("AiPanelContainer", () => {
@@ -309,6 +442,10 @@ describe("AiPanelContainer", () => {
     localStorage.clear();
     setViewportWidth(1600); // upper resize clamp = 800
     resetAiCommandsForTest();
+    mockBoardDataByPath.clear();
+    mockActiveBoardPathRef.current = undefined;
+    mockDispatchUpdateBoard.mockReset();
+    applyDefaultDispatchBehavior();
   });
 
   it("renders AiPanel right-docked with the model selector", async () => {
@@ -416,13 +553,14 @@ describe("AiPanelContainer", () => {
   });
 
   it("conversation survives a toggle: collapsing then re-expanding preserves the messages", async () => {
-    // Preseed a chosen model so the container mounts `AiPanelConversation` and
-    // its `useConversation` store — without a model the panel renders the
-    // no-model state instead.
+    // Preseed a chosen model on the board entity so the container mounts
+    // `AiPanelConversation` and its `useConversation` store — without a model
+    // the panel renders the no-model state instead.
     localStorage.setItem(
       aiPanelStateStorageKey(BOARD),
-      JSON.stringify({ open: true, modelId: "claude-code" }),
+      JSON.stringify({ open: true }),
     );
+    setBoardModel(BOARD, "claude-code");
 
     const REPLY = "persistent agent reply";
     const harness = mockHarness({
@@ -512,17 +650,19 @@ describe("AiPanelContainer", () => {
     const BOARD_B = "/tmp/board-b";
     const REPLY = "reply for board a";
 
-    // Preseed a chosen model so the panel mounts `AiPanelConversation`
-    // immediately — without a model the panel renders the no-model state and
-    // never connects.
+    // Preseed a chosen model on each board entity so the panel mounts
+    // `AiPanelConversation` immediately — without a model the panel renders
+    // the no-model state and never connects.
     localStorage.setItem(
       aiPanelStateStorageKey(BOARD_A),
-      JSON.stringify({ open: true, modelId: "claude-code" }),
+      JSON.stringify({ open: true }),
     );
     localStorage.setItem(
       aiPanelStateStorageKey(BOARD_B),
-      JSON.stringify({ open: true, modelId: "claude-code" }),
+      JSON.stringify({ open: true }),
     );
+    setBoardModel(BOARD_A, "claude-code");
+    setBoardModel(BOARD_B, "claude-code");
 
     const harnessA = mockHarness(
       {
@@ -605,8 +745,9 @@ describe("AiPanelContainer", () => {
     // both stable, so the existing client + session survive.
     localStorage.setItem(
       aiPanelStateStorageKey(BOARD),
-      JSON.stringify({ open: true, modelId: "claude-code" }),
+      JSON.stringify({ open: true }),
     );
+    setBoardModel(BOARD, "claude-code");
 
     const harness = mockHarness(
       {
@@ -765,12 +906,14 @@ describe("AiPanelContainer", () => {
   });
 
   it("the ai.focus command handler expands a collapsed panel and focuses the prompt", async () => {
-    // Seed the board with a chosen model (so the prompt textarea is enabled
-    // and focusable) and collapsed (so `ai.focus` must expand it first).
+    // Seed the board entity with a chosen model (so the prompt textarea is
+    // enabled and focusable) and the geometry as collapsed (so `ai.focus`
+    // must expand it first).
     localStorage.setItem(
       aiPanelStateStorageKey(BOARD),
-      JSON.stringify({ open: false, modelId: "claude-code" }),
+      JSON.stringify({ open: false }),
     );
+    setBoardModel(BOARD, "claude-code");
     await renderContainer();
     await screen.findByTestId("ai-panel-container");
     const collapsedBody = document.querySelector("[data-slot='ai-panel']");
@@ -800,12 +943,135 @@ describe("AiPanelContainer", () => {
     });
   });
 
-  it("persists and reapplies the per-board model choice", async () => {
+  it("dispatches update.board on a user-initiated model pick and reapplies it on remount", async () => {
     // With two available models in the list, the auto-select default lands on
     // the first (Claude Code). This test then drives a user-initiated pick of
     // the *second* model through the composer's footer select, asserting that
-    // the user pick overrides the auto-selected default and is persisted —
-    // and that a fresh mount reapplies the user's choice, not the default.
+    // the user pick overrides the auto-selected default and is written back
+    // to the board entity via `update.board` — and that a fresh mount, with
+    // the board entity now carrying `model: "qwen-coder"`, reapplies the
+    // user's choice (no `localStorage.modelId` involved).
+    const TWO_MODELS: AiModel[] = [
+      {
+        id: "claude-code",
+        label: "Claude Code",
+        kind: "claude-code",
+        available: true,
+        hint: "Claude Code CLI: /usr/local/bin/claude",
+      },
+      {
+        id: "qwen-coder",
+        label: "Qwen Coder",
+        kind: "local-llama",
+        available: true,
+        hint: null,
+      },
+    ];
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "ai_list_models") return TWO_MODELS;
+      return undefined;
+    });
+    // Fresh board with no model set — the auto-default-selection effect
+    // will pick `claude-code` and dispatch `update.board` itself.
+    setBoardModel(BOARD, null);
+
+    await renderContainer();
+    await screen.findByTestId("ai-panel-container");
+
+    // The auto-select default landed on Claude Code; the trigger reads its
+    // label now (not the placeholder). The dispatch mock has already mirrored
+    // the auto-pick onto the board entity.
+    const selector = await waitFor(() => {
+      const btn = screen.getByRole("combobox", { name: /claude code/i });
+      expect(btn).not.toBeDisabled();
+      return btn;
+    });
+    await waitFor(() => {
+      expect(mockDispatchUpdateBoard).toHaveBeenCalledWith({
+        args: { model: "claude-code" },
+      });
+    });
+
+    // User picks the second model — the explicit choice overrides the
+    // auto-selected default.
+    await act(async () => {
+      await userEvent.click(selector);
+    });
+    const listbox = await screen.findByRole("listbox");
+    await act(async () => {
+      await userEvent.click(
+        within(listbox).getByRole("option", { name: /qwen coder/i }),
+      );
+    });
+
+    // The Container dispatched `update.board` with the picked model id.
+    await waitFor(() => {
+      expect(mockDispatchUpdateBoard).toHaveBeenCalledWith({
+        args: { model: "qwen-coder" },
+      });
+    });
+    // And nothing was written to `localStorage` under `modelId` — only the
+    // geometry keys (`open`, `width`) live there now.
+    const stored = localStorage.getItem(aiPanelStateStorageKey(BOARD));
+    if (stored) {
+      expect(JSON.parse(stored)).not.toHaveProperty("modelId");
+    }
+
+    // A fresh mount reads the board entity's `model` and reapplies the
+    // user's pick — the selector shows the qwen label.
+    await renderContainer();
+    await waitFor(() => {
+      const triggers = screen.getAllByRole("combobox", {
+        name: /qwen coder/i,
+      });
+      expect(triggers.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("selected model rehydrates from board.model on mount", async () => {
+    // A board whose entity already carries `model: "qwen-coder"` (e.g. set
+    // by an MCP `kanban_update_board` from outside the app) must drive the
+    // picker straight to that model on first mount — no auto-default,
+    // no dispatch, no localStorage involvement.
+    const TWO_MODELS: AiModel[] = [
+      {
+        id: "claude-code",
+        label: "Claude Code",
+        kind: "claude-code",
+        available: true,
+        hint: "Claude Code CLI: /usr/local/bin/claude",
+      },
+      {
+        id: "qwen-coder",
+        label: "Qwen Coder",
+        kind: "local-llama",
+        available: true,
+        hint: null,
+      },
+    ];
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "ai_list_models") return TWO_MODELS;
+      return undefined;
+    });
+    setBoardModel(BOARD, "qwen-coder");
+
+    await renderContainer();
+    await screen.findByTestId("ai-panel-container");
+
+    // The picker reads the board's `model` directly — no auto-default fires.
+    await waitFor(() => {
+      const triggers = screen.getAllByRole("combobox", {
+        name: /qwen coder/i,
+      });
+      expect(triggers.length).toBeGreaterThan(0);
+    });
+    expect(mockDispatchUpdateBoard).not.toHaveBeenCalled();
+  });
+
+  it("switching boards swaps in the new board's model", async () => {
+    // Each board's selected model lives on its own entity; switching boards
+    // must swap in the new board's `model` (or fall through to auto-default
+    // when unset). No state from the previous board may persist.
     const TWO_MODELS: AiModel[] = [
       {
         id: "claude-code",
@@ -827,55 +1093,48 @@ describe("AiPanelContainer", () => {
       return undefined;
     });
 
-    await renderContainer();
+    const BOARD_A = "/tmp/board-a";
+    const BOARD_B = "/tmp/board-b";
+    setBoardModel(BOARD_A, "qwen-coder");
+    setBoardModel(BOARD_B, "claude-code");
+
+    const { rerender } = await renderInAct(
+      <BoardScopedContainer
+        boardPath={BOARD_A}
+        createConnect={noopConnect}
+      />,
+    );
     await screen.findByTestId("ai-panel-container");
-
-    // The auto-select default landed on Claude Code; the trigger reads its
-    // label now (not the placeholder).
-    const selector = await waitFor(() => {
-      const btn = screen.getByRole("combobox", { name: /claude code/i });
-      expect(btn).not.toBeDisabled();
-      return btn;
-    });
-
-    // User picks the second model — the explicit choice overrides the
-    // auto-selected default.
-    await act(async () => {
-      await userEvent.click(selector);
-    });
-    const listbox = await screen.findByRole("listbox");
-    await act(async () => {
-      await userEvent.click(
-        within(listbox).getByRole("option", { name: /qwen coder/i }),
-      );
-    });
-
-    // The Container persisted the user-picked per-board model id.
-    await waitFor(() => {
-      const stored = JSON.parse(
-        localStorage.getItem(aiPanelStateStorageKey(BOARD))!,
-      );
-      expect(stored.modelId).toBe("qwen-coder");
-    });
-
-    // A fresh mount reapplies the user's pick — the selector reads its label.
-    await renderContainer();
     await waitFor(() => {
       const triggers = screen.getAllByRole("combobox", {
         name: /qwen coder/i,
       });
       expect(triggers.length).toBeGreaterThan(0);
     });
+
+    // Switch to board B — the picker must reflect board B's model.
+    await act(async () => {
+      rerender(
+        <BoardScopedContainer
+          boardPath={BOARD_B}
+          createConnect={noopConnect}
+        />,
+      );
+    });
+    await waitFor(() => {
+      const triggers = screen.getAllByRole("combobox", {
+        name: /claude code/i,
+      });
+      expect(triggers.length).toBeGreaterThan(0);
+    });
   });
 
-  it("auto-selects the first available model on a fresh mount with no persisted modelId", async () => {
+  it("auto-selects the first available model on a fresh mount with no board model", async () => {
     // The panel must never land in the dead-end `NoModelState` when
-    // `ai_list_models` already returned a usable model. On a board with no
-    // persisted `ai-panel-state:<path>` entry, the Container picks the first
-    // `available: true` model — Claude Code in this fixture — and persists it
-    // through the same `saveAiPanelState` path a user click would take. The
-    // panel transitions out of the no-model state within one render, and a
-    // remount reads the model id back from `localStorage`.
+    // `ai_list_models` already returned a usable model. On a board whose
+    // entity has no `model` set, the Container picks the first
+    // `available: true` model — Claude Code in this fixture — and writes it
+    // through `update.board`, the same path a user click would take.
     const AVAILABLE_MODELS: AiModel[] = [
       {
         id: "claude-code",
@@ -897,19 +1156,20 @@ describe("AiPanelContainer", () => {
       return undefined;
     });
 
-    // No persisted state for this board.
+    // No persisted state for this board, and the board entity has no model.
     expect(localStorage.getItem(aiPanelStateStorageKey(BOARD))).toBeNull();
+    setBoardModel(BOARD, null);
 
     await renderContainer();
     await screen.findByTestId("ai-panel-container");
 
-    // After `ai_list_models` resolves, the per-board modelId becomes
-    // `claude-code`, persisted to the board's `localStorage` snapshot.
+    // After `ai_list_models` resolves, the auto-default-selection effect
+    // dispatches `update.board` with `claude-code` — the same path a user
+    // click takes, but driven by the effect rather than a `userEvent.click`.
     await waitFor(() => {
-      const raw = localStorage.getItem(aiPanelStateStorageKey(BOARD));
-      expect(raw).not.toBeNull();
-      const stored = JSON.parse(raw!);
-      expect(stored.modelId).toBe("claude-code");
+      expect(mockDispatchUpdateBoard).toHaveBeenCalledWith({
+        args: { model: "claude-code" },
+      });
     });
 
     // The panel left the no-model state — its composer trigger now reads the
@@ -947,17 +1207,17 @@ describe("AiPanelContainer", () => {
       if (cmd === "ai_list_models") return UNAVAILABLE_MODELS;
       return undefined;
     });
+    setBoardModel(BOARD, null);
 
     await renderContainer();
     await screen.findByTestId("ai-panel-container");
 
-    // The lone (unavailable) model is auto-selected and persisted, exactly as
+    // The lone (unavailable) model is auto-selected and dispatched, exactly as
     // an available default would be.
     await waitFor(() => {
-      const raw = localStorage.getItem(aiPanelStateStorageKey(BOARD));
-      expect(raw).not.toBeNull();
-      const stored = JSON.parse(raw!);
-      expect(stored.modelId).toBe("claude-code");
+      expect(mockDispatchUpdateBoard).toHaveBeenCalledWith({
+        args: { model: "claude-code" },
+      });
     });
 
     // The panel left the `NoModelState` branch — its "Choose a model" heading
@@ -968,15 +1228,13 @@ describe("AiPanelContainer", () => {
     });
   });
 
-  it("re-selects a default when the persisted model is no longer offered", async () => {
+  it("re-selects a default when the board's model is no longer offered", async () => {
     // A previously-picked model can drop out of `ai_list_models` — e.g. a
-    // llama model that lost its `kanban` tag. A stale persisted id must not
-    // strand the panel: when the persisted id is absent from the current list,
-    // the Container falls back to a default just as if nothing were persisted.
-    localStorage.setItem(
-      aiPanelStateStorageKey(BOARD),
-      JSON.stringify({ modelId: "qwen-coder" }),
-    );
+    // llama model that lost its `kanban` tag. A stale id on the board entity
+    // must not strand the panel: when the stored id is absent from the
+    // current list, the Container falls back to a default just as if no
+    // model were set.
+    setBoardModel(BOARD, "qwen-coder");
 
     const MODELS: AiModel[] = [
       {
@@ -995,24 +1253,21 @@ describe("AiPanelContainer", () => {
     await renderContainer();
     await screen.findByTestId("ai-panel-container");
 
-    // The stale `qwen-coder` id is replaced by the only offered model.
+    // The stale `qwen-coder` id is replaced by the only offered model via a
+    // fresh `update.board` dispatch.
     await waitFor(() => {
-      const stored = JSON.parse(
-        localStorage.getItem(aiPanelStateStorageKey(BOARD))!,
-      );
-      expect(stored.modelId).toBe("claude-code");
+      expect(mockDispatchUpdateBoard).toHaveBeenCalledWith({
+        args: { model: "claude-code" },
+      });
     });
   });
 
-  it("does not overwrite a persisted modelId, even when the persisted model is unavailable", async () => {
-    // A persisted `modelId` is an explicit prior user pick — the auto-select
-    // effect must be a no-op against it. Even if the persisted model is
+  it("does not overwrite a board's stored model, even when that model is unavailable", async () => {
+    // A model set on the board entity is an explicit prior user pick — the
+    // auto-select effect must be a no-op against it. Even if the model is
     // currently `available: false`, the user's choice wins; the Container
     // must not silently swap them onto the first available model.
-    localStorage.setItem(
-      aiPanelStateStorageKey(BOARD),
-      JSON.stringify({ modelId: "qwen-coder" }),
-    );
+    setBoardModel(BOARD, "qwen-coder");
 
     const MIXED_MODELS: AiModel[] = [
       {
@@ -1048,17 +1303,75 @@ describe("AiPanelContainer", () => {
       await Promise.resolve();
     });
 
-    // The persisted `qwen-coder` choice survives — the composer trigger shows
-    // its label, and `localStorage` still holds the original id.
+    // The board's `qwen-coder` choice survives — the composer trigger shows
+    // its label, and no `update.board` dispatch happened.
     await waitFor(() => {
       const triggers = screen.getAllByRole("combobox", {
         name: /qwen coder/i,
       });
       expect(triggers.length).toBeGreaterThan(0);
     });
-    const stored = JSON.parse(
-      localStorage.getItem(aiPanelStateStorageKey(BOARD))!,
-    );
-    expect(stored.modelId).toBe("qwen-coder");
+    expect(mockDispatchUpdateBoard).not.toHaveBeenCalled();
+  });
+
+  it("does not write modelId to localStorage on model selection", async () => {
+    // Acceptance criterion: no code path under `ai-panel-container.tsx`
+    // writes `modelId` to `localStorage`. Picking a model only dispatches
+    // `update.board` — the `localStorage` snapshot must carry only the UI
+    // geometry keys (`open`, `width`), never `modelId`.
+    const TWO_MODELS: AiModel[] = [
+      {
+        id: "claude-code",
+        label: "Claude Code",
+        kind: "claude-code",
+        available: true,
+        hint: "Claude Code CLI: /usr/local/bin/claude",
+      },
+      {
+        id: "qwen-coder",
+        label: "Qwen Coder",
+        kind: "local-llama",
+        available: true,
+        hint: null,
+      },
+    ];
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "ai_list_models") return TWO_MODELS;
+      return undefined;
+    });
+    setBoardModel(BOARD, null);
+
+    await renderContainer();
+    await screen.findByTestId("ai-panel-container");
+
+    // Drive a user pick.
+    const selector = await waitFor(() => {
+      const btn = screen.getByRole("combobox", { name: /claude code/i });
+      expect(btn).not.toBeDisabled();
+      return btn;
+    });
+    await act(async () => {
+      await userEvent.click(selector);
+    });
+    const listbox = await screen.findByRole("listbox");
+    await act(async () => {
+      await userEvent.click(
+        within(listbox).getByRole("option", { name: /qwen coder/i }),
+      );
+    });
+
+    // The dispatch fired …
+    await waitFor(() => {
+      expect(mockDispatchUpdateBoard).toHaveBeenCalledWith({
+        args: { model: "qwen-coder" },
+      });
+    });
+
+    // … but the localStorage snapshot must never contain `modelId`.
+    const raw = localStorage.getItem(aiPanelStateStorageKey(BOARD));
+    if (raw !== null) {
+      const stored = JSON.parse(raw);
+      expect(stored).not.toHaveProperty("modelId");
+    }
   });
 });
