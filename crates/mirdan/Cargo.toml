@@ -26,6 +26,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
 toml = { workspace = true }
+jsonc-parser = { workspace = true }
 
 # CLI
 clap = { workspace = true }

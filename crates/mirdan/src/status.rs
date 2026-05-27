@@ -591,9 +591,12 @@ pub fn permissions_present(path: &Path) -> bool {
 }
 
 /// Read and parse JSON at `path`, returning `None` on any error or missing file.
+///
+/// Accepts JSONC (comments and trailing commas) so detection of an agent's
+/// installed components mirrors the lenient input format we accept on install.
 fn read_json(path: &Path) -> Option<serde_json::Value> {
     let content = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&content).ok()
+    crate::parse_jsonc(&content).ok()
 }
 
 /// Read and parse an MCP config document at `path` as a `serde_json::Value`.
@@ -601,9 +604,10 @@ fn read_json(path: &Path) -> Option<serde_json::Value> {
 /// Picks the parser from the file extension: `.toml` paths are parsed as TOML
 /// and converted to a `serde_json::Value` so downstream probing (the
 /// `mcpServers.sah.command` walk) is identical regardless of input format;
-/// every other extension is parsed as JSON. Returns `None` for missing files
-/// and parse errors so the detector reports `Missing` rather than panicking on
-/// malformed user config.
+/// every other extension is parsed as JSONC (JSON with comments and trailing
+/// commas) so detection mirrors the lenient input format the installer
+/// accepts. Returns `None` for missing files and parse errors so the detector
+/// reports `Missing` rather than panicking on malformed user config.
 fn read_config_doc(path: &Path) -> Option<serde_json::Value> {
     let content = std::fs::read_to_string(path).ok()?;
     let is_toml = path
@@ -614,7 +618,7 @@ fn read_config_doc(path: &Path) -> Option<serde_json::Value> {
         let value: toml::Value = toml::from_str(&content).ok()?;
         serde_json::to_value(value).ok()
     } else {
-        serde_json::from_str(&content).ok()
+        crate::parse_jsonc(&content).ok()
     }
 }
 
@@ -704,6 +708,22 @@ mod tests {
         std::fs::write(
             dir.path().join("mcp.json"),
             r#"{"mcpServers": {"sah": {"command": "/usr/local/bin/sah"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(state_of(&agent, Component::Mcp), ComponentState::Installed);
+    }
+
+    #[test]
+    fn test_mcp_installed_jsonc_json_branch() {
+        // Agents like Zed ship JSONC settings.json files (line comments and
+        // trailing commas). The detector must read them via the same lenient
+        // parser the installer uses, otherwise install would silently succeed
+        // while detection reports Missing.
+        let dir = TempDir::new().unwrap();
+        let agent = temp_agent(dir.path());
+        std::fs::write(
+            dir.path().join("mcp.json"),
+            "// Zed-style header comment\n{\n  \"mcpServers\": {\n    \"sah\": {\n      \"command\": \"sah\",\n      \"args\": [\"serve\",],\n    },\n  },\n}",
         )
         .unwrap();
         assert_eq!(state_of(&agent, Component::Mcp), ComponentState::Installed);

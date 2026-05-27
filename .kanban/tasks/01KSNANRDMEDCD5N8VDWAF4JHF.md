@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KSMXKZM1NZV1QH0SSKAP0V4P
-position_column: todo
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffb280
 title: 'Doctor/install: accept JSONC anywhere we parse user-written JSON (Postel''s law)'
 ---
 ## What

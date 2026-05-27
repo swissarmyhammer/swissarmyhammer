@@ -195,9 +195,12 @@ pub fn parse_yaml_frontmatter(path: &Path) -> Result<serde_yaml_ng::Value, Regis
 }
 
 /// Read the plugin name from `.claude-plugin/plugin.json`.
+///
+/// Accepts JSONC (comments and trailing commas) because plugin authors edit
+/// this file by hand and may carry over JSONC conventions from agent configs.
 pub fn read_plugin_json(plugin_json_path: &Path) -> Result<String, RegistryError> {
     let content = std::fs::read_to_string(plugin_json_path)?;
-    let json: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
+    let json: serde_json::Value = crate::parse_jsonc(&content).map_err(|e| {
         RegistryError::Validation(format!(
             "Invalid JSON in {}: {}",
             plugin_json_path.display(),
@@ -422,6 +425,53 @@ mcp:
 
         let name = read_plugin_json(&plugin_json).unwrap();
         assert_eq!(name, "my-plugin");
+    }
+
+    #[test]
+    fn test_read_plugin_json_accepts_jsonc() {
+        // Plugin authors may carry JSONC conventions over from their agent
+        // settings. Trailing commas and line comments must parse.
+        let dir = tempfile::tempdir().unwrap();
+        let plugin_json = dir.path().join("plugin.json");
+        std::fs::write(
+            &plugin_json,
+            "// My plugin\n{\n  \"name\": \"my-plugin\",\n  \"description\": \"A plugin\",\n}",
+        )
+        .unwrap();
+
+        let name = read_plugin_json(&plugin_json).unwrap();
+        assert_eq!(name, "my-plugin");
+    }
+
+    #[test]
+    fn test_register_mcp_server_into_jsonc_settings() {
+        // End-to-end regression for the Zed `init user` failure: when the
+        // existing settings file is JSONC (header comment, trailing commas),
+        // `register_mcp_server` must read it via the lenient parser, mutate,
+        // and write strict JSON back. Mirrors the install path that failed
+        // for `~/.config/zed/settings.json`.
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("settings.json");
+        std::fs::write(
+            &config_path,
+            "// Settings for Zed AI\n{\n  \"context_servers\": {},\n}",
+        )
+        .unwrap();
+
+        let entry = McpServerEntry {
+            command: "sah".to_string(),
+            args: vec!["serve".to_string()],
+            env: BTreeMap::new(),
+        };
+
+        register_mcp_server(&config_path, "context_servers", "sah", &entry).unwrap();
+
+        // Written file is now strict JSON; round-trips with `read_plugin_json`-
+        // style strict parsing.
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(json["context_servers"]["sah"]["command"], "sah");
+        assert_eq!(json["context_servers"]["sah"]["args"][0], "serve");
     }
 
     #[test]

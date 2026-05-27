@@ -23,6 +23,8 @@ pub mod doctor;
 pub mod git_source;
 pub mod info;
 pub mod install;
+pub mod jsonc;
+pub use jsonc::parse_jsonc;
 pub mod list;
 pub mod lockfile;
 pub mod mcp_config;

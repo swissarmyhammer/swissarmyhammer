@@ -1282,9 +1282,10 @@ fn deploy_plugin(
                     };
 
                     if let Some(config_path) = config_path {
-                        // Read and register MCP servers from plugin's .mcp.json
+                        // Read and register MCP servers from plugin's .mcp.json.
+                        // Plugin authors edit this file by hand, so accept JSONC.
                         if let Ok(content) = std::fs::read_to_string(&plugin_mcp) {
-                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                            if let Ok(json) = crate::parse_jsonc(&content) {
                                 if let Some(servers) =
                                     json.get(&mcp_cfg.servers_key).and_then(|s| s.as_object())
                                 {
