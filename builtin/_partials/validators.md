@@ -6,20 +6,16 @@ partial: true
 
 ## Validator Feedback
 
-Validators are automated quality gates that run on your code changes. When a validator blocks you (e.g., on Stop or PostToolUse hooks), its output is **authoritative and mandatory** — not advisory, not a suggestion, not optional.
+Validators are automated quality gates on your changes. When one blocks you (Stop or PostToolUse hook), its output is **authoritative and mandatory** — not advisory.
 
-**Validator feedback is part of your task.** A task is not done until all validators pass. Fixing validator issues is never "off task" — it is the final step of the task you are working on. Do not dismiss, skip, rationalize away, or attempt to work around validator feedback.
+**Validator feedback is part of your task.** A task isn't done until all validators pass. Fixing validator issues is the final step, never "off task."
 
 When a validator blocks:
 
-1. **Read the full message.** Understand exactly what the validator flagged and why.
-2. **Fix every issue it raised.** Apply the specific fixes the validator describes. Do not partially address them.
-3. **Re-verify.** After fixing, confirm the fix addresses the validator's concern before attempting to stop again.
+1. **Read the full message.**
+2. **Fix every issue.** Apply the specific fixes the validator describes; don't partially address.
+3. **Re-verify** before attempting to stop again.
 
-**Never treat validator output as:**
-- A distraction from your "real" task
-- Something that can be deferred to a follow-up task
-- An incorrect or overzealous check that you can override
-- Noise that should be acknowledged but not acted on
+**Never treat validator output as:** a distraction, deferrable, overzealous, or noise to acknowledge but ignore.
 
-If a validator flags something you genuinely believe is a false positive, explain your reasoning to the user and ask for guidance — do not silently ignore it.
+If you genuinely believe it's a false positive, explain your reasoning to the user and ask — do not silently ignore it.

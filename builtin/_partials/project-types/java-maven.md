@@ -6,41 +6,24 @@ partial: true
 
 ### Java (Maven) Project Guidelines
 
-**Common Commands:**
+**Testing — do NOT glob; Maven discovers tests in `src/test/java/`:**
+- All: `mvn test`
+- Class: `mvn test -Dtest=ClassName`
+- Method: `mvn test -Dtest=ClassName#methodName`
+- Plus integration: `mvn verify`
+
+**Common commands:**
 - Clean build: `mvn clean install`
 - Compile: `mvn compile`
-- **Run ALL tests:** `mvn test` (runs all JUnit/TestNG tests automatically)
-- **Run specific test class:** `mvn test -Dtest=ClassName`
-- **Run specific test method:** `mvn test -Dtest=ClassName#methodName`
-- **Run integration tests:** `mvn verify` (includes `mvn test` plus integration tests)
-- Package: `mvn package` (creates JAR/WAR)
-- Run: `mvn exec:java` (if configured)
+- Package (JAR/WAR): `mvn package`
 - Skip tests: `mvn install -DskipTests`
-- Dependency tree: `mvn dependency:tree`
+- Run (if configured): `mvn exec:java`
+- Dep tree: `mvn dependency:tree`; unused: `mvn dependency:analyze`
 
-**IMPORTANT:** Do NOT glob for test files. Maven automatically discovers tests in `src/test/java/`. Use `mvn test` to run all tests.
+**Formatting** (if configured in `pom.xml`):
+- Spotless: `mvn spotless:apply` / `spotless:check`
+- google-java-format plugin: check `pom.xml`
 
-**Formatting:**
-- **Spotless:** `mvn spotless:apply` (format) or `mvn spotless:check` (verify) — if configured in `pom.xml`
-- **Google Java Format:** check `pom.xml` for `google-java-format` plugin
-- Check `pom.xml` for formatter plugins before committing
-- ALWAYS run the project's formatter before committing
+**Project structure:** `src/main/java`, `src/main/resources`, `src/test/java`, `target/` git-ignored. Config: `pom.xml`.
 
-**Best Practices:**
-- Use `mvn clean` before full builds to avoid stale artifacts
-- Run `mvn verify` for full validation including integration tests
-- Check `mvn -version` to verify Java and Maven versions
-- Use `mvn dependency:analyze` to find unused dependencies
-
-**Project Structure:**
-- Source code: `src/main/java/`
-- Resources: `src/main/resources/`
-- Tests: `src/test/java/`
-- Test resources: `src/test/resources/`
-- Build output: `target/` (git-ignored)
-- Configuration: `pom.xml` (Maven configuration)
-
-**Multi-Module Projects:**
-- Check for parent `pom.xml` in root
-- Build from root: `mvn clean install`
-- Build specific module: `mvn clean install -pl module-name`
+**Multi-module:** check parent `pom.xml` in root. Specific module: `mvn clean install -pl <module>`.

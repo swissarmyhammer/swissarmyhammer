@@ -6,54 +6,28 @@ partial: true
 
 ### Rust Project Guidelines
 
-**Testing Strategy:**
-- **ALWAYS use `cargo nextest` for running tests** - it's faster and more reliable than `cargo test`
-- **To run ALL tests:** `cargo nextest run --workspace` (recommended)
-- **To run tests for a specific package:** `cargo nextest run --package package-name`
-- **To run a specific test:** `cargo nextest run test_name`
-- **If nextest is not installed:** Install with `cargo install cargo-nextest --locked`
-- **Check nextest is available:** `cargo nextest --version` (if this fails, install it first)
+**Testing — always use `cargo nextest`** (faster, more reliable than `cargo test`):
+- All tests: `cargo nextest run --workspace`
+- Package: `cargo nextest run --package <name>`
+- Single test: `cargo nextest run <test_name>`
+- Install if missing: `cargo install cargo-nextest --locked`
 
-**IMPORTANT:** Do NOT use glob patterns to discover tests. Use the project detection system and run `cargo nextest run ` to execute all tests from the root of the project. 
+**Do NOT glob for test files.** Run `cargo nextest run` from the project root.
 
-**Common Commands:**
-- Build: `cargo build` (debug) or `cargo build --release` (optimized)
-- Check: `cargo check` (faster than build, validates code)
-- Format: `cargo fmt` (auto-format code)
-- Lint: `cargo clippy` (catch common mistakes)
-- Documentation: `cargo doc --open`
-- Test: `cargo nextest run`, you might need to install it first with `cargo install cargo-nextest --locked`
+**Common commands:**
+- Build: `cargo build` / `cargo build --release`
+- Check (faster than build): `cargo check`
+- Format: `cargo fmt` (verify: `cargo fmt --check`) — CI enforces
+- Lint: `cargo clippy -- -D warnings` — CI enforces
+- Docs: `cargo doc --open`
 
-**Formatting:**
-- **Format command:** `cargo fmt`
-- **Check only (no changes):** `cargo fmt --check`
-- ALWAYS run `cargo fmt` before committing — CI enforces this
-- For workspaces, `cargo fmt` formats all members automatically
+Run `cargo fmt` and `cargo clippy` before committing.
 
-**Linting:**
-- **Lint command:** `cargo clippy -- -D warnings`
-- ALWAYS run `cargo clippy` before committing — CI enforces `-D warnings`
+**File locations:** `src/` (source), `tests/` (integration), `examples/`, `src/bin/`, `target/` (git-ignored).
 
-**Best Practices:**
-- Run `cargo fmt` and `cargo clippy` before committing
-- Prefer `cargo check` for quick validation during development
-- Use workspace features if this is part of a Cargo workspace
-
-**File Locations:**
-- Source code: `src/`
-- Tests: `tests/` (integration tests) or inline in `src/` (unit tests)
-- Examples: `examples/`
-- Binaries: `src/bin/`
-- Build output: `target/` (git-ignored)
-
-**Testing**
-
-You can focus testing on what you changed and pick up dependencies. Very efficient!
+**Targeted testing** — picks up changed crate + reverse deps:
 
 ```
-# Run tests in my-crate AND everything that transitively depends on it
 cargo nextest run -E 'rdeps(my-crate)'
-
-# Multiple changed packages (union them)
 cargo nextest run -E 'rdeps(crate-a) | rdeps(crate-b)'
 ```
