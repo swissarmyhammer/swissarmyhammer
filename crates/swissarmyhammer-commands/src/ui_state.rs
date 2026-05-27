@@ -748,13 +748,33 @@ impl UIState {
 
     /// Set the per-window board assignment.
     ///
-    /// Writes to `windows[label].board_path`.
+    /// Writes to `windows[label].board_path`. When the new `path` differs
+    /// from the window's previous `board_path`, also clears the window's
+    /// `active_perspective_id` and `filtered_task_ids` slots in the same
+    /// write lock — perspective IDs and their resolved task ID lists are
+    /// bound to a specific board's id space, so carrying them across a
+    /// board switch would render the new board against a stale filter
+    /// (none of its task IDs match the stale list) and leave every column
+    /// empty until the user toggles a perspective tab. The frontend's
+    /// `useAutoSelectActivePerspective` then re-picks the new board's
+    /// default perspective and dispatches `perspective.switch` to
+    /// repopulate `filtered_task_ids`.
+    ///
+    /// Same-path calls are a no-op for perspective state: redundant writes
+    /// (e.g. the Tauri adapter re-issuing the canonical path after the
+    /// command already wrote it) must not race with the auto-select
+    /// repair path.
+    ///
     /// Auto-saves if a config path is configured.
     pub fn set_window_board(&self, label: &str, path: &str) {
         {
             let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
             let ws = inner.windows.entry(label.to_string()).or_default();
-            ws.board_path = path.to_string();
+            if ws.board_path != path {
+                ws.board_path = path.to_string();
+                ws.active_perspective_id = String::new();
+                ws.filtered_task_ids = None;
+            }
         }
         self.try_save();
     }
@@ -1868,6 +1888,99 @@ mod tests {
         let state = UIState::new();
         state.set_window_board("main", "/boards/foo");
         assert_eq!(state.window_board("main").as_deref(), Some("/boards/foo"));
+    }
+
+    /// Switching the window's board to a different path must clear the
+    /// per-window perspective slot (`active_perspective_id` +
+    /// `filtered_task_ids`).
+    ///
+    /// Both fields are bound to the *previous* board's id space; carrying
+    /// them across a board switch causes the new board to render against a
+    /// stale filter (none of its task IDs match the stale list), so every
+    /// column looks empty until the user toggles a perspective tab. The
+    /// reset lives inside `set_window_board` so the frontend never observes
+    /// a (new board, old perspective id, old filtered ids) tuple.
+    #[test]
+    fn set_window_board_clears_perspective_state_when_path_changes() {
+        let state = UIState::new();
+        state.set_window_board("main", "/boards/old");
+        state.switch_perspective("main", "p-old", vec!["t1".to_string(), "t2".to_string()]);
+        assert_eq!(state.active_perspective_id("main"), "p-old");
+        assert_eq!(state.filtered_task_ids("main"), vec!["t1", "t2"]);
+
+        state.set_window_board("main", "/boards/new");
+
+        assert_eq!(state.window_board("main").as_deref(), Some("/boards/new"));
+        assert_eq!(
+            state.active_perspective_id("main"),
+            "",
+            "active_perspective_id must be cleared when switching to a new board",
+        );
+        // `filtered_task_ids()` returns Vec — we need to look at the raw
+        // window state to distinguish None from Some(empty).
+        let inner = state.inner.read().unwrap();
+        let ws = inner.windows.get("main").expect("main window present");
+        assert!(
+            ws.filtered_task_ids.is_none(),
+            "filtered_task_ids must be reset to None (not Some(empty)) when \
+             switching to a new board so the frontend reads it as 'never \
+             switched → show all tasks' until the auto-select repair path \
+             fires switch_perspective for the new board"
+        );
+    }
+
+    /// Calling `set_window_board` with the *same* path the window already
+    /// has must NOT clobber the window's perspective slot.
+    ///
+    /// This is the idempotency guarantee: redundant writes (e.g. when the
+    /// adapter re-runs `set_window_board` with the canonical path after the
+    /// command already wrote it) must be a no-op for perspective state, or
+    /// they would race with the auto-select repair path.
+    #[test]
+    fn set_window_board_with_same_path_preserves_perspective_state() {
+        let state = UIState::new();
+        state.set_window_board("main", "/boards/foo");
+        state.switch_perspective("main", "p-keep", vec!["t1".to_string(), "t2".to_string()]);
+        assert_eq!(state.active_perspective_id("main"), "p-keep");
+
+        state.set_window_board("main", "/boards/foo");
+
+        assert_eq!(
+            state.active_perspective_id("main"),
+            "p-keep",
+            "same-path set_window_board must leave active_perspective_id intact",
+        );
+        assert_eq!(
+            state.filtered_task_ids("main"),
+            vec!["t1", "t2"],
+            "same-path set_window_board must leave filtered_task_ids intact",
+        );
+    }
+
+    /// First assignment of a board to a window (no previous `board_path`)
+    /// counts as a board transition (empty path → real path), so any
+    /// stale perspective state seeded before the board landed must be
+    /// reset. Perspective IDs belong to a specific board's id space; a
+    /// perspective set against "no board" is by definition stale once a
+    /// real board path is assigned.
+    #[test]
+    fn set_window_board_first_assignment_clears_pre_seeded_perspective_state() {
+        let state = UIState::new();
+        // Seed perspective state on a window that has no board_path yet.
+        state.switch_perspective("main", "p-pre", vec!["t1".to_string()]);
+        assert!(state.window_board("main").is_none());
+
+        state.set_window_board("main", "/boards/first");
+
+        // Previous board_path was "" (default), new path is "/boards/first";
+        // the two differ so the reset fires.
+        assert_eq!(state.active_perspective_id("main"), "");
+        let inner = state.inner.read().unwrap();
+        assert!(inner
+            .windows
+            .get("main")
+            .map(|ws| ws.filtered_task_ids.is_none())
+            .unwrap_or(false));
     }
 
     #[test]
