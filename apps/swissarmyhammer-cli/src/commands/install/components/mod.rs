@@ -1267,14 +1267,24 @@ pub struct ClaudeMd;
 ///
 /// Returns `None` if the file does not exist, `Some(true)` if the preamble is present,
 /// and `Some(false)` if it is missing.
+///
+/// Delegates the preamble check to [`mirdan::status::preamble_present`] so the
+/// test helper agrees by construction with what `mirdan status` detects. The
+/// extra "file does not exist" vs. "file exists but has no preamble" distinction
+/// (returning `None` vs. `Some(false)`) is kept for the install-layer tests
+/// that want to assert on file presence as well as preamble presence.
+///
+/// Note: an existing-but-unreadable file (e.g. permission denied on
+/// `read_to_string`) is reported as `Some(false)` rather than `None`, because
+/// [`mirdan::status::preamble_present`] treats read failure as "no preamble".
+/// In practice the install layer creates these files itself, so an unreadable
+/// CLAUDE.md is not a path the tests exercise.
 #[cfg(test)]
 fn preamble_file_has_preamble(path: &std::path::Path) -> Option<bool> {
     if !path.exists() {
         return None;
     }
-    let content = std::fs::read_to_string(path).ok()?;
-    let first_non_empty = content.lines().find(|l| !l.trim().is_empty());
-    Some(first_non_empty.is_some_and(|line| line.contains(CLAUDE_MD_PREAMBLE)))
+    Some(mirdan::status::preamble_present(path))
 }
 
 /// Ensure the instructions file at `path` has the required preamble.
@@ -1297,8 +1307,7 @@ fn ensure_preamble(path: &std::path::Path) -> Result<&'static str, String> {
     }
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-    let first_non_empty = content.lines().find(|l| !l.trim().is_empty());
-    if first_non_empty.is_some_and(|line| line.contains(CLAUDE_MD_PREAMBLE)) {
+    if mirdan::status::preamble_present_in(&content) {
         return Ok("already present");
     }
     let new_content = format!("{}\n\n{}", CLAUDE_MD_PREAMBLE, content);
@@ -1320,8 +1329,7 @@ fn remove_preamble(path: &std::path::Path) -> Result<&'static str, String> {
     }
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-    let first_non_empty = content.lines().find(|l| !l.trim().is_empty());
-    if !first_non_empty.is_some_and(|line| line.contains(CLAUDE_MD_PREAMBLE)) {
+    if !mirdan::status::preamble_present_in(&content) {
         return Ok("no preamble");
     }
     // Remove the preamble line and any immediately following blank lines
@@ -1605,6 +1613,126 @@ mod tests {
         fn drop(&mut self) {
             std::env::remove_var(self.0);
         }
+    }
+
+    /// Build a minimal `AgentDef` for tests that only need the agent identity +
+    /// a `global_settings_path` (e.g. the install/status agreement tests for
+    /// deny-Bash). All other path fields are left `None` and the detect list is
+    /// empty. Centralising this means adding a new field to `AgentDef` only
+    /// breaks `AgentDef` itself, not every test that happens to need a
+    /// synthetic agent.
+    fn synthetic_agent_def(global_settings: &std::path::Path) -> mirdan::agents::AgentDef {
+        mirdan::agents::AgentDef {
+            id: "claude-code".to_string(),
+            name: "Claude Code".to_string(),
+            project_path: "skills".to_string(),
+            global_path: "~/global-skills".to_string(),
+            detect: vec![],
+            symlink_policy: mirdan::agents::SymlinkPolicy::default(),
+            mcp_config: None,
+            plugin_path: None,
+            global_plugin_path: None,
+            agent_path: None,
+            global_agent_path: None,
+            instructions_path: None,
+            global_instructions_path: None,
+            settings_path: Some("settings.json".to_string()),
+            global_settings_path: Some(global_settings.to_string_lossy().to_string()),
+            doctor: false,
+        }
+    }
+
+    // ── Shared-detector agreement tests ─────────────────────────────────
+    //
+    // These tests pin the install layer to the same predicates `mirdan::status`
+    // uses for `mirdan status` / `sah doctor`. They install via the production
+    // ensure/merge paths and then detect with `mirdan::status` directly, so any
+    // future drift between writer and detector breaks the build.
+
+    /// `ensure_preamble` writes a file that `mirdan::status::preamble_present`
+    /// recognizes as installed.
+    #[test]
+    fn test_install_preamble_agrees_with_status_detector() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let claude_md = temp.path().join("CLAUDE.md");
+
+        // Detector reports missing before any install.
+        assert!(!mirdan::status::preamble_present(&claude_md));
+
+        // Install via the production path.
+        ensure_preamble(&claude_md).unwrap();
+
+        // Detector now reports installed.
+        assert!(
+            mirdan::status::preamble_present(&claude_md),
+            "preamble_present must agree with what ensure_preamble wrote"
+        );
+
+        // Prepending onto an existing file must also be detected as installed.
+        let other = temp.path().join("other.md");
+        std::fs::write(&other, "existing project notes\n").unwrap();
+        ensure_preamble(&other).unwrap();
+        assert!(
+            mirdan::status::preamble_present(&other),
+            "preamble_present must agree after ensure_preamble prepends"
+        );
+    }
+
+    /// `install_deny_bash_for_agent` writes a settings file that
+    /// `mirdan::status::permissions_present` recognizes as installed.
+    #[test]
+    fn test_install_deny_bash_agrees_with_status_detector() {
+        use swissarmyhammer_common::reporter::NullReporter;
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let settings = temp.path().join("settings.json");
+
+        // Detector reports missing before any install.
+        assert!(!mirdan::status::permissions_present(&settings));
+
+        // Install via the production per-agent path. The AgentDef is only used
+        // for the reporter message, so a synthetic one is fine.
+        let def = synthetic_agent_def(&settings);
+        let reporter = NullReporter;
+        let result = install_deny_bash_for_agent("deny-bash", &def, &settings, &reporter);
+        assert_eq!(
+            result.status,
+            swissarmyhammer_common::lifecycle::InitStatus::Ok
+        );
+
+        // Detector now reports installed.
+        assert!(
+            mirdan::status::permissions_present(&settings),
+            "permissions_present must agree with what install_deny_bash_for_agent wrote"
+        );
+    }
+
+    /// `mirdan::mcp_config::register_mcp_server` (the writer the install layer
+    /// calls via `register_agent_mcp`) writes a config file that
+    /// `mirdan::status::mcp_server_installed` recognizes as installed.
+    #[test]
+    fn test_install_mcp_agrees_with_status_detector() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let mcp_json = temp.path().join("mcp.json");
+
+        // Detector reports missing before any install.
+        assert!(!mirdan::status::mcp_server_installed(&mcp_json));
+
+        // Install via the same `mirdan::mcp_config` entry point the install
+        // layer calls in `register_agent_mcp`.
+        mirdan::mcp_config::register_mcp_server(
+            &mcp_json,
+            "mcpServers",
+            "sah",
+            &sah_mcp_server_entry(),
+        )
+        .expect("register_mcp_server should succeed");
+
+        // Detector now reports installed.
+        assert!(
+            mirdan::status::mcp_server_installed(&mcp_json),
+            "mcp_server_installed must agree with what register_mcp_server wrote"
+        );
     }
 
     // ── McpRegistration component tests ─────────────────────────────────

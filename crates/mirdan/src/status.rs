@@ -404,7 +404,11 @@ fn init_command(scope: InitScope) -> &'static str {
 /// handful of agents (e.g. vscode). We do not consult the agent's configured
 /// `servers_key`: an agent with a non-default key beyond these two is not
 /// currently detected here.
-fn mcp_server_installed(path: &Path) -> bool {
+///
+/// This is the **single source of truth** for "is the sah MCP server installed
+/// at this path?" and is consumed by both `mirdan::status` and the sah-cli
+/// install layer so detection and installation cannot drift.
+pub fn mcp_server_installed(path: &Path) -> bool {
     let Some(root) = read_json(path) else {
         return false;
     };
@@ -436,10 +440,25 @@ fn dir_non_empty(path: &Path) -> bool {
 
 /// True when the instructions file at `path` exists and its first non-empty
 /// line contains [`PREAMBLE_MARKER`].
-fn preamble_present(path: &Path) -> bool {
+///
+/// This is the **single source of truth** for "is the sah preamble present at
+/// this path?" and is consumed by both `mirdan::status` and the sah-cli install
+/// layer so detection and installation cannot drift.
+pub fn preamble_present(path: &Path) -> bool {
     let Ok(content) = std::fs::read_to_string(path) else {
         return false;
     };
+    preamble_present_in(&content)
+}
+
+/// True when `content`'s first non-empty line contains [`PREAMBLE_MARKER`].
+///
+/// Companion to [`preamble_present`] for callers that have already read the
+/// file (e.g. the install layer's `ensure`/`merge` paths, which need both the
+/// detection result and the original content). Keeping a single string-based
+/// predicate avoids reading the file twice and guarantees the install layer
+/// and `mirdan status` apply identical "is the preamble there?" logic.
+pub fn preamble_present_in(content: &str) -> bool {
     content
         .lines()
         .find(|l| !l.trim().is_empty())
@@ -447,7 +466,11 @@ fn preamble_present(path: &Path) -> bool {
 }
 
 /// True when the settings JSON at `path` lists `"Bash"` under `permissions.deny`.
-fn permissions_present(path: &Path) -> bool {
+///
+/// This is the **single source of truth** for "is the sah Bash-deny permission
+/// installed at this path?" and is consumed by both `mirdan::status` and the
+/// sah-cli install layer so detection and installation cannot drift.
+pub fn permissions_present(path: &Path) -> bool {
     let Some(root) = read_json(path) else {
         return false;
     };
@@ -498,6 +521,7 @@ mod tests {
             global_instructions_path: Some(p("global-CLAUDE.md")),
             settings_path: Some(p("settings.json")),
             global_settings_path: Some(p("global-settings.json")),
+            doctor: false,
         }
     }
 
@@ -519,6 +543,7 @@ mod tests {
             global_instructions_path: None,
             settings_path: None,
             global_settings_path: None,
+            doctor: false,
         }
     }
 
@@ -855,6 +880,120 @@ mod tests {
         let entry = &json["components"][0];
         assert_eq!(entry["state"], "n/a");
         assert!(entry["path"].is_null());
+    }
+
+    /// Build a synthetic `codex` `AgentDef` whose every probed path lands
+    /// inside `dir`. This mirrors the `temp_agent` helper but pins the agent
+    /// to `codex` so the same shape the real `agents_default.yaml` entry
+    /// produces (no `agent_path`, but MCP + Preamble paths set) is exercised
+    /// end-to-end.
+    fn codex_temp_agent(dir: &Path) -> AgentDef {
+        let p = |name: &str| dir.join(name).to_string_lossy().to_string();
+        AgentDef {
+            id: "codex".to_string(),
+            name: "Codex".to_string(),
+            project_path: p("skills"),
+            global_path: p("global-skills"),
+            // detect via a directory inside dir so this agent is detected
+            // (and selected by get_detected_agents) without depending on a
+            // real $HOME layout.
+            detect: vec![DetectMethod::Dir { dir: p("detect") }],
+            symlink_policy: SymlinkPolicy::default(),
+            mcp_config: Some(crate::agents::McpConfigDef {
+                project_path: p("config.toml"),
+                global_path: Some(p("global-config.toml")),
+                servers_key: "mcp_servers".to_string(),
+            }),
+            plugin_path: None,
+            global_plugin_path: None,
+            // codex has no subagents directory.
+            agent_path: None,
+            global_agent_path: None,
+            instructions_path: Some(p("AGENTS.md")),
+            global_instructions_path: Some(p("global-AGENTS.md")),
+            settings_path: None,
+            global_settings_path: None,
+            doctor: true,
+        }
+    }
+
+    #[test]
+    fn codex_full_stack() {
+        let dir = TempDir::new().unwrap();
+        // Make the detect dir exist so get_detected_agents picks this entry up.
+        std::fs::create_dir_all(dir.path().join("detect")).unwrap();
+
+        let agent = codex_temp_agent(dir.path());
+        let config = AgentsConfig {
+            agents: vec![agent],
+        };
+
+        let scopes = [InitScope::Project, InitScope::User];
+        let statuses = check_all(&config, &scopes);
+
+        // With both Preamble and MCP path fields populated for both scopes,
+        // the four (component × scope) cells we care about must resolve to a
+        // concrete on-disk state (Installed or Missing), never NotApplicable.
+        for &component in &[Component::Mcp, Component::Preamble] {
+            for &scope in &scopes {
+                let status = statuses
+                    .iter()
+                    .find(|s| s.component == component && s.scope == scope)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "expected codex status row for component {:?} at scope {:?}",
+                            component, scope
+                        )
+                    });
+                assert_ne!(
+                    status.state,
+                    ComponentState::NotApplicable,
+                    "codex {:?} at {:?} must not be NotApplicable",
+                    component,
+                    scope
+                );
+            }
+        }
+
+        // With nothing on disk yet, both MCP and Preamble report Missing at
+        // both scopes — the rows are reachable but the artifacts are not
+        // installed.
+        let project_mcp = statuses
+            .iter()
+            .find(|s| s.component == Component::Mcp && s.scope == InitScope::Project)
+            .unwrap();
+        assert_eq!(project_mcp.state, ComponentState::Missing);
+        let user_mcp = statuses
+            .iter()
+            .find(|s| s.component == Component::Mcp && s.scope == InitScope::User)
+            .unwrap();
+        assert_eq!(user_mcp.state, ComponentState::Missing);
+
+        let project_preamble = statuses
+            .iter()
+            .find(|s| s.component == Component::Preamble && s.scope == InitScope::Project)
+            .unwrap();
+        assert_eq!(project_preamble.state, ComponentState::Missing);
+        let user_preamble = statuses
+            .iter()
+            .find(|s| s.component == Component::Preamble && s.scope == InitScope::User)
+            .unwrap();
+        assert_eq!(user_preamble.state, ComponentState::Missing);
+
+        // Write a preamble file at the user scope path and re-check: that one
+        // cell flips to Installed, proving the row genuinely participates in
+        // detection rather than being permanently NotApplicable.
+        std::fs::write(
+            dir.path().join("global-AGENTS.md"),
+            format!("{}\n", PREAMBLE_MARKER),
+        )
+        .unwrap();
+        let statuses = check_all(&config, &scopes);
+        let user_preamble = statuses
+            .iter()
+            .find(|s| s.component == Component::Preamble && s.scope == InitScope::User)
+            .unwrap();
+        assert_eq!(user_preamble.state, ComponentState::Installed);
     }
 
     #[test]

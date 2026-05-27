@@ -40,6 +40,19 @@ test-group = "treesitter-embedding"
 # Warn every 60s, kill after 6 periods (6 minutes)
 slow-timeout = { period = "60s", terminate-after = 6 }
 
+# Same root cause as treesitter-embedding above, applied to the
+# swissarmyhammer-tools code_context unit tests: they call
+# `create_indexed_project` which invokes the real `index_discovered_files_async`
+# indexer, which loads the qwen-embedding model. With nextest's
+# process-per-test isolation there is no in-process cache, so running these in
+# parallel triggers N cold model loads and the slow-timeout kills 11 of them at
+# 300s. Serialising this subset keeps the real pipeline under test while making
+# each run measure in seconds, not minutes.
+[[profile.default.overrides]]
+filter = "package(swissarmyhammer-tools) and test(/^mcp::tools::code_context::tests::/)"
+test-group = "treesitter-embedding"
+slow-timeout = { period = "60s", terminate-after = 6 }
+
 # Apply serial execution to llama-embedding tests
 [[profile.default.overrides]]
 filter = "package(llama-embedding)"
