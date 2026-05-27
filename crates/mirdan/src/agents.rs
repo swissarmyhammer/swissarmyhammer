@@ -87,6 +87,15 @@ pub struct AgentDef {
     /// Global settings/permissions file (e.g. Claude Code: `~/.claude/settings.json`).
     #[serde(default)]
     pub global_settings_path: Option<String>,
+    /// Whether the `sah doctor` check-stack runs against this agent.
+    ///
+    /// When `true`, the doctor reports per-component install rows (MCP, Skills,
+    /// Subagents, Preamble, Permissions) for this agent. When `false` (the
+    /// default for any agent that omits the field), the doctor skips it
+    /// entirely. Only the four agents we explicitly support — `claude-code`,
+    /// `zed-ai`, `copilot`, `codex` — should set this to `true`.
+    #[serde(default)]
+    pub doctor: bool,
 }
 
 /// How to detect if an agent is installed.
@@ -465,6 +474,7 @@ mod tests {
                 global_instructions_path: None,
                 settings_path: None,
                 global_settings_path: None,
+                doctor: false,
             }],
         };
         let detected = get_detected_agents(&config);
@@ -490,6 +500,7 @@ mod tests {
             global_instructions_path: None,
             settings_path: None,
             global_settings_path: None,
+            doctor: false,
         };
         assert_eq!(agent_project_skill_dir(&def), PathBuf::from(".test/skills"));
     }
@@ -556,6 +567,7 @@ mod tests {
             global_instructions_path: Some("~/.claude/CLAUDE.md".to_string()),
             settings_path: Some(".claude/settings.json".to_string()),
             global_settings_path: Some("~/.claude/settings.json".to_string()),
+            doctor: false,
         };
         let global = agent_global_instructions_file(&def).expect("should be Some");
         assert!(
@@ -588,6 +600,7 @@ mod tests {
             global_instructions_path: None,
             settings_path: Some(".claude/settings.json".to_string()),
             global_settings_path: Some("~/.claude/settings.json".to_string()),
+            doctor: false,
         };
         assert_eq!(
             agent_project_settings_file(&def),
@@ -616,6 +629,7 @@ mod tests {
             global_instructions_path: None,
             settings_path: None,
             global_settings_path: None,
+            doctor: false,
         };
         assert!(agent_project_instructions_file(&def).is_none());
         assert!(agent_global_instructions_file(&def).is_none());
@@ -644,6 +658,7 @@ mod tests {
                     global_instructions_path: None,
                     settings_path: None,
                     global_settings_path: None,
+                    doctor: false,
                 },
                 AgentDef {
                     id: "cursor".to_string(),
@@ -663,6 +678,7 @@ mod tests {
                     global_instructions_path: None,
                     settings_path: None,
                     global_settings_path: None,
+                    doctor: false,
                 },
             ],
         }
@@ -757,6 +773,98 @@ mod tests {
                 agent.id
             );
         }
+    }
+
+    #[test]
+    fn agents_default_doctored_paths() {
+        let config = load_agents_config().unwrap();
+
+        // The four agents that are explicitly doctored — all must have
+        // `doctor: true` and any agent NOT in this set must have `doctor: false`.
+        let doctored_ids = ["claude-code", "zed-ai", "copilot", "codex"];
+        for agent in &config.agents {
+            let expected = doctored_ids.contains(&agent.id.as_str());
+            assert_eq!(
+                agent.doctor, expected,
+                "agent '{}' doctor flag mismatch (expected {})",
+                agent.id, expected
+            );
+        }
+
+        // claude-code: already complete; just verify the doctor flag is set and
+        // the full path stack is wired (sanity).
+        let claude = config
+            .agents
+            .iter()
+            .find(|a| a.id == "claude-code")
+            .expect("claude-code agent should exist");
+        assert!(claude.doctor);
+        assert!(claude.mcp_config.is_some());
+        assert_eq!(claude.instructions_path.as_deref(), Some("CLAUDE.md"));
+        assert_eq!(
+            claude.global_instructions_path.as_deref(),
+            Some("~/.claude/CLAUDE.md")
+        );
+        assert_eq!(claude.agent_path.as_deref(), Some(".claude/agents"));
+
+        // zed-ai: mcp_config wired, no instructions_path, no agent_path.
+        let zed = config
+            .agents
+            .iter()
+            .find(|a| a.id == "zed-ai")
+            .expect("zed-ai agent should exist");
+        assert!(zed.doctor);
+        let zed_mcp = zed.mcp_config.as_ref().expect("zed-ai mcp_config");
+        assert_eq!(zed_mcp.project_path, ".zed/settings.json");
+        assert_eq!(
+            zed_mcp.global_path.as_deref(),
+            Some("~/.config/zed/settings.json")
+        );
+        assert_eq!(zed_mcp.servers_key, "context_servers");
+        assert!(zed.instructions_path.is_none());
+        assert!(zed.global_instructions_path.is_none());
+        assert!(zed.agent_path.is_none());
+        assert!(zed.global_agent_path.is_none());
+
+        // copilot: instructions_path wired, no agent_path.
+        let copilot = config
+            .agents
+            .iter()
+            .find(|a| a.id == "copilot")
+            .expect("copilot agent should exist");
+        assert!(copilot.doctor);
+        assert_eq!(
+            copilot.instructions_path.as_deref(),
+            Some(".github/copilot-instructions.md")
+        );
+        assert_eq!(
+            copilot.global_instructions_path.as_deref(),
+            Some("~/.config/github-copilot/intellij/global-copilot-instructions.md")
+        );
+        assert!(copilot.agent_path.is_none());
+        assert!(copilot.global_agent_path.is_none());
+
+        // codex: mcp_config wired, instructions_path wired, no agent_path.
+        let codex = config
+            .agents
+            .iter()
+            .find(|a| a.id == "codex")
+            .expect("codex agent should exist");
+        assert!(codex.doctor);
+        let codex_mcp = codex.mcp_config.as_ref().expect("codex mcp_config");
+        assert_eq!(codex_mcp.project_path, ".codex/config.toml");
+        assert_eq!(
+            codex_mcp.global_path.as_deref(),
+            Some("~/.codex/config.toml")
+        );
+        assert_eq!(codex_mcp.servers_key, "mcp_servers");
+        assert_eq!(codex.instructions_path.as_deref(), Some("AGENTS.md"));
+        assert_eq!(
+            codex.global_instructions_path.as_deref(),
+            Some("~/.codex/AGENTS.md")
+        );
+        assert!(codex.agent_path.is_none());
+        assert!(codex.global_agent_path.is_none());
     }
 
     #[test]

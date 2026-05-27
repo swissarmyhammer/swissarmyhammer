@@ -871,6 +871,7 @@ mod tests {
             global_instructions_path: None,
             settings_path: None,
             global_settings_path: None,
+            doctor: false,
         };
         let config = AgentsConfig { agents: vec![bare] };
 

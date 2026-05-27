@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffad80
 title: 'Doctor: extend agents_default.yaml path coverage for the 4 doctored agents'
 ---
 ## What
