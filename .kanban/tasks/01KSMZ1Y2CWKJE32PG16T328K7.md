@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KSMZ15RVAEQ6MYQEPGXSEP9K
-position_column: todo
-position_ordinal: '8380'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffae80
 project: ai-panel
 title: Persist selected model per-board via `model` field on the board entity
 ---
@@ -33,32 +33,39 @@ The board entity already round-trips through `EntityContext::read`/`write` to `.
 
 ## Acceptance Criteria
 
-- [ ] `UpdateBoard::new().with_model("qwen").execute(&ctx)` succeeds and `.kanban/boards/board.yaml` on disk contains a `model: qwen` line.
-- [ ] `UpdateBoard::new().with_model("claude-code").execute(&ctx)` succeeds.
-- [ ] `UpdateBoard::new().with_model("bogus-xyz").execute(&ctx)` returns `ExecutionResult::Failed` with an error mentioning the unknown id.
-- [ ] `UpdateBoard::new().with_model("qwen-embedding").execute(&ctx)` returns `Failed` (embedding executor cannot back a chat agent).
-- [ ] `GetBoard::default().execute(&ctx)` returns `"model"` in both `include_counts: true` and `include_counts: false` shapes; value is `null` when unset, the chosen id when set.
-- [ ] `UpdateBoard` with only `name` set does not clobber an existing `model` value.
-- [ ] Existing `test_update_board_name` and `test_update_board_description` still pass.
+- [x] `UpdateBoard::new().with_model("qwen").execute(&ctx)` succeeds and `.kanban/boards/board.yaml` on disk contains a `model: qwen` line.
+- [x] `UpdateBoard::new().with_model("claude-code").execute(&ctx)` succeeds.
+- [x] `UpdateBoard::new().with_model("bogus-xyz").execute(&ctx)` returns `ExecutionResult::Failed` with an error mentioning the unknown id.
+- [x] `UpdateBoard::new().with_model("qwen-embedding").execute(&ctx)` returns `Failed` (embedding executor cannot back a chat agent).
+- [x] `GetBoard::default().execute(&ctx)` returns `"model"` in both `include_counts: true` and `include_counts: false` shapes; value is `null` when unset, the chosen id when set.
+- [x] `UpdateBoard` with only `name` set does not clobber an existing `model` value.
+- [x] Existing `test_update_board_name` and `test_update_board_description` still pass.
 
 ## Tests
 
 Add to `crates/swissarmyhammer-kanban/src/board/update.rs::tests`:
 
-- [ ] `test_update_board_model_persists_to_yaml` — set model, then read the raw `.kanban/boards/board.yaml` file from disk and assert it contains the model id.
-- [ ] `test_update_board_model_round_trips_via_get_board` — set model, then `GetBoard`, assert `result["model"] == "qwen"`.
-- [ ] `test_update_board_rejects_unknown_model` — `with_model("bogus-xyz")` → `Failed`.
-- [ ] `test_update_board_rejects_embedding_model` — `with_model("qwen-embedding")` → `Failed`.
-- [ ] `test_update_board_accepts_claude_code` — round-trips `claude-code`.
-- [ ] `test_update_board_accepts_qwen` — round-trips `qwen` (depends on prior task tagging it).
-- [ ] `test_update_board_model_preserved_when_only_name_changes` — set model, then update name only, then GetBoard, assert model still present.
+- [x] `test_update_board_model_persists_to_yaml` — set model, then read the raw `.kanban/boards/board.yaml` file from disk and assert it contains the model id.
+- [x] `test_update_board_model_round_trips_via_get_board` — set model, then `GetBoard`, assert `result["model"] == "qwen"`.
+- [x] `test_update_board_rejects_unknown_model` — `with_model("bogus-xyz")` → `Failed`.
+- [x] `test_update_board_rejects_embedding_model` — `with_model("qwen-embedding")` → `Failed`.
+- [x] `test_update_board_accepts_claude_code` — round-trips `claude-code`.
+- [x] `test_update_board_accepts_qwen` — round-trips `qwen` (depends on prior task tagging it).
+- [x] `test_update_board_model_preserved_when_only_name_changes` — set model, then update name only, then GetBoard, assert model still present.
 
 Add to `crates/swissarmyhammer-kanban/src/board/get.rs::tests`:
 
-- [ ] `test_get_board_model_null_when_unset` — fresh board has `result["model"]` as null (both `include_counts: true` and `false`).
+- [x] `test_get_board_model_null_when_unset` — fresh board has `result["model"]` as null (both `include_counts: true` and `false`).
 
 Run: `cargo test -p swissarmyhammer-kanban board::update board::get`.
 
 ## Workflow
 
 - Use `/tdd` — write all the failing tests first, then make them pass.
+
+## Implementation Notes
+
+- Added `swissarmyhammer-config` workspace dependency to `crates/swissarmyhammer-kanban/Cargo.toml` so the validator can call `ModelManager::find_agent_by_name` and `parse_model_config`. No new dependency direction — config does not depend on kanban.
+- Extracted a private `validate_model_id` helper at module scope in `update.rs` rather than inlining inside `execute` — it mirrors `resolve_model_config` in `kanban-app/src/ai/models.rs` and the kept-separate function keeps `execute` short and the validation rules in one place. Uses the existing `KanbanError::InvalidValue` variant with field `"model"` for both unknown ids and embedding-executor rejections.
+- Also threaded `model` through `dispatch.rs::execute_board_operation` so MCP / CLI callers of `update board` can pass it. The dispatch reads `op.get_string("model")` next to the existing `name` / `description` reads.
+- All 64 `board::*` tests pass (9 new + 55 existing). `cargo check --workspace --lib --tests` and `cargo clippy -p swissarmyhammer-kanban -- -D warnings` both clean.

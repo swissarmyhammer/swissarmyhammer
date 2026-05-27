@@ -8715,6 +8715,7 @@ dependencies = [
  "serial_test",
  "swissarmyhammer-commands",
  "swissarmyhammer-common",
+ "swissarmyhammer-config",
  "swissarmyhammer-directory",
  "swissarmyhammer-entity",
  "swissarmyhammer-fields",

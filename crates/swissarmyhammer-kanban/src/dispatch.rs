@@ -56,6 +56,9 @@ async fn execute_board_operation(
             if let Some(desc) = op.get_string("description") {
                 cmd = cmd.with_description(desc);
             }
+            if let Some(model) = op.get_string("model") {
+                cmd = cmd.with_model(model);
+            }
             processor.process(&cmd, ctx).await
         }
         _ => Err(KanbanError::parse(format!(

@@ -23,6 +23,7 @@ open = "5"
 
 # Local workspace dependencies
 swissarmyhammer-common = { workspace = true }
+swissarmyhammer-config = { workspace = true }
 swissarmyhammer-directory = { workspace = true }
 swissarmyhammer-fields = { workspace = true }
 swissarmyhammer-entity = { workspace = true }
