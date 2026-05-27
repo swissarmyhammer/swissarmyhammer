@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KSMZ1Y2CWKJE32PG16T328K7
-position_column: todo
-position_ordinal: '8580'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffaf80
 project: ai-panel
 title: 'Integration test: per-board model isolation (two boards, two models, no bleed)'
 ---
@@ -42,16 +42,18 @@ If `swissarmyhammer-config::model::ModelManager::find_agent_by_name` + `parse_mo
 
 This proves the stored id resolves to a runnable executor, not just an opaque string. If it pulls in heavy test setup, drop it — the round-trip assertions alone are enough.
 
+Decision: skipped. The validator inside `UpdateBoard::execute` already invokes `find_agent_by_name` + `parse_model_config` + executor-type check, and the existing inline unit tests in `src/board/update.rs` cover that resolution. Duplicating it here would add no coverage.
+
 ## Acceptance Criteria
 
-- [ ] New test file `crates/swissarmyhammer-kanban/tests/per_board_model_isolation.rs` exists.
-- [ ] The test passes locally.
-- [ ] The test fails if a regression makes `UpdateBoard` write the model to a shared/global location (e.g. a static or a single shared file).
+- [x] New test file `crates/swissarmyhammer-kanban/tests/per_board_model_isolation.rs` exists.
+- [x] The test passes locally.
+- [x] The test fails if a regression makes `UpdateBoard` write the model to a shared/global location (e.g. a static or a single shared file).
 
 ## Tests
 
-- [ ] `test_per_board_model_isolation` — the test described above.
-- [ ] Run: `cargo test -p swissarmyhammer-kanban --test per_board_model_isolation`.
+- [x] `test_per_board_model_isolation` — the test described above.
+- [x] Run: `cargo test -p swissarmyhammer-kanban --test per_board_model_isolation`.
 
 ## Workflow
 
