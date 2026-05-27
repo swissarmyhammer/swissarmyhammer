@@ -17,178 +17,178 @@ _sah() {
                 cmd="sah"
                 ;;
             sah,agent)
-                cmd="sah__subcmd__agent"
+                cmd="sah__agent"
                 ;;
             sah,completion)
-                cmd="sah__subcmd__completion"
+                cmd="sah__completion"
                 ;;
             sah,deinit)
-                cmd="sah__subcmd__deinit"
+                cmd="sah__deinit"
                 ;;
             sah,doctor)
-                cmd="sah__subcmd__doctor"
+                cmd="sah__doctor"
                 ;;
             sah,help)
-                cmd="sah__subcmd__help"
+                cmd="sah__help"
                 ;;
             sah,init)
-                cmd="sah__subcmd__init"
+                cmd="sah__init"
                 ;;
             sah,model)
-                cmd="sah__subcmd__model"
+                cmd="sah__model"
                 ;;
             sah,prompt)
-                cmd="sah__subcmd__prompt"
+                cmd="sah__prompt"
                 ;;
             sah,serve)
-                cmd="sah__subcmd__serve"
+                cmd="sah__serve"
                 ;;
             sah,statusline)
-                cmd="sah__subcmd__statusline"
+                cmd="sah__statusline"
                 ;;
             sah,tools)
-                cmd="sah__subcmd__tools"
+                cmd="sah__tools"
                 ;;
             sah,validate)
-                cmd="sah__subcmd__validate"
+                cmd="sah__validate"
                 ;;
-            sah__subcmd__agent,acp)
-                cmd="sah__subcmd__agent__subcmd__acp"
+            sah__agent,acp)
+                cmd="sah__agent__acp"
                 ;;
-            sah__subcmd__agent,help)
-                cmd="sah__subcmd__agent__subcmd__help"
+            sah__agent,help)
+                cmd="sah__agent__help"
                 ;;
-            sah__subcmd__agent__subcmd__help,acp)
-                cmd="sah__subcmd__agent__subcmd__help__subcmd__acp"
+            sah__agent__help,acp)
+                cmd="sah__agent__help__acp"
                 ;;
-            sah__subcmd__agent__subcmd__help,help)
-                cmd="sah__subcmd__agent__subcmd__help__subcmd__help"
+            sah__agent__help,help)
+                cmd="sah__agent__help__help"
                 ;;
-            sah__subcmd__help,agent)
-                cmd="sah__subcmd__help__subcmd__agent"
+            sah__help,agent)
+                cmd="sah__help__agent"
                 ;;
-            sah__subcmd__help,completion)
-                cmd="sah__subcmd__help__subcmd__completion"
+            sah__help,completion)
+                cmd="sah__help__completion"
                 ;;
-            sah__subcmd__help,deinit)
-                cmd="sah__subcmd__help__subcmd__deinit"
+            sah__help,deinit)
+                cmd="sah__help__deinit"
                 ;;
-            sah__subcmd__help,doctor)
-                cmd="sah__subcmd__help__subcmd__doctor"
+            sah__help,doctor)
+                cmd="sah__help__doctor"
                 ;;
-            sah__subcmd__help,help)
-                cmd="sah__subcmd__help__subcmd__help"
+            sah__help,help)
+                cmd="sah__help__help"
                 ;;
-            sah__subcmd__help,init)
-                cmd="sah__subcmd__help__subcmd__init"
+            sah__help,init)
+                cmd="sah__help__init"
                 ;;
-            sah__subcmd__help,model)
-                cmd="sah__subcmd__help__subcmd__model"
+            sah__help,model)
+                cmd="sah__help__model"
                 ;;
-            sah__subcmd__help,prompt)
-                cmd="sah__subcmd__help__subcmd__prompt"
+            sah__help,prompt)
+                cmd="sah__help__prompt"
                 ;;
-            sah__subcmd__help,serve)
-                cmd="sah__subcmd__help__subcmd__serve"
+            sah__help,serve)
+                cmd="sah__help__serve"
                 ;;
-            sah__subcmd__help,statusline)
-                cmd="sah__subcmd__help__subcmd__statusline"
+            sah__help,statusline)
+                cmd="sah__help__statusline"
                 ;;
-            sah__subcmd__help,tools)
-                cmd="sah__subcmd__help__subcmd__tools"
+            sah__help,tools)
+                cmd="sah__help__tools"
                 ;;
-            sah__subcmd__help,validate)
-                cmd="sah__subcmd__help__subcmd__validate"
+            sah__help,validate)
+                cmd="sah__help__validate"
                 ;;
-            sah__subcmd__help__subcmd__agent,acp)
-                cmd="sah__subcmd__help__subcmd__agent__subcmd__acp"
+            sah__help__agent,acp)
+                cmd="sah__help__agent__acp"
                 ;;
-            sah__subcmd__help__subcmd__model,list)
-                cmd="sah__subcmd__help__subcmd__model__subcmd__list"
+            sah__help__model,list)
+                cmd="sah__help__model__list"
                 ;;
-            sah__subcmd__help__subcmd__model,show)
-                cmd="sah__subcmd__help__subcmd__model__subcmd__show"
+            sah__help__model,show)
+                cmd="sah__help__model__show"
                 ;;
-            sah__subcmd__help__subcmd__model,use)
-                cmd="sah__subcmd__help__subcmd__model__subcmd__use"
+            sah__help__model,use)
+                cmd="sah__help__model__use"
                 ;;
-            sah__subcmd__help__subcmd__serve,http)
-                cmd="sah__subcmd__help__subcmd__serve__subcmd__http"
+            sah__help__serve,http)
+                cmd="sah__help__serve__http"
                 ;;
-            sah__subcmd__help__subcmd__statusline,config)
-                cmd="sah__subcmd__help__subcmd__statusline__subcmd__config"
+            sah__help__statusline,config)
+                cmd="sah__help__statusline__config"
                 ;;
-            sah__subcmd__help__subcmd__tools,disable)
-                cmd="sah__subcmd__help__subcmd__tools__subcmd__disable"
+            sah__help__tools,disable)
+                cmd="sah__help__tools__disable"
                 ;;
-            sah__subcmd__help__subcmd__tools,enable)
-                cmd="sah__subcmd__help__subcmd__tools__subcmd__enable"
+            sah__help__tools,enable)
+                cmd="sah__help__tools__enable"
                 ;;
-            sah__subcmd__model,help)
-                cmd="sah__subcmd__model__subcmd__help"
+            sah__model,help)
+                cmd="sah__model__help"
                 ;;
-            sah__subcmd__model,list)
-                cmd="sah__subcmd__model__subcmd__list"
+            sah__model,list)
+                cmd="sah__model__list"
                 ;;
-            sah__subcmd__model,show)
-                cmd="sah__subcmd__model__subcmd__show"
+            sah__model,show)
+                cmd="sah__model__show"
                 ;;
-            sah__subcmd__model,use)
-                cmd="sah__subcmd__model__subcmd__use"
+            sah__model,use)
+                cmd="sah__model__use"
                 ;;
-            sah__subcmd__model__subcmd__help,help)
-                cmd="sah__subcmd__model__subcmd__help__subcmd__help"
+            sah__model__help,help)
+                cmd="sah__model__help__help"
                 ;;
-            sah__subcmd__model__subcmd__help,list)
-                cmd="sah__subcmd__model__subcmd__help__subcmd__list"
+            sah__model__help,list)
+                cmd="sah__model__help__list"
                 ;;
-            sah__subcmd__model__subcmd__help,show)
-                cmd="sah__subcmd__model__subcmd__help__subcmd__show"
+            sah__model__help,show)
+                cmd="sah__model__help__show"
                 ;;
-            sah__subcmd__model__subcmd__help,use)
-                cmd="sah__subcmd__model__subcmd__help__subcmd__use"
+            sah__model__help,use)
+                cmd="sah__model__help__use"
                 ;;
-            sah__subcmd__serve,help)
-                cmd="sah__subcmd__serve__subcmd__help"
+            sah__serve,help)
+                cmd="sah__serve__help"
                 ;;
-            sah__subcmd__serve,http)
-                cmd="sah__subcmd__serve__subcmd__http"
+            sah__serve,http)
+                cmd="sah__serve__http"
                 ;;
-            sah__subcmd__serve__subcmd__help,help)
-                cmd="sah__subcmd__serve__subcmd__help__subcmd__help"
+            sah__serve__help,help)
+                cmd="sah__serve__help__help"
                 ;;
-            sah__subcmd__serve__subcmd__help,http)
-                cmd="sah__subcmd__serve__subcmd__help__subcmd__http"
+            sah__serve__help,http)
+                cmd="sah__serve__help__http"
                 ;;
-            sah__subcmd__statusline,config)
-                cmd="sah__subcmd__statusline__subcmd__config"
+            sah__statusline,config)
+                cmd="sah__statusline__config"
                 ;;
-            sah__subcmd__statusline,help)
-                cmd="sah__subcmd__statusline__subcmd__help"
+            sah__statusline,help)
+                cmd="sah__statusline__help"
                 ;;
-            sah__subcmd__statusline__subcmd__help,config)
-                cmd="sah__subcmd__statusline__subcmd__help__subcmd__config"
+            sah__statusline__help,config)
+                cmd="sah__statusline__help__config"
                 ;;
-            sah__subcmd__statusline__subcmd__help,help)
-                cmd="sah__subcmd__statusline__subcmd__help__subcmd__help"
+            sah__statusline__help,help)
+                cmd="sah__statusline__help__help"
                 ;;
-            sah__subcmd__tools,disable)
-                cmd="sah__subcmd__tools__subcmd__disable"
+            sah__tools,disable)
+                cmd="sah__tools__disable"
                 ;;
-            sah__subcmd__tools,enable)
-                cmd="sah__subcmd__tools__subcmd__enable"
+            sah__tools,enable)
+                cmd="sah__tools__enable"
                 ;;
-            sah__subcmd__tools,help)
-                cmd="sah__subcmd__tools__subcmd__help"
+            sah__tools,help)
+                cmd="sah__tools__help"
                 ;;
-            sah__subcmd__tools__subcmd__help,disable)
-                cmd="sah__subcmd__tools__subcmd__help__subcmd__disable"
+            sah__tools__help,disable)
+                cmd="sah__tools__help__disable"
                 ;;
-            sah__subcmd__tools__subcmd__help,enable)
-                cmd="sah__subcmd__tools__subcmd__help__subcmd__enable"
+            sah__tools__help,enable)
+                cmd="sah__tools__help__enable"
                 ;;
-            sah__subcmd__tools__subcmd__help,help)
-                cmd="sah__subcmd__tools__subcmd__help__subcmd__help"
+            sah__tools__help,help)
+                cmd="sah__tools__help__help"
                 ;;
             *)
                 ;;
@@ -218,7 +218,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__agent)
+        sah__agent)
             opts="-h --model --help acp help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -236,7 +236,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__agent__subcmd__acp)
+        sah__agent__acp)
             opts="-c -h --config --permission-policy --allow-path --block-path --max-file-size --terminal-buffer-size --graceful-shutdown-timeout --model --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -286,7 +286,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__agent__subcmd__help)
+        sah__agent__help)
             opts="acp help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -300,7 +300,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__agent__subcmd__help__subcmd__acp)
+        sah__agent__help__acp)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -314,7 +314,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__agent__subcmd__help__subcmd__help)
+        sah__agent__help__help)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -328,7 +328,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__completion)
+        sah__completion)
             opts="-h --model --help bash elvish fish powershell zsh"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -346,7 +346,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__deinit)
+        sah__deinit)
             opts="-h --remove-directory --model --help project local user"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -364,7 +364,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__doctor)
+        sah__doctor)
             opts="-h --model --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -382,7 +382,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__help)
+        sah__help)
             opts="serve init deinit doctor prompt completion validate model agent tools statusline help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -396,7 +396,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__help__subcmd__agent)
+        sah__help__agent)
             opts="acp"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -410,7 +410,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__help__subcmd__agent__subcmd__acp)
+        sah__help__agent__acp)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -424,7 +424,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__help__subcmd__completion)
+        sah__help__completion)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -438,7 +438,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__help__subcmd__deinit)
+        sah__help__deinit)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -452,7 +452,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__help__subcmd__doctor)
+        sah__help__doctor)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -466,7 +466,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__help__subcmd__help)
+        sah__help__help)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -480,7 +480,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__help__subcmd__init)
+        sah__help__init)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -494,7 +494,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__help__subcmd__model)
+        sah__help__model)
             opts="list show use"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -508,7 +508,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__help__subcmd__model__subcmd__list)
+        sah__help__model__list)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -522,7 +522,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__help__subcmd__model__subcmd__show)
+        sah__help__model__show)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -536,7 +536,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__help__subcmd__model__subcmd__use)
+        sah__help__model__use)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -550,7 +550,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__help__subcmd__prompt)
+        sah__help__prompt)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -564,7 +564,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__help__subcmd__serve)
+        sah__help__serve)
             opts="http"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -578,7 +578,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__help__subcmd__serve__subcmd__http)
+        sah__help__serve__http)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -592,7 +592,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__help__subcmd__statusline)
+        sah__help__statusline)
             opts="config"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -606,7 +606,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__help__subcmd__statusline__subcmd__config)
+        sah__help__statusline__config)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -620,7 +620,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__help__subcmd__tools)
+        sah__help__tools)
             opts="enable disable"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -634,7 +634,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__help__subcmd__tools__subcmd__disable)
+        sah__help__tools__disable)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -648,7 +648,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__help__subcmd__tools__subcmd__enable)
+        sah__help__tools__enable)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -662,7 +662,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__help__subcmd__validate)
+        sah__help__validate)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -676,7 +676,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__init)
+        sah__init)
             opts="-h --model --help project local user"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -694,7 +694,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__model)
+        sah__model)
             opts="-h --model --help list show use help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -712,7 +712,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__model__subcmd__help)
+        sah__model__help)
             opts="list show use help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -726,7 +726,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__model__subcmd__help__subcmd__help)
+        sah__model__help__help)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -740,7 +740,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__model__subcmd__help__subcmd__list)
+        sah__model__help__list)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -754,7 +754,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__model__subcmd__help__subcmd__show)
+        sah__model__help__show)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -768,7 +768,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__model__subcmd__help__subcmd__use)
+        sah__model__help__use)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -782,7 +782,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__model__subcmd__list)
+        sah__model__list)
             opts="-h --format --model --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -804,7 +804,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__model__subcmd__show)
+        sah__model__show)
             opts="-h --format --model --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -826,7 +826,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__model__subcmd__use)
+        sah__model__use)
             opts="-h --model --help <name>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -844,7 +844,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__prompt)
+        sah__prompt)
             opts="-h --model --help [ARGS]..."
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -862,7 +862,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__serve)
+        sah__serve)
             opts="-h --model --help http help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -880,7 +880,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__serve__subcmd__help)
+        sah__serve__help)
             opts="http help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -894,7 +894,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__serve__subcmd__help__subcmd__help)
+        sah__serve__help__help)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -908,7 +908,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__serve__subcmd__help__subcmd__http)
+        sah__serve__help__http)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -922,7 +922,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__serve__subcmd__http)
+        sah__serve__http)
             opts="-p -H -h --port --host --model --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -956,7 +956,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__statusline)
+        sah__statusline)
             opts="-h --model --help config help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -974,7 +974,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__statusline__subcmd__config)
+        sah__statusline__config)
             opts="-h --model --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -992,7 +992,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__statusline__subcmd__help)
+        sah__statusline__help)
             opts="config help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1006,7 +1006,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__statusline__subcmd__help__subcmd__config)
+        sah__statusline__help__config)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1020,7 +1020,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__statusline__subcmd__help__subcmd__help)
+        sah__statusline__help__help)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1034,7 +1034,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__tools)
+        sah__tools)
             opts="-h --global --model --help enable disable help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1052,7 +1052,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__tools__subcmd__disable)
+        sah__tools__disable)
             opts="-h --model --help [NAMES]..."
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1070,7 +1070,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__tools__subcmd__enable)
+        sah__tools__enable)
             opts="-h --model --help [NAMES]..."
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1088,7 +1088,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__tools__subcmd__help)
+        sah__tools__help)
             opts="enable disable help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1102,7 +1102,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__tools__subcmd__help__subcmd__disable)
+        sah__tools__help__disable)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1116,7 +1116,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__tools__subcmd__help__subcmd__enable)
+        sah__tools__help__enable)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1130,7 +1130,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__tools__subcmd__help__subcmd__help)
+        sah__tools__help__help)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1144,7 +1144,7 @@ _sah() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sah__subcmd__validate)
+        sah__validate)
             opts="-q -h --quiet --format --validate-tools --model --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )

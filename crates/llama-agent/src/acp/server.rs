@@ -56,6 +56,11 @@ pub struct AcpServer {
     /// Terminal manager for process handling
     terminal_manager: Arc<RwLock<TerminalManager>>,
 
+    /// Shared endpoint that relays MCP elicitation requests to the connected ACP
+    /// client. Populated once a client connects (see `start_with_streams`); read
+    /// by each per-session MCP [`crate::mcp_client_handler::NotifyingClientHandler`].
+    elicitation_endpoint: crate::mcp_client_handler::ElicitationEndpoint,
+
     /// How often the background task scans the session cache for eviction.
     ///
     /// Mirrors claude-agent's `SessionManager::cleanup_interval` so both agents
@@ -155,6 +160,7 @@ impl AcpServer {
             permission_engine,
             filesystem_ops,
             terminal_manager,
+            elicitation_endpoint: Arc::new(RwLock::new(None)),
             cleanup_interval,
             max_session_age,
         };
@@ -416,6 +422,13 @@ impl AcpServer {
                 agent_client_protocol::on_receive_notification!(),
             )
             .connect_with(transport, async move |cx| {
+                // Publish the live connection as the elicitation endpoint so MCP
+                // client handlers can redirect inbound `elicitation/create`
+                // requests to this connected ACP client. `cx` is the agent's
+                // `ConnectionTo<Client>`; the endpoint is cleared when the bridge
+                // exits below so a disconnected client falls back to declining.
+                self.publish_client_connection(cx.clone()).await;
+
                 // Bridge: forward broadcast `SessionNotification`s to the client.
                 //
                 // The bridge exits cleanly when any of the following happens:
@@ -430,14 +443,14 @@ impl AcpServer {
                 // dispatch loop and return — i.e. `start_with_streams`
                 // completes.
                 let mut rx = self.notification_tx.subscribe();
-                loop {
+                let bridge_result = loop {
                     tokio::select! {
                         biased;
                         () = connection_closed.cancelled() => {
                             tracing::info!(
                                 "Transport closed (reader EOF); shutting down notification bridge"
                             );
-                            return Ok(());
+                            break Ok(());
                         }
                         recv_result = rx.recv() => {
                             match recv_result {
@@ -447,14 +460,14 @@ impl AcpServer {
                                             "Failed to forward session/update: {}",
                                             e
                                         );
-                                        return Err(e);
+                                        break Err(e);
                                     }
                                 }
                                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                                     tracing::info!(
                                         "Session notification channel closed; shutting down connection"
                                     );
-                                    return Ok(());
+                                    break Ok(());
                                 }
                                 Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                                     tracing::warn!(
@@ -465,9 +478,58 @@ impl AcpServer {
                             }
                         }
                     }
-                }
+                };
+
+                // Tear down the elicitation endpoint: no client is connected once
+                // the bridge returns, so further elicitations should decline.
+                self.clear_client_connection().await;
+                bridge_result
             })
             .await
+    }
+
+    /// Publish a live ACP client connection as the elicitation endpoint.
+    ///
+    /// Installs a [`crate::acp::elicitation::ConnectionElicitationSender`] wrapping
+    /// `cx` (the agent's `ConnectionTo<Client>`) into the shared
+    /// `elicitation_endpoint` cell so per-session MCP
+    /// [`crate::mcp_client_handler::NotifyingClientHandler`]s can redirect
+    /// inbound `elicitation/create` requests to this connected client. Without
+    /// this the endpoint stays `None` and elicitations decline.
+    ///
+    /// This is the production wiring used both by [`Self::start_with_streams`]
+    /// (stdio transport) and by callers that compose `Agent.builder()` /
+    /// `connect_with` themselves (e.g. `swissarmyhammer-agent`'s
+    /// `wrap_llama_into_handle`), which would otherwise bypass `connect_with`
+    /// and never publish the connection. Pair with [`Self::clear_client_connection`]
+    /// when the connection ends.
+    pub async fn publish_client_connection(
+        &self,
+        cx: agent_client_protocol::ConnectionTo<agent_client_protocol::Client>,
+    ) {
+        let sender: Arc<dyn crate::acp::elicitation::ElicitationSender> = Arc::new(
+            crate::acp::elicitation::ConnectionElicitationSender::new(cx),
+        );
+        *self.elicitation_endpoint.write().await = Some(sender);
+    }
+
+    /// Tear down the published elicitation endpoint.
+    ///
+    /// Sets the shared `elicitation_endpoint` cell back to `None` so that once
+    /// the client connection ends, further elicitations decline rather than
+    /// targeting a dead connection. Mirror of [`Self::publish_client_connection`].
+    pub async fn clear_client_connection(&self) {
+        *self.elicitation_endpoint.write().await = None;
+    }
+
+    /// Report whether an elicitation endpoint (client connection) is published.
+    ///
+    /// Reads the shared `elicitation_endpoint` cell populated by
+    /// [`Self::publish_client_connection`]. Observability accessor for tests and
+    /// diagnostics confirming the server can relay `elicitation/create` requests
+    /// to a connected client before relying on it.
+    pub async fn is_elicitation_endpoint_set(&self) -> bool {
+        self.elicitation_endpoint.read().await.is_some()
     }
 
     /// Resolve a session by ACP session ID.
@@ -1626,9 +1688,17 @@ impl AcpServer {
             );
 
             // Create notifying handler that forwards MCP notifications as ACP
-            let handler = Arc::new(crate::mcp_client_handler::NotifyingClientHandler::new(
-                self.notification_tx.clone(),
-            ));
+            // and relays MCP elicitation requests to the connected ACP client
+            // through the shared, late-populated endpoint. The shared client
+            // capabilities let the handler decline elicitations the client never
+            // advertised support for, matching claude-agent's bridge.
+            let handler = Arc::new(
+                crate::mcp_client_handler::NotifyingClientHandler::with_elicitation_endpoint(
+                    self.notification_tx.clone(),
+                    self.elicitation_endpoint.clone(),
+                    self.client_capabilities.clone(),
+                ),
+            );
 
             let mut clients = Vec::new();
             for server in &all_mcp_servers {
@@ -3158,6 +3228,76 @@ mod tests {
         let config = AcpConfig::default();
         let (server, _notification_rx) = AcpServer::new(agent_server, config);
         server
+    }
+
+    /// Regression test for the llama client-wiring fix.
+    ///
+    /// In production llama-agent runs through
+    /// `swissarmyhammer_agent::wrap_llama_into_handle`, whose `with_spawned`
+    /// closure obtains the agent's `ConnectionTo<Client>` and calls
+    /// [`AcpServer::publish_client_connection`] (and
+    /// [`AcpServer::clear_client_connection`] when the connection ends). That
+    /// wrapper bypasses [`AcpServer::start_with_streams`], so these methods are
+    /// the only place the elicitation endpoint gets installed. Before the fix
+    /// the wrapper never called them, leaving `elicitation_endpoint` `None` so
+    /// MCP `elicitation/create` requests declined with "No client connection
+    /// available".
+    ///
+    /// This test drives a real `ConnectionTo<Client>` over an in-process
+    /// `Channel::duplex()` and asserts the publish/clear pair toggles the
+    /// endpoint that the per-session MCP handler reads. A full end-to-end run
+    /// through the wrapper is covered for the Claude path in
+    /// `swissarmyhammer-agent`; the llama wrapper cannot be exercised there
+    /// without depending on these internal `ModelManager`/`RequestQueue`
+    /// constructors, so the wiring methods are verified here where they live.
+    #[tokio::test]
+    #[serial]
+    async fn publish_client_connection_installs_and_clears_elicitation_endpoint() {
+        use agent_client_protocol::{Agent, Channel, Client, ConnectionTo};
+
+        let server = Arc::new(create_test_server().await);
+
+        // Stand up a live agent→client connection: a no-op fake client on one
+        // end, and on the other a `ConnectionTo<Client>` we hand to the server.
+        let (client_side, agent_side) = Channel::duplex();
+
+        let client_task = tokio::spawn(async move {
+            let _ = Client
+                .builder()
+                .name("llama-wiring-fake-client")
+                .connect_to(client_side)
+                .await;
+        });
+
+        let server_for_conn = Arc::clone(&server);
+        Agent
+            .builder()
+            .name("llama-wiring-test-agent")
+            .connect_with(agent_side, async move |cx: ConnectionTo<Client>| {
+                assert!(
+                    !server_for_conn.is_elicitation_endpoint_set().await,
+                    "elicitation endpoint must start unset"
+                );
+
+                server_for_conn.publish_client_connection(cx.clone()).await;
+                assert!(
+                    server_for_conn.is_elicitation_endpoint_set().await,
+                    "publish_client_connection must install the elicitation endpoint"
+                );
+
+                server_for_conn.clear_client_connection().await;
+                assert!(
+                    !server_for_conn.is_elicitation_endpoint_set().await,
+                    "clear_client_connection must tear the elicitation endpoint down"
+                );
+
+                Ok::<(), agent_client_protocol::Error>(())
+            })
+            .await
+            .expect("agent connect_with should succeed");
+
+        client_task.abort();
+        let _ = client_task.await;
     }
 
     /// Build a test server backed by the given [`AcpConfig`].

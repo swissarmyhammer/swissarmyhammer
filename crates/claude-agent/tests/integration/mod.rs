@@ -2,6 +2,8 @@
 
 mod concurrent_session;
 mod coverage_tests;
+mod elicitation_bridge_flow;
+mod mcp_http_session;
 mod opaque_session_ids;
 mod session_persistence;
 mod session_resume;

@@ -747,6 +747,12 @@ pub struct ModelInfo {
     pub source: ModelConfigSource,
     /// Optional description extracted from configuration
     pub description: Option<String>,
+    /// Tags extracted from the configuration's YAML front matter.
+    ///
+    /// Controls where a model surfaces — e.g. the kanban AI panel only offers
+    /// models tagged `kanban`. Empty when the configuration declares no tags.
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 /// Parse model description from configuration content
@@ -764,6 +770,42 @@ pub fn parse_model_description(content: &str) -> Option<String> {
 
     // Fall back to comment format
     extract_comment_field(content, "# Description:")
+}
+
+/// Parse model tags from configuration content
+///
+/// Extracts a `tags:` value from the YAML front matter (the `---`…`---`
+/// block). Flow form (`tags: [kanban, cli]`), block-sequence form
+/// (`tags:\n  - kanban\n  - cli`), and a lone scalar (`tags: kanban`, treated as
+/// a single-element list) are all supported. Content with no front matter or no
+/// `tags:` key yields an empty `Vec`.
+pub fn parse_model_tags(content: &str) -> Vec<String> {
+    let content = content.trim();
+    extract_yaml_frontmatter_list(content, "tags").unwrap_or_default()
+}
+
+/// Extract a list-valued field from YAML frontmatter as a list of strings
+///
+/// Accepts both the sequence form (`field: [a, b]` or a block sequence) and a
+/// lone scalar (`field: a`), which is treated as a single-element list. A scalar
+/// is the least-surprising fallback: writing `tags: kanban` instead of
+/// `tags: [kanban]` should still tag the model rather than silently drop it.
+fn extract_yaml_frontmatter_list(content: &str, field: &str) -> Option<Vec<String>> {
+    let stripped = content.strip_prefix("---")?;
+    let end_pos = stripped.find("---")?;
+    let front_matter = &stripped[..end_pos];
+
+    let yaml_value = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(front_matter).ok()?;
+    let value = yaml_value.get(field)?;
+    match value.as_sequence() {
+        Some(seq) => Some(
+            seq.iter()
+                .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+                .collect(),
+        ),
+        // A scalar string value is treated as a single-element list.
+        None => value.as_str().map(|s| vec![s.trim().to_string()]),
+    }
 }
 
 /// Extract a field from YAML frontmatter
@@ -1060,11 +1102,13 @@ impl ModelManager {
 
         for (name, content) in builtin_models {
             let description = parse_model_description(content);
+            let tags = parse_model_tags(content);
             models.push(ModelInfo {
                 name: name.to_string(),
                 content: content.to_string(),
                 source: ModelConfigSource::Builtin,
                 description,
+                tags,
             });
         }
 
@@ -1358,6 +1402,7 @@ impl ModelManager {
         })?;
 
         let description = parse_model_description(content);
+        let tags = parse_model_tags(content);
         tracing::trace!(
             "Successfully loaded model '{}' from {} (description: {:?})",
             model_name,
@@ -1370,6 +1415,7 @@ impl ModelManager {
             content: content.to_string(),
             source: source.clone(),
             description,
+            tags,
         })
     }
 
@@ -2401,6 +2447,7 @@ mod tests {
             content: "agent: config".to_string(),
             source: ModelConfigSource::Builtin,
             description: Some("Test agent description".to_string()),
+            tags: vec![],
         };
 
         assert_eq!(agent_info.name, "test-agent");
@@ -2419,6 +2466,7 @@ mod tests {
             content: "config".to_string(),
             source: ModelConfigSource::Builtin,
             description: None,
+            tags: vec![],
         };
 
         let agent2 = ModelInfo {
@@ -2426,6 +2474,7 @@ mod tests {
             content: "config".to_string(),
             source: ModelConfigSource::Builtin,
             description: None,
+            tags: vec![],
         };
 
         let agent3 = ModelInfo {
@@ -2433,6 +2482,7 @@ mod tests {
             content: "config".to_string(),
             source: ModelConfigSource::Builtin,
             description: None,
+            tags: vec![],
         };
 
         assert_eq!(agent1, agent2);
@@ -2446,6 +2496,7 @@ mod tests {
             content: "executor:\n  type: claude-code\n  config: {}\nquiet: false".to_string(),
             source: ModelConfigSource::User,
             description: Some("A test agent".to_string()),
+            tags: vec![],
         };
 
         let json = serde_json::to_string(&agent_info).expect("Failed to serialize ModelInfo");
@@ -2564,6 +2615,99 @@ description: "  Padded description  "
         let comment_content = r#"# Description:   Padded comment   "#;
         let description = parse_model_description(comment_content);
         assert_eq!(description, Some("Padded comment".to_string()));
+    }
+
+    #[test]
+    fn test_parse_model_tags_list_form() {
+        let content = r#"---
+tags: [kanban, cli]
+---
+executor:
+  type: claude-code
+  config: {}"#;
+
+        let tags = parse_model_tags(content);
+        assert_eq!(tags, vec!["kanban".to_string(), "cli".to_string()]);
+    }
+
+    #[test]
+    fn test_parse_model_tags_block_sequence_form() {
+        let content = r#"---
+description: "A model"
+tags:
+  - kanban
+  - cli
+---
+executor:
+  type: claude-code
+  config: {}"#;
+
+        let tags = parse_model_tags(content);
+        assert_eq!(tags, vec!["kanban".to_string(), "cli".to_string()]);
+    }
+
+    #[test]
+    fn test_parse_model_tags_scalar_form() {
+        let content = r#"---
+tags: kanban
+---
+executor:
+  type: claude-code
+  config: {}"#;
+
+        let tags = parse_model_tags(content);
+        assert_eq!(tags, vec!["kanban".to_string()]);
+    }
+
+    #[test]
+    fn test_parse_model_tags_missing_frontmatter() {
+        let content = r#"executor:
+  type: claude-code
+  config: {}
+quiet: false"#;
+
+        assert!(parse_model_tags(content).is_empty());
+    }
+
+    #[test]
+    fn test_parse_model_tags_no_tags_key() {
+        let content = r#"---
+description: "A model without tags"
+---
+executor:
+  type: claude-code
+  config: {}"#;
+
+        assert!(parse_model_tags(content).is_empty());
+    }
+
+    #[test]
+    fn test_load_builtin_models_only_claude_code_carries_kanban_tag() {
+        let models = ModelManager::load_builtin_models().expect("builtin models must load");
+
+        let claude = models
+            .iter()
+            .find(|m| m.name == "claude-code")
+            .expect("the built-in `claude-code` model must exist");
+        assert!(
+            claude.tags.iter().any(|t| t == "kanban"),
+            "`claude-code` must carry the `kanban` tag, got {:?}",
+            claude.tags
+        );
+
+        // For now only Claude Code surfaces in the kanban panel — the llama
+        // chat models and the embedding model must not carry the `kanban` tag.
+        for name in ["qwen", "qwen-embedding"] {
+            let model = models
+                .iter()
+                .find(|m| m.name == name)
+                .unwrap_or_else(|| panic!("the built-in `{name}` model must exist"));
+            assert!(
+                !model.tags.iter().any(|t| t == "kanban"),
+                "`{name}` must not carry the `kanban` tag for now, got {:?}",
+                model.tags
+            );
+        }
     }
 
     #[test]

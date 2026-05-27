@@ -330,6 +330,21 @@ describe("BINDING_TABLES", () => {
     expect(emacs["Escape"]).toBe("nav.drillOut");
     expect(emacs["Enter"]).toBe("nav.drillIn");
   });
+
+  it("every keymap binds the AI panel commands consistently", () => {
+    // The window-layer `ai.*` commands are registered in `app-shell.tsx`'s
+    // global scope; their `BINDING_TABLES` entries cover the no-focus case
+    // where `extractScopeBindings` yields nothing. All three keymaps bind the
+    // same keys — there is no per-keymap divergence for the AI panel.
+    // `ai.model` is intentionally key-less (it takes a `model` arg).
+    for (const mode of ["vim", "cua", "emacs"] as const) {
+      const table = BINDING_TABLES[mode];
+      expect(table["Mod+j"], `${mode} Mod+j`).toBe("ai.toggle");
+      expect(table["Mod+i"], `${mode} Mod+i`).toBe("ai.focus");
+      expect(table["Mod+Shift+J"], `${mode} Mod+Shift+J`).toBe("ai.newChat");
+      expect(table["Mod+."], `${mode} Mod+.`).toBe("ai.cancel");
+    }
+  });
 });
 
 /* ---------- createKeyHandler ---------- */

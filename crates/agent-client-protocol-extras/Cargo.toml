@@ -10,6 +10,11 @@ homepage.workspace = true
 
 [dependencies]
 agent-client-protocol.workspace = true
+# Pulls in the schema crate with `unstable_elicitation` enabled. Cargo feature
+# unification then exposes the elicitation types through
+# `agent_client_protocol::schema` (the main crate re-exports this same crate),
+# making them reachable from every crate that uses `agent-client-protocol`.
+agent-client-protocol-schema.workspace = true
 async-trait.workspace = true
 axum.workspace = true
 futures.workspace = true

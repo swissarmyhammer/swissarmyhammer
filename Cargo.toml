@@ -48,6 +48,7 @@ members = [
     "crates/swissarmyhammer-operations",
     "crates/swissarmyhammer-operations-macros",
     "crates/swissarmyhammer-skills",
+    "crates/swissarmyhammer-workspace-init",
     "crates/swissarmyhammer-agents",
     "crates/swissarmyhammer-web",
     "crates/mirdan",
@@ -185,6 +186,15 @@ rmcp = { version = "1.7", features = [
     "schemars",
 ] }
 agent-client-protocol = { version = "0.12" }
+# Depend on the schema crate directly with `unstable_elicitation` so Cargo feature
+# unification turns the elicitation types (CreateElicitationRequest /
+# CreateElicitationResponse / ElicitationAction) on through the main crate's
+# `agent_client_protocol::schema` re-export. The main crate does NOT forward an
+# `unstable_elicitation` feature, so it must be enabled on the schema crate. The
+# `0.13` requirement matches the schema version `agent-client-protocol` 0.12
+# resolves to (currently 0.13.2), keeping the two crates unified. This is always-on
+# (no SAH feature flag): "all functionality all the time".
+agent-client-protocol-schema = { version = "0.13", features = ["unstable_elicitation"] }
 dirs = "6.0"
 comfy-table = "7"
 crossterm = "0.29"
@@ -285,6 +295,7 @@ swissarmyhammer-tools = { path = "crates/swissarmyhammer-tools" }
 swissarmyhammer-treesitter = { path = "crates/swissarmyhammer-treesitter" }
 swissarmyhammer-views = { path = "crates/swissarmyhammer-views" }
 swissarmyhammer-web = { path = "crates/swissarmyhammer-web" }
+swissarmyhammer-workspace-init = { path = "crates/swissarmyhammer-workspace-init" }
 swissarmyhammer = { path = "crates/swissarmyhammer" }
 num_cpus = "1.17"
 process-wrap = "8.2"

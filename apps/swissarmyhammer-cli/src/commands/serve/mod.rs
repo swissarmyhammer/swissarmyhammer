@@ -443,6 +443,7 @@ fn display_verbose_server_status(
 mod tests {
     use super::*;
     use clap::{Arg, Command};
+    use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
 
     #[test]
     fn test_description_content() {
@@ -455,9 +456,17 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_handle_command_signature() {
         use crate::cli::OutputFormat;
         use crate::context::CliContext;
+
+        // Isolate HOME + CWD — `CliContext::new()` calls into the same
+        // `build_async()` codepath that creates `.sah/` at cwd as a side effect
+        // of `get_swissarmyhammer_dir()`. Without isolation, this test leaks a
+        // `.sah/` skeleton into the host crate directory.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
 
         // This test just verifies that the function signature matches expected pattern
         let app = Command::new("test").arg(Arg::new("test").long("test"));

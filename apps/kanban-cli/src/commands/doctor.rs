@@ -212,7 +212,11 @@ mod tests {
     /// "Git Repository". The status is host-dependent (Ok inside a git repo,
     /// Warning outside) so we accept either — the hard contract is the count
     /// and name.
+    /// `check_git_repository` walks ancestors from process-global CWD via
+    /// `find_git_repository_root()`, so this test joins the crate-wide `cwd`
+    /// serialization group to stay isolated from CWD-mutating tests.
     #[test]
+    #[serial_test::serial(cwd)]
     fn check_git_repository_produces_one_check() {
         let mut doctor = KanbanDoctor::new();
         doctor.check_git_repository();
@@ -243,7 +247,11 @@ mod tests {
     /// "Board Initialized". The status depends on whether the `.kanban/`
     /// directory in the test's CWD happens to contain a board file; we
     /// only assert shape here.
+    ///
+    /// `check_board_initialized` reads process-global CWD, so this test
+    /// joins the crate-wide `cwd` serialization group.
     #[test]
+    #[serial_test::serial(cwd)]
     fn check_board_initialized_produces_one_check() {
         let mut doctor = KanbanDoctor::new();
         doctor.check_board_initialized();
@@ -262,10 +270,12 @@ mod tests {
     /// `<root>/board.yaml` and emitted a false-negative warning inside any
     /// repo that uses the entity layout.
     ///
-    /// Uses `CurrentDirGuard` + `#[serial]` per `feedback_test_isolation.md`
-    /// so this test cannot race with other tests that read or mutate CWD.
+    /// Uses `CurrentDirGuard` + `#[serial_test::serial(cwd)]` per
+    /// `feedback_test_isolation.md` so this test cannot race with other tests
+    /// that read or mutate CWD. `cwd` is the crate-wide group shared by every
+    /// CWD-touching test in this crate (`skill.rs`, `logging.rs`, `serve.rs`).
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(cwd)]
     fn check_board_initialized_recognizes_entity_layout() {
         use swissarmyhammer_common::test_utils::CurrentDirGuard;
         use tempfile::TempDir;
@@ -298,8 +308,11 @@ mod tests {
     /// suggesting the actual `kanban board init` verb. The fix string is
     /// load-bearing: it must match the real CLI subcommand path so users
     /// who copy-paste it actually create a board.
+    ///
+    /// Joins the crate-wide `cwd` serialization group (see
+    /// `check_board_initialized_recognizes_entity_layout`).
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(cwd)]
     fn check_board_initialized_warns_when_no_kanban_dir() {
         use swissarmyhammer_common::test_utils::CurrentDirGuard;
         use tempfile::TempDir;
@@ -330,7 +343,12 @@ mod tests {
     /// `run_diagnostics` must run all three checks and yield a valid exit
     /// code in `0..=2`. The three checks are the documented suite; bumping
     /// past three should be a deliberate change flagged by this test.
+    ///
+    /// `run_diagnostics` runs `check_git_repository` and
+    /// `check_board_initialized`, both of which read process-global CWD —
+    /// so this test joins the crate-wide `cwd` serialization group.
     #[test]
+    #[serial_test::serial(cwd)]
     fn run_diagnostics_runs_all_three_checks() {
         let mut doctor = KanbanDoctor::new();
         let exit_code = doctor.run_diagnostics();
@@ -342,7 +360,11 @@ mod tests {
     /// `run_doctor(false)` must return a valid exit code (0, 1, or 2). This
     /// is the user-facing entry point wired into `main.rs`; it must stay
     /// safe to call in any environment, printing only — never panicking.
+    ///
+    /// `run_doctor` drives `run_diagnostics`, which reads process-global CWD;
+    /// this test joins the crate-wide `cwd` serialization group.
     #[test]
+    #[serial_test::serial(cwd)]
     fn run_doctor_non_verbose_returns_valid_exit_code() {
         let exit_code = run_doctor(false);
         assert!(exit_code <= 2);
@@ -351,7 +373,11 @@ mod tests {
     /// `run_doctor(true)` exercises the verbose printing path alongside the
     /// non-verbose variant above. Any panic in the verbose table renderer
     /// would surface here.
+    ///
+    /// Joins the crate-wide `cwd` serialization group (see
+    /// `run_doctor_non_verbose_returns_valid_exit_code`).
     #[test]
+    #[serial_test::serial(cwd)]
     fn run_doctor_verbose_returns_valid_exit_code() {
         let exit_code = run_doctor(true);
         assert!(exit_code <= 2);

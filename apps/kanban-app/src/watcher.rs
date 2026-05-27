@@ -31,7 +31,7 @@ use swissarmyhammer_kanban::virtual_tags::default_virtual_tag_registry;
 use swissarmyhammer_kanban::KanbanContext;
 use swissarmyhammer_perspectives::PerspectiveEvent;
 use swissarmyhammer_views::ViewEvent;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{Mutex, RwLock};
@@ -815,9 +815,180 @@ async fn process_cache_event(
             sync_search_index(&mut idx, watch_event);
         }
     }
+    let touched_task = cache_event_touches_task(&resolved);
     for watch_event in resolved {
         emit_watch_event(app, board_path, watch_event);
     }
+
+    // A task create/remove/field-change can move tasks into or out of a
+    // filtered window's perspective. `filtered_task_ids` is a snapshot taken
+    // at `perspective.switch` time and nothing else refreshes it — so recompute
+    // it here, server-side, and push a `ui-state-changed` event per window.
+    if touched_task {
+        recompute_and_emit_perspective_filters(ctx, app).await;
+    }
+}
+
+/// Whether a resolved batch of `WatchEvent`s touches at least one `task`
+/// entity — i.e. whether `process_cache_event` should fire a perspective
+/// recompute.
+///
+/// A single cache event resolves to zero-or-more `WatchEvent`s (the primary
+/// event plus synthetic dependency fan-out events). The recompute is the
+/// expensive part, so the gate runs once over the whole batch.
+fn cache_event_touches_task(resolved: &[WatchEvent]) -> bool {
+    resolved.iter().any(watch_event_touches_task)
+}
+
+/// Whether a resolved `WatchEvent` concerns a `task` entity.
+///
+/// `AttachmentChanged` carries the owning entity type too; a task attachment
+/// change does not move the task in or out of a filter, so only the three
+/// entity-shaped events count.
+fn watch_event_touches_task(evt: &WatchEvent) -> bool {
+    matches!(
+        evt,
+        WatchEvent::EntityCreated { entity_type, .. }
+        | WatchEvent::EntityRemoved { entity_type, .. }
+        | WatchEvent::EntityFieldChanged { entity_type, .. }
+            if entity_type == "task"
+    )
+}
+
+/// Recompute every filtered window's perspective filter and emit a
+/// `ui-state-changed` event for each window whose id list actually moved.
+///
+/// Reaches `UIState` through the app's managed [`AppState`] and mirrors the
+/// `ui-state-changed` payload shape produced by `emit_ui_state_change_if_needed`
+/// in `commands.rs` — `{ "kind": "perspective_switch", "state": <UIState> }`.
+async fn recompute_and_emit_perspective_filters(ctx: &Arc<KanbanContext>, app: &tauri::AppHandle) {
+    let app_state = app.state::<crate::state::AppState>();
+    let ui_state = &app_state.ui_state;
+    let changed_windows = recompute_perspective_filters(ctx.as_ref(), ui_state).await;
+    if changed_windows.is_empty() {
+        return;
+    }
+    let snapshot = serde_json::json!({
+        "kind": "perspective_switch",
+        "state": ui_state.to_json(),
+    });
+    for window_label in changed_windows {
+        if let Some(window) = app.get_webview_window(&window_label) {
+            if let Err(e) = window.emit("ui-state-changed", &snapshot) {
+                tracing::warn!(
+                    window_label, error = %e,
+                    "failed to emit ui-state-changed after perspective recompute"
+                );
+            }
+        }
+    }
+}
+
+/// Re-evaluate the perspective filter for every window whose `filtered_task_ids`
+/// is already populated (`Some`) and write the fresh id list back via
+/// [`UIState::switch_perspective`].
+///
+/// Returns the label of every window whose id list actually changed —
+/// `switch_perspective` is idempotent and yields `None` when the recompute
+/// produces the same set, so unchanged windows are absent. The caller emits a
+/// full `UIState` snapshot per changed window (mirroring
+/// `emit_ui_state_change_if_needed`), so only the labels are needed here.
+///
+/// Windows whose `filtered_task_ids` is `None` (never switched perspective)
+/// are skipped: `None` means "no filter, show all", and populating it would
+/// change that window's behavior.
+///
+/// Windows that share an `active_perspective_id` share one filter, so each
+/// distinct perspective is evaluated exactly once. The shared DSL evaluator
+/// [`evaluate_perspective_filter`] keeps this in lockstep with
+/// `perspective.switch`.
+pub async fn recompute_perspective_filters(
+    ctx: &KanbanContext,
+    ui_state: &swissarmyhammer_commands::UIState,
+) -> Vec<String> {
+    use swissarmyhammer_kanban::commands::perspective_commands::evaluate_perspective_filter;
+
+    // Collect the windows that hold a filter snapshot, grouped by perspective.
+    let mut windows_by_perspective: HashMap<String, Vec<String>> = HashMap::new();
+    for (label, window) in ui_state.all_windows() {
+        if window.filtered_task_ids.is_none() {
+            continue;
+        }
+        windows_by_perspective
+            .entry(window.active_perspective_id.clone())
+            .or_default()
+            .push(label);
+    }
+    if windows_by_perspective.is_empty() {
+        return Vec::new();
+    }
+
+    // Look up each distinct perspective's filter once.
+    let perspective_filters = match load_perspective_filters(ctx, &windows_by_perspective).await {
+        Some(filters) => filters,
+        None => return Vec::new(),
+    };
+
+    let mut changed_windows = Vec::new();
+    for (perspective_id, window_labels) in windows_by_perspective {
+        let Some(filter) = perspective_filters.get(&perspective_id) else {
+            // Perspective vanished (deleted concurrently) — leave its windows
+            // untouched rather than forcing an empty filter on them.
+            continue;
+        };
+        let new_ids = match evaluate_perspective_filter(ctx, filter).await {
+            Ok(ids) => ids,
+            Err(e) => {
+                tracing::warn!(
+                    perspective_id, error = %e,
+                    "perspective filter recompute failed — leaving snapshot stale"
+                );
+                continue;
+            }
+        };
+        for label in window_labels {
+            // `switch_perspective` takes the id list by value; the `clone()`
+            // is required because multiple windows on the same perspective
+            // each consume their own copy.
+            if ui_state
+                .switch_perspective(&label, &perspective_id, new_ids.clone())
+                .is_some()
+            {
+                changed_windows.push(label);
+            }
+        }
+    }
+    changed_windows
+}
+
+/// Resolve the filter DSL string for each distinct perspective id referenced
+/// by a filtered window.
+///
+/// Returns `None` when the perspective context is unavailable (the recompute
+/// is then skipped entirely). A perspective id with no matching perspective is
+/// simply absent from the returned map.
+async fn load_perspective_filters(
+    ctx: &KanbanContext,
+    windows_by_perspective: &HashMap<String, Vec<String>>,
+) -> Option<HashMap<String, String>> {
+    let pctx = match ctx.perspective_context().await {
+        Ok(pctx) => pctx,
+        Err(e) => {
+            tracing::warn!(error = %e, "perspective context unavailable — skipping recompute");
+            return None;
+        }
+    };
+    let pctx = pctx.read().await;
+    let mut filters = HashMap::new();
+    for perspective_id in windows_by_perspective.keys() {
+        if let Some(perspective) = pctx.get_by_id(perspective_id) {
+            filters.insert(
+                perspective_id.clone(),
+                perspective.filter.clone().unwrap_or_default(),
+            );
+        }
+    }
+    Some(filters)
 }
 
 /// Translate a `PerspectiveEvent` into a Tauri event and emit it.
@@ -1827,5 +1998,218 @@ mod tests {
             "EntityFieldChanged.changes must include the edited `color` field; got: {changes:#?}"
         );
         assert_eq!(color_change.unwrap().value, json!("#00ff00"));
+    }
+
+    // ------------------------------------------------------------------------
+    // Perspective-filter recompute tests — regression guards for the bug where
+    // a task created or changed by an external process never appeared on the
+    // board because the window's `filtered_task_ids` snapshot went stale.
+    //
+    // `recompute_perspective_filters` is the bridge-side hook: given the
+    // current `KanbanContext` and `UIState`, it re-evaluates each filtered
+    // window's perspective filter and returns the windows whose id list
+    // actually moved.
+    // ------------------------------------------------------------------------
+
+    use swissarmyhammer_commands::UIState;
+
+    /// Add a `#bug` perspective to the board and return its id.
+    async fn add_bug_perspective(ctx: &Arc<KanbanContext>) -> String {
+        use swissarmyhammer_kanban::perspective::AddPerspective;
+        let result = AddPerspective::new("Bugs", "board")
+            .with_filter("#bug")
+            .execute(ctx.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+        result["id"].as_str().unwrap().to_string()
+    }
+
+    /// Add a task whose description carries `#bug` so the enrichment pipeline
+    /// lifts it into `filter_tags` (what the `#bug` DSL predicate reads).
+    async fn add_bug_task(ctx: &Arc<KanbanContext>, title: &str) -> String {
+        let task = AddTask::new(title)
+            .with_description("#bug")
+            .execute(ctx.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+        task["id"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn recompute_perspective_filters_picks_up_new_matching_task() {
+        // A window switched to a `#bug` perspective holds a snapshot of the
+        // matching ids. After an external process adds a new `#bug` task, the
+        // bridge recompute must refresh that snapshot and surface a
+        // PerspectiveSwitch change for the window.
+        let (_temp, ctx, _cache) = setup_kanban_with_board().await;
+        let pid = add_bug_perspective(&ctx).await;
+        let t1 = add_bug_task(&ctx, "First bug").await;
+
+        let ui = UIState::new();
+        // Window starts on the perspective with only the first task in scope.
+        ui.switch_perspective("main", &pid, vec![t1.clone()]);
+
+        // External process adds another `#bug` task.
+        let t2 = add_bug_task(&ctx, "Second bug").await;
+
+        let changed_windows = recompute_perspective_filters(ctx.as_ref(), &ui).await;
+
+        assert_eq!(
+            changed_windows,
+            vec!["main".to_string()],
+            "exactly the `main` window should change"
+        );
+        // UIState itself must carry the refreshed list.
+        let stored = ui.filtered_task_ids("main");
+        assert!(stored.contains(&t1));
+        assert!(
+            stored.contains(&t2),
+            "the newly created task must be in the refreshed id list"
+        );
+    }
+
+    #[tokio::test]
+    async fn recompute_perspective_filters_leaves_never_switched_window_alone() {
+        // A window that has never switched perspective holds
+        // `filtered_task_ids == None` ("no filter, show all"). The bridge must
+        // not populate it — that would change its behavior.
+        let (_temp, ctx, _cache) = setup_kanban_with_board().await;
+        let _pid = add_bug_perspective(&ctx).await;
+        let _t1 = add_bug_task(&ctx, "A bug").await;
+
+        let ui = UIState::new();
+        // No switch_perspective call — the `main` window's filtered_task_ids
+        // stays `None`.
+
+        let changed_windows = recompute_perspective_filters(ctx.as_ref(), &ui).await;
+
+        assert!(
+            changed_windows.is_empty(),
+            "a never-switched window must not be recomputed"
+        );
+        assert!(
+            ui.get_window_state("main")
+                .and_then(|ws| ws.filtered_task_ids)
+                .is_none(),
+            "filtered_task_ids must remain None for a never-switched window"
+        );
+    }
+
+    #[tokio::test]
+    async fn recompute_perspective_filters_dedupes_shared_perspective() {
+        // Two windows on the SAME perspective share one filter. The recompute
+        // evaluates that filter once and applies the fresh id list to both.
+        let (_temp, ctx, _cache) = setup_kanban_with_board().await;
+        let pid = add_bug_perspective(&ctx).await;
+        let t1 = add_bug_task(&ctx, "First bug").await;
+
+        let ui = UIState::new();
+        ui.switch_perspective("main", &pid, vec![t1.clone()]);
+        ui.switch_perspective("secondary", &pid, vec![t1.clone()]);
+
+        let t2 = add_bug_task(&ctx, "Second bug").await;
+
+        let mut changed_windows = recompute_perspective_filters(ctx.as_ref(), &ui).await;
+        changed_windows.sort();
+
+        assert_eq!(
+            changed_windows,
+            vec!["main".to_string(), "secondary".to_string()],
+            "both windows must be refreshed"
+        );
+        for label in ["main", "secondary"] {
+            let stored = ui.filtered_task_ids(label);
+            assert!(
+                stored.contains(&t2),
+                "window `{label}` must see the new task"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn recompute_perspective_filters_drops_removed_task() {
+        // When a task that was in scope is deleted, the recompute must remove
+        // it from the window's filtered id list.
+        let (_temp, ctx, _cache) = setup_kanban_with_board().await;
+        let pid = add_bug_perspective(&ctx).await;
+        let t1 = add_bug_task(&ctx, "First bug").await;
+        let t2 = add_bug_task(&ctx, "Second bug").await;
+
+        let ui = UIState::new();
+        ui.switch_perspective("main", &pid, vec![t1.clone(), t2.clone()]);
+
+        // External process deletes the second task.
+        let ectx = ctx.entity_context().await.unwrap();
+        ectx.delete("task", &t2).await.unwrap();
+
+        let changed_windows = recompute_perspective_filters(ctx.as_ref(), &ui).await;
+
+        assert_eq!(changed_windows, vec!["main".to_string()]);
+        let stored = ui.filtered_task_ids("main");
+        assert!(stored.contains(&t1));
+        assert!(
+            !stored.contains(&t2),
+            "the removed task must drop out of the filtered id list"
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_event_gate_fires_for_task_events_only() {
+        // `process_cache_event` only fires the perspective recompute when its
+        // `cache_event_touches_task` gate says the resolved batch touched a
+        // `task`. That gate runs on the *resolved* `WatchEvent`s produced by
+        // `resolve_event`. Drive real cache events for a task and for a
+        // non-task (`tag`) entity end to end and assert the gate verdict on
+        // each — a regression in `watch_event_touches_task` (e.g. matching
+        // `tag`, or dropping the `task` guard) would flip one of these.
+        let (_temp, ctx, cache) = setup_kanban_with_board().await;
+
+        let seen = pre_populate_seen(&cache).await;
+        let mut rx = cache.subscribe();
+        let mut state = BridgeState::new(seen);
+
+        // A real task creation by the kanban layer.
+        let task = AddTask::new("A task")
+            .execute(ctx.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = task["id"].as_str().unwrap().to_string();
+
+        let evt = rx.recv().await.expect("task write must emit");
+        let resolved = resolve_event(evt, ctx.as_ref(), &mut state).await;
+        assert!(
+            resolved.iter().any(
+                |e| matches!(e, WatchEvent::EntityCreated { entity_type, id, .. }
+                    if entity_type == "task" && id == &task_id)
+            ),
+            "resolve_event must surface the new task as a task EntityCreated"
+        );
+        assert!(
+            cache_event_touches_task(&resolved),
+            "a resolved task cache event must trip the recompute gate"
+        );
+
+        // A real tag creation — a non-task entity. The gate must NOT trip.
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        cache.write(&tag).await.unwrap();
+
+        let evt = rx.recv().await.expect("tag write must emit");
+        let resolved = resolve_event(evt, ctx.as_ref(), &mut state).await;
+        assert!(
+            !resolved.is_empty(),
+            "resolve_event must surface the tag event"
+        );
+        assert!(
+            resolved.iter().all(|e| !watch_event_touches_task(e)),
+            "no resolved tag event may be classified as touching a task"
+        );
+        assert!(
+            !cache_event_touches_task(&resolved),
+            "a resolved non-task cache event must not trip the recompute gate"
+        );
     }
 }

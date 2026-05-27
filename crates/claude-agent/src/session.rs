@@ -708,6 +708,21 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    /// Build a `TerminalManager` initialized with terminal client capabilities.
+    ///
+    /// ACP requires the client to declare `terminal = true` during initialization
+    /// before any terminal operation is permitted. Production wiring sets this from
+    /// the `initialize` request; tests must mirror it so capability-checked methods
+    /// behave as they do at runtime.
+    async fn create_test_terminal_manager() -> crate::terminal_manager::TerminalManager {
+        let manager = crate::terminal_manager::TerminalManager::new();
+        let caps = agent_client_protocol::schema::ClientCapabilities::new()
+            .terminal(true)
+            .fs(agent_client_protocol::schema::FileSystemCapabilities::new());
+        manager.set_client_capabilities(caps).await;
+        manager
+    }
+
     // SessionId tests
     #[test]
     fn test_session_id_new() {
@@ -961,17 +976,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_session_with_cleanup() {
-        use crate::terminal_manager::{TerminalCreateParams, TerminalManager};
+        use crate::terminal_manager::TerminalCreateParams;
 
         let manager = SessionManager::new();
-        let terminal_manager = TerminalManager::new();
-        // Terminal operations are gated behind the client `terminal` capability,
-        // which a real client declares during `initialize`.
-        terminal_manager
-            .set_client_capabilities(
-                agent_client_protocol::schema::ClientCapabilities::new().terminal(true),
-            )
-            .await;
+        let terminal_manager = create_test_terminal_manager().await;
         let cwd = std::env::current_dir().unwrap();
         let session_id = manager.create_session(cwd, None).unwrap();
         let session_id_str = session_id.to_string();
@@ -1017,17 +1025,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_session_with_cleanup_multiple_terminals() {
-        use crate::terminal_manager::{TerminalCreateParams, TerminalManager};
+        use crate::terminal_manager::TerminalCreateParams;
 
         let manager = SessionManager::new();
-        let terminal_manager = TerminalManager::new();
-        // Terminal operations are gated behind the client `terminal` capability,
-        // which a real client declares during `initialize`.
-        terminal_manager
-            .set_client_capabilities(
-                agent_client_protocol::schema::ClientCapabilities::new().terminal(true),
-            )
-            .await;
+        let terminal_manager = create_test_terminal_manager().await;
         let cwd = std::env::current_dir().unwrap();
         let session_id = manager.create_session(cwd, None).unwrap();
         let session_id_str = session_id.to_string();
@@ -1107,6 +1108,9 @@ mod tests {
 
     #[test]
     fn test_list_sessions() {
+        // `list_sessions` now reflects only the in-memory `sessions` map of this
+        // manager instance (durable listing lives in `SessionStore`), so a fresh
+        // manager starts empty without needing an isolated storage directory.
         let manager = SessionManager::new();
         let cwd = std::env::current_dir().unwrap();
 

@@ -166,6 +166,7 @@ async fn build_dynamic_sources_assembles_views_boards_perspectives_headless() {
         open_board_ctxs: &open_boards,
         active_window_label: Some("main"),
         windows,
+        ai_models: vec![],
     };
     let dynamic: DynamicSources = build_dynamic_sources(inputs).await;
 
@@ -279,6 +280,7 @@ async fn build_dynamic_sources_handles_no_active_context() {
         open_board_ctxs: &open_boards,
         active_window_label: Some("main"),
         windows: vec![],
+        ai_models: vec![],
     };
     let dynamic = build_dynamic_sources(inputs).await;
 
@@ -330,6 +332,7 @@ async fn build_dynamic_sources_emits_every_open_board_and_window() {
         open_board_ctxs: &open_boards,
         active_window_label: Some("main"),
         windows,
+        ai_models: vec![],
     };
     let dynamic: DynamicSources = build_dynamic_sources(inputs).await;
 
@@ -443,6 +446,7 @@ async fn build_dynamic_sources_falls_back_to_basename_when_ctx_missing() {
         open_board_ctxs: &open_boards,
         active_window_label: Some("main"),
         windows: vec![],
+        ai_models: vec![],
     };
     let dynamic = build_dynamic_sources(inputs).await;
 
@@ -494,6 +498,7 @@ async fn build_dynamic_sources_filters_perspectives_by_active_view_kind() {
         open_board_ctxs: &open_boards,
         active_window_label: Some("main"),
         windows: vec![],
+        ai_models: vec![],
     };
     let dynamic = build_dynamic_sources(inputs).await;
 
@@ -562,6 +567,7 @@ async fn perspectives_are_scoped_by_view_id_when_set() {
         open_board_ctxs: &open_boards,
         active_window_label: Some("main"),
         windows: vec![],
+        ai_models: vec![],
     })
     .await;
     assert!(
@@ -584,6 +590,7 @@ async fn perspectives_are_scoped_by_view_id_when_set() {
         open_board_ctxs: &open_boards,
         active_window_label: Some("main"),
         windows: vec![],
+        ai_models: vec![],
     })
     .await;
     assert!(
@@ -626,6 +633,7 @@ async fn legacy_kind_perspectives_remain_shared_by_kind() {
             open_board_ctxs: &open_boards,
             active_window_label: Some("main"),
             windows: vec![],
+            ai_models: vec![],
         })
         .await;
         assert!(
@@ -651,6 +659,7 @@ async fn legacy_kind_perspectives_remain_shared_by_kind() {
         open_board_ctxs: &open_boards,
         active_window_label: Some("main"),
         windows: vec![],
+        ai_models: vec![],
     })
     .await;
     assert!(

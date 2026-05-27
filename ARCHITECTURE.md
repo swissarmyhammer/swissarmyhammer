@@ -565,7 +565,7 @@ The kanban desktop app is a Tauri 2 application with a React frontend.
 
 The Tauri backend is a thin wiring layer:
 
-- **AppState** holds the command registry, command impls, open boards (each a `BoardHandle` wrapping KanbanContext + StoreContext + EntityCache + SearchIndex), UIState, and native menu.
+- **AppState** holds the command registry, command impls, open boards (each a `BoardHandle` wrapping KanbanContext + StoreContext + EntityCache + SearchIndex + a per-board in-process full-SAH-toolset MCP server), UIState, and native menu.
 - **`dispatch_command`** is the single mutation entry point. All other `#[tauri::command]` functions are read-only queries.
 - **File watcher** monitors `.kanban/` directories for external changes. SHA-256 content hashing avoids double-firing on its own writes.
 - **Menu** is built dynamically from the CommandsRegistry and rebuilds on keymap changes, board switches, and focus changes.

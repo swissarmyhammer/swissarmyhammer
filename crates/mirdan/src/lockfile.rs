@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use swissarmyhammer_common::lifecycle::InitScope;
 
 use crate::package_type::PackageType;
 use crate::registry::RegistryError;
@@ -115,6 +116,29 @@ impl Lockfile {
 /// Get the lockfile path for a project root.
 fn lockfile_path(project_root: &Path) -> PathBuf {
     project_root.join(LOCKFILE_NAME)
+}
+
+/// Resolve the directory that hosts the `mirdan-lock.json` file for a given scope.
+///
+/// - [`InitScope::User`] → the user's home directory (so the lockfile sits at
+///   `~/mirdan-lock.json`, alongside the global `~/.skills/` and `~/.agents/`
+///   stores it tracks).
+/// - [`InitScope::Project`] / [`InitScope::Local`] → the current working
+///   directory, matching the historical project-scope behaviour where the
+///   lockfile lives next to the project source tree.
+///
+/// Returns an error describing the failure mode if the underlying lookup fails
+/// (no `HOME` for user scope, or `std::env::current_dir()` failure for project
+/// scope). Callers that thread results back through `InitResult::error` can
+/// surface the message directly.
+pub fn lockfile_root_for_scope(scope: &InitScope) -> Result<PathBuf, String> {
+    match scope {
+        InitScope::User => dirs::home_dir()
+            .ok_or_else(|| "Could not resolve home directory for user-scope lockfile".to_string()),
+        InitScope::Project | InitScope::Local => {
+            std::env::current_dir().map_err(|e| format!("Failed to get current directory: {}", e))
+        }
+    }
 }
 
 /// Verify SHA-512 integrity of downloaded data.
@@ -299,5 +323,29 @@ mod tests {
             },
         );
         assert!(lf.find_by_display_name("bar").is_none());
+    }
+
+    /// User scope resolves to the user's home directory so the lockfile lives
+    /// alongside `~/.skills/` and `~/.agents/`, not in the (possibly arbitrary)
+    /// current working directory.
+    #[test]
+    #[serial_test::serial(home_env)]
+    fn test_lockfile_root_for_scope_user() {
+        use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+
+        let env = IsolatedTestEnvironment::new().unwrap();
+        let root = lockfile_root_for_scope(&InitScope::User).unwrap();
+        assert_eq!(root, env.home_path());
+    }
+
+    /// Project and local scope resolve to the current working directory, matching
+    /// the historical behaviour where the lockfile sits next to the project tree.
+    #[test]
+    fn test_lockfile_root_for_scope_project() {
+        let cwd = std::env::current_dir().unwrap();
+        let project = lockfile_root_for_scope(&InitScope::Project).unwrap();
+        let local = lockfile_root_for_scope(&InitScope::Local).unwrap();
+        assert_eq!(project, cwd);
+        assert_eq!(local, cwd);
     }
 }

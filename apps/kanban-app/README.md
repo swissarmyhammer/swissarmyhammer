@@ -71,10 +71,12 @@ The self-install is **silent, idempotent, self-healing, and non-destructive**:
   same name — is never overwritten.
 
 When the only viable directory is root-owned `/usr/local/bin`, creating the
-symlink needs administrator rights, so the app shows a **single one-time macOS
-password prompt**. A marker file (`.cli-install-attempted` in the app's
-Application Support directory) records that the prompt was shown, so a user who
-declines is never nagged again on later launches.
+symlink needs administrator rights, so the app shows an explanatory dialog and
+then the macOS admin password prompt. Self-install is gated solely on the
+`kanban` symlink — there is no remembered-attempt state. If the symlink is
+absent (the user declined, or it was later deleted), the next launch offers to
+install it again; once the link is present, `already_installed` short-circuits
+and the app stays silent.
 
 See the module documentation at the top of `src/cli_install.rs` for the full
 design rationale and the per-function contracts.

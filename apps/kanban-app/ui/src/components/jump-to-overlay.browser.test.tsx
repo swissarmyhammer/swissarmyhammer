@@ -108,6 +108,7 @@ import {
   fqRoot,
   type FullyQualifiedMoniker,
 } from "@/types/spatial";
+import { mkRect, stubScopeGeometry } from "@/test/stub-scope-geometry";
 
 // ---------------------------------------------------------------------------
 // Test harness
@@ -236,44 +237,6 @@ function installHarness(jumpCodes: string[]): Harness {
 }
 
 /**
- * Stub `getBoundingClientRect` for every element matching the given
- * `data-testid` so seeded scopes have known on-screen rects in jsdom-
- * less browser mode. Returns the cleanup function — invoke it in
- * `afterEach` to restore the original prototype method.
- */
-function stubScopeRects(rects: Map<string, DOMRect>): () => void {
-  const orig = Element.prototype.getBoundingClientRect;
-  Element.prototype.getBoundingClientRect = function () {
-    const testId = (this as HTMLElement).dataset?.testid;
-    if (testId !== undefined && rects.has(testId)) {
-      return rects.get(testId)!;
-    }
-    return orig.call(this);
-  };
-  return () => {
-    Element.prototype.getBoundingClientRect = orig;
-  };
-}
-
-/**
- * Build a `DOMRect` shape from `(x, y, w, h)` because real browsers'
- * `DOMRect` constructor isn't always available in test environments.
- */
-function mkRect(x: number, y: number, w: number, h: number): DOMRect {
-  return {
-    x,
-    y,
-    left: x,
-    top: y,
-    width: w,
-    height: h,
-    right: x + w,
-    bottom: y + h,
-    toJSON: () => ({}),
-  } as DOMRect;
-}
-
-/**
  * Render a tree with the given number of seeded scopes inside a window
  * `<FocusLayer>`, plus the overlay. Each scope's host `<div>` gets a
  * `data-testid="seed-<n>"` so the rect stub can pin its geometry.
@@ -319,7 +282,7 @@ function renderHarness(opts: {
   // `enumerateScopesInLayer` call inside `useJumpTargets`) see the
   // canned geometry. Installing after render would let the first
   // enumeration observe the un-stubbed natural layout.
-  const cleanup = stubScopeRects(opts.rects);
+  const cleanup = stubScopeGeometry(opts.rects);
   const scopes = Array.from({ length: opts.scopeCount }, (_, i) => i);
   const result = render(
     <SpatialFocusProvider>
@@ -625,7 +588,9 @@ describe("<JumpToOverlay>", () => {
     });
     await flush();
     expect(onClose).not.toHaveBeenCalled();
-    expect(harness.focusCalls.find((f) => f.includes("scope:"))).toBeUndefined();
+    expect(
+      harness.focusCalls.find((f) => f.includes("scope:")),
+    ).toBeUndefined();
     cleanupRects();
     unmount();
   });
@@ -817,9 +782,24 @@ describe("<JumpToOverlay>", () => {
     expect(codes.length).toBe(30);
     const harness = installHarness(codes);
     const onClose = vi.fn();
+    // Lay the 30 seed scopes out as a NON-overlapping 5×6 grid that fits
+    // inside the test browser viewport (≤414 px wide). Non-overlapping
+    // matters because the visibility filter hit-tests each scope's pill
+    // anchor: overlapping rects would make one scope occlude another's
+    // anchor and the filter would (correctly) drop the occluded one,
+    // shrinking the pill count below 30. Each cell is 60×25 with a 10 px
+    // gutter, so anchors never fall inside a neighbour's rect.
     const rects = new Map<string, DOMRect>();
+    const COLS = 5;
+    const CELL_W = 60;
+    const CELL_H = 25;
+    const GUTTER = 10;
     for (let i = 0; i < 30; i++) {
-      rects.set(`seed-${i}`, mkRect(10 + i * 5, 10 + i * 5, 50, 20));
+      const col = i % COLS;
+      const row = Math.floor(i / COLS);
+      const x = 10 + col * (CELL_W + GUTTER);
+      const y = 10 + row * (CELL_H + GUTTER);
+      rects.set(`seed-${i}`, mkRect(x, y, CELL_W, CELL_H));
     }
     const { cleanupRects, unmount } = renderHarness({
       scopeCount: 30,

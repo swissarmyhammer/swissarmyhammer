@@ -88,14 +88,109 @@ impl FileWatcher {
         }
     }
 
-    /// Start watching prompt directories for changes
+    /// Start watching prompt directories for changes.
+    ///
+    /// This replaces any previously-active watch on `self`. It is the
+    /// `&mut self` convenience wrapper around [`FileWatcher::start`]: it builds
+    /// a freshly-started watcher and moves it into `self`.
+    ///
+    /// Prefer [`FileWatcher::start`] when the watcher lives behind a shared
+    /// lock (e.g. `Arc<Mutex<FileWatcher>>`): building off-lock keeps the slow
+    /// macOS FSEvents `.watch()` registration out of the locked critical path,
+    /// so concurrent shutdown does not block on it.
     pub async fn start_watching<C>(&mut self, callback: C) -> Result<()>
     where
         C: FileWatcherCallback + Clone,
     {
         // Stop existing watcher if running
         self.stop_watching();
+        *self = Self::start(callback).await?;
+        Ok(())
+    }
 
+    /// Build a fully-started `FileWatcher`, performing the slow FSEvents
+    /// stream registration WITHOUT requiring `&mut self` or any shared lock,
+    /// and WITHOUT pinning a tokio worker for the duration of the registration.
+    ///
+    /// WHY this is an associated constructor rather than `&mut self`: on macOS
+    /// `debouncer.watcher().watch(path, Recursive)` blocks for seconds while it
+    /// registers an FSEvents stream, and that registration serializes through
+    /// the OS FSEvents subsystem. When the watcher lives behind a shared
+    /// `Arc<Mutex<FileWatcher>>`, holding that lock across `.watch()` makes
+    /// `stop_watching()` (shutdown) block for the full registration time.
+    /// Building the watcher here — off any shared lock — lets the caller grab
+    /// the lock only briefly to store the result, keeping shutdown fast.
+    ///
+    /// WHY the blocking build runs on a detached `std::thread`: the FSEvents
+    /// `.watch()` call is synchronous and cannot be interrupted by `abort()`.
+    /// If it ran inline on the background-startup tokio task, it would pin a
+    /// tokio worker for the full ~4.5s registration. `abort()` would suspend
+    /// the future but the worker stays blocked in `.watch()`, so when the test
+    /// runtime is dropped, runtime teardown waits for that pinned worker —
+    /// keeping in-process server tests at ~4.5s. Running the build on a
+    /// dedicated `std::thread` and only `.await`ing the completion channel here
+    /// keeps the async side cleanly abortable: nothing on the tokio runtime
+    /// blocks on FSEvents, so an aborted startup never holds a worker and
+    /// runtime teardown is immediate. The thread is short-lived (one per
+    /// registration; concurrency bounded by the caller's parallelism). If the
+    /// receiver is dropped (startup aborted), the built watcher is dropped on
+    /// the thread, whose `Drop` detaches the debouncer teardown — so a late
+    /// registration never resurrects a watcher and never blocks a tokio worker.
+    ///
+    /// Returns an inactive (no-debouncer) `FileWatcher` when there are no
+    /// prompt directories to watch.
+    pub async fn start<C>(callback: C) -> Result<Self>
+    where
+        C: FileWatcherCallback + Clone,
+    {
+        // Capture the current runtime handle so the off-runtime build thread
+        // can drive the async debouncer construction (which internally spawns a
+        // tokio task) and the event-processing task. `block_on`/`enter` on this
+        // handle keeps those tasks on the existing runtime while the blocking
+        // `.watch()` runs on the std::thread — off the tokio worker pool.
+        let runtime = tokio::runtime::Handle::current();
+        let (tx, rx) = tokio::sync::oneshot::channel::<Result<Self>>();
+
+        // WHY std::thread (not spawn_blocking): spawn_blocking threads still
+        // belong to the runtime's blocking pool and can delay runtime teardown;
+        // a fully detached std::thread does not. The thread takes ownership of
+        // everything it needs and reports back over the oneshot channel.
+        std::thread::Builder::new()
+            .name("fsevents-watch-register".to_string())
+            .spawn(move || {
+                let built = runtime.block_on(Self::build_blocking(callback));
+                // If the receiver is gone (startup was aborted / shutdown ran),
+                // the send fails and `built` is dropped here on this thread. Its
+                // `Drop` detaches the debouncer teardown, so the abandoned
+                // watcher is cleaned up without ever touching a tokio worker.
+                let _ = tx.send(built);
+            })
+            .map_err(|e| SwissArmyHammerError::Other {
+                message: format!("Failed to spawn FSEvents registration thread: {e}"),
+            })?;
+
+        // Await completion. This await is the only thing the background-startup
+        // tokio task does for the registration, so aborting it suspends here
+        // cleanly without pinning a worker in the synchronous `.watch()`.
+        rx.await.map_err(|_| SwissArmyHammerError::Other {
+            message: "FSEvents registration thread terminated before reporting a result"
+                .to_string(),
+        })?
+    }
+
+    /// Perform the blocking FSEvents registration and event-task spawn.
+    ///
+    /// This runs on the dedicated registration `std::thread` via `block_on`, so
+    /// the synchronous `.watch()` call never occupies a tokio worker. The
+    /// debouncer construction and event-processing task are spawned onto the
+    /// captured runtime via the `block_on` runtime context.
+    ///
+    /// Returns an inactive (no-debouncer) `FileWatcher` when there are no
+    /// prompt directories to watch.
+    async fn build_blocking<C>(callback: C) -> Result<Self>
+    where
+        C: FileWatcherCallback + Clone,
+    {
         tracing::info!("Starting file watching for prompt directories");
 
         // Get the directories to watch using the same logic as PromptResolver
@@ -116,7 +211,7 @@ impl FileWatcher {
         // The resolver already returns only existing paths
         if watch_paths.is_empty() {
             tracing::warn!("No prompt directories found to watch");
-            return Ok(());
+            return Ok(Self::new());
         }
 
         // Create async debouncer with 500ms timeout and channel for events
@@ -129,7 +224,10 @@ impl FileWatcher {
             message: format!("Failed to create async debouncer: {}", e),
         })?;
 
-        // Watch all directories
+        // Watch all directories. On macOS this `.watch()` call is the slow,
+        // synchronous FSEvents stream registration. It runs on the dedicated
+        // registration thread (not a tokio worker), so an aborted startup never
+        // blocks runtime teardown on it.
         for path in &watch_paths {
             debouncer
                 .watcher()
@@ -192,18 +290,32 @@ impl FileWatcher {
             tracing::debug!("📁 File watcher task exiting");
         });
 
-        // Store the debouncer and event handler
-        self.debouncer = Some(debouncer);
-        self.event_handle = Some(handle);
-
-        Ok(())
+        // Return the fully-started watcher. `event_rx` was moved into the
+        // event-processing task above, so it is intentionally not retained.
+        Ok(Self {
+            debouncer: Some(debouncer),
+            event_rx: None,
+            event_handle: Some(handle),
+        })
     }
 
     /// Stop file watching
     pub fn stop_watching(&mut self) {
-        // Drop the debouncer (which stops watching automatically)
-        if let Some(_debouncer) = self.debouncer.take() {
-            tracing::debug!("📁 Async debouncer stopped");
+        // Drop the debouncer (which stops watching automatically).
+        //
+        // WHY a detached thread: dropping the `notify` `RecommendedWatcher`
+        // inside the `AsyncDebouncer` blocks for ~5s on macOS FSEvents stream
+        // teardown, and that teardown serializes through the OS FSEvents
+        // subsystem — so under load (many watchers torn down at once) it queues
+        // and dominates server `shutdown()` time. Moving the drop onto a
+        // short-lived `std::thread` lets the caller return immediately while the
+        // OS teardown completes off the critical path. `std::thread::spawn`
+        // (not `tokio::task::spawn_blocking`) because `stop_watching` runs from
+        // both async callers and `Drop`, which can execute outside a runtime.
+        // Watch behavior is unchanged — only teardown timing moves off-path.
+        if let Some(debouncer) = self.debouncer.take() {
+            std::thread::spawn(move || drop(debouncer));
+            tracing::debug!("📁 Async debouncer teardown detached");
         }
 
         // Close the event channel
@@ -216,6 +328,16 @@ impl FileWatcher {
             handle.abort();
             tracing::debug!("📁 File watcher event task aborted");
         }
+    }
+}
+
+impl FileWatcher {
+    /// Test-only accessor: reports whether the watcher is currently inactive
+    /// (no debouncer installed). Used by server-level tests to assert that a
+    /// late, post-shutdown store was suppressed without exposing internals.
+    #[cfg(test)]
+    pub(crate) fn debouncer_is_none_for_test(&self) -> bool {
+        self.debouncer.is_none()
     }
 }
 
@@ -894,25 +1016,120 @@ mod tests {
     // FileWatcher start_watching with callback
     // ---------------------------------------------------------------------------
 
-    /// Test that `start_watching` succeeds with a mock callback and sets up the debouncer.
+    /// Test that `start_watching` sets up the debouncer when there is at least
+    /// one prompt directory to watch.
+    ///
+    /// The `start_watching` contract has two legitimate `Ok` outcomes:
+    /// 1. There are prompt directories — the debouncer is created and stored.
+    /// 2. There are no prompt directories — a warning is logged and the
+    ///    function returns `Ok(())` without creating a debouncer.
+    ///
+    /// Asserting `debouncer.is_some()` on every `Ok` would conflate the two
+    /// cases, so this test pins the precondition: it creates a temp directory
+    /// with a `.git` marker (so it anchors as the git root) and a `.prompts`
+    /// subdirectory (so `PromptResolver::get_prompt_directories()` returns it),
+    /// then changes CWD into it via `CurrentDirGuard`. With at least one
+    /// directory to watch, the success path must produce a debouncer.
     #[tokio::test]
     #[serial_test::serial(cwd)]
     async fn test_file_watcher_start_watching_sets_up_debouncer() {
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+        use tempfile::TempDir;
+
+        // Set up a deterministic prompt directory:
+        //   <temp>/.git           — anchors the temp dir as the git root so
+        //                           `find_git_repository_root_from()` returns it
+        //                           regardless of where the host TempDir lives.
+        //   <temp>/.prompts/      — the dot-directory the prompt resolver
+        //                           returns from `get_prompt_directories()`.
+        let temp = TempDir::new().expect("create temp dir");
+        std::fs::create_dir(temp.path().join(".git")).expect("create .git marker");
+        std::fs::create_dir(temp.path().join(".prompts")).expect("create .prompts dir");
+
+        let _cwd_guard = CurrentDirGuard::new(temp.path()).expect("change cwd into temp dir");
+
         let cb = MockCallback::new();
         let mut watcher = FileWatcher::new();
 
-        // start_watching may succeed or fail depending on the environment's
-        // prompt directories. We test both code paths.
-        let result = watcher.start_watching(cb).await;
-        if result.is_ok() {
-            // If it succeeded, the debouncer should be set
-            assert!(watcher.debouncer.is_some());
-            assert!(watcher.event_handle.is_some());
-        }
-        // Either way, stop_watching should be safe
+        // With a deterministic prompt directory present, `start_watching` must
+        // succeed and install the debouncer.
+        watcher
+            .start_watching(cb)
+            .await
+            .expect("start_watching should succeed with a non-empty prompt directory list");
+        assert!(watcher.debouncer.is_some());
+        assert!(watcher.event_handle.is_some());
+
+        // stop_watching tears the debouncer back down.
         watcher.stop_watching();
         assert!(watcher.debouncer.is_none());
         assert!(watcher.event_handle.is_none());
+    }
+
+    /// Teardown-promptness guard: `stop_watching()` must return to the caller
+    /// in well under 1s even when an active `AsyncDebouncer` is watching a real
+    /// directory.
+    ///
+    /// On macOS, dropping the `notify` `RecommendedWatcher` inside the
+    /// `AsyncDebouncer` blocks for ~5s on FSEvents stream teardown and
+    /// serializes across processes under load — the dominant cost of an
+    /// in-process MCP server `shutdown()`. `stop_watching()` detaches that drop
+    /// to a background thread, so the caller must return promptly. This test
+    /// fails (takes ~5s) if the detach regresses back to a synchronous drop.
+    ///
+    /// The debouncer is constructed and watched directly (rather than via
+    /// `start_watching`, which depends on environment prompt directories) so
+    /// the guard reliably exercises a live FSEvents stream teardown.
+    #[tokio::test]
+    async fn test_stop_watching_returns_promptly() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        let (mut debouncer, _event_rx) =
+            AsyncDebouncer::new_with_channel(Duration::from_millis(500), None)
+                .await
+                .unwrap();
+        debouncer
+            .watcher()
+            .watch(temp.path(), RecursiveMode::Recursive)
+            .unwrap();
+
+        let mut watcher = FileWatcher::new();
+        watcher.debouncer = Some(debouncer);
+
+        let start = std::time::Instant::now();
+        watcher.stop_watching();
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "stop_watching blocked the caller for {elapsed:?}; teardown must be detached"
+        );
+        assert!(watcher.debouncer.is_none());
+    }
+
+    /// Off-lock-build guard: `FileWatcher::start` builds a started watcher
+    /// WITHOUT requiring the shared `Arc<Mutex<FileWatcher>>` lock. This is
+    /// what frees server `shutdown()` from blocking behind an in-flight
+    /// startup: the slow macOS FSEvents `.watch()` registration runs off-lock.
+    ///
+    /// The test holds the shared lock for the entire `start` build. If `start`
+    /// ever tried to take that lock it would deadlock and the test would hang
+    /// forever (caught by the nextest slow/leak timeout). Completing at all is
+    /// the guarantee. We deliberately do NOT bound the build's wall time: the
+    /// FSEvents registration itself takes seconds under load, but that latency
+    /// is independent of the lock — the point here is only that it is not held.
+    #[tokio::test]
+    async fn test_start_builds_without_shared_lock() {
+        let shared: Arc<Mutex<FileWatcher>> = Arc::new(Mutex::new(FileWatcher::new()));
+
+        // Hold the shared lock for the whole build to prove `start` never needs it.
+        let _guard = shared.lock().await;
+
+        // Exercise the real off-lock builder while still holding the lock. If
+        // `start` needed `shared`, this `.await` would never return.
+        let built = FileWatcher::start(MockCallback::new()).await;
+
+        assert!(built.is_ok(), "start should build a watcher off-lock");
     }
 
     /// Test that calling `start_watching` twice replaces the previous watcher.

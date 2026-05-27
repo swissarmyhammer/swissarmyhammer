@@ -26,9 +26,10 @@ struct MenuEntry {
 ///
 /// Reads all `CommandDef` entries with `menu` metadata, groups them by
 /// the first path element (top-level menu), sorts by `(group, order)`,
-/// and builds native menu items. OS chrome items (About, Quit, Hide,
-/// Open Recent, Edit shortcuts, Window list) are injected in their
-/// standard positions.
+/// and builds native menu items. The menu bar carries six top-level
+/// submenus in order: App, File, Edit, View, Navigation, Window. OS
+/// chrome items (About, Quit, Hide, Open Recent, Edit shortcuts, Window
+/// list) are injected in their standard positions.
 ///
 /// Returns a `HashMap` of all created menu item handles keyed by command ID,
 /// which can be stored in `AppState` for later enable/disable operations.
@@ -45,18 +46,29 @@ pub fn build_menu_from_commands(
     let app_menu = build_app_submenu(app, &menus, &mut menu_items)?;
     let file_menu = build_file_submenu(app, &menus, recent, &mut menu_items)?;
     let edit_menu = build_grouped_submenu(app, "Edit", menus.get("Edit"), &mut menu_items)?;
+    // View submenu hosts view-surface commands (currently the AI panel
+    // toggle `ai.toggle`). Placed after Edit, before Navigation, in the
+    // conventional menu-bar order (Edit → View → Navigate → Window).
+    let view_menu = build_grouped_submenu(app, "View", menus.get("View"), &mut menu_items)?;
     // Navigation submenu hosts the nine `nav.*` commands contributed by
     // `swissarmyhammer-focus` (eight directional/drill plus
-    // `nav.jump`). Placement between Edit and Window mirrors common
-    // app conventions (View / Navigate sits after Edit) and keeps
-    // Window as the trailing menu before any platform-specific Help.
+    // `nav.jump`). Placement between View and Window mirrors common
+    // app conventions and keeps Window as the trailing menu before any
+    // platform-specific Help.
     let nav_menu =
         build_grouped_submenu(app, "Navigation", menus.get("Navigation"), &mut menu_items)?;
     let window_menu = build_window_submenu(app, &menus, windows, &mut menu_items)?;
 
     let menu = Menu::with_items(
         app,
-        &[&app_menu, &file_menu, &edit_menu, &nav_menu, &window_menu],
+        &[
+            &app_menu,
+            &file_menu,
+            &edit_menu,
+            &view_menu,
+            &nav_menu,
+            &window_menu,
+        ],
     )?;
     app.set_menu(menu).map_err(|e| {
         tracing::error!("Failed to set menu: {}", e);
@@ -920,6 +932,33 @@ mod tests {
         );
         assert_eq!(groups.first().copied(), Some(0), "first group must be 0");
         assert_eq!(groups.last().copied(), Some(3), "last group must be 3");
+    }
+
+    /// The composed registry must place the AI panel toggle command
+    /// (`ai.toggle`, contributed by `swissarmyhammer-kanban`) under a
+    /// single top-level `View` submenu key. The native menu builder
+    /// (`Menu::with_items` in `build_menu_from_commands`) feeds this map
+    /// into `build_grouped_submenu(app, "View", menus.get("View"), …)`,
+    /// so the presence of the `View` key and the `ai.toggle` entry is
+    /// the load-bearing contract for the View menu wiring.
+    #[test]
+    fn view_submenu_contains_ai_toggle_command() {
+        let registry = compose_registry![
+            swissarmyhammer_commands,
+            swissarmyhammer_focus,
+            swissarmyhammer_kanban,
+        ];
+        let ui_state = UIState::new();
+        let menus = collect_menu_entries(&registry, &ui_state);
+
+        let view = menus
+            .get("View")
+            .expect("View submenu must exist once ai.toggle carries a menu placement");
+        assert!(
+            view.iter().any(|e| e.id == "ai.toggle"),
+            "View submenu must collect the ai.toggle command; got {:?}",
+            view.iter().map(|e| &e.id).collect::<Vec<_>>(),
+        );
     }
 
     /// Single-character bindings are valid accelerator atoms — they

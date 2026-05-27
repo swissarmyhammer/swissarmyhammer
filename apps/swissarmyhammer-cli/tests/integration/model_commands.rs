@@ -232,9 +232,14 @@ async fn test_model_list_yaml_format() -> Result<()> {
 
 #[tokio::test]
 async fn test_model_use_builtin_model() -> Result<()> {
-    let _env = IsolatedTestEnvironment::new()?;
+    // `sah model use` writes `.sah/sah.yaml` into the process working
+    // directory. Run it inside the isolated temp dir so it does not pollute
+    // the crate source tree — `IsolatedTestEnvironment` only isolates HOME,
+    // not the working directory.
+    let env = IsolatedTestEnvironment::new()?;
+    let project_root = env.temp_dir();
 
-    let output = run_model_command(&["model", "use", "claude-code"]).await?;
+    let output = run_model_command_in_dir(&["model", "use", "claude-code"], &project_root).await?;
 
     // Should succeed or fail with specific config-related errors only
     if !output.status.success() {

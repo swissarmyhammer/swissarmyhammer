@@ -353,6 +353,7 @@ impl CliContextBuilder {
 #[cfg(test)]
 mod tests {
     use serde::Serialize;
+    use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
 
     #[derive(Serialize, Debug, Clone)]
     struct TestRow {
@@ -698,7 +699,15 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_cli_context_new() {
+        // Isolate HOME + CWD — `CliContext::new()` calls into
+        // `build_async()`, which calls `get_swissarmyhammer_dir()` and creates
+        // `.sah/` at cwd as a side effect. Without isolation this leaks a
+        // `.sah/` skeleton into the host crate directory.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         let template_context = swissarmyhammer_config::TemplateContext::new();
         let matches = clap::Command::new("test").get_matches_from(vec!["test"]);
 
@@ -720,14 +729,26 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_cli_context_builder_missing_required_fields() {
+        // Isolate HOME + CWD — see `test_cli_context_new`. The validation
+        // error path still constructs the same `.sah/` directory before
+        // failing on the missing required field.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         // Missing template_context and matches should fail
         let result = super::CliContextBuilder::default().build_async().await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_cli_context_get_prompt_library() {
+        // Isolate HOME + CWD — see `test_cli_context_new`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         let template_context = swissarmyhammer_config::TemplateContext::new();
         let matches = clap::Command::new("test").get_matches_from(vec!["test"]);
 
@@ -748,7 +769,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_cli_context_render_prompt_nonexistent() {
+        // Isolate HOME + CWD — see `test_cli_context_new`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         let template_context = swissarmyhammer_config::TemplateContext::new();
         let matches = clap::Command::new("test").get_matches_from(vec!["test"]);
 
@@ -770,6 +796,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_cli_context_display_formats() {
         use serde::Serialize;
 
@@ -778,6 +805,10 @@ mod tests {
             name: String,
             value: i32,
         }
+
+        // Isolate HOME + CWD — see `test_cli_context_new`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
 
         let template_context = swissarmyhammer_config::TemplateContext::new();
         let matches = clap::Command::new("test").get_matches_from(vec!["test"]);
@@ -809,6 +840,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_cli_context_display_empty_items() {
         use serde::Serialize;
 
@@ -816,6 +848,10 @@ mod tests {
         struct Item {
             name: String,
         }
+
+        // Isolate HOME + CWD — see `test_cli_context_new`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
 
         let template_context = swissarmyhammer_config::TemplateContext::new();
         let matches = clap::Command::new("test").get_matches_from(vec!["test"]);
@@ -838,6 +874,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_cli_context_display_yaml() {
         use serde::Serialize;
 
@@ -845,6 +882,10 @@ mod tests {
         struct Item {
             name: String,
         }
+
+        // Isolate HOME + CWD — see `test_cli_context_new`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
 
         let template_context = swissarmyhammer_config::TemplateContext::new();
         let matches = clap::Command::new("test").get_matches_from(vec!["test"]);
@@ -865,6 +906,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_cli_context_display_table_with_items() {
         use serde::Serialize;
 
@@ -873,6 +915,10 @@ mod tests {
             name: String,
             status: String,
         }
+
+        // Isolate HOME + CWD — see `test_cli_context_new`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
 
         let template_context = swissarmyhammer_config::TemplateContext::new();
         let matches = clap::Command::new("test").get_matches_from(vec!["test"]);
@@ -898,8 +944,13 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_cli_context_display_prompts() {
         use crate::commands::prompt::display::{DisplayRows, PromptRow};
+
+        // Isolate HOME + CWD — see `test_cli_context_new`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
 
         let template_context = swissarmyhammer_config::TemplateContext::new();
         let matches = clap::Command::new("test").get_matches_from(vec!["test"]);
@@ -923,8 +974,13 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_cli_context_display_prompts_verbose() {
         use crate::commands::prompt::display::{DisplayRows, VerbosePromptRow};
+
+        // Isolate HOME + CWD — see `test_cli_context_new`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
 
         let template_context = swissarmyhammer_config::TemplateContext::new();
         let matches = clap::Command::new("test").get_matches_from(vec!["test"]);

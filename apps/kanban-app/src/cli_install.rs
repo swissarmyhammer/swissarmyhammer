@@ -14,14 +14,25 @@
 //!   `Kanban.app` is repaired in place.
 //! * **Non-destructive.** A pre-existing real (non-symlink) `kanban` file —
 //!   some unrelated tool of the same name — is never overwritten.
-//! * **Homebrew-aware.** When the Homebrew cask already linked the CLI,
-//!   [`already_installed`] short-circuits the whole flow so the user is never
-//!   prompted.
+//! * **Homebrew-aware.** When the Homebrew cask already linked the CLI from
+//!   `/Applications/Kanban.app`, an app launched from `/Applications` finds
+//!   that link already pointing at its own CLI, so [`already_installed`]
+//!   short-circuits the whole flow and the user is never prompted.
+//!
+//! Self-install is gated **solely on the `kanban` symlink** — there is no
+//! remembered-attempt state. Each launch, [`run`] checks
+//! [`already_installed`]: a symlink pointing exactly at the running app's CLI
+//! is a silent no-op, while a missing link — or one pointing anywhere else —
+//! triggers a fresh install/repair attempt (including the escalation/password
+//! path on macOS). So if the link is later deleted, the next launch re-creates
+//! it.
 //!
 //! The pure functions ([`resolve_bundled_cli`], [`already_installed`],
-//! [`install_cli_symlink`]) are filesystem-only and fully unit-tested. The
-//! privilege-escalation path is isolated behind [`pick_target_dir`] and is
-//! deliberately not unit-tested — see the comment on that function.
+//! [`install_cli_symlink`], [`build_install_applescript`]) are
+//! computation-only and fully unit-tested. The privilege-escalation path —
+//! constructing and running an `NSAppleScript` — is isolated behind
+//! [`pick_target_dir`] and is deliberately not unit-tested; see the comment on
+//! that function.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -57,7 +68,8 @@ pub struct TargetDir {
     /// The directory in which to create the `kanban` symlink.
     pub path: PathBuf,
     /// True when `path` is not writable by the current user and the symlink
-    /// must therefore be created via an `osascript` privilege escalation.
+    /// must therefore be created via an in-process AppleScript privilege
+    /// escalation (macOS only).
     pub needs_escalation: bool,
 }
 
@@ -92,29 +104,36 @@ fn is_inside_kanban_bundle(path: &Path) -> bool {
         .any(|w| w[0] == "Kanban.app" && w[1] == "Contents" && w[2] == "MacOS" && w[3] == CLI_NAME)
 }
 
-/// Whether `kanban` already resolves in `target_dir` to a symlink that points
-/// into *some* `Kanban.app` bundle.
+/// Whether `kanban` in `target_dir` is *our* symlink — a symlink pointing
+/// exactly at `bundled`, the CLI of the currently running app.
 ///
-/// This covers the Homebrew-cask case: when `brew` installed the cask it
-/// already created a `kanban` link into `Caskroom/.../Kanban.app`. In that
-/// situation the app must do nothing — the CLI is reachable and re-linking it
-/// would only fight the package manager.
+/// The question this answers is "is this our install", not "is there a
+/// `kanban`". Only an exact match means the link already does what [`run`]
+/// would do, so the launch-time install can be skipped. Every other state —
+/// a missing entry, a real (non-symlink) file, a symlink to an unrelated
+/// target, or a symlink into a *different* `Kanban.app` bundle — returns
+/// `false`, so [`run`] proceeds to install or repair the link.
+///
+/// This still short-circuits the Homebrew-cask case correctly: a cask links
+/// `<brew bin>/kanban -> /Applications/Kanban.app/Contents/MacOS/kanban`, and
+/// when the app is launched from `/Applications` its `bundled` path *is* that
+/// target. The exact-match check then returns `true`, so the app does not
+/// fight the package manager.
 ///
 /// # Parameters
 /// * `target_dir` — the `PATH` directory to inspect.
-/// * `bundled` — the CLI shipped with the *running* app. Unused for the
-///   bundle-shape check but kept in the signature so callers always pass the
-///   same pair to [`already_installed`] and [`install_cli_symlink`].
+/// * `bundled` — the CLI shipped with the *running* app; the symlink target
+///   that counts as already installed.
 ///
 /// # Returns
-/// `true` when a `kanban` symlink into any Kanban bundle is present, `false`
-/// when the entry is missing, is a real file, or links somewhere unrelated.
+/// `true` only when `target_dir/kanban` is a symlink whose target equals
+/// `bundled` exactly; `false` for every other state.
 pub fn already_installed(target_dir: &Path, bundled: &Path) -> bool {
-    let _ = bundled;
     let link = target_dir.join(CLI_NAME);
     match std::fs::read_link(&link) {
-        Ok(dest) => is_inside_kanban_bundle(&dest),
-        // Not a symlink, or does not exist — nothing is installed.
+        // A symlink — installed only when it points at the running app's CLI.
+        Ok(dest) => dest == bundled,
+        // Not a symlink (a real file), or does not exist — not our install.
         Err(_) => false,
     }
 }
@@ -260,12 +279,14 @@ fn homebrew_bin() -> Option<PathBuf> {
 ///
 /// # Privilege escalation is intentionally not unit-tested.
 ///
-/// The `needs_escalation` branch causes [`run`] to invoke `osascript` with
-/// `with administrator privileges`, which opens a system password dialog.
-/// That cannot be exercised in an automated test, and faking it would test the
-/// fake rather than the behaviour. Coverage stops at this function: it
-/// produces a plain [`TargetDir`] value, and every consumer ([`run`]) branches
-/// only on its boolean. The pure symlink functions above are fully tested.
+/// The `needs_escalation` branch causes [`run`] (on macOS) to run an
+/// AppleScript `with administrator privileges`, which opens a system password
+/// dialog. That cannot be exercised in an automated test, and faking it would
+/// test the fake rather than the behaviour. Coverage stops at this function:
+/// it produces a plain [`TargetDir`] value, and every consumer ([`run`])
+/// branches only on its boolean. The pure functions above — including
+/// [`build_install_applescript`], which renders the exact AppleScript source —
+/// are fully tested.
 pub fn pick_target_dir() -> TargetDir {
     if let Some(brew_bin) = homebrew_bin() {
         if is_writable(&brew_bin) {
@@ -283,77 +304,123 @@ pub fn pick_target_dir() -> TargetDir {
     }
 }
 
-/// Filename of the marker recording that a privileged install was already
-/// attempted, so a user who declines the password prompt is not nagged on
-/// every subsequent launch.
-const ESCALATION_MARKER: &str = ".cli-install-attempted";
-
-/// Path of the privileged-install marker file inside the app's
-/// Application Support directory, if that directory can be determined.
-fn escalation_marker_path() -> Option<PathBuf> {
-    let support = dirs::data_dir()?.join("com.swissarmyhammer.kanban");
-    Some(support.join(ESCALATION_MARKER))
+/// Escape a string for embedding inside an AppleScript double-quoted literal.
+///
+/// AppleScript string literals treat `\` and `"` specially, so each must be
+/// backslash-escaped. Order matters: backslashes are doubled first so the
+/// backslashes introduced when escaping quotes are not doubled again.
+fn applescript_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-/// Install the `kanban` symlink into a root-owned directory via a single
-/// `osascript` privilege escalation, guarded by a one-shot marker file.
+/// Render the AppleScript source that installs the `kanban` CLI symlink.
 ///
-/// The first launch that needs escalation shows the macOS password dialog
-/// exactly once. Whether the user accepts or declines, the marker is written
-/// so later launches do not prompt again. A later launch can still self-heal
-/// silently if a writable directory (e.g. a freshly installed Homebrew)
-/// becomes available — [`run`] reaches this path only when escalation is the
-/// *only* option.
-fn install_with_escalation(bundled: &Path, target_dir: &Path) {
-    let marker = escalation_marker_path();
-    if let Some(marker) = &marker {
-        if marker.exists() {
-            tracing::debug!(
-                "kanban CLI install: privileged attempt already made, not prompting again"
-            );
-            return;
-        }
-    }
-
-    let link = target_dir.join(CLI_NAME);
-    // `ln -sf` is idempotent and atomic enough for this one-shot path. The
-    // inner double quotes are escaped for the AppleScript string literal.
+/// The script has two parts:
+///
+/// 1. An explanatory `display dialog` that names the `kanban` command-line
+///    tool and offers an `Install` / `Not Now` choice. `Install` is the
+///    default button and `Not Now` is the *cancel* button — clicking it makes
+///    AppleScript raise the standard user-cancelled error (-128), which aborts
+///    the script before the privileged step ever runs. That is exactly the
+///    behaviour wanted: choosing `Not Now` is treated like a declined prompt.
+/// 2. A `do shell script "ln -sf …" with administrator privileges`, reached
+///    only when the user chose `Install`. Running this from inside the
+///    `Kanban.app` process makes macOS attribute the password dialog to
+///    "Kanban" rather than to a spawned `osascript` binary.
+///
+/// This function is pure and platform-neutral — it builds and returns a
+/// `String`, touching no macOS types — so it compiles and is unit-tested on
+/// any host.
+///
+/// # Parameters
+/// * `bundled` — absolute path to the bundled CLI to link to.
+/// * `link` — absolute path of the `kanban` symlink to create on `PATH`.
+pub fn build_install_applescript(bundled: &Path, link: &Path) -> String {
+    // The shell command run with administrator privileges. `ln -sf` is
+    // idempotent and atomic enough for this install step. The whole command
+    // becomes an AppleScript string literal, so it is escaped as one.
     let shell = format!("ln -sf '{}' '{}'", bundled.display(), link.display());
-    let script = format!(
-        "do shell script \"{}\" with administrator privileges",
-        shell.replace('\\', "\\\\").replace('"', "\\\"")
+    let shell_literal = applescript_escape(&shell);
+
+    // The explanatory prose shown before the password prompt. It is a separate
+    // AppleScript string literal and so is escaped independently.
+    let explanation = applescript_escape(
+        "Kanban can install the \"kanban\" command-line tool so you can use it \
+         from the Terminal.\n\nThis needs your administrator password to add \
+         the command to your PATH.",
     );
 
-    match std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(&script)
-        .status()
-    {
-        Ok(status) if status.success() => {
-            tracing::info!(
-                target_dir = %target_dir.display(),
-                "kanban CLI installed via privilege escalation"
-            );
-        }
-        Ok(status) => {
-            // Most commonly: the user clicked Cancel on the password dialog.
-            tracing::info!(
-                %status,
-                "kanban CLI privileged install was not completed"
-            );
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "kanban CLI privileged install: osascript failed to run");
-        }
-    }
+    format!(
+        "display dialog \"{explanation}\" \
+         with title \"Install kanban command-line tool\" \
+         buttons {{\"Not Now\", \"Install\"}} \
+         default button \"Install\" cancel button \"Not Now\" with icon note\n\
+         do shell script \"{shell_literal}\" with administrator privileges"
+    )
+}
 
-    // Record the attempt regardless of outcome so we never nag.
-    if let Some(marker) = marker {
-        if let Some(parent) = marker.parent() {
-            let _ = std::fs::create_dir_all(parent);
+/// Install the `kanban` symlink into a root-owned directory by running an
+/// AppleScript `with administrator privileges` in-process.
+///
+/// [`run`] calls this only when [`already_installed`] is false and escalation
+/// is the *only* option, so every call corresponds to a `kanban` link that is
+/// missing or does not point at this app's CLI. It builds the AppleScript via
+/// [`build_install_applescript`] and runs it unconditionally: such a launch
+/// shows the explanatory dialog and, if the user chooses `Install`, the macOS
+/// password dialog. There is no remembered-attempt state — if the user
+/// declines, the next launch (still not finding our link) offers again; once
+/// the link points at this app's CLI, [`already_installed`] short-circuits
+/// before this function is ever reached.
+///
+/// # In-process AppleScript, not a subprocess
+///
+/// The script is executed via `NSAppleScript` inside the running `Kanban.app`
+/// process rather than by spawning the `osascript` binary. macOS attributes
+/// the `with administrator privileges` request to the *process* that makes it,
+/// so running in-process makes the auth dialog read "Kanban wants to make
+/// changes" instead of the opaque "osascript wants to make changes".
+///
+/// # Not unit-tested
+///
+/// Constructing an `NSAppleScript` and calling `executeAndReturnError` opens
+/// system dialogs and triggers a privilege prompt — GUI/privilege side effects
+/// that cannot be exercised in an automated test. The testable part is fully
+/// isolated in [`build_install_applescript`]; this function only wraps that
+/// pure source in the unavoidable `NSAppleScript` call, mirroring the untested
+/// escalation boundary documented on [`pick_target_dir`].
+#[cfg(target_os = "macos")]
+fn install_with_escalation(bundled: &Path, target_dir: &Path) {
+    use objc2::AnyThread;
+    use objc2_foundation::{NSAppleScript, NSString};
+
+    let link = target_dir.join(CLI_NAME);
+    let source = build_install_applescript(bundled, &link);
+
+    // Build and run the AppleScript in-process. `NSAppleScript::initWithSource`
+    // returns `None` only when the source string is unrepresentable, which
+    // cannot happen for the ASCII-and-path script built above.
+    let ns_source = NSString::from_str(&source);
+    match NSAppleScript::initWithSource(NSAppleScript::alloc(), &ns_source) {
+        Some(script) => {
+            let mut error: Option<_> = None;
+            // SAFETY: `script` is a freshly created `NSAppleScript`; passing a
+            // valid out-pointer for the error dictionary is the documented
+            // calling convention for `executeAndReturnError:`.
+            let _descriptor = unsafe { script.executeAndReturnError(Some(&mut error)) };
+            match error {
+                None => tracing::info!(
+                    target_dir = %target_dir.display(),
+                    "kanban CLI installed via privilege escalation"
+                ),
+                Some(_) => {
+                    // Most commonly: the user chose `Not Now` (AppleScript
+                    // error -128) or cancelled the password dialog.
+                    tracing::info!("kanban CLI privileged install was not completed");
+                }
+            }
         }
-        if let Err(e) = std::fs::write(&marker, b"") {
-            tracing::warn!(error = %e, "kanban CLI install: failed to write attempt marker");
+        None => {
+            tracing::warn!("kanban CLI privileged install: AppleScript source could not be built");
         }
     }
 }
@@ -366,7 +433,9 @@ fn install_with_escalation(bundled: &Path, target_dir: &Path) {
 ///
 /// The flow is: locate the bundled CLI next to the running app, pick a viable
 /// `PATH` directory, short-circuit if a Kanban link is already present, then
-/// either symlink directly (writable dir) or escalate once (root-owned dir).
+/// either symlink directly (writable dir) or escalate (root-owned dir).
+/// Whether to act is gated solely on the symlink — a launch that still finds
+/// no link attempts the install again.
 /// Every outcome is logged via `tracing`; nothing is printed to stderr because
 /// the GUI routes logs to the macOS unified log.
 pub fn run() {
@@ -388,13 +457,25 @@ pub fn run() {
     if already_installed(&target.path, &bundled) {
         tracing::debug!(
             target_dir = %target.path.display(),
-            "kanban CLI install: already linked into a Kanban bundle; skipping"
+            "kanban CLI install: `kanban` already links at this app's CLI; skipping"
         );
         return;
     }
 
     if target.needs_escalation {
+        // Privileged CLI install is implemented only on macOS, where the
+        // `NSAppleScript` `with administrator privileges` flow exists. On
+        // other platforms there is no AppleScript to run and no prompt to
+        // show, so this branch honestly does nothing — it does not fake an
+        // install.
+        #[cfg(target_os = "macos")]
         install_with_escalation(&bundled, &target.path);
+        #[cfg(not(target_os = "macos"))]
+        tracing::debug!(
+            target_dir = %target.path.display(),
+            "kanban CLI install: target dir needs privilege escalation, \
+             which is only supported on macOS; skipping"
+        );
         return;
     }
 
@@ -414,7 +495,8 @@ pub fn run() {
 }
 
 /// Run [`run`] on a detached background thread so app startup is never
-/// blocked by `brew --prefix`, filesystem probes, or an `osascript` dialog.
+/// blocked by `brew --prefix`, filesystem probes, or a privileged-install
+/// AppleScript dialog.
 pub fn spawn() {
     std::thread::spawn(run);
 }

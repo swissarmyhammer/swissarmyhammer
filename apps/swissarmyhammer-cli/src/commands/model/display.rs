@@ -12,6 +12,7 @@ pub struct AgentRow {
     pub name: String,
     pub description: String,
     pub source: String,
+    pub tags: Vec<String>,
 }
 
 /// Detailed agent information for verbose list output
@@ -21,6 +22,7 @@ pub struct VerboseAgentRow {
     pub description: String,
     pub source: String,
     pub content_size: String,
+    pub tags: Vec<String>,
 }
 
 /// Extract common fields from ModelInfo to reduce duplication
@@ -43,6 +45,7 @@ impl From<&ModelInfo> for AgentRow {
             name,
             description,
             source,
+            tags: agent.tags.clone(),
         }
     }
 }
@@ -55,6 +58,7 @@ impl From<&ModelInfo> for VerboseAgentRow {
             description,
             source,
             content_size: format!("{} chars", agent.content.len()),
+            tags: agent.tags.clone(),
         }
     }
 }
@@ -86,6 +90,7 @@ mod tests {
             description: Some("Test description".to_string()),
             source: ModelConfigSource::Builtin,
             content: "Test agent configuration content".to_string(),
+            tags: vec![],
         }
     }
 
@@ -95,6 +100,7 @@ mod tests {
             description: Some("Complete agent description".to_string()),
             source: ModelConfigSource::Project,
             content: "Complete agent configuration with lots of content here".to_string(),
+            tags: vec![],
         }
     }
 
@@ -104,6 +110,7 @@ mod tests {
             description: None,
             source: ModelConfigSource::User,
             content: "".to_string(),
+            tags: vec![],
         }
     }
 
@@ -278,6 +285,7 @@ mod tests {
             name: "test".to_string(),
             description: "Test Description".to_string(),
             source: "📦 Built-in".to_string(),
+            tags: vec![],
         };
 
         let json = serde_json::to_string(&row).expect("Should serialize to JSON");
@@ -299,6 +307,7 @@ mod tests {
             description: "Test Description".to_string(),
             source: "📦 Built-in".to_string(),
             content_size: "100 chars".to_string(),
+            tags: vec![],
         };
 
         let json = serde_json::to_string(&row).expect("Should serialize to JSON");
@@ -326,6 +335,35 @@ mod tests {
     }
 
     #[test]
+    fn agent_row_includes_tags_in_structured_output() {
+        let agent = ModelInfo {
+            name: "tagged-agent".to_string(),
+            description: Some("desc".to_string()),
+            source: ModelConfigSource::Builtin,
+            content: "content".to_string(),
+            tags: vec!["kanban".to_string(), "cli".to_string()],
+        };
+
+        let json = serde_json::to_value(AgentRow::from(&agent)).expect("AgentRow must serialize");
+        assert_eq!(json["tags"], serde_json::json!(["kanban", "cli"]));
+    }
+
+    #[test]
+    fn verbose_agent_row_includes_tags_in_structured_output() {
+        let agent = ModelInfo {
+            name: "tagged-agent".to_string(),
+            description: Some("desc".to_string()),
+            source: ModelConfigSource::Builtin,
+            content: "content".to_string(),
+            tags: vec!["kanban".to_string()],
+        };
+
+        let json = serde_json::to_value(VerboseAgentRow::from(&agent))
+            .expect("VerboseAgentRow must serialize");
+        assert_eq!(json["tags"], serde_json::json!(["kanban"]));
+    }
+
+    #[test]
     fn test_all_source_types() {
         let test_cases = [
             (ModelConfigSource::Builtin, "📦 Built-in"),
@@ -339,6 +377,7 @@ mod tests {
                 description: Some(format!("{:?} description", source)),
                 source,
                 content: "content".to_string(),
+                tags: vec![],
             };
 
             assert_eq!(AgentRow::from(&agent).source, expected_emoji);

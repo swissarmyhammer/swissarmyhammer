@@ -119,6 +119,14 @@ const DEFAULT_MAX_QUEUE_SIZE: usize = 100;
 /// Delay in milliseconds to allow notification collector to finish processing
 const NOTIFICATION_COLLECTION_DELAY_MS: u64 = 100;
 
+/// Tool-name glob pattern for the MCP toolset this app provides.
+///
+/// Claude sees these tools namespaced as `mcp__<server>__<tool>` (e.g.
+/// `mcp__swissarmyhammer-kanban__question`). Wiring this pattern into the
+/// claude-agent permission engine's `auto_allow_tool_patterns` auto-approves
+/// our own tools without surfacing a consent dialog in the kanban AI panel.
+const MCP_AUTO_ALLOW_PATTERN: &str = "mcp__*";
+
 /// Errors that can occur during ACP agent execution
 #[derive(Debug, Error)]
 pub enum AcpError {
@@ -297,6 +305,36 @@ pub struct CreateAgentOptions {
     /// Override for Claude's built-in tools. When set to Some(""), disables all built-in tools.
     /// This is used for validator agents that should only have MCP-provided tools.
     pub tools_override: Option<String>,
+    /// Auto-approve *every* tool call (including Claude's built-in
+    /// Write/Edit/Bash/terminal tools), not just the app's MCP toolset.
+    ///
+    /// When `true`, the Claude `AgentConfig` is built with an
+    /// `auto_allow_tool_patterns` of `["*"]`, so the permission engine returns
+    /// `Allowed` for every tool and never emits a `session/request_permission`
+    /// consent dialog. When `false` (the default), only the MCP toolset
+    /// (`mcp__*`) is auto-allowed and everything else falls through to the
+    /// default ask-on-unknown behaviour.
+    ///
+    /// The kanban app opts in to this; other consumers (e.g. validator agents)
+    /// keep the conservative default.
+    pub auto_allow_all: bool,
+}
+
+/// Resolve the `auto_allow_tool_patterns` glob set for the Claude
+/// `AgentConfig`.
+///
+/// When `auto_allow_all` is `true`, returns `["*"]`, which auto-approves every
+/// tool the agent may call (the kanban app's posture: the Claude CLI already
+/// runs with `--dangerously-skip-permissions`, so claude-agent's policy engine
+/// is the only remaining gate and this keeps it fully open). When `false`,
+/// returns `["mcp__*"]`, auto-approving only the app's own MCP toolset while
+/// leaving all other tools subject to the default ask-on-unknown behaviour.
+fn resolve_auto_allow_patterns(auto_allow_all: bool) -> Vec<String> {
+    if auto_allow_all {
+        vec!["*".to_string()]
+    } else {
+        vec![MCP_AUTO_ALLOW_PATTERN.to_string()]
+    }
 }
 
 /// Create an ACP agent based on model configuration
@@ -335,6 +373,7 @@ pub async fn create_agent_with_options(
                 mcp_config,
                 options.ephemeral,
                 options.tools_override.clone(),
+                options.auto_allow_all,
             )
             .await
         }
@@ -378,10 +417,9 @@ pub async fn create_agent_with_options(
 /// alongside the broadcast receiver fed into `notification_rx` on the
 /// returned [`AcpAgentHandle`].
 fn wrap_claude_into_handle(
-    agent: claude_agent::ClaudeAgent,
+    agent: Arc<claude_agent::ClaudeAgent>,
     notification_rx: broadcast::Receiver<SessionNotification>,
 ) -> AcpAgentHandle {
-    let agent = Arc::new(agent);
     let bridge_rx = notification_rx.resubscribe();
 
     let builder = Agent
@@ -390,8 +428,11 @@ fn wrap_claude_into_handle(
         .on_receive_request(
             {
                 let agent = Arc::clone(&agent);
-                async move |req: ClientRequest, responder: Responder<serde_json::Value>, _cx| {
-                    dispatch_claude_request(&agent, req, responder).await
+                move |req: ClientRequest,
+                      responder: Responder<serde_json::Value>,
+                      cx: ConnectionTo<Client>| {
+                    let agent = Arc::clone(&agent);
+                    async move { dispatch_claude_request(&agent, req, responder, &cx).await }
                 }
             },
             agent_client_protocol::on_receive_request!(),
@@ -406,8 +447,21 @@ fn wrap_claude_into_handle(
             },
             agent_client_protocol::on_receive_notification!(),
         )
-        .with_spawned(move |cx: ConnectionTo<Client>| async move {
-            forward_session_notifications(bridge_rx, cx).await
+        .with_spawned({
+            let agent = Arc::clone(&agent);
+            move |cx: ConnectionTo<Client>| async move {
+                // Wire the outbound client connection into the agent for the
+                // lifetime of this connection. This is the ONLY place the agent
+                // can obtain its `ConnectionTo<Client>`, and without it the
+                // shared `client` cell stays `None` so `elicitation/create` and
+                // `session/request_permission` decline with "No client
+                // connection available". `ConnectionTo<Client>` is `Clone`, so
+                // the bridge below keeps its own copy for notification
+                // forwarding.
+                agent.set_client(cx.clone()).await;
+                tracing::info!("Wired ACP client connection into ClaudeAgent");
+                forward_session_notifications(bridge_rx, cx).await
+            }
         });
 
     let traced = TracingAgent::new(builder, "Claude");
@@ -421,10 +475,9 @@ fn wrap_claude_into_handle(
 
 /// Mirror of [`wrap_claude_into_handle`] for `llama_agent::AcpServer`.
 fn wrap_llama_into_handle(
-    agent: llama_agent::AcpServer,
+    agent: Arc<llama_agent::AcpServer>,
     notification_rx: broadcast::Receiver<SessionNotification>,
 ) -> AcpAgentHandle {
-    let agent = Arc::new(agent);
     let bridge_rx = notification_rx.resubscribe();
 
     let builder = Agent
@@ -449,8 +502,21 @@ fn wrap_llama_into_handle(
             },
             agent_client_protocol::on_receive_notification!(),
         )
-        .with_spawned(move |cx: ConnectionTo<Client>| async move {
-            forward_session_notifications(bridge_rx, cx).await
+        .with_spawned({
+            let agent = Arc::clone(&agent);
+            move |cx: ConnectionTo<Client>| async move {
+                // Publish the live connection as the elicitation endpoint so
+                // per-session MCP client handlers can relay `elicitation/create`
+                // to the connected client. Production uses this wrapper (not
+                // `AcpServer::start_with_streams`), so without this the endpoint
+                // stays `None` and elicitations decline. Mirror the
+                // publish/clear lifecycle `start_with_streams` performs.
+                agent.publish_client_connection(cx.clone()).await;
+                tracing::info!("Published ACP client connection as llama elicitation endpoint");
+                let result = forward_session_notifications(bridge_rx, cx).await;
+                agent.clear_client_connection().await;
+                result
+            }
         });
 
     let traced = TracingAgent::new(builder, "Llama");
@@ -490,10 +556,32 @@ async fn forward_session_notifications(
 /// Demultiplex an incoming `ClientRequest` onto `ClaudeAgent`'s inherent
 /// methods. Mirrors the per-method handler registration that
 /// `start_with_streams` would otherwise wire up.
+///
+/// # Why `prompt` is spawned off the dispatch loop
+///
+/// This function runs as an `on_receive_request` callback, which executes
+/// **inside the connection's single dispatch loop**; the loop is blocked until
+/// the callback completes (see `agent_client_protocol::concepts::ordering`).
+/// That same loop is what routes *incoming responses* back to `block_task`
+/// awaiters.
+///
+/// A `prompt` turn is long-running and, mid-turn, issues nested agent→client
+/// requests — `elicitation/create` and `session/request_permission` — and then
+/// `block_task().await`s their responses. If `agent.prompt(...)` were awaited
+/// inline here, the dispatch loop would stay blocked for the whole turn and
+/// could never route those nested responses back: the elicitation request goes
+/// out, but the user's answer never returns and the turn deadlocks.
+///
+/// Therefore the `prompt` variant is dispatched via [`ConnectionTo::spawn`],
+/// which runs the turn on the connection's task runtime *outside* the dispatch
+/// loop. The callback returns immediately, leaving the loop free to route the
+/// nested responses. The remaining (short, non-nesting) request variants are
+/// handled inline to preserve their natural ordering guarantees.
 async fn dispatch_claude_request(
     agent: &Arc<claude_agent::ClaudeAgent>,
     request: ClientRequest,
     responder: Responder<serde_json::Value>,
+    cx: &ConnectionTo<Client>,
 ) -> Result<(), agent_client_protocol::Error> {
     match request {
         ClientRequest::InitializeRequest(req) => responder
@@ -511,9 +599,14 @@ async fn dispatch_claude_request(
         ClientRequest::SetSessionModeRequest(req) => responder
             .cast()
             .respond_with_result(agent.set_session_mode(req).await),
-        ClientRequest::PromptRequest(req) => responder
-            .cast()
-            .respond_with_result(agent.prompt(req).await),
+        ClientRequest::PromptRequest(req) => {
+            // Run the prompt turn off the dispatch loop so the loop stays free to
+            // route the nested elicitation/permission responses (see the
+            // function docs). The spawned task owns the `Responder` (which is
+            // `Send + 'static`) and replies when the turn completes.
+            let agent = Arc::clone(agent);
+            spawn_prompt_turn(cx, responder, async move { agent.prompt(req).await })
+        }
         ClientRequest::ExtMethodRequest(req) => {
             let result = agent.ext_method(req).await.and_then(|ext_response| {
                 serde_json::from_str::<serde_json::Value>(ext_response.0.get())
@@ -531,6 +624,39 @@ async fn dispatch_claude_request(
                 .respond_with_error(agent_client_protocol::Error::method_not_found())
         }
     }
+}
+
+/// Dispatch a prompt turn off the connection's dispatch loop.
+///
+/// This is the load-bearing seam of the elicitation deadlock fix. The prompt
+/// `Future` is handed to [`ConnectionTo::spawn`], which runs it on the
+/// connection's task runtime *outside* the single dispatch loop, and the
+/// supplied `Responder` (which is `Send + 'static`) is moved into that task to
+/// reply when the turn completes. The caller's `on_receive_request` callback
+/// therefore returns immediately, leaving the dispatch loop free to route the
+/// nested agent→client requests (`elicitation/create`,
+/// `session/request_permission`) the turn issues mid-flight.
+///
+/// Awaiting `prompt` inline in the callback instead would block the dispatch
+/// loop for the whole turn, so the nested responses could never be routed back
+/// and the turn would deadlock. Extracting that decision here lets a regression
+/// test drive the *real* spawn behaviour with a controllable prompt future that
+/// performs a nested round-trip, without needing the Claude CLI: see
+/// `spawn_prompt_turn_keeps_dispatch_loop_free_for_nested_request`.
+fn spawn_prompt_turn<F>(
+    cx: &ConnectionTo<Client>,
+    responder: Responder<serde_json::Value>,
+    prompt: F,
+) -> Result<(), agent_client_protocol::Error>
+where
+    F: std::future::Future<Output = Result<PromptResponse, agent_client_protocol::Error>>
+        + Send
+        + 'static,
+{
+    cx.spawn(async move {
+        let result = prompt.await;
+        responder.cast().respond_with_result(result)
+    })
 }
 
 /// Demultiplex an incoming `ClientNotification` onto `ClaudeAgent`'s
@@ -637,6 +763,7 @@ async fn create_claude_agent(
     mcp_config: Option<McpServerConfig>,
     ephemeral: bool,
     tools_override: Option<String>,
+    auto_allow_all: bool,
 ) -> AcpResult<AcpAgentHandle> {
     // Check if Claude CLI is available (claude-agent requires this)
     if which::which("claude").is_err() {
@@ -646,11 +773,49 @@ async fn create_claude_agent(
         ));
     }
 
-    // Create Claude agent configuration with MCP servers
-    // Increase max prompt length for rule checking which may include very large files
+    let agent_config =
+        build_claude_agent_config(mcp_config, ephemeral, tools_override, auto_allow_all);
+
+    // Create the Claude agent
+    let (agent, notification_rx) =
+        claude_agent::ClaudeAgent::new(agent_config)
+            .await
+            .map_err(|e| {
+                AcpError::InitializationError(format!("Failed to create Claude agent: {}", e))
+            })?;
+
+    Ok(wrap_claude_into_handle(Arc::new(agent), notification_rx))
+}
+
+/// Build the `claude_agent::AgentConfig` for a Claude ACP agent.
+///
+/// Pure (no I/O, no process spawn) so the wiring is unit-testable without the
+/// Claude CLI: which tools the permission engine auto-approves, whether the
+/// per-board MCP server is attached, and the ephemeral / tools-override
+/// carry-through. [`create_claude_agent`] calls this and then spawns
+/// `ClaudeAgent::new`.
+///
+/// Auto-allow resolution: the app runs the Claude CLI with
+/// `--dangerously-skip-permissions`, making claude-agent's own policy engine
+/// the sole gate. With `auto_allow_all` the gate is fully open (`*`) — every
+/// tool, including the CLI's built-ins, is approved without a consent dialog.
+/// Otherwise only the MCP toolset this app provides (Claude sees these as
+/// `mcp__*`, e.g. `mcp__swissarmyhammer-kanban__question`) is auto-allowed,
+/// leaving everything else subject to the default ask-on-unknown behaviour.
+/// `max_prompt_length` is raised because rule checking may include very large
+/// files.
+fn build_claude_agent_config(
+    mcp_config: Option<McpServerConfig>,
+    ephemeral: bool,
+    tools_override: Option<String>,
+    auto_allow_all: bool,
+) -> claude_agent::AgentConfig {
+    let auto_allow_tool_patterns = resolve_auto_allow_patterns(auto_allow_all);
+
     let mut agent_config = if let Some(mcp) = mcp_config {
         claude_agent::AgentConfig {
             max_prompt_length: MAX_PROMPT_LENGTH_BYTES,
+            auto_allow_tool_patterns,
             mcp_servers: vec![claude_agent::config::McpServerConfig::Http(
                 claude_agent::config::HttpTransport {
                     transport_type: "http".to_string(),
@@ -664,22 +829,14 @@ async fn create_claude_agent(
     } else {
         claude_agent::AgentConfig {
             max_prompt_length: MAX_PROMPT_LENGTH_BYTES,
+            auto_allow_tool_patterns,
             ..Default::default()
         }
     };
 
     agent_config.claude.ephemeral = ephemeral;
     agent_config.claude.tools_override = tools_override;
-
-    // Create the Claude agent
-    let (agent, notification_rx) =
-        claude_agent::ClaudeAgent::new(agent_config)
-            .await
-            .map_err(|e| {
-                AcpError::InitializationError(format!("Failed to create Claude agent: {}", e))
-            })?;
-
-    Ok(wrap_claude_into_handle(agent, notification_rx))
+    agent_config
 }
 
 /// Convert swissarmyhammer model source to llama-agent model source
@@ -818,7 +975,10 @@ async fn create_llama_agent(
     let (acp_server, notification_rx) =
         llama_agent::AcpServer::new(Arc::new(agent_server), acp_config);
 
-    Ok(wrap_llama_into_handle(acp_server, notification_rx))
+    Ok(wrap_llama_into_handle(
+        Arc::new(acp_server),
+        notification_rx,
+    ))
 }
 
 /// Execute a prompt using an ACP agent
@@ -1456,6 +1616,263 @@ mod tests {
         assert_eq!(result, "Claude wins");
     }
 
+    /// The kanban Claude wiring must carry the `mcp__*` auto-allow pattern on
+    /// the `claude_agent::AgentConfig` it builds, so the per-board MCP toolset
+    /// is approved without a consent dialog. Asserts the pattern constant and
+    /// that a config built with it (as `create_claude_agent` does) exposes it.
+    #[test]
+    fn test_claude_config_carries_mcp_auto_allow_pattern() {
+        assert_eq!(MCP_AUTO_ALLOW_PATTERN, "mcp__*");
+
+        let config = claude_agent::AgentConfig {
+            max_prompt_length: MAX_PROMPT_LENGTH_BYTES,
+            auto_allow_tool_patterns: vec![MCP_AUTO_ALLOW_PATTERN.to_string()],
+            ..Default::default()
+        };
+        assert_eq!(config.auto_allow_tool_patterns, vec!["mcp__*".to_string()]);
+    }
+
+    /// `resolve_auto_allow_patterns` selects the auto-allow glob set fed into
+    /// the Claude `AgentConfig`. `true` (the kanban app's choice) auto-approves
+    /// every tool via `"*"`; `false` (the default for all other callers) keeps
+    /// the conservative `"mcp__*"` scope.
+    #[test]
+    fn test_resolve_auto_allow_patterns() {
+        assert_eq!(
+            resolve_auto_allow_patterns(true),
+            vec!["*".to_string()],
+            "auto_allow_all=true must auto-approve every tool"
+        );
+        assert_eq!(
+            resolve_auto_allow_patterns(false),
+            vec!["mcp__*".to_string()],
+            "auto_allow_all=false must keep the conservative MCP-only scope"
+        );
+    }
+
+    /// `auto_allow_all` must flow into the `auto_allow_tool_patterns` of the
+    /// built `AgentConfig` in BOTH construction branches — with and without an
+    /// MCP server. This is the wiring the helper test alone can't catch: a
+    /// regression that updated only one branch would still pass
+    /// `test_resolve_auto_allow_patterns`.
+    #[test]
+    fn test_build_claude_agent_config_threads_auto_allow_all_in_both_branches() {
+        // No-MCP branch.
+        let no_mcp = build_claude_agent_config(None, false, None, true);
+        assert_eq!(
+            no_mcp.auto_allow_tool_patterns,
+            vec!["*".to_string()],
+            "no-MCP branch must use the resolved wildcard patterns"
+        );
+
+        // MCP branch.
+        let with_mcp = build_claude_agent_config(
+            Some(McpServerConfig::new("http://localhost:1/mcp")),
+            false,
+            None,
+            true,
+        );
+        assert_eq!(
+            with_mcp.auto_allow_tool_patterns,
+            vec!["*".to_string()],
+            "MCP branch must use the resolved wildcard patterns too"
+        );
+    }
+
+    /// The default (`auto_allow_all == false`) keeps the conservative
+    /// `mcp__*`-only scope in both branches — the behavior every non-kanban
+    /// caller relies on.
+    #[test]
+    fn test_build_claude_agent_config_default_is_mcp_only_in_both_branches() {
+        let no_mcp = build_claude_agent_config(None, false, None, false);
+        assert_eq!(no_mcp.auto_allow_tool_patterns, vec!["mcp__*".to_string()]);
+
+        let with_mcp = build_claude_agent_config(
+            Some(McpServerConfig::new("http://localhost:1/mcp")),
+            false,
+            None,
+            false,
+        );
+        assert_eq!(
+            with_mcp.auto_allow_tool_patterns,
+            vec!["mcp__*".to_string()]
+        );
+    }
+
+    /// A `Some(McpServerConfig)` attaches exactly one HTTP MCP server carrying
+    /// the supplied URL under the `swissarmyhammer` name; `None` attaches none.
+    #[test]
+    fn test_build_claude_agent_config_attaches_mcp_http_server() {
+        let with_mcp = build_claude_agent_config(
+            Some(McpServerConfig::new("http://example.com/mcp")),
+            false,
+            None,
+            false,
+        );
+        assert_eq!(with_mcp.mcp_servers.len(), 1);
+        match &with_mcp.mcp_servers[0] {
+            claude_agent::config::McpServerConfig::Http(http) => {
+                assert_eq!(http.url, "http://example.com/mcp");
+                assert_eq!(http.name, "swissarmyhammer");
+            }
+            _ => panic!("expected an HTTP MCP server variant"),
+        }
+
+        let no_mcp = build_claude_agent_config(None, false, None, false);
+        assert!(
+            no_mcp.mcp_servers.is_empty(),
+            "no MCP config must attach no servers"
+        );
+    }
+
+    /// `ephemeral` and `tools_override` are carried through onto the nested
+    /// Claude config in both branches.
+    #[test]
+    fn test_build_claude_agent_config_threads_ephemeral_and_tools_override() {
+        let custom = build_claude_agent_config(None, true, Some(String::new()), false);
+        assert!(custom.claude.ephemeral);
+        assert_eq!(custom.claude.tools_override, Some(String::new()));
+
+        let plain = build_claude_agent_config(None, false, None, false);
+        assert!(!plain.claude.ephemeral);
+        assert_eq!(plain.claude.tools_override, None);
+    }
+
+    /// End-to-end behavioral guard for `auto_allow_all == true`: the patterns
+    /// the kanban app configures (`resolve_auto_allow_patterns(true)`), fed into
+    /// claude-agent's real permission engine the way `create_permission_engine`
+    /// wires them (Allow policies prepended ahead of the ask-on-everything
+    /// defaults), auto-approve EVERY tool class — MCP, CLI built-ins, and
+    /// arbitrary unknowns. That means no `session/request_permission` is ever
+    /// emitted: no per-tool nag.
+    #[tokio::test]
+    async fn test_wildcard_pattern_allows_all_tools_via_claude_engine() {
+        use claude_agent::permissions::{
+            FilePermissionStorage, PermissionPolicy, PermissionPolicyEngine, PolicyAction,
+            PolicyEvaluation, RiskLevel,
+        };
+
+        let temp_dir =
+            std::env::temp_dir().join(format!("sah-agent-perm-wild-{}", std::process::id()));
+        let storage = FilePermissionStorage::new(temp_dir);
+
+        // Source the Allow patterns from the production helper so this test
+        // tracks what the kanban app actually configures.
+        let mut policies: Vec<PermissionPolicy> = resolve_auto_allow_patterns(true)
+            .into_iter()
+            .map(|pattern| PermissionPolicy {
+                tool_pattern: pattern,
+                default_action: PolicyAction::Allow,
+                require_user_consent: false,
+                allow_always_option: true,
+                risk_level: RiskLevel::Low,
+            })
+            .collect();
+        // Representative defaults that would otherwise force a consent dialog
+        // for the CLI's built-in tools (mirrors `default_permission_policies`).
+        policies.extend([
+            PermissionPolicy {
+                tool_pattern: "fs_write*".to_string(),
+                default_action: PolicyAction::AskUser,
+                require_user_consent: true,
+                allow_always_option: true,
+                risk_level: RiskLevel::Medium,
+            },
+            PermissionPolicy {
+                tool_pattern: "terminal*".to_string(),
+                default_action: PolicyAction::AskUser,
+                require_user_consent: true,
+                allow_always_option: true,
+                risk_level: RiskLevel::High,
+            },
+            PermissionPolicy {
+                tool_pattern: "*".to_string(),
+                default_action: PolicyAction::AskUser,
+                require_user_consent: true,
+                allow_always_option: true,
+                risk_level: RiskLevel::Medium,
+            },
+        ]);
+        let engine = PermissionPolicyEngine::with_policies(Box::new(storage), policies);
+
+        for tool in [
+            "mcp__swissarmyhammer-kanban__question",
+            "terminal_create",
+            "fs_write_file",
+            "http_request",
+            "bash",
+            "some_unknown_tool",
+        ] {
+            let outcome = engine
+                .evaluate_tool_call(tool, &serde_json::json!({}))
+                .await
+                .expect("evaluation must succeed");
+            assert!(
+                matches!(outcome, PolicyEvaluation::Allowed),
+                "auto_allow_all must auto-approve `{tool}` without consent, got: {:?}",
+                outcome
+            );
+        }
+    }
+
+    /// End-to-end check that the `mcp__*` pattern, fed into claude-agent's
+    /// public permission engine the way the agent wiring does, auto-allows the
+    /// app's MCP tools while unrelated tools still require user consent.
+    #[tokio::test]
+    async fn test_mcp_pattern_allows_kanban_tools_via_claude_engine() {
+        use claude_agent::permissions::{
+            FilePermissionStorage, PermissionPolicy, PermissionPolicyEngine, PolicyAction,
+            PolicyEvaluation, RiskLevel,
+        };
+
+        let temp_dir =
+            std::env::temp_dir().join(format!("sah-agent-perm-test-{}", std::process::id()));
+        let storage = FilePermissionStorage::new(temp_dir);
+
+        // Mirror create_permission_engine: auto-allow pattern prepended ahead of
+        // a representative catch-all ask policy.
+        let policies = vec![
+            PermissionPolicy {
+                tool_pattern: MCP_AUTO_ALLOW_PATTERN.to_string(),
+                default_action: PolicyAction::Allow,
+                require_user_consent: false,
+                allow_always_option: true,
+                risk_level: RiskLevel::Low,
+            },
+            PermissionPolicy {
+                tool_pattern: "*".to_string(),
+                default_action: PolicyAction::AskUser,
+                require_user_consent: true,
+                allow_always_option: true,
+                risk_level: RiskLevel::Medium,
+            },
+        ];
+        let engine = PermissionPolicyEngine::with_policies(Box::new(storage), policies);
+
+        let allowed = engine
+            .evaluate_tool_call(
+                "mcp__swissarmyhammer-kanban__question",
+                &serde_json::json!({}),
+            )
+            .await
+            .expect("evaluation must succeed");
+        assert!(
+            matches!(allowed, PolicyEvaluation::Allowed),
+            "mcp__* tools must be auto-allowed, got: {:?}",
+            allowed
+        );
+
+        let needs_consent = engine
+            .evaluate_tool_call("bash", &serde_json::json!({}))
+            .await
+            .expect("evaluation must succeed");
+        assert!(
+            matches!(needs_consent, PolicyEvaluation::RequireUserConsent { .. }),
+            "Unrelated tools must still require consent, got: {:?}",
+            needs_consent
+        );
+    }
+
     #[test]
     fn test_build_agent_response_success() {
         let prompt_result = PromptResponse::new(StopReason::EndTurn);
@@ -1964,6 +2381,7 @@ mod tests {
         let options = CreateAgentOptions {
             ephemeral: false,
             tools_override: Some("".to_string()),
+            ..Default::default()
         };
         assert_eq!(options.tools_override, Some("".to_string()));
     }
@@ -1973,6 +2391,7 @@ mod tests {
         let options = CreateAgentOptions {
             ephemeral: true,
             tools_override: Some("custom".to_string()),
+            ..Default::default()
         };
         let debug = format!("{:?}", options);
         assert!(debug.contains("ephemeral: true"));
@@ -1984,6 +2403,7 @@ mod tests {
         let options = CreateAgentOptions {
             ephemeral: true,
             tools_override: Some("tools".to_string()),
+            ..Default::default()
         };
         let cloned = options.clone();
         assert!(cloned.ephemeral);
@@ -2234,5 +2654,492 @@ mod tests {
         let t = AgentResponseType::Partial;
         let cloned = t.clone();
         assert!(matches!(cloned, AgentResponseType::Partial));
+    }
+
+    // ========================================================================
+    // End-to-end notification bridge test
+    //
+    // Exercises the *exact* production path the kanban app uses to receive
+    // `SessionUpdate::ToolCallUpdate` notifications: the agent's broadcast
+    // channel → the `forward_session_notifications` task spawned by
+    // `wrap_claude_into_handle` → `cx.send_notification` → the JSON-RPC
+    // wire framed onto a WebSocket text frame.
+    //
+    // The kanban app declares no streaming meta in `clientCapabilities`, so
+    // the production path runs through `handle_non_streaming_prompt`. The
+    // existing `claude-agent` tests already prove the chunk pipeline emits a
+    // broadcast notification — see
+    // `test_real_cli_tool_result_line_round_trips_to_tool_call_update`.
+    // What this test proves is the remaining hop: a broadcast notification
+    // emitted by the agent actually arrives on the WebSocket as a JSON-RPC
+    // `session/update` frame the webview ACP client can parse.
+    //
+    // If a future change to `forward_session_notifications`, the
+    // `with_spawned` wiring, or the lines/WebSocket adapter silently drops
+    // `ToolCallUpdate` notifications, this test fails — pinning the bug to
+    // the bridge / transport layer rather than to the chunk pipeline.
+    // ========================================================================
+
+    /// Drive a real ACP `initialize` request → reply round-trip over a
+    /// loopback WebSocket against a `ClaudeAgent` wrapped by
+    /// `wrap_claude_into_handle`, then inject a `SessionUpdate::ToolCallUpdate`
+    /// via the agent's notification sender and confirm the WebSocket client
+    /// receives a matching `session/update` JSON-RPC notification.
+    ///
+    /// This is the e2e test the user asked for in the task: it builds the
+    /// agent the way production does, drives the same `ConnectTo::<Agent>`
+    /// wiring `agent_ws.rs` uses, and asserts the `ToolCallUpdate` arrives
+    /// on the wire — which is the chain that the chunk-level unit tests do
+    /// not cover.
+    #[tokio::test]
+    async fn test_tool_call_update_arrives_on_websocket_wire() {
+        use agent_client_protocol::schema::{
+            SessionId, SessionNotification, SessionUpdate, ToolCallId, ToolCallStatus,
+            ToolCallUpdate, ToolCallUpdateFields,
+        };
+        use agent_client_protocol::{Agent as AgentRole, ConnectTo};
+        use claude_agent::{AgentConfig, ClaudeAgent};
+        use futures_util::{SinkExt, StreamExt};
+        use std::io;
+        use std::time::Duration;
+        use tokio::net::TcpListener;
+        use tokio_tungstenite::tungstenite::Message;
+
+        // Build the agent the way production does — `ClaudeAgent::new` does
+        // not spawn any subprocess. The returned broadcast receiver is the
+        // global channel `notification_sender.send_update` publishes to;
+        // `wrap_claude_into_handle` resubscribes it for the bridge task.
+        let (agent, notification_rx) = ClaudeAgent::new(AgentConfig::default())
+            .await
+            .expect("agent construction must succeed");
+
+        // Extract the notification sender *before* moving the agent into
+        // `wrap_claude_into_handle`. The sender hands us a back door onto
+        // the same broadcast channel `forward_session_notifications` is
+        // reading, so we can publish synthetic `ToolCallUpdate`s without
+        // needing a real Claude CLI process.
+        let sender = agent.notification_sender();
+
+        let handle = wrap_claude_into_handle(Arc::new(agent), notification_rx);
+
+        // Stand up a loopback WebSocket server that wraps the agent
+        // component exactly the way `agent_ws.rs::serve_agent` does — same
+        // `lines_transport` shape, same `ConnectTo::<Agent>::connect_to`
+        // call. Anything that works here works for the real kanban app.
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("loopback bind must succeed");
+        let addr = listener.local_addr().expect("bound listener has addr");
+
+        let server_task = tokio::spawn(async move {
+            let (stream, _peer) = listener.accept().await.expect("accept must succeed");
+            let ws = tokio_tungstenite::accept_async(stream)
+                .await
+                .expect("ws handshake must succeed");
+            let transport = ws_lines_transport(ws);
+            ConnectTo::<AgentRole>::connect_to(transport, handle.agent)
+                .await
+                .map_err(|e| io::Error::other(e.to_string()))
+        });
+
+        // Connect the client side of the WebSocket.
+        let url = format!("ws://{addr}/");
+        let (mut ws, _resp) = tokio_tungstenite::connect_async(&url)
+            .await
+            .expect("client connect must succeed");
+
+        // ACP handshake: send `initialize` so the agent's
+        // `ConnectTo<Client>` is live and `forward_session_notifications`
+        // is actively pumping the bridge. Without this, `send_notification`
+        // would not yet have a counterpart to write to.
+        let initialize = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": 1,
+                "clientCapabilities": {
+                    "fs": { "readTextFile": false, "writeTextFile": false },
+                    "terminal": false
+                }
+            }
+        });
+        ws.send(Message::text(initialize.to_string()))
+            .await
+            .expect("initialize send must succeed");
+
+        // Drain the `initialize` reply so the next frame the client reads
+        // is the notification we are about to inject.
+        let init_reply = tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                match ws.next().await {
+                    Some(Ok(Message::Text(text))) => return text.to_string(),
+                    Some(Ok(Message::Close(_))) | None => {
+                        panic!("connection closed before initialize reply arrived")
+                    }
+                    Some(Ok(_)) => continue,
+                    Some(Err(e)) => panic!("WebSocket error during initialize: {e}"),
+                }
+            }
+        })
+        .await
+        .expect("initialize reply must arrive within timeout");
+        let init_value: serde_json::Value =
+            serde_json::from_str(&init_reply).expect("initialize reply is JSON");
+        assert_eq!(
+            init_value.get("id").and_then(|v| v.as_i64()),
+            Some(1),
+            "initialize reply must echo id=1: {init_reply}"
+        );
+
+        // Inject a `ToolCallUpdate` onto the agent's broadcast channel.
+        // This is exactly what `handle_streaming_tool_result` does inside
+        // the chunk pipeline — but we shortcut the chunk pipeline so the
+        // test does not need a Claude CLI subprocess. The remaining hops
+        // — broadcast → bridge task → `cx.send_notification` → JSON-RPC
+        // serialization → WebSocket frame — are the production path being
+        // verified.
+        let session_id = SessionId::new(std::sync::Arc::from("test-session-001"));
+        let tool_call_id = ToolCallId::new(std::sync::Arc::from("toolu_01DrhKGoTS6bBL9KkZqigfM1"));
+        let fields = ToolCallUpdateFields::new().status(ToolCallStatus::Completed);
+        let update = ToolCallUpdate::new(tool_call_id, fields);
+        let notification =
+            SessionNotification::new(session_id, SessionUpdate::ToolCallUpdate(update));
+
+        sender
+            .send_update(notification)
+            .await
+            .expect("send_update must succeed");
+
+        // Read the next WebSocket frame and assert it is a
+        // `session/update` JSON-RPC notification carrying our injected
+        // `tool_call_update`. If `forward_session_notifications` dropped
+        // the message, or if `cx.send_notification` failed silently, or if
+        // the lines/WebSocket adapter ate the frame, this read times out
+        // or yields the wrong payload — both pinpoint a bridge/transport
+        // bug rather than a chunk-pipeline bug.
+        let frame = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match ws.next().await {
+                    Some(Ok(Message::Text(text))) => return text.to_string(),
+                    Some(Ok(Message::Close(_))) | None => {
+                        panic!("connection closed before notification frame arrived")
+                    }
+                    Some(Ok(_)) => continue,
+                    Some(Err(e)) => panic!("WebSocket error awaiting notification: {e}"),
+                }
+            }
+        })
+        .await
+        .expect("ToolCallUpdate notification must arrive on the wire within timeout");
+
+        let frame_value: serde_json::Value =
+            serde_json::from_str(&frame).expect("notification frame is JSON");
+
+        // ACP `session/update` is the JSON-RPC method name for
+        // `SessionNotification` (see `agent-client-protocol-schema`'s
+        // `CLIENT_METHOD_NAMES.session_update`). A notification frame has
+        // no `id` and a `method`/`params` shape.
+        assert!(
+            frame_value.get("id").is_none(),
+            "notification frame must have no id, got: {frame}"
+        );
+        assert_eq!(
+            frame_value.get("method").and_then(|v| v.as_str()),
+            Some("session/update"),
+            "frame method must be session/update, got: {frame}"
+        );
+
+        let params = frame_value
+            .get("params")
+            .expect("notification frame must carry params");
+        assert_eq!(
+            params.get("sessionId").and_then(|v| v.as_str()),
+            Some("test-session-001"),
+            "params.sessionId must round-trip, got: {params}"
+        );
+
+        // The session update payload is nested under `update`. The
+        // `SessionUpdate::ToolCallUpdate` discriminant serializes as
+        // `sessionUpdate = "tool_call_update"` (snake_case) on the wire —
+        // the snake_case key the webview adapter's reducer matches on.
+        let update_payload = params
+            .get("update")
+            .expect("params must carry an update object");
+        assert_eq!(
+            update_payload.get("sessionUpdate").and_then(|v| v.as_str()),
+            Some("tool_call_update"),
+            "update.sessionUpdate must be tool_call_update, got: {update_payload}"
+        );
+        assert_eq!(
+            update_payload.get("toolCallId").and_then(|v| v.as_str()),
+            Some("toolu_01DrhKGoTS6bBL9KkZqigfM1"),
+            "update.toolCallId must round-trip end-to-end, got: {update_payload}"
+        );
+        assert_eq!(
+            update_payload.get("status").and_then(|v| v.as_str()),
+            Some("completed"),
+            "update.status must be completed (ToolCallStatus::Completed serializes lowercase), got: {update_payload}"
+        );
+
+        // Clean teardown. Dropping the client closes the socket, which
+        // ends `ConnectTo::connect_to` on the server side.
+        drop(ws);
+        let _ = server_task.await;
+    }
+
+    /// Regression test for the production wiring of the outbound ACP client
+    /// connection into `ClaudeAgent`.
+    ///
+    /// The kanban AI panel builds its in-process agent via this crate's
+    /// `wrap_claude_into_handle`, then runs it through
+    /// `Client::builder().connect_with(...)`. The agent only ever obtains a
+    /// `ConnectionTo<Client>` inside the wrapper's `with_spawned` closure, so
+    /// that closure is the *only* place the connection can be handed to the
+    /// agent for outbound client-bound requests (`elicitation/create`,
+    /// `session/request_permission`). Before the fix the closure used `cx`
+    /// purely for notification forwarding and never called
+    /// `ClaudeAgent::set_client`, so the agent's shared `client` cell stayed
+    /// `None` and every elicitation declined with "No client connection
+    /// available".
+    ///
+    /// This test exercises the *real* wrapper (not a hand-rolled builder):
+    /// it constructs a `ClaudeAgent`, keeps an `Arc` clone, wraps it, drives
+    /// an `initialize` over an in-process `Channel::duplex()` connection, then
+    /// asserts the agent now reports a live client connection. It fails before
+    /// the wiring fix and passes after.
+    ///
+    /// Note: `ClaudeAgent::new` does not require the Claude CLI binary just to
+    /// construct the agent (the CLI is only spawned when a prompt actually
+    /// runs), so this test needs no external installation.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn claude_wrapper_wires_client_connection_into_agent() {
+        use agent_client_protocol::{Channel, ConnectTo};
+
+        // Build a real ClaudeAgent and keep an Arc clone to inspect.
+        let (agent, notification_rx) =
+            claude_agent::ClaudeAgent::new(claude_agent::AgentConfig::default())
+                .await
+                .expect("ClaudeAgent::new should construct without the Claude CLI");
+        let agent = Arc::new(agent);
+        let inspect = Arc::clone(&agent);
+
+        // Sanity: nothing is wired before the connection is established.
+        assert!(
+            !inspect.is_client_connected().await,
+            "client connection must start unset"
+        );
+
+        // Wrap through the real production wrapper to get the agent component.
+        let handle = wrap_claude_into_handle(agent, notification_rx);
+
+        // Stand up an in-process connection: the agent component is the server
+        // side; a minimal fake client drives a single `initialize` request,
+        // which forces the wrapper's `with_spawned` task to run.
+        let (channel_a, channel_b) = Channel::duplex();
+
+        let server_task = tokio::spawn(async move {
+            let _ = handle.agent.connect_to(channel_a).await;
+        });
+
+        Client
+            .builder()
+            .name("client-wiring-test")
+            .connect_with(channel_b, async move |cx: ConnectionTo<Agent>| {
+                let _ = cx
+                    .send_request(InitializeRequest::new(1.into()))
+                    .block_task()
+                    .await;
+                Ok::<(), agent_client_protocol::Error>(())
+            })
+            .await
+            .expect("client connect_with should succeed");
+
+        // The `with_spawned` task runs concurrently; poll briefly for it to
+        // wire the connection in rather than racing it.
+        let mut connected = false;
+        for _ in 0..50 {
+            if inspect.is_client_connected().await {
+                connected = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        server_task.abort();
+        let _ = server_task.await;
+
+        assert!(
+            connected,
+            "wrap_claude_into_handle must wire the ConnectionTo<Client> into ClaudeAgent \
+             (via set_client) so outbound elicitation/permission requests reach the client"
+        );
+    }
+
+    // The llama mirror of this wiring fix is tested in the `llama-agent`
+    // crate itself (see `crates/llama-agent/src/acp/server.rs` ->
+    // `publish_client_connection_installs_and_clears_elicitation_endpoint`).
+    // A full `AcpServer` is built there from the in-crate `ModelManager` /
+    // `RequestQueue` internals (which are `pub(crate)` and unreachable from
+    // this crate) without loading a GGUF model, the same convention the other
+    // `AcpServer` protocol tests use. Reconstructing that here would mean
+    // depending on llama-agent internals just to stand up the server, so the
+    // wiring methods `publish_client_connection` / `clear_client_connection`
+    // are exercised where they live instead.
+
+    /// Regression test for the prompt-deadlock fix in [`dispatch_claude_request`].
+    ///
+    /// `dispatch_claude_request` runs as an `on_receive_request` callback, which
+    /// the ACP SDK executes **inside the connection's single dispatch loop**; the
+    /// loop is blocked until the callback returns, and that same loop is what
+    /// routes *incoming responses* back to `block_task` awaiters. A real prompt
+    /// turn, mid-flight, issues nested agent→client requests
+    /// (`elicitation/create`, `session/request_permission`) and awaits their
+    /// responses. If the prompt were awaited inline in the callback, the loop
+    /// would stay blocked for the whole turn and could never route those nested
+    /// responses — the turn deadlocks. The fix routes the prompt turn through
+    /// [`spawn_prompt_turn`] → [`ConnectionTo::spawn`], freeing the loop.
+    ///
+    /// This test pins the *real* [`spawn_prompt_turn`] helper that
+    /// `dispatch_claude_request` uses — not a hand-rolled model of it. It cannot
+    /// drive `dispatch_claude_request` end-to-end because the real
+    /// `ClaudeAgent::prompt` only issues nested client requests once it spawns
+    /// the Claude CLI subprocess (infeasible in a unit test). So it substitutes a
+    /// controllable prompt future that performs the same decisive move a real
+    /// turn does: issue an `elicitation/create` on the stored client connection
+    /// and `block_task().await` its response. The future's response can only be
+    /// routed back if the dispatch loop is free — i.e. only if `spawn_prompt_turn`
+    /// actually runs the turn off the loop.
+    ///
+    /// Reverting `spawn_prompt_turn` to await the prompt inline makes this test
+    /// time out (the nested response is never routed). The timeout converts that
+    /// regression into a fast, definite failure.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spawn_prompt_turn_keeps_dispatch_loop_free_for_nested_request() {
+        use agent_client_protocol::{Channel, UntypedMessage};
+        use serde_json::json;
+        use tokio::sync::Mutex;
+
+        let (agent_side, client_side) = Channel::duplex();
+
+        // Agent end: an `on_receive_request` handler that dispatches the incoming
+        // "prompt" request through the REAL `spawn_prompt_turn`. The prompt
+        // future, while running on the spawned task, issues a nested
+        // `elicitation/create` request on a clone of the live client connection
+        // and blocks on its response — exactly the shape of a production turn.
+        let agent_task = tokio::spawn(async move {
+            let _ = Agent
+                .builder()
+                .name("spawn-prompt-turn-test-agent")
+                .on_receive_request(
+                    move |_req: UntypedMessage,
+                          responder: Responder<serde_json::Value>,
+                          cx: ConnectionTo<Client>| {
+                        let conn_for_prompt = cx.clone();
+                        async move {
+                            // The prompt future mimics a real turn: issue a
+                            // nested agent→client request and await it. This only
+                            // resolves if the dispatch loop is free to route the
+                            // response — which requires `spawn_prompt_turn` to run
+                            // the turn off the loop.
+                            let prompt = async move {
+                                let elicitation =
+                                    UntypedMessage::new("elicitation/create", json!({}))
+                                        .expect("elicitation message must encode");
+                                conn_for_prompt
+                                    .send_request(elicitation)
+                                    .block_task()
+                                    .await?;
+                                Ok::<PromptResponse, agent_client_protocol::Error>(
+                                    PromptResponse::new(StopReason::EndTurn),
+                                )
+                            };
+                            spawn_prompt_turn(&cx, responder.cast(), prompt)
+                        }
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .connect_to(agent_side)
+                .await;
+        });
+
+        // Client end: answers the nested `elicitation/create` and drives one
+        // "prompt" request, recording that the elicitation actually arrived.
+        let elicitation_seen = Arc::new(Mutex::new(false));
+        let elicitation_seen_handler = Arc::clone(&elicitation_seen);
+
+        let drive = Client
+            .builder()
+            .name("spawn-prompt-turn-test-client")
+            .on_receive_request(
+                move |req: UntypedMessage,
+                      responder: Responder<serde_json::Value>,
+                      _cx: ConnectionTo<Agent>| {
+                    let elicitation_seen = Arc::clone(&elicitation_seen_handler);
+                    async move {
+                        let result = if req.method() == "elicitation/create" {
+                            *elicitation_seen.lock().await = true;
+                            Ok(json!({ "action": "accept", "content": {} }))
+                        } else {
+                            Err(agent_client_protocol::Error::method_not_found())
+                        };
+                        responder.respond_with_result(result)
+                    }
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .connect_with(client_side, async move |cx: ConnectionTo<Agent>| {
+                let prompt = UntypedMessage::new("prompt", json!({ "kind": "prompt" }))
+                    .expect("prompt message must encode");
+                cx.send_request(prompt).block_task().await?;
+                Ok::<(), agent_client_protocol::Error>(())
+            });
+
+        tokio::time::timeout(Duration::from_secs(10), drive)
+            .await
+            .expect(
+                "the prompt turn's nested elicitation/create must round-trip while the prompt \
+                 runs off the dispatch loop; a timeout here means spawn_prompt_turn awaited the \
+                 prompt inline and blocked the loop (a regression of the deadlock fix)",
+            )
+            .expect("client connect_with should succeed");
+
+        assert!(
+            *elicitation_seen.lock().await,
+            "the nested elicitation/create issued by the prompt turn must reach the client"
+        );
+
+        agent_task.abort();
+        let _ = agent_task.await;
+    }
+
+    /// Build the same `Lines` transport `agent_ws::lines_transport` builds.
+    /// Duplicated here so this test crate does not depend on `kanban-app`
+    /// (which is a binary target). The semantics — one JSON-RPC message
+    /// per text frame, dropped binary/ping/pong, errors via `io::Error` —
+    /// are intentionally identical.
+    fn ws_lines_transport(
+        ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    ) -> agent_client_protocol::Lines<
+        impl futures_util::Sink<String, Error = std::io::Error> + Send + 'static,
+        impl futures_util::Stream<Item = std::io::Result<String>> + Send + 'static,
+    > {
+        use futures_util::{SinkExt, StreamExt};
+        let (sink, stream) = ws.split();
+        let incoming = stream.filter_map(|frame| async move {
+            match frame {
+                Ok(tokio_tungstenite::tungstenite::Message::Text(text)) => {
+                    Some(Ok(text.as_str().to_owned()))
+                }
+                Ok(_) => None,
+                Err(e) => Some(Err(std::io::Error::other(e))),
+            }
+        });
+        let outgoing =
+            sink.sink_map_err(std::io::Error::other)
+                .with(|line: String| async move {
+                    Ok(tokio_tungstenite::tungstenite::Message::text(line))
+                });
+        agent_client_protocol::Lines::new(outgoing, incoming)
     }
 }

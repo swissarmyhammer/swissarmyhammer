@@ -810,6 +810,13 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    // Note: there is no "invalid meta type" test because the ACP schema types
+    // `ClientCapabilities::meta` as `Option<Meta>` where `Meta = Map<String, Value>`.
+    // A non-object meta is unrepresentable through the typed builder, so the former
+    // runtime "meta must be an object" check (and its test) is obsolete — the type
+    // system now enforces it at compile time. Invalid meta *values* are still
+    // covered by `test_validate_client_capabilities_with_invalid_meta_value`.
+
     #[test]
     fn test_validate_client_capabilities_with_invalid_meta_value() {
         use agent_client_protocol::schema::{ClientCapabilities, FileSystemCapabilities};
@@ -888,6 +895,11 @@ mod tests {
         let result = validator.validate_client_capabilities(Some(&capabilities));
         assert!(result.is_ok());
     }
+
+    // Note: there is no "invalid fs.meta type" test for the same reason as the
+    // top-level meta: `FileSystemCapabilities::meta` is typed as `Option<Meta>`
+    // (an object map), so a non-object fs.meta cannot be constructed. Valid fs.meta
+    // is covered by `test_validate_client_capabilities_with_fs_meta`.
 
     #[test]
     fn test_validate_client_capabilities_with_all_optional_fields_populated() {

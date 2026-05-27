@@ -4,17 +4,20 @@
 //! 1. Mirdan binary in PATH
 //! 2. Agents detected
 //! 3. AVP directory exists
-//! 4. Registry reachable
-//! 5. Credentials valid
+//! 4. Install stack (per-component install status from [`crate::status`])
+//! 5. Registry reachable
+//! 6. Credentials valid
 
 use std::env;
 use std::path::PathBuf;
 
+use swissarmyhammer_common::lifecycle::InitScope;
 use swissarmyhammer_directory::{AvpConfig, ManagedDirectory};
 use swissarmyhammer_doctor::{Check, CheckStatus, DoctorRunner};
 
 use crate::agents;
 use crate::registry::get_registry_url;
+use crate::status::{self, ComponentState};
 
 /// Mirdan diagnostic runner.
 pub struct MirdanDoctor {
@@ -42,10 +45,47 @@ impl MirdanDoctor {
         self.check_mirdan_in_path();
         self.check_agents_detected();
         self.check_avp_directory();
+        self.check_install_stack();
         self.check_registry_reachable().await;
         self.check_credentials();
 
         self.get_exit_code()
+    }
+
+    /// Check the install-status of every sah-managed component for every
+    /// detected agent across the project and user scopes.
+    ///
+    /// Adds one [`Check`] per applicable [`ComponentStatus`] — sourced from
+    /// [`crate::status`] — so `mirdan doctor` reports the same install stack the
+    /// agent-agnostic capability exposes. [`ComponentState::NotApplicable`]
+    /// statuses are skipped: they describe components an agent does not support
+    /// at a scope and carry no actionable signal.
+    ///
+    /// If the agents config cannot be loaded, an error check is added in its
+    /// place; the dedicated [`Self::check_agents_detected`] check reports the
+    /// same failure with a fix hint.
+    fn check_install_stack(&mut self) {
+        let config = match agents::load_agents_config() {
+            Ok(config) => config,
+            Err(e) => {
+                self.add_check(Check {
+                    name: "Install Stack".to_string(),
+                    status: CheckStatus::Error,
+                    message: format!("Failed to load agents config: {}", e),
+                    fix: None,
+                });
+                return;
+            }
+        };
+
+        let statuses = status::check_all(&config, &[InitScope::Project, InitScope::User]);
+        for s in statuses
+            .iter()
+            .filter(|s| s.state != ComponentState::NotApplicable)
+        {
+            let check = status::to_check(s);
+            self.add_check(check);
+        }
     }
 
     /// Check if mirdan binary is in PATH.
@@ -309,5 +349,32 @@ mod tests {
     fn test_default() {
         let doctor = MirdanDoctor::default();
         assert!(doctor.checks().is_empty());
+    }
+
+    #[test]
+    fn test_check_install_stack_adds_component_checks() {
+        let mut doctor = MirdanDoctor::new();
+        doctor.check_install_stack();
+
+        // With no agent installed, detection falls back to Claude Code, so the
+        // install stack contributes one check per applicable component across the
+        // project and user scopes. The exact count depends on which components
+        // Claude Code defines paths for, but there must be several, and each must
+        // be named in the `Agent · scope · Component` form `status::to_check`
+        // produces.
+        let checks = doctor.checks();
+        assert!(!checks.is_empty(), "install stack should contribute checks");
+        assert!(
+            checks.iter().all(|c| c.name.contains(" · ")),
+            "every install-stack check name should use the ' · ' separator"
+        );
+        // The fallback agent is Claude Code; its name must appear in the checks.
+        assert!(
+            checks.iter().any(|c| c.name.contains("Claude Code")),
+            "fallback Claude Code agent should appear in install-stack checks"
+        );
+        // Both scopes should be represented.
+        assert!(checks.iter().any(|c| c.name.contains("project")));
+        assert!(checks.iter().any(|c| c.name.contains("user")));
     }
 }

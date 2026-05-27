@@ -17,7 +17,10 @@ use crate::{
     constants::sizes,
     content_block_processor::ContentBlockProcessor,
     path_validator::PathValidator,
-    permissions::{FilePermissionStorage, PermissionPolicyEngine, PolicyEvaluation},
+    permissions::{
+        default_permission_policies, FilePermissionStorage, PermissionPolicy,
+        PermissionPolicyEngine, PolicyAction, PolicyEvaluation, RiskLevel,
+    },
     protocol_translator::ProtocolTranslator,
     session::SessionManager,
     size_validator::{SizeLimits, SizeValidator},
@@ -69,9 +72,14 @@ pub struct ClaudeAgent {
     /// Per ACP protocol, Agent can send requests TO the Client. In ACP 0.11 the
     /// `Client` trait is gone — `agent_client_protocol::Client` is a unit Role
     /// marker, and outbound calls flow over a typed [`ConnectionTo<Client>`]
-    /// handle obtained from the connection builder. The handle is `Clone`, so
-    /// it does not need to be wrapped in an `Arc`.
-    pub(crate) client: Option<agent_client_protocol::ConnectionTo<agent_client_protocol::Client>>,
+    /// handle obtained from the connection builder. The handle is `Clone`.
+    ///
+    /// Stored in a shared `Arc<RwLock<Option<..>>>` cell rather than a bare
+    /// `Option` because the connection is set *after* construction (via
+    /// [`Self::set_client`]) yet must also be readable by the elicitation
+    /// bridge handler, which is installed on the Claude client at construction
+    /// time. The shared cell is the single source of truth both paths read.
+    pub(crate) client: crate::agent_elicitation::SharedClient,
     /// Storage for user permission preferences
     ///
     /// Stores "always" decisions (allow-always, reject-always) across tool calls
@@ -161,11 +169,24 @@ impl ClaudeAgent {
         let (notification_sender, notification_receiver) =
             NotificationSender::new(config.notification_buffer_size);
 
-        let permission_engine = Self::create_permission_engine();
+        let permission_engine = Self::create_permission_engine(&config);
         let protocol_translator = Arc::new(ProtocolTranslator::new(permission_engine.clone()));
 
-        let claude_client =
-            Self::create_claude_client(&config, protocol_translator, &notification_sender)?;
+        // Shared cells for the client connection and capabilities. Created here
+        // so the elicitation bridge handler (installed on the Claude client
+        // below) and the agent itself read the same live values once the
+        // connection is set and `initialize` reports capabilities.
+        let client: crate::agent_elicitation::SharedClient = Arc::new(RwLock::new(None));
+        let client_capabilities: crate::agent_elicitation::SharedClientCapabilities =
+            Arc::new(RwLock::new(None));
+
+        let claude_client = Self::create_claude_client(
+            &config,
+            protocol_translator,
+            &notification_sender,
+            client.clone(),
+            client_capabilities.clone(),
+        )?;
 
         let mcp_manager = Arc::new(crate::mcp::McpServerManager::new());
         let tool_handler = Self::create_tool_handler(
@@ -193,22 +214,58 @@ impl ClaudeAgent {
             permission_engine,
             raw_message_manager,
             path_validator,
+            client,
+            client_capabilities,
         );
 
         Ok((agent, notification_receiver))
     }
 
     /// Create the permission policy engine with file-based storage.
-    fn create_permission_engine() -> Arc<PermissionPolicyEngine> {
+    ///
+    /// Any `auto_allow_tool_patterns` configured on the agent are turned into
+    /// low-risk `Allow` policies and prepended ahead of the built-in default
+    /// policies. Because [`PermissionPolicyEngine::evaluate_tool_call`] uses
+    /// first-match-wins ordering, this guarantees a matching tool (e.g.
+    /// `mcp__*`) is auto-approved before the catch-all `"*"` ask policy is
+    /// reached, so no consent dialog is surfaced for those tools.
+    fn create_permission_engine(config: &AgentConfig) -> Arc<PermissionPolicyEngine> {
         let storage_path = std::env::current_dir()
             .unwrap_or_else(|_| std::path::PathBuf::from("."))
             .join(".claude-agent")
             .join("permissions");
         let storage = FilePermissionStorage::new(storage_path);
-        Arc::new(PermissionPolicyEngine::new(Box::new(storage)))
+
+        let mut policies: Vec<PermissionPolicy> = config
+            .auto_allow_tool_patterns
+            .iter()
+            .map(|pattern| {
+                tracing::debug!(
+                    tool_pattern = %pattern,
+                    "Auto-allowing tools matching configured pattern without user consent"
+                );
+                PermissionPolicy {
+                    tool_pattern: pattern.clone(),
+                    default_action: PolicyAction::Allow,
+                    require_user_consent: false,
+                    allow_always_option: true,
+                    risk_level: RiskLevel::Low,
+                }
+            })
+            .collect();
+        policies.extend(default_permission_policies());
+
+        Arc::new(PermissionPolicyEngine::with_policies(
+            Box::new(storage),
+            policies,
+        ))
     }
 
     /// Create and configure the Claude client.
+    ///
+    /// The shared `client` and `client_capabilities` cells are used to build the
+    /// elicitation bridge handler and install it on the client, so a CLI
+    /// elicitation surfaced on the streaming loop is relayed to the ACP client.
     ///
     /// The raw message manager is not wired here — it is created per session
     /// in `new_session`, once the session ULID is known, and installed onto the
@@ -217,9 +274,16 @@ impl ClaudeAgent {
         config: &AgentConfig,
         protocol_translator: Arc<ProtocolTranslator>,
         notification_sender: &NotificationSender,
+        client: crate::agent_elicitation::SharedClient,
+        client_capabilities: crate::agent_elicitation::SharedClientCapabilities,
     ) -> crate::Result<Arc<ClaudeClient>> {
         let mut claude_client = ClaudeClient::new_with_config(&config.claude, protocol_translator)?;
         claude_client.set_notification_sender(Arc::new(notification_sender.clone()));
+
+        let elicitation_handler = Arc::new(
+            crate::agent_elicitation::ElicitationBridgeHandler::new(client, client_capabilities),
+        );
+        claude_client.set_elicitation_handler(elicitation_handler);
 
         Ok(Arc::new(claude_client))
     }
@@ -335,6 +399,8 @@ impl ClaudeAgent {
         permission_engine: Arc<PermissionPolicyEngine>,
         raw_message_manager: Option<RawMessageManager>,
         path_validator: Arc<PathValidator>,
+        client: crate::agent_elicitation::SharedClient,
+        client_capabilities: crate::agent_elicitation::SharedClientCapabilities,
     ) -> Self {
         let base64_processor = Arc::new(Base64Processor::default());
         let content_block_processor = Arc::new(ContentBlockProcessor::new(
@@ -352,7 +418,7 @@ impl ClaudeAgent {
             mcp_manager: Some(mcp_manager),
             config,
             capabilities,
-            client_capabilities: Arc::new(RwLock::new(None)),
+            client_capabilities,
             notification_sender: Arc::new(notification_sender),
             cancellation_manager: Arc::new(cancellation_manager),
             permission_engine,
@@ -360,7 +426,7 @@ impl ClaudeAgent {
             content_block_processor,
             editor_state_manager,
             raw_message_manager,
-            client: None,
+            client,
             permission_storage: Arc::new(permission_storage::PermissionStorage::new()),
             plan_manager: Arc::new(RwLock::new(crate::plan::PlanManager::new())),
             available_agents: Arc::new(RwLock::new(None)),
@@ -375,13 +441,29 @@ impl ClaudeAgent {
     /// This should be called with a [`ConnectionTo<Client>`] after creating the
     /// agent — typically the handle obtained inside the
     /// `Agent.builder().on_receive_request(...).connect_with(...)` closure. It
-    /// is required for the agent to send `session/request_permission` and
-    /// other client-bound requests outside of a per-request handler context.
-    pub fn set_client(
-        &mut self,
+    /// is required for the agent to send `session/request_permission`,
+    /// `elicitation/create`, and other client-bound requests outside of a
+    /// per-request handler context.
+    ///
+    /// Writes the shared client cell, so the elicitation bridge handler
+    /// installed on the Claude client sees the connection too. `&self` because
+    /// the connection lives behind an `Arc<RwLock<..>>`.
+    pub async fn set_client(
+        &self,
         client: agent_client_protocol::ConnectionTo<agent_client_protocol::Client>,
     ) {
-        self.client = Some(client);
+        *self.client.write().await = Some(client);
+    }
+
+    /// Report whether an outbound client connection has been wired in.
+    ///
+    /// Reads the shared `client` cell populated by [`Self::set_client`]. This
+    /// is an observability accessor for tests and diagnostics that need to
+    /// confirm the agent can issue client-bound requests (e.g. the
+    /// `elicitation/create` round-trip) before relying on them. Returns `true`
+    /// once a connection is present, `false` while the cell is still empty.
+    pub async fn is_client_connected(&self) -> bool {
+        self.client.read().await.is_some()
     }
 
     /// Set available agents (modes) from Claude CLI init message
@@ -637,6 +719,37 @@ impl ClaudeAgent {
     /// A reference to the ToolCallHandler instance used by this agent.
     pub fn tool_handler(&self) -> Arc<RwLock<ToolCallHandler>> {
         Arc::clone(&self.tool_handler)
+    }
+
+    /// Get a reference to the MCP server manager.
+    ///
+    /// Returns the manager that holds connections to MCP servers connected for
+    /// this agent — including any HTTP/SSE/stdio servers supplied per session
+    /// via `session/new`'s `mcpServers`. The manager exposes those servers'
+    /// tools to the [`ToolCallHandler`] and routes tool calls to them.
+    ///
+    /// # Returns
+    ///
+    /// `Some` with the shared [`crate::mcp::McpServerManager`] when the agent
+    /// was built with MCP support (the default), or `None` otherwise.
+    pub fn mcp_manager(&self) -> Option<Arc<crate::mcp::McpServerManager>> {
+        self.mcp_manager.clone()
+    }
+
+    /// Get a reference to the notification sender.
+    ///
+    /// Exposes the [`NotificationSender`] this agent uses internally to publish
+    /// `SessionNotification`s on the broadcast channel returned by
+    /// [`ClaudeAgent::new`]. Tests use this accessor to inject synthetic
+    /// notifications and assert they propagate end-to-end through the bridge
+    /// (`forward_session_notifications` in `swissarmyhammer-agent`) onto the
+    /// ACP JSON-RPC wire — the production path the AI panel observes.
+    ///
+    /// # Returns
+    ///
+    /// A clone of the shared [`NotificationSender`].
+    pub fn notification_sender(&self) -> Arc<NotificationSender> {
+        Arc::clone(&self.notification_sender)
     }
 
     /// Resolve an incoming ACP `sessionId` to a live session.
@@ -1319,13 +1432,79 @@ impl ClaudeAgent {
             .map_err(|_e| agent_client_protocol::Error::internal_error())
     }
 
-    /// Spawn Claude process and handle init response for new session.
-    pub(crate) async fn spawn_claude_for_new_session(
+    /// Connect the MCP servers supplied in a `session/new` request.
+    ///
+    /// Each ACP `McpServer` (stdio, HTTP, or SSE) is converted to the internal
+    /// [`crate::config::McpServerConfig`] and connected through the agent's
+    /// shared `mcp_manager`. Once connected, the servers' tools become visible
+    /// to the [`ToolCallHandler`] via `mcp_manager.list_available_tools()` and
+    /// tool calls are routed to them.
+    ///
+    /// Individual connection failures are logged and skipped by the manager so
+    /// a single bad server does not abort session creation; this method is a
+    /// no-op when no MCP servers were requested or the agent has no manager.
+    pub(crate) async fn connect_new_session_mcp_servers(&self, request: &NewSessionRequest) {
+        if request.mcp_servers.is_empty() {
+            return;
+        }
+
+        let Some(mcp_manager) = &self.mcp_manager else {
+            tracing::warn!(
+                "Session requested {} MCP server(s) but the agent has no MCP manager; skipping",
+                request.mcp_servers.len()
+            );
+            return;
+        };
+
+        let internal_mcp_servers: Vec<crate::config::McpServerConfig> = request
+            .mcp_servers
+            .iter()
+            .filter_map(|server| self.convert_acp_to_internal_mcp_config(server))
+            .collect();
+
+        if internal_mcp_servers.is_empty() {
+            return;
+        }
+
+        tracing::info!(
+            "Connecting {} MCP server(s) from session/new request",
+            internal_mcp_servers.len()
+        );
+
+        if let Err(e) = mcp_manager.connect_servers(internal_mcp_servers).await {
+            tracing::error!("Failed to connect session MCP servers: {}", e);
+        }
+    }
+
+    /// Build the [`SpawnConfig`] for a brand-new session.
+    ///
+    /// Pure assembly logic, factored out of [`Self::spawn_claude_for_new_session`]
+    /// so it can be unit-tested without spawning a subprocess.
+    ///
+    /// The crucial behavior this encodes: `SpawnConfig.mcp_servers` is the
+    /// **union** of the agent's static `self.config.mcp_servers` and the
+    /// per-session servers in `request.mcp_servers` (translated to the
+    /// internal [`McpServerConfig`] via [`Self::convert_acp_to_internal_mcp_config`]).
+    ///
+    /// Without this union, the spawned `claude` CLI would see only the
+    /// build-time static config — empty for callers like the kanban app —
+    /// and would silently fall back to ambient global/project MCP
+    /// configuration (`~/.claude.json`, `.mcp.json`), bypassing the
+    /// per-board MCP server the ACP client supplied.
+    ///
+    /// Stdio entries from `request.mcp_servers` are still converted and
+    /// included; the downstream [`crate::claude_process::ClaudeProcess::build_mcp_servers_map`]
+    /// will warn and skip them (the Claude CLI only accepts HTTP/SSE), so
+    /// dropping them here would lose information about what was requested.
+    ///
+    /// [`SpawnConfig`]: crate::claude_process::SpawnConfig
+    /// [`McpServerConfig`]: crate::config::McpServerConfig
+    pub(crate) fn build_session_spawn_config(
         &self,
         session_id: &crate::session::SessionId,
         protocol_session_id: &SessionId,
         request: &NewSessionRequest,
-    ) {
+    ) -> crate::claude_process::SpawnConfig {
         use crate::claude_process::SpawnConfig;
 
         // Extract system_prompt from session metadata if present
@@ -1336,16 +1515,39 @@ impl ClaudeAgent {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        tracing::info!("Spawning Claude process for session: {}", session_id);
-        let spawn_config = SpawnConfig::builder()
+        // Union: static build-time servers first, then per-session servers
+        // converted from ACP. Order is preserved so a duplicate name in
+        // `request.mcp_servers` overrides the static entry when the Claude
+        // CLI builds its servers map (last-write-wins on the JSON map).
+        let mut mcp_servers = self.config.mcp_servers.clone();
+        mcp_servers.extend(
+            request
+                .mcp_servers
+                .iter()
+                .filter_map(|server| self.convert_acp_to_internal_mcp_config(server)),
+        );
+
+        SpawnConfig::builder()
             .session_id(*session_id)
             .acp_session_id(protocol_session_id.clone())
             .cwd(request.cwd.clone())
-            .mcp_servers(self.config.mcp_servers.clone())
+            .mcp_servers(mcp_servers)
             .system_prompt(system_prompt)
             .ephemeral(self.config.claude.ephemeral)
             .tools_override(self.config.claude.tools_override.clone())
-            .build();
+            .build()
+    }
+
+    /// Spawn Claude process and handle init response for new session.
+    pub(crate) async fn spawn_claude_for_new_session(
+        &self,
+        session_id: &crate::session::SessionId,
+        protocol_session_id: &SessionId,
+        request: &NewSessionRequest,
+    ) {
+        tracing::info!("Spawning Claude process for session: {}", session_id);
+        let spawn_config =
+            self.build_session_spawn_config(session_id, protocol_session_id, request);
 
         match self
             .claude_client
@@ -2446,7 +2648,8 @@ impl ClaudeAgent {
         request: &PermissionRequest,
         permission_options: &[crate::tools::PermissionOption],
     ) -> crate::tools::PermissionOutcome {
-        let Some(ref client) = self.client else {
+        let client_guard = self.client.read().await;
+        let Some(client) = client_guard.as_ref() else {
             tracing::warn!(
                 "Permission required for tool '{}' but no client connection available",
                 tool_name
@@ -2664,6 +2867,249 @@ impl ClaudeAgent {
                 agent_client_protocol::Error::invalid_params()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{AgentConfig, HttpTransport, McpServerConfig};
+
+    /// Build a `NewSessionRequest` carrying one HTTP MCP server entry. The
+    /// `SessionId` and URL must be unique per call so concurrent tests do not
+    /// collide on the temp-dir MCP-config filename written by
+    /// `configure_mcp_servers`.
+    fn new_session_request_with_http_server(name: &str, url: &str) -> NewSessionRequest {
+        use agent_client_protocol::schema::{McpServer, McpServerHttp};
+
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+        NewSessionRequest::new(cwd)
+            .mcp_servers(vec![McpServer::Http(McpServerHttp::new(name, url))])
+    }
+
+    /// Verifies the per-session MCP server from `request.mcp_servers` is
+    /// forwarded into `SpawnConfig.mcp_servers` so the spawned `claude` CLI
+    /// is launched with `--mcp-config` pointing at the per-board server.
+    ///
+    /// This is the regression test for the bug where `spawn_claude_for_new_session`
+    /// fed only `self.config.mcp_servers` (empty for the kanban app) and so the
+    /// `claude` CLI fell back to ambient global MCP config.
+    #[tokio::test]
+    async fn test_build_session_spawn_config_includes_per_session_http_server() {
+        let config = AgentConfig::default();
+        let (agent, _rx) = ClaudeAgent::new(config)
+            .await
+            .expect("agent construction must succeed");
+
+        let request =
+            new_session_request_with_http_server("per-board-kanban", "http://127.0.0.1:54321/mcp");
+
+        let session_id = crate::session::SessionId::new();
+        let protocol_session_id = SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV");
+
+        let spawn_config =
+            agent.build_session_spawn_config(&session_id, &protocol_session_id, &request);
+
+        let http_names: Vec<&str> = spawn_config
+            .mcp_servers
+            .iter()
+            .filter_map(|s| match s {
+                McpServerConfig::Http(http) => Some(http.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            http_names.contains(&"per-board-kanban"),
+            "Per-session HTTP MCP server must be forwarded into SpawnConfig.mcp_servers, got: {:?}",
+            http_names
+        );
+
+        let urls: Vec<&str> = spawn_config
+            .mcp_servers
+            .iter()
+            .filter_map(|s| match s {
+                McpServerConfig::Http(http) => Some(http.url.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            urls.contains(&"http://127.0.0.1:54321/mcp"),
+            "Per-session HTTP MCP server URL must be preserved in SpawnConfig, got: {:?}",
+            urls
+        );
+    }
+
+    /// Verifies the helper takes the *union* of `self.config.mcp_servers`
+    /// and `request.mcp_servers`: a statically configured MCP server is
+    /// not dropped when a per-session server is also supplied.
+    #[tokio::test]
+    async fn test_build_session_spawn_config_unions_static_and_per_session_servers() {
+        let config = AgentConfig {
+            mcp_servers: vec![McpServerConfig::Http(HttpTransport {
+                transport_type: "http".to_string(),
+                name: "static-server".to_string(),
+                url: "https://static.example.com/mcp".to_string(),
+                headers: vec![],
+            })],
+            ..AgentConfig::default()
+        };
+
+        let (agent, _rx) = ClaudeAgent::new(config)
+            .await
+            .expect("agent construction must succeed");
+
+        let request =
+            new_session_request_with_http_server("session-server", "http://127.0.0.1:54322/mcp");
+
+        let session_id = crate::session::SessionId::new();
+        let protocol_session_id = SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAW");
+
+        let spawn_config =
+            agent.build_session_spawn_config(&session_id, &protocol_session_id, &request);
+
+        let names: Vec<&str> = spawn_config.mcp_servers.iter().map(|s| s.name()).collect();
+        assert!(
+            names.contains(&"static-server"),
+            "Static server from self.config.mcp_servers must still appear in SpawnConfig, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"session-server"),
+            "Per-session server from request.mcp_servers must appear in SpawnConfig, got: {:?}",
+            names
+        );
+    }
+
+    /// Sanity check for the empty case: with no static config and no
+    /// per-session servers, `SpawnConfig.mcp_servers` is empty (so
+    /// `configure_mcp_servers` correctly skips `--mcp-config`).
+    #[tokio::test]
+    async fn test_build_session_spawn_config_empty_when_no_servers() {
+        let config = AgentConfig::default();
+        let (agent, _rx) = ClaudeAgent::new(config)
+            .await
+            .expect("agent construction must succeed");
+
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+        let request = NewSessionRequest::new(cwd);
+
+        let session_id = crate::session::SessionId::new();
+        let protocol_session_id = SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAX");
+
+        let spawn_config =
+            agent.build_session_spawn_config(&session_id, &protocol_session_id, &request);
+
+        assert!(
+            spawn_config.mcp_servers.is_empty(),
+            "With no static or per-session MCP servers, SpawnConfig.mcp_servers must be empty"
+        );
+    }
+
+    /// A `ClaudeAgent` built from an `AgentConfig` carrying an `mcp__*`
+    /// auto-allow pattern must evaluate MCP tools as allowed (no consent
+    /// dialog), while unrelated tools still require user consent. This is the
+    /// end-to-end guard for the kanban "no permission dialog for our own
+    /// tools" fix.
+    #[tokio::test]
+    async fn test_auto_allow_tool_patterns_skip_consent_for_mcp_tools() {
+        let config = AgentConfig {
+            auto_allow_tool_patterns: vec!["mcp__*".to_string()],
+            ..AgentConfig::default()
+        };
+        let (agent, _rx) = ClaudeAgent::new(config)
+            .await
+            .expect("agent construction must succeed");
+
+        let result = agent
+            .permission_engine
+            .evaluate_tool_call(
+                "mcp__swissarmyhammer-kanban__question",
+                &serde_json::json!({}),
+            )
+            .await
+            .expect("evaluation must succeed");
+        assert!(
+            matches!(result, PolicyEvaluation::Allowed),
+            "mcp__* tools must be auto-allowed without consent, got: {:?}",
+            result
+        );
+
+        let result = agent
+            .permission_engine
+            .evaluate_tool_call("http_request", &serde_json::json!({}))
+            .await
+            .expect("evaluation must succeed");
+        assert!(
+            matches!(result, PolicyEvaluation::RequireUserConsent { .. }),
+            "Unrelated tools must still require user consent, got: {:?}",
+            result
+        );
+    }
+
+    /// A `ClaudeAgent` built with the wildcard auto-allow pattern (`"*"`) must
+    /// auto-allow *every* tool — including the Claude CLI's non-MCP built-ins
+    /// like `terminal_create` — without surfacing a consent dialog. This is the
+    /// end-to-end guard for the kanban "auto-approve all tool permissions"
+    /// behaviour driven by `CreateAgentOptions::auto_allow_all`.
+    #[tokio::test]
+    async fn test_auto_allow_wildcard_skips_consent_for_builtin_tools() {
+        let config = AgentConfig {
+            auto_allow_tool_patterns: vec!["*".to_string()],
+            ..AgentConfig::default()
+        };
+        let (agent, _rx) = ClaudeAgent::new(config)
+            .await
+            .expect("agent construction must succeed");
+
+        // A non-MCP built-in tool must be auto-allowed (no consent dialog).
+        let result = agent
+            .permission_engine
+            .evaluate_tool_call("terminal_create", &serde_json::json!({}))
+            .await
+            .expect("evaluation must succeed");
+        assert!(
+            matches!(result, PolicyEvaluation::Allowed),
+            "with the \"*\" pattern, built-in tools must be auto-allowed, got: {:?}",
+            result
+        );
+
+        // Another built-in (file write) must likewise be auto-allowed.
+        let result = agent
+            .permission_engine
+            .evaluate_tool_call("fs_write_file", &serde_json::json!({}))
+            .await
+            .expect("evaluation must succeed");
+        assert!(
+            matches!(result, PolicyEvaluation::Allowed),
+            "with the \"*\" pattern, fs_write_file must be auto-allowed, got: {:?}",
+            result
+        );
+    }
+
+    /// Without any configured auto-allow patterns, MCP tools fall through to the
+    /// default catch-all policy and require user consent. This pins the
+    /// opt-in nature of the feature so the default behaviour for other
+    /// consumers is unchanged.
+    #[tokio::test]
+    async fn test_default_config_requires_consent_for_mcp_tools() {
+        let config = AgentConfig::default();
+        let (agent, _rx) = ClaudeAgent::new(config)
+            .await
+            .expect("agent construction must succeed");
+
+        let result = agent
+            .permission_engine
+            .evaluate_tool_call(
+                "mcp__swissarmyhammer-kanban__question",
+                &serde_json::json!({}),
+            )
+            .await
+            .expect("evaluation must succeed");
+        assert!(
+            matches!(result, PolicyEvaluation::RequireUserConsent { .. }),
+            "With no auto-allow patterns, mcp__* tools must require consent, got: {:?}",
+            result
+        );
     }
 }
 

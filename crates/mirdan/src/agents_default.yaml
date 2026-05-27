@@ -14,6 +14,10 @@ agents:
     global_plugin_path: "~/.claude/plugins"
     agent_path: .claude/agents
     global_agent_path: "~/.claude/agents"
+    instructions_path: CLAUDE.md
+    global_instructions_path: "~/.claude/CLAUDE.md"
+    settings_path: .claude/settings.json
+    global_settings_path: "~/.claude/settings.json"
   - id: cursor
     name: Cursor
     project_path: .cursor/skills

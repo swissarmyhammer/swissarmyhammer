@@ -653,9 +653,10 @@ mod tests {
         };
 
         let protocol_error = error.to_protocol_error();
-        // -32602 is the standard JSON-RPC "invalid params" code, which the
-        // protocol's `ErrorCode` normalizes to the dedicated `InvalidParams`
-        // variant rather than `Other(-32602)`.
+        // -32602 is the standard JSON-RPC "invalid params" code, which the ACP
+        // schema normalizes to the dedicated `ErrorCode::InvalidParams` variant
+        // (see `From<i32> for ErrorCode`) rather than carrying it as
+        // `ErrorCode::Other(-32602)`.
         assert_eq!(
             protocol_error.code,
             agent_client_protocol::ErrorCode::InvalidParams

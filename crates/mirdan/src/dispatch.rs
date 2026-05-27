@@ -3,7 +3,8 @@
 use crate::deploy_result::{DeployAction, DeployResult};
 use crate::registry::RegistryError;
 use crate::{
-    agents, auth, completions, doctor, info, install, list, new, outdated, publish, search, sync,
+    agents, auth, completions, doctor, info, install, list, new, outdated, publish, search, status,
+    sync,
 };
 use crate::{Cli, Commands, NewKind};
 
@@ -166,6 +167,8 @@ pub async fn dispatch(cli: &Cli) -> Option<i32> {
         ),
 
         Commands::Sync { global } => handle_registry_result(sync::run_sync(agent_filter, *global)),
+
+        Commands::Status { all, json } => handle_registry_result(status::run_status(*all, *json)),
 
         Commands::Doctor { verbose } => doctor::run_doctor(*verbose).await,
 

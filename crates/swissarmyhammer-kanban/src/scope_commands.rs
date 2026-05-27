@@ -77,6 +77,16 @@ pub struct DynamicSources {
     /// Perspectives — each generates a `perspective.switch` palette row with
     /// `args.perspective_id` pre-filled.
     pub perspectives: Vec<PerspectiveInfo>,
+    /// Selectable AI models — feeds the `ai.models` options resolver so the
+    /// `ai.model` command palette popover offers the configured models
+    /// instead of a free-text box.
+    ///
+    /// Unlike views/boards/perspectives this list generates no dynamic
+    /// command rows; it is consumer-supplied runtime data. The model set is
+    /// discovered by `swissarmyhammer-config`'s `ModelManager`, which the
+    /// pure-domain kanban crate does not depend on — the GUI runtime
+    /// enumerates it (via `ai_list_models`) and threads it in here.
+    pub ai_models: Vec<crate::commands::options_resolvers::AiModelInfo>,
 }
 
 /// A fully resolved command ready for display in a menu, palette, or context menu.
@@ -741,11 +751,15 @@ fn enrich_options(
 fn build_options_sources(
     dynamic: Option<&DynamicSources>,
 ) -> swissarmyhammer_commands::OptionsSources {
+    use crate::commands::options_resolvers::AiOptionsData;
     use swissarmyhammer_commands::OptionsSources;
     use swissarmyhammer_perspectives::PerspectivesOptionsData;
     let mut sources = OptionsSources::new();
     sources.insert(PerspectivesOptionsData {
         perspectives: dynamic.map(|d| d.perspectives.clone()).unwrap_or_default(),
+    });
+    sources.insert(AiOptionsData {
+        models: dynamic.map(|d| d.ai_models.clone()).unwrap_or_default(),
     });
     sources
 }
@@ -2284,6 +2298,7 @@ mod tests {
             boards: vec![],
             windows: vec![],
             perspectives: vec![],
+            ..Default::default()
         };
         let cmds = commands_for_scope(
             &scope,
@@ -2359,6 +2374,7 @@ mod tests {
             boards: vec![],
             windows: vec![],
             perspectives: vec![],
+            ..Default::default()
         };
         let cmds = commands_for_scope(
             &scope,
@@ -2430,6 +2446,7 @@ mod tests {
             boards: vec![],
             windows: vec![],
             perspectives: vec![],
+            ..Default::default()
         };
         let cmds = commands_for_scope(
             &scope,
@@ -2491,6 +2508,7 @@ mod tests {
             boards: vec![],
             windows: vec![],
             perspectives: vec![],
+            ..Default::default()
         };
         let cmds = commands_for_scope(
             &scope,
@@ -2557,6 +2575,7 @@ mod tests {
             ],
             windows: vec![],
             perspectives: vec![],
+            ..Default::default()
         };
         let cmds = commands_for_scope(
             &scope,
@@ -2596,6 +2615,7 @@ mod tests {
             }],
             windows: vec![],
             perspectives: vec![],
+            ..Default::default()
         };
         let cmds = commands_for_scope(
             &scope,
@@ -2638,6 +2658,7 @@ mod tests {
             }],
             windows: vec![],
             perspectives: vec![],
+            ..Default::default()
         };
         let cmds = commands_for_scope(
             &scope,
@@ -3175,6 +3196,7 @@ mod tests {
             }],
             windows: vec![],
             perspectives: vec![],
+            ..Default::default()
         };
         let cmds = commands_for_scope(
             &scope,
@@ -3219,6 +3241,7 @@ mod tests {
                 },
             ],
             perspectives: vec![],
+            ..Default::default()
         };
         let cmds = commands_for_scope(
             &scope,
@@ -3257,6 +3280,7 @@ mod tests {
                 focused: true,
             }],
             perspectives: vec![],
+            ..Default::default()
         };
         let cmds = commands_for_scope(
             &scope,
@@ -3294,6 +3318,7 @@ mod tests {
                 focused: true,
             }],
             perspectives: vec![],
+            ..Default::default()
         };
         let cmds = commands_for_scope(
             &scope,

@@ -18,7 +18,9 @@ use crate::cache::EntityCache;
 
 /// Handle to a running file watcher. Dropping it stops the watcher.
 pub struct EntityWatcher {
-    _watcher: RecommendedWatcher,
+    /// The underlying notify watcher. Stored in an `Option` so `Drop` can move
+    /// it out and tear it down on a detached thread (see the `Drop` impl).
+    watcher: Option<RecommendedWatcher>,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
@@ -112,7 +114,7 @@ impl EntityWatcher {
         });
 
         Ok(Self {
-            _watcher: watcher,
+            watcher: Some(watcher),
             shutdown: Some(shutdown_tx),
         })
     }
@@ -120,8 +122,24 @@ impl EntityWatcher {
 
 impl Drop for EntityWatcher {
     fn drop(&mut self) {
+        // Stop the event-processing task first.
         if let Some(tx) = self.shutdown.take() {
             let _ = tx.send(());
+        }
+
+        // Tear down the notify watcher on a detached thread.
+        //
+        // WHY: dropping the `notify` `RecommendedWatcher` blocks for ~5s on
+        // macOS FSEvents stream teardown, and that teardown serializes through
+        // the OS FSEvents subsystem — so under load (many watchers dropped at
+        // once) it queues and crosses test/shutdown deadlines. Moving the drop
+        // onto a short-lived `std::thread` lets the dropping thread return
+        // immediately while the OS teardown completes off the critical path.
+        // `std::thread::spawn` (not `tokio::task::spawn_blocking`) because
+        // `Drop` can run outside a tokio runtime. Watch behavior is unchanged —
+        // only teardown timing moves off-path.
+        if let Some(watcher) = self.watcher.take() {
+            std::thread::spawn(move || drop(watcher));
         }
     }
 }
@@ -587,6 +605,33 @@ mod tests {
 
         // Drop should send shutdown signal without panic
         drop(watcher.unwrap());
+    }
+
+    /// Teardown-promptness guard: dropping an `EntityWatcher` that is actively
+    /// watching a real directory must return to the caller in well under 1s.
+    ///
+    /// On macOS, dropping the underlying `notify` `RecommendedWatcher` blocks
+    /// for ~5s on FSEvents stream teardown and serializes across processes
+    /// under load — the dominant cause of the in-process-server/watcher test
+    /// timeouts. `Drop` detaches that teardown to a background thread, so the
+    /// caller's drop must complete promptly. This test fails (takes ~5s) if
+    /// the detach regresses back to a synchronous drop.
+    #[tokio::test]
+    async fn entity_watcher_drop_returns_promptly() {
+        let (_dir, cache) = setup_cache().await;
+
+        // Watch a real directory so the watcher holds a live FSEvents stream
+        // whose teardown is the blocking operation we want off the drop path.
+        let watcher = EntityWatcher::start(_dir.path().to_path_buf(), cache).unwrap();
+
+        let start = std::time::Instant::now();
+        drop(watcher);
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "EntityWatcher drop blocked the caller for {elapsed:?}; teardown must be detached"
+        );
     }
 
     // -------------------------------------------------------------------------

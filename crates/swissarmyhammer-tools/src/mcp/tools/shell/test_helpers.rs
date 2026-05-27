@@ -216,7 +216,14 @@ pub(crate) fn shared_tool() -> ShellExecuteTool {
     ShellExecuteTool::new_isolated()
 }
 
-/// Execute a shell tool operation with the given op and args
+/// Execute a shell tool operation with the given op and args.
+///
+/// For "execute command" ops (empty `op` string or `"execute command"`) that
+/// do not specify a `working_directory`, defaults the working directory to
+/// `/tmp` for the same reason as [`TestCommandBuilder::new`]: the process CWD
+/// can become invalid during parallel test execution when other tests create
+/// and delete temporary directories. Tests can still pass an explicit
+/// `working_directory` via `extra_args` to override.
 pub(crate) async fn execute_op(
     op: &str,
     extra_args: Vec<(&str, serde_json::Value)>,
@@ -224,7 +231,10 @@ pub(crate) async fn execute_op(
     execute_op_with(&shared_tool(), op, extra_args).await
 }
 
-/// Execute a shell tool operation on a specific tool instance
+/// Execute a shell tool operation on a specific tool instance.
+///
+/// Applies the same `/tmp` working-directory default as [`execute_op`] for
+/// "execute command" ops without an explicit `working_directory`.
 pub(crate) async fn execute_op_with(
     tool: &ShellExecuteTool,
     op: &str,
@@ -233,8 +243,15 @@ pub(crate) async fn execute_op_with(
     let context = create_test_context().await;
     let mut args = serde_json::Map::new();
     args.insert("op".to_string(), json!(op));
+    let is_execute_command = op.is_empty() || op == "execute command";
+    let has_explicit_working_dir = extra_args.iter().any(|(k, _)| *k == "working_directory");
     for (k, v) in extra_args {
         args.insert(k.to_string(), v);
+    }
+    // Default working_directory to /tmp for execute command ops to avoid
+    // racing against parallel CWD mutators (see TestCommandBuilder::new).
+    if is_execute_command && !has_explicit_working_dir && args.contains_key("command") {
+        args.insert("working_directory".to_string(), json!("/tmp"));
     }
     tool.execute(args, &context).await
 }
@@ -245,11 +262,15 @@ pub(crate) async fn run_command(command: &str) -> usize {
     run_command_with(&shared_tool(), command).await
 }
 
-/// Run a command on a specific tool instance and return its command_id
+/// Run a command on a specific tool instance and return its command_id.
+///
+/// Defaults the working directory to `/tmp` to avoid racing against parallel
+/// CWD mutators (see [`TestCommandBuilder::new`]).
 pub(crate) async fn run_command_with(tool: &ShellExecuteTool, command: &str) -> usize {
     let context = create_test_context().await;
     let mut args = serde_json::Map::new();
     args.insert("command".to_string(), json!(command));
+    args.insert("working_directory".to_string(), json!("/tmp"));
     let result = tool.execute(args, &context).await;
     assert!(result.is_ok(), "Setup command failed: {:?}", result.err());
     let call_result = result.unwrap();

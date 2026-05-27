@@ -549,9 +549,18 @@ mod tests {
 
     // Additional integration-style tests
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_execute_test_command_file_not_found() {
         use crate::context::CliContextBuilder;
+        use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
         use swissarmyhammer_config::TemplateContext;
+
+        // Isolate HOME + CWD — `CliContextBuilder::build_async()` calls
+        // `get_swissarmyhammer_dir()` which creates `.sah/` at cwd as a side
+        // effect. Without isolation, this test leaks a `.sah/` skeleton into
+        // the host crate directory.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
 
         let test_cmd = super::TestCommand {
             prompt_name: None,
@@ -588,9 +597,16 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_execute_test_command_missing_prompt_and_file() {
         use crate::context::CliContextBuilder;
+        use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
         use swissarmyhammer_config::TemplateContext;
+
+        // Isolate HOME + CWD — see `test_execute_test_command_file_not_found`
+        // for why `CliContextBuilder::build_async()` requires this guard.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
 
         let test_cmd = super::TestCommand {
             prompt_name: None,

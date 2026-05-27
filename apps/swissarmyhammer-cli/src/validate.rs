@@ -575,6 +575,7 @@ mod tests {
     use super::*;
     use crate::dynamic_cli::CliValidationStats;
     use std::path::PathBuf;
+    use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
     use swissarmyhammer_common::Validatable;
 
     #[test]
@@ -637,7 +638,15 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_validate_all_handles_partial_templates() {
+        // Isolate HOME + CWD — `Validator::validate_all_with_options`
+        // exercises code paths that resolve project directories from cwd and
+        // create `.sah/` there as a side effect. Without isolation this leaks
+        // a `.sah/` skeleton into the host crate directory.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         // This test verifies that .liquid files with {% partial %} marker
         // don't generate errors for missing title/description
         let mut validator = Validator::new(false);
@@ -763,7 +772,12 @@ Neither of these should cause validation errors."#;
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_validate_tools_functionality() {
+        // Isolate HOME + CWD — see `test_validate_all_handles_partial_templates`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         let mut validator = Validator::new(false);
 
         let mut result = ValidationResult::new();
@@ -780,7 +794,12 @@ Neither of these should cause validation errors."#;
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_validate_all_with_tools_flag() {
+        // Isolate HOME + CWD — see `test_validate_all_handles_partial_templates`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         let mut validator = Validator::new(false);
 
         // Test validation with validate_tools = false
@@ -799,7 +818,12 @@ Neither of these should cause validation errors."#;
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_validate_tools_error_handling() {
+        // Isolate HOME + CWD — see `test_validate_all_handles_partial_templates`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         let mut validator = Validator::new(false);
 
         let mut result = ValidationResult::new();

@@ -1,0 +1,24 @@
+[package]
+name = "swissarmyhammer-workspace-init"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Root-explicit SwissArmyHammer workspace initialization (.sah/ + builtin skills)"
+
+[dependencies]
+# Workspace dependencies
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
+tracing = { workspace = true }
+
+# Local workspace dependencies
+swissarmyhammer-common = { workspace = true }
+swissarmyhammer-config = { workspace = true }
+swissarmyhammer-prompts = { workspace = true }
+swissarmyhammer-skills = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

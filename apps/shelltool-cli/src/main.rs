@@ -222,13 +222,14 @@ mod tests {
     /// the writes hermetic: `.claude/settings.local.json` and `.shell/`
     /// are scoped beneath the tempdir and discarded on drop.
     ///
-    /// [`CurrentDirGuard`] shares a single global mutex
-    /// (`swissarmyhammer_common::test_utils::CURRENT_DIR_LOCK`) with every
-    /// other CWD-mutating test in the binary — including
-    /// `logging::tests::init_tracing_creates_mcp_log_under_shell_dir` —
-    /// so there's no window during which two tests can race on
-    /// `std::env::set_current_dir`.
+    /// `#[serial_test::serial(cwd)]` joins the crate-wide `cwd` serialization
+    /// group shared by every CWD-touching test in this crate. The internal
+    /// `CURRENT_DIR_LOCK` inside [`CurrentDirGuard`] only serializes against
+    /// other `CurrentDirGuard` users; it does NOT serialize against the raw
+    /// `std::env::set_current_dir` tests in `doctor.rs` and `registry.rs`.
+    /// The `cwd` group is the single mutex covering all four.
     #[test]
+    #[serial_test::serial(cwd)]
     fn dispatch_command_init_local_runs_registry() {
         let tempdir = TempDir::new().expect("create tempdir");
         let _cwd = CurrentDirGuard::new(tempdir.path()).expect("enter tempdir");
@@ -254,9 +255,10 @@ mod tests {
     /// through the deinit registry and return an exit code derived from
     /// the component results. As with init, we pin CWD to a tempdir so
     /// any file writes/removes land in a throwaway scope, and use
-    /// [`CurrentDirGuard`] so the CWD change is serialized against every
-    /// other CWD-mutating test via the shared `CURRENT_DIR_LOCK`.
+    /// `#[serial_test::serial(cwd)]` so the CWD change is serialized against
+    /// every other CWD-touching test via the crate-wide `cwd` group.
     #[test]
+    #[serial_test::serial(cwd)]
     fn dispatch_command_deinit_local_runs_registry() {
         let tempdir = TempDir::new().expect("create tempdir");
         let _cwd = CurrentDirGuard::new(tempdir.path()).expect("enter tempdir");

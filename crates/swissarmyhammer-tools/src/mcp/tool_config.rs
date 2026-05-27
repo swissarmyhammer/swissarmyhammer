@@ -280,6 +280,7 @@ fn file_mtime(path: &Path) -> Option<SystemTime> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
     use tempfile::TempDir;
 
     fn make_config(entries: &[(&str, bool)]) -> ToolConfig {
@@ -403,9 +404,23 @@ mod tests {
     // is a synchronous function.  This is required because `ShellExecuteTool::new()`
     // internally accesses shared async state (ShellState) that requires a Tokio
     // runtime to be active at construction time.
+    //
+    // Isolation requirements: tests that trigger an actual reload run
+    // `load_merged_tool_config()`, which reads the *process-global* HOME (via
+    // `dirs::home_dir()`) and CWD (via `find_git_repository_root()`). To keep
+    // these tests deterministic when run in parallel with other tests that
+    // mutate HOME or CWD, they must (a) hold an `IsolatedTestEnvironment` for
+    // the lifetime of the reload — which acquires the HOME lock and points
+    // HOME at a clean temp dir — and (b) serialize on `cwd` and chdir into a
+    // clean temp dir to neutralize the project-config lookup.
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_watcher_detects_file_change() {
         use crate::mcp::tool_registry::ToolRegistry;
+
+        let _env = IsolatedTestEnvironment::new().expect("isolated env");
+        let cwd_dir = TempDir::new().expect("cwd temp dir");
+        let _cwd = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
 
         let dir = TempDir::new().expect("temp dir");
         let path = dir.path().join("tools.yaml");
@@ -466,9 +481,19 @@ mod tests {
     }
 
     // NOTE: #[tokio::test] is required here — see explanation on test_watcher_detects_file_change.
+    // Isolation: same constraint as test_watcher_detects_file_change. The
+    // assertion `is_tool_enabled("shell")` after reload would fail if the
+    // process HOME or CWD pointed to a workspace whose merged config disabled
+    // shell, so we isolate HOME with IsolatedTestEnvironment and chdir into a
+    // clean temp dir under #[serial(cwd)].
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_watcher_deleted_file_reverts_to_all_enabled() {
         use crate::mcp::tool_registry::ToolRegistry;
+
+        let _env = IsolatedTestEnvironment::new().expect("isolated env");
+        let cwd_dir = TempDir::new().expect("cwd temp dir");
+        let _cwd = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
 
         let dir = TempDir::new().expect("temp dir");
         let path = dir.path().join("tools.yaml");

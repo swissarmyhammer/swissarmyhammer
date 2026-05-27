@@ -70,6 +70,11 @@ md5 = { workspace = true }
 
 # Agent Client Protocol (always enabled)
 agent-client-protocol = { workspace = true }
+# Declared directly (not relied on transitively through extras) so the
+# elicitation types are reachable in this crate's own build config,
+# independent of the extras dependency. The feature is carried by the
+# workspace dependency declaration.
+agent-client-protocol-schema = { workspace = true }
 
 swissarmyhammer-common = { workspace = true }
 swissarmyhammer-kanban = { workspace = true }

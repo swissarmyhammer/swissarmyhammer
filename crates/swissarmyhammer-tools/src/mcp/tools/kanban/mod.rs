@@ -164,12 +164,20 @@ impl swissarmyhammer_common::lifecycle::Initializable for KanbanTool {
         <Self as crate::mcp::tool_registry::McpTool>::name(self)
     }
 
+    fn display_name(&self) -> &str {
+        "Kanban board"
+    }
+
     fn category(&self) -> &str {
         "tools"
     }
 
     fn priority(&self) -> i32 {
-        25
+        // Sits between the Preamble (50) and Skills (60) steps in the
+        // re-spaced 10s pipeline — same relative position it held in the
+        // legacy 22 → 25 → 30 ordering (after `ClaudeMd`, before
+        // `SkillDeployment`).
+        55
     }
 
     fn is_applicable(&self, scope: &swissarmyhammer_common::lifecycle::InitScope) -> bool {

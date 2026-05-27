@@ -114,6 +114,29 @@ struct OutputCap {
     streaming: bool,
 }
 
+/// Result of running the non-streaming chunk-dispatch loop.
+///
+/// The non-streaming path either drains the stream naturally — in which case
+/// `handle_non_streaming_prompt` builds the final `EndTurn` response from the
+/// accumulated `claude_response` — or it short-circuits mid-stream because of
+/// cancellation or the per-turn output cap, in which case the loop already
+/// has a terminal `PromptResponse` ready to return.
+#[derive(Debug)]
+enum NonStreamingChunkOutcome {
+    /// Stream drained naturally. The caller stores `response_content` as the
+    /// assistant message and embeds it as `claude_response` in the response
+    /// `_meta` for diagnostics/replay. `chunk_count` is logged at info level.
+    Finished {
+        response_content: String,
+        chunk_count: u64,
+    },
+    /// Stream terminated early with a fully-built terminal response — either
+    /// `StopReason::Cancelled` (cancellation observed mid-stream) or
+    /// `StopReason::MaxTokens` (per-turn output cap fired). The caller
+    /// returns this response directly without further accumulation.
+    EarlyReturn(PromptResponse),
+}
+
 impl crate::agent::ClaudeAgent {
     /// Check if streaming is supported for this session
     pub(crate) fn should_stream(
@@ -325,7 +348,8 @@ impl crate::agent::ClaudeAgent {
                 claude_stop_reason = Some(reason.clone());
             }
 
-            if chunk.content.is_empty() && chunk.tool_call.is_none() {
+            if chunk.content.is_empty() && chunk.tool_call.is_none() && chunk.tool_result.is_none()
+            {
                 continue;
             }
 
@@ -362,6 +386,116 @@ impl crate::agent::ClaudeAgent {
 
         self.build_streaming_response(&session_id_str, claude_stop_reason)
             .await
+    }
+
+    /// Consume the per-chunk dispatch loop for `handle_non_streaming_prompt`.
+    ///
+    /// The non-streaming path receives the same `MessageChunk` stream as the
+    /// streaming path — `query_stream_with_context` is the only producer in
+    /// the agent. The non-streaming response API just needs to (a) accumulate
+    /// the assistant's text into a single `claude_response` for the final
+    /// `_meta`, and (b) emit the same per-chunk `SessionUpdate` notifications
+    /// the streaming path emits so the AI panel sees identical wire events
+    /// regardless of which path the agent picks.
+    ///
+    /// This helper delegates per-chunk dispatch to [`Self::process_single_chunk`]
+    /// — the same dispatch the streaming path uses — so a `ChunkType::ToolResult`
+    /// chunk produces a `SessionUpdate::ToolCallUpdate` notification (advancing
+    /// the AI panel's tool card from pending to completed/failed) instead of
+    /// being silently dropped. This is the fix for "AI panel: tool calls never
+    /// leave pending" on the non-streaming code path; the user's live app does
+    /// not enable streaming in its `clientCapabilities`, so this is the path
+    /// that actually runs in production.
+    ///
+    /// Returns either:
+    /// - `Finished { response_content, chunk_count }` when the stream drained
+    ///   naturally; the caller stores the accumulated `claude_response` and
+    ///   builds the final `EndTurn` response, or
+    /// - `EarlyReturn(response)` when cancellation or the output-token cap
+    ///   fired mid-stream and produced a terminal `PromptResponse` directly.
+    async fn process_non_streaming_chunks(
+        &self,
+        session_id: &crate::session::SessionId,
+        session_id_str: &str,
+        stream: &mut std::pin::Pin<
+            Box<dyn futures::Stream<Item = crate::claude::MessageChunk> + Send>,
+        >,
+        effective_cap: u64,
+        requested_max_tokens: Option<u64>,
+    ) -> Result<NonStreamingChunkOutcome, agent_client_protocol::Error> {
+        let mut response_content = String::new();
+        let mut chunk_count: u64 = 0;
+        let mut output_tokens: u64 = 0;
+
+        while let Some(chunk) = futures::StreamExt::next(stream).await {
+            if self.cancellation_manager.is_cancelled(session_id_str).await {
+                tracing::info!(
+                    "Session {} cancelled during Claude API response",
+                    session_id
+                );
+                let mut meta_map = serde_json::Map::new();
+                meta_map.insert(
+                    "cancelled_during_api_response".to_string(),
+                    serde_json::json!(true),
+                );
+                meta_map.insert(
+                    "partial_response_length".to_string(),
+                    serde_json::json!(response_content.len()),
+                );
+                return Ok(NonStreamingChunkOutcome::EarlyReturn(
+                    PromptResponse::new(StopReason::Cancelled).meta(meta_map),
+                ));
+            }
+
+            chunk_count += 1;
+            response_content.push_str(&chunk.content);
+
+            // Skip protocol-metadata-only chunks the same way the streaming
+            // path does — anything that carries no payload (no text, no
+            // tool_call, no tool_result) is uninteresting to subscribers.
+            if chunk.content.is_empty() && chunk.tool_call.is_none() && chunk.tool_result.is_none()
+            {
+                continue;
+            }
+
+            // Delegate per-chunk dispatch to the shared streaming-path
+            // handler so tool_call, tool_result, and text chunks all produce
+            // the same notifications regardless of which path is active.
+            // `accumulated_content` here is local to the streaming handlers'
+            // own bookkeeping and is not the source of `response_content` —
+            // we already accumulated `chunk.content` above to preserve the
+            // non-streaming path's `claude_response` semantics.
+            let mut accumulated_content = String::new();
+            self.process_single_chunk(session_id, session_id_str, &chunk, &mut accumulated_content)
+                .await?;
+
+            // Accumulate output tokens against the effective cap. We count
+            // text deltas only (tool-call chunks are protocol metadata, not
+            // generated content). If the cap fires, abort the underlying
+            // claude subprocess and return `MaxTokens` immediately so the
+            // model can't keep generating off-screen.
+            if let Some(response) = self
+                .check_output_token_cap(
+                    session_id,
+                    session_id_str,
+                    &mut output_tokens,
+                    &chunk.content,
+                    OutputCap {
+                        effective: effective_cap,
+                        caller_supplied: requested_max_tokens,
+                        streaming: false,
+                    },
+                )
+                .await
+            {
+                return Ok(NonStreamingChunkOutcome::EarlyReturn(response));
+            }
+        }
+
+        Ok(NonStreamingChunkOutcome::Finished {
+            response_content,
+            chunk_count,
+        })
     }
 
     /// Abort the in-flight generation when the per-turn output cap fires.
@@ -542,6 +676,9 @@ impl crate::agent::ClaudeAgent {
                 accumulated_content,
             )
             .await?;
+        } else if let Some(tool_result_info) = &chunk.tool_result {
+            self.handle_streaming_tool_result(session_id, session_id_str, tool_result_info)
+                .await?;
         } else if !chunk.content.is_empty() {
             self.handle_streaming_text_chunk(
                 session_id,
@@ -700,6 +837,59 @@ impl crate::agent::ClaudeAgent {
         Ok(())
     }
 
+    /// Handle a tool-call completion during streaming.
+    ///
+    /// Mirrors [`Self::handle_streaming_tool_call`] for the completion side of
+    /// a tool call: emits a `SessionUpdate::ToolCallUpdate` notification to the
+    /// ACP client and stores it on the session so a reloaded session shows the
+    /// tool as completed/failed (not stuck in pending).
+    ///
+    /// This is the second half of the fix for "AI panel: tool calls never
+    /// leave pending" — without this branch the `ChunkType::ToolResult` chunks
+    /// produced by `claude::process_notification` would have no consumer.
+    async fn handle_streaming_tool_result(
+        &self,
+        session_id: &crate::session::SessionId,
+        session_id_str: &str,
+        tool_result_info: &crate::claude::ToolResultInfo,
+    ) -> Result<(), agent_client_protocol::Error> {
+        use agent_client_protocol::schema::{ToolCallId, ToolCallUpdate, ToolCallUpdateFields};
+
+        let mut fields = ToolCallUpdateFields::new().status(tool_result_info.status);
+        if let Some(content) = tool_result_info.content.clone() {
+            fields = fields.content(content);
+        }
+        if let Some(raw_output) = tool_result_info.raw_output.clone() {
+            fields = fields.raw_output(raw_output);
+        }
+
+        let update = SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            ToolCallId::new(std::sync::Arc::from(tool_result_info.id.clone())),
+            fields,
+        ));
+
+        // Store in session message log so replay reflects the completed state.
+        let update_message = crate::session::Message::from_update(update.clone());
+        self.session_manager
+            .update_session(session_id, |session| {
+                session.add_message(update_message);
+            })
+            .map_err(|_| agent_client_protocol::Error::internal_error())?;
+
+        let notification =
+            SessionNotification::new(SessionId::new(session_id_str.to_string()), update);
+
+        if let Err(e) = self.send_session_update(notification).await {
+            tracing::error!(
+                "Failed to send tool call update notification for session {}: {}",
+                session_id,
+                e
+            );
+        }
+
+        Ok(())
+    }
+
     /// Handle permission check for a tool call
     async fn handle_tool_permission_check(
         &self,
@@ -742,22 +932,25 @@ impl crate::agent::ClaudeAgent {
                 if let Some(stored_kind) = self.permission_storage.get_preference(&tool_name).await
                 {
                     self.handle_stored_permission_preference(&tool_name, stored_kind);
-                } else if let Some(ref client) = self.client {
-                    self.request_user_permission(
-                        session_id,
-                        session_id_str,
-                        &tool_call_id,
-                        &tool_name,
-                        client,
-                        &options,
-                    )
-                    .await;
                 } else {
-                    tracing::warn!(
-                        "Permission required for tool '{}' but no client connection available",
-                        tool_name
-                    );
-                    // TODO: Send tool completion with error status
+                    let client_guard = self.client.read().await;
+                    if let Some(client) = client_guard.as_ref() {
+                        self.request_user_permission(
+                            session_id,
+                            session_id_str,
+                            &tool_call_id,
+                            &tool_name,
+                            client,
+                            &options,
+                        )
+                        .await;
+                    } else {
+                        tracing::warn!(
+                            "Permission required for tool '{}' but no client connection available",
+                            tool_name
+                        );
+                        // TODO: Send tool completion with error status
+                    }
                 }
             }
         }
@@ -860,10 +1053,13 @@ impl crate::agent::ClaudeAgent {
 
         // ACP 0.11: dispatch to the counterpart Client role over the
         // ConnectionTo handle. Calling `block_task` here is safe iff the caller
-        // has already spawned this work off the JSON-RPC event loop (e.g. via
-        // `cx.spawn(...)` from the `prompt` dispatch handler) — invoking it
-        // directly inside an `on_receive_request` handler would deadlock. The
-        // dispatch-layer wiring landing in B5/B6/B9 must uphold this contract.
+        // has already spawned this work off the JSON-RPC event loop — invoking
+        // it directly inside an `on_receive_request` handler would deadlock,
+        // because the single dispatch loop that routes this request's response
+        // would be the very loop blocked awaiting the handler. That contract is
+        // upheld by `swissarmyhammer-agent::dispatch_claude_request`, which runs
+        // the whole prompt turn (this permission round-trip included) via
+        // `cx.spawn(...)` instead of awaiting `agent.prompt(...)` on the loop.
         match client.send_request(acp_request).block_task().await {
             Ok(response) => {
                 self.handle_permission_response(tool_name, response, options)
@@ -1118,141 +1314,31 @@ impl crate::agent::ClaudeAgent {
         let effective_cap =
             effective_generation_cap(self.config.max_tokens_per_turn, requested_max_tokens);
 
-        let mut response_content = String::new();
-        let mut chunk_count = 0;
-        let mut output_tokens: u64 = 0;
+        let chunk_outcome = self
+            .process_non_streaming_chunks(
+                session_id,
+                &session_id_str,
+                &mut stream,
+                effective_cap,
+                requested_max_tokens,
+            )
+            .await?;
 
-        while let Some(chunk) = futures::StreamExt::next(&mut stream).await {
-            // Check for cancellation during response
-            if self
-                .cancellation_manager
-                .is_cancelled(&session_id_str)
-                .await
-            {
+        let response_content = match chunk_outcome {
+            NonStreamingChunkOutcome::Finished {
+                response_content,
+                chunk_count,
+            } => {
                 tracing::info!(
-                    "Session {} cancelled during Claude API response",
+                    "Received Claude API response ({} bytes, {} chunks) for session: {}",
+                    response_content.len(),
+                    chunk_count,
                     session_id
                 );
-                let mut meta_map = serde_json::Map::new();
-                meta_map.insert(
-                    "cancelled_during_api_response".to_string(),
-                    serde_json::json!(true),
-                );
-                meta_map.insert(
-                    "partial_response_length".to_string(),
-                    serde_json::json!(response_content.len()),
-                );
-                return Ok(PromptResponse::new(StopReason::Cancelled).meta(meta_map));
+                response_content
             }
-
-            chunk_count += 1;
-            response_content.push_str(&chunk.content);
-
-            // Handle tool calls and send notifications
-            let update = if let Some(tool_call_info) = &chunk.tool_call {
-                use agent_client_protocol::schema::{
-                    ToolCall, ToolCallId, ToolCallStatus, ToolKind,
-                };
-
-                // Infer tool kind from name
-                let kind = if tool_call_info.name.to_lowercase().contains("read") {
-                    ToolKind::Read
-                } else if tool_call_info.name.to_lowercase().contains("write")
-                    || tool_call_info.name.to_lowercase().contains("edit")
-                {
-                    ToolKind::Edit
-                } else if tool_call_info.name.to_lowercase().contains("bash")
-                    || tool_call_info.name.to_lowercase().contains("execute")
-                {
-                    ToolKind::Execute
-                } else {
-                    ToolKind::Other
-                };
-
-                SessionUpdate::ToolCall(
-                    ToolCall::new(
-                        ToolCallId::new(format!("tool_{}", chunk_count)),
-                        tool_call_info.name.clone(),
-                    )
-                    .kind(kind)
-                    .status(ToolCallStatus::Pending)
-                    .raw_input(tool_call_info.parameters.clone()),
-                )
-            } else if !chunk.content.is_empty() {
-                // Send text chunk notification
-                SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
-                    ContentBlock::Text(TextContent::new(chunk.content.clone())),
-                ))
-            } else {
-                continue; // Skip empty chunks
-            };
-
-            // Store in session context for history replay
-            let message = crate::session::Message::from_update(update.clone());
-            self.session_manager
-                .update_session(session_id, |session| {
-                    session.add_message(message);
-                })
-                .map_err(|e| {
-                    tracing::error!("Failed to store response chunk: {}", e);
-                    crate::acp_error::internal_error(format!(
-                        "Failed to store response chunk in session: {e}"
-                    ))
-                })?;
-
-            let notification =
-                SessionNotification::new(SessionId::new(session_id_str.clone()), update);
-
-            // Send notification
-            if let Err(e) = self.send_session_update(notification).await {
-                tracing::error!(
-                    "Failed to send notification for session {}: {}",
-                    session_id,
-                    e
-                );
-            }
-
-            // Check if this is a TodoWrite tool call and send Plan notification
-            if let Some(tool_call_info) = &chunk.tool_call {
-                if tool_call_info.name == "TodoWrite" {
-                    self.handle_todowrite_plan_notification(
-                        session_id,
-                        &session_id_str,
-                        tool_call_info,
-                    )
-                    .await;
-                }
-            }
-
-            // Accumulate output tokens against the effective cap. We count
-            // text deltas only (tool-call chunks are protocol metadata, not
-            // generated content). If the cap fires, abort the underlying
-            // claude subprocess and return `MaxTokens` immediately so the
-            // model can't keep generating off-screen.
-            if let Some(response) = self
-                .check_output_token_cap(
-                    session_id,
-                    &session_id_str,
-                    &mut output_tokens,
-                    &chunk.content,
-                    OutputCap {
-                        effective: effective_cap,
-                        caller_supplied: requested_max_tokens,
-                        streaming: false,
-                    },
-                )
-                .await
-            {
-                return Ok(response);
-            }
-        }
-
-        tracing::info!(
-            "Received Claude API response ({} bytes, {} chunks) for session: {}",
-            response_content.len(),
-            chunk_count,
-            session_id
-        );
+            NonStreamingChunkOutcome::EarlyReturn(response) => return Ok(response),
+        };
 
         // ACP requires specific stop reasons for all prompt turn completions:
         // Check for refusal patterns in Claude's response content
@@ -1494,6 +1580,7 @@ mod tests {
                 content: "a".repeat(delta_size),
                 chunk_type: ChunkType::Text,
                 tool_call: None,
+                tool_result: None,
                 token_usage: None,
                 stop_reason: None,
             })
@@ -1589,5 +1676,573 @@ mod tests {
             StopReason::MaxTokens,
             "A short stream must not trigger the max_tokens cap"
         );
+    }
+
+    // =========================================================================
+    // Tool-result chunk → SessionUpdate::ToolCallUpdate notification
+    // =========================================================================
+
+    /// Build a one-chunk stream carrying a `ChunkType::ToolResult` with the
+    /// given id and status. Used by the tool-result handler tests below.
+    fn tool_result_stream(
+        id: &str,
+        status: agent_client_protocol::schema::ToolCallStatus,
+    ) -> std::pin::Pin<Box<dyn Stream<Item = MessageChunk> + Send>> {
+        let chunk = MessageChunk {
+            content: String::new(),
+            chunk_type: ChunkType::ToolResult,
+            tool_call: None,
+            tool_result: Some(crate::claude::ToolResultInfo {
+                id: id.to_string(),
+                status,
+                content: None,
+                raw_output: Some(serde_json::json!({"ok": true})),
+            }),
+            token_usage: None,
+            stop_reason: None,
+        };
+        Box::pin(tokio_stream::iter(vec![chunk]))
+    }
+
+    /// A `ChunkType::ToolResult` chunk produces a `SessionUpdate::ToolCallUpdate`
+    /// broadcast notification carrying the chunk's tool call id and status.
+    ///
+    /// This is the second half of the "AI panel tool calls never leave pending"
+    /// fix: `claude::process_notification` now emits a `ChunkType::ToolResult`
+    /// chunk for every tool completion, and this test pins the chunk consumer's
+    /// behavior — the chunk must round-trip back into a `ToolCallUpdate`
+    /// notification so the webview can fold it onto the matching pending
+    /// dynamic-tool part.
+    #[tokio::test]
+    async fn test_tool_result_chunk_emits_tool_call_update_notification() {
+        use agent_client_protocol::schema::ToolCallStatus;
+
+        let config = AgentConfig::default();
+        let (agent, mut rx) = crate::agent::ClaudeAgent::new(config)
+            .await
+            .expect("agent construction must succeed");
+
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+        let session_id = agent
+            .session_manager
+            .create_session(cwd, None)
+            .expect("session creation must succeed");
+
+        let mut stream = tool_result_stream("toolu_completed", ToolCallStatus::Completed);
+
+        agent
+            .process_stream_chunks(&session_id, &mut stream, 100_000, None)
+            .await
+            .expect("process_stream_chunks must succeed");
+
+        // The handler must have broadcast a ToolCallUpdate to subscribers.
+        let notification = rx
+            .try_recv()
+            .expect("a ToolCallUpdate notification must be broadcast");
+
+        match notification.update {
+            SessionUpdate::ToolCallUpdate(update) => {
+                assert_eq!(update.tool_call_id.0.as_ref(), "toolu_completed");
+                assert_eq!(update.fields.status, Some(ToolCallStatus::Completed));
+                assert_eq!(
+                    update.fields.raw_output,
+                    Some(serde_json::json!({"ok": true}))
+                );
+            }
+            other => panic!("expected ToolCallUpdate, got {:?}", other),
+        }
+    }
+
+    /// `Failed` tool result chunks land as `ToolCallUpdate` notifications with
+    /// `ToolCallStatus::Failed`, so the AI panel can render the tool card in
+    /// the failed state (with error content/output).
+    #[tokio::test]
+    async fn test_tool_result_chunk_failed_status_round_trips() {
+        use agent_client_protocol::schema::ToolCallStatus;
+
+        let config = AgentConfig::default();
+        let (agent, mut rx) = crate::agent::ClaudeAgent::new(config)
+            .await
+            .expect("agent construction must succeed");
+
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+        let session_id = agent
+            .session_manager
+            .create_session(cwd, None)
+            .expect("session creation must succeed");
+
+        let mut stream = tool_result_stream("toolu_failed", ToolCallStatus::Failed);
+
+        agent
+            .process_stream_chunks(&session_id, &mut stream, 100_000, None)
+            .await
+            .expect("process_stream_chunks must succeed");
+
+        let notification = rx
+            .try_recv()
+            .expect("a ToolCallUpdate notification must be broadcast");
+
+        match notification.update {
+            SessionUpdate::ToolCallUpdate(update) => {
+                assert_eq!(update.tool_call_id.0.as_ref(), "toolu_failed");
+                assert_eq!(update.fields.status, Some(ToolCallStatus::Failed));
+            }
+            other => panic!("expected ToolCallUpdate, got {:?}", other),
+        }
+    }
+
+    // =========================================================================
+    // Non-streaming path: tool-result chunk → SessionUpdate::ToolCallUpdate
+    // =========================================================================
+    //
+    // The user-visible bug is on the *non-streaming* path. The webview's ACP
+    // client (`apps/kanban-app/ui/src/ai/acp-client.ts`) initializes with
+    // `clientCapabilities` that do NOT carry `meta.streaming = true`, so
+    // `should_stream` returns `false` and the agent runs
+    // `handle_non_streaming_prompt`. The original implementation's per-chunk
+    // loop only handled `chunk.tool_call` and `chunk.content`, falling through
+    // to `else { continue }` for `ChunkType::ToolResult` chunks — which is
+    // exactly what `claude::process_notification` produces for a CLI
+    // `tool_result`. So every tool completion was silently dropped on the
+    // non-streaming path, leaving the AI panel's tool cards stuck in pending.
+    //
+    // These tests pin the contract: a `ChunkType::ToolResult` chunk run
+    // through the non-streaming chunk loop must produce a
+    // `SessionUpdate::ToolCallUpdate` notification carrying the chunk's real
+    // tool call id and status. They are the regression test for the live-app
+    // failure that earlier unit tests did not catch.
+
+    /// `process_non_streaming_chunks` (the non-streaming chunk-dispatch loop)
+    /// turns a `ChunkType::ToolResult` chunk into a `SessionUpdate::ToolCallUpdate`
+    /// notification with the chunk's original `tool_call_id` and `Completed`
+    /// status. Before the fix, this chunk hit `else { continue; }` and no
+    /// notification was ever broadcast — that is the bug the live app surfaces.
+    #[tokio::test]
+    async fn test_non_streaming_tool_result_emits_tool_call_update() {
+        use agent_client_protocol::schema::ToolCallStatus;
+
+        let config = AgentConfig::default();
+        let (agent, mut rx) = crate::agent::ClaudeAgent::new(config)
+            .await
+            .expect("agent construction must succeed");
+
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+        let session_id = agent
+            .session_manager
+            .create_session(cwd, None)
+            .expect("session creation must succeed");
+        let session_id_str = session_id.to_string();
+
+        let mut stream = tool_result_stream("toolu_nonstream_done", ToolCallStatus::Completed);
+
+        let outcome = agent
+            .process_non_streaming_chunks(&session_id, &session_id_str, &mut stream, 100_000, None)
+            .await
+            .expect("process_non_streaming_chunks must succeed");
+
+        // A pure-result stream finishes naturally with empty response_content.
+        match outcome {
+            NonStreamingChunkOutcome::Finished {
+                response_content,
+                chunk_count,
+            } => {
+                assert!(
+                    response_content.is_empty(),
+                    "tool-result-only stream has no assistant text"
+                );
+                assert_eq!(chunk_count, 1, "exactly one chunk was produced");
+            }
+            other => panic!("expected Finished outcome, got {:?}", other),
+        }
+
+        let notification = rx
+            .try_recv()
+            .expect("non-streaming path must broadcast a ToolCallUpdate");
+
+        match notification.update {
+            SessionUpdate::ToolCallUpdate(update) => {
+                assert_eq!(
+                    update.tool_call_id.0.as_ref(),
+                    "toolu_nonstream_done",
+                    "ToolCallUpdate must carry the chunk's real tool_call_id, not a synthesized one"
+                );
+                assert_eq!(update.fields.status, Some(ToolCallStatus::Completed));
+            }
+            other => panic!("expected ToolCallUpdate, got {:?}", other),
+        }
+    }
+
+    /// `Failed` tool result chunks on the non-streaming path also produce
+    /// `ToolCallUpdate` notifications, with `ToolCallStatus::Failed`. The AI
+    /// panel needs this to render the tool card in the failed state.
+    #[tokio::test]
+    async fn test_non_streaming_tool_result_failed_status_round_trips() {
+        use agent_client_protocol::schema::ToolCallStatus;
+
+        let config = AgentConfig::default();
+        let (agent, mut rx) = crate::agent::ClaudeAgent::new(config)
+            .await
+            .expect("agent construction must succeed");
+
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+        let session_id = agent
+            .session_manager
+            .create_session(cwd, None)
+            .expect("session creation must succeed");
+        let session_id_str = session_id.to_string();
+
+        let mut stream = tool_result_stream("toolu_nonstream_fail", ToolCallStatus::Failed);
+
+        agent
+            .process_non_streaming_chunks(&session_id, &session_id_str, &mut stream, 100_000, None)
+            .await
+            .expect("process_non_streaming_chunks must succeed");
+
+        let notification = rx
+            .try_recv()
+            .expect("non-streaming path must broadcast a ToolCallUpdate");
+
+        match notification.update {
+            SessionUpdate::ToolCallUpdate(update) => {
+                assert_eq!(update.tool_call_id.0.as_ref(), "toolu_nonstream_fail");
+                assert_eq!(update.fields.status, Some(ToolCallStatus::Failed));
+            }
+            other => panic!("expected ToolCallUpdate, got {:?}", other),
+        }
+    }
+
+    /// `tool_call` chunks on the non-streaming path emit `SessionUpdate::ToolCall`
+    /// notifications with the chunk's **real** tool_call_id (not the previous
+    /// synthesized `tool_${chunk_count}` placeholder).
+    ///
+    /// This pins the second half of the bug: even when a `ToolCallUpdate`
+    /// fired with the real CLI id, the matching initial `ToolCall` was being
+    /// emitted with `format!("tool_{}", chunk_count)`. The webview folds
+    /// updates onto the matching pending part by `toolCallId` — a mismatched
+    /// id is just as fatal as a missing update. The shared streaming-path
+    /// handler uses `tool_call_info.id` directly, so delegating to it on
+    /// the non-streaming path produces matching ids end-to-end.
+    #[tokio::test]
+    async fn test_non_streaming_tool_call_uses_real_tool_call_id() {
+        use crate::claude::{ChunkType, MessageChunk, ToolCallInfo};
+        use agent_client_protocol::schema::ToolCallStatus;
+
+        let config = AgentConfig::default();
+        let (agent, mut rx) = crate::agent::ClaudeAgent::new(config)
+            .await
+            .expect("agent construction must succeed");
+
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+        let session_id = agent
+            .session_manager
+            .create_session(cwd, None)
+            .expect("session creation must succeed");
+        let session_id_str = session_id.to_string();
+
+        let chunk = MessageChunk {
+            content: String::new(),
+            chunk_type: ChunkType::ToolCall,
+            tool_call: Some(ToolCallInfo {
+                id: "toolu_real_id_42".to_string(),
+                name: "read_file".to_string(),
+                parameters: serde_json::json!({"path": "/tmp/x"}),
+            }),
+            tool_result: None,
+            token_usage: None,
+            stop_reason: None,
+        };
+        let mut stream: std::pin::Pin<Box<dyn Stream<Item = MessageChunk> + Send>> =
+            Box::pin(tokio_stream::iter(vec![chunk]));
+
+        agent
+            .process_non_streaming_chunks(&session_id, &session_id_str, &mut stream, 100_000, None)
+            .await
+            .expect("process_non_streaming_chunks must succeed");
+
+        let notification = rx
+            .try_recv()
+            .expect("non-streaming path must broadcast a ToolCall");
+
+        match notification.update {
+            SessionUpdate::ToolCall(tool_call) => {
+                assert_eq!(
+                    tool_call.tool_call_id.0.as_ref(),
+                    "toolu_real_id_42",
+                    "non-streaming path must use the chunk's real id, not a synthesized placeholder"
+                );
+                assert_eq!(tool_call.status, ToolCallStatus::Pending);
+            }
+            other => panic!("expected ToolCall, got {:?}", other),
+        }
+    }
+
+    /// **End-to-end pipeline test.** Drives a real Claude CLI `tool_result`
+    /// line (the exact wire format captured in
+    /// `/tmp/claude_stdout_debug.jsonl` from a live session) through the full
+    /// non-streaming pipeline: `protocol_translator.stream_json_to_acp` →
+    /// `claude::ClaudeClient::tool_call_update_to_chunk` (the pure builder
+    /// `process_notification` uses to translate `SessionUpdate::ToolCallUpdate`
+    /// into a `ChunkType::ToolResult` chunk) → `process_non_streaming_chunks`
+    /// → broadcast.
+    ///
+    /// Asserts at each step. The first assertion to fail points at the
+    /// actual gap in the wire path — earlier unit tests stubbed each step
+    /// individually, so a gap between steps would have passed every unit test
+    /// while still leaving the live app broken.
+    #[tokio::test]
+    async fn test_real_cli_tool_result_line_round_trips_to_tool_call_update() {
+        use crate::claude::ClaudeClient;
+        use agent_client_protocol::schema::{SessionId, ToolCallStatus};
+
+        // Step 1: A real CLI `tool_result` line, copied verbatim from a live
+        // session debug log (/tmp/claude_stdout_debug.jsonl). The matching
+        // `tool_use` arrived earlier as a `stream_event content_block_start`
+        // with the same `id`; the two share `tool_use_id` ↔ `id`.
+        let cli_line = r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_01DrhKGoTS6bBL9KkZqigfM1","type":"tool_result","content":[{"type":"text","text":"{\n  \"count\": 0,\n  \"tasks\": []\n}"}]}]},"parent_tool_use_id":null,"session_id":"d96c9d14-506b-4fe4-ac26-9f555e9ec297","uuid":"5c21b659-25ec-4827-b50d-a768e37585a7","timestamp":"2026-05-19T14:11:43.824Z","tool_use_result":[{"type":"text","text":"{\n  \"count\": 0,\n  \"tasks\": []\n}"}]}"#;
+
+        let config = AgentConfig::default();
+        let (agent, mut rx) = crate::agent::ClaudeAgent::new(config)
+            .await
+            .expect("agent construction must succeed");
+
+        // Step 1b: Run the CLI line through the same protocol_translator the
+        // production code uses. The bug claim is "the gap is somewhere in
+        // the wire path"; if the translator fails to recognise the line,
+        // this assertion fails first.
+        let temp_dir =
+            tempfile::tempdir().expect("temp dir for permission storage must be created");
+        let storage = crate::permissions::FilePermissionStorage::new(temp_dir.path().to_path_buf());
+        let permission_engine = std::sync::Arc::new(
+            crate::permissions::PermissionPolicyEngine::new(Box::new(storage)),
+        );
+        let translator = crate::protocol_translator::ProtocolTranslator::new(permission_engine);
+        let acp_session_id = SessionId::new(std::sync::Arc::from("test-session"));
+
+        let notification = translator
+            .stream_json_to_acp(cli_line, &acp_session_id)
+            .await
+            .expect("translator must succeed on a real CLI line")
+            .expect("a real tool_result line must yield a SessionNotification");
+
+        let tool_call_update = match notification.update {
+            SessionUpdate::ToolCallUpdate(u) => u,
+            other => panic!(
+                "translator must produce SessionUpdate::ToolCallUpdate for a tool_result line, got {:?}",
+                other
+            ),
+        };
+        assert_eq!(
+            tool_call_update.tool_call_id.0.as_ref(),
+            "toolu_01DrhKGoTS6bBL9KkZqigfM1",
+            "translator must preserve the CLI tool_use_id as the ACP tool_call_id"
+        );
+        assert_eq!(
+            tool_call_update.fields.status,
+            Some(ToolCallStatus::Completed),
+            "a non-error CLI tool_result is Completed"
+        );
+
+        // Step 2: Run the ToolCallUpdate through the same pure builder
+        // `process_notification` uses to turn it into a `ChunkType::ToolResult`
+        // MessageChunk. Asserting on the chunk pins the contract that the
+        // notification produces *some* chunk for the downstream consumer —
+        // before the prior commit this returned no chunk at all.
+        let chunk = ClaudeClient::tool_call_update_to_chunk(tool_call_update)
+            .expect("a Completed ToolCallUpdate must produce a ToolResult chunk");
+        assert!(matches!(
+            chunk.chunk_type,
+            crate::claude::ChunkType::ToolResult
+        ));
+        let info = chunk
+            .tool_result
+            .as_ref()
+            .expect("ToolResult chunk must carry tool_result info");
+        assert_eq!(info.id, "toolu_01DrhKGoTS6bBL9KkZqigfM1");
+        assert_eq!(info.status, ToolCallStatus::Completed);
+
+        // Step 3: Feed the chunk into the non-streaming chunk loop — the
+        // path the live app uses. Before the fix, this dropped the chunk
+        // via `else { continue; }` and broadcast nothing.
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+        let session_id = agent
+            .session_manager
+            .create_session(cwd, None)
+            .expect("session creation must succeed");
+        let session_id_str = session_id.to_string();
+        let mut stream: std::pin::Pin<Box<dyn Stream<Item = crate::claude::MessageChunk> + Send>> =
+            Box::pin(tokio_stream::iter(vec![chunk]));
+
+        agent
+            .process_non_streaming_chunks(&session_id, &session_id_str, &mut stream, 100_000, None)
+            .await
+            .expect("process_non_streaming_chunks must succeed");
+
+        // Step 4: The agent must broadcast a `SessionUpdate::ToolCallUpdate`
+        // carrying the original tool_call_id and `Completed` status. This is
+        // what the webview adapter expects to fold onto the pending tool
+        // card in the AI panel.
+        let out = rx.try_recv().expect(
+            "non-streaming pipeline must broadcast a ToolCallUpdate for a real CLI tool_result",
+        );
+        match out.update {
+            SessionUpdate::ToolCallUpdate(update) => {
+                assert_eq!(
+                    update.tool_call_id.0.as_ref(),
+                    "toolu_01DrhKGoTS6bBL9KkZqigfM1",
+                    "broadcast ToolCallUpdate must carry the CLI's original tool_call_id"
+                );
+                assert_eq!(update.fields.status, Some(ToolCallStatus::Completed));
+            }
+            other => panic!("expected broadcast ToolCallUpdate, got {:?}", other),
+        }
+    }
+
+    /// **Streaming-path** end-to-end wire test. Mirrors the non-streaming
+    /// `test_real_cli_tool_result_line_round_trips_to_tool_call_update` but
+    /// walks the exact production pipeline the user prescribed when the AI
+    /// panel still showed tool cards stuck on pending after the initial fix:
+    ///
+    /// `protocol_translator::stream_json_to_acp(line)`
+    ///   → `claude::ClaudeClient::tool_call_update_to_chunk` (the pure builder
+    ///      that `claude::ClaudeClient::process_notification` uses to convert
+    ///      `SessionUpdate::ToolCallUpdate` into a `MessageChunk`)
+    ///   → `tokio::sync::mpsc::UnboundedSender::send` (the same channel
+    ///      `run_stream_loop` uses; the consumer side is wrapped with
+    ///      `tokio_stream::wrappers::UnboundedReceiverStream` exactly as
+    ///      `query_stream` does)
+    ///   → `process_stream_chunks` (the streaming code path)
+    ///   → `NotificationSender` broadcast
+    ///
+    /// The assertions step through every join point so the *first* failing
+    /// assertion pinpoints the gap. Earlier unit tests cover each step in
+    /// isolation but a gap *between* them (e.g. a broken channel wrap, a
+    /// chunk-skip predicate that drops `ChunkType::ToolResult`, or a
+    /// missing dispatch branch) would let every unit test pass while
+    /// leaving the wire broken — which is exactly the symptom the user
+    /// reported.
+    #[tokio::test]
+    async fn test_real_cli_tool_result_round_trips_through_streaming_pipeline() {
+        use crate::claude::{ClaudeClient, MessageChunk};
+        use agent_client_protocol::schema::{SessionId, ToolCallStatus};
+
+        // Step 1: A real CLI `tool_result` line copied verbatim from
+        // /tmp/claude_stdout_debug.jsonl. The matching `tool_use` arrived
+        // earlier as a `stream_event content_block_start` with the same id
+        // ("toolu_01DrhKGoTS6bBL9KkZqigfM1") — these share `tool_use_id` ↔
+        // `id`, so a successful round-trip preserves that id end-to-end.
+        let cli_line = r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_01DrhKGoTS6bBL9KkZqigfM1","type":"tool_result","content":[{"type":"text","text":"{\n  \"count\": 0,\n  \"tasks\": []\n}"}]}]},"parent_tool_use_id":null,"session_id":"d96c9d14-506b-4fe4-ac26-9f555e9ec297","uuid":"5c21b659-25ec-4827-b50d-a768e37585a7","timestamp":"2026-05-19T14:11:43.824Z","tool_use_result":[{"type":"text","text":"{\n  \"count\": 0,\n  \"tasks\": []\n}"}]}"#;
+
+        let config = AgentConfig::default();
+        let (agent, mut rx) = crate::agent::ClaudeAgent::new(config)
+            .await
+            .expect("agent construction must succeed");
+
+        // Build the protocol translator the same way the production code
+        // does in `ClaudeClient::new`.
+        let temp_dir =
+            tempfile::tempdir().expect("temp dir for permission storage must be created");
+        let storage = crate::permissions::FilePermissionStorage::new(temp_dir.path().to_path_buf());
+        let permission_engine = std::sync::Arc::new(
+            crate::permissions::PermissionPolicyEngine::new(Box::new(storage)),
+        );
+        let translator = crate::protocol_translator::ProtocolTranslator::new(permission_engine);
+        let acp_session_id = SessionId::new(std::sync::Arc::from("test-session"));
+
+        // Step 1 (assert): the translator turns the real CLI line into a
+        // `SessionUpdate::ToolCallUpdate` carrying the CLI's tool_use_id.
+        // If this fails, the gap is in `try_handle_tool_result`.
+        let notification = translator
+            .stream_json_to_acp(cli_line, &acp_session_id)
+            .await
+            .expect("translator must succeed on a real CLI line")
+            .expect("a real tool_result line must yield a SessionNotification");
+
+        let tool_call_update = match notification.update {
+            SessionUpdate::ToolCallUpdate(u) => u,
+            other => panic!(
+                "translator must produce SessionUpdate::ToolCallUpdate for a tool_result line, got {:?}",
+                other
+            ),
+        };
+        assert_eq!(
+            tool_call_update.tool_call_id.0.as_ref(),
+            "toolu_01DrhKGoTS6bBL9KkZqigfM1",
+            "translator must preserve the CLI tool_use_id as the ACP tool_call_id"
+        );
+        assert_eq!(
+            tool_call_update.fields.status,
+            Some(ToolCallStatus::Completed),
+            "a non-error CLI tool_result is Completed"
+        );
+
+        // Step 2 (assert): the pure builder the streaming loop uses turns
+        // the ToolCallUpdate into a `ChunkType::ToolResult` MessageChunk
+        // carrying the same id and status. If this fails, the gap is in
+        // `tool_call_update_to_chunk` (the function `process_notification`
+        // calls inside `handle_tool_call_update`).
+        let chunk = ClaudeClient::tool_call_update_to_chunk(tool_call_update)
+            .expect("a Completed ToolCallUpdate must produce a ToolResult chunk");
+        assert!(matches!(
+            chunk.chunk_type,
+            crate::claude::ChunkType::ToolResult
+        ));
+        let info = chunk
+            .tool_result
+            .as_ref()
+            .expect("ToolResult chunk must carry tool_result info");
+        assert_eq!(info.id, "toolu_01DrhKGoTS6bBL9KkZqigfM1");
+        assert_eq!(info.status, ToolCallStatus::Completed);
+
+        // Step 3 (assert): the chunk traverses the same channel shape the
+        // production code uses — an `UnboundedSender` written by
+        // `run_stream_loop`, drained by `UnboundedReceiverStream` and
+        // consumed by `process_stream_chunks`. If `process_stream_chunks`'s
+        // empty-chunk skip predicate were to drop `ChunkType::ToolResult`
+        // (the "Likely culprit" the user called out), the broadcast in
+        // step 4 would receive nothing.
+        let (tx, channel_rx) = tokio::sync::mpsc::unbounded_channel::<MessageChunk>();
+        tx.send(chunk).expect("channel send must succeed");
+        drop(tx); // close so process_stream_chunks terminates after one chunk
+        let mut stream: std::pin::Pin<Box<dyn Stream<Item = MessageChunk> + Send>> = Box::pin(
+            tokio_stream::wrappers::UnboundedReceiverStream::new(channel_rx),
+        );
+
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+        let session_id = agent
+            .session_manager
+            .create_session(cwd, None)
+            .expect("session creation must succeed");
+
+        agent
+            .process_stream_chunks(&session_id, &mut stream, 100_000, None)
+            .await
+            .expect("process_stream_chunks must succeed");
+
+        // Step 4 (assert): `process_stream_chunks` must broadcast a
+        // `SessionUpdate::ToolCallUpdate` carrying the original CLI
+        // tool_call_id and `Completed` status. If this fails, the gap is
+        // in `process_single_chunk`'s dispatch to
+        // `handle_streaming_tool_result`, or in `send_session_update`.
+        let out = rx.try_recv().expect(
+            "streaming pipeline must broadcast a ToolCallUpdate for a real CLI tool_result",
+        );
+        match out.update {
+            SessionUpdate::ToolCallUpdate(update) => {
+                assert_eq!(
+                    update.tool_call_id.0.as_ref(),
+                    "toolu_01DrhKGoTS6bBL9KkZqigfM1",
+                    "streaming broadcast ToolCallUpdate must carry the CLI's original tool_call_id"
+                );
+                assert_eq!(
+                    update.fields.status,
+                    Some(ToolCallStatus::Completed),
+                    "streaming broadcast ToolCallUpdate must carry Completed status"
+                );
+            }
+            other => panic!(
+                "expected broadcast SessionUpdate::ToolCallUpdate on the streaming path, got {:?}",
+                other
+            ),
+        }
     }
 }

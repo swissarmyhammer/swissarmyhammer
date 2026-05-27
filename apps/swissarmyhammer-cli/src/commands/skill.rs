@@ -15,22 +15,24 @@
 //! sah's builtin skills rely on `{% include %}` partials that the simple
 //! `swissarmyhammer-templating` engine used by other CLIs does not support.
 //!
-//! The filesystem helpers ([`is_safe_name`], [`save_lockfile_and_report`],
-//! [`remove_store_entries`]) live in [`super::install::components`] because
-//! they are shared with the sibling `AgentDeployment` component.
+//! The path-safety + store-cleanup helpers ([`mirdan::store::is_safe_name`],
+//! [`mirdan::store::is_safe_relative_path`], [`mirdan::store::remove_store_entries`])
+//! live in `mirdan::store` because they are pure store mechanics with no
+//! CLI-specific concerns. [`save_lockfile_and_report`] stays in
+//! [`super::install::components`] because it is shared with the sibling
+//! `AgentDeployment` component and depends on the CLI's `InitEvent` reporter.
 
 use std::fs;
 
+use mirdan::store::{is_safe_name, is_safe_relative_path, remove_store_entries};
 use swissarmyhammer_common::lifecycle::{InitResult, InitScope, Initializable};
 use swissarmyhammer_common::reporter::{InitEvent, InitReporter};
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_prompts::PromptLibrary;
 
-use super::install::components::{
-    is_safe_name, is_safe_relative_path, remove_store_entries, save_lockfile_and_report,
-};
+use super::install::components::save_lockfile_and_report;
 
-// ── SkillDeployment (priority 30) ────────────────────────────────────
+// ── SkillDeployment (priority 60) ────────────────────────────────────
 
 /// Deploys/removes builtin skills via mirdan's store + lockfile.
 ///
@@ -45,14 +47,19 @@ impl Initializable for SkillDeployment {
         "skill-deployment"
     }
 
+    /// Human-readable label for this component.
+    fn display_name(&self) -> &str {
+        "Skills"
+    }
+
     /// Component category: deployment tasks.
     fn category(&self) -> &str {
         "deployment"
     }
 
-    /// Component priority: 30 (runs after structure setup at priority 20).
+    /// Component priority: 60 (runs after the preamble, before agent deployment).
     fn priority(&self) -> i32 {
-        30
+        60
     }
 
     /// Install builtin skills via mirdan's deploy + lockfile.
@@ -61,8 +68,7 @@ impl Initializable for SkillDeployment {
     /// template engine before writing to disk, so `{% include %}` partials
     /// and `{{version}}` variables are expanded.
     fn init(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        let global = matches!(scope, InitScope::User);
-        match deploy_all_skills(global, reporter) {
+        match deploy_all_skills(scope, reporter) {
             Ok(msg) => vec![InitResult::ok(self.name(), msg)],
             Err(e) => vec![InitResult::error(self.name(), e)],
         }
@@ -215,7 +221,12 @@ fn write_skill_contents(
 /// library's Liquid engine, writes them to temp directories, and deploys
 /// them to every detected agent. Lockfile entries are added for each skill
 /// so that `deinit` can tear them down cleanly.
-fn deploy_all_skills(global: bool, reporter: &dyn InitReporter) -> Result<String, String> {
+///
+/// `scope` controls both where each skill is deployed (project vs global
+/// store) and where the lockfile is written via
+/// [`mirdan::lockfile::lockfile_root_for_scope`] — user scope writes
+/// `~/mirdan-lock.json`; project/local scope writes `<cwd>/mirdan-lock.json`.
+fn deploy_all_skills(scope: &InitScope, reporter: &dyn InitReporter) -> Result<String, String> {
     use swissarmyhammer_skills::SkillResolver;
 
     let resolver = SkillResolver::new();
@@ -224,7 +235,8 @@ fn deploy_all_skills(global: bool, reporter: &dyn InitReporter) -> Result<String
     let prompt_library = PromptLibrary::default();
     let template_context = build_version_template_context();
 
-    let (project_root, mut lockfile) = load_project_lockfile()?;
+    let global = matches!(scope, InitScope::User);
+    let (project_root, mut lockfile) = load_project_lockfile(scope)?;
 
     let mut installed_count = 0;
     let mut skill_targets: Vec<String> = Vec::new();
@@ -265,9 +277,15 @@ fn build_version_template_context() -> TemplateContext {
     ctx
 }
 
-fn load_project_lockfile() -> Result<(std::path::PathBuf, mirdan::lockfile::Lockfile), String> {
-    let project_root =
-        std::env::current_dir().map_err(|e| format!("Failed to get current directory: {}", e))?;
+/// Resolve the lockfile root for `scope` and load (or default-construct) the
+/// `mirdan-lock.json` that lives there.
+///
+/// Returns the resolved root alongside the loaded lockfile so callers can pass
+/// the same root to [`super::install::components::save_lockfile_and_report`].
+fn load_project_lockfile(
+    scope: &InitScope,
+) -> Result<(std::path::PathBuf, mirdan::lockfile::Lockfile), String> {
+    let project_root = mirdan::lockfile::lockfile_root_for_scope(scope)?;
     let lockfile = mirdan::lockfile::Lockfile::load(&project_root)
         .map_err(|e| format!("Failed to load lockfile: {}", e))?;
     Ok((project_root, lockfile))
@@ -383,13 +401,35 @@ fn build_metadata_mapping(
 mod tests {
     use super::*;
     use swissarmyhammer_common::reporter::NullReporter;
+    use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
+
+    /// Deploying builtin skills writes the central `.skills/` store, the
+    /// per-agent `.claude/skills`, `.zed/skills`, etc. directories, and a
+    /// `mirdan-lock.json` — all relative to the process working directory.
+    /// During `cargo test` the working directory is the crate manifest dir,
+    /// so any test that runs real deployment must first chdir into an
+    /// isolated temp dir or it pollutes the source tree.
+    ///
+    /// Also isolates `HOME` via `IsolatedTestEnvironment` so deployment
+    /// doesn't read the developer's real `~/.swissarmyhammer` or
+    /// `~/.claude` directories.
+    ///
+    /// Returns the HOME guard, the CWD guard (restores cwd on drop), and
+    /// the owning `TempDir` for the working directory.
+    fn isolated_deploy_dir() -> (IsolatedTestEnvironment, CurrentDirGuard, tempfile::TempDir) {
+        let env = IsolatedTestEnvironment::new().expect("isolated home env");
+        let temp = tempfile::tempdir().expect("create temp dir for skill deployment");
+        let guard = CurrentDirGuard::new(temp.path()).expect("chdir into isolated temp dir");
+        (env, guard, temp)
+    }
 
     #[test]
     fn test_skill_deployment_name_and_priority() {
         let component = SkillDeployment;
         assert_eq!(Initializable::name(&component), "skill-deployment");
+        assert_eq!(Initializable::display_name(&component), "Skills");
         assert_eq!(component.category(), "deployment");
-        assert_eq!(component.priority(), 30);
+        assert_eq!(component.priority(), 60);
     }
 
     #[test]
@@ -599,9 +639,20 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_skill_deployment_init_returns_one_result() {
         // init() should return exactly one result, either Ok or Error depending
-        // on the environment (e.g., whether any agents are detected).
+        // on the environment (e.g., whether any agents are detected). It
+        // deploys builtin skills via mirdan into cwd-relative agent
+        // directories and writes a cwd-relative `mirdan-lock.json`, so isolate
+        // HOME + CWD to a temp dir to keep the developer's home and the
+        // crate source tree clean.
+        //
+        // Joins the crate-wide `cwd` serialization group: `isolated_deploy_dir()`
+        // mutates process-global CWD via `CurrentDirGuard`, and the group is the
+        // only thing that serializes against the raw `std::env::set_current_dir`
+        // tests in `doctor/checks.rs` and `model/use_command.rs`.
+        let (_env, _guard, _temp) = isolated_deploy_dir();
         let component = SkillDeployment;
         let reporter = NullReporter;
         let results = component.init(&InitScope::Project, &reporter);
@@ -609,7 +660,15 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_skill_deployment_deinit_returns_one_result() {
+        // deinit() removes skill symlinks from cwd-relative agent directories;
+        // isolate HOME + CWD to a temp dir so the call targets the temp dir
+        // only.
+        //
+        // Joins the crate-wide `cwd` serialization group (see
+        // `test_skill_deployment_init_returns_one_result`).
+        let (_env, _guard, _temp) = isolated_deploy_dir();
         let component = SkillDeployment;
         let reporter = NullReporter;
         let results = component.deinit(&InitScope::Project, &reporter);

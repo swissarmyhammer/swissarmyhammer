@@ -62,7 +62,6 @@ pub fn init_tracing(debug: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
     use swissarmyhammer_common::logging::{open_log_file, LOG_FILE_NAME};
     use swissarmyhammer_common::test_utils::CurrentDirGuard;
     use tempfile::TempDir;
@@ -99,17 +98,19 @@ mod tests {
     /// `init_tracing` installs a global subscriber via `.init()`, which can
     /// only succeed once per test binary — subsequent calls panic. This test
     /// therefore exercises the auto-create path (the happy branch) in a
-    /// single call and uses `#[serial]` to keep the `CurrentDirGuard`'s CWD
-    /// change from racing with other tests in this crate.
+    /// single call and uses `#[serial_test::serial(cwd)]` — the crate-wide
+    /// `cwd` group — to keep the `CurrentDirGuard`'s CWD change from racing
+    /// with any other CWD-touching test in this crate.
     #[test]
-    #[serial]
+    #[serial_test::serial(cwd)]
     fn init_tracing_creates_mcp_log_under_shell_dir() {
         let tmp = TempDir::new().unwrap();
 
         let _cwd_guard = CurrentDirGuard::new(tmp.path()).unwrap();
 
         // `init_tracing` may only be called once per test binary. Running
-        // this under `#[serial]` ensures it's the single authoritative call.
+        // this under the `cwd` serial group ensures it's the single
+        // authoritative call.
         init_tracing(false);
 
         assert!(

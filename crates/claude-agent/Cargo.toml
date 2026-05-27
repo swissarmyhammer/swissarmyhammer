@@ -10,6 +10,11 @@ description = "Claude agent implementation for SwissArmyHammer"
 
 [dependencies]
 agent-client-protocol = { workspace = true }
+# Declared directly (not relied on transitively through extras) so the
+# elicitation types are reachable in this crate's own build config,
+# independent of the extras dependency. The feature is carried by the
+# workspace dependency declaration.
+agent-client-protocol-schema = { workspace = true }
 agent-client-protocol-extras = { workspace = true }
 model-context-protocol-extras = { workspace = true }
 rmcp = { workspace = true }
