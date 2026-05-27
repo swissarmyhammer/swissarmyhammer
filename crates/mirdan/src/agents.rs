@@ -884,4 +884,45 @@ agents:
         assert_eq!(config.agents[0].id, "test-agent");
         assert_eq!(config.agents[0].detect.len(), 2);
     }
+
+    /// `AgentDef.doctor` must be `#[serde(default)]`: a YAML entry that omits
+    /// the field deserializes to `false`, and a YAML entry that sets it to
+    /// `true` deserializes to `true`. This is the precondition the install-stack
+    /// allowlist relies on — every agent without an explicit opt-in must default
+    /// to "not doctored".
+    #[test]
+    fn test_agent_def_doctor_field_defaults_to_false() {
+        let yaml_without = r#"
+agents:
+  - id: no-doctor
+    name: No Doctor
+    project_path: .nd/skills
+    global_path: "~/.nd/skills"
+    detect:
+      - dir: "~/.nd"
+"#;
+        let config: AgentsConfig = serde_yaml_ng::from_str(yaml_without).unwrap();
+        assert_eq!(config.agents.len(), 1);
+        assert!(
+            !config.agents[0].doctor,
+            "doctor field omitted in YAML should default to false"
+        );
+
+        let yaml_with = r#"
+agents:
+  - id: yes-doctor
+    name: Yes Doctor
+    project_path: .yd/skills
+    global_path: "~/.yd/skills"
+    doctor: true
+    detect:
+      - dir: "~/.yd"
+"#;
+        let config: AgentsConfig = serde_yaml_ng::from_str(yaml_with).unwrap();
+        assert_eq!(config.agents.len(), 1);
+        assert!(
+            config.agents[0].doctor,
+            "doctor: true in YAML should deserialize to true"
+        );
+    }
 }

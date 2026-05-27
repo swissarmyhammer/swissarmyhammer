@@ -53,13 +53,14 @@ impl MirdanDoctor {
     }
 
     /// Check the install-status of every sah-managed component for every
-    /// detected agent across the project and user scopes.
+    /// doctor-enabled detected agent across the project and user scopes.
     ///
     /// Adds one [`Check`] per applicable [`ComponentStatus`] — sourced from
-    /// [`crate::status`] — so `mirdan doctor` reports the same install stack the
-    /// agent-agnostic capability exposes. [`ComponentState::NotApplicable`]
-    /// statuses are skipped: they describe components an agent does not support
-    /// at a scope and carry no actionable signal.
+    /// [`crate::status::check_all_doctored`] — so `mirdan doctor` reports the
+    /// install stack only for agents that opt in via `doctor: true` in
+    /// `agents_default.yaml`. [`ComponentState::NotApplicable`] statuses are
+    /// skipped: they describe components an agent does not support at a scope
+    /// and carry no actionable signal.
     ///
     /// If the agents config cannot be loaded, an error check is added in its
     /// place; the dedicated [`Self::check_agents_detected`] check reports the
@@ -78,7 +79,7 @@ impl MirdanDoctor {
             }
         };
 
-        let statuses = status::check_all(&config, &[InitScope::Project, InitScope::User]);
+        let statuses = status::check_all_doctored(&config, &[InitScope::Project, InitScope::User]);
         for s in statuses
             .iter()
             .filter(|s| s.state != ComponentState::NotApplicable)
@@ -349,6 +350,104 @@ mod tests {
     fn test_default() {
         let doctor = MirdanDoctor::default();
         assert!(doctor.checks().is_empty());
+    }
+
+    /// The install-stack must only emit checks for agents whose `AgentDef.doctor`
+    /// is `true`. Given a config with a doctored agent alongside `cursor` (no
+    /// `doctor` field, so `false`), no check name may contain the cursor agent's
+    /// human name — the YAML allowlist alone decides who appears.
+    ///
+    /// Both agents are given **real** tempdir detection paths so they both
+    /// pass `get_detected_agents`. Without that, the `cursor` entry would be
+    /// dropped before the doctor filter ever ran (and `claude-code` would be
+    /// injected via the fallback in `agents::get_detected_agents`), so the
+    /// filter under test would never see cursor as input. The positive control
+    /// — asserting that the doctor-enabled agent's checks **are** present —
+    /// then proves detection actually fired for the doctored side.
+    #[test]
+    fn test_check_install_stack_only_emits_doctored_agents() {
+        use crate::agents::{AgentDef, AgentsConfig, DetectMethod, SymlinkPolicy};
+        use crate::status::{check_all_doctored, to_check, ComponentState};
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let detect_doctored = dir.path().join("detect-doctored");
+        let detect_cursor = dir.path().join("detect-cursor");
+        std::fs::create_dir_all(&detect_doctored).unwrap();
+        std::fs::create_dir_all(&detect_cursor).unwrap();
+
+        let doctored = AgentDef {
+            id: "claude-code".to_string(),
+            name: "Claude Code".to_string(),
+            project_path: ".claude/skills".to_string(),
+            global_path: "~/.claude/skills".to_string(),
+            detect: vec![DetectMethod::Dir {
+                dir: detect_doctored.to_string_lossy().to_string(),
+            }],
+            symlink_policy: SymlinkPolicy::default(),
+            mcp_config: None,
+            plugin_path: None,
+            global_plugin_path: None,
+            agent_path: None,
+            global_agent_path: None,
+            instructions_path: None,
+            global_instructions_path: None,
+            settings_path: None,
+            global_settings_path: None,
+            doctor: true,
+        };
+        let cursor = AgentDef {
+            id: "cursor".to_string(),
+            name: "Cursor".to_string(),
+            project_path: ".cursor/skills".to_string(),
+            global_path: "~/.cursor/skills".to_string(),
+            detect: vec![DetectMethod::Dir {
+                dir: detect_cursor.to_string_lossy().to_string(),
+            }],
+            symlink_policy: SymlinkPolicy::default(),
+            mcp_config: None,
+            plugin_path: None,
+            global_plugin_path: None,
+            agent_path: None,
+            global_agent_path: None,
+            instructions_path: None,
+            global_instructions_path: None,
+            settings_path: None,
+            global_settings_path: None,
+            doctor: false,
+        };
+        let config = AgentsConfig {
+            agents: vec![doctored, cursor],
+        };
+
+        // Drive the production filter-and-convert loop directly with the
+        // synthetic config so the test does not depend on what is installed on
+        // the host.
+        let statuses = check_all_doctored(&config, &[InitScope::Project, InitScope::User]);
+        let checks: Vec<Check> = statuses
+            .iter()
+            .filter(|s| s.state != ComponentState::NotApplicable)
+            .map(to_check)
+            .collect();
+
+        // Positive control: the doctored agent's detection actually fired and
+        // produced rows. Without this assertion, an empty `checks` vec would
+        // trivially satisfy the "no Cursor" check below — masking a broken
+        // detection setup as a passing filter test.
+        assert!(
+            checks.iter().any(|c| c.name.contains("Claude Code")),
+            "doctored agent 'Claude Code' should appear in install-stack checks; \
+             missing means detection didn't fire and the filter assertion is vacuous"
+        );
+        // The actual filter assertion: cursor was detected (so it entered the
+        // input set) but `check_all_doctored` excluded it because `doctor: false`.
+        for check in &checks {
+            assert!(
+                !check.name.contains("Cursor"),
+                "non-doctored agent 'Cursor' must not appear in install-stack checks; got '{}'",
+                check.name
+            );
+        }
     }
 
     #[test]

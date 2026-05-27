@@ -487,16 +487,19 @@ fn has_avp_hooks_in_file(path: &std::path::Path) -> bool {
     })
 }
 
-/// Check the full sah install stack for every detected agent at project and user scope.
+/// Check the full sah install stack for every doctor-enabled detected agent at
+/// project and user scope.
 ///
 /// This is the agent-agnostic replacement for the old, Claude-specific,
 /// project-only preamble check. It loads the host's agents config and delegates
-/// to [`check_install_stack_with`], which runs [`mirdan::status::check_all`]
-/// across [`InitScope::Project`] and [`InitScope::User`] and converts each
-/// applicable [`ComponentStatus`] into a doctor [`Check`] via
-/// [`mirdan::status::to_check`]. The check name produced by `to_check` already
-/// encodes agent, scope, and component (e.g. `"Claude Code · user · Preamble"`),
-/// so project and user rows are distinct.
+/// to [`check_install_stack_with`], which runs
+/// [`mirdan::status::check_all_doctored`] across [`InitScope::Project`] and
+/// [`InitScope::User`] and converts each applicable [`ComponentStatus`] into a
+/// doctor [`Check`] via [`mirdan::status::to_check`]. Only agents whose
+/// `AgentDef.doctor` is `true` (per `agents_default.yaml`) participate. The
+/// check name produced by `to_check` already encodes agent, scope, and
+/// component (e.g. `"Claude Code · user · Preamble"`), so project and user
+/// rows are distinct.
 ///
 /// [`ComponentState::NotApplicable`] statuses are skipped entirely rather than
 /// shown as passing rows. When the agents config fails to load, a single Error
@@ -532,19 +535,21 @@ pub fn check_install_stack(checks: &mut Vec<Check>) -> Result<()> {
 /// Push install-stack checks for an explicitly provided agents config.
 ///
 /// This is the config-injectable core of [`check_install_stack`]: it runs
-/// [`mirdan::status::check_all`] across [`InitScope::Project`] and
+/// [`mirdan::status::check_all_doctored`] across [`InitScope::Project`] and
 /// [`InitScope::User`], skips [`ComponentState::NotApplicable`] statuses, and
 /// converts the rest into doctor [`Check`]s via [`mirdan::status::to_check`].
+/// Only agents whose `AgentDef.doctor` is `true` participate — the YAML
+/// allowlist is the sole source of truth.
 ///
 /// Splitting this out gives tests a seam to drive the real skip-and-convert loop
 /// with a synthetic config (e.g. a bare agent that yields NotApplicable rows),
 /// without depending on what happens to be installed on the host. The public
 /// [`check_install_stack`] is the thin wrapper that loads the host's real config.
 fn check_install_stack_with(config: &mirdan::agents::AgentsConfig, checks: &mut Vec<Check>) {
-    use mirdan::status::{check_all, to_check, ComponentState};
+    use mirdan::status::{check_all_doctored, to_check, ComponentState};
     use swissarmyhammer_common::lifecycle::InitScope;
 
-    let statuses = check_all(config, &[InitScope::Project, InitScope::User]);
+    let statuses = check_all_doctored(config, &[InitScope::Project, InitScope::User]);
     for status in &statuses {
         if status.state == ComponentState::NotApplicable {
             continue;
@@ -838,13 +843,108 @@ mod tests {
         );
     }
 
+    /// The install-stack must only emit checks for agents whose `AgentDef.doctor`
+    /// is `true`. Given a synthetic config containing `cursor` (no `doctor`
+    /// field, defaulting to `false`) alongside a doctor-enabled agent, no
+    /// check name may contain `"Cursor"` — the YAML allowlist alone decides
+    /// which agents participate in the install stack.
+    ///
+    /// Both agents are given **real** tempdir detection paths so they both
+    /// pass `get_detected_agents`. Without that, the `cursor` entry would be
+    /// dropped before the doctor filter ever ran (and `claude-code` would be
+    /// injected via the fallback in `agents::get_detected_agents`), so the
+    /// filter under test would never see cursor as input. The positive control
+    /// — asserting that the doctor-enabled agent's checks **are** present —
+    /// then proves detection actually fired for the doctored side.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_check_install_stack_only_emits_doctored_agents() {
+        use mirdan::agents::{AgentDef, AgentsConfig, DetectMethod, SymlinkPolicy};
+        use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+        use tempfile::TempDir;
+
+        let _env = IsolatedTestEnvironment::new().expect("isolated env");
+
+        let dir = TempDir::new().unwrap();
+        let detect_doctored = dir.path().join("detect-doctored");
+        let detect_cursor = dir.path().join("detect-cursor");
+        std::fs::create_dir_all(&detect_doctored).unwrap();
+        std::fs::create_dir_all(&detect_cursor).unwrap();
+
+        let doctored = AgentDef {
+            id: "claude-code".to_string(),
+            name: "Claude Code".to_string(),
+            project_path: ".claude/skills".to_string(),
+            global_path: "~/.claude/skills".to_string(),
+            detect: vec![DetectMethod::Dir {
+                dir: detect_doctored.to_string_lossy().to_string(),
+            }],
+            symlink_policy: SymlinkPolicy::default(),
+            mcp_config: None,
+            plugin_path: None,
+            global_plugin_path: None,
+            agent_path: None,
+            global_agent_path: None,
+            instructions_path: None,
+            global_instructions_path: None,
+            settings_path: None,
+            global_settings_path: None,
+            doctor: true,
+        };
+        let cursor = AgentDef {
+            id: "cursor".to_string(),
+            name: "Cursor".to_string(),
+            project_path: ".cursor/skills".to_string(),
+            global_path: "~/.cursor/skills".to_string(),
+            detect: vec![DetectMethod::Dir {
+                dir: detect_cursor.to_string_lossy().to_string(),
+            }],
+            symlink_policy: SymlinkPolicy::default(),
+            mcp_config: None,
+            plugin_path: None,
+            global_plugin_path: None,
+            agent_path: None,
+            global_agent_path: None,
+            instructions_path: None,
+            global_instructions_path: None,
+            settings_path: None,
+            global_settings_path: None,
+            doctor: false,
+        };
+        let config = AgentsConfig {
+            agents: vec![doctored, cursor],
+        };
+
+        let mut checks = Vec::new();
+        check_install_stack_with(&config, &mut checks);
+
+        // Positive control: the doctored agent's detection actually fired and
+        // produced rows. Without this assertion, an empty `checks` vec would
+        // trivially satisfy the "no Cursor" check below — masking a broken
+        // detection setup as a passing filter test.
+        assert!(
+            checks.iter().any(|c| c.name.contains("Claude Code")),
+            "doctored agent 'Claude Code' should appear in install-stack checks; \
+             missing means detection didn't fire and the filter assertion is vacuous"
+        );
+        // The actual filter assertion: cursor was detected (so it entered the
+        // input set) but `check_all_doctored` excluded it because `doctor: false`.
+        for check in &checks {
+            assert!(
+                !check.name.contains("Cursor"),
+                "non-doctored agent 'Cursor' must not appear in install-stack checks; got '{}'",
+                check.name
+            );
+        }
+    }
+
     /// NotApplicable component statuses (an agent with no path defined for a
     /// component) must produce no doctor check at all.
     #[test]
     #[serial_test::serial(cwd)]
     fn test_check_install_stack_skips_not_applicable() {
         use mirdan::agents::{AgentDef, AgentsConfig, DetectMethod, SymlinkPolicy};
-        use mirdan::status::{check_all, to_check, ComponentState};
+        use mirdan::status::{check_all_doctored, to_check, ComponentState};
         use swissarmyhammer_common::lifecycle::InitScope;
         use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
@@ -852,7 +952,8 @@ mod tests {
 
         // A "bare" agent that is detected (claude-code id => fallback) but defines
         // no MCP/agent/instructions/settings paths, so those components resolve to
-        // NotApplicable.
+        // NotApplicable. `doctor: true` so it participates in the install-stack
+        // (the YAML opt-in is what the production loop now filters on).
         let bare = AgentDef {
             id: "claude-code".to_string(),
             name: "Bare".to_string(),
@@ -871,13 +972,14 @@ mod tests {
             global_instructions_path: None,
             settings_path: None,
             global_settings_path: None,
-            doctor: false,
+            doctor: true,
         };
         let config = AgentsConfig { agents: vec![bare] };
 
-        // Establish the ground truth independently: check_all over the bare config
-        // must yield at least one NotApplicable status (e.g. MCP has no path).
-        let statuses = check_all(&config, &[InitScope::Project, InitScope::User]);
+        // Establish the ground truth independently: check_all_doctored over the
+        // bare (but doctor-enabled) config must yield at least one NotApplicable
+        // status (e.g. MCP has no path).
+        let statuses = check_all_doctored(&config, &[InitScope::Project, InitScope::User]);
         assert!(
             statuses
                 .iter()

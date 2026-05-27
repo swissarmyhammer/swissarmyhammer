@@ -244,6 +244,31 @@ pub fn check_all(config: &AgentsConfig, scopes: &[InitScope]) -> Vec<ComponentSt
     out
 }
 
+/// Check every component for every detected, doctor-enabled agent across the
+/// given scopes.
+///
+/// The contract: this is the install-stack capability that `sah doctor` and
+/// `mirdan doctor` consume. It mirrors [`check_all`] but filters the detected
+/// agents to those whose [`AgentDef::doctor`] is `true` — i.e. the agents that
+/// opt in via the `doctor: true` field in `agents_default.yaml`. The YAML is
+/// the single source of truth; this function deliberately does not hard-code
+/// any id list.
+///
+/// `mirdan status` (the table command) intentionally uses [`check_all`]
+/// instead: that view is "where are the packages installed across every
+/// detected agent" and is not gated by the doctor opt-in.
+pub fn check_all_doctored(config: &AgentsConfig, scopes: &[InitScope]) -> Vec<ComponentStatus> {
+    let detected = agents::get_detected_agents(config);
+    let doctored: Vec<_> = detected.into_iter().filter(|a| a.def.doctor).collect();
+    let mut out = Vec::with_capacity(doctored.len() * scopes.len() * Component::all().len());
+    for agent in &doctored {
+        for &scope in scopes {
+            out.extend(check_agent(&agent.def, scope));
+        }
+    }
+    out
+}
+
 /// Map a [`ComponentStatus`] into a doctor [`Check`].
 ///
 /// - [`ComponentState::Installed`] → [`CheckStatus::Ok`], no fix.
@@ -1079,6 +1104,93 @@ mod tests {
             .find(|s| s.component == Component::Preamble && s.scope == InitScope::User)
             .unwrap();
         assert_eq!(user_preamble.state, ComponentState::Installed);
+    }
+
+    /// `check_all_doctored` must filter agents by `AgentDef.doctor` before
+    /// running the per-component sweep. Given a config that contains one
+    /// doctor-enabled agent and one doctor-disabled agent (both detectable),
+    /// every emitted `ComponentStatus` must belong to the doctor-enabled
+    /// agent — the disabled one contributes nothing.
+    #[test]
+    fn test_check_all_doctored_filters_by_doctor_field() {
+        let dir = TempDir::new().unwrap();
+        // Make both agents detectable so `get_detected_agents` returns both.
+        let detect_a = dir.path().join("detect-a");
+        let detect_b = dir.path().join("detect-b");
+        std::fs::create_dir_all(&detect_a).unwrap();
+        std::fs::create_dir_all(&detect_b).unwrap();
+
+        let p = |sub: &str, name: &str| {
+            dir.path()
+                .join(sub)
+                .join(name)
+                .to_string_lossy()
+                .to_string()
+        };
+
+        // Doctor-enabled agent: claude-code shape, opts in via `doctor: true`.
+        let doctored = AgentDef {
+            id: "claude-code".to_string(),
+            name: "Claude Code".to_string(),
+            project_path: p("a", "skills"),
+            global_path: p("a", "global-skills"),
+            detect: vec![DetectMethod::Dir {
+                dir: detect_a.to_string_lossy().to_string(),
+            }],
+            symlink_policy: SymlinkPolicy::default(),
+            mcp_config: None,
+            plugin_path: None,
+            global_plugin_path: None,
+            agent_path: None,
+            global_agent_path: None,
+            instructions_path: None,
+            global_instructions_path: None,
+            settings_path: None,
+            global_settings_path: None,
+            doctor: true,
+        };
+        // Doctor-disabled agent: also detected, but the install-stack must skip it.
+        let undoctored = AgentDef {
+            id: "cursor".to_string(),
+            name: "Cursor".to_string(),
+            project_path: p("b", "skills"),
+            global_path: p("b", "global-skills"),
+            detect: vec![DetectMethod::Dir {
+                dir: detect_b.to_string_lossy().to_string(),
+            }],
+            symlink_policy: SymlinkPolicy::default(),
+            mcp_config: None,
+            plugin_path: None,
+            global_plugin_path: None,
+            agent_path: None,
+            global_agent_path: None,
+            instructions_path: None,
+            global_instructions_path: None,
+            settings_path: None,
+            global_settings_path: None,
+            doctor: false,
+        };
+        let config = AgentsConfig {
+            agents: vec![doctored, undoctored],
+        };
+
+        let statuses = check_all_doctored(&config, &[InitScope::Project, InitScope::User]);
+
+        assert!(
+            !statuses.is_empty(),
+            "expected at least one row for the doctor-enabled agent"
+        );
+        for status in &statuses {
+            assert_eq!(
+                status.agent_id, "claude-code",
+                "every install-stack row must belong to a doctor: true agent; got '{}'",
+                status.agent_id
+            );
+        }
+        assert!(
+            statuses.iter().all(|s| s.agent_id != "cursor"),
+            "doctor: false agent 'cursor' must not appear in check_all_doctored output"
+        );
     }
 
     #[test]
