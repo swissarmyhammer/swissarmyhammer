@@ -1,8 +1,7 @@
 ---
 assignees:
 - claude-code
-depends_on:
-- 01KS5F5ZNA0621X8KM2NPERXNV
+depends_on: []
 position_column: todo
 position_ordinal: 9a80
 project: store-service
@@ -10,50 +9,58 @@ title: '`store` MCP server: undo/redo/transaction/history over the shared StoreC
 ---
 ## What
 
-Expose the shared `StoreContext` (the single undo substrate — see the shared-substrate task) as an MCP server named `store`. This is the generic, store-layer surface for the cross-cutting concerns that aren't entity-type-specific: undo, redo, transaction grouping, and per-item history. Because the substrate owns **multiple** stores (task, column, tag, project, actor, view, perspective), store-scoped operations take a **`store` parameter**; the stack-wide operations (undo/redo) do not, by design.
+Expose the shared `StoreContext` (the single undo substrate — already wired in production at `apps/kanban-app/src/state.rs`) as an in-process MCP server named `store`, registered via `host.expose_rust_module(...)` on the existing `swissarmyhammer-plugin` host. This is the generic, store-layer surface for the cross-cutting concerns that aren't entity-type-specific: undo, redo, transaction grouping, and per-item history.
 
-The undo/redo/grouping ops wrap existing `StoreContext` APIs (verified: `undo()`, `redo()`, `can_undo()`, `can_redo()`, `undo_depth()`, `begin_undo_group()`/`end_undo_group()`, `push()`, `flush_all()`). NOTE — the per-item read ops are NOT a thin face over existing code: `StoreContext`/`ErasedStore` (`erased.rs`) currently expose only `root`/`store_name`/`flush_changes`/`has_entry`/`undo_erased`/`redo_erased` — there is **no** accessor to read an item's current bytes or its changelog by `(store, item_id)`. `Changelog::read_all`/`find_entry` (`changelog.rs`) exist but only per-store, not reachable through the context. So `History` and `GetItem` require **new `ErasedStore` trait methods + new `StoreContext` accessors** — net-new work, not just an MCP wrapper.
+Because the substrate owns **multiple** stores (task, column, tag, project, actor, view, perspective), store-scoped operations take a **`store` parameter**; the stack-wide operations (undo/redo) do not, by design.
+
+The undo/redo/grouping ops wrap existing `StoreContext` APIs that ship today: `undo()`, `redo()`, `can_undo()`, `can_redo()`, `undo_depth()`, `begin_undo_group()`/`end_undo_group()`, `push()`, `flush_all()` (verified in `crates/swissarmyhammer-store/src/context.rs`).
+
+The per-item READ ops are **net-new work**, not a thin face over existing code. `StoreContext`/`ErasedStore` (`erased.rs`) today expose only `root` / `store_name` / `flush_changes` / `has_entry` / `undo_erased` / `redo_erased` — **no** accessor reads an item's current bytes or its changelog by `(store, item_id)`. `Changelog::read_all` / `find_entry` exist but only per-store, unreachable through the context. So `History` and `GetItem` require **new `ErasedStore` trait methods + new `StoreContext` accessors**.
+
+This card is standalone — Tier 0 by design. The substrate already exists in production (the guard-test card `01KS5F5ZNA0621X8KM2NPERXNV` documents the invariant; it does not *create* the substrate, so this card does not block on it). The only external dependency is the `operation_tool!` macro, which is already merged in `swissarmyhammer-operations-macros`.
 
 Files:
-- `crates/swissarmyhammer-store/src/erased.rs` — add `get_item_bytes(item_id)` and `read_changelog(item_id)` (or equivalent) to the `ErasedStore` trait; implement for the concrete store(s)
-- `crates/swissarmyhammer-store/src/context.rs` — add `StoreContext` accessors that dispatch by `store` name to the above
-- `crates/swissarmyhammer-store/src/server.rs` (or a thin `swissarmyhammer-store-mcp` crate) — `StoreServer` holding the shared `Arc<StoreContext>`
-- `operations.rs` — `#[operation]` structs:
+- `crates/swissarmyhammer-store/src/erased.rs` — add `get_item_bytes(item_id)` and `read_changelog(item_id)` (or equivalent) to the `ErasedStore` trait; implement for the concrete store(s).
+- `crates/swissarmyhammer-store/src/context.rs` — add `StoreContext` accessors that dispatch by `store` name to the above.
+- `crates/swissarmyhammer-store/src/server.rs` (new module) — `StoreServer` holding the shared `Arc<StoreContext>` and implementing the plugin platform's `McpServer` trait.
+- `crates/swissarmyhammer-store/src/operations.rs` (new module) — `#[operation]` structs via the merged `operation_tool!` macro:
   - **stack-wide (no `store` param)**: `Undo`, `Redo`, `CanUndo`, `CanRedo`, `UndoDepth` — operate on the one unified stack; revert/replay whatever store(s) the target entry/group touched. Return `UndoOutcome { items: [(store, item)…] }`.
-  - **transaction grouping**: see the grouping mechanism below — exposed so a logical command's multi-store writes undo atomically.
+  - **transaction grouping**: `BeginTransaction` → id, `EndTransaction` — the public lifecycle for non-command callers. Internally this replaces the global `current_group: Mutex<Option<UndoEntryId>>` slot on `StoreContext` with an ambient transaction id (see below). Existing `begin_undo_group`/`end_undo_group` callers are migrated; no parallel grouping mechanism.
   - **store-scoped (`store` param required)**: `History { store, item_id }` (per-item changelog — needs the new accessor), `GetItem { store, item_id }` (read current bytes — needs the new accessor), optionally `ListStores`.
-- bootstrap — `host.expose_rust_module("store", StoreServer::new(shared_store_ctx.clone()))`
+- bootstrap call sites — `host.expose_rust_module("store", StoreServer::new(shared_store_ctx.clone()))` so a plugin can activate the module under any name with `register("store", { rust: "store" })`. (No bootstrap change in *production* yet — that lives in the cut-over project. For this card, the wiring is exercised through the integration tests.)
 
 ### Transaction grouping (generic, cross-store)
 
-A single command often writes several items across several stores (e.g. `column.reorder` → N columns; a paste → a task + its tags) and they must undo as **one** step. Today this uses a global `current_group` single-slot `Mutex<Option<UndoEntryId>>` on `StoreContext` (`context.rs`) — single-group, racy under concurrent dispatch, kanban-unaware of views/perspectives. The existing `begin_undo_group`/`end_undo_group` are the entry points; this task **replaces their mutex internals** with an **ambient transaction id** carried in the call context (it does NOT add a second, parallel grouping mechanism):
+A single command often writes several items across several stores (e.g. a column reorder → N columns; a paste → a task + its tags) and they must undo as **one** step. Today this uses a global `current_group` single-slot `Mutex<Option<UndoEntryId>>` on `StoreContext` — single-group, racy under concurrent dispatch. The existing `begin_undo_group` / `end_undo_group` are the entry points; this task **replaces their mutex internals** with an **ambient transaction id** that can be carried in a call's `RequestContext::extensions`:
 
-- The Command service generates one transaction id per `execute` and stamps it into `RequestContext::extensions` (same channel as `CallerId`).
-- The dispatcher propagates it onto every downstream `tools/call` the `execute` callback makes — to `kanban`, `views`, any store-backed server.
-- Each store's write path reads the ambient transaction id and passes it as the `group_id` to `StoreContext::push`. Entries sharing the id are one undo group regardless of which store/server produced them.
-- No global mutable group state; concurrency-safe; generic — any store that pushes honors the ambient id if present, knows nothing about commands.
+- A `BeginTransaction` (or the Command service, later) generates a `txn` id and sets it as an ambient value.
+- Each store's write path reads the ambient `txn` if present and passes it as `group_id` to `StoreContext::push`. Entries sharing the id are one undo group regardless of which store produced them. Without an ambient `txn`, writes group per the existing legacy rule.
+- No global mutable group state; concurrency-safe; generic — any store that pushes honors the ambient id if present; the store knows nothing about commands.
 
-`store` exposes the transaction lifecycle for non-command callers too (`BeginTransaction` → id, `EndTransaction`, replacing the `begin/end_undo_group` mutex API), but the common path is the Command service bracketing `execute` automatically.
+The ambient-`txn` mechanism is **testable in isolation** here: tests call `BeginTransaction` directly, make writes through two different `TrackedStore`s under it, and assert a single `Undo` reverts both. The Command-service-driven case (the txn is set automatically around `execute`) is the follow-up card `01KS613VPH2G4ZWKZPGW9ZCJAA` in `command-service`.
 
-### Relationship to other servers
+### Relationship to other servers (informational, not a dependency)
 
-- `kanban` / `views` / `entity` **write** into the shared `StoreContext` (their writes push undo entries, stamped with the ambient txn id).
-- `store` provides **visibility and control** over the resulting stack (undo/redo/history). No server calls another server's MCP — they share the `Arc<StoreContext>`.
+- `kanban` / `views` / `entity` MCP servers (future) **write** into the shared `StoreContext` — their writes push undo entries, stamped with the ambient txn id when one is set.
+- `store` provides **visibility and control** over the resulting stack (undo / redo / history). No server calls another server's MCP — they share the `Arc<StoreContext>`.
+
+None of those other servers need to exist for THIS card to land — the store ops are exercised directly against the existing `TrackedStore` set through integration tests.
 
 ## Acceptance Criteria
-- [ ] `store` registered as an in-process server over the shared `Arc<StoreContext>`
-- [ ] `Undo`/`Redo`/`CanUndo`/`CanRedo`/`UndoDepth` operate on the one unified stack and revert across stores
-- [ ] New `ErasedStore`/`StoreContext` accessors for current-bytes + per-item changelog exist; `History`/`GetItem` use them and require a `store` param; unknown store → structured error
-- [ ] Ambient transaction id replaces the global `current_group` (its mutex internals, not a parallel system); a command's multi-store writes undo as one group; concurrent transactions don't interfere
-- [ ] `_meta` operations tree complete
+- [ ] `store` server type exists and registers via `host.expose_rust_module("store", …)` against a shared `Arc<StoreContext>`
+- [ ] `Undo` / `Redo` / `CanUndo` / `CanRedo` / `UndoDepth` operate on the one unified stack and revert across stores when invoked through the MCP face
+- [ ] New `ErasedStore` / `StoreContext` accessors for current-bytes + per-item changelog exist; `History` / `GetItem` use them and require a `store` param; unknown store → structured error
+- [ ] Ambient transaction id replaces the global `current_group` (its mutex internals, not a parallel system); a `BeginTransaction` → writes through two stores → `EndTransaction` → single `Undo` reverts both; concurrent transactions don't interfere
+- [ ] `_meta` operations tree complete (one `store` tool, all ops surfaced under it)
+- [ ] No dependency on the `kanban` / `views` / `entity` MCP servers — the integration tests stand the substrate up directly and drive the `store` ops against it
 
 ## Tests
 - [ ] `crates/swissarmyhammer-store/tests/integration/store_server_e2e.rs` — undo/redo round-trips over the shared ctx; `History { store: "task", item_id }` returns the item's changelog (via the new accessor); `GetItem` returns current bytes
 - [ ] `crates/swissarmyhammer-store/tests/integration/txn_grouping_e2e.rs` — open a transaction id; make writes to two different stores under it; single `Undo` reverts both; a second concurrent transaction id stays independent
-- [ ] `_meta` snapshot
+- [ ] `crates/swissarmyhammer-store/tests/integration/meta_snapshot.rs` — `_meta` operations-tree snapshot for the `store` tool
 - [ ] `cargo test -p swissarmyhammer-store` passes
 
 ## Workflow
 - Use `/tdd` — write the cross-store transaction-grouping test first; it pins the generic grouping contract.
 
-Depends on the shared-substrate task and the operation-struct foundation. Prerequisite for: the cache-reconciliation task, the app-shell-commands plugin (app.undo/redo → `store`), and the Command-service execute-bracketing.
+Standalone — no kanban dep, no cross-server e2e. Uses only the existing `swissarmyhammer-store` crate, the existing `swissarmyhammer-plugin` host, and the already-merged `operation_tool!` macro. Prerequisite for: the cache-reconciliation card, the app-shell `app.undo/redo` plugin (which forwards to this `store` server), and the Command-service `execute` transaction-bracketing follow-up (`01KS613VPH2G4ZWKZPGW9ZCJAA`).
