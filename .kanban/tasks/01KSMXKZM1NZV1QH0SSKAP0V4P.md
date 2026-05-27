@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KSMXK4R8Y9A2ZWV7KFC1Y4PT
-position_column: todo
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffb180
 title: 'Doctor: delete scope-blind legacy checks superseded by the install stack'
 ---
 ## What
@@ -57,3 +57,8 @@ If a helper has callers outside the deleted check, keep the helper.
 
 ## Depends on
 - 01KSMXK4R8Y9A2ZWV7KFC1Y4PT (scope-pair policy must be in place so the install-stack rows that supersede these are correct — otherwise we'd swap false-warning legacy checks for false-warning mirdan rows) #init-doctor
+
+## Review Findings (2026-05-27 17:55)
+
+### Nits
+- [x] `apps/swissarmyhammer-cli/src/commands/doctor/mod.rs:319` — `test_deleted_legacy_checks_absent` asserts only the *absence* of three names but has no positive control on the result set, so a future regression that makes `run_diagnostics_without_output` return an empty `checks` Vec (e.g., due to a panic-swallowing error path or an accidental short-circuit) would pass this test vacuously. Add `assert!(!doctor.checks.is_empty(), "doctor pipeline produced no checks — regression assertion would pass vacuously");` after the `result.is_ok()` check, mirroring the assertion already used in the adjacent `test_run_diagnostics`.
