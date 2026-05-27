@@ -1,5 +1,6 @@
 ---
 description: "Qwen3.6"
+tags: [kanban]
 ---
 quiet: false
 executor:

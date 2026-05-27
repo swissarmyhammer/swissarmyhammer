@@ -2682,29 +2682,33 @@ executor:
     }
 
     #[test]
-    fn test_load_builtin_models_only_claude_code_carries_kanban_tag() {
+    fn test_load_builtin_models_kanban_tag_membership() {
         let models = ModelManager::load_builtin_models().expect("builtin models must load");
 
-        let claude = models
-            .iter()
-            .find(|m| m.name == "claude-code")
-            .expect("the built-in `claude-code` model must exist");
-        assert!(
-            claude.tags.iter().any(|t| t == "kanban"),
-            "`claude-code` must carry the `kanban` tag, got {:?}",
-            claude.tags
-        );
+        // `claude-code` and `qwen` are the kanban-tagged chat models that
+        // surface in the kanban panel.
+        for name in ["claude-code", "qwen"] {
+            let model = models
+                .iter()
+                .find(|m| m.name == name)
+                .unwrap_or_else(|| panic!("the built-in `{name}` model must exist"));
+            assert!(
+                model.tags.iter().any(|t| t == "kanban"),
+                "`{name}` must carry the `kanban` tag, got {:?}",
+                model.tags
+            );
+        }
 
-        // For now only Claude Code surfaces in the kanban panel — the llama
-        // chat models and the embedding model must not carry the `kanban` tag.
-        for name in ["qwen", "qwen-embedding"] {
+        // The embedding model and the other untagged llama chat variants must
+        // not carry the `kanban` tag — they should not surface in the panel.
+        for name in ["qwen-embedding", "qwen-coder", "qwen-moe", "qwen-0.6b-test"] {
             let model = models
                 .iter()
                 .find(|m| m.name == name)
                 .unwrap_or_else(|| panic!("the built-in `{name}` model must exist"));
             assert!(
                 !model.tags.iter().any(|t| t == "kanban"),
-                "`{name}` must not carry the `kanban` tag for now, got {:?}",
+                "`{name}` must not carry the `kanban` tag, got {:?}",
                 model.tags
             );
         }
