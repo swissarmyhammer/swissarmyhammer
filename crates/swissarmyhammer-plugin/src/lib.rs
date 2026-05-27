@@ -43,7 +43,9 @@ pub use dispatcher::Dispatcher;
 pub use error::{Error, Result};
 pub use host::PluginHost;
 pub use ledger::{CallbackId, PluginLedger, RegistrationHandle};
-pub use registry::{ServerName, ServerRegistry};
+pub use registry::{
+    RegisterOutcome, ServerName, ServerRegistry, ServerSource, ServerStatus, UnregisterOutcome,
+};
 pub use reload::ReloadStatus;
 pub use runtime::{
     transpile_typescript, HostDispatcher, PluginModuleLoader, PluginRuntime, RuntimeConfig,

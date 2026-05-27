@@ -78,7 +78,9 @@ use crate::discovery::{
 };
 use crate::error::{Error, Result};
 use crate::ledger::{CallbackId, PluginLedger, RegistrationHandle};
-use crate::registry::{ServerName, ServerRegistry, ServerStatus};
+use crate::registry::{
+    RegisterOutcome, ServerName, ServerRegistry, ServerSource, ServerStatus, UnregisterOutcome,
+};
 use crate::reload::ReloadStatus;
 use crate::runtime::{HostDispatcher, PluginRuntime, RuntimeConfig};
 use crate::server::{CallerId, CliServer, McpServer, PluginId, ToolMetadata, UrlServer};
@@ -1591,19 +1593,24 @@ impl PluginHost {
     ) {
         match handle {
             RegistrationHandle::Server(name) => {
-                let removed = self.lock().registry.unregister(&name);
-                if removed.is_none() {
+                let outcome = self.lock().registry.unregister(&name);
+                if matches!(outcome, UnregisterOutcome::NotRegistered) {
                     tracing::debug!(
                         plugin = %plugin_id.as_str(),
                         server = %name,
                         "ledger server handle had no live registration to dispose"
                     );
                 }
-                // Disposing a ledger server handle removes the server from the
-                // registry — keep the generated `.d.ts` in sync. Driven after
-                // the host mutex is released; the unload that called this then
-                // flushes the emitter so the burst settles into one write.
-                if removed.is_some() {
+                // Disposing a ledger server handle drops one caller's hold on
+                // the server. The registry only removes it when the LAST
+                // holder unregisters — that is the moment the emitter is
+                // told. A `Decremented` outcome leaves the server live (and
+                // its tools still reachable through the registered name) for
+                // the remaining holders, so the emitter is left alone. Driven
+                // after the host mutex is released; the unload that called
+                // this then flushes the emitter so the burst settles into one
+                // write.
+                if matches!(outcome, UnregisterOutcome::Removed(_)) {
                     self.inner.types_emitter.server_unregistered(name);
                 }
             }
@@ -1938,8 +1945,13 @@ impl HostBridge {
         Ok(Value::Object(Map::new()))
     }
 
-    /// Handles an `unregister` envelope: removes a server and consumes its
-    /// ledger entry.
+    /// Handles an `unregister` envelope: drops one caller's hold on a server
+    /// and consumes its ledger entry.
+    ///
+    /// Refcounted unregister: the registration is torn down only when the
+    /// LAST holder is gone. A `Decremented` outcome leaves the live server
+    /// reachable for the remaining holders; a `Removed` outcome is the one
+    /// that drives the types-emitter `server_unregistered` event.
     ///
     /// A plugin unregistering a name it never registered — or already
     /// unregistered — is not an error, but it is a sign of a buggy plugin, so
@@ -1948,28 +1960,30 @@ impl HostBridge {
     /// registration to dispose.
     fn unregister(&self, payload: &Value) -> std::result::Result<Value, String> {
         let name = envelope_str(payload, "name")?;
-        let removed_is_some;
+        let server_was_removed;
         {
             let mut state = self.host.lock();
-            let removed = state.registry.unregister(&name);
+            let outcome = state.registry.unregister(&name);
             let consumed = state.ledger.consume_server(&self.plugin_id, &name);
-            removed_is_some = removed.is_some();
-            if removed.is_none() || !consumed {
+            server_was_removed = matches!(outcome, UnregisterOutcome::Removed(_));
+            let had_registration = !matches!(outcome, UnregisterOutcome::NotRegistered);
+            if !had_registration || !consumed {
                 tracing::debug!(
                     plugin = %self.plugin_id.as_str(),
                     server = %name,
-                    had_registration = removed_is_some,
+                    had_registration,
                     had_ledger_entry = consumed,
                     "plugin unregistered a server it did not have registered"
                 );
             }
         }
 
-        // The registry dropped a server: keep the generated `.d.ts` in sync.
-        // Driven for an absent name too — a no-op for the emitter, since its
-        // snapshot simply has nothing to remove — done after the host mutex is
-        // released so the emitter's own lock never nests under it.
-        if removed_is_some {
+        // The registry tore a server down: keep the generated `.d.ts` in sync.
+        // A `Decremented` outcome leaves the server live — no event — so the
+        // emitter is only told when the last caller has unregistered. Driven
+        // after the host mutex is released so the emitter's own lock never
+        // nests under it.
+        if server_was_removed {
             self.host.inner.types_emitter.server_unregistered(name);
         }
         Ok(Value::Object(Map::new()))
@@ -2026,18 +2040,78 @@ impl PluginHost {
     /// into the live registry under `name` and a [`RegistrationHandle::Server`]
     /// is appended to the plugin's ledger.
     ///
+    /// # Idempotent share fast-path
+    ///
+    /// Two plugins that both register the same `(name, source)` must NOT
+    /// pay the cost of a second `connect_source` — for a `{ cli }` source
+    /// that would spawn a duplicate subprocess; for a `{ rust }` source the
+    /// already-activated module would be missing from the available-modules
+    /// table and the second activation would fail. So before connecting,
+    /// the host checks the registry: if `name` is already live with a
+    /// structurally-equal source, the call records the ledger entry, bumps
+    /// the registry refcount, and returns — no new connect, no duplicate
+    /// types-emitter event.
+    ///
     /// # Errors
     ///
-    /// Returns [`Error::ServerNameTaken`] when `name` is already registered,
-    /// [`Error::UnknownServer`] when a `rust` id names no exposed module, or
-    /// [`Error::ServerUnavailable`] when a `cli` or `url` source cannot be
-    /// connected or the source shape is not one of the three kinds.
+    /// Returns [`Error::ServerNameTaken`] when `name` is already registered
+    /// against a DIFFERENT source, [`Error::UnknownServer`] when a `rust` id
+    /// names no exposed module, or [`Error::ServerUnavailable`] when a `cli`
+    /// or `url` source cannot be connected or the source shape is not one of
+    /// the three kinds.
     async fn connect_and_register(
         &self,
         plugin_id: &PluginId,
         name: ServerName,
         source: Value,
     ) -> Result<()> {
+        let parsed_source = ServerSource::from_json(&source).ok_or(Error::ServerUnavailable)?;
+
+        // Fast path: the registry already holds a structurally-equal source
+        // under `name`. Skip `connect_source` — its side effects (spawning a
+        // subprocess, consuming the activate-once `{ rust }` module) must not
+        // run twice for one shared registration.
+        {
+            let mut state = self.lock();
+            match state.registry.source_for(&name) {
+                Some(existing) if existing == &parsed_source => {
+                    // Share path: bump the refcount through `register`, which
+                    // also handles a tombstone/reloading marker the same way
+                    // the slow path would. The supplied `server` is irrelevant
+                    // here — the registry keeps the already-live one — so any
+                    // `Arc<dyn McpServer>` clone of the live server is passed
+                    // to satisfy the API, and the outcome is verified to be
+                    // `AlreadyRegistered` rather than panicked-asserted to
+                    // keep this branch a strict no-op on the live server.
+                    let live = state
+                        .registry
+                        .get(&name)
+                        .expect("source_for matched, so a live server is present");
+                    let outcome =
+                        state
+                            .registry
+                            .register(name.clone(), parsed_source.clone(), live)?;
+                    debug_assert!(
+                        matches!(outcome, RegisterOutcome::AlreadyRegistered),
+                        "a matching source must produce AlreadyRegistered"
+                    );
+                    // The plugin is tracked from `load`, so this append cannot orphan.
+                    state
+                        .ledger
+                        .record(plugin_id, RegistrationHandle::Server(name));
+                    return Ok(());
+                }
+                Some(_) => {
+                    // Name is live with a DIFFERENT source — surface the
+                    // collision now without spending the connect budget.
+                    return Err(Error::ServerNameTaken(name));
+                }
+                None => {
+                    // Vacant or tombstoned — drop the lock and connect.
+                }
+            }
+        }
+
         let server = self.connect_source(&source).await?;
 
         // Snapshot the server's tools before it is moved into the registry so
@@ -2045,20 +2119,31 @@ impl PluginHost {
         // outside the host mutex below.
         let tools = server.tools();
 
-        {
+        let registered_fresh = {
             let mut state = self.lock();
-            state.registry.register(name.clone(), server)?;
-            // The plugin is tracked from `load`, so this append cannot be orphaned.
+            // Re-check under the lock: another plugin may have raced this
+            // call. `register` itself handles all three cases (vacant, same
+            // source — refcount bump, different source — error).
+            let outcome = state
+                .registry
+                .register(name.clone(), parsed_source, server)?;
+            // The plugin is tracked from `load`, so this append cannot orphan.
             state
                 .ledger
                 .record(plugin_id, RegistrationHandle::Server(name.clone()));
-        }
+            matches!(outcome, RegisterOutcome::Registered)
+        };
 
         // The registry gained a server: keep the generated `.d.ts` in sync.
+        // Only emit on a FRESH registration; a raced `AlreadyRegistered`
+        // share dropped the server we connected — its tools are already
+        // reflected in the emitter from the original registration.
         // The emitter is internally synchronized, so this is called after the
         // host mutex is dropped — the debounce collapses a `load()` burst of
         // registrations into a single write at the flush boundary.
-        self.inner.types_emitter.server_registered(name, tools);
+        if registered_fresh {
+            self.inner.types_emitter.server_registered(name, tools);
+        }
         Ok(())
     }
 

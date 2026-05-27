@@ -375,7 +375,13 @@ mod tests {
         );
         let mut registry = ServerRegistry::new();
         registry
-            .register("echo-srv".to_string(), server)
+            .register(
+                "echo-srv".to_string(),
+                crate::registry::ServerSource::Rust {
+                    id: "echo-srv-mod".to_string(),
+                },
+                server,
+            )
             .expect("registering a fresh name should succeed");
         let dispatcher = Dispatcher::new(Arc::new(registry));
 

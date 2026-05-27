@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '9480'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffac80
 project: plugin-arch
 title: Make `ServerRegistry::register` idempotent for same-(name, source) registrations
 ---

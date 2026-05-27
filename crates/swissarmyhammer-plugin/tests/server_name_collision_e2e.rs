@@ -71,7 +71,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 use swissarmyhammer_plugin::{CallerId, Error, PluginHost, PLUGINS_SUBDIR};
 
-use support::{COLLIDE_PROBE_B_MODULE_ID, COLLIDE_PROBE_SERVER_NAME};
+use support::COLLIDE_PROBE_SERVER_NAME;
 
 /// The example bundle directory name for the winning side of the collision.
 const COLLIDE_PROBE_A: &str = "collide-probe-a";
@@ -226,17 +226,16 @@ async fn server_name_collision_policy_holds_across_two_committed_bundles() {
 
     // ── Assertion 4 ────────────────────────────────────────────────────────
     // Unloading bundle A frees the shared name (with a tombstone the registry
-    // clears on re-registration). After re-exposing bundle B's `{ rust }`
-    // module — the failed first load above moved it out of the
-    // available-modules table — a fresh load of bundle B succeeds. The
-    // newly-claimed server answers a real `tools/call`, confirming the
+    // clears on re-registration). A fresh load of bundle B then succeeds —
+    // bundle B's `{ rust }` module is still exposed because the failed first
+    // load short-circuited on the registry's `ServerNameTaken` check before
+    // ever calling `activate_rust_module`, so the module was never consumed.
+    // The newly-claimed server answers a real `tools/call`, confirming the
     // registration is genuine and not just a syntactic success.
     tokio::time::timeout(support::TIMEOUT, host.unload(&plugin_a_id))
         .await
         .expect("unloading bundle A should not hang")
         .expect("unloading bundle A should succeed");
-
-    support::expose_collide_probe_module(&host, COLLIDE_PROBE_B_MODULE_ID).await;
 
     let _plugin_b_id = tokio::time::timeout(support::TIMEOUT, host.load(&bundle_b_path))
         .await

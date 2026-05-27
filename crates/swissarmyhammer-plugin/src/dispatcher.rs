@@ -157,7 +157,13 @@ mod tests {
         let server = Arc::new(RecordingServer::new());
         let mut registry = ServerRegistry::new();
         registry
-            .register("srv".to_string(), server.clone())
+            .register(
+                "srv".to_string(),
+                crate::registry::ServerSource::Rust {
+                    id: "srv-mod".to_string(),
+                },
+                server.clone(),
+            )
             .expect("registering a fresh name should succeed");
 
         let dispatcher = Dispatcher::new(Arc::new(registry));
