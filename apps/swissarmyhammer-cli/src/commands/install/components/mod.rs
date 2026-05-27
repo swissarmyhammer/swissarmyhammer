@@ -851,50 +851,28 @@ impl Initializable for ProjectStructure {
     }
 
     /// Create the project directory structure with .prompts, .sah, and workflows.
-    fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        use swissarmyhammer_common::SwissarmyhammerDirectory;
-
-        let sah_dir = match SwissarmyhammerDirectory::from_git_root().or_else(|_| {
-            let cwd = std::env::current_dir()
-                .map_err(|e| format!("Failed to get current directory: {}", e))?;
-            SwissarmyhammerDirectory::from_custom_root(cwd)
-                .map_err(|e| format!("Failed to create .sah directory: {}", e))
-        }) {
-            Ok(d) => d,
-            Err(e) => return vec![InitResult::error(self.name(), e)],
+    ///
+    /// Resolves the project root (git root, else the current directory) and
+    /// delegates the actual `.sah/` + `.prompts/` creation to the root-explicit
+    /// [`swissarmyhammer_workspace_init::ProjectStructure`] component, so the
+    /// workspace-structure logic is shared with the kanban-app rather than
+    /// forked. Root resolution stays here because the CLI is rooted at the
+    /// process working directory by design.
+    fn init(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
+        let root = match swissarmyhammer_common::utils::find_git_repository_root() {
+            Some(root) => root,
+            None => match std::env::current_dir() {
+                Ok(cwd) => cwd,
+                Err(e) => {
+                    return vec![InitResult::error(
+                        self.name(),
+                        format!("Failed to get current directory: {}", e),
+                    )];
+                }
+            },
         };
 
-        // Create .prompts/ as a sibling to .sah/ (dot-directory path for PromptResolver)
-        let project_root = match sah_dir.root().parent() {
-            Some(p) => p,
-            None => {
-                return vec![InitResult::error(
-                    self.name(),
-                    "Failed to determine project root from .sah directory".to_string(),
-                )];
-            }
-        };
-        let prompts_dir = project_root.join(".prompts");
-        if let Err(e) = fs::create_dir_all(&prompts_dir) {
-            return vec![InitResult::error(
-                self.name(),
-                format!("Failed to create .prompts directory: {}", e),
-            )];
-        }
-
-        if let Err(e) = sah_dir.ensure_subdir("workflows") {
-            return vec![InitResult::error(
-                self.name(),
-                format!("Failed to create workflows directory: {}", e),
-            )];
-        }
-
-        reporter.emit(&InitEvent::Action {
-            verb: "Created".to_string(),
-            message: format!("project structure at {}", sah_dir.root().display()),
-        });
-
-        vec![InitResult::ok(self.name(), "Project structure initialized")]
+        swissarmyhammer_workspace_init::ProjectStructure::new(root).init(scope, reporter)
     }
 
     /// Remove `.sah/` and `.prompts/` directories if `remove_directory` is true.

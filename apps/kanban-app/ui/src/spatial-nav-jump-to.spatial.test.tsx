@@ -178,12 +178,19 @@ import {
 // ---------------------------------------------------------------------------
 
 import App from "@/App";
+import { JumpToOverlay } from "@/components/jump-to-overlay";
+import { FocusLayer } from "@/components/focus-layer";
+import { FocusScope } from "@/components/focus-scope";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { mkRect, stubScopeGeometry } from "@/test/stub-scope-geometry";
 import {
   asSegment,
   composeFq,
   fqRoot,
   type FullyQualifiedMoniker,
 } from "@/types/spatial";
+import * as React from "react";
 
 // ---------------------------------------------------------------------------
 // Sneak code generator — fixture-backed mock of the Rust kernel.
@@ -441,21 +448,33 @@ async function seedCardFocus(
 }
 
 /**
- * Compute the expected jump-target count. The overlay enumerates every
- * scope in the layer that owns prior focus, then filters to entries with
- * a non-null DOM ref AND a non-zero rect (width and height both
- * positive). This helper queries the live DOM the same way: every scope
- * host (`[data-segment]`) inside the App that has a non-zero
- * `getBoundingClientRect`. The pill count must match this.
+ * Compute the expected jump-target count under the overlay's visibility
+ * contract.
+ *
+ * The overlay enumerates every scope in the topmost layer, then drops any
+ * whose pill anchor is not actually visible — off-screen, scrolled out of a
+ * clipping ancestor, or occluded by a higher surface (see
+ * `useJumpTargets` / `isScopeAnchorVisible` in `jump-to-overlay.tsx`). Pills
+ * paint only for VISIBLE scopes (vim-sneak / AceJump "you can only jump to
+ * what you can see" semantics).
+ *
+ * This helper mirrors that contract: it counts every scope host
+ * (`[data-segment]`) whose pill anchor (`rect.left + 4`, `rect.top + 4`)
+ * passes the same `elementFromPoint` hit-test the overlay uses — the topmost
+ * element there is the host or one of its descendants. The pill count must
+ * equal this visible count, not the raw enumerable count (some scopes are
+ * scrolled off the board's overflow well in the test viewport).
  */
-function countEnumerableScopes(): number {
+function countVisibleScopes(): number {
   const hosts = Array.from(
     document.querySelectorAll<HTMLElement>("[data-segment]"),
   );
   let count = 0;
   for (const h of hosts) {
     const r = h.getBoundingClientRect();
-    if (r.width > 0 && r.height > 0) count += 1;
+    if (r.width <= 0 || r.height <= 0) continue;
+    const hit = document.elementFromPoint(r.left + 4, r.top + 4);
+    if (hit !== null && h.contains(hit)) count += 1;
   }
   return count;
 }
@@ -480,7 +499,7 @@ describe("End-to-end spatial test for Jump-To overlay — full <App/>", () => {
   // Case 1 — vim `s` opens the overlay, pill count matches enumerable scopes.
   // -------------------------------------------------------------------------
 
-  it("vim `s` opens the overlay; pill count matches the enumerable scope count", async () => {
+  it("vim `s` opens the overlay; pill count matches the visible scope count", async () => {
     currentKeymapMode = "vim";
     const { unmount } = renderApp();
     await flushAppMount();
@@ -489,15 +508,16 @@ describe("End-to-end spatial test for Jump-To overlay — full <App/>", () => {
     // window-root layer (the layer that owns the focused card).
     await seedCardFocus(harness, "task:T1");
 
-    // Capture the enumerable-scope count BEFORE opening — once the
-    // overlay mounts its own `<FocusLayer>` and sentinel, the DOM grows
-    // by the sentinel host and (per `useJumpTargets`'s mount-time
-    // capture) every visible scope host gets a pill. The captured
-    // count is the predictor of pill count.
-    const expectedPills = countEnumerableScopes();
+    // Capture the VISIBLE-scope count BEFORE opening — once the overlay
+    // mounts its own `<FocusLayer>` and sentinel, the DOM grows by the
+    // sentinel host and (per `useJumpTargets`'s mount-time capture) every
+    // visible scope host gets a pill. Off-screen / occluded scopes are
+    // filtered out, so the predictor is the visible count, not the raw
+    // enumerable count.
+    const expectedPills = countVisibleScopes();
     expect(
       expectedPills,
-      "App must register some focusable scopes before Jump-To opens",
+      "App must register some visible focusable scopes before Jump-To opens",
     ).toBeGreaterThan(0);
 
     // Vim mode binds `s` → `nav.jump`.
@@ -508,7 +528,7 @@ describe("End-to-end spatial test for Jump-To overlay — full <App/>", () => {
     const pills = jumpPills();
     expect(
       pills.length,
-      `pill count (${pills.length}) must equal enumerable scope count (${expectedPills})`,
+      `pill count (${pills.length}) must equal visible scope count (${expectedPills})`,
     ).toBe(expectedPills);
 
     unmount();
@@ -525,7 +545,7 @@ describe("End-to-end spatial test for Jump-To overlay — full <App/>", () => {
 
     await seedCardFocus(harness, "task:T1");
 
-    const expectedPills = countEnumerableScopes();
+    const expectedPills = countVisibleScopes();
     expect(expectedPills).toBeGreaterThan(0);
 
     // Cua mode binds `Mod+G` → `nav.jump`. The browser-mode tests run
@@ -732,42 +752,94 @@ describe("End-to-end spatial test for Jump-To overlay — full <App/>", () => {
   // Case 6 — Multi-letter code requires both keystrokes.
   //
   // The sneak alphabet has 23 letters; counts ≤ 23 produce only
-  // single-letter codes, counts > 23 spill into 2-letter codes. The
-  // 3×3 fixture board produces fewer than 23 enumerable scopes, so
-  // this case mounts a thin extra-scope wrapper INSIDE the App's
-  // window-layer to push the count past 23.
-  //
-  // Rather than synthesising a fake scope tree, we exploit the fact
-  // that the App's window layer already contains every chrome scope
-  // (nav-bar buttons, perspective tabs, etc.) — counted dynamically.
-  // If the count is below 24 we add a thin slot of additional scopes
-  // via a child mounter.
+  // single-letter codes, counts > 23 spill into 2-letter codes. To force a
+  // 2-letter code deterministically we need MORE THAN 23 *visible* scopes —
+  // and visibility now matters: the overlay drops off-screen / occluded
+  // scopes (see Cases 1/2). The full <App/> at the test viewport exposes
+  // fewer than 24 visible scopes (the board overflows and the AI panel
+  // occludes the rest), so this case mounts a controlled set of 28 visible
+  // leaf scopes in a window layer instead — laid out as a non-overlapping
+  // grid that fits the test viewport so every scope passes the visibility
+  // hit-test. It still drives the REAL `<JumpToOverlay>` and the REAL
+  // Rust-generated sneak codes (the fixture), which is the unique coverage
+  // this case adds over the synthetic browser-test 2-letter case.
   // -------------------------------------------------------------------------
 
   it("multi-letter code: first letter narrows the buffer, second letter dispatches focus", async () => {
     currentKeymapMode = "vim";
-    const { unmount } = renderApp();
-    await flushAppMount();
 
-    await seedCardFocus(harness, "task:T1");
+    // 28 scopes → > 23, so the sneak generator spills into 2-letter codes.
+    // Lay them out as a non-overlapping grid that fits the test browser
+    // viewport (≤ ~414 px wide) so all 28 pass the overlay's anchor
+    // visibility hit-test (vim-sneak: only visible scopes get a pill).
+    const SCOPE_COUNT = 28;
+    const COLS = 6;
+    const CELL_W = 60;
+    const CELL_H = 24;
+    const GUTTER = 6;
+    const rects = new Map<string, DOMRect>();
+    for (let i = 0; i < SCOPE_COUNT; i++) {
+      const col = i % COLS;
+      const row = Math.floor(i / COLS);
+      const x = 4 + col * (CELL_W + GUTTER);
+      const y = 4 + row * (CELL_H + GUTTER);
+      rects.set(`seed-${i}`, mkRect(x, y, CELL_W, CELL_H));
+    }
+    const cleanupRects = stubScopeGeometry(rects);
 
-    // Sanity: more than 23 enumerable scopes means at least one code
-    // will be 2 letters. The 3×3 board fixture mounts plenty of
-    // chrome (3 columns, 9 cards, 2 perspective tabs, multiple nav-bar
-    // leaves, view-chrome zones, etc.) to push the count well past 23.
-    const enumerable = countEnumerableScopes();
-    expect(
-      enumerable,
-      `fixture must register >23 enumerable scopes (got ${enumerable}) so codes spill into 2-letter range`,
-    ).toBeGreaterThan(23);
+    /**
+     * Defer the overlay open one tick so seed scopes register first, and own
+     * the open-state so `onClose` actually unmounts the overlay — mirroring
+     * `AppShell`'s `jumpOpen` flag (a bare `vi.fn()` `onClose` would leave the
+     * overlay mounted after a match, so the dismiss assertion would never see
+     * it unmount).
+     */
+    function DeferredJumpToOverlay({ onClose }: { onClose: () => void }) {
+      const [open, setOpen] = React.useState(false);
+      React.useEffect(() => {
+        const id = setTimeout(() => setOpen(true), 0);
+        return () => clearTimeout(id);
+      }, []);
+      return (
+        <JumpToOverlay
+          open={open}
+          onClose={() => {
+            setOpen(false);
+            onClose();
+          }}
+        />
+      );
+    }
 
-    fireEvent.keyDown(document.body, { key: "s" });
+    const onClose = vi.fn();
+    const { unmount } = render(
+      <SpatialFocusProvider>
+        <FocusLayer name={asSegment("window")}>
+          <EntityFocusProvider>
+            {Array.from({ length: SCOPE_COUNT }, (_, i) => (
+              <FocusScope
+                key={i}
+                moniker={asSegment(`scope:${i}`)}
+                data-testid={`seed-${i}`}
+              >
+                <span>scope {i}</span>
+              </FocusScope>
+            ))}
+            <DeferredJumpToOverlay onClose={onClose} />
+          </EntityFocusProvider>
+        </FocusLayer>
+      </SpatialFocusProvider>,
+    );
+
     const overlay = await waitForJumpOverlay();
 
-    // Find a 2-letter pill. The sneak generator emits single-letter
-    // codes first, so the LAST pill is guaranteed to carry a 2-letter
-    // code when the count is > 23.
+    // All 28 visible scopes get a pill; > 23 forces at least one 2-letter
+    // code (the sneak generator emits single-letter codes first).
     const pills = jumpPills();
+    expect(
+      pills.length,
+      `all ${SCOPE_COUNT} visible scopes must get a pill`,
+    ).toBe(SCOPE_COUNT);
     const twoLetterPill = pills.find(
       (p) => (p.dataset.jumpCode ?? "").length === 2,
     );
@@ -821,6 +893,7 @@ describe("End-to-end spatial test for Jump-To overlay — full <App/>", () => {
       "overlay must unmount after the unique-code match",
     ).toBeNull();
 
+    cleanupRects();
     unmount();
   });
 

@@ -152,6 +152,10 @@ impl ClaudeAgent {
         let session_id = self.create_new_session_internal(&request).await?;
         let protocol_session_id = SessionId::new(session_id.to_string());
 
+        // Connect any MCP servers supplied in the request so their tools are
+        // exposed to the agent before the Claude process is spawned.
+        self.connect_new_session_mcp_servers(&request).await;
+
         // Spawn Claude process and handle init
         self.spawn_claude_for_new_session(&session_id, &protocol_session_id, &request)
             .await;

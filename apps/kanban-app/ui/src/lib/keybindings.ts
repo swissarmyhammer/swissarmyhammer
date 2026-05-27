@@ -50,6 +50,18 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     // entry will need to move along with the per-Inspectable and
     // root-scope `keys: { vim: "Space" }` bindings.
     Space: "entity.inspect",
+    // AI panel — window-layer commands registered in `app-shell.tsx`'s
+    // global scope. Their `keys` blocks also ride on the `CommandDef`s,
+    // so `extractScopeBindings` resolves them when the global scope is in
+    // the focused chain; these `BINDING_TABLES` entries cover the
+    // no-focus case (body focus) where the scope walk yields nothing.
+    // `ai.cancel` is availability-gated — its `CommandDef.available`
+    // flips to `false` when the conversation is idle, so the dispatch is
+    // a no-op off-stream even though the key is bound.
+    "Mod+j": "ai.toggle",
+    "Mod+i": "ai.focus",
+    "Mod+Shift+J": "ai.newChat",
+    "Mod+.": "ai.cancel",
   },
   cua: {
     "Mod+Shift+P": "app.palette",
@@ -89,6 +101,12 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     // emacs) claim Space the same way — the parity is enforced by
     // `inspectable.space.browser.test.tsx`'s "Vim-mode parity" block.
     Space: "entity.inspect",
+    // AI panel — see the vim block above for the contract. All three
+    // keymaps bind the AI panel commands identically.
+    "Mod+j": "ai.toggle",
+    "Mod+i": "ai.focus",
+    "Mod+Shift+J": "ai.newChat",
+    "Mod+.": "ai.cancel",
   },
   emacs: {
     "Mod+Shift+P": "app.palette",
@@ -112,6 +130,12 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     // shadow / fallback contract — emacs claims Space the same way,
     // and vim does too (no current vim leader-key conflict).
     Space: "entity.inspect",
+    // AI panel — see the vim block above for the contract. All three
+    // keymaps bind the AI panel commands identically.
+    "Mod+j": "ai.toggle",
+    "Mod+i": "ai.focus",
+    "Mod+Shift+J": "ai.newChat",
+    "Mod+.": "ai.cancel",
   },
 };
 

@@ -192,7 +192,29 @@ mod tests {
     use std::env;
     use std::path::PathBuf;
     use swissarmyhammer_common::reporter::NullReporter;
+    use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
     use tempfile::TempDir;
+
+    /// Isolate a test from the real source tree before it runs `init`/`deinit`.
+    ///
+    /// `ShelltoolMcpRegistration::init`/`deinit` resolve each detected agent's
+    /// MCP config from a CWD-relative path (e.g. `.mcp.json`) and the global
+    /// config from a HOME-relative path (e.g. `~/.claude.json`). During
+    /// `cargo test` the CWD is the crate manifest dir, which contains a
+    /// committed `apps/shelltool-cli/.mcp.json` — so an unisolated `deinit`
+    /// would strip the `shelltool` entry straight out of that tracked file.
+    ///
+    /// This helper pins HOME to a fresh isolated env and chdir's into that
+    /// env's temp dir, so both project- and global-scope writes land in a
+    /// throwaway location. The returned tuple keeps the guards alive for the
+    /// duration of the test (CWD is restored, HOME is restored, temp dir is
+    /// removed on drop). Callers must also carry `#[serial(cwd)]` so the CWD
+    /// change is mutually exclusive with every other CWD-touching test.
+    fn isolated_init_env() -> (IsolatedTestEnvironment, CurrentDirGuard) {
+        let env = IsolatedTestEnvironment::new().expect("create isolated test env");
+        let guard = CurrentDirGuard::new(env.temp_dir()).expect("chdir into isolated temp dir");
+        (env, guard)
+    }
 
     /// RAII guard that restores `env::current_dir` on drop.
     struct CwdGuard {
@@ -254,7 +276,12 @@ mod tests {
     }
 
     #[test]
+    #[serial(cwd)]
     fn test_init_returns_ok_result() {
+        // `init` writes each detected agent's project `.mcp.json` relative to
+        // CWD — isolate CWD (and HOME) to a temp dir so it cannot strip or
+        // rewrite the committed `apps/shelltool-cli/.mcp.json`.
+        let (_env, _cwd) = isolated_init_env();
         let component = ShelltoolMcpRegistration;
         let reporter = NullReporter;
         let results = component.init(&InitScope::Project, &reporter);
@@ -263,7 +290,12 @@ mod tests {
     }
 
     #[test]
+    #[serial(cwd)]
     fn test_deinit_returns_ok_result() {
+        // `deinit` removes the `shelltool` entry from each detected agent's
+        // CWD-relative `.mcp.json`. Without isolation this strips the entry
+        // from the tracked `apps/shelltool-cli/.mcp.json` — isolate CWD here.
+        let (_env, _cwd) = isolated_init_env();
         let component = ShelltoolMcpRegistration;
         let reporter = NullReporter;
         let results = component.deinit(&InitScope::Project, &reporter);
@@ -274,7 +306,11 @@ mod tests {
     /// by invoking it with `InitScope::User`. Regardless of which agents
     /// mirdan detects, the global branch is always traversed.
     #[test]
+    #[serial(cwd)]
     fn test_init_global_scope() {
+        // Global scope writes HOME-relative agent configs; project-scope
+        // detection still touches CWD. Isolate both via `isolated_init_env`.
+        let (_env, _cwd) = isolated_init_env();
         let component = ShelltoolMcpRegistration;
         let reporter = NullReporter;
         let results = component.init(&InitScope::User, &reporter);
@@ -284,7 +320,9 @@ mod tests {
     /// Exercises the `global { agent_global_mcp_config(..) }` arm of `deinit`
     /// by invoking it with `InitScope::User`.
     #[test]
+    #[serial(cwd)]
     fn test_deinit_global_scope() {
+        let (_env, _cwd) = isolated_init_env();
         let component = ShelltoolMcpRegistration;
         let reporter = NullReporter;
         let results = component.deinit(&InitScope::User, &reporter);
@@ -299,8 +337,16 @@ mod tests {
     /// at a relative `.mcp.json` path. With the cwd chdired into the tempdir,
     /// the register call creates `.mcp.json`, and the subsequent deinit call
     /// removes the `shelltool` entry from it.
+    ///
+    /// This test mutates BOTH process-global CWD (`env::set_current_dir`) and
+    /// the `MIRDAN_AGENTS_CONFIG` env var, so it joins BOTH the crate-wide
+    /// `cwd` group (shared by every CWD-touching test in `skill.rs`,
+    /// `logging.rs`, `main.rs`, `doctor.rs`) and the `env` group. Without the
+    /// `cwd` group, a skill-deployment test's `CurrentDirGuard` could restore
+    /// CWD to the crate dir mid-test and the `deinit` call would write
+    /// `.mcp.json` straight into `apps/shelltool-cli/`.
     #[test]
-    #[serial(env)]
+    #[serial(cwd, env)]
     fn test_init_and_deinit_register_success_path() {
         let _cwd = CwdGuard::capture();
         let _mirdan_env = MirdanConfigGuard::capture();

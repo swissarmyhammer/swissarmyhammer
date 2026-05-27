@@ -21,7 +21,7 @@ import { join, resolve } from "path";
 import yaml from "js-yaml";
 import type { BrowserCommand } from "vitest/node";
 
-// Resolve the kanban CLI binary from the project's debug build
+// Resolve the kanban CLI binary from the workspace's repo-root debug build
 const KANBAN_BIN = resolve(__dirname, "../../../../../target/debug/kanban");
 
 // Resolve builtin YAML directories relative to this file

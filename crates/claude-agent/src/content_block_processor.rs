@@ -1360,7 +1360,7 @@ mod tests {
         let processor = create_test_processor();
 
         // Create a proper ResourceLink with the builder pattern.
-        // ResourceLink::new takes (name, uri) in that order.
+        // ResourceLink::new takes (name, uri), so the URI goes in the second argument.
         let resource_link = ResourceLink::new("document.pdf", "https://example.com/document.pdf");
 
         let content_block = ContentBlock::ResourceLink(resource_link);

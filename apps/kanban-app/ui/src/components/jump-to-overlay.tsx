@@ -72,6 +72,18 @@ const JUMP_TO_SENTINEL_SEGMENT = asSegment("jump-to-sentinel");
  */
 const FLASH_MS = 150;
 
+/**
+ * Pixel offset, from a scope's rect top-left, at which its code pill is
+ * anchored. {@link JumpPill} positions each pill at
+ * (`rect.left + PILL_ANCHOR_OFFSET`, `rect.top + PILL_ANCHOR_OFFSET`), and
+ * {@link isScopeAnchorVisible} hit-tests the SAME point — keeping the two in
+ * lockstep is load-bearing: the visibility check must probe exactly where the
+ * pill will paint, or it could keep a scope whose pill lands somewhere
+ * occluded (or vice versa). Sharing one constant makes that invariant
+ * structural rather than a pair of magic `4`s that can drift apart.
+ */
+const PILL_ANCHOR_OFFSET = 4;
+
 /** Public props for the `<JumpToOverlay>` component. */
 export interface JumpToOverlayProps {
   /** Whether the overlay is currently visible. Owned by `app-shell.tsx`. */
@@ -526,8 +538,8 @@ function JumpPill({ target }: JumpPillProps) {
       // deterministic.
       className="fixed z-[80] bg-primary text-primary-foreground font-mono px-1 rounded shadow text-xs leading-tight"
       style={{
-        left: rect.left + 4,
-        top: rect.top + 4,
+        left: rect.left + PILL_ANCHOR_OFFSET,
+        top: rect.top + PILL_ANCHOR_OFFSET,
       }}
     >
       {code}
@@ -540,12 +552,70 @@ function JumpPill({ target }: JumpPillProps) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Decide whether a scope's pill-anchor point is actually visible on screen
+ * — the visibility contract that makes Jump-To honour vim-sneak / AceJump
+ * semantics: **you can only jump to what you can see.**
+ *
+ * The anchor point is the exact point {@link JumpPill} paints at
+ * (`rect.left + PILL_ANCHOR_OFFSET`, `rect.top + PILL_ANCHOR_OFFSET`). A
+ * scope is visible iff a hit-test at that point lands on the scope's own
+ * host element (the `data-moniker={fq}` `<div>` `<FocusScope>` renders) or
+ * a descendant of it. That single `elementFromPoint` check captures every
+ * way a scope can be invisible without hard-coding any specific occluder:
+ *
+ *   - **Off the viewport** — the anchor is scrolled past a window edge:
+ *     `elementFromPoint` returns `null`, so the scope is dropped.
+ *   - **Scrolled out of a clipping ancestor** — e.g. a kanban column
+ *     scrolled into the board well's right-side `overflow-x-auto` overflow
+ *     region: the hit-test at the geometric anchor lands on whatever paints
+ *     there (the clip container, an adjacent surface), not on the scope's
+ *     subtree, so the scope is dropped.
+ *   - **Occluded by a higher surface** — e.g. the docked AI panel painted
+ *     over the anchor: the hit-test returns the panel's DOM, which is not
+ *     in the scope's subtree, so the scope is dropped. This stays
+ *     panel-agnostic: the check never names the panel; it only asks "is my
+ *     own element the thing painted at my pill anchor?"
+ *
+ * Returns `false` (drop) when the host element can't be located, when the
+ * hit-test returns `null`, or when the hit element is outside the host's
+ * subtree. Returns `true` (keep) only when the host is the topmost surface
+ * at its own anchor.
+ *
+ * IMPORTANT — hit-test timing: this runs inside {@link useJumpTargets}'
+ * mount effect, while {@link JumpToOverlayBody} still renders `null`
+ * (targets are unresolved). The overlay's `z-[80]` backdrop / pills are NOT
+ * yet in the DOM, so `elementFromPoint` sees the real application DOM, not
+ * the overlay's own backdrop. (The backdrop only mounts after `setTargets`
+ * commits a populated array.)
+ */
+function isScopeAnchorVisible(
+  fq: FullyQualifiedMoniker,
+  rect: DOMRect,
+): boolean {
+  // Locate the scope's host element by the `data-moniker` attribute every
+  // `<FocusScope>` host carries (see `focus-scope.tsx`). FQM segments embed
+  // entity ids (`task:T1`, `field:task:T1.title`, …); `CSS.escape` makes the
+  // attribute selector safe regardless of the id's characters, so an unusual
+  // id can never throw a selector `SyntaxError` and abort the whole filter.
+  const host = document.querySelector(`[data-moniker="${CSS.escape(fq)}"]`);
+  if (host === null) return false;
+  const x = rect.left + PILL_ANCHOR_OFFSET;
+  const y = rect.top + PILL_ANCHOR_OFFSET;
+  const hit = document.elementFromPoint(x, y);
+  if (hit === null) return false;
+  // Keep only when the topmost painted element at the anchor is the host
+  // itself or a node inside its subtree. `Node.contains` is reflexive
+  // (`host.contains(host) === true`), so this covers the host-is-topmost
+  // case too.
+  return host.contains(hit);
+}
+
+/**
  * Enumerate scopes in the **topmost** layer (the active modal layer),
  * generate one code per scope, and pair them up. Returns `null` while
  * async code generation is in flight, an empty array when the layer
- * has no non-zero-area scopes (the empty-enumeration case the body
- * handles by closing immediately), or a populated `JumpTarget[]`
- * otherwise.
+ * has no visible scopes (the empty-enumeration case the body handles by
+ * closing immediately), or a populated `JumpTarget[]` otherwise.
  *
  * Per the modal-layer model (card `01KR7CDEFWWVF4WH0BCHE8Y21J`),
  * jump-to enumerates against the **active layer** — the topmost
@@ -554,6 +624,15 @@ function JumpPill({ target }: JumpPillProps) {
  * pills paint on cards / columns / navbar. With the inspector on top,
  * pills paint on inspector field scopes. The `priorFocusedFq` plumbing
  * remains for the dismiss-on-no-match restore-prior-focus path.
+ *
+ * # Visibility filter
+ *
+ * Enumerated scopes are filtered down to those whose pill anchor is
+ * actually visible (see {@link isScopeAnchorVisible}). Off-screen,
+ * scrolled-out, and panel-occluded scopes are dropped so no pill ever
+ * paints under a higher surface or off the visible scroll viewport —
+ * standard vim-sneak / AceJump semantics. The zero-area pre-filter stays
+ * as a cheap first pass (a collapsed scope has no anchor worth hit-testing).
  *
  * The enumeration runs once on mount (the body remounts on each open),
  * so mid-overlay layout changes don't reshuffle pills — that's a
@@ -576,7 +655,14 @@ function useJumpTargets(
     const topLayerFq = spatial.topLayerFq() ?? fqRoot(asSegment("window"));
     const enumerated = spatial
       .enumerateScopesInLayer(topLayerFq)
-      .filter((s) => s.rect.width > 0 && s.rect.height > 0);
+      // First pass: drop collapsed (zero-area) scopes — they have no
+      // meaningful anchor to hit-test.
+      .filter((s) => s.rect.width > 0 && s.rect.height > 0)
+      // Second pass: drop scopes whose pill anchor is not visible
+      // (off-screen, scrolled out of a clipping ancestor, or occluded by a
+      // higher surface such as the docked AI panel). Runs while the overlay
+      // backdrop is not yet mounted, so the hit-test sees the real app DOM.
+      .filter((s) => isScopeAnchorVisible(s.fq, s.rect));
     if (enumerated.length === 0) {
       setTargets([]);
       return;

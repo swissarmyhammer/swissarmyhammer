@@ -57,6 +57,14 @@ use swissarmyhammer_common::lifecycle::InitRegistry;
 /// to pre-create in User scope. See [`super::install::components::ProjectStructure`]
 /// for the full rationale.
 ///
+/// The `.sah/` + `.prompts/` workspace-structure logic is **not** forked: the
+/// `ProjectStructure` component's `init` delegates to the root-explicit
+/// [`swissarmyhammer_workspace_init`] crate — the same crate the kanban-app
+/// runs in-process on board open — so `sah init` and the in-process agent
+/// produce an identical workspace layout. The CLI's `SkillDeployment` deploys
+/// builtin skills to detected coding-agent directories (a distinct target from
+/// the workspace-local `.sah/skills/` the workspace-init crate produces).
+///
 /// The `remove_directory` parameter controls whether `ProjectStructure::deinit`
 /// deletes `.sah/` and `.prompts/` directories. Pass `false` for `init`.
 pub fn register_all(registry: &mut InitRegistry, remove_directory: bool) {

@@ -13,7 +13,12 @@
  * { ... })` keeps the work inside the boundary.
  */
 
-import { act, render, type RenderOptions } from "@testing-library/react";
+import {
+  act,
+  render,
+  waitFor,
+  type RenderOptions,
+} from "@testing-library/react";
 import { userEvent } from "vitest/browser";
 import type { ReactElement } from "react";
 
@@ -128,4 +133,25 @@ export async function flushActSettle(settleMs = 0): Promise<void> {
       await Promise.resolve();
     }
   });
+}
+
+/**
+ * Poll `predicate` until it stops throwing, with each poll iteration
+ * wrapped in an `act()` boundary.
+ *
+ * Use this instead of a fixed `flushActSettle(ms)` when a component
+ * settles via an async effect with no fixed completion time (e.g. a
+ * Shiki `codeToHtml` highlight that resolves on its own schedule). A
+ * fixed wait races such effects under parallel-suite load; polling is
+ * deterministic — it returns as soon as the DOM reflects the update.
+ *
+ * Unlike `vi.waitFor`, `@testing-library/react`'s `waitFor` is
+ * act-aware: the library installs an `act()` async wrapper around each
+ * poll, so the late setState the predicate is waiting on settles
+ * inside an act scope. That suppresses the "update to X was not
+ * wrapped in act(...)" warning a bare `vi.waitFor` would leave behind,
+ * without freezing the effect queue.
+ */
+export async function waitForInAct(predicate: () => void): Promise<void> {
+  await waitFor(predicate);
 }

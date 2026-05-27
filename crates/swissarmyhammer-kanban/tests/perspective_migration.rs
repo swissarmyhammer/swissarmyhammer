@@ -256,6 +256,7 @@ async fn legacy_perspective_ambiguous_emits_one_time_log() {
             open_board_ctxs: &open_boards,
             active_window_label: Some("main"),
             windows: vec![],
+            ai_models: vec![],
         })
         .await;
     }

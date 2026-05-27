@@ -86,6 +86,7 @@ name = "agent-client-protocol-extras"
 version = "0.13.5"
 dependencies = [
  "agent-client-protocol",
+ "agent-client-protocol-schema",
  "async-trait",
  "avp-common",
  "axum",
@@ -1264,6 +1265,7 @@ version = "0.13.5"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-extras",
+ "agent-client-protocol-schema",
  "anyhow",
  "async-trait",
  "base64 0.22.1",
@@ -4170,14 +4172,21 @@ dependencies = [
 name = "kanban-app"
 version = "0.13.5"
 dependencies = [
+ "agent-client-protocol",
  "base64 0.22.1",
  "clap",
  "dirs",
+ "futures-util",
  "objc2",
+ "objc2-foundation",
+ "reqwest 0.13.3",
+ "rmcp",
  "serde",
  "serde_json",
+ "swissarmyhammer-agent",
  "swissarmyhammer-commands",
  "swissarmyhammer-common",
+ "swissarmyhammer-config",
  "swissarmyhammer-entity",
  "swissarmyhammer-entity-search",
  "swissarmyhammer-fields",
@@ -4186,7 +4195,9 @@ dependencies = [
  "swissarmyhammer-kanban",
  "swissarmyhammer-perspectives",
  "swissarmyhammer-store",
+ "swissarmyhammer-tools",
  "swissarmyhammer-views",
+ "swissarmyhammer-workspace-init",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",
@@ -4196,11 +4207,13 @@ dependencies = [
  "tauri-plugin-log",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
  "tracing",
  "tracing-oslog",
  "tracing-subscriber",
  "ulid",
  "urlencoding",
+ "which",
  "whoami",
 ]
 
@@ -4492,6 +4505,7 @@ version = "0.13.5"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-extras",
+ "agent-client-protocol-schema",
  "anyhow",
  "async-trait",
  "axum",
@@ -8316,6 +8330,7 @@ dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-extras",
  "claude-agent",
+ "futures-util",
  "llama-agent",
  "serde",
  "serde_json",
@@ -8323,6 +8338,7 @@ dependencies = [
  "swissarmyhammer-config",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-tungstenite",
  "tokio-util",
  "tracing",
  "which",
@@ -8408,6 +8424,7 @@ dependencies = [
  "swissarmyhammer-statusline",
  "swissarmyhammer-templating",
  "swissarmyhammer-tools",
+ "swissarmyhammer-workspace-init",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -9189,6 +9206,21 @@ dependencies = [
  "url",
  "urlencoding",
  "wiremock",
+]
+
+[[package]]
+name = "swissarmyhammer-workspace-init"
+version = "0.13.5"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "swissarmyhammer-common",
+ "swissarmyhammer-config",
+ "swissarmyhammer-prompts",
+ "swissarmyhammer-skills",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]

@@ -1311,14 +1311,7 @@ mod tests {
         crate::session::SessionManager::new()
     }
 
-    /// Build client capabilities with the terminal capability enabled, for
-    /// tests that exercise handlers gated behind `validate_terminal_capability`.
-    fn terminal_enabled_capabilities() -> agent_client_protocol::schema::ClientCapabilities {
-        agent_client_protocol::schema::ClientCapabilities::new().terminal(true)
-    }
-
-    /// Build a `TerminalManager` with the client terminal capability already
-    /// granted.
+    /// Build a `TerminalManager` initialized with terminal client capabilities.
     ///
     /// Every terminal operation (`create`, `get`, `release`, `wait_for_exit`,
     /// `kill`, cleanup) is gated behind `validate_terminal_capability`, which a
@@ -1326,10 +1319,12 @@ mod tests {
     /// `terminal: true`. Tests use this helper instead of `TerminalManager::new()`
     /// so they reach the behavior under test rather than the capability gate.
     async fn create_test_terminal_manager() -> TerminalManager {
-        let mgr = TerminalManager::new();
-        mgr.set_client_capabilities(terminal_enabled_capabilities())
-            .await;
-        mgr
+        let manager = TerminalManager::new();
+        let caps = agent_client_protocol::schema::ClientCapabilities::new()
+            .terminal(true)
+            .fs(agent_client_protocol::schema::FileSystemCapabilities::new());
+        manager.set_client_capabilities(caps).await;
+        manager
     }
 
     async fn create_terminal_for_testing(
@@ -1375,13 +1370,14 @@ mod tests {
             .unwrap();
 
         let session = terminals.get(&terminal_id).unwrap();
-        // `create_terminal_with_command` spawns the process eagerly, so the
-        // terminal is already `Running`; a fast command like `echo` may also
-        // have already transitioned to `Finished` by the time we observe it.
+        // A terminal created via create_terminal_with_command spawns its process
+        // immediately, so it starts Running and may already have transitioned to
+        // Finished by the time we observe it (echo exits near-instantly). The point
+        // of this test is that get_terminal returns a live, non-released terminal.
         let state = session.get_state().await;
         assert!(
             matches!(state, TerminalState::Running | TerminalState::Finished),
-            "expected Running or Finished, got {state:?}"
+            "expected a running or finished terminal, got {state:?}"
         );
 
         // Clean up
@@ -1400,8 +1396,11 @@ mod tests {
         let manager = create_test_terminal_manager().await;
         let session_manager = create_test_session_manager().await;
 
+        // A well-formed ULID (26 Crockford base32 chars) that was never created,
+        // so the session lookup must report "Session not found" rather than a
+        // malformed-ID error.
         let result = manager
-            .get_terminal(&session_manager, "01K6DB0000000000000000000", "term_test")
+            .get_terminal(&session_manager, "01K6DB000000000000000000AA", "term_test")
             .await;
 
         assert!(result.is_err());
@@ -1463,9 +1462,8 @@ mod tests {
             .unwrap();
 
         // Try to get the released terminal for operations (should fail).
-        // Per the ACP spec, releasing a terminal makes its ID invalid:
-        // `release_terminal` removes it from storage entirely, so a subsequent
-        // lookup reports "Terminal not found".
+        // Per the ACP spec, releasing invalidates the terminal ID and removes it
+        // from storage, so a subsequent lookup reports "Terminal not found".
         let result = manager
             .get_terminal(&session_manager, &session_id, &terminal_id)
             .await;
@@ -1491,12 +1489,11 @@ mod tests {
             let session = terminals.get(&terminal_id).unwrap();
             let state = session.get_state().await;
 
-            // `create_terminal_with_command` spawns the process eagerly, so the
-            // terminal starts `Running`; a fast command like `echo` may already
-            // have transitioned to `Finished` by the time we observe it.
+            // The process spawns immediately on create, so the live terminal is
+            // Running or already Finished — never released while still registered.
             assert!(
                 matches!(state, TerminalState::Running | TerminalState::Finished),
-                "expected Running or Finished, got {state:?}"
+                "expected a running or finished terminal, got {state:?}"
             );
             assert!(!session.is_released().await);
         }
@@ -2783,7 +2780,6 @@ mod tests {
         // the terminal, which would otherwise race the get on the same id).
         let mut add_handles = Vec::new();
         let mut get_handles = Vec::new();
-        let mut release_handles = Vec::new();
 
         for (i, terminal_id) in terminal_ids.iter().enumerate() {
             let terminals = manager.terminals.clone();
@@ -2822,13 +2818,17 @@ mod tests {
             handle.await.unwrap();
         }
 
-        // All get operations should succeed
+        // All get operations should succeed. Per the ACP spec, releasing a
+        // terminal removes it from storage and invalidates its ID, so reads must
+        // complete before releases — otherwise a get would race a remove. We
+        // therefore drain the get handles before spawning the releases.
         for handle in get_handles {
             let result = handle.await.unwrap();
             assert!(result.is_ok());
         }
 
         // Release each terminal concurrently, once the reads above are done.
+        let mut release_handles = Vec::new();
         for terminal_id in terminal_ids.iter() {
             let manager_clone = manager.clone();
             let session_manager_clone = session_manager.clone();
@@ -2852,9 +2852,9 @@ mod tests {
             assert!(result.is_ok());
         }
 
-        // Verify all terminals were released. Per the ACP spec, releasing a
-        // terminal makes its ID invalid: `release_terminal` removes it from
-        // storage, so none of the released terminals should remain.
+        // Verify all terminals were released. Per the ACP spec, releasing
+        // invalidates the terminal ID and removes it from storage, so none of
+        // the released terminals remain registered.
         let terminals = manager.terminals.read().await;
         for terminal_id in terminal_ids.iter() {
             assert!(

@@ -37,6 +37,7 @@ swissarmyhammer-common = { workspace = true }
 swissarmyhammer-git = { workspace = true }
 swissarmyhammer-operations = { workspace = true }
 swissarmyhammer-skills = { workspace = true }
+swissarmyhammer-workspace-init = { workspace = true }
 swissarmyhammer-agent = { workspace = true }
 swissarmyhammer-agents = { workspace = true }
 swissarmyhammer-statusline = { workspace = true }

@@ -656,8 +656,12 @@ async fn test_invalid_yaml_recovery() -> Result<()> {
     verify_valid_agents_loaded(&agents_array, &valid_agents)?;
     verify_invalid_agents_excluded(&agents_array, &invalid_files)?;
 
+    // `sah model use` writes `.sah/sah.yaml` into its working directory.
+    // Pass the isolated temp dir explicitly so it does not pollute the crate
+    // source tree — a `None` working directory would inherit the test
+    // process's cwd (the crate manifest dir).
     let use_output =
-        run_sah_command_with_timeout(&["model", "use", "claude-code"], None, 10).await?;
+        run_sah_command_with_timeout(&["model", "use", "claude-code"], Some(&temp_dir), 10).await?;
 
     if !use_output.status.success() {
         let stderr = String::from_utf8_lossy(&use_output.stderr);

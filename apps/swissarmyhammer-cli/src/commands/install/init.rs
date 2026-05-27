@@ -1,7 +1,11 @@
 //! Set up sah for all detected AI coding agents (skills + MCP).
 //!
 //! Delegates to composable `Initializable` components registered via the
-//! top-level `commands::registry`.
+//! top-level `commands::registry`. The `.sah/` + `.prompts/` workspace
+//! structure is created by the root-explicit
+//! [`swissarmyhammer_workspace_init`] crate (consumed via the
+//! `ProjectStructure` component), so the workspace-setup logic is shared with
+//! the kanban-app's in-process board init rather than forked.
 
 use std::time::Instant;
 

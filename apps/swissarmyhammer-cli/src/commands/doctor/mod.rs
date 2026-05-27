@@ -281,6 +281,11 @@ mod tests {
         assert_eq!(doctor.checks.len(), 0);
     }
 
+    /// `run_diagnostics_without_output` reads process-global CWD — via
+    /// `find_git_repository_root()` and the CWD-relative checks in `checks.rs`
+    /// (`check_lsp_servers`, `check_file_permissions`). `#[serial_test::serial(cwd)]`
+    /// joins the crate-wide `cwd` group so it cannot run concurrently with any
+    /// CWD-mutating test.
     #[tokio::test]
     #[serial_test::serial(cwd)]
     async fn test_run_diagnostics() {

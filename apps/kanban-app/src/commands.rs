@@ -1917,8 +1917,40 @@ async fn build_dynamic_sources(
         open_board_ctxs: &open_board_ctxs,
         active_window_label: Some("main"),
         windows,
+        ai_models: gather_ai_models(),
     })
     .await
+}
+
+/// Enumerate the selectable AI models and project them onto the
+/// kanban-side [`AiModelInfo`] shape the `ai.models` options resolver
+/// consumes.
+///
+/// The model set is discovered by `swissarmyhammer-config`'s
+/// `ModelManager` — a GUI-runtime concern the pure-domain kanban crate
+/// does not depend on, so the enumeration happens here and the
+/// projected list is threaded into `DynamicSources`. The full
+/// [`crate::ai::models::Model`] carries richer metadata (`kind`,
+/// `available`, `hint`); the picker only needs `id` + `label`.
+///
+/// On enumeration failure the model picker degrades to an empty list
+/// (the same graceful-degradation the resolver already tolerates) — a
+/// transient agent-discovery error must not break `list_commands_for_scope`.
+fn gather_ai_models() -> Vec<swissarmyhammer_kanban::commands::options_resolvers::AiModelInfo> {
+    use swissarmyhammer_kanban::commands::options_resolvers::AiModelInfo;
+    match crate::ai::models::ai_list_models() {
+        Ok(models) => models
+            .into_iter()
+            .map(|m| AiModelInfo {
+                id: m.id,
+                label: m.label,
+            })
+            .collect(),
+        Err(e) => {
+            tracing::warn!(error = %e, "ai model enumeration failed; ai.model picker will be empty");
+            Vec::new()
+        }
+    }
 }
 
 /// Emit `info`-level telemetry about the resolved-command list so a

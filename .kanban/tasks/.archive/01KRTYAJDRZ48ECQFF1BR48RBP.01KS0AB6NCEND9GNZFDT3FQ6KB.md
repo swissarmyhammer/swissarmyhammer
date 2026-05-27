@@ -1,0 +1,18 @@
+---
+assignees:
+- claude-code
+position_column: todo
+position_ordinal: '9280'
+title: 'Flaky model_commands integration tests: unsynchronized HOME env mutation races under parallel execution'
+---
+## What
+The integration tests in `apps/swissarmyhammer-cli/tests/integration/model_commands.rs` and `model_performance_edge_casess.rs` mutate the `HOME` environment variable with raw `std::env::set_var("HOME", ...)` + `scopeguard`, but only some are annotated `#[serial_test::serial]`. Under parallel `cargo test`, these tests race on the global `HOME` env var (and against `IsolatedTestEnvironment`, which serializes HOME under its own `HOME_ENV_LOCK`). One of `test_model_precedence_user_over_builtin` / `test_model_list_with_invalid_model_files` / `test_model_hierarchy_*` fails intermittently.
+
+This is a PRE-EXISTING flake, confirmed reproducible on the unmodified baseline (3/3 parallel runs of the `model_commands` module fail exactly 1 test). It is NOT a source-tree pollution bug and is unrelated to task 01KRTXA710XCYM6TMSYTW3NX9D (which fixed the skill/agent/workspace deployment pollution).
+
+## Acceptance Criteria
+- [ ] All `HOME`-mutating model integration tests are serialized consistently (shared `#[serial_test::serial(home_env)]` group) or refactored to use `IsolatedTestEnvironment` / a HOME guard with a lock.
+- [ ] Running the full `model_commands` and `model_performance_edge_casess` modules in parallel (`cargo test -p swissarmyhammer-cli --test cli_tests integration::model_commands::`) passes reliably across repeated runs.
+
+## Tests
+- [ ] `cargo test -p swissarmyhammer-cli --test cli_tests integration::model_commands::` is green 5 runs in a row. #bug

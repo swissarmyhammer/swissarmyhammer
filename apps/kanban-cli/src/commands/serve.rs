@@ -535,12 +535,18 @@ mod tests {
     }
 
     /// `KanbanMcpServer::kanban_dir` must resolve `.kanban` against the
-    /// process CWD. Use `CurrentDirGuard` to serialize the CWD change
-    /// and confirm dispatch round-trips a success response in that
-    /// directory. Paths are compared after `canonicalize` because macOS
-    /// tempdirs live under `/var/folders/...` which is a symlink to
-    /// `/private/var/folders/...`.
+    /// process CWD. Use `CurrentDirGuard` to pin the CWD change and confirm
+    /// dispatch round-trips a success response in that directory. Paths are
+    /// compared after `canonicalize` because macOS tempdirs live under
+    /// `/var/folders/...` which is a symlink to `/private/var/folders/...`.
+    ///
+    /// `#[serial_test::serial(cwd)]` joins the crate-wide `cwd` serialization
+    /// group — the single mutex shared by EVERY CWD-touching test in this
+    /// crate (`skill.rs`, `doctor.rs`, `logging.rs`). The `CurrentDirGuard`
+    /// internal lock alone does NOT serialize against the `cwd`-grouped tests,
+    /// so the attribute is required to keep this test from racing them.
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn kanban_server_call_tool_resolves_cwd_for_init_board() {
         let temp = TempDir::new().expect("create tempdir");
         let _guard = CurrentDirGuard::new(temp.path()).expect("enter tempdir");
