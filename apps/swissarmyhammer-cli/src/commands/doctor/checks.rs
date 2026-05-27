@@ -536,26 +536,23 @@ pub fn check_install_stack(checks: &mut Vec<Check>) -> Result<()> {
 ///
 /// This is the config-injectable core of [`check_install_stack`]: it runs
 /// [`mirdan::status::check_all_doctored`] across [`InitScope::Project`] and
-/// [`InitScope::User`], skips [`ComponentState::NotApplicable`] statuses, and
-/// converts the rest into doctor [`Check`]s via [`mirdan::status::to_check`].
-/// Only agents whose `AgentDef.doctor` is `true` participate — the YAML
-/// allowlist is the sole source of truth.
+/// [`InitScope::User`] and converts the resulting statuses into doctor
+/// [`Check`]s via [`mirdan::status::statuses_to_checks`]. Only agents whose
+/// `AgentDef.doctor` is `true` participate — the YAML allowlist is the sole
+/// source of truth. `statuses_to_checks` filters `NotApplicable` rows and
+/// applies the scope-pair policy (project-missing demotes to Ok when the user
+/// scope is installed, and vice versa), so this caller only forwards them.
 ///
-/// Splitting this out gives tests a seam to drive the real skip-and-convert loop
+/// Splitting this out gives tests a seam to drive the real conversion loop
 /// with a synthetic config (e.g. a bare agent that yields NotApplicable rows),
 /// without depending on what happens to be installed on the host. The public
 /// [`check_install_stack`] is the thin wrapper that loads the host's real config.
 fn check_install_stack_with(config: &mirdan::agents::AgentsConfig, checks: &mut Vec<Check>) {
-    use mirdan::status::{check_all_doctored, to_check, ComponentState};
+    use mirdan::status::{check_all_doctored, statuses_to_checks};
     use swissarmyhammer_common::lifecycle::InitScope;
 
     let statuses = check_all_doctored(config, &[InitScope::Project, InitScope::User]);
-    for status in &statuses {
-        if status.state == ComponentState::NotApplicable {
-            continue;
-        }
-        checks.push(to_check(status));
-    }
+    checks.extend(statuses_to_checks(&statuses));
 }
 
 #[cfg(test)]
@@ -829,17 +826,35 @@ mod tests {
             .contains("sah init user"));
 
         // Both project and user rows are present for the agent.
-        assert!(
-            checks
-                .iter()
-                .any(|c| c.name == "Claude Code · project · Preamble"),
-            "expected a project-scope Preamble row"
-        );
+        let project_preamble = checks
+            .iter()
+            .find(|c| c.name == "Claude Code · project · Preamble")
+            .expect("expected a project-scope Preamble row");
         assert!(
             checks
                 .iter()
                 .any(|c| c.name == "Claude Code · user · Preamble"),
             "expected a user-scope Preamble row"
+        );
+
+        // Scope-pair policy: project-scope preamble is missing on disk, but the
+        // user-scope preamble is installed — the project row demotes to Ok
+        // with no fix, and the message names the user scope.
+        assert_eq!(
+            project_preamble.status,
+            CheckStatus::Ok,
+            "project-missing preamble should demote to Ok when user scope is installed; got: {}",
+            project_preamble.message
+        );
+        assert!(
+            project_preamble.fix.is_none(),
+            "demoted project row should have no fix hint; got: {:?}",
+            project_preamble.fix
+        );
+        assert!(
+            project_preamble.message.contains("user"),
+            "demoted project row should reference the user scope; got: {}",
+            project_preamble.message
         );
     }
 

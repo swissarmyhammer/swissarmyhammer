@@ -306,6 +306,85 @@ pub fn to_check(status: &ComponentStatus) -> Check {
     }
 }
 
+/// Convert a slice of [`ComponentStatus`] into [`Check`]s, applying the
+/// scope-pair policy.
+///
+/// Statuses are grouped by `(agent_id, component)` so the per-scope rows for
+/// the same component can see each other. For each group:
+///
+/// - Both scopes `Installed` → both rows `Ok` (same as [`to_check`]).
+/// - Both scopes `Missing` → both rows `Warning` with `sah init` / `sah init
+///   user` fix hints (same as [`to_check`]).
+/// - One scope `Installed`, the other `Missing` → the installed-scope row is
+///   `Ok` as today; the missing-scope row is demoted to `Ok` with `fix: None`
+///   and a message that names where the component was found.
+///
+/// [`ComponentState::NotApplicable`] statuses are filtered at this layer and
+/// produce no [`Check`] — callers receive only actionable rows.
+pub fn statuses_to_checks(statuses: &[ComponentStatus]) -> Vec<Check> {
+    let mut out = Vec::with_capacity(statuses.len());
+    for status in statuses {
+        if status.state == ComponentState::NotApplicable {
+            continue;
+        }
+        if status.state == ComponentState::Missing {
+            if let Some(peer) = find_installed_peer(statuses, status) {
+                out.push(demoted_missing_check(status, peer));
+                continue;
+            }
+        }
+        out.push(to_check(status));
+    }
+    out
+}
+
+/// Find an `Installed` peer for `status`: same `agent_id` and `component`,
+/// different `scope`.
+///
+/// Returns `None` when no peer scope has the component installed.
+fn find_installed_peer<'a>(
+    statuses: &'a [ComponentStatus],
+    status: &ComponentStatus,
+) -> Option<&'a ComponentStatus> {
+    statuses.iter().find(|other| {
+        other.agent_id == status.agent_id
+            && other.component == status.component
+            && other.scope != status.scope
+            && other.state == ComponentState::Installed
+    })
+}
+
+/// Build the demoted [`Check`] for a `Missing` row when a peer scope has the
+/// component installed.
+///
+/// The check is `Ok` with `fix: None` and a message that names both the missing
+/// path and the installed peer's scope and path.
+fn demoted_missing_check(status: &ComponentStatus, peer: &ComponentStatus) -> Check {
+    let name = format!(
+        "{} · {} · {}",
+        status.agent_name,
+        scope_label(status.scope),
+        status.component.label()
+    );
+    let peer_path = peer
+        .path
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "<unknown path>".to_string());
+    let message = format!(
+        "{}; installed at {} scope ({})",
+        status.detail,
+        scope_label(peer.scope),
+        peer_path,
+    );
+    Check {
+        name,
+        status: CheckStatus::Ok,
+        message,
+        fix: None,
+    }
+}
+
 /// Human-readable label for a scope, used in check names and the status table.
 fn scope_label(scope: InitScope) -> &'static str {
     match scope {
@@ -1191,6 +1270,251 @@ mod tests {
             statuses.iter().all(|s| s.agent_id != "cursor"),
             "doctor: false agent 'cursor' must not appear in check_all_doctored output"
         );
+    }
+
+    /// Build a synthetic `ComponentStatus` for tests of `statuses_to_checks`.
+    ///
+    /// Lets each test compose the (agent_id, component, scope, state, path)
+    /// tuple it needs without going through the filesystem detector.
+    fn synthetic_status(
+        agent_id: &str,
+        component: Component,
+        scope: InitScope,
+        state: ComponentState,
+        path: Option<PathBuf>,
+    ) -> ComponentStatus {
+        let detail = match (&state, &path) {
+            (ComponentState::Installed, Some(p)) => format!("found at {}", p.display()),
+            (ComponentState::Missing, Some(p)) => format!("missing at {}", p.display()),
+            (ComponentState::NotApplicable, _) => {
+                format!(
+                    "{} not supported for this agent at this scope",
+                    component.label()
+                )
+            }
+            (_, None) => String::new(),
+        };
+        ComponentStatus {
+            agent_id: agent_id.to_string(),
+            agent_name: "Claude Code".to_string(),
+            component,
+            scope,
+            path,
+            state,
+            detail,
+        }
+    }
+
+    #[test]
+    fn test_statuses_to_checks_demotes_project_missing_when_user_installed() {
+        let user_path = PathBuf::from("/Users/test/.claude/CLAUDE.md");
+        let project_path = PathBuf::from("/work/repo/CLAUDE.md");
+        let statuses = vec![
+            synthetic_status(
+                "claude-code",
+                Component::Preamble,
+                InitScope::Project,
+                ComponentState::Missing,
+                Some(project_path.clone()),
+            ),
+            synthetic_status(
+                "claude-code",
+                Component::Preamble,
+                InitScope::User,
+                ComponentState::Installed,
+                Some(user_path.clone()),
+            ),
+        ];
+
+        let checks = statuses_to_checks(&statuses);
+        assert_eq!(checks.len(), 2);
+
+        let project_check = checks
+            .iter()
+            .find(|c| c.name == "Claude Code · project · Preamble")
+            .expect("project preamble row");
+        assert_eq!(
+            project_check.status,
+            CheckStatus::Ok,
+            "project-missing with user-installed should demote to Ok"
+        );
+        assert!(
+            project_check.fix.is_none(),
+            "demoted row should have no fix"
+        );
+        assert!(
+            project_check
+                .message
+                .contains(&user_path.display().to_string()),
+            "message should mention the user-scope path; got: {}",
+            project_check.message
+        );
+        assert!(
+            project_check.message.contains("user"),
+            "message should name the user scope; got: {}",
+            project_check.message
+        );
+
+        let user_check = checks
+            .iter()
+            .find(|c| c.name == "Claude Code · user · Preamble")
+            .expect("user preamble row");
+        assert_eq!(user_check.status, CheckStatus::Ok);
+        assert!(user_check.fix.is_none());
+    }
+
+    #[test]
+    fn test_statuses_to_checks_demotes_user_missing_when_project_installed() {
+        let user_path = PathBuf::from("/Users/test/.claude/CLAUDE.md");
+        let project_path = PathBuf::from("/work/repo/CLAUDE.md");
+        let statuses = vec![
+            synthetic_status(
+                "claude-code",
+                Component::Preamble,
+                InitScope::Project,
+                ComponentState::Installed,
+                Some(project_path.clone()),
+            ),
+            synthetic_status(
+                "claude-code",
+                Component::Preamble,
+                InitScope::User,
+                ComponentState::Missing,
+                Some(user_path.clone()),
+            ),
+        ];
+
+        let checks = statuses_to_checks(&statuses);
+        let user_check = checks
+            .iter()
+            .find(|c| c.name == "Claude Code · user · Preamble")
+            .expect("user preamble row");
+        assert_eq!(
+            user_check.status,
+            CheckStatus::Ok,
+            "user-missing with project-installed should demote to Ok"
+        );
+        assert!(user_check.fix.is_none());
+        assert!(
+            user_check
+                .message
+                .contains(&project_path.display().to_string()),
+            "message should reference the project path; got: {}",
+            user_check.message
+        );
+        assert!(
+            user_check.message.contains("project"),
+            "message should name the project scope; got: {}",
+            user_check.message
+        );
+    }
+
+    #[test]
+    fn test_statuses_to_checks_both_missing_stays_warning() {
+        let statuses = vec![
+            synthetic_status(
+                "claude-code",
+                Component::Preamble,
+                InitScope::Project,
+                ComponentState::Missing,
+                Some(PathBuf::from("/work/repo/CLAUDE.md")),
+            ),
+            synthetic_status(
+                "claude-code",
+                Component::Preamble,
+                InitScope::User,
+                ComponentState::Missing,
+                Some(PathBuf::from("/Users/test/.claude/CLAUDE.md")),
+            ),
+        ];
+
+        let checks = statuses_to_checks(&statuses);
+        assert_eq!(checks.len(), 2);
+
+        let project_check = checks
+            .iter()
+            .find(|c| c.name == "Claude Code · project · Preamble")
+            .unwrap();
+        assert_eq!(project_check.status, CheckStatus::Warning);
+        let project_fix = project_check
+            .fix
+            .as_ref()
+            .expect("missing should carry fix");
+        assert!(project_fix.contains("sah init"));
+        assert!(!project_fix.contains("sah init user"));
+
+        let user_check = checks
+            .iter()
+            .find(|c| c.name == "Claude Code · user · Preamble")
+            .unwrap();
+        assert_eq!(user_check.status, CheckStatus::Warning);
+        assert!(user_check
+            .fix
+            .as_ref()
+            .expect("missing should carry fix")
+            .contains("sah init user"));
+    }
+
+    #[test]
+    fn test_statuses_to_checks_both_installed_stays_ok() {
+        let statuses = vec![
+            synthetic_status(
+                "claude-code",
+                Component::Preamble,
+                InitScope::Project,
+                ComponentState::Installed,
+                Some(PathBuf::from("/work/repo/CLAUDE.md")),
+            ),
+            synthetic_status(
+                "claude-code",
+                Component::Preamble,
+                InitScope::User,
+                ComponentState::Installed,
+                Some(PathBuf::from("/Users/test/.claude/CLAUDE.md")),
+            ),
+        ];
+
+        let checks = statuses_to_checks(&statuses);
+        assert_eq!(checks.len(), 2);
+        for check in &checks {
+            assert_eq!(check.status, CheckStatus::Ok);
+            assert!(check.fix.is_none());
+        }
+    }
+
+    #[test]
+    fn test_statuses_to_checks_filters_not_applicable() {
+        let statuses = vec![
+            synthetic_status(
+                "claude-code",
+                Component::Mcp,
+                InitScope::Project,
+                ComponentState::NotApplicable,
+                None,
+            ),
+            synthetic_status(
+                "claude-code",
+                Component::Mcp,
+                InitScope::User,
+                ComponentState::NotApplicable,
+                None,
+            ),
+            synthetic_status(
+                "claude-code",
+                Component::Preamble,
+                InitScope::Project,
+                ComponentState::Missing,
+                Some(PathBuf::from("/work/repo/CLAUDE.md")),
+            ),
+        ];
+
+        let checks = statuses_to_checks(&statuses);
+        assert_eq!(
+            checks.len(),
+            1,
+            "NotApplicable statuses should produce no checks"
+        );
+        assert_eq!(checks[0].name, "Claude Code · project · Preamble");
     }
 
     #[test]

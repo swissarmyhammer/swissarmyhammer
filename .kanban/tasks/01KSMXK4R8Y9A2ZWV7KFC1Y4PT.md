@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KSMXJBVVH06V6EDHYCFCRBHS
-position_column: todo
-position_ordinal: '8380'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffb080
 title: 'Doctor: scope-pair policy — demote project-missing to Ok when user-installed'
 ---
 ## What

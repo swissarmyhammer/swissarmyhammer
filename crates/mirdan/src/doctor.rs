@@ -17,7 +17,7 @@ use swissarmyhammer_doctor::{Check, CheckStatus, DoctorRunner};
 
 use crate::agents;
 use crate::registry::get_registry_url;
-use crate::status::{self, ComponentState};
+use crate::status;
 
 /// Mirdan diagnostic runner.
 pub struct MirdanDoctor {
@@ -56,11 +56,12 @@ impl MirdanDoctor {
     /// doctor-enabled detected agent across the project and user scopes.
     ///
     /// Adds one [`Check`] per applicable [`ComponentStatus`] — sourced from
-    /// [`crate::status::check_all_doctored`] — so `mirdan doctor` reports the
+    /// [`crate::status::check_all_doctored`] and converted via
+    /// [`crate::status::statuses_to_checks`] — so `mirdan doctor` reports the
     /// install stack only for agents that opt in via `doctor: true` in
-    /// `agents_default.yaml`. [`ComponentState::NotApplicable`] statuses are
-    /// skipped: they describe components an agent does not support at a scope
-    /// and carry no actionable signal.
+    /// `agents_default.yaml`. `NotApplicable` statuses are filtered inside
+    /// `statuses_to_checks`; the scope-pair policy is applied there too, so
+    /// project-missing rows demote to Ok when the user scope is installed.
     ///
     /// If the agents config cannot be loaded, an error check is added in its
     /// place; the dedicated [`Self::check_agents_detected`] check reports the
@@ -80,11 +81,7 @@ impl MirdanDoctor {
         };
 
         let statuses = status::check_all_doctored(&config, &[InitScope::Project, InitScope::User]);
-        for s in statuses
-            .iter()
-            .filter(|s| s.state != ComponentState::NotApplicable)
-        {
-            let check = status::to_check(s);
+        for check in status::statuses_to_checks(&statuses) {
             self.add_check(check);
         }
     }
