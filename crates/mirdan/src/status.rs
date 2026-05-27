@@ -396,24 +396,30 @@ fn init_command(scope: InitScope) -> &'static str {
     }
 }
 
-/// True when the MCP config JSON at `path` registers the sah server.
+/// True when the MCP config at `path` registers the sah server.
 ///
-/// Installed when a `sah` entry exists under one of the two common server keys
-/// and its `command` is `sah` or ends with `/sah`. We probe the conventional
-/// `mcpServers` key (the default `servers_key`) and the `servers` key used by a
-/// handful of agents (e.g. vscode). We do not consult the agent's configured
-/// `servers_key`: an agent with a non-default key beyond these two is not
-/// currently detected here.
+/// Installed when a `sah` entry exists under one of the common server keys and
+/// its `command` is `sah` or ends with `/sah`. We probe the conventional
+/// `mcpServers` key (the default `servers_key` used by JSON-based agents like
+/// Claude Code), the `servers` key used by a handful of agents (e.g. vscode),
+/// and the `mcp_servers` key used by Codex's TOML config. We do not consult
+/// the agent's configured `servers_key`: an agent with a key beyond these is
+/// not currently detected here.
+///
+/// Supports both JSON and TOML — for files with a `.toml` extension the
+/// content is parsed as TOML and converted to a `serde_json::Value` so the
+/// downstream probing is identical to the JSON case.
 ///
 /// This is the **single source of truth** for "is the sah MCP server installed
 /// at this path?" and is consumed by both `mirdan::status` and the sah-cli
 /// install layer so detection and installation cannot drift.
 pub fn mcp_server_installed(path: &Path) -> bool {
-    let Some(root) = read_json(path) else {
+    let Some(root) = read_config_doc(path) else {
         return false;
     };
-    // Probe the two common server keys: "mcpServers" (default) and "servers".
-    for key in ["mcpServers", "servers"] {
+    // Probe the three common server keys: "mcpServers" (the JSON default),
+    // "servers" (vscode-style), and "mcp_servers" (Codex's TOML convention).
+    for key in ["mcpServers", "servers", "mcp_servers"] {
         if let Some(server) = root.get(key).and_then(|s| s.get("sah")) {
             if is_sah_command(server) {
                 return true;
@@ -484,6 +490,28 @@ pub fn permissions_present(path: &Path) -> bool {
 fn read_json(path: &Path) -> Option<serde_json::Value> {
     let content = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&content).ok()
+}
+
+/// Read and parse an MCP config document at `path` as a `serde_json::Value`.
+///
+/// Picks the parser from the file extension: `.toml` paths are parsed as TOML
+/// and converted to a `serde_json::Value` so downstream probing (the
+/// `mcpServers.sah.command` walk) is identical regardless of input format;
+/// every other extension is parsed as JSON. Returns `None` for missing files
+/// and parse errors so the detector reports `Missing` rather than panicking on
+/// malformed user config.
+fn read_config_doc(path: &Path) -> Option<serde_json::Value> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let is_toml = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("toml"));
+    if is_toml {
+        let value: toml::Value = toml::from_str(&content).ok()?;
+        serde_json::to_value(value).ok()
+    } else {
+        serde_json::from_str(&content).ok()
+    }
 }
 
 #[cfg(test)]
@@ -598,6 +626,63 @@ mod tests {
             r#"{"mcpServers": {"sah": {"command": "not-sah"}}}"#,
         )
         .unwrap();
+        assert_eq!(state_of(&agent, Component::Mcp), ComponentState::Missing);
+    }
+
+    #[test]
+    fn test_mcp_installed_toml_basic() {
+        let dir = TempDir::new().unwrap();
+        let mut agent = temp_agent(dir.path());
+        // Point the MCP config at a .toml file so the detector recognizes
+        // the format from the path extension.
+        let toml_path = dir.path().join("config.toml").to_string_lossy().to_string();
+        agent.mcp_config.as_mut().unwrap().project_path = toml_path.clone();
+        std::fs::write(&toml_path, "[mcp_servers.sah]\ncommand = \"sah\"\n").unwrap();
+        assert_eq!(state_of(&agent, Component::Mcp), ComponentState::Installed);
+    }
+
+    #[test]
+    fn test_mcp_installed_toml_absolute_path() {
+        let dir = TempDir::new().unwrap();
+        let mut agent = temp_agent(dir.path());
+        let toml_path = dir.path().join("config.toml").to_string_lossy().to_string();
+        agent.mcp_config.as_mut().unwrap().project_path = toml_path.clone();
+        std::fs::write(
+            &toml_path,
+            "[mcp_servers.sah]\ncommand = \"/usr/local/bin/sah\"\n",
+        )
+        .unwrap();
+        assert_eq!(state_of(&agent, Component::Mcp), ComponentState::Installed);
+    }
+
+    #[test]
+    fn test_mcp_installed_toml_wrong_command() {
+        let dir = TempDir::new().unwrap();
+        let mut agent = temp_agent(dir.path());
+        let toml_path = dir.path().join("config.toml").to_string_lossy().to_string();
+        agent.mcp_config.as_mut().unwrap().project_path = toml_path.clone();
+        std::fs::write(&toml_path, "[mcp_servers.sah]\ncommand = \"not-sah\"\n").unwrap();
+        assert_eq!(state_of(&agent, Component::Mcp), ComponentState::Missing);
+    }
+
+    #[test]
+    fn test_mcp_installed_toml_other_server() {
+        let dir = TempDir::new().unwrap();
+        let mut agent = temp_agent(dir.path());
+        let toml_path = dir.path().join("config.toml").to_string_lossy().to_string();
+        agent.mcp_config.as_mut().unwrap().project_path = toml_path.clone();
+        std::fs::write(&toml_path, "[mcp_servers.other]\ncommand = \"node\"\n").unwrap();
+        assert_eq!(state_of(&agent, Component::Mcp), ComponentState::Missing);
+    }
+
+    #[test]
+    fn test_mcp_installed_toml_malformed_returns_false() {
+        let dir = TempDir::new().unwrap();
+        let mut agent = temp_agent(dir.path());
+        let toml_path = dir.path().join("config.toml").to_string_lossy().to_string();
+        agent.mcp_config.as_mut().unwrap().project_path = toml_path.clone();
+        // Not valid TOML — an unterminated table header.
+        std::fs::write(&toml_path, "[mcp_servers.sah\ncommand = ").unwrap();
         assert_eq!(state_of(&agent, Component::Mcp), ComponentState::Missing);
     }
 
