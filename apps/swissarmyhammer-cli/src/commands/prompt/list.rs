@@ -58,6 +58,7 @@ mod tests {
     use crate::context::CliContextBuilder;
     use std::collections::HashMap;
     use swissarmyhammer_common::is_prompt_visible;
+    use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
     use swissarmyhammer_config::TemplateContext;
 
     async fn create_test_context(
@@ -132,7 +133,16 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_list_command_integration() {
+        // Isolate HOME + CWD — `create_test_context()` calls
+        // `CliContextBuilder::build_async()`, which calls
+        // `get_swissarmyhammer_dir()` and creates `.sah/` at cwd as a side
+        // effect. Without isolation this leaks a `.sah/` skeleton into the
+        // host crate directory.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         // Test the list command through the main command handler
         let context =
             create_test_context(crate::cli::OutputFormat::Table, false, false, false).await;
@@ -144,7 +154,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_list_command_verbose_mode() {
+        // Isolate HOME + CWD — see `test_list_command_integration`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         // Test the list command in verbose mode
         let context =
             create_test_context(crate::cli::OutputFormat::Table, true, false, false).await;
@@ -156,7 +171,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_list_command_json_format() {
+        // Isolate HOME + CWD — see `test_list_command_integration`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         // Test the list command with JSON output format
         let context =
             create_test_context(crate::cli::OutputFormat::Json, false, false, false).await;
@@ -168,7 +188,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_list_command_yaml_format() {
+        // Isolate HOME + CWD — see `test_list_command_integration`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         // Test the list command with YAML output format
         let context =
             create_test_context(crate::cli::OutputFormat::Yaml, false, false, false).await;
@@ -180,7 +205,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_list_command_debug_mode() {
+        // Isolate HOME + CWD — see `test_list_command_integration`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         // Test the list command with debug enabled
         let context =
             create_test_context(crate::cli::OutputFormat::Table, false, true, false).await;
@@ -191,7 +221,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_list_command_quiet_mode() {
+        // Isolate HOME + CWD — see `test_list_command_integration`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         // Test the list command with quiet mode enabled
         let context =
             create_test_context(crate::cli::OutputFormat::Table, false, false, true).await;
@@ -202,7 +237,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_list_command_verbose_json() {
+        // Isolate HOME + CWD — see `test_list_command_integration`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         // Test combination of verbose and JSON output
         let context = create_test_context(crate::cli::OutputFormat::Json, true, false, false).await;
 
@@ -212,7 +252,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_list_command_verbose_yaml() {
+        // Isolate HOME + CWD — see `test_list_command_integration`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         // Test combination of verbose and YAML output
         let context = create_test_context(crate::cli::OutputFormat::Yaml, true, false, false).await;
 
@@ -222,7 +267,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_list_command_all_flags() {
+        // Isolate HOME + CWD — see `test_list_command_integration`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         // Test with all flags enabled (verbose, debug, but not quiet as they conflict)
         let context = create_test_context(crate::cli::OutputFormat::Json, true, true, false).await;
 
@@ -365,7 +415,12 @@ mod tests {
 
     // Test the create_test_context helper itself
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_create_test_context_variations() {
+        // Isolate HOME + CWD — see `test_list_command_integration`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         // Test different combinations to ensure the helper works correctly
         let context =
             create_test_context(crate::cli::OutputFormat::Table, false, false, false).await;

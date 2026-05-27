@@ -1613,13 +1613,19 @@ mod tests {
     /// must return a Warning result with a fix hint rather than writing a
     /// non-agent-bound `.mcp.json` (the deleted legacy fallback behavior).
     #[test]
-    #[serial_test::serial(home_env)]
+    #[serial_test::serial(home_env, cwd)]
     fn test_mcp_registration_init_warns_when_no_agent_has_mcp_config() {
         use swissarmyhammer_common::lifecycle::InitStatus;
         use swissarmyhammer_common::reporter::NullReporter;
-        use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+        use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
 
         let env = IsolatedTestEnvironment::new().unwrap();
+        // Pin cwd to the isolated tempdir so `McpRegistration::init` does not
+        // write `.mcp.json` (or any sibling agent-dir parents) into the host
+        // crate directory. The test already inspects results + the (now
+        // tempdir-rooted) `.mcp.json` path, so this only changes *where* the
+        // would-be writes land — not what the test asserts.
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
 
         // Write a custom agents config where the only agent has no mcp_config
         // and is "detected" because its detect dir exists under the isolated home.

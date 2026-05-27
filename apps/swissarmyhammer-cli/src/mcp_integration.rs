@@ -283,6 +283,7 @@ pub mod response_formatting {
 mod tests {
     use super::*;
     use serde_json::json;
+    use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
 
     /// `CliToolContext::new()` reads process-global CWD via
     /// `std::env::current_dir()` and roots an `McpServer` at whatever it
@@ -294,6 +295,13 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(cwd)]
     async fn test_cli_tool_context_creation() {
+        // Isolate HOME + CWD — `CliToolContext::new()` resolves the project
+        // directory from cwd and creates `.sah/` there as a side effect.
+        // Without isolation this leaks a `.sah/` skeleton into the host crate
+        // directory.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         let result = CliToolContext::new().await;
         assert!(
             result.is_ok(),
@@ -306,7 +314,15 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_create_arguments() {
+        // Isolate CWD — `CliToolContext::new_isolated` still reaches into
+        // cwd-based path resolution for some sub-context and creates `.sah/`
+        // at cwd. Without the CWD guard the empty `.sah/` directory leaks
+        // into the host crate directory.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         let temp = tempfile::TempDir::new().unwrap();
         let context = CliToolContext::new_isolated(temp.path()).await.unwrap();
 
@@ -332,7 +348,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_isolated_tool_execution() {
+        // Isolate CWD — see `test_create_arguments`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         let temp = tempfile::TempDir::new().unwrap();
         let context = CliToolContext::new_isolated(temp.path()).await.unwrap();
 
@@ -368,6 +389,10 @@ mod tests {
     #[serial_test::serial(cwd)]
     async fn test_all_registered_tools_pass_cli_validation() {
         use crate::dynamic_cli::CliBuilder;
+
+        // Isolate HOME + CWD — see `test_cli_tool_context_creation`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
 
         // Use the same code path as the actual CLI
         let context = CliToolContext::new()

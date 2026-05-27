@@ -62,11 +62,20 @@ async fn run_prompt_command_typed(
 mod tests {
     use super::*;
 
+    use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
     use swissarmyhammer_config::TemplateContext;
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_run_prompt_command_typed_list() {
         use crate::context::CliContextBuilder;
+
+        // Isolate HOME + CWD — `CliContextBuilder::build_async()` calls
+        // `get_swissarmyhammer_dir()` which creates `.sah/` at cwd as a side
+        // effect. Without isolation this leaks a `.sah/` skeleton into the
+        // host crate directory.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
 
         // Create a List command using the new typed system
         let command = PromptCommand::List(cli::ListCommand {});
@@ -94,8 +103,13 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_run_prompt_command_typed_test_with_invalid_prompt() {
         use crate::context::CliContextBuilder;
+
+        // Isolate HOME + CWD — see `test_run_prompt_command_typed_list`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
 
         // Create a Test command with a non-existent prompt using the new typed system
         let command = PromptCommand::Test(cli::TestCommand {
