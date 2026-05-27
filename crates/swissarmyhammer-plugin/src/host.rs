@@ -823,6 +823,24 @@ impl PluginHost {
         Ok(())
     }
 
+    /// Reports whether a module is currently exposed under `id` in the
+    /// available-modules table — that is, available to be activated by a
+    /// plugin's `register(name, { rust: id })`.
+    ///
+    /// A `true` return covers the window between
+    /// [`expose_rust_module`](Self::expose_rust_module) and a plugin's
+    /// activation: activation moves the module out of the table, so this
+    /// reports `false` afterward. Used by the command-service bootstrap
+    /// tests to assert that `expose_rust_module("commands", ...)` actually
+    /// landed, without needing a plugin to drive the activation step.
+    ///
+    /// # Parameters
+    ///
+    /// - `id` — the module id to look up.
+    pub async fn has_exposed_module(&self, id: &str) -> bool {
+        self.lock().modules.contains_key(id)
+    }
+
     /// Loads the plugin whose bundle is the directory `plugin_dir`.
     ///
     /// Creates a fresh [`PluginRuntime`] isolate for the plugin, wires its SDK
@@ -1719,6 +1737,90 @@ impl PluginHost {
         self.lock().ledger.len(plugin_id)
     }
 
+    /// Records an [`RegistrationHandle::Opaque`] dispose hook on `plugin_id`'s
+    /// ledger.
+    ///
+    /// Higher-tier services — the command service in particular — wire
+    /// per-plugin disposal here: when a plugin first creates a service-owned
+    /// resource (a registered command, for example), the service installs an
+    /// opaque hook so [`PluginHost::unload`]'s ledger drain calls it on the
+    /// way out. The hook runs on the platform's unload path, after the
+    /// plugin's own `unload()` and before the isolate is torn down, so it
+    /// can free service-owned state in step with the host's authoritative
+    /// cleanup.
+    ///
+    /// Multiple hooks for the same plugin are appended in registration order
+    /// and drained last-first by [`PluginLedger::drain`], matching the
+    /// disposal discipline for every other handle kind.
+    ///
+    /// Synchronous because the only work it performs is briefly holding the
+    /// host's state mutex — no async I/O, no await. Verb handlers in
+    /// service crates can therefore call it from sync contexts (the
+    /// command-service register path does exactly this).
+    ///
+    /// # Parameters
+    ///
+    /// - `plugin_id` — the id of the plugin to attach the hook to.
+    /// - `hook` — a one-shot dispose function the unload path will run.
+    ///
+    /// # Returns
+    ///
+    /// `true` when the hook was recorded; `false` when `plugin_id` is not
+    /// currently tracked (the plugin is unloaded or was never loaded), in
+    /// which case the hook is dropped to avoid creating an orphan ledger
+    /// entry.
+    pub fn record_unload_hook(&self, plugin_id: &PluginId, hook: Box<dyn FnOnce() + Send>) -> bool {
+        let mut state = self.lock();
+        state
+            .ledger
+            .record(plugin_id, RegistrationHandle::Opaque(hook))
+    }
+
+    /// Invokes a callback in a loaded plugin's isolate.
+    ///
+    /// Resolves `plugin_id` to its loaded [`PluginRuntime`], clones a
+    /// [`crate::CallbackInvoker`] out under the host's state mutex (so the
+    /// mutex is dropped before the awaited reply), and dispatches the
+    /// `notifications/callbacks/invoke` to the worker thread. The callback's
+    /// settled return value (or an isolate-level failure) is returned to the
+    /// caller verbatim.
+    ///
+    /// This is the seam higher-tier services use to route a callback back to
+    /// the registering plugin without depending on the [`PluginRuntime`]
+    /// type or the host's private state.
+    ///
+    /// # Parameters
+    ///
+    /// - `plugin_id` — the id of the plugin whose isolate holds the callback.
+    /// - `callback_id` — the SDK-assigned callback id (e.g. `"cb_42"`).
+    /// - `args` — the positional arguments JSON, conventionally an array.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnknownPlugin`] when no plugin is loaded under
+    /// `plugin_id`, [`Error::Runtime`] when the callback is missing or the
+    /// stored function throws, [`Error::RuntimeTimeout`] when the worker
+    /// does not answer within the command timeout, or [`Error::RuntimeStopped`]
+    /// when the worker channel is closed.
+    pub async fn invoke_plugin_callback(
+        &self,
+        plugin_id: &PluginId,
+        callback_id: impl Into<String>,
+        args: Value,
+    ) -> Result<Value> {
+        // Take the runtime's callback invoker out under the lock, then drop
+        // the lock before awaiting the reply. The invoker owns its own
+        // channel sender clone, so it survives the lock release.
+        let invoker = self
+            .lock()
+            .plugins
+            .get(plugin_id)
+            .map(|plugin| plugin.runtime.callback_invoker())
+            .ok_or(Error::UnknownPlugin)?;
+
+        invoker.invoke(callback_id, args).await
+    }
+
     /// Mints a fresh, host-unique [`PluginId`].
     fn mint_plugin_id(&self) -> PluginId {
         let seq = self.inner.next_plugin_seq.fetch_add(1, Ordering::Relaxed);
@@ -1880,7 +1982,19 @@ impl HostBridge {
         )])))
     }
 
-    /// Handles a `toolsCall` envelope: routes a `tools/call` at the registry.
+    /// Handles a `toolsCall` envelope: records any callback markers in the
+    /// plugin's ledger, then routes the call at the registry.
+    ///
+    /// The SDK's `toolsCall` envelope carries an arguments map that has already
+    /// passed through `marshalCallbacks`: any function value anywhere in the
+    /// payload was replaced with a `{ "$callback": "cb_..." }` marker before
+    /// the call left the isolate. The host treats those markers as opaque
+    /// handles — it does not invoke them here, the target tool does — but
+    /// every marker id is recorded as a [`RegistrationHandle::Callback`] in
+    /// the plugin's ledger so that [`PluginHost::unload`] disposes the stored
+    /// functions on the way down. A `tools/call` whose arguments carry no
+    /// markers (the common verbatim path to a URL- or CLI-sourced server)
+    /// adds nothing to the ledger and is otherwise unchanged.
     fn tools_call(&self, payload: &Value) -> std::result::Result<Value, String> {
         let server = envelope_str(payload, "server")?;
         let tool = envelope_str(payload, "tool")?;
@@ -1888,6 +2002,23 @@ impl HostBridge {
             .get("arguments")
             .cloned()
             .unwrap_or_else(|| Value::Object(Map::new()));
+
+        // Record every callback marker reachable in the arguments map so the
+        // plugin's ledger can drain them on unload. The collect-then-record
+        // split keeps the ledger mutation under a single lock and out of the
+        // routing path's async hot loop.
+        let mut callback_ids = Vec::new();
+        collect_callback_ids(&arguments, &mut callback_ids);
+        if !callback_ids.is_empty() {
+            let mut state = self.host.lock();
+            for id in callback_ids {
+                // The plugin is tracked from `load`, so this append cannot orphan.
+                state.ledger.record(
+                    &self.plugin_id,
+                    RegistrationHandle::Callback(CallbackId::new(id)),
+                );
+            }
+        }
 
         let host = self.host.clone();
         let caller = CallerId::Plugin(self.plugin_id.clone());

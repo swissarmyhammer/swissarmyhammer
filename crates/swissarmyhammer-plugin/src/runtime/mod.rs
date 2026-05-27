@@ -516,6 +516,20 @@ impl PluginRuntime {
         await_reply(response).await
     }
 
+    /// Clone the worker channel so callers can invoke callbacks without
+    /// holding a borrow of the runtime across an `.await`.
+    ///
+    /// Returns a [`CallbackInvoker`] that owns its own clone of the command
+    /// channel sender; sending into the cloned channel reaches the same
+    /// worker thread. This is the seam the plugin host uses so that a
+    /// callback dispatcher can invoke a callback in a plugin's isolate
+    /// without holding the host's state mutex across the awaited reply.
+    pub fn callback_invoker(&self) -> CallbackInvoker {
+        CallbackInvoker {
+            sender: self.sender.clone(),
+        }
+    }
+
     /// Shut the runtime down: stop the worker thread and tear down the isolate.
     ///
     /// Dropping the worker's command sender ends its receive loop and the
@@ -571,6 +585,66 @@ impl Drop for PluginRuntime {
     /// Tear the isolate down when the handle goes away.
     fn drop(&mut self) {
         let _ = self.join_worker();
+    }
+}
+
+/// A detached handle that invokes callbacks against a plugin runtime worker.
+///
+/// `CallbackInvoker` owns a clone of the worker's command channel sender, so
+/// the caller does not need to keep a borrow of the originating
+/// [`PluginRuntime`] alive across the awaited reply. The plugin host hands
+/// one of these to a callback dispatcher: the dispatcher resolves the right
+/// plugin under the host's state lock, clones an invoker out, releases the
+/// lock, and then awaits the callback's reply without blocking other host
+/// operations.
+///
+/// The handle is `Send` but not `Sync` (it carries an [`mpsc::Sender`]); it
+/// is meant to be moved into the awaiting task rather than shared between
+/// threads.
+#[derive(Debug, Clone)]
+pub struct CallbackInvoker {
+    /// A clone of the originating worker thread's command channel.
+    sender: mpsc::Sender<Command>,
+}
+
+impl CallbackInvoker {
+    /// Invoke a callback the plugin earlier handed the host by reference.
+    ///
+    /// Mirrors [`PluginRuntime::invoke_callback`]: dispatches an
+    /// [`Command::InvokeCallback`] to the worker thread, awaits the worker's
+    /// reply (bounded by the same command timeout), and returns the
+    /// callback's settled return value.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` — the callback id the SDK minted when it marshalled the function.
+    /// * `args` — the positional arguments, a JSON array, passed to the function.
+    ///
+    /// # Returns
+    ///
+    /// The callback's return value as JSON, or JSON `null` when it returned
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Runtime`] when no callback is registered under `id` or
+    /// the stored function throws, [`Error::RuntimeTimeout`] when the worker
+    /// does not answer within the command timeout, or [`Error::RuntimeStopped`]
+    /// when the worker channel is closed.
+    pub async fn invoke(
+        &self,
+        id: impl Into<String>,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let (reply, response) = oneshot::channel();
+        self.sender
+            .send(Command::InvokeCallback {
+                id: id.into(),
+                args,
+                reply,
+            })
+            .map_err(|_| Error::RuntimeStopped)?;
+        await_reply(response).await
     }
 }
 

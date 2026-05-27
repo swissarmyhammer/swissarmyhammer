@@ -396,12 +396,17 @@ fn virtual_modules() -> HashMap<String, String> {
     modules
 }
 
-/// Transpile the embedded `@swissarmyhammer/plugin` SDK source to JavaScript.
+/// Transpile the combined `@swissarmyhammer/plugin` SDK source to JavaScript.
 ///
-/// The SDK ([`crate::sdk::SDK_PLUGIN_SOURCE`]) is TypeScript; the virtual
-/// module table must hold JavaScript V8 can evaluate directly. The transpiled
-/// code carries an inline source map so plugin stack traces that pass through
-/// the SDK report original TypeScript positions.
+/// The SDK lives across several TypeScript files
+/// ([`SDK_PLUGIN_SOURCE`](crate::sdk::SDK_PLUGIN_SOURCE),
+/// [`SDK_SERVICES_SOURCE`](crate::sdk::SDK_SERVICES_SOURCE),
+/// [`SDK_COMMANDS_SOURCE`](crate::sdk::SDK_COMMANDS_SOURCE)) which
+/// [`combined_sdk_source`](crate::sdk::combined_sdk_source) concatenates into
+/// a single module body before transpilation. The virtual module table must
+/// hold JavaScript V8 can evaluate directly. The transpiled code carries an
+/// inline source map so plugin stack traces that pass through the SDK report
+/// original TypeScript positions.
 ///
 /// # Panics
 ///
@@ -410,7 +415,8 @@ fn virtual_modules() -> HashMap<String, String> {
 fn transpiled_sdk() -> String {
     let specifier = ModuleSpecifier::parse(&format!("{VIRTUAL_SCHEME}:plugin"))
         .expect("the SDK virtual-module URL must be a valid specifier");
-    transpile_typescript(&specifier, crate::sdk::SDK_PLUGIN_SOURCE)
+    let combined = crate::sdk::combined_sdk_source();
+    transpile_typescript(&specifier, &combined)
         .expect("the embedded @swissarmyhammer/plugin SDK source must transpile")
         .code
 }

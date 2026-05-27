@@ -281,14 +281,19 @@ async fn an_async_callback_is_awaited() {
     );
 }
 
-/// Tool-call payloads are unaffected: a function never reaches a `toolsCall`,
-/// because the callback machinery only scans callback-bearing paths.
+/// Plain `toolsCall` arguments cross verbatim — the SDK's marshal-on-tool-call
+/// pass is a no-op when no function is present.
 ///
 /// `callbackDispatch` carries a function and produces a `$callback` marker;
-/// the `toolsCall` issued right after carries only plain JSON and is delivered
-/// verbatim with no `$callback` key anywhere in it.
+/// the `toolsCall` issued right after carries only plain JSON. The SDK's
+/// `toolsCall` path still runs each payload through `marshalCallbacks`, but
+/// that pass walks the value and replaces only function values — a plain-data
+/// payload comes through unchanged, with no `$callback` key anywhere in it.
+/// This pins the contract that a tool call to a URL- or CLI-sourced MCP
+/// server (whose payloads are by construction plain JSON) reaches the remote
+/// server as ordinary JSON-RPC.
 #[tokio::test]
-async fn tool_call_payloads_are_not_scanned_for_callbacks() {
+async fn plain_tool_call_payloads_pass_through_unchanged() {
     let bundle = tempfile::TempDir::new().expect("temp dir");
     // First a callback-bearing dispatch (a function → marker), then a plain
     // `toolsCall` carrying ordinary JSON arguments.

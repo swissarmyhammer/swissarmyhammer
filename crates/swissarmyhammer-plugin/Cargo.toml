@@ -87,6 +87,14 @@ swissarmyhammer-git = { workspace = true }
 swissarmyhammer-common = { workspace = true }
 serial_test = { workspace = true }
 
+# Used by the `tests/integration/*.rs` SDK-helper end-to-end tests, which
+# bootstrap the real command service into a `PluginHost` so a probe plugin's
+# `ensureServices` + `registerCommands` calls land on a genuine in-process
+# command registry. The dependency is dev-only — `swissarmyhammer-command-service`
+# depends on `swissarmyhammer-plugin` as a normal dependency, so this reverse
+# edge forms a normal-dep + dev-dep cycle Cargo permits.
+swissarmyhammer-command-service = { workspace = true }
+
 [lints]
 workspace = true
 

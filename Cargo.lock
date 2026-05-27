@@ -9490,6 +9490,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-command-service"
+version = "0.13.5"
+dependencies = [
+ "async-trait",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "swissarmyhammer-operations",
+ "swissarmyhammer-operations-macros",
+ "swissarmyhammer-plugin",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "swissarmyhammer-commands"
 version = "0.13.5"
 dependencies = [
@@ -9905,6 +9923,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "swissarmyhammer-command-service",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-directory",

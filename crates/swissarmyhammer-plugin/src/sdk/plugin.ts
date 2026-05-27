@@ -431,9 +431,12 @@ export interface Transport {
    * Resolve a dispatch `path` against `server`'s cached tool definitions and
    * issue the corresponding `tools/call`.
    *
-   * `tools/call` payloads cross to URL- and CLI-sourced MCP servers as real
-   * JSON-RPC; they are dispatched **verbatim** and are never scanned for
-   * function values — the callback primitive does not touch this path.
+   * `tools/call` payloads cross verbatim *except* for function values: the
+   * SDK marshals any function anywhere in `args` to a `{ $callback: id }`
+   * marker before dispatching, so the host receives opaque handles and never
+   * function values. The marshalling is a no-op when `args` carries no
+   * functions, so a plain-data tool call to a URL- or CLI-sourced MCP server
+   * still reaches that server as ordinary JSON-RPC.
    */
   callPath(
     server: string,
@@ -599,14 +602,23 @@ class HostBridge implements Transport {
     tool: string,
     args: Record<string, unknown>,
   ): unknown {
-    // A `tools/call` payload crosses verbatim — it reaches a URL- or
-    // CLI-sourced MCP server as real JSON-RPC and must carry no `$callback`
-    // machinery. The callback primitive is deliberately not applied here.
+    // A `tools/call` payload crosses verbatim *except* for function values:
+    // a function anywhere in `args` is marshalled to a `$callback` marker so
+    // the host receives an opaque handle, never a function value. The
+    // marshalling is a no-op when `args` carries no functions, so the
+    // URL/CLI verbatim path is unchanged for plain-data tool calls — those
+    // payloads still reach a remote MCP server as ordinary JSON-RPC. The
+    // marker shape is what in-process Rust services (notably the command
+    // service's `register command` operation) expect for function-valued
+    // fields like `execute` and `available`; the host's `toolsCall`
+    // envelope handler records each marker id in the plugin's ledger so the
+    // isolate's callback table is drained on unload.
+    const marshalled = marshalCallbacks(args) as Record<string, unknown>;
     return this.dispatch({
       kind: "toolsCall",
       server,
       tool,
-      arguments: args,
+      arguments: marshalled,
     });
   }
 

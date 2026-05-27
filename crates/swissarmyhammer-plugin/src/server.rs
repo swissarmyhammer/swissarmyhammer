@@ -163,7 +163,7 @@ impl PluginId {
 /// This is a placeholder: the dispatcher task refines how callers are
 /// resolved and used, but the [`McpServer::invoke`] signature needs the type
 /// now.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CallerId {
     /// The request originates from the platform host itself.
     HostInternal,
