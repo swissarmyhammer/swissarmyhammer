@@ -298,6 +298,17 @@ impl ViewsContext {
         let _ = self.store_context.set(ctx);
     }
 
+    /// Return the `Arc<StoreContext>` previously installed via
+    /// [`set_store_context`], if any.
+    ///
+    /// Exposed so substrate-guard tests can verify via `Arc::ptr_eq` that the
+    /// views context shares the single app-wide `StoreContext`. Production
+    /// code paths reach the context through the setter side and do not need
+    /// to read it back.
+    pub fn store_context(&self) -> Option<Arc<StoreContext>> {
+        self.store_context.get().cloned()
+    }
+
     /// Subscribe to view change events.
     ///
     /// Returns a receiver that will get all events emitted after this call.

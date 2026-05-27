@@ -8,6 +8,7 @@ use std::path::Path;
 
 use async_trait::async_trait;
 
+use crate::changelog::ChangelogEntry;
 use crate::error::Result;
 use crate::event::ChangeEvent;
 use crate::handle::StoreHandle;
@@ -43,6 +44,23 @@ pub trait ErasedStore: Send + Sync {
     ///
     /// The `item_id` identifies which per-item changelog contains the entry.
     async fn redo_erased(&self, id: &UndoEntryId, item_id: &StoredItemId) -> Result<()>;
+
+    /// Read the current serialized bytes of the item from disk.
+    ///
+    /// Returns `Ok(None)` when the item does not exist (i.e. has never
+    /// been written or has been trashed / archived). Returns the
+    /// item's on-disk text otherwise. This is the type-erased path used
+    /// by the `store` MCP server's `GetItem` verb — it returns raw text
+    /// so callers do not need to know the concrete `Item` type.
+    async fn get_item_bytes(&self, item_id: &StoredItemId) -> Result<Option<String>>;
+
+    /// Read every changelog entry for the given item.
+    ///
+    /// Returns an empty `Vec` when the item has never been written.
+    /// Used by the `store` MCP server's `History` verb to expose the
+    /// per-item mutation history without knowing the concrete `Item`
+    /// type.
+    async fn read_changelog(&self, item_id: &StoredItemId) -> Result<Vec<ChangelogEntry>>;
 }
 
 #[async_trait]
@@ -71,6 +89,14 @@ impl<S: TrackedStore> ErasedStore for StoreHandle<S> {
     async fn redo_erased(&self, id: &UndoEntryId, item_id: &StoredItemId) -> Result<()> {
         self.redo(id, item_id).await?;
         Ok(())
+    }
+
+    async fn get_item_bytes(&self, item_id: &StoredItemId) -> Result<Option<String>> {
+        StoreHandle::get_item_bytes(self, item_id).await
+    }
+
+    async fn read_changelog(&self, item_id: &StoredItemId) -> Result<Vec<ChangelogEntry>> {
+        StoreHandle::read_changelog(self, item_id).await
     }
 }
 

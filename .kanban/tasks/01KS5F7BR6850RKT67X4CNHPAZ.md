@@ -2,8 +2,8 @@
 assignees:
 - claude-code
 depends_on: []
-position_column: todo
-position_ordinal: 9a80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffb680
 project: store-service
 title: '`store` MCP server: undo/redo/transaction/history over the shared StoreContext'
 ---

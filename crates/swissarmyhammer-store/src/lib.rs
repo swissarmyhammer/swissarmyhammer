@@ -16,6 +16,15 @@
 //!    type-erased [`ErasedStore`](erased::ErasedStore) trait, sharing a single
 //!    [`UndoStack`] so that undo/redo works across heterogeneous stores.
 //!
+//! # Substrate invariant
+//!
+//! One `Arc<StoreContext>` per app; share it via `Arc::clone`; never construct
+//! a second one for the same board. A second context would fork the undo
+//! stack and produce a second `undo_stack.yaml`, so `undo` would only reverse
+//! the half of the writes that happened to land in the context the caller
+//! reached. See [`StoreContext`] for the full rationale and the location of
+//! the regression guard.
+//!
 //! This crate provides:
 //! - [`TrackedStore`] trait for defining file-backed stores
 //! - [`StoreHandle`] for write, delete, undo, redo, and change detection
@@ -27,10 +36,12 @@ pub mod changelog;
 pub mod context;
 pub mod diff;
 pub mod erased;
-mod error;
+pub mod error;
 pub mod event;
 pub mod handle;
 pub mod id;
+pub mod operations;
+pub mod server;
 pub mod stack;
 pub mod store;
 pub mod trash;
@@ -41,5 +52,6 @@ pub use error::StoreError;
 pub use event::ChangeEvent;
 pub use handle::StoreHandle;
 pub use id::{StoredItemId, UndoEntryId};
+pub use server::StoreServer;
 pub use stack::{UndoEntry, UndoStack};
 pub use store::TrackedStore;

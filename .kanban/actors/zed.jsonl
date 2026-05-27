@@ -1,0 +1,1 @@
+{"id":"01KSNHA8E27HP3GNVDD8R8ZC4R","timestamp":"2026-05-27T20:16:47.554744Z","op":"create","item_id":"zed","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: 4c51bf\n+name: Zed\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: 4c51bf\n-name: Zed\n","transaction_id":null}

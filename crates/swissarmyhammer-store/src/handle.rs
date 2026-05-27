@@ -666,6 +666,28 @@ impl<S: TrackedStore> StoreHandle<S> {
         }
     }
 
+    /// Read the current serialized bytes of an item directly from disk.
+    ///
+    /// Returns `Ok(None)` when the item does not exist (never written,
+    /// or trashed / archived). Returns the on-disk text otherwise.
+    /// This is the read accessor the `store` MCP server's `GetItem`
+    /// verb dispatches to through the [`ErasedStore`] trait.
+    pub async fn get_item_bytes(&self, item_id: &StoredItemId) -> Result<Option<String>> {
+        self.read_text_from_disk(item_id.as_str()).await
+    }
+
+    /// Read every changelog entry for the given item.
+    ///
+    /// Returns an empty `Vec` when the item has never been written.
+    /// This is the read accessor the `store` MCP server's `History`
+    /// verb dispatches to through the [`ErasedStore`] trait.
+    pub async fn read_changelog(&self, item_id: &StoredItemId) -> Result<Vec<ChangelogEntry>> {
+        self.changelog_for(item_id)
+            .read_all()
+            .await
+            .map_err(StoreError::Io)
+    }
+
     /// Check whether this store's per-item changelog contains the given entry ID.
     ///
     /// The `item_id` identifies which per-item changelog to search. Also checks

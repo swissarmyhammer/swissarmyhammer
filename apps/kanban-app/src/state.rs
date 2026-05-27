@@ -320,6 +320,20 @@ impl BoardHandle {
             .await
             .map_err(|e| format!("Failed to open board context: {e}"))?;
 
+        // INVARIANT: one `Arc<StoreContext>` per app — and therefore one
+        // `undo_stack.yaml`. Every `TrackedStore` (entity-type stores,
+        // perspective store, view store) registers into THIS context via
+        // `Arc::clone(&store_context)`, so `store.undo` / `store.redo` revert
+        // across all of them on a single LIFO stack.
+        //
+        // Never construct a second `StoreContext` for the same board — that
+        // would fork the undo stack: entity edits would land on one stack,
+        // perspective edits on another, and `undo` would silently revert
+        // only the one the caller happened to dispatch to. The substrate
+        // guard test at `apps/kanban-app/tests/substrate_guard.rs` enforces
+        // this by `Arc::ptr_eq`-comparing the context each subsystem holds
+        // against the one constructed here; if anybody splits the substrate,
+        // that test fails loudly.
         let store_context = Arc::new(swissarmyhammer_store::StoreContext::new(
             kanban_path.to_path_buf(),
         ));

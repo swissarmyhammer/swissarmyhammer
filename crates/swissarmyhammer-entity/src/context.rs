@@ -124,6 +124,17 @@ impl EntityContext {
         let _ = self.store_context.set(ctx);
     }
 
+    /// Return the `Arc<StoreContext>` previously installed via
+    /// [`set_store_context`], if any.
+    ///
+    /// Exposed so substrate-guard tests can verify via `Arc::ptr_eq` that the
+    /// entity context shares the single app-wide `StoreContext`. Production
+    /// code paths reach the context through the setter side and do not need
+    /// to read it back.
+    pub fn store_context(&self) -> Option<Arc<StoreContext>> {
+        self.store_context.get().cloned()
+    }
+
     /// Attach a validation engine. Enables field validation on write.
     pub fn with_validation(mut self, engine: Arc<ValidationEngine>) -> Self {
         self.validation = Some(engine);

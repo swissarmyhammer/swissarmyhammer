@@ -2,8 +2,8 @@
 assignees:
 - claude-code
 depends_on: []
-position_column: todo
-position_ordinal: '9980'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffb580
 project: store-service
 title: 'Shared StoreContext substrate: single undo stack across all command-backing servers'
 ---
