@@ -8,35 +8,33 @@ depends_on:
 - 01KSQBFMECY2QGC545BRXGR3JT
 - 01KSQBG2EW2HNHQ911SHN6G6YK
 - 01KSQBGPHT216JC640GNAA5NRA
-position_column: todo
-position_ordinal: 8f80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffbe80
 project: llama-coverage
 title: Add a CI coverage gate for llama-agent so the bar can't regress
 ---
-## What
+## DONE (2026-05-28)
 
-Once the coverage cards land, lock the bar in so a future change can't silently drop back to the state that let the 0-token bug ship. Add a CI coverage gate for `llama-agent`.
+Added a `llama-agent-coverage` CI job (`.github/workflows/ci.yml`) that measures crate-scoped line coverage and fails the build below a threshold.
 
-## Steps
+### Why not `cargo llvm-cov --fail-under-lines`
+That flag gates the workspace-wide TOTAL, which is ~30% here because `--package llama-agent` still instruments other path-dep crates (agent-client-protocol-extras, swissarmyhammer-agents, …) that the llama-agent suite barely touches. Meaningless as a llama-agent gate. Instead the job exports an LCOV and runs `scripts/llama_agent_gap_report.py` (the same scoped tool the baseline card used), now extended with `--fail-under` (crate floor) and `--critical FILE:PCT` (per-file floors). Backward-compatible: the no-flag and positional-needle invocations still work.
 
-1. Add a CI step (in the existing CI provider — check `.github/workflows` or whatever the `ci` skill detects) that runs `cargo llvm-cov --package llama-agent` and fails the build if region/line coverage drops below a threshold.
-2. Set the threshold from the achieved post-epic number minus a small margin (e.g. if the epic reaches 94%, gate at 90%). Do NOT set it at 100% — that invites coverage-gaming and flaky exclusions. Gate the behavior-critical modules higher (generation, queue, stopper, acp translation/server) if the tool supports per-path thresholds.
-3. Document any deliberate exclusions (the real-model FFI decode in `model.rs` is the legitimate one — it needs a real model and is covered by the small real-model smoke tests, not unit coverage) with `#[cfg]` / coverage-ignore annotations and a comment explaining why.
-4. Make sure the gate does NOT require downloading the 27B model — the unit coverage runs on scripted-model tests + the small qwen-0.6b smoke tests only.
+### Threshold (recorded + justified)
+- **Crate floor: 80% line.** Achieved post-epic = **85.04%**; pre-epic baseline = **78.01%**. 80% sits above baseline (so it ratchets up and blocks regression to the pre-epic / 0-token-bug state) with ~5pt slack for model-availability variance — the real-model smoke tests use the small qwen-0.6B and skip on HF rate-limit; on the self-hosted runner the model is cached so they run, but the margin absorbs a transient skip. NOT 100% (invites gaming/brittle exclusions).
+- **Per-file critical floors** (guard bug-prone modules harder than the average): `generation/budget.rs:100` (the extracted arithmetic — the bug's home, must never regress), `stopper/mod.rs:95`, `queue.rs:90`, `acp/translation.rs:90`, `chat_template.rs:80` (tool-call parsing).
 
-## Acceptance Criteria
+### Exclusions (annotated, not silently dropped)
+The real-model FFI decode loops (`generation/mod.rs`, `model.rs` load path) bind llama.cpp and are covered by the small-model smoke tests, not unit coverage — documented in the CI job comment; not separately gated. No 27B download: the suite is hardcoded to qwen-0.6B (`src/test_models.rs`); CI sets `LLAMA_N_GPU_LAYERS=0`.
 
-- [ ] CI fails when `llama-agent` coverage drops below the threshold.
-- [ ] The threshold is recorded and justified (achieved % minus margin).
-- [ ] Legitimate exclusions (real-model FFI) are annotated and explained, not silently dropped.
-- [ ] The gate runs without the 27B model download.
+### Gate demonstrated (the card's "test")
+- PASS: real thresholds against the post-epic LCOV → python exit 0, "COVERAGE GATE PASSED".
+- FAIL (crate): `--fail-under 95` → exit 1, "crate line coverage 85.04% < floor 95.00%".
+- FAIL (critical): `--critical queue.rs:99` → exit 1, per-file violation reported.
+This is a cleaner, deterministic equivalent of "delete a covered test and confirm the step fails" — the floor itself is moved instead, with no flaky model dependence.
 
-## Tests
-
-- [ ] Demonstrate the gate: temporarily delete a covered test locally and confirm the coverage step fails; restore it.
-- [ ] Run the CI command locally: `cargo llvm-cov --package llama-agent --fail-under-lines <threshold>` (or tool equivalent) exits non-zero below the bar, zero above.
-
-## Workflow
-
-- Use the `ci` skill to find and modify the right workflow file.
-- Final card of the epic — depends on all the coverage cards landing first.
+### Acceptance criteria
+- [x] CI fails when llama-agent coverage drops below the threshold (demonstrated, exit 1).
+- [x] Threshold recorded + justified (80% = achieved 85.04% with margin, above 78.01% baseline).
+- [x] Legitimate exclusions (real-model FFI) annotated + explained in the CI job comment.
+- [x] Gate runs without the 27B model download (qwen-0.6B only, GPU layers off).
