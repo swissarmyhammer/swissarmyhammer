@@ -71,7 +71,9 @@ When a `range` was used (explicit or auto-detected), use `get diff` with `file@<
 {"op": "get diff", "left": "src/main.rs@HEAD~4", "right": "src/main.rs"}
 ```
 
-For every changed file: `{"op": "get blastradius", "file_path": "<file>"}` and `get callgraph` (inbound) on changed symbols. Diff shows what changed; blast radius shows what it *affects* — sizes the change for Layer 1, finds untouched callers the change may have quietly broken for Layer 2.
+For every changed file: `{"op": "get blastradius", "file_path": "<file>"}` and `get callgraph` (inbound) on changed symbols. Diff shows what changed; blast radius shows what it *affects* — sizes the change for Layer 1, finds untouched callers the change may have quietly broken for Layer 3. An **empty inbound callgraph** on an added/changed symbol that isn't an entry point, exported API, or test is the dead-code signal for Layer 2.
+
+Run `{"op": "find duplicates", "file_path": "<file>"}` on the changed files — the verbatim/near-verbatim duplication signal for Layer 2.
 
 ### 4. Layered examination
 
@@ -79,15 +81,22 @@ Don't skip layers — each catches different problems.
 
 **Layer 1: Design & Architecture** — Does it fit? Appropriate abstractions? Over-engineering? Right codebase for this?
 
-**Layer 2: Functionality & Correctness** — Does it do what the author intended? Good for users? Edge cases (empty, null, boundary, error)? Off-by-one, wrong booleans, missing early returns? Concurrency (races, deadlocks, shared mutable state)?
+**Layer 2: Reuse, Dead Code & Data-Driven Design** — the highest-leverage layer for machine-written code, which trends toward duplication and hardcoding. Findings here are **blockers**.
 
-**Layer 3: Tests** — Tests for new/changed behavior? Verify behavior, not implementation? Would they fail if the code were broken? Edge cases covered? Mocks only at system boundaries?
+- **Dead code (blocker)** — any added or changed symbol with an empty inbound callgraph that is not an entry point, exported public API, or test is dead. Also flag orphaned modules never wired into production, unreachable branches, commented-out code, and tests that exercise only a dead path. Delete it; don't ship it.
+- **Duplication (blocker for verbatim/near-verbatim)** — copies drift out of sync and inflate the surface area. Extract a shared function and parameterize the difference. Two blocks that differ only by a value are one function with an argument.
+- **Hardcoding → data** — be data-driven. A `match`/`if`-chain over a known set whose arms differ only in constants is a table, not control flow. Repeated literals are a named constant or config entry. Variation belongs in data (tables, maps, config, declarative specs) interpreted by a single code path — not in parallel code paths a human must keep in lockstep.
+- **Calibration** — warranted generalization removes *existing* duplication or serves a *real* variation axis. Rule of three: two occurrences is coincidence, three is a pattern. No second caller → no parameter. The right abstraction beats three copies; the wrong abstraction is worse than five. Speculative abstraction with no real consumer is over-engineering — flag it under Layer 1, not here.
 
-**Layer 4: Security** — Input validated? Injection (SQL, command, XSS, template)? Secrets safe? Auth checks? Error messages safe?
+**Layer 3: Functionality & Correctness** — Does it do what the author intended? Good for users? Edge cases (empty, null, boundary, error)? Off-by-one, wrong booleans, missing early returns? Concurrency (races, deadlocks, shared mutable state)?
 
-**Layer 5: Naming, Clarity, Simplicity** — Descriptive without being verbose? Understandable without explanation? Comments explain "why"? Stale comments or TODOs?
+**Layer 4: Tests** — Tests for new/changed behavior? Verify behavior, not implementation? Would they fail if the code were broken? Edge cases covered? Mocks only at system boundaries?
 
-**Layer 6: Performance** (when relevant) — O(n²)+ on large data? Unnecessary allocations in hot paths? N+1 queries? Resource cleanup in all paths?
+**Layer 5: Security** — Input validated? Injection (SQL, command, XSS, template)? Secrets safe? Auth checks? Error messages safe?
+
+**Layer 6: Naming, Clarity, Simplicity** — Descriptive without being verbose? Understandable without explanation? Comments explain "why"? Stale comments or TODOs?
+
+**Layer 7: Performance** (when relevant) — O(n²)+ on large data? Unnecessary allocations in hot paths? N+1 queries? Resource cleanup in all paths?
 
 ### 5. Review every line
 
@@ -135,7 +144,7 @@ Single dated section, organized by severity (current local date/time):
 
 | Severity | Meaning |
 |----------|---------|
-| **blocker** | Correctness bug, security vuln, data loss risk |
+| **blocker** | Correctness bug, security vuln, data loss risk, dead code, or verbatim/near-verbatim duplication |
 | **warning** | Design problem, missing test, performance concern |
 | **nit** | Style preference, minor improvement |
 
@@ -220,7 +229,7 @@ No verdict label (no approve / request-changes / comment-only) — the column mo
 
 1. Ensure review column.
 2. `get task` → read body, scope the diff.
-3. `get changes` auto-detect, read every changed file, apply six layers (+ RUST_REVIEW.md for Rust).
+3. `get changes` auto-detect, read every changed file, apply seven layers (+ RUST_REVIEW.md for Rust).
 4. Zero new findings, all prior items now `- [x]`.
 5. Move to `done`.
 
