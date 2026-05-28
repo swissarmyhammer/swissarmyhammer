@@ -21,9 +21,20 @@
 //! - **reveal** (`reveal path`) — reveal a file in the OS file manager. Backs
 //!   `attachment.reveal`.
 //!
-//! The board-file lifecycle operations (`SwitchBoard` / `CloseBoard` /
-//! `NewBoard` / `OpenBoard`) are a separate follow-up task on this same crate
-//! and are deliberately absent.
+//! **board lifecycle** group:
+//! - **switch** (`switch board`) — switch the active board. Backs
+//!   `file.switchBoard`; wraps `AppState::open_board`.
+//! - **close** (`close board`) — close a board. Backs `file.closeBoard`; wraps
+//!   `AppState::close_board`.
+//! - **new** (`new board`) — create a board via the OS folder picker. Backs
+//!   `file.newBoard`; ports `new_board_dialog`.
+//! - **open** (`open board`) — open a board via the OS file-open dialog. Backs
+//!   `file.openBoard`; ports `open_board_dialog`.
+//!
+//! The board open / close / init side effects and the OS dialog all thread
+//! through state this crate cannot own (`AppState`, the tauri dialog plugin), so
+//! — exactly as new-window creation does — they are supplied as injected
+//! callbacks plus an injectable picker shim the app-shell bootstrap wires up.
 //!
 //! # Architecture
 //!
@@ -44,10 +55,12 @@ pub mod service;
 pub mod shell;
 
 pub use operations::{
-    operations, ActivateWindow, CloseWindow, GetMonitors, GetWindowPosition, OpenNewWindow,
-    OpenPath, RevealPath, SetWindowPosition,
+    operations, ActivateWindow, CloseBoard, CloseWindow, GetMonitors, GetWindowPosition, NewBoard,
+    OpenBoard, OpenNewWindow, OpenPath, RevealPath, SetWindowPosition, SwitchBoard,
 };
 pub use service::WindowService;
 pub use shell::{
-    MonitorInfo, NewWindow, OpenWindowFn, TauriWindowShell, WindowPosition, WindowShell,
+    run_new_board, run_open_board, CloseBoardFn, CreatedBoard, InitBoardFn, MonitorInfo, NewWindow,
+    OpenedBoard, OpenWindowFn, PickFolderFn, SwitchBoardFn, TauriWindowShell, WindowPosition,
+    WindowShell,
 };

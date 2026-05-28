@@ -10364,6 +10364,7 @@ dependencies = [
  "swissarmyhammer-operations-macros",
  "swissarmyhammer-plugin",
  "tauri",
+ "tempfile",
  "tokio",
  "tracing",
 ]

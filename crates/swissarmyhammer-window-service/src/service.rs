@@ -5,16 +5,15 @@
 //! `window` operation tool whose `inputSchema` and `_meta` are derived from the
 //! operation structs in [`crate::operations`].
 //!
-//! The tool exposes two op groups:
+//! The tool exposes three op groups:
 //!
 //! - **window** — `new window` (ports `create_window`), `activate window`,
 //!   `set position`, `get position`, `get monitors`, `close window`.
 //! - **OS file actions** — `open path` (backs `attachment.open`), `reveal path`
 //!   (backs `attachment.reveal`).
-//!
-//! The board-file lifecycle ops live on a separate follow-up task on this same
-//! crate; the service routes only the window + file-action verbs today, but the
-//! dispatch table can grow without reshaping the service.
+//! - **board lifecycle** — `switch board` / `close board` (wrap
+//!   `AppState::open_board` / `close_board`), `new board` / `open board` (port
+//!   the `new_board_dialog` / `open_board_dialog` folder-picker paths).
 //!
 //! The `WindowService` is bootstrapped into the plugin platform via
 //! `host.expose_rust_module("window", service)`. The integration tests in
@@ -34,8 +33,8 @@ use serde_json::Value;
 use swissarmyhammer_operations_macros::operation_tool;
 
 use crate::operations::{
-    operations, ActivateWindow, CloseWindow, GetMonitors, GetWindowPosition, OpenNewWindow,
-    OpenPath, RevealPath, SetWindowPosition,
+    operations, ActivateWindow, CloseBoard, CloseWindow, GetMonitors, GetWindowPosition, NewBoard,
+    OpenBoard, OpenNewWindow, OpenPath, RevealPath, SetWindowPosition, SwitchBoard,
 };
 use crate::shell::{WindowPosition, WindowShell};
 
@@ -147,6 +146,41 @@ impl WindowService {
         self.shell.reveal_path(&req.path).map_err(shell_error)?;
         Ok(serde_json::json!({ "ok": true, "revealed": req.path }))
     }
+
+    /// Handle a `SwitchBoard` call — switch the active board via the shell.
+    fn handle_switch_board(&self, req: SwitchBoard) -> Result<Value, McpError> {
+        self.shell.switch_board(&req.path).map_err(shell_error)?;
+        Ok(serde_json::json!({ "ok": true, "path": req.path }))
+    }
+
+    /// Handle a `CloseBoard` call — close the board at the path via the shell.
+    fn handle_close_board(&self, req: CloseBoard) -> Result<Value, McpError> {
+        self.shell.close_board(&req.path).map_err(shell_error)?;
+        Ok(serde_json::json!({ "ok": true, "path": req.path }))
+    }
+
+    /// Handle a `NewBoard` call — create a board via the picker / dialog path.
+    fn handle_new_board(&self, _req: NewBoard) -> Result<Value, McpError> {
+        let board = self.shell.new_board().map_err(shell_error)?;
+        Ok(serde_json::json!({
+            "ok": true,
+            "path": board.path,
+            "name": board.name,
+        }))
+    }
+
+    /// Handle an `OpenBoard` call — open a board via the file-open dialog.
+    ///
+    /// A cancelled dialog is a success with `opened: false` and a null `path`,
+    /// not an error — the user simply declined to open anything.
+    fn handle_open_board(&self, _req: OpenBoard) -> Result<Value, McpError> {
+        let opened = self.shell.open_board().map_err(shell_error)?;
+        Ok(serde_json::json!({
+            "ok": true,
+            "opened": opened.is_some(),
+            "path": opened.map(|b| b.path),
+        }))
+    }
 }
 
 /// Map a shell error string onto an rmcp `internal_error`.
@@ -246,6 +280,22 @@ impl ServerHandler for WindowService {
             "reveal path" => {
                 let req: RevealPath = deserialize_op(arguments, &op)?;
                 self.handle_reveal_path(req)?
+            }
+            "switch board" => {
+                let req: SwitchBoard = deserialize_op(arguments, &op)?;
+                self.handle_switch_board(req)?
+            }
+            "close board" => {
+                let req: CloseBoard = deserialize_op(arguments, &op)?;
+                self.handle_close_board(req)?
+            }
+            "new board" => {
+                let req: NewBoard = deserialize_op(arguments, &op)?;
+                self.handle_new_board(req)?
+            }
+            "open board" => {
+                let req: OpenBoard = deserialize_op(arguments, &op)?;
+                self.handle_open_board(req)?
             }
             other => {
                 return Err(McpError::invalid_params(

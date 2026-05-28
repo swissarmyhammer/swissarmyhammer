@@ -6,6 +6,7 @@
 //! its `ServerHandler` impl without spinning up the full plugin host, a live
 //! GUI, or a real file manager.
 
+mod board_lifecycle_e2e;
 mod common;
 mod meta_snapshot;
 mod window_e2e;

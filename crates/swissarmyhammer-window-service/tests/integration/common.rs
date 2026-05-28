@@ -18,7 +18,7 @@ use rmcp::transport::Transport;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use serde_json::Value;
 use swissarmyhammer_window_service::{
-    MonitorInfo, NewWindow, WindowPosition, WindowService, WindowShell,
+    CreatedBoard, MonitorInfo, NewWindow, OpenedBoard, WindowPosition, WindowService, WindowShell,
 };
 
 /// A recording [`WindowShell`] used to assert which shell method the service
@@ -37,10 +37,17 @@ pub struct SpyShell {
     pub positions: HashMap<String, WindowPosition>,
     /// The monitor list `get_monitors` hands back.
     pub monitors: Vec<MonitorInfo>,
+    /// The board `new_board` hands back, simulating the new-board dialog path.
+    pub new_board: CreatedBoard,
+    /// The board `open_board` hands back, simulating the open-board picker
+    /// resolving to a chosen folder. `None` models the user cancelling the
+    /// OS file-open dialog.
+    pub open_board: Option<OpenedBoard>,
 }
 
 impl SpyShell {
-    /// Build a spy with canned new-window, positions, and monitor list.
+    /// Build a spy with canned new-window, positions, and monitor list, and
+    /// default board-lifecycle results.
     pub fn new(
         new_window: NewWindow,
         positions: HashMap<String, WindowPosition>,
@@ -51,7 +58,27 @@ impl SpyShell {
             new_window,
             positions,
             monitors,
+            new_board: CreatedBoard {
+                path: "/tmp/new-board".to_string(),
+                name: "New Board".to_string(),
+            },
+            open_board: Some(OpenedBoard {
+                path: "/tmp/opened-board".to_string(),
+            }),
         }
+    }
+
+    /// Override the board `new_board` hands back (the new-board dialog result).
+    pub fn with_new_board(mut self, new_board: CreatedBoard) -> Self {
+        self.new_board = new_board;
+        self
+    }
+
+    /// Override the board `open_board` hands back. `None` models the user
+    /// cancelling the OS file-open picker.
+    pub fn with_open_board(mut self, open_board: Option<OpenedBoard>) -> Self {
+        self.open_board = open_board;
+        self
     }
 
     /// Snapshot the recorded call tags in order.
@@ -109,6 +136,26 @@ impl WindowShell for SpyShell {
     fn reveal_path(&self, path: &str) -> Result<(), String> {
         self.record(format!("reveal_path:{path}"));
         Ok(())
+    }
+
+    fn switch_board(&self, path: &str) -> Result<(), String> {
+        self.record(format!("switch_board:{path}"));
+        Ok(())
+    }
+
+    fn close_board(&self, path: &str) -> Result<(), String> {
+        self.record(format!("close_board:{path}"));
+        Ok(())
+    }
+
+    fn new_board(&self) -> Result<CreatedBoard, String> {
+        self.record("new_board");
+        Ok(self.new_board.clone())
+    }
+
+    fn open_board(&self) -> Result<Option<OpenedBoard>, String> {
+        self.record("open_board");
+        Ok(self.open_board.clone())
     }
 }
 

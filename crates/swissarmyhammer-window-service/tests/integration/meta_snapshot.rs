@@ -11,13 +11,9 @@ use super::common::{request_context, Harness};
 
 /// The `_meta` tree under `io.swissarmyhammer/operations` enumerates every
 /// (noun, verb, op) tuple for the `window` tool. This snapshot pins the current
-/// set of eight ops across both groups (window + OS-file actions); a deliberate
-/// addition / rename should update this assertion in the same PR as the
-/// operation struct change.
-///
-/// The board-file lifecycle ops (`switch board` / `close board` / `new board`
-/// / `open board`) are a separate follow-up task and are intentionally NOT in
-/// this list yet.
+/// set of twelve ops across three groups (window + OS-file actions + board
+/// lifecycle); a deliberate addition / rename should update this assertion in
+/// the same PR as the operation struct change.
 #[tokio::test]
 async fn window_tool_meta_operations_tree_is_complete() {
     let h = Harness::new();
@@ -51,6 +47,11 @@ async fn window_tool_meta_operations_tree_is_complete() {
         // OS-file actions group
         ("path", "open", "open path"),
         ("path", "reveal", "reveal path"),
+        // board-lifecycle group
+        ("board", "switch", "switch board"),
+        ("board", "close", "close board"),
+        ("board", "new", "new board"),
+        ("board", "open", "open board"),
     ];
 
     for (noun, verb, op_str) in &expected {

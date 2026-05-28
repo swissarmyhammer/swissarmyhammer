@@ -15,12 +15,17 @@
 //!   the service drove the right shell method with the right arguments.
 //!
 //! The board-file lifecycle operations (`SwitchBoard` / `CloseBoard` /
-//! `NewBoard` / `OpenBoard`) are a separate follow-up task on this same crate.
-//! They are deliberately absent here, but the seam is shaped so they can be
-//! added as additional trait methods without disturbing the window / file-action
-//! surface.
+//! `NewBoard` / `OpenBoard`) live alongside the window / file-action surface as
+//! additional trait methods. Two of them — `NewBoard` and `OpenBoard` — show an
+//! OS file dialog; that dialog goes through an injectable picker shim
+//! ([`PickFolderFn`]) so tests can drive the "user chose folder X" / "user
+//! cancelled" paths without standing up a native dialog. The board open / close
+//! / init side effects thread through `AppState` (which this crate cannot
+//! depend on), so — exactly as `open_new_window` does with [`OpenWindowFn`] —
+//! they are supplied as injected callbacks the app-shell bootstrap wires up.
 
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 /// A window's top-left position in logical pixels relative to the primary
 /// display's top-left origin.
@@ -67,6 +72,34 @@ pub struct NewWindow {
     pub label: String,
     /// The board path the window was opened against, if any was resolved.
     pub board_path: Option<String>,
+}
+
+/// A board created by [`WindowShell::new_board`].
+///
+/// Mirrors the result of the original `new_board_dialog` path: the user picked
+/// a folder, a board was initialized at its `.kanban` directory (if not already
+/// present), and the board was opened. Carries the resolved board path and the
+/// board name derived from the chosen folder.
+///
+/// Named to parallel [`NewWindow`] (the result of opening a window) rather than
+/// the `NewBoard` operation struct.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreatedBoard {
+    /// The resolved `.kanban` board path the new board lives at.
+    pub path: String,
+    /// The board name, derived from the chosen folder's file name.
+    pub name: String,
+}
+
+/// A board opened by [`WindowShell::open_board`].
+///
+/// Mirrors the result of the original `open_board_dialog` path: the user picked
+/// an existing folder via the OS file-open dialog and the board there was
+/// opened. Carries the resolved board path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenedBoard {
+    /// The resolved `.kanban` board path that was opened.
+    pub path: String,
 }
 
 /// The seam between `window` operations and the OS / GUI.
@@ -119,6 +152,39 @@ pub trait WindowShell: Send + Sync {
     /// `explorer /select,`) — out of the kanban command path into the shell
     /// seam.
     fn reveal_path(&self, path: &str) -> Result<(), String>;
+
+    /// Switch the active board to the one at the given path.
+    ///
+    /// Backs `file.switchBoard`. Wraps `AppState::open_board` (which resolves
+    /// the `.kanban` directory, opens / touches the board, and updates MRU
+    /// tracking) without behavior change.
+    fn switch_board(&self, path: &str) -> Result<(), String>;
+
+    /// Close the board at the given path, removing it from the open set.
+    ///
+    /// Backs `file.closeBoard`. Wraps `AppState::close_board` (which removes the
+    /// board, re-points MRU if needed, and stops any running agent) without
+    /// behavior change.
+    fn close_board(&self, path: &str) -> Result<(), String>;
+
+    /// Create a new board via the OS folder picker.
+    ///
+    /// Backs `file.newBoard`. Ports `new_board_dialog`: shows the folder picker,
+    /// derives the board name from the chosen folder, initializes a board at its
+    /// `.kanban` directory (if not already a board), and opens it. Returns the
+    /// resulting [`CreatedBoard`], or an error string on failure.
+    ///
+    /// The picker shim returning "cancelled" is surfaced as an error so the op
+    /// can report it; this is the only board op that always produces a board on
+    /// success (the dialog path has no "opened nothing" success state for new).
+    fn new_board(&self) -> Result<CreatedBoard, String>;
+
+    /// Open an existing board via the OS file-open dialog.
+    ///
+    /// Backs `file.openBoard`. Ports `open_board_dialog`: shows the folder
+    /// picker and opens the chosen board. Returns `Some(OpenedBoard)` for the
+    /// chosen board, or `None` when the user cancelled the dialog.
+    fn open_board(&self) -> Result<Option<OpenedBoard>, String>;
 }
 
 use std::sync::Arc;
@@ -135,6 +201,38 @@ use tauri::{AppHandle, Manager, Runtime};
 pub type OpenWindowFn<R> =
     Arc<dyn Fn(&AppHandle<R>, Option<String>) -> Result<NewWindow, String> + Send + Sync>;
 
+/// The injectable OS folder-picker shim for the board dialogs.
+///
+/// `NewBoard` and `OpenBoard` show a native folder picker; production wires
+/// this to Tauri's `dialog().file().pick_folder(...)`, while tests inject a
+/// closure returning a fixed path (or `None` to model the user cancelling).
+/// Returning `None` means the dialog was dismissed without a choice.
+pub type PickFolderFn = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
+
+/// A callback that initializes a board at a resolved `.kanban` path.
+///
+/// Board initialization runs the kanban `InitBoard` operation, which lives in a
+/// crate this library does not — and should not — depend on. The bootstrap site
+/// supplies this closure wired to the real init processor; it is a no-op when
+/// the path is already an initialized board.
+pub type InitBoardFn = Arc<dyn Fn(&Path, &str) -> Result<(), String> + Send + Sync>;
+
+/// A callback that opens / switches the active board to the one at the given
+/// path, threading through `AppState`.
+///
+/// `AppState::open_board` (board resolution, watcher start, MRU tracking) lives
+/// in the app bin crate this library cannot reach, mirroring why
+/// [`OpenWindowFn`] is injected. The bootstrap supplies this wired to the real
+/// `AppState`; it backs `switch_board`, `new_board`, and `open_board`.
+pub type SwitchBoardFn<R> =
+    Arc<dyn Fn(&AppHandle<R>, &Path) -> Result<(), String> + Send + Sync>;
+
+/// A callback that closes the board at the given path via `AppState`.
+///
+/// Wraps `AppState::close_board` for the same reason [`SwitchBoardFn`] wraps
+/// `open_board`. Backs `close_board`.
+pub type CloseBoardFn<R> = Arc<dyn Fn(&AppHandle<R>, &Path) -> Result<(), String> + Send + Sync>;
+
 /// Production [`WindowShell`] backed by a live `tauri::AppHandle`.
 ///
 /// Generic over the tauri [`Runtime`] so it works against both the real `Wry`
@@ -147,12 +245,37 @@ pub type OpenWindowFn<R> =
 pub struct TauriWindowShell<R: Runtime> {
     app: AppHandle<R>,
     open_window: OpenWindowFn<R>,
+    pick_folder: PickFolderFn,
+    init_board: InitBoardFn,
+    switch_board: SwitchBoardFn<R>,
+    close_board: CloseBoardFn<R>,
 }
 
 impl<R: Runtime> TauriWindowShell<R> {
-    /// Wrap a `tauri::AppHandle` plus a new-window callback as a [`WindowShell`].
-    pub fn new(app: AppHandle<R>, open_window: OpenWindowFn<R>) -> Self {
-        Self { app, open_window }
+    /// Wrap a `tauri::AppHandle` plus the injected callbacks as a
+    /// [`WindowShell`].
+    ///
+    /// `open_window` backs new-window creation; `pick_folder` is the OS
+    /// folder-picker shim the board dialogs drive; `init_board` initializes a
+    /// board at a resolved path; `switch_board` / `close_board` thread board
+    /// open / close through `AppState`. Each touches state this crate cannot
+    /// own, so all are supplied by the app-shell bootstrap.
+    pub fn new(
+        app: AppHandle<R>,
+        open_window: OpenWindowFn<R>,
+        pick_folder: PickFolderFn,
+        init_board: InitBoardFn,
+        switch_board: SwitchBoardFn<R>,
+        close_board: CloseBoardFn<R>,
+    ) -> Self {
+        Self {
+            app,
+            open_window,
+            pick_folder,
+            init_board,
+            switch_board,
+            close_board,
+        }
     }
 }
 
@@ -236,6 +359,129 @@ impl<R: Runtime> WindowShell for TauriWindowShell<R> {
         reveal_in_file_manager(path).map_err(|e| format!("failed to reveal {path}: {e}"))?;
         Ok(())
     }
+
+    fn switch_board(&self, path: &str) -> Result<(), String> {
+        (self.switch_board)(&self.app, Path::new(path))
+    }
+
+    fn close_board(&self, path: &str) -> Result<(), String> {
+        (self.close_board)(&self.app, Path::new(path))
+    }
+
+    /// Port of `new_board_dialog` / `handle_new_board`, threaded through the
+    /// injected `AppState` board-open callback.
+    fn new_board(&self) -> Result<CreatedBoard, String> {
+        run_new_board(&self.pick_folder, |kanban_path, name| {
+            (self.init_board)(kanban_path, name)
+        })
+        .and_then(|created| match created {
+            Some((created, folder)) => {
+                (self.switch_board)(&self.app, &folder)?;
+                Ok(created)
+            }
+            None => Err("new board cancelled".to_string()),
+        })
+    }
+
+    /// Port of `open_board_dialog` / `handle_open_board`, threaded through the
+    /// injected `AppState` board-open callback.
+    fn open_board(&self) -> Result<Option<OpenedBoard>, String> {
+        match run_open_board(&self.pick_folder)? {
+            Some((opened, folder)) => {
+                (self.switch_board)(&self.app, &folder)?;
+                Ok(Some(opened))
+            }
+            None => Ok(None),
+        }
+    }
+}
+
+/// The ported `new_board_dialog` / `handle_new_board` file/IO logic, decoupled
+/// from `AppState` and the tauri runtime so it is unit-testable on disk.
+///
+/// Shows the folder picker, derives the board name, resolves its `.kanban`
+/// path, and initializes the board there via `init_board`. Returns the
+/// [`CreatedBoard`] paired with the originally-chosen folder (which the caller
+/// passes to the `AppState` board-open seam), or `None` when the picker was
+/// cancelled.
+///
+/// `init_board` is the kanban `InitBoard` step, supplied by the caller because
+/// it lives in a crate this one cannot depend on; it is a no-op when the path is
+/// already an initialized board.
+pub fn run_new_board(
+    pick_folder: &PickFolderFn,
+    init_board: impl FnOnce(&Path, &str) -> Result<(), String>,
+) -> Result<Option<(CreatedBoard, PathBuf)>, String> {
+    let Some(folder) = pick_folder() else {
+        return Ok(None);
+    };
+    let name = board_name_from_folder(&folder);
+    let kanban_path = resolve_kanban_path(&folder);
+    init_board(&kanban_path, &name)?;
+    let created = CreatedBoard {
+        path: kanban_path.display().to_string(),
+        name,
+    };
+    Ok(Some((created, folder)))
+}
+
+/// The ported `open_board_dialog` / `handle_open_board` file/IO logic, decoupled
+/// from `AppState` and the tauri runtime so it is unit-testable.
+///
+/// Shows the folder picker and resolves the chosen folder to its `.kanban`
+/// path. Returns the [`OpenedBoard`] paired with the originally-chosen folder
+/// (which the caller passes to the `AppState` board-open seam), or `None` when
+/// the picker was cancelled.
+pub fn run_open_board(
+    pick_folder: &PickFolderFn,
+) -> Result<Option<(OpenedBoard, PathBuf)>, String> {
+    let Some(folder) = pick_folder() else {
+        return Ok(None);
+    };
+    let kanban_path = resolve_kanban_path(&folder);
+    let opened = OpenedBoard {
+        path: kanban_path.display().to_string(),
+    };
+    Ok(Some((opened, folder)))
+}
+
+/// Derive a board name from a chosen folder, ported from `handle_new_board`.
+///
+/// Uses the folder's file name, falling back to `"New Board"` when the path has
+/// no usable final component (e.g. a root path).
+fn board_name_from_folder(folder: &Path) -> String {
+    folder
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("New Board")
+        .to_string()
+}
+
+/// Resolve a chosen folder to its `.kanban` board directory.
+///
+/// Behavior-preserving port of `AppState::resolve_kanban_path`
+/// (`apps/kanban-app/src/state.rs`): the path itself may be a `.kanban`
+/// directory, may live inside one, or may be a folder that contains (or will
+/// contain) a `.kanban` child. Unlike the original this never returns an error
+/// — the original's only error channel was unreachable in practice — so callers
+/// get a plain `PathBuf`.
+fn resolve_kanban_path(path: &Path) -> PathBuf {
+    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+
+    // Already a .kanban directory.
+    if path.file_name().and_then(|n| n.to_str()) == Some(".kanban") && path.is_dir() {
+        return path;
+    }
+
+    // Inside a .kanban directory (e.g. /foo/.kanban/tasks).
+    for ancestor in path.ancestors() {
+        if ancestor.file_name().and_then(|n| n.to_str()) == Some(".kanban") && ancestor.is_dir() {
+            return ancestor.to_path_buf();
+        }
+    }
+
+    // A folder that contains (or will contain) a .kanban child.
+    path.join(".kanban")
 }
 
 /// Spawn the platform-specific "reveal in file manager" command.

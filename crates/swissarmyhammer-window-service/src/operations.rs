@@ -6,7 +6,7 @@
 //! `WINDOW_OPERATIONS` slice via the `operation_tool!` macro, so the two cannot
 //! drift.
 //!
-//! Operations divide into two groups:
+//! Operations divide into three groups:
 //!
 //! - **window** — window-manager actions: `OpenNewWindow` (ports the original
 //!   `create_window` Tauri command), plus the net-new `ActivateWindow`,
@@ -16,9 +16,11 @@
 //!   backs `attachment.reveal`). These relocate the direct OS calls that lived
 //!   inside the kanban attachment command path.
 //!
-//! The board-file lifecycle operations (`SwitchBoard` / `CloseBoard` /
-//! `NewBoard` / `OpenBoard`) are a separate follow-up task on this same crate
-//! and are deliberately absent here.
+//! - **board lifecycle** — `SwitchBoard` (backs `file.switchBoard`, wraps
+//!   `AppState::open_board`), `CloseBoard` (backs `file.closeBoard`, wraps
+//!   `AppState::close_board`), `NewBoard` (backs `file.newBoard`, ports the
+//!   `new_board_dialog` folder-picker path), and `OpenBoard` (backs
+//!   `file.openBoard`, ports the `open_board_dialog` folder-picker path).
 
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
@@ -179,6 +181,83 @@ pub struct RevealPath {
     pub path: String,
 }
 
+// Board-file lifecycle ──────────────────────────────────────────────────
+
+/// Switch the active board to the one at the given path.
+///
+/// Backs `file.switchBoard`. Wraps `AppState::open_board`
+/// (`apps/kanban-app/src/state.rs`) behind the `WindowShell` seam without
+/// behavior change: resolve the `.kanban` directory, open / touch the board,
+/// update MRU tracking.
+///
+/// Returns `{ ok: true, path: <string> }`.
+#[operation(
+    verb = "switch",
+    noun = "board",
+    description = "Switch the active board to the one at the given path"
+)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SwitchBoard {
+    /// The board path to switch to (a folder, a `.kanban` directory, or a path
+    /// inside one).
+    #[serde(default)]
+    pub path: String,
+}
+
+/// Close the board at the given path.
+///
+/// Backs `file.closeBoard`. Wraps `AppState::close_board`
+/// (`apps/kanban-app/src/state.rs`) behind the `WindowShell` seam without
+/// behavior change: remove the board from the open set, re-point MRU if needed,
+/// stop any running agent.
+///
+/// Returns `{ ok: true, path: <string> }`.
+#[operation(
+    verb = "close",
+    noun = "board",
+    description = "Close the board at the given path"
+)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct CloseBoard {
+    /// The board path to close.
+    #[serde(default)]
+    pub path: String,
+}
+
+/// Create a new board via the OS folder picker.
+///
+/// Backs `file.newBoard`. Ports the `new_board_dialog` handler
+/// (`apps/kanban-app/src/commands.rs`): show the folder picker, derive the board
+/// name from the chosen folder, initialize a board at its `.kanban` directory,
+/// then open it. The picker is the injectable shim so the path is testable
+/// without a native dialog.
+///
+/// Returns `{ ok: true, path: <string>, name: <string> }`.
+#[operation(
+    verb = "new",
+    noun = "board",
+    description = "Create a new board via the OS folder picker"
+)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct NewBoard {}
+
+/// Open an existing board via the OS file-open dialog.
+///
+/// Backs `file.openBoard`. Ports the `open_board_dialog` handler
+/// (`apps/kanban-app/src/commands.rs`): show the folder picker and open the
+/// chosen board. The picker is the injectable shim so the path is testable
+/// without a native dialog.
+///
+/// Returns `{ ok: true, opened: <bool>, path: <string|null> }` — `opened` is
+/// `false` with a null `path` when the user cancelled the dialog.
+#[operation(
+    verb = "open",
+    noun = "board",
+    description = "Open an existing board via the OS file-open dialog"
+)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct OpenBoard {}
+
 /// All window operations — the canonical list used for schema generation.
 ///
 /// Both the wire-schema generator (`generate_mcp_schema`) and the discovery
@@ -195,6 +274,10 @@ static WINDOW_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(
         Box::leak(Box::<CloseWindow>::default()) as &dyn Operation,
         Box::leak(Box::<OpenPath>::default()) as &dyn Operation,
         Box::leak(Box::<RevealPath>::default()) as &dyn Operation,
+        Box::leak(Box::<SwitchBoard>::default()) as &dyn Operation,
+        Box::leak(Box::<CloseBoard>::default()) as &dyn Operation,
+        Box::leak(Box::<NewBoard>::default()) as &dyn Operation,
+        Box::leak(Box::<OpenBoard>::default()) as &dyn Operation,
     ]
 });
 
