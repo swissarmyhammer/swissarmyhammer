@@ -3338,6 +3338,11 @@ mod tests {
     struct BarrierAgent {
         next_session: std::sync::atomic::AtomicUsize,
         barrier: Arc<tokio::sync::Barrier>,
+        /// Number of prompts currently in flight, and the peak ever observed.
+        /// The peak lets the test assert exactly how many prompts overlapped —
+        /// a positive, time-free proof of concurrency.
+        in_flight: std::sync::atomic::AtomicUsize,
+        peak_in_flight: std::sync::atomic::AtomicUsize,
     }
 
     impl BarrierAgent {
@@ -3345,7 +3350,16 @@ mod tests {
             Self {
                 next_session: std::sync::atomic::AtomicUsize::new(0),
                 barrier: Arc::new(tokio::sync::Barrier::new(parties)),
+                in_flight: std::sync::atomic::AtomicUsize::new(0),
+                peak_in_flight: std::sync::atomic::AtomicUsize::new(0),
             }
+        }
+
+        /// The maximum number of prompts that were ever in flight at the same
+        /// time. Equals `parties` iff every prompt overlapped on the barrier.
+        fn peak_in_flight(&self) -> usize {
+            self.peak_in_flight
+                .load(std::sync::atomic::Ordering::SeqCst)
         }
 
         async fn new_session(
@@ -3367,9 +3381,15 @@ mod tests {
             &self,
             _request: agent_client_protocol::schema::PromptRequest,
         ) -> agent_client_protocol::Result<agent_client_protocol::schema::PromptResponse> {
-            // Block until `parties` prompts are concurrently in flight. Returns
-            // immediately for every party once the last one arrives.
+            use std::sync::atomic::Ordering::SeqCst;
+            // Record this prompt as in flight and bump the observed peak.
+            let now = self.in_flight.fetch_add(1, SeqCst) + 1;
+            self.peak_in_flight.fetch_max(now, SeqCst);
+            // Block until `parties` prompts are concurrently in flight. This is
+            // the synchronization point: it can only release if the runner ran
+            // the prompts concurrently. A serial runner blocks here forever.
             self.barrier.wait().await;
+            self.in_flight.fetch_sub(1, SeqCst);
             Ok(agent_client_protocol::schema::PromptResponse::new(
                 agent_client_protocol::schema::StopReason::EndTurn,
             ))
@@ -3487,17 +3507,23 @@ mod tests {
 
     /// Multiple rules must be evaluated concurrently, not one after another.
     ///
-    /// This is proven *structurally* with a [`BarrierAgent`]: each rule's prompt
-    /// blocks until all 3 prompts are in flight together, so the call can only
-    /// complete if the runner ran them in parallel. A serial runner would block
-    /// the first prompt on the barrier forever, and the surrounding `timeout`
-    /// would fire. There is deliberately NO wall-clock threshold — the previous
-    /// `elapsed < 500ms` assertion flaked under heavy parallel CI load even when
-    /// execution was genuinely concurrent (scheduler contention stretched the
-    /// wall time past the bound).
+    /// Proven *structurally* with a [`BarrierAgent`] — pure synchronization, no
+    /// wall-clock anywhere. Each rule's prompt registers itself as in flight and
+    /// then blocks on a 3-party barrier; the barrier can only release once all 3
+    /// prompts are in flight at the same instant, which can only happen if the
+    /// runner executes the rules concurrently. We then assert the observed peak
+    /// concurrency was exactly 3 — a positive proof of overlap.
+    ///
+    /// The previous version asserted `elapsed < 500ms`, which flaked under heavy
+    /// parallel CI load even when execution was genuinely concurrent (scheduler
+    /// contention stretched the wall time past the bound). A serial regression
+    /// here instead blocks forever on the barrier and surfaces as a hang — the
+    /// correct, barrier-native failure for "did not run in parallel", with no
+    /// timing threshold to flake.
     #[tokio::test]
     async fn test_execute_ruleset_runs_rules_in_parallel() {
         let agent = Arc::new(BarrierAgent::new(3));
+        let agent_probe = Arc::clone(&agent);
         let (notifier, _) = claude_agent::NotificationSender::new(64);
         let notifier = Arc::new(notifier);
         let notifier_body = Arc::clone(&notifier);
@@ -3509,27 +3535,21 @@ mod tests {
             let mut runner = ValidatorRunner::new(conn, notifier_body).unwrap();
             runner.rule_concurrency = Arc::new(Semaphore::new(3));
 
-            // Generous per-rule timeout (30s) so the rule-level deadline never
-            // fires first; the 10s outer timeout below is the real guard.
             let ruleset = create_ruleset_with_timeout(&["a", "b", "c"], 30);
             let context = serde_json::json!({"tool_name": "Write"});
 
-            // If the rules run in parallel, all 3 prompts reach the barrier, it
-            // releases, and this completes near-instantly. If they run serially,
-            // the first prompt blocks on the barrier and this never returns — the
-            // 10s timeout (well under the 30s per-rule budget) then fires and the
-            // expect() fails with a clear message.
-            let (executed, _is_rate_limited) = tokio::time::timeout(
-                std::time::Duration::from_secs(10),
-                runner.execute_ruleset(&ruleset, HookType::Stop, &context, None),
-            )
-            .await
-            .expect(
-                "rules did not run in parallel: the 3 prompts never reached the barrier \
-                 together, so the runner is executing rules serially",
-            );
+            // Completes only once the barrier releases, i.e. once all 3 prompts
+            // overlapped. (A serial runner would deadlock the first prompt here.)
+            let (executed, _is_rate_limited) = runner
+                .execute_ruleset(&ruleset, HookType::Stop, &context, None)
+                .await;
 
             assert_eq!(executed.rule_results.len(), 3);
+            assert_eq!(
+                agent_probe.peak_in_flight(),
+                3,
+                "all 3 rule prompts must be in flight at once (concurrent execution)",
+            );
         })
         .await;
     }
