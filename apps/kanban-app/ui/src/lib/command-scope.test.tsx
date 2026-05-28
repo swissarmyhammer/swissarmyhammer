@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import type { ReactNode } from "react";
 
@@ -8,6 +8,13 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
+}));
+
+vi.mock("@/lib/mcp-transport", () => ({
+  callCommandTool: vi.fn().mockResolvedValue({ ok: true }),
+  subscribeCommandsChanged: vi.fn().mockResolvedValue(() => {}),
+  COMMAND_TOOL: "command",
+  COMMANDS_CHANGED_EVENT: "notifications/commands/changed",
 }));
 
 import {
@@ -25,6 +32,14 @@ import {
   type CommandDef,
   type CommandScope,
 } from "./command-scope";
+import { callCommandTool } from "@/lib/mcp-transport";
+
+const mockCallCommandTool = vi.mocked(callCommandTool);
+
+beforeEach(() => {
+  mockCallCommandTool.mockReset();
+  mockCallCommandTool.mockResolvedValue({ ok: true });
+});
 
 /* ---------- helpers ---------- */
 
@@ -450,10 +465,9 @@ describe("useDispatchCommand", () => {
     };
   }
 
-  it("ad-hoc dispatch calls backend with scope chain and boardPath", async () => {
-    const { invoke } = await import("@tauri-apps/api/core");
-    (invoke as ReturnType<typeof vi.fn>).mockClear();
-    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
+  it("ad-hoc dispatch routes through execute command with scope chain and board_path", async () => {
+    mockCallCommandTool.mockClear();
+    mockCallCommandTool.mockResolvedValue({ ok: true });
 
     const { result } = renderHook(() => useDispatchCommand(), {
       wrapper: boardWrapper([[]], "/boards/my-board", ["window:main"]),
@@ -463,19 +477,20 @@ describe("useDispatchCommand", () => {
       await result.current("test.cmd", { args: { foo: "bar" } });
     });
 
-    expect(invoke).toHaveBeenCalledWith("dispatch_command", {
-      cmd: "test.cmd",
-      target: undefined,
-      args: { foo: "bar" },
-      scopeChain: ["window:main"],
-      boardPath: "/boards/my-board",
+    expect(mockCallCommandTool).toHaveBeenCalledWith("execute command", {
+      id: "test.cmd",
+      ctx: {
+        scope_chain: ["window:main"],
+        target: undefined,
+        args: { foo: "bar" },
+      },
+      board_path: "/boards/my-board",
     });
   });
 
-  it("pre-bound dispatch calls backend with correct cmd", async () => {
-    const { invoke } = await import("@tauri-apps/api/core");
-    (invoke as ReturnType<typeof vi.fn>).mockClear();
-    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
+  it("pre-bound dispatch routes through execute command with correct id", async () => {
+    mockCallCommandTool.mockClear();
+    mockCallCommandTool.mockResolvedValue({ ok: true });
 
     const { result } = renderHook(() => useDispatchCommand("test.cmd"), {
       wrapper: boardWrapper([[]], "/boards/test"),
@@ -485,19 +500,19 @@ describe("useDispatchCommand", () => {
       await result.current({ args: { x: 1 } });
     });
 
-    expect(invoke).toHaveBeenCalledWith("dispatch_command", {
-      cmd: "test.cmd",
-      target: undefined,
-      args: { x: 1 },
-      scopeChain: [],
-      boardPath: "/boards/test",
+    expect(mockCallCommandTool).toHaveBeenCalledWith("execute command", {
+      id: "test.cmd",
+      ctx: {
+        scope_chain: [],
+        target: undefined,
+        args: { x: 1 },
+      },
+      board_path: "/boards/test",
     });
   });
 
   it("frontend execute handler is called when command resolves in scope", async () => {
-    const { invoke } = await import("@tauri-apps/api/core");
-    (invoke as ReturnType<typeof vi.fn>).mockClear();
-    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    mockCallCommandTool.mockClear();
 
     const executeFn = vi.fn();
     const cmds = [cmd("local.action", { execute: executeFn })];
@@ -511,17 +526,13 @@ describe("useDispatchCommand", () => {
     });
 
     expect(executeFn).toHaveBeenCalledOnce();
-    // dispatch_command should NOT have been called
-    expect(invoke).not.toHaveBeenCalledWith(
-      "dispatch_command",
-      expect.anything(),
-    );
+    // The Command service must NOT be invoked for client-side handlers.
+    expect(mockCallCommandTool).not.toHaveBeenCalled();
   });
 
-  it("backend fallback when command not in scope", async () => {
-    const { invoke } = await import("@tauri-apps/api/core");
-    (invoke as ReturnType<typeof vi.fn>).mockClear();
-    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
+  it("Command service fallback when command not in scope", async () => {
+    mockCallCommandTool.mockClear();
+    mockCallCommandTool.mockResolvedValue({ ok: true });
 
     const { result } = renderHook(() => useDispatchCommand(), {
       wrapper: boardWrapper([[cmd("other")]], "/boards/test"),
@@ -531,19 +542,20 @@ describe("useDispatchCommand", () => {
       await result.current("unknown.cmd", { target: "task:abc" });
     });
 
-    expect(invoke).toHaveBeenCalledWith("dispatch_command", {
-      cmd: "unknown.cmd",
-      target: "task:abc",
-      args: undefined,
-      scopeChain: [],
-      boardPath: "/boards/test",
+    expect(mockCallCommandTool).toHaveBeenCalledWith("execute command", {
+      id: "unknown.cmd",
+      ctx: {
+        scope_chain: [],
+        target: "task:abc",
+        args: undefined,
+      },
+      board_path: "/boards/test",
     });
   });
 
   it("scope chain is automatic from context", async () => {
-    const { invoke } = await import("@tauri-apps/api/core");
-    (invoke as ReturnType<typeof vi.fn>).mockClear();
-    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
+    mockCallCommandTool.mockClear();
+    mockCallCommandTool.mockResolvedValue({ ok: true });
 
     const { result } = renderHook(() => useDispatchCommand(), {
       wrapper: boardWrapper([[], [], []], "/boards/nested", [
@@ -557,19 +569,20 @@ describe("useDispatchCommand", () => {
       await result.current("test.cmd");
     });
 
-    expect(invoke).toHaveBeenCalledWith("dispatch_command", {
-      cmd: "test.cmd",
-      target: undefined,
-      args: undefined,
-      scopeChain: ["task:abc", "column:todo", "window:board-2"],
-      boardPath: "/boards/nested",
+    expect(mockCallCommandTool).toHaveBeenCalledWith("execute command", {
+      id: "test.cmd",
+      ctx: {
+        scope_chain: ["task:abc", "column:todo", "window:board-2"],
+        target: undefined,
+        args: undefined,
+      },
+      board_path: "/boards/nested",
     });
   });
 
   it("explicit scopeChain in options overrides context-derived chain", async () => {
-    const { invoke } = await import("@tauri-apps/api/core");
-    (invoke as ReturnType<typeof vi.fn>).mockClear();
-    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
+    mockCallCommandTool.mockClear();
+    mockCallCommandTool.mockResolvedValue({ ok: true });
 
     // Render inside a scope with monikers so there IS a context-derived chain
     const { result } = renderHook(() => useDispatchCommand(), {
@@ -588,12 +601,14 @@ describe("useDispatchCommand", () => {
       });
     });
 
-    expect(invoke).toHaveBeenCalledWith("dispatch_command", {
-      cmd: "entity.copy",
-      target: "task:abc",
-      args: undefined,
-      scopeChain: ["task:abc", "column:todo", "window:main"],
-      boardPath: "/boards/test",
+    expect(mockCallCommandTool).toHaveBeenCalledWith("execute command", {
+      id: "entity.copy",
+      ctx: {
+        scope_chain: ["task:abc", "column:todo", "window:main"],
+        target: "task:abc",
+        args: undefined,
+      },
+      board_path: "/boards/test",
     });
   });
 
@@ -688,9 +703,8 @@ describe("useDispatchCommand", () => {
   });
 
   it("dispatch reads the latest focused scope at call time, not at render time", async () => {
-    const { invoke } = await import("@tauri-apps/api/core");
-    (invoke as ReturnType<typeof vi.fn>).mockClear();
-    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
+    mockCallCommandTool.mockClear();
+    mockCallCommandTool.mockResolvedValue({ ok: true });
 
     let focused: CommandScope | null = makeFocusedScope([
       "task:a",
@@ -723,13 +737,15 @@ describe("useDispatchCommand", () => {
       await capturedDispatch("test.cmd");
     });
 
-    // The backend call must reflect the CURRENT focused scope, not the stale one.
-    expect(invoke).toHaveBeenCalledWith("dispatch_command", {
-      cmd: "test.cmd",
-      target: undefined,
-      args: undefined,
-      scopeChain: ["task:b", "column:doing", "window:main"],
-      boardPath: "/boards/test",
+    // The service call must reflect the CURRENT focused scope, not the stale one.
+    expect(mockCallCommandTool).toHaveBeenCalledWith("execute command", {
+      id: "test.cmd",
+      ctx: {
+        scope_chain: ["task:b", "column:doing", "window:main"],
+        target: undefined,
+        args: undefined,
+      },
+      board_path: "/boards/test",
     });
   });
 
@@ -791,18 +807,14 @@ describe("CommandBusyProvider", () => {
   });
 
   it("isBusy transitions true during backend dispatch and false after", async () => {
-    const { invoke } = await import("@tauri-apps/api/core");
-
-    // Create a deferred promise so we can control when invoke resolves
+    // Create a deferred promise so we can control when the service resolves
     let resolveInvoke!: (v: unknown) => void;
-    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string) => {
-      if (cmd === "dispatch_command") {
-        return new Promise((resolve) => {
+    mockCallCommandTool.mockImplementation(
+      () =>
+        new Promise((resolve) => {
           resolveInvoke = resolve;
-        });
-      }
-      return Promise.resolve();
-    });
+        }),
+    );
 
     const { result } = renderHook(
       () => ({
@@ -833,17 +845,13 @@ describe("CommandBusyProvider", () => {
   });
 
   it("isBusy returns to false even when dispatch rejects", async () => {
-    const { invoke } = await import("@tauri-apps/api/core");
-
     let rejectInvoke!: (e: Error) => void;
-    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string) => {
-      if (cmd === "dispatch_command") {
-        return new Promise((_resolve, reject) => {
+    mockCallCommandTool.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
           rejectInvoke = reject;
-        });
-      }
-      return Promise.resolve();
-    });
+        }),
+    );
 
     const { result } = renderHook(
       () => ({
@@ -873,17 +881,13 @@ describe("CommandBusyProvider", () => {
   });
 
   it("isBusy stays true when multiple commands are in-flight", async () => {
-    const { invoke } = await import("@tauri-apps/api/core");
-
     const resolvers: Array<(v: unknown) => void> = [];
-    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string) => {
-      if (cmd === "dispatch_command") {
-        return new Promise((resolve) => {
+    mockCallCommandTool.mockImplementation(
+      () =>
+        new Promise((resolve) => {
           resolvers.push(resolve);
-        });
-      }
-      return Promise.resolve();
-    });
+        }),
+    );
 
     const { result } = renderHook(
       () => ({

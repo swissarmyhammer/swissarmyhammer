@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { callCommandTool } from "@/lib/mcp-transport";
 
 // ---------------------------------------------------------------------------
 // ActiveBoardPath context — per-window board path for multi-window dispatch
@@ -433,7 +434,8 @@ export interface DispatchOptions {
  *
  * Automatically reads the scope chain and board path from context.
  * Commands registered in scope with an `execute` handler run client-side;
- * all others are forwarded to the Rust backend via `dispatch_command`.
+ * all others are forwarded to the Command MCP service via its
+ * `execute command` verb (see {@link runBackendDispatch}).
  *
  * @overload Ad-hoc dispatch: returns a function that takes a command ID and options.
  */
@@ -509,7 +511,7 @@ export function useDispatchCommand(presetCmd?: string) {
         return runFrontendExecute(cmdId, opts, resolved);
       }
 
-      // Backend dispatch — Tauri IPC with busy tracking
+      // Command service dispatch — `execute command` with busy tracking.
       const chain = opts.scopeChain ?? scopeChainFromScope(effectiveScope);
       return runBackendDispatch(
         cmdId,
@@ -556,7 +558,21 @@ async function runFrontendExecute(
   await resolved.execute!(opts);
 }
 
-/** Dispatch to the Rust backend, wrapping the call in the busy counter. */
+/**
+ * Dispatch a command through the Command MCP service, wrapping the call in
+ * the busy counter.
+ *
+ * The hook captures the scope chain + target + args at CLICK time (see
+ * `useDispatchCommand`) and hands them to the service's `execute command`
+ * verb inside `ctx`, whose shape mirrors the service's `CommandContext`
+ * (`scope_chain` / `target` / `args`). The service forwards `ctx` to the
+ * registered callback unchanged — no command logic runs in React.
+ *
+ * `board_path` is a kanban-app multi-window concern, not part of the
+ * service's `CommandContext`; it rides alongside `id`/`ctx` so the host's
+ * callback dispatcher can route the invocation to the correct window. It is
+ * omitted entirely when no active board path is set.
+ */
 async function runBackendDispatch(
   cmdId: string,
   opts: DispatchOptions,
@@ -566,12 +582,14 @@ async function runBackendDispatch(
 ): Promise<unknown> {
   setInflightCount((c) => c + 1);
   try {
-    return await invoke("dispatch_command", {
-      cmd: cmdId,
-      target: opts.target,
-      args: opts.args,
-      scopeChain: chain,
-      ...(boardPath ? { boardPath } : {}),
+    return await callCommandTool("execute command", {
+      id: cmdId,
+      ctx: {
+        scope_chain: chain,
+        target: opts.target,
+        args: opts.args,
+      },
+      ...(boardPath ? { board_path: boardPath } : {}),
     });
   } finally {
     setInflightCount((c) => c - 1);
