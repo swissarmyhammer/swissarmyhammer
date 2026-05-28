@@ -119,80 +119,12 @@ impl swissarmyhammer_common::lifecycle::Initializable for SkillTool {
     }
 }
 
-impl swissarmyhammer_common::health::Doctorable for SkillTool {
-    fn name(&self) -> &str {
-        "Skill"
-    }
-
-    fn category(&self) -> &str {
-        "tools"
-    }
-
-    fn run_health_checks(&self) -> Vec<swissarmyhammer_common::health::HealthCheck> {
-        use swissarmyhammer_common::health::HealthCheck;
-
-        let mut checks = Vec::new();
-        let cat = self.category();
-
-        // Determine project root for checking installed skills
-        let project_root = swissarmyhammer_common::utils::find_git_repository_root()
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-        let skills_dir = project_root.join(".claude").join("skills");
-
-        // Use the library to get the list of expected skills
-        match self.library.try_read() {
-            Ok(lib) => {
-                let skills = lib.list();
-                if skills.is_empty() {
-                    checks.push(HealthCheck::warning(
-                        "Skills library",
-                        "No skills loaded in library",
-                        Some("Run 'sah init' to install skills".to_string()),
-                        cat,
-                    ));
-                    return checks;
-                }
-
-                let mut missing = Vec::new();
-                for skill in &skills {
-                    let skill_md = skills_dir.join(skill.name.as_str()).join("SKILL.md");
-                    if !skill_md.exists() {
-                        missing.push(skill.name.as_str().to_string());
-                    }
-                }
-
-                if missing.is_empty() {
-                    checks.push(HealthCheck::ok(
-                        "Skills installation",
-                        format!(
-                            "All {} skills installed in {}",
-                            skills.len(),
-                            skills_dir.display()
-                        ),
-                        cat,
-                    ));
-                } else {
-                    checks.push(HealthCheck::warning(
-                        "Skills installation",
-                        format!("Missing skills: {}", missing.join(", ")),
-                        Some("Run 'sah init' to install skills".to_string()),
-                        cat,
-                    ));
-                }
-            }
-            Err(_) => {
-                checks.push(HealthCheck::warning(
-                    "Skills library",
-                    "Could not read skill library (locked)",
-                    None,
-                    cat,
-                ));
-            }
-        }
-
-        checks
-    }
-}
+// SkillTool has no scope-aware health checks of its own — Claude Code skill
+// installation is detected by mirdan's install stack (`Claude Code · {project,
+// user} · Skills`), which knows both `~/.claude/skills/` and the project's
+// `.claude/skills/`. The legacy project-scope-only `Skills installation` check
+// was removed (kanban 01KSMXKZM1NZV1QH0SSKAP0V4P).
+crate::impl_empty_doctorable!(SkillTool);
 
 #[async_trait]
 impl AgentTool for SkillTool {}

@@ -80,6 +80,8 @@ pub fn load_credentials() -> Option<Credentials> {
     }
 
     let contents = fs::read_to_string(&path).ok()?;
+    // Strict on purpose: we wrote this credentials file ourselves via
+    // `save_credentials` -> `serde_json::to_string_pretty`.
     serde_json::from_str(&contents).ok()
 }
 

@@ -65,6 +65,9 @@ impl Lockfile {
             return Ok(Self::default());
         }
         let content = std::fs::read_to_string(&path)?;
+        // Strict on purpose: the lockfile is our own output written by
+        // `save` -> `serde_json::to_string_pretty`. Users should not hand-edit
+        // it; a JSONC tolerance would mask corruption rather than help.
         serde_json::from_str(&content).map_err(|e| {
             RegistryError::Validation(format!("Invalid lockfile '{}': {}", path.display(), e))
         })

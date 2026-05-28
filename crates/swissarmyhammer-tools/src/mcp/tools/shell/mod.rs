@@ -266,103 +266,14 @@ fn check_config_file(check_name: &str, path: &std::path::Path, cat: &str) -> Hea
     }
 }
 
-/// Check that `.claude/settings.json` denies the built-in `Bash` tool.
-///
-/// Denying Bash forces agents through the shell tool's security pipeline.
-fn check_bash_denied(cat: &str) -> HealthCheck {
-    let settings = match load_claude_settings_for_bash_check(cat) {
-        Ok(s) => s,
-        Err(warning) => return warning,
-    };
-    if settings_denies_bash(&settings) {
-        HealthCheck::ok(
-            "Bash denied",
-            "Bash is correctly denied in .claude/settings.json — shell tool is the intended execution path",
-            cat,
-        )
-    } else {
-        HealthCheck::warning(
-            "Bash denied",
-            "Bash is not denied in .claude/settings.json — agents may bypass the shell tool's security controls",
-            Some("Add \"Bash\" to permissions.deny in .claude/settings.json to enforce shell tool security policies".to_string()),
-            cat,
-        )
-    }
-}
-
-/// Load `.claude/settings.json` for the Bash-denied health check.
-///
-/// On failure (missing file, read error, or JSON parse error), returns a
-/// warning-level `HealthCheck` in the `"Bash denied"` namespace suitable for
-/// the caller to return directly.
-fn load_claude_settings_for_bash_check(cat: &str) -> Result<serde_json::Value, HealthCheck> {
-    let path = std::path::PathBuf::from(".claude").join("settings.json");
-    if !path.exists() {
-        return Err(HealthCheck::warning(
-            "Bash denied",
-            "No .claude/settings.json found — Bash may not be denied for agents",
-            Some("Create .claude/settings.json with {\"permissions\":{\"deny\":[\"Bash\"]}} to enforce shell tool security policies".to_string()),
-            cat,
-        ));
-    }
-    let content = std::fs::read_to_string(&path).map_err(|e| {
-        HealthCheck::warning(
-            "Bash denied",
-            format!(".claude/settings.json could not be read: {}", e),
-            Some("Check file permissions on .claude/settings.json".to_string()),
-            cat,
-        )
-    })?;
-    serde_json::from_str(&content).map_err(|e| {
-        HealthCheck::warning(
-            "Bash denied",
-            format!(".claude/settings.json could not be parsed as JSON: {}", e),
-            Some(
-                "Ensure .claude/settings.json is valid JSON with a permissions.deny array"
-                    .to_string(),
-            ),
-            cat,
-        )
-    })
-}
-
-/// Return `true` when the Claude settings object lists `"Bash"` under
-/// `permissions.deny`. Missing keys or wrong types all evaluate to `false`.
-fn settings_denies_bash(settings: &serde_json::Value) -> bool {
-    let Some(deny) = settings
-        .get("permissions")
-        .and_then(|p| p.get("deny"))
-        .and_then(|d| d.as_array())
-    else {
-        return false;
-    };
-    deny.iter().any(|v| v.as_str() == Some("Bash"))
-}
-
-/// Check whether the shell skill is deployed under `.claude/skills/shell`.
-fn check_shell_skill_deployed(cat: &str) -> HealthCheck {
-    let path = std::path::PathBuf::from(".claude")
-        .join("skills")
-        .join("shell");
-    if !path.exists() {
-        return HealthCheck::warning(
-            "Shell skill deployed",
-            "Shell skill not found at .claude/skills/shell — agents may not have shell instructions",
-            Some("Run `sah init` or create a symlink from .claude/skills/shell to the shell skill directory".to_string()),
-            cat,
-        );
-    }
-    let is_symlink = path
-        .symlink_metadata()
-        .map(|m| m.file_type().is_symlink())
-        .unwrap_or(false);
-    let message = if is_symlink {
-        "Shell skill is deployed as a symlink in .claude/skills/shell"
-    } else {
-        "Shell skill directory exists at .claude/skills/shell"
-    };
-    HealthCheck::ok("Shell skill deployed", message, cat)
-}
+// The legacy `Bash denied` and `Shell skill deployed` health checks were removed
+// (kanban 01KSMXKZM1NZV1QH0SSKAP0V4P): both inspected only project-scope
+// `.claude/` and produced false warnings under a user-scope install. Their
+// concerns are now covered by mirdan's scope-aware install stack:
+//   - `Claude Code · {project,user} · Permissions` (Bash denied)
+//   - `Claude Code · {project,user} · Skills`      (shell skill deployed)
+// The installer side — `Initializable::init` writing Bash to deny — is
+// unchanged.
 
 /// Create `.shell/config.yaml` from the builtin template when it doesn't exist.
 ///
@@ -488,8 +399,9 @@ impl Doctorable for ShellExecuteTool {
     /// - All deny/permit regex patterns compile
     /// - User config (~/.shell/config.yaml) loads if present
     /// - Project config (.shell/config.yaml) loads if present
-    /// - Bash is denied in .claude/settings.json permissions.deny
-    /// - Shell skill is deployed (check symlink exists in .claude/skills/shell)
+    ///
+    /// Note: scope-aware checks for `.claude/settings.json` Bash denial and the
+    /// deployed shell skill live in mirdan's install stack, not here.
     fn run_health_checks(&self) -> Vec<HealthCheck> {
         let cat = self.category();
         let mut checks = Vec::new();
@@ -499,8 +411,6 @@ impl Doctorable for ShellExecuteTool {
             checks.push(check);
         }
         checks.push(check_project_config(cat));
-        checks.push(check_bash_denied(cat));
-        checks.push(check_shell_skill_deployed(cat));
 
         checks
     }
@@ -1339,146 +1249,6 @@ mod tests {
             project_check.unwrap().status,
             HealthStatus::Error,
             "Invalid project config should produce Error status"
-        );
-    }
-
-    /// Test health check when .claude/settings.json exists but Bash is NOT in deny
-    #[tokio::test]
-    async fn test_health_check_bash_not_denied() {
-        use swissarmyhammer_common::health::HealthStatus;
-        use swissarmyhammer_common::test_utils::CurrentDirGuard;
-
-        let tmp = tempfile::TempDir::new().unwrap();
-        let _guard = CurrentDirGuard::new(tmp.path()).unwrap();
-
-        // Create .claude/settings.json WITHOUT Bash in deny
-        let claude_dir = tmp.path().join(".claude");
-        std::fs::create_dir_all(&claude_dir).unwrap();
-        std::fs::write(
-            claude_dir.join("settings.json"),
-            r#"{"permissions":{"deny":["SomeOtherTool"]}}"#,
-        )
-        .unwrap();
-
-        let tool = ShellExecuteTool::new_isolated();
-        let checks = tool.run_health_checks();
-
-        let bash_check = checks.iter().find(|c| c.name == "Bash denied");
-        assert!(bash_check.is_some(), "Should have a Bash denied check");
-        assert_eq!(
-            bash_check.unwrap().status,
-            HealthStatus::Warning,
-            "Bash not denied should produce Warning status: {:?}",
-            bash_check.unwrap().message
-        );
-    }
-
-    /// Test health check when .claude/settings.json has invalid JSON
-    #[tokio::test]
-    async fn test_health_check_settings_invalid_json() {
-        use swissarmyhammer_common::health::HealthStatus;
-        use swissarmyhammer_common::test_utils::CurrentDirGuard;
-
-        let tmp = tempfile::TempDir::new().unwrap();
-        let _guard = CurrentDirGuard::new(tmp.path()).unwrap();
-
-        // Create .claude/settings.json with invalid JSON
-        let claude_dir = tmp.path().join(".claude");
-        std::fs::create_dir_all(&claude_dir).unwrap();
-        std::fs::write(claude_dir.join("settings.json"), "not json at all {{{").unwrap();
-
-        let tool = ShellExecuteTool::new_isolated();
-        let checks = tool.run_health_checks();
-
-        let bash_check = checks.iter().find(|c| c.name == "Bash denied");
-        assert!(bash_check.is_some(), "Should have a Bash denied check");
-        assert_eq!(
-            bash_check.unwrap().status,
-            HealthStatus::Warning,
-            "Invalid settings.json should produce Warning status"
-        );
-    }
-
-    /// Test health check when .claude/settings.json has Bash correctly in deny
-    #[tokio::test]
-    async fn test_health_check_bash_is_denied() {
-        use swissarmyhammer_common::health::HealthStatus;
-        use swissarmyhammer_common::test_utils::CurrentDirGuard;
-
-        let tmp = tempfile::TempDir::new().unwrap();
-        let _guard = CurrentDirGuard::new(tmp.path()).unwrap();
-
-        // Create .claude/settings.json WITH Bash in deny
-        let claude_dir = tmp.path().join(".claude");
-        std::fs::create_dir_all(&claude_dir).unwrap();
-        std::fs::write(
-            claude_dir.join("settings.json"),
-            r#"{"permissions":{"deny":["Bash"]}}"#,
-        )
-        .unwrap();
-
-        let tool = ShellExecuteTool::new_isolated();
-        let checks = tool.run_health_checks();
-
-        let bash_check = checks.iter().find(|c| c.name == "Bash denied");
-        assert!(bash_check.is_some(), "Should have a Bash denied check");
-        assert_eq!(
-            bash_check.unwrap().status,
-            HealthStatus::Ok,
-            "Bash denied should produce Ok status"
-        );
-    }
-
-    /// Test health check when shell skill directory exists (not a symlink)
-    #[tokio::test]
-    async fn test_health_check_shell_skill_directory() {
-        use swissarmyhammer_common::health::HealthStatus;
-        use swissarmyhammer_common::test_utils::CurrentDirGuard;
-
-        let tmp = tempfile::TempDir::new().unwrap();
-        let _guard = CurrentDirGuard::new(tmp.path()).unwrap();
-
-        // Create .claude/skills/shell as a regular directory
-        let skill_dir = tmp.path().join(".claude").join("skills").join("shell");
-        std::fs::create_dir_all(&skill_dir).unwrap();
-
-        let tool = ShellExecuteTool::new_isolated();
-        let checks = tool.run_health_checks();
-
-        let skill_check = checks.iter().find(|c| c.name == "Shell skill deployed");
-        assert!(
-            skill_check.is_some(),
-            "Should have a Shell skill deployed check"
-        );
-        assert_eq!(
-            skill_check.unwrap().status,
-            HealthStatus::Ok,
-            "Shell skill directory should produce Ok status"
-        );
-    }
-
-    /// Test health check when shell skill does not exist
-    #[tokio::test]
-    async fn test_health_check_shell_skill_missing() {
-        use swissarmyhammer_common::health::HealthStatus;
-        use swissarmyhammer_common::test_utils::CurrentDirGuard;
-
-        let tmp = tempfile::TempDir::new().unwrap();
-        let _guard = CurrentDirGuard::new(tmp.path()).unwrap();
-
-        // No skill directory created
-        let tool = ShellExecuteTool::new_isolated();
-        let checks = tool.run_health_checks();
-
-        let skill_check = checks.iter().find(|c| c.name == "Shell skill deployed");
-        assert!(
-            skill_check.is_some(),
-            "Should have a Shell skill deployed check"
-        );
-        assert_eq!(
-            skill_check.unwrap().status,
-            HealthStatus::Warning,
-            "Missing shell skill should produce Warning status"
         );
     }
 
