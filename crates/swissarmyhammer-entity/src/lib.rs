@@ -24,6 +24,8 @@ pub mod events;
 pub mod filter;
 pub mod id_types;
 pub mod io;
+pub mod operations;
+pub mod server;
 pub mod store;
 pub mod undo_commands;
 pub mod watcher;
@@ -39,6 +41,7 @@ pub use io::{
     entity_extension, entity_file_path, read_entity, read_entity_dir, restore_entity_files,
     trash_entity_files, write_entity,
 };
+pub use server::EntityServer;
 pub use store::EntityTypeStore;
 pub use undo_commands::{RedoCmd, UndoCmd};
 pub use watcher::EntityWatcher;

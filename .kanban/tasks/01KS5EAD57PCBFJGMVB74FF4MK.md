@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KS5F5ZNA0621X8KM2NPERXNV
-position_column: todo
-position_ordinal: '9880'
+position_column: review
+position_ordinal: '80'
 project: entity-service
 title: '`entity` MCP server: generic CRUD + archive + kanban-frozen guard'
 ---
