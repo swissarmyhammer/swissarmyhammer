@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KS36KNHH9BPC82MFMGTY3T5J
 - 01KS5F7BR6850RKT67X4CNHPAZ
-position_column: review
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffc180
 project: command-events
 title: 'MCP notification surface: store-keyed change events for all stored things (not just entities)'
 ---

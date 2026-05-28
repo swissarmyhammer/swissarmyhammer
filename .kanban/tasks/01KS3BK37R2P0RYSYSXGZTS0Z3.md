@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KS36KNHH9BPC82MFMGTY3T5J
-position_column: todo
-position_ordinal: '9580'
+position_column: review
+position_ordinal: '80'
 project: builtin-commands
 title: 'Plugin catalog: enumerate every builtin plugin + lock cut-over baseline'
 ---

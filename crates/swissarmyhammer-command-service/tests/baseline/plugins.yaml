@@ -1,0 +1,805 @@
+# =============================================================================
+# LOCKED PLUGIN CATALOG — builtin-commands cut-over baseline.
+#
+# Card 01KS3BK37R2P0RYSYSXGZTS0Z3. This is the authoritative contract for every
+# plugin-port task and the cut-over e2e test.
+#
+# Structure:
+#   plugins:
+#     - name:            plugin id
+#       directory:       crate-relative dir the YAML sources live in
+#       ensure_services: services this plugin requires at registration
+#       source_yamls:    the YAML file(s) contributing this plugin's commands
+#       commands:        full per-command roster (metadata 1:1 with the source
+#                        YAML, plus `backend` = MCP server the command routes to)
+#
+# Tallies locked by catalog_self_check.rs: 7 plugins / 12 source YAMLs /
+# 62 commands.
+#
+# `backend` is an independent dimension from `source_yaml`: e.g. ui.setFocus is
+# sourced from ui.yaml but backed by the `focus` server.
+#
+# Per-command metadata mirrors the source YAML exactly. Fields only present when
+# the YAML carries them (absent == default), so the fidelity test can compare
+# 1:1.
+# =============================================================================
+
+plugins:
+  # ---------------------------------------------------------------------------
+  # 1. task-commands — 3 — task.yaml
+  # ---------------------------------------------------------------------------
+  - name: task-commands
+    directory: crates/swissarmyhammer-kanban/builtin/commands
+    ensure_services: [commands, kanban]
+    source_yamls: [task.yaml]
+    commands:
+      - id: task.move
+        name: Move Task
+        source_yaml: task.yaml
+        backend: kanban
+        scope: "entity:task"
+        undoable: true
+        params:
+          - name: task
+            from: scope_chain
+            entity_type: task
+          - name: column
+            from: target
+            entity_type: column
+          - name: drop_index
+            from: args
+
+      - id: task.untag
+        name: Remove Tag
+        source_yaml: task.yaml
+        backend: kanban
+        scope: "entity:tag,entity:task"
+        undoable: true
+        context_menu: true
+        keys:
+          vim: x
+          cua: Delete
+        params:
+          - name: tag
+            from: scope_chain
+            entity_type: tag
+          - name: task
+            from: scope_chain
+            entity_type: task
+
+      - id: task.doThisNext
+        name: Do This Next
+        source_yaml: task.yaml
+        backend: kanban
+        scope: "entity:task"
+        undoable: true
+        context_menu: true
+        params:
+          - name: task
+            from: scope_chain
+            entity_type: task
+
+  # ---------------------------------------------------------------------------
+  # 2. kanban-misc-commands — 5 — column/attachment/tag/view.yaml
+  # ---------------------------------------------------------------------------
+  - name: kanban-misc-commands
+    directory: crates/swissarmyhammer-kanban/builtin/commands
+    ensure_services: [commands, kanban, window, views]
+    source_yamls: [column.yaml, attachment.yaml, tag.yaml, view.yaml]
+    commands:
+      - id: column.reorder
+        name: Reorder Columns
+        source_yaml: column.yaml
+        backend: kanban
+        undoable: true
+        visible: false
+        params:
+          - name: id
+            from: args
+          - name: target_index
+            from: args
+
+      - id: attachment.open
+        name: Open
+        source_yaml: attachment.yaml
+        backend: window
+        scope: "attachment"
+        context_menu: true
+
+      - id: attachment.reveal
+        name: Show in Finder
+        source_yaml: attachment.yaml
+        backend: window
+        scope: "attachment"
+        context_menu: true
+
+      - id: tag.update
+        name: Update Tag
+        source_yaml: tag.yaml
+        backend: kanban
+        scope: "entity:tag"
+        undoable: true
+        visible: false
+        params:
+          - name: id
+            from: scope_chain
+            entity_type: tag
+
+      - id: view.set
+        name: Switch View
+        source_yaml: view.yaml
+        backend: views
+        visible: false
+        params:
+          - name: view_id
+            from: args
+
+  # ---------------------------------------------------------------------------
+  # 3. file-commands — 4 — file.yaml
+  # ---------------------------------------------------------------------------
+  - name: file-commands
+    directory: crates/swissarmyhammer-kanban/builtin/commands
+    ensure_services: [commands, window]
+    source_yamls: [file.yaml]
+    commands:
+      - id: file.switchBoard
+        name: Switch Board
+        source_yaml: file.yaml
+        backend: window
+        undoable: false
+
+      - id: file.closeBoard
+        name: Close Board
+        source_yaml: file.yaml
+        backend: window
+        undoable: false
+        keys:
+          cua: Mod+W
+          vim: Mod+W
+        menu:
+          path: [File]
+          group: 0
+          order: 2
+
+      - id: file.newBoard
+        name: New Board
+        source_yaml: file.yaml
+        backend: window
+        undoable: false
+        keys:
+          cua: Mod+Shift+B
+        menu:
+          path: [File]
+          group: 0
+          order: 0
+
+      - id: file.openBoard
+        name: Open Board
+        source_yaml: file.yaml
+        backend: window
+        undoable: false
+        keys:
+          cua: Mod+O
+        menu:
+          path: [File]
+          group: 0
+          order: 1
+
+  # ---------------------------------------------------------------------------
+  # 4. perspective-commands — 17 — perspective.yaml
+  # ---------------------------------------------------------------------------
+  - name: perspective-commands
+    directory: crates/swissarmyhammer-kanban/builtin/commands
+    ensure_services: [commands, views]
+    source_yamls: [perspective.yaml]
+    commands:
+      - id: perspective.load
+        name: Load Perspective
+        source_yaml: perspective.yaml
+        backend: views
+        params:
+          - name: name
+            from: args
+        keys: {}
+
+      - id: perspective.save
+        name: Save Perspective
+        source_yaml: perspective.yaml
+        backend: views
+        tab_button:
+          icon: plus
+        undoable: true
+        params:
+          - name: name
+            from: args
+            shape: text
+          - name: view_id
+            from: scope_chain
+            entity_type: view
+        keys: {}
+
+      - id: perspective.delete
+        name: Delete Perspective
+        source_yaml: perspective.yaml
+        backend: views
+        scope: "entity:perspective"
+        undoable: true
+        context_menu: true
+        params:
+          - name: name
+            from: args
+        keys: {}
+
+      - id: perspective.rename
+        name: Rename Perspective
+        source_yaml: perspective.yaml
+        backend: views
+        visible: false
+        undoable: true
+        params:
+          - name: id
+            from: args
+          - name: new_name
+            from: args
+        keys: {}
+
+      - id: perspective.filter.focus
+        name: Focus Filter
+        source_yaml: perspective.yaml
+        backend: views
+        scope: "entity:perspective"
+        tab_button:
+          icon: filter
+        params:
+          - name: perspective_id
+            from: scope_chain
+            entity_type: perspective
+        keys: {}
+
+      - id: perspective.filter
+        name: Set Filter
+        source_yaml: perspective.yaml
+        backend: views
+        scope: "entity:perspective"
+        undoable: true
+        params:
+          - name: filter
+            from: args
+          - name: perspective_id
+            from: args
+        keys: {}
+
+      - id: perspective.clearFilter
+        name: Clear Filter
+        source_yaml: perspective.yaml
+        backend: views
+        scope: "entity:perspective"
+        undoable: true
+        context_menu: true
+        params:
+          - name: perspective_id
+            from: args
+        keys: {}
+
+      - id: perspective.group
+        name: Group By
+        source_yaml: perspective.yaml
+        backend: views
+        scope: "entity:perspective"
+        tab_button:
+          icon: group
+        undoable: true
+        params:
+          - name: group
+            from: args
+            shape: enum
+            options_from: "perspective.fields"
+            clear_command: "perspective.clearGroup"
+          - name: perspective_id
+            from: scope_chain
+            entity_type: perspective
+        keys: {}
+
+      - id: perspective.clearGroup
+        name: Clear Group
+        source_yaml: perspective.yaml
+        backend: views
+        scope: "entity:perspective"
+        undoable: true
+        context_menu: true
+        params:
+          - name: perspective_id
+            from: args
+        keys: {}
+
+      - id: perspective.sort.set
+        name: Sort Field
+        source_yaml: perspective.yaml
+        backend: views
+        scope: "entity:perspective"
+        view_kinds: [grid]
+        tab_button:
+          icon: arrow-up-down
+        undoable: true
+        params:
+          - name: field
+            from: args
+            shape: enum
+            options_from: "perspective.fields"
+          - name: direction
+            from: args
+            shape: enum
+            options_from: "sort.directions"
+          - name: perspective_id
+            from: scope_chain
+            entity_type: perspective
+        keys: {}
+
+      - id: perspective.sort.clear
+        name: Clear Sort
+        source_yaml: perspective.yaml
+        backend: views
+        scope: "entity:perspective"
+        view_kinds: [grid]
+        undoable: true
+        context_menu: true
+        params:
+          - name: perspective_id
+            from: args
+        keys: {}
+
+      - id: perspective.sort.toggle
+        name: Toggle Sort
+        source_yaml: perspective.yaml
+        backend: views
+        scope: "entity:perspective"
+        view_kinds: [grid]
+        undoable: true
+        params:
+          - name: field
+            from: args
+          - name: perspective_id
+            from: args
+        keys: {}
+
+      - id: perspective.next
+        name: Next Perspective
+        source_yaml: perspective.yaml
+        backend: views
+        params:
+          - name: view_kind
+            from: args
+          - name: view_id
+            from: args
+        keys:
+          cua: "Mod+]"
+          vim: "gt"
+
+      - id: perspective.prev
+        name: Previous Perspective
+        source_yaml: perspective.yaml
+        backend: views
+        params:
+          - name: view_kind
+            from: args
+          - name: view_id
+            from: args
+        keys:
+          cua: "Mod+["
+          vim: "gT"
+
+      - id: perspective.goto
+        name: Go to Perspective
+        source_yaml: perspective.yaml
+        backend: views
+        visible: false
+        params:
+          - name: id
+            from: args
+          - name: view_kind
+            from: args
+          - name: view_id
+            from: args
+        keys: {}
+
+      - id: perspective.list
+        name: List Perspectives
+        source_yaml: perspective.yaml
+        backend: views
+        visible: false
+
+      - id: perspective.switch
+        name: Switch Perspective
+        source_yaml: perspective.yaml
+        backend: views
+        visible: false
+        params:
+          - name: perspective_id
+            from: args
+
+  # ---------------------------------------------------------------------------
+  # 5. entity-commands — 8 — entity.yaml
+  # ---------------------------------------------------------------------------
+  - name: entity-commands
+    directory: crates/swissarmyhammer-commands/builtin/commands
+    ensure_services: [commands, entity]
+    source_yamls: [entity.yaml]
+    commands:
+      - id: entity.add
+        name: New Entity
+        source_yaml: entity.yaml
+        backend: entity
+        undoable: true
+        visible: false
+        params:
+          - name: entity_type
+            from: args
+
+      - id: entity.update_field
+        name: Update Field
+        source_yaml: entity.yaml
+        backend: entity
+        undoable: true
+        visible: false
+        params:
+          - name: entity_type
+            from: args
+          - name: id
+            from: args
+          - name: field_name
+            from: args
+          - name: value
+            from: args
+
+      - id: entity.delete
+        name: "Delete {{entity.type}}"
+        source_yaml: entity.yaml
+        backend: entity
+        undoable: true
+        context_menu: true
+        context_menu_group: 2
+        context_menu_order: 0
+        keys:
+          cua: Mod+Backspace
+        params:
+          - name: moniker
+            from: target
+
+      - id: entity.archive
+        name: "Archive {{entity.type}}"
+        source_yaml: entity.yaml
+        backend: entity
+        undoable: true
+        context_menu: true
+        context_menu_group: 2
+        context_menu_order: 1
+        keys:
+          vim: dd
+        params:
+          - name: moniker
+            from: target
+
+      - id: entity.unarchive
+        name: "Unarchive {{entity.type}}"
+        source_yaml: entity.yaml
+        backend: entity
+        undoable: true
+        context_menu: true
+        context_menu_group: 2
+        context_menu_order: 2
+        params:
+          - name: moniker
+            from: target
+
+      - id: entity.cut
+        name: "Cut {{entity.type}}"
+        source_yaml: entity.yaml
+        backend: entity
+        undoable: true
+        context_menu: true
+        context_menu_group: 1
+        context_menu_order: 0
+        keys:
+          cua: Mod+X
+          vim: x
+        menu:
+          path: [Edit]
+          group: 1
+          order: 0
+        params:
+          - name: moniker
+            from: target
+
+      - id: entity.copy
+        name: "Copy {{entity.type}}"
+        source_yaml: entity.yaml
+        backend: entity
+        undoable: false
+        context_menu: true
+        context_menu_group: 1
+        context_menu_order: 1
+        keys:
+          cua: Mod+C
+          vim: "y"
+        menu:
+          path: [Edit]
+          group: 1
+          order: 1
+        params:
+          - name: moniker
+            from: target
+
+      - id: entity.paste
+        name: "Paste {{entity.type}}"
+        source_yaml: entity.yaml
+        backend: entity
+        undoable: true
+        context_menu: true
+        context_menu_group: 1
+        context_menu_order: 2
+        keys:
+          cua: Mod+V
+          vim: p
+        menu:
+          path: [Edit]
+          group: 1
+          order: 2
+        params:
+          - name: moniker
+            from: target
+
+  # ---------------------------------------------------------------------------
+  # 6. ui-commands — 10 — ui.yaml
+  # ---------------------------------------------------------------------------
+  - name: ui-commands
+    directory: crates/swissarmyhammer-commands/builtin/commands
+    ensure_services: [commands, ui_state, window, focus]
+    source_yamls: [ui.yaml]
+    commands:
+      - id: ui.inspect
+        name: "Inspect {{entity.type}}"
+        source_yaml: ui.yaml
+        backend: ui_state
+        context_menu: true
+        context_menu_group: 3
+        context_menu_order: 0
+        params:
+          - name: moniker
+            from: target
+
+      - id: ui.inspector.close
+        name: Close Inspector
+        source_yaml: ui.yaml
+        backend: ui_state
+        keys:
+          cua: Escape
+          vim: q
+
+      - id: ui.inspector.close_all
+        name: Close All Inspectors
+        source_yaml: ui.yaml
+        backend: ui_state
+        keys:
+          cua: Mod+Escape
+          vim: Q
+
+      - id: ui.inspector.set_width
+        name: Set Inspector Width
+        source_yaml: ui.yaml
+        backend: ui_state
+        visible: false
+        undoable: false
+        params:
+          - name: width
+            from: args
+
+      - id: ui.palette.open
+        name: Command Palette
+        source_yaml: ui.yaml
+        backend: ui_state
+        keys:
+          cua: Mod+K
+          vim: ":"
+
+      - id: ui.palette.close
+        name: Close Palette
+        source_yaml: ui.yaml
+        backend: ui_state
+        visible: false
+
+      - id: ui.entity.startRename
+        name: Rename Perspective
+        source_yaml: ui.yaml
+        backend: ui_state
+        scope: "entity:perspective"
+        keys:
+          cua: Enter
+          vim: Enter
+          emacs: Enter
+
+      - id: ui.mode.set
+        name: Set App Mode
+        source_yaml: ui.yaml
+        backend: ui_state
+        visible: false
+        undoable: false
+        params:
+          - name: mode
+            from: args
+
+      # SOURCE YAML is ui.yaml; BACKEND is `focus` (spatial-nav project).
+      # source-file membership and backend are independent dimensions.
+      - id: ui.setFocus
+        name: Set Focus
+        source_yaml: ui.yaml
+        backend: focus
+        visible: false
+        undoable: false
+
+      - id: window.new
+        name: New Window
+        source_yaml: ui.yaml
+        backend: window
+        keys:
+          cua: Mod+Shift+N
+          vim: Mod+Shift+N
+          emacs: Mod+Shift+N
+        menu:
+          path: [Window]
+          group: 0
+          order: 0
+
+  # ---------------------------------------------------------------------------
+  # 7. app-shell-commands — 15 — app/settings/drag.yaml
+  # ---------------------------------------------------------------------------
+  - name: app-shell-commands
+    directory: crates/swissarmyhammer-commands/builtin/commands
+    ensure_services: [commands, app, ui_state, store]
+    source_yamls: [app.yaml, settings.yaml, drag.yaml]
+    commands:
+      - id: app.about
+        name: About
+        source_yaml: app.yaml
+        backend: app
+        menu:
+          path: [App]
+          group: 0
+          order: 0
+
+      - id: app.help
+        name: Help
+        source_yaml: app.yaml
+        backend: app
+        keys:
+          vim: F1
+          cua: F1
+
+      - id: app.quit
+        name: Quit
+        source_yaml: app.yaml
+        backend: app
+        keys:
+          cua: Mod+Q
+          vim: ":q"
+        menu:
+          path: [App]
+          group: 2
+          order: 0
+
+      - id: app.command
+        name: Command Palette
+        source_yaml: app.yaml
+        backend: ui_state
+        keys:
+          vim: ":"
+          cua: Mod+Shift+P
+          emacs: Mod+Shift+P
+
+      - id: app.palette
+        name: Command Palette
+        source_yaml: app.yaml
+        backend: ui_state
+        visible: false
+        keys:
+          cua: Mod+Shift+P
+          vim: Mod+Shift+P
+          emacs: Mod+Shift+P
+
+      - id: app.search
+        name: Find
+        source_yaml: app.yaml
+        backend: ui_state
+        keys:
+          vim: "/"
+          cua: Mod+F
+          emacs: Mod+F
+        menu:
+          path: [Edit]
+          group: 0
+          order: 2
+
+      - id: app.dismiss
+        name: Dismiss
+        source_yaml: app.yaml
+        backend: ui_state
+        keys:
+          vim: Escape
+          cua: Escape
+          emacs: Escape
+
+      - id: app.undo
+        name: Undo
+        source_yaml: app.yaml
+        backend: store
+        undoable: false
+        keys:
+          cua: Mod+Z
+          vim: u
+        menu:
+          path: [Edit]
+          group: 0
+          order: 0
+
+      - id: app.redo
+        name: Redo
+        source_yaml: app.yaml
+        backend: store
+        undoable: false
+        keys:
+          cua: Mod+Shift+Z
+          vim: Ctrl+R
+        menu:
+          path: [Edit]
+          group: 0
+          order: 1
+
+      - id: settings.keymap.vim
+        name: Vim Keybindings
+        source_yaml: settings.yaml
+        backend: ui_state
+        menu:
+          path: [App, Settings]
+          group: 0
+          order: 1
+          radio_group: keymap
+
+      - id: settings.keymap.cua
+        name: Standard Keybindings
+        source_yaml: settings.yaml
+        backend: ui_state
+        menu:
+          path: [App, Settings]
+          group: 0
+          order: 0
+          radio_group: keymap
+
+      - id: settings.keymap.emacs
+        name: Emacs Keybindings
+        source_yaml: settings.yaml
+        backend: ui_state
+        menu:
+          path: [App, Settings]
+          group: 0
+          order: 2
+          radio_group: keymap
+
+      - id: drag.start
+        name: Start Drag
+        source_yaml: drag.yaml
+        backend: ui_state
+        undoable: false
+        visible: false
+
+      - id: drag.cancel
+        name: Cancel Drag
+        source_yaml: drag.yaml
+        backend: ui_state
+        undoable: false
+        visible: false
+
+      - id: drag.complete
+        name: Complete Drag
+        source_yaml: drag.yaml
+        backend: ui_state
+        undoable: false
+        visible: false
