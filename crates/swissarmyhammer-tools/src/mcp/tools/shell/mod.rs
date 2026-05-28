@@ -112,17 +112,25 @@ impl ShellExecuteTool {
         }
     }
 
-    /// Creates an instance rooted in an isolated temp directory.
+    /// Creates an instance rooted in an isolated temp directory, with a
+    /// [`MockEmbedder`](model_embedding::mock::MockEmbedder) injected.
     ///
     /// Use this in tests to avoid depending on the process CWD, which can
     /// become invalid when concurrent tests delete their temp directories.
+    ///
+    /// The mock embedder is essential, not incidental: the previous version
+    /// used [`ShellState::with_dir`], which lazy-loads the real
+    /// `qwen-embedding` model in the background embedding worker the first time
+    /// a command produces output. Loading that model per-test serialized and
+    /// contended under parallel `nextest`, so every subprocess-spawning test
+    /// hung at the 300s timeout (while all passing under `--test-threads=1`).
+    /// Injecting the mock keeps the embedding write-path deterministic and
+    /// model-free, which is correct for the execute/get-lines tests that don't
+    /// exercise semantic search. Tests that genuinely need real embeddings use
+    /// [`with_embedder`](Self::with_embedder) with their own model.
     #[cfg(test)]
     pub(crate) fn new_isolated() -> Self {
-        let dir = std::env::temp_dir().join(format!(".shell-test-{}", ulid::Ulid::new()));
-        let state = ShellState::with_dir(dir).expect("Failed to initialize isolated shell state");
-        Self {
-            state: Arc::new(Mutex::new(state)),
-        }
+        Self::with_embedder(Arc::new(model_embedding::mock::MockEmbedder::new(384)))
     }
 
     /// Create an instance that routes every chunk through a caller-supplied
