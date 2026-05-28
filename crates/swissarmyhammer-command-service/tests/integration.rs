@@ -48,6 +48,8 @@ mod builtin_kanban_misc_e2e;
 mod builtin_perspective_commands_e2e;
 #[path = "integration/builtin_task_commands_e2e.rs"]
 mod builtin_task_commands_e2e;
+#[path = "integration/builtin_ui_commands_e2e.rs"]
+mod builtin_ui_commands_e2e;
 #[path = "integration/host_bootstrap_e2e.rs"]
 mod host_bootstrap_e2e;
 #[path = "integration/mcp_notifications_e2e.rs"]

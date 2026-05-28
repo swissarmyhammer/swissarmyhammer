@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KS5G3AKZXDN7K6YR415E0V4K
 - 01KS5F8THM5EQMKFSF6GFAE55C
-position_column: doing
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffcd80
 project: command-events
 title: 'Frontend: subscribe to MCP change notifications (reuse reducer + add txn batching)'
 ---

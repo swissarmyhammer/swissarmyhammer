@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffcc80
 project: spatial-nav
 title: '`focus`/`spatial` MCP server: expose SpatialRegistry/SpatialState for the command-driven UI'
 ---

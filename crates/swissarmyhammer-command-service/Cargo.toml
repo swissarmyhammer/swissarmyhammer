@@ -52,6 +52,12 @@ swissarmyhammer-entity-mcp = { workspace = true }
 swissarmyhammer-ui-state = { workspace = true }
 swissarmyhammer-fields = { workspace = true }
 swissarmyhammer-store = { workspace = true }
+# The `builtin_ui_commands_e2e` integration test exposes the REAL in-process
+# `focus` operation tool (a `swissarmyhammer_focus::FocusServer` over a real
+# `SpatialRegistry` / `SpatialState`) to a `PluginHost` so the ported
+# `ui.setFocus` command routes through the same focus kernel the kanban app
+# uses. Dev-only edge, same shape as the other reverse dev edges in this section.
+swissarmyhammer-focus = { workspace = true }
 # The `builtin_app_shell_commands_e2e` integration test exposes the REAL
 # in-process `app` / `ui_state` / `store` operation tools to a `PluginHost`
 # (the `app` tool over a recording spy `AppShell`, `ui_state` over a temp-file
