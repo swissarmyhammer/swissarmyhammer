@@ -428,10 +428,13 @@ fn scan_dir_for_package(
 }
 
 /// Extract name from .claude-plugin/plugin.json.
+///
+/// Accepts JSONC (comments and trailing commas) because plugin authors edit
+/// this file by hand and may carry JSONC conventions over from agent settings.
 fn extract_name_from_plugin_json(dir: &Path) -> Option<String> {
     let path = dir.join(".claude-plugin").join("plugin.json");
     let content = std::fs::read_to_string(&path).ok()?;
-    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let json: serde_json::Value = crate::parse_jsonc(&content).ok()?;
     json.get("name")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())

@@ -17,91 +17,87 @@ metadata:
 
 # LSP
 
-Diagnose LSP server health for the current project and install any missing servers. When live LSP operations (e.g., `get_hover`, `get_completions`, `go_to_definition`) return results from the tree-sitter layer instead of a real LSP server, the most likely cause is a missing or uninstalled language server. This skill helps you find and fix that.
+Diagnose LSP server health and install missing servers. When live LSP ops (`get_hover`, `get_completions`, `go_to_definition`) return tree-sitter results instead of LSP, the most likely cause is a missing server.
 
 ## Process
 
-### 1. Get LSP status
-
-Call the `code_context` tool to get LSP server status for all detected languages:
+### 1. Get status
 
 ```json
 {"op": "lsp status"}
 ```
 
-This returns a JSON object with two fields:
+Returns:
+- `languages[]`: `{icon, extensions, lsp_server, installed, install_hint}` (hint only when not installed)
+- `all_healthy`: true when every detected language's server is installed
 
-- `languages`: array of objects, each with:
-  - `icon`: language icon string (e.g. "\ue7a8" for Rust)
-  - `extensions`: file extensions found in the index (e.g. `["rs"]`)
-  - `lsp_server`: server command name (e.g. `"rust-analyzer"`)
-  - `installed`: boolean, whether the server binary is on PATH
-  - `install_hint`: string with the install command (only present when `installed` is false)
-- `all_healthy`: boolean, true when every detected language has its LSP server installed
+### 2. Present
 
-### 2. Present findings
+One row per language:
 
-Display a table with one row per language:
-
-| Icon | Language Server | Status | Install Command |
-|------|----------------|--------|-----------------|
-| (icon) | rust-analyzer | Installed | -- |
+| Icon | Server | Status | Install Command |
+|------|--------|--------|-----------------|
+| (icon) | rust-analyzer | Installed | — |
 | (icon) | typescript-language-server | Missing | `npm install -g typescript-language-server` |
 
-### 3. Act on results
+### 3. Act
 
-**If `all_healthy` is true**: Report that all LSP servers are installed and working. No action needed.
+**`all_healthy: true`** — report all good, no action.
 
-**If servers are missing**:
-1. List the missing servers and their install commands
-2. Ask the user for permission before running any install commands
-3. Run each approved install command via the `shell` tool
-4. After all installs complete, re-run `code_context` with `{"op": "lsp status"}` to confirm the fix
-5. Present the updated table
+**Servers missing**:
+1. List the missing servers + install commands
+2. Ask permission before installing
+3. Run approved installs via `shell`
+4. Re-run `lsp status` to confirm
+5. Show updated table
 
 ### 4. Verify with a live op
 
-After installing a server, confirm it is working end-to-end by trying a live LSP operation on a known file. For example, call `code_context` with a `get symbol` query for a symbol you know exists:
+Confirm end-to-end with a known symbol:
 
 ```json
 {"op": "get symbol", "query": "main"}
 ```
 
-If the result comes back with LSP-sourced data (not just tree-sitter), the server is working. If results are still degraded, the server may need a project restart or additional configuration (e.g., a `compile_commands.json` for C/C++, or a `tsconfig.json` for TypeScript).
+LSP-sourced data confirms it works. Still degraded? The server may need a project restart or config (`compile_commands.json` for C/C++, `tsconfig.json` for TS).
 
-### 5. Handle errors
+### 5. Errors
 
-- **Install command fails**: Report the error output and suggest the user install manually (e.g. different package manager, permissions issue, version conflict).
-- **No languages detected**: Suggest the user check that the project has source files and re-run `code_context` with `{"op": "lsp status"}` after adding them.
+- **Install fails**: report output; suggest manual install (different package manager, permissions, version).
+- **No languages detected**: confirm source files exist; re-run after adding them.
 
 ## Troubleshooting
 
-### Error: `get_hover` / `get_definition` still return `source_layer: TreeSitter` after the server reports `installed: true`
+### `get_hover` / `get_definition` still return `source_layer: TreeSitter` after `installed: true`
 
-- **Cause**: The LSP process was already running (against the previous state of the workspace) when the server binary was installed, or the server has not finished its initial project scan. Installation does not restart live sessions.
-- **Solution**: Restart the MCP server (or the parent agent harness) so `sah` spawns a fresh LSP process, then wait for the initial scan. Verify with:
-  ```json
-  {"op": "get hover", "file_path": "<file-you-know>", "line": 0, "character": 0}
-  ```
-  A successful fix returns a non-empty `contents` field sourced from the LSP layer.
+The LSP process was already running (against the prior state) when the binary was installed, or the initial scan hasn't finished. Installs don't restart live sessions.
 
-### Error: `clangd` (C/C++) reports no symbols or "Unable to handle compilation, expected compilation database"
+Restart the MCP server (or parent harness) so `sah` spawns a fresh LSP, then wait for the scan. Verify:
 
-- **Cause**: `clangd` needs a `compile_commands.json` at the workspace root (or in a `build/` directory it can find) to know include paths and compiler flags. Without it, it falls back to tree-sitter-only behavior.
-- **Solution**: Generate one from your build system and re-run `lsp status`:
-  - CMake: `cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && ln -sf build/compile_commands.json .`
-  - Bear (Make-based builds): `bear -- make`
-  - Meson: already emitted in the build directory — symlink it to the root.
+```json
+{"op": "get hover", "file_path": "<known-file>", "line": 0, "character": 0}
+```
 
-### Error: `typescript-language-server` returns no completions or types in a monorepo
+A non-empty `contents` from the LSP layer = fixed.
 
-- **Cause**: No `tsconfig.json` (or the wrong one) resolves for the file — the server cannot determine module resolution, target, or paths. Common in monorepos where each package has its own `tsconfig.json` but the root does not.
-- **Solution**: Add a root `tsconfig.json` with `"references"` to each package's config, or open the agent from inside the specific package directory. Confirm with:
-  ```json
-  {"op": "get hover", "file_path": "packages/<pkg>/src/index.ts", "line": 0, "character": 0}
-  ```
+### `clangd` (C/C++): no symbols or "Unable to handle compilation, expected compilation database"
 
-### Error: `install command` succeeds but the binary is still not on `PATH`
+`clangd` needs `compile_commands.json` at the workspace root (or a discoverable `build/`). Generate, then re-run `lsp status`:
 
-- **Cause**: The install placed the binary in a directory (e.g. `~/.cargo/bin`, `~/.npm-global/bin`, `~/go/bin`) that the MCP server's environment has not picked up. Shell `rc` files only affect interactive shells.
-- **Solution**: Export the directory in the environment that launches the agent (e.g. add it to `launchd` env on macOS or your service manager on Linux), then restart the MCP server. Verify with `which <server-binary>` in the same environment that launches `sah`.
+- CMake: `cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && ln -sf build/compile_commands.json .`
+- Make (Bear): `bear -- make`
+- Meson: already emitted in the build dir — symlink to root
+
+### `typescript-language-server` returns nothing in a monorepo
+
+No (or wrong) `tsconfig.json` resolves for the file — common when each package has its own but the root doesn't. Add a root `tsconfig.json` with `"references"` to each package, or open the agent inside the package dir. Confirm:
+
+```json
+{"op": "get hover", "file_path": "packages/<pkg>/src/index.ts", "line": 0, "character": 0}
+```
+
+### Install succeeded but binary still not on `PATH`
+
+Installed to a dir (`~/.cargo/bin`, `~/.npm-global/bin`, `~/go/bin`) that the MCP server's env doesn't see. Shell rc only affects interactive shells.
+
+Export the directory in the environment that launches the agent (launchd on macOS, your service manager on Linux), then restart the MCP server. Confirm with `which <binary>` in that same environment.

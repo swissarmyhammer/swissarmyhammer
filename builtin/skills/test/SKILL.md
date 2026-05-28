@@ -16,90 +16,75 @@ metadata:
 
 # Test
 
-**Zero failures. Zero warnings. Zero skipped tests. The build is either clean or it's broken.**
+**Zero failures. Zero warnings. Zero skipped. The build is clean or it's broken.**
 
 ## Process
 
-### 1. Run the full test suite
+1. **Run the full test suite** using project detection to pick the right command.
+2. **Type-check + lint** with warnings as errors (`cargo clippy -- -D warnings`).
+3. **Check for skipped/ignored tests** — fix or delete each. Skips are not acceptable.
+4. **Fix every failure and warning**, re-running after each fix. Trace before editing: `get symbol` on the failing function, `get callgraph` (inbound) to see callers, `get blastradius` on the file to avoid breaking a passing test elsewhere.
+5. **Track remaining failures on kanban.** Ensure tag exists:
 
-Run the full test suite for the detected project type. Use the project detection system to determine the correct command.
+   ```json
+   {"op": "add tag", "id": "test-failure", "name": "Test Failure", "color": "ff0000", "description": "Failing test or type check"}
+   ```
 
-### 2. Run type checking and linting
+   Create one task per failure:
 
-Run type checking and linting with warnings as errors (e.g. `cargo clippy -- -D warnings`).
+   ```json
+   {"op": "add task", "title": "<concise description>", "description": "<file:lines>\n\n<error>\n\n<what you tried>", "tags": ["test-failure"]}
+   ```
 
-### 3. Check for skipped/ignored tests
-
-Find any skipped or ignored tests. Fix or delete each one — skipped tests are not acceptable.
-
-### 4. Fix every failure and warning
-
-Fix every failure and every warning, re-running after each fix. Understanding why something fails is not the end — it's the start. The reason it fails is the path to making it pass. Follow that path.
-
-Before editing anything, trace the failure with `code_context`: `get symbol` on the failing function or type to read it, `get callgraph` (inbound) to see what reaches it, and `get blastradius` on the file before you change it so the fix does not break a passing test elsewhere.
-
-### 5. Track failures on the kanban board
-
-Ensure a `test-failure` tag exists:
-
-```json
-{"op": "add tag", "id": "test-failure", "name": "Test Failure", "color": "ff0000", "description": "Failing test or type check"}
-```
-
-Create kanban tasks for each remaining failure:
-
-```json
-{"op": "add task", "title": "<concise description>", "description": "<file:lines>\n\n<error message>\n\n<what you tried>", "tags": ["test-failure"]}
-```
-
-### 6. Report back
-
-Report: pass/fail, what was fixed, what's left. If you get stuck, report what you tried and where you're blocked — don't silently give up.
+6. **Report**: pass/fail, what was fixed, what's left. If stuck, say what you tried and where you're blocked.
 
 ## Rules
 
-- ALL tests must pass. A partial pass is a fail.
-- ALL compiler and linter warnings must be resolved. Warnings are bugs that haven't bitten yet.
-- Skipped tests are not acceptable. A skipped test is either broken (fix it) or dead (delete it).
-- Every failing test is your responsibility to fix. No exceptions.
-- When a fix adds new code or relocates existing code, place it per `ARCHITECTURE.md` if one exists — a fix that passes but violates a documented boundary is not done.
-- Do not add `#[allow(...)]`, `@suppress`, `// eslint-disable`, or any other mechanism to silence warnings.
-- Do not add `#[ignore]` or `skip` to make a test stop failing.
+- All tests pass. A partial pass is a fail.
+- All warnings resolved. Warnings are bugs that haven't bitten yet.
+- Skipped tests are broken (fix) or dead (delete) — never acceptable.
+- Place new/relocated code per `ARCHITECTURE.md` if one exists.
+- Never silence: no `#[allow(...)]`, `@suppress`, `// eslint-disable`.
+- Never skip: no `#[ignore]` or `skip` to make a test stop failing.
 
 ## Troubleshooting
 
-### Error: a single test hangs and the whole suite never finishes
+### A single test hangs and the suite never finishes
 
-- **Cause**: The test is waiting on something that will not happen in CI — a network call, a spawned child process, a file watcher, an unflushed buffer, or a deadlocked mutex. Without a timeout, the runner sits forever.
-- **Solution**: Run the suite with a hard per-test timeout and isolate the offender. Use the `shell` skill's `timeout` parameter so you can always reclaim control:
-  - Rust: `cargo nextest run --test-threads=1 --timeout 60` (or plain `cargo test -- --test-threads=1` under the shell-tool `timeout: 300`)
-  - Python: `pytest --timeout=60` (requires `pytest-timeout`)
-  - Node: `jest --testTimeout=60000`
-  Once you have the failing test name, re-run it alone with `RUST_LOG=trace` / `--verbose` to see where it blocks, fix the underlying wait, and re-run the full suite.
+Test waits on something CI can't deliver (network, child process, file watcher, deadlock). Run with a hard per-test timeout and isolate the offender via the `shell` tool's `timeout`:
 
-### Error: tests pass locally but fail with "address already in use" or file-not-found when run in parallel
+- Rust: `cargo nextest run --test-threads=1 --timeout 60`
+- Python: `pytest --timeout=60` (needs `pytest-timeout`)
+- Node: `jest --testTimeout=60000`
 
-- **Cause**: Tests share mutable global state — the current working directory, an environment variable, a fixed TCP port, or a shared temp file. Parallel runners hit the race.
-- **Solution**: Serialize the affected tests with the project's isolation primitive rather than disabling parallelism globally:
-  - Rust: `#[serial_test::serial]` on the test function, or use `CurrentDirGuard` / `tempfile::TempDir` so each test gets its own cwd and files
-  - Python: `@pytest.mark.serial` with a matching `pytest-xdist` group, or `tmp_path` fixture for filesystem isolation
-  - Node: `test.serial(...)` (ava) or fix the port to `0` and read the assigned port back
-  Never "fix" this by adding `--test-threads=1` as a permanent flag — that masks the bug.
+Re-run the offending test with `RUST_LOG=trace` / `--verbose` to find the wait, fix the underlying cause.
 
-### Error: a test fails intermittently ("flaky") and passes on retry
+### Tests pass locally, fail in parallel ("address in use", missing files)
 
-- **Cause**: Non-determinism in the test — timing assumptions, unordered iteration (HashMap/HashSet), clock reads, or dependency on external state. Passing "most of the time" is failing.
-- **Solution**: Reproduce the failure deterministically before fixing it. Run the single test in a loop with seed logging:
-  - Rust: `for i in {1..100}; do cargo test <name> -- --nocapture || break; done`
-  - Python: `pytest -x --count=100 <path>::<name>` (requires `pytest-repeat`)
-  Once reproduced, remove the source of non-determinism (sort iteration, inject a clock, seed RNGs) rather than adding retries.
+Tests share mutable state — cwd, env var, fixed port, shared temp file. Serialize with the project's isolation primitive, don't disable parallelism globally:
 
-### Error: `cargo clippy -- -D warnings` fails with a lint you did not introduce
+- Rust: `#[serial_test::serial]`; `CurrentDirGuard` / `tempfile::TempDir` for cwd/files
+- Python: `@pytest.mark.serial`; `tmp_path` fixture for filesystem
+- Node: `test.serial(...)` (ava); bind port `0` and read it back
 
-- **Cause**: A toolchain or dependency bump enabled a new lint, or `clippy` was updated between runs. The warning is real and must be fixed.
-- **Solution**: Fix the lint, do not silence it. Start with auto-fixes:
-  ```
-  cargo clippy --fix --allow-staged --all-targets
-  cargo clippy -- -D warnings
-  ```
-  For lints auto-fix cannot handle, read the `clippy::<lint_name>` documentation (`cargo clippy --explain <lint_name>`) and rewrite the offending code. Never add `#[allow(...)]`.
+Never permanently set `--test-threads=1` — it masks the bug.
+
+### Flaky test (passes on retry)
+
+Non-determinism — timing, unordered iteration, clock, external state. Reproduce deterministically before fixing:
+
+- Rust: `for i in {1..100}; do cargo test <name> -- --nocapture || break; done`
+- Python: `pytest -x --count=100 <path>::<name>` (needs `pytest-repeat`)
+
+Remove the source (sort iteration, inject a clock, seed RNGs) — don't add retries.
+
+### `cargo clippy -- -D warnings` fails on a lint you didn't introduce
+
+Toolchain bump enabled a new lint. Fix, don't silence. Auto-fix first:
+
+```
+cargo clippy --fix --allow-staged --all-targets
+cargo clippy -- -D warnings
+```
+
+For lints auto-fix can't handle: `cargo clippy --explain <lint_name>`, rewrite the code. Never `#[allow(...)]`.

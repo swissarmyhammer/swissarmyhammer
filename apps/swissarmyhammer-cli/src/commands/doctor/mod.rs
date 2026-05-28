@@ -309,6 +309,40 @@ mod tests {
         assert!(exit_code <= 2);
     }
 
+    /// Regression: three Claude-only, project-scope-blind legacy health checks
+    /// were deleted in favor of mirdan's scope-aware install stack. The full
+    /// doctor pipeline must not emit any of them.
+    ///
+    /// See kanban 01KSMXKZM1NZV1QH0SSKAP0V4P.
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_deleted_legacy_checks_absent() {
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
+        let mut doctor = Doctor::new();
+        let result = doctor.run_diagnostics_without_output().await;
+        assert!(result.is_ok(), "diagnostics should succeed");
+
+        // Positive control: without this, the absence assertions below would
+        // pass vacuously if the pipeline ever returned an empty `checks` Vec
+        // (e.g. due to a panic-swallowing error path or accidental
+        // short-circuit). Mirrors the assertion in `test_run_diagnostics`.
+        assert!(
+            !doctor.checks.is_empty(),
+            "doctor pipeline produced no checks — regression assertion would pass vacuously"
+        );
+
+        let deleted = ["Skills installation", "Bash denied", "Shell skill deployed"];
+        for name in deleted {
+            assert!(
+                !doctor.checks.iter().any(|c| c.name == name),
+                "deleted legacy check '{}' must not appear in doctor.checks()",
+                name
+            );
+        }
+    }
+
     /// In a user-mode install (no surrounding Git repository), doctor must not
     /// hard-fail: it should record the missing repo as a Warning, still run all
     /// scope-independent checks, and not short-circuit with an error exit code.

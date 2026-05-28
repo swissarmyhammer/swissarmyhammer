@@ -8,41 +8,21 @@ metadata:
   version: "{{version}}"
 ---
 
-
 # Double Check
 
-Review your recent work for correctness, completeness, and alignment with the user's intent.
+Review recent work for correctness, completeness, and alignment with intent.
 
 ## Process
 
-### 1. Gather Context
+1. **Gather context** — `git status`, `git get changes`, read the changed files, check active kanban tasks for the original requirements.
 
-- Review the current `git status` and recent changes using `git` with `op: "get changes"`
-- Read the changed files in full to understand what was done
-- Check any active kanban tasks for the original requirements
+2. **Verify correctness** for each changed file:
+   - Compiles/parses (run build or lint)
+   - Matches intent (compare done vs asked)
+   - No obvious bugs (off-by-one, missing error handling, typos, wrong variable names)
+   - Tests pass for changed code
+   - No loose ends: TODOs, commented-out code, debug prints, placeholders
 
-### 2. Verify Correctness
+3. **Clarify** — make a numbered list and ask one at a time, waiting for each answer. Specific and actionable, not vague.
 
-For each changed file, check:
-
-- **Does it compile/parse?** Run the appropriate build or lint command
-- **Does it match the intent?** Compare what was done against what was asked
-- **Are there obvious bugs?** Off-by-one errors, missing error handling, typos, wrong variable names
-- **Are tests passing?** Run the test suite if tests exist for the changed code
-- **Are there loose ends?** TODOs left behind, commented-out code, debug prints, placeholder values
-
-### 3. Ask Clarifying Questions
-
-If anything is unclear or ambiguous:
-
-- Make a numbered list of questions
-- Ask them **one at a time**, waiting for each answer before proceeding
-- Questions should be specific and actionable, not vague
-
-### 4. Report
-
-Summarize what was checked and the result:
-
-- What looks correct
-- What issues were found (if any)
-- What was unclear and needs the user's input
+4. **Report** — what's correct, what's broken, what's unclear.

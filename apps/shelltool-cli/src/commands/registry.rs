@@ -28,6 +28,18 @@ fn agent_servers_key(agent: &DetectedAgent) -> &str {
         .unwrap_or(DEFAULT_SERVERS_KEY)
 }
 
+/// Return the per-agent extras merged into each MCP entry the writer
+/// produces. Most agents return an empty map; a small number (e.g. Zed)
+/// require additional fields like `"source": "custom"`.
+fn agent_entry_extras(agent: &DetectedAgent) -> BTreeMap<String, serde_json::Value> {
+    agent
+        .def
+        .mcp_config
+        .as_ref()
+        .map(|c| c.entry_extras.clone())
+        .unwrap_or_default()
+}
+
 /// Resolve the MCP config file path for an agent given the install scope.
 fn resolve_mcp_config_path(agent: &DetectedAgent, global: bool) -> Option<PathBuf> {
     if global {
@@ -63,7 +75,14 @@ fn register_agent(
         return false;
     };
     let servers_key = agent_servers_key(agent);
-    match mirdan::mcp_config::register_mcp_server(&config_path, servers_key, SERVER_NAME, entry) {
+    let extras = agent_entry_extras(agent);
+    match mirdan::mcp_config::register_mcp_server(
+        &config_path,
+        servers_key,
+        SERVER_NAME,
+        entry,
+        &extras,
+    ) {
         Ok(()) => {
             reporter.emit(&InitEvent::Action {
                 verb: "Registered".to_string(),

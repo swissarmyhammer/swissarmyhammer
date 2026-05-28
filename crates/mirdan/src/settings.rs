@@ -21,8 +21,12 @@ use crate::registry::RegistryError;
 /// Read a JSON settings file, returning an empty object if the file does
 /// not exist or is empty.
 ///
-/// Returns a `RegistryError::Io` on I/O failure or `RegistryError::Json`
-/// when the file exists but contains invalid JSON.
+/// Accepts JSONC (JSON with `//` and `/* */` comments and trailing commas)
+/// because agents like Zed and VS Code ship JSONC settings files even when
+/// the file extension is `.json`. Writing remains strict JSON.
+///
+/// Returns a `RegistryError::Io` on I/O failure or `RegistryError::Validation`
+/// when the file exists but is neither valid JSON nor valid JSONC.
 pub fn read_json(path: &Path) -> Result<Value, RegistryError> {
     if !path.exists() {
         return Ok(Value::Object(Map::new()));
@@ -32,7 +36,7 @@ pub fn read_json(path: &Path) -> Result<Value, RegistryError> {
     if trimmed.is_empty() {
         return Ok(Value::Object(Map::new()));
     }
-    serde_json::from_str(trimmed).map_err(|e| {
+    crate::parse_jsonc(trimmed).map_err(|e| {
         RegistryError::Validation(format!("Invalid JSON in {}: {}", path.display(), e))
     })
 }
@@ -195,6 +199,31 @@ mod tests {
         fs::write(&path, r#"{"a": 1, "b": [2, 3]}"#).unwrap();
         let value = read_json(&path).unwrap();
         assert_eq!(value, json!({"a": 1, "b": [2, 3]}));
+    }
+
+    #[test]
+    fn test_load_settings_with_comments() {
+        // Zed (and VS Code) ship JSONC `settings.json` files that open with a
+        // header comment block. Strict `serde_json::from_str` rejects them with
+        // "expected value at line 1 column 1"; `read_json` must accept them.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            "// Settings for Zed\n{\n  \"context_servers\": {}\n}",
+        )
+        .unwrap();
+        let value = read_json(&path).unwrap();
+        assert_eq!(value, json!({"context_servers": {}}));
+    }
+
+    #[test]
+    fn test_load_settings_with_trailing_commas() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, "{\n  \"foo\": 1,\n  \"bar\": [2, 3,],\n}").unwrap();
+        let value = read_json(&path).unwrap();
+        assert_eq!(value, json!({"foo": 1, "bar": [2, 3]}));
     }
 
     #[test]
