@@ -588,20 +588,27 @@ pub fn llama_chunk_to_acp_notification(
     session_id: agent_client_protocol::schema::SessionId,
     chunk: crate::types::StreamChunk,
 ) -> agent_client_protocol::schema::SessionNotification {
+    agent_message_notification(session_id, chunk.text)
+}
+
+/// Build an `AgentMessageChunk` `SessionNotification` carrying `text`.
+///
+/// Used by the streaming turn loop to broadcast the *visible* assistant text
+/// after reasoning/tool-call markup has been stripped (see
+/// [`crate::acp::visible_text`]); the raw `StreamChunk` text is not broadcast
+/// directly, so `<think>`/`<tool_call>` spans never reach the client as message
+/// content.
+pub fn agent_message_notification(
+    session_id: agent_client_protocol::schema::SessionId,
+    text: String,
+) -> agent_client_protocol::schema::SessionNotification {
     use agent_client_protocol::schema::{
         ContentBlock, ContentChunk, SessionNotification, SessionUpdate,
     };
 
-    // Convert the text chunk to a ContentBlock
-    let content_block = ContentBlock::from(chunk.text);
-
-    // Wrap it in a ContentChunk
+    let content_block = ContentBlock::from(text);
     let content_chunk = ContentChunk::new(content_block);
-
-    // Create a SessionUpdate with the agent message chunk
     let update = SessionUpdate::AgentMessageChunk(content_chunk);
-
-    // Return the SessionNotification
     SessionNotification::new(session_id, update)
 }
 

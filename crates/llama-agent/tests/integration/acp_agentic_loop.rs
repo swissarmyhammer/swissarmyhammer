@@ -299,11 +299,14 @@ async fn acp_single_turn_streams_text_and_reports_tokens() {
     // observed in isolation.
     let _ = drain(&mut rx);
 
+    // `/no_think` disables Qwen3's thinking mode so the turn produces a real
+    // answer rather than spending its whole budget in an unbounded `<think>`
+    // block (the single-turn streaming contract needs visible answer text).
     let response = tokio::time::timeout(
         NO_HANG_BUDGET,
         server.prompt(text_prompt(
             session.session_id.clone(),
-            "Reply with exactly the word: pong",
+            "/no_think Reply with exactly the word: pong",
         )),
     )
     .await
@@ -314,7 +317,7 @@ async fn acp_single_turn_streams_text_and_reports_tokens() {
     let streamed = agent_text(&notifications);
 
     // The streamed AgentMessageChunk text must be non-empty — a real turn
-    // produced real tokens.
+    // produced real visible tokens.
     assert!(
         !streamed.trim().is_empty(),
         "single-turn prompt must stream non-empty agent text; got notifications: {:?}",
@@ -322,6 +325,15 @@ async fn acp_single_turn_streams_text_and_reports_tokens() {
             .iter()
             .map(|n| format!("{:?}", n.update))
             .collect::<Vec<_>>()
+    );
+
+    // The visible stream must NOT contain reasoning/tool-call markup — the
+    // `VisibleTextFilter` strips `<think>…</think>` and `<tool_call>…</tool_call>`
+    // before broadcasting. Even with `/no_think` the model emits an empty
+    // `<think></think>`, so this guards that it never reaches the client.
+    assert!(
+        !streamed.contains("<think>") && !streamed.contains("<tool_call>"),
+        "streamed agent text must not contain reasoning/tool-call markup; got: {streamed:?}"
     );
 
     // The final response meta records the token count. It must be present and
@@ -336,15 +348,17 @@ async fn acp_single_turn_streams_text_and_reports_tokens() {
         "a non-empty turn must report tokens_generated > 0, got {tokens}"
     );
 
-    // The meta's `llama_response` mirror must match the streamed text — the
-    // final response and the live stream agree.
+    // The meta's `llama_response` mirror carries the FULL raw text (markup
+    // included) for debugging/titles; the visible stream is that text minus the
+    // stripped spans. So the raw mirror must at least contain the visible text.
     let mirrored = meta
         .get("llama_response")
         .and_then(|v| v.as_str())
         .expect("response meta must carry llama_response");
-    assert_eq!(
-        mirrored, streamed,
-        "the response's llama_response meta must equal the streamed agent text"
+    assert!(
+        mirrored.contains(streamed.trim()),
+        "raw llama_response meta must contain the visible streamed text; \
+         mirrored={mirrored:?} streamed={streamed:?}"
     );
 }
 
@@ -357,6 +371,9 @@ struct ToolTurnOutcome {
     tool_messages: usize,
     /// `tool_calls_executed` from the final `PromptResponse` meta (0 if absent).
     tool_calls_executed: u64,
+    /// Concatenated visible agent text streamed during the turn — must never
+    /// contain raw `<tool_call>`/`<think>` markup once the filter strips it.
+    streamed_agent_text: String,
     /// The turn's final text (lower-cased) from the response `llama_response` meta.
     final_text: String,
 }
@@ -390,9 +407,11 @@ async fn run_tool_turn(
         .expect("tool-calling prompt must not hang")
         .expect("prompt must succeed against a healthy model");
 
-    let tool_call_broadcast = drain(rx)
+    let notes = drain(rx);
+    let tool_call_broadcast = notes
         .iter()
         .any(|n| matches!(n.update, SessionUpdate::ToolCall(_)));
+    let streamed_agent_text = agent_text(&notes);
 
     let llama_id = parse_llama_id(&session.session_id);
     let final_session = server
@@ -424,6 +443,7 @@ async fn run_tool_turn(
         tool_messages,
         tool_calls_executed,
         final_text,
+        streamed_agent_text,
     }
 }
 
@@ -506,6 +526,15 @@ async fn acp_multi_turn_dispatches_tool_and_threads_result() {
                 "the response meta must report tool_calls_executed >= 1 (inverse of the \
                  `0 tool calls executed` bug); got {}",
                 outcome.tool_calls_executed
+            );
+            // The user's exact bug: the raw `<tool_call>` / `<think>` markup must
+            // NOT leak into the visible streamed agent text when the structured
+            // tool call is emitted.
+            assert!(
+                !outcome.streamed_agent_text.contains("<tool_call>")
+                    && !outcome.streamed_agent_text.contains("<think>"),
+                "streamed agent text must not contain raw tool_call/think markup; got: {:?}",
+                outcome.streamed_agent_text
             );
             assert!(
                 outcome.final_text.contains("main"),

@@ -265,6 +265,7 @@ pub mod session_record;
 pub mod session_resume;
 pub mod terminal;
 pub mod translation;
+pub(crate) mod visible_text;
 
 // Test utilities are available in both test and non-test builds
 // to support integration tests that need to import them

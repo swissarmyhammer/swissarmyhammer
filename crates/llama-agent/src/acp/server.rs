@@ -2053,10 +2053,18 @@ impl AcpServer {
                     Self::convert_error(e)
                 })?;
 
-            // Stream chunks and convert each to ACP notification
+            // Stream chunks and convert each to ACP notification.
+            //
+            // `generated_text` accumulates the FULL raw output (needed by
+            // `extract_tool_calls` below and the response meta), but the text we
+            // broadcast to the client is run through `VisibleTextFilter` so the
+            // `<think>…</think>` reasoning and `<tool_call>…</tool_call>` spans
+            // never appear as visible message content — a structured `ToolCall`
+            // is the only representation of a call the client sees.
             let mut generated_text = String::new();
             let mut llama_finish_reason: Option<crate::types::FinishReason> = None;
             let mut turn_tokens = 0;
+            let mut visible = super::visible_text::VisibleTextFilter::default();
             while let Some(chunk_result) = stream.next().await {
                 match chunk_result {
                     Ok(chunk) => {
@@ -2068,20 +2076,32 @@ impl AcpServer {
                             llama_finish_reason = chunk.finish_reason.clone();
                         }
 
-                        // Convert chunk to ACP notification
-                        let notification = super::translation::llama_chunk_to_acp_notification(
-                            request.session_id.clone(),
-                            chunk,
-                        );
-
-                        // Broadcast the notification
-                        self.broadcast_notification(notification);
+                        // Broadcast only the visible (markup-stripped) text.
+                        let shown = visible.push(&chunk.text);
+                        if !shown.is_empty() {
+                            self.broadcast_notification(
+                                super::translation::agent_message_notification(
+                                    request.session_id.clone(),
+                                    shown,
+                                ),
+                            );
+                        }
                     }
                     Err(e) => {
                         tracing::error!("Stream chunk error: {}", e);
                         return Err(Self::convert_error(e));
                     }
                 }
+            }
+
+            // Flush any visible text held back at the stream's end (text that was
+            // never part of a completed markup span).
+            let tail = visible.finish();
+            if !tail.is_empty() {
+                self.broadcast_notification(super::translation::agent_message_notification(
+                    request.session_id.clone(),
+                    tail,
+                ));
             }
 
             total_tokens += turn_tokens;
