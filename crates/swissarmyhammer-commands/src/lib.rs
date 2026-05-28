@@ -17,7 +17,6 @@ pub mod macros;
 pub mod options_resolver;
 pub mod registry;
 pub mod types;
-pub mod window_info;
 
 pub use command::Command;
 pub use context::{parse_moniker, CommandContext};
@@ -31,4 +30,3 @@ pub use types::{
     CommandDef, CommandInvocation, KeysDef, MenuPlacement, ParamDef, ParamOption, ParamShape,
     ParamSource, TabButtonDef,
 };
-pub use window_info::WindowInfo;

@@ -1,11 +1,13 @@
 //! Lightweight open-window descriptor for dynamic command generation.
 //!
-//! Lives here (in the consumer-agnostic commands crate) rather than in
-//! `swissarmyhammer-kanban` because the descriptor has nothing to do
-//! with kanban specifically — it is GUI runtime data the scope
-//! dispatcher consumes when emitting `window.focus:{label}` rows. Any
-//! consumer that drives a multi-window GUI off the command registry
-//! produces and consumes this shape.
+//! Lives here (in the consumer-agnostic common crate) rather than in
+//! `swissarmyhammer-kanban` or the Tauri-coupled window-service crate
+//! because the descriptor has nothing to do with kanban specifically and
+//! must stay free of any Tauri dependency. It is GUI runtime data the
+//! scope dispatcher consumes when emitting `window.focus:{label}` rows.
+//! Non-Tauri consumers (`swissarmyhammer-statusline`,
+//! `swissarmyhammer-kanban`) produce and consume this shape, so it belongs
+//! in the shared base crate every consumer already depends on.
 
 /// Lightweight open-window descriptor for dynamic command generation.
 ///

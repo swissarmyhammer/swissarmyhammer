@@ -106,8 +106,8 @@ fn update_window_title(app: &AppHandle, label: &str, board_name: Option<&str>) {
 /// state only exist on the Tauri runtime. The headless `DynamicSources`
 /// builder in `swissarmyhammer_kanban::dynamic_sources` takes the result of
 /// this function as a caller-supplied input; tests fabricate the list.
-fn gather_windows(app: &tauri::AppHandle) -> Vec<swissarmyhammer_commands::WindowInfo> {
-    use swissarmyhammer_commands::WindowInfo;
+fn gather_windows(app: &tauri::AppHandle) -> Vec<swissarmyhammer_common::WindowInfo> {
+    use swissarmyhammer_common::WindowInfo;
     app.webview_windows()
         .iter()
         .filter_map(|(label, w)| {

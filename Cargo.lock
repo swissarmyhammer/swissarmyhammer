@@ -10333,6 +10333,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-window-service"
+version = "0.13.5"
+dependencies = [
+ "async-trait",
+ "open",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "swissarmyhammer-common",
+ "swissarmyhammer-operations",
+ "swissarmyhammer-operations-macros",
+ "swissarmyhammer-plugin",
+ "tauri",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "swissarmyhammer-workspace-init"
 version = "0.13.5"
 dependencies = [

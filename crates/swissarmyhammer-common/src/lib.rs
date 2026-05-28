@@ -49,9 +49,11 @@ pub mod types;
 pub mod ulid_generator;
 pub mod utils;
 pub mod validation;
+pub mod window_info;
 
 // Re-export commonly used constants for convenience
 pub use constants::DEFAULT_TEST_EMBEDDING_MODEL;
+pub use window_info::WindowInfo;
 pub use parameters::*;
 pub use test_utils::*;
 pub use validation::*;

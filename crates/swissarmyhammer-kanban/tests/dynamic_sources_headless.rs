@@ -25,7 +25,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::json;
-use swissarmyhammer_commands::{compose_registry, WindowInfo};
+use swissarmyhammer_commands::compose_registry;
+use swissarmyhammer_common::WindowInfo;
 use swissarmyhammer_ui_state::{UIState};
 use swissarmyhammer_kanban::dynamic_sources::{build_dynamic_sources, DynamicSourcesInputs};
 use swissarmyhammer_kanban::scope_commands::{commands_for_scope, DynamicSources};
