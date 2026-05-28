@@ -70,7 +70,9 @@
 pub mod layer;
 pub mod navigate;
 pub mod observer;
+pub mod operations;
 pub mod registry;
+pub mod server;
 pub mod snapshot;
 pub mod sneak;
 pub mod state;
@@ -121,7 +123,11 @@ pub fn builtin_yaml_sources() -> Vec<(&'static str, &'static str)> {
 pub use layer::FocusLayer;
 pub use navigate::{drill_in, drill_out, pick_target};
 pub use observer::{FocusEventSink, NoopSink, RecordingSink};
+pub use operations::{
+    operations, ClearFocus, DrillIn, DrillOut, Focus, FocusLost, Navigate, PopLayer, PushLayer,
+};
 pub use registry::SpatialRegistry;
+pub use server::FocusServer;
 pub use snapshot::{FocusOverrides, IndexedSnapshot, NavSnapshot, SnapshotScope};
 pub use sneak::{generate_sneak_codes, SneakError, MAX_SNEAK_CODES, SNEAK_ALPHABET};
 pub use state::{FallbackResolution, FocusChangedEvent, LostFocusContext, SpatialState};

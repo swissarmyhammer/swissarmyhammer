@@ -10,14 +10,20 @@ readme = "README.md"
 
 [dependencies]
 include_dir = { workspace = true }
+rmcp = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 swissarmyhammer-common = { workspace = true }
+swissarmyhammer-operations = { workspace = true }
+swissarmyhammer-operations-macros = { workspace = true }
+swissarmyhammer-plugin = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
 ulid = { workspace = true }
 
 [dev-dependencies]
-serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
 swissarmyhammer-commands = { workspace = true }
+tokio = { workspace = true, features = ["full", "test-util"] }
 tracing-subscriber = { workspace = true }
