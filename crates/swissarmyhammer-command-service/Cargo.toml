@@ -25,6 +25,21 @@ tracing = { workspace = true }
 serde_yaml_ng = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
+# The change-propagation e2e (`undo_redo_notifies_dependents_e2e`) boots the
+# real entity/views/perspectives stack over one shared `StoreContext`, wires
+# `swissarmyhammer-kanban`'s notification fan-in adapters into the bridge, and
+# drives undo/redo through the kanban reconcile. These are dev-only edges:
+# `swissarmyhammer-kanban` depends on `swissarmyhammer-plugin` (which this
+# crate also depends on) as a normal dependency; the reverse dev edge here is
+# the same normal-dep + dev-dep shape Cargo permits (mirroring the existing
+# `swissarmyhammer-tools` dev-dep below).
+swissarmyhammer-entity = { workspace = true, features = ["test-support"] }
+swissarmyhammer-views = { workspace = true }
+swissarmyhammer-perspectives = { workspace = true }
+swissarmyhammer-kanban = { workspace = true }
+swissarmyhammer-fields = { workspace = true }
+swissarmyhammer-store = { workspace = true }
+swissarmyhammer-commands = { workspace = true }
 
 # Used by the `builtin_task_commands_e2e` integration test to expose the REAL
 # in-process `kanban` operation tool to a `PluginHost` exactly as the kanban

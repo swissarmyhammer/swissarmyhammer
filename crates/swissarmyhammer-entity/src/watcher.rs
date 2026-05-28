@@ -228,7 +228,16 @@ async fn handle_file_event(
     match kind {
         EventKind::Create(_) | EventKind::Modify(_) => {
             if path.exists() {
-                match cache.refresh_from_disk(entity_type, id).await {
+                // A watcher-sourced refresh carries `origin: "watcher"` (and no
+                // txn — an external edit is not part of an in-process command).
+                match cache
+                    .refresh_from_disk_with(
+                        entity_type,
+                        id,
+                        swissarmyhammer_store::EventProvenance::watcher(),
+                    )
+                    .await
+                {
                     Ok(changed) => {
                         if changed {
                             tracing::debug!(entity_type, id, "entity updated from disk");
@@ -241,11 +250,23 @@ async fn handle_file_event(
             } else {
                 // File was created then immediately deleted (temp file pattern).
                 // Remove from cache if it was there.
-                cache.evict(entity_type, id).await;
+                cache
+                    .evict_with(
+                        entity_type,
+                        id,
+                        swissarmyhammer_store::EventProvenance::watcher(),
+                    )
+                    .await;
             }
         }
         EventKind::Remove(_) => {
-            cache.evict(entity_type, id).await;
+            cache
+                .evict_with(
+                    entity_type,
+                    id,
+                    swissarmyhammer_store::EventProvenance::watcher(),
+                )
+                .await;
         }
         _ => {}
     }

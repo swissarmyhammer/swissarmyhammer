@@ -26,7 +26,7 @@ use crate::error::{Result, ViewsError};
 use crate::events::ViewEvent;
 use crate::store::ViewStore;
 use crate::types::{ViewDef, ViewId};
-use swissarmyhammer_store::{StoreContext, StoreHandle, StoredItemId, UndoEntryId};
+use swissarmyhammer_store::{EventProvenance, StoreContext, StoreHandle, StoredItemId, UndoEntryId};
 
 /// Default capacity for the view event broadcast channel.
 ///
@@ -220,10 +220,13 @@ impl ViewsContext {
         let is_create = old.is_none();
         let changed_fields = diff_view(old.as_ref(), def);
         if !changed_fields.is_empty() {
+            let prov = EventProvenance::user();
             let _ = self.event_sender.send(ViewEvent::ViewChanged {
                 id: def.id.clone(),
                 changed_fields,
                 is_create,
+                txn: prov.txn,
+                origin: prov.origin,
             });
         }
 
@@ -274,9 +277,12 @@ impl ViewsContext {
         let deleted = self.cache_remove_at(idx);
 
         // Broadcast the deletion event.
-        let _ = self
-            .event_sender
-            .send(ViewEvent::ViewDeleted { id: deleted.id });
+        let prov = EventProvenance::user();
+        let _ = self.event_sender.send(ViewEvent::ViewDeleted {
+            id: deleted.id,
+            txn: prov.txn,
+            origin: prov.origin,
+        });
 
         Ok(entry_id)
     }
@@ -343,6 +349,22 @@ impl ViewsContext {
     /// Parse failures on an existing file return an error. In-memory cache
     /// state is not mutated when parsing fails.
     pub async fn reload_from_disk(&mut self, id: &str) -> Result<()> {
+        self.reload_from_disk_with(id, EventProvenance::user())
+            .await
+    }
+
+    /// Like [`reload_from_disk`](Self::reload_from_disk) but stamps the
+    /// supplied provenance (`txn` + `origin`) onto the emitted event.
+    ///
+    /// Post-undo/redo reconciliation passes `origin: "undo"`/`"redo"` plus
+    /// the reversed command's transaction id; the plain wrapper stamps
+    /// `origin: "user"`. The event kind is derived from the post-rewrite
+    /// on-disk state, identical across callers.
+    pub async fn reload_from_disk_with(
+        &mut self,
+        id: &str,
+        prov: EventProvenance,
+    ) -> Result<()> {
         let path = self.view_path(id);
         if path.exists() {
             let content = fs::read_to_string(&path).await?;
@@ -354,12 +376,16 @@ impl ViewsContext {
                 // this as a full refresh."
                 changed_fields: Vec::new(),
                 is_create: false,
+                txn: prov.txn,
+                origin: prov.origin,
             });
         } else if let Some(&idx) = self.id_index.get(id) {
             let _deleted = self.cache_remove_at(idx);
-            let _ = self
-                .event_sender
-                .send(ViewEvent::ViewDeleted { id: id.to_string() });
+            let _ = self.event_sender.send(ViewEvent::ViewDeleted {
+                id: id.to_string(),
+                txn: prov.txn,
+                origin: prov.origin,
+            });
         }
         Ok(())
     }
@@ -1041,7 +1067,7 @@ kind: board
             .try_recv()
             .expect("undo of create must emit ViewDeleted via reload_from_disk");
         match undo_evt {
-            ViewEvent::ViewDeleted { ref id } => {
+            ViewEvent::ViewDeleted { ref id, .. } => {
                 assert_eq!(id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
             }
             other => panic!("expected ViewDeleted from undo of create, got {other:?}"),
@@ -1073,7 +1099,7 @@ kind: board
 
         let delete_evt = rx.try_recv().unwrap();
         match delete_evt {
-            ViewEvent::ViewDeleted { ref id } => {
+            ViewEvent::ViewDeleted { ref id, .. } => {
                 assert_eq!(id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
             }
             other => panic!("expected ViewDeleted from delete, got {other:?}"),
@@ -1131,6 +1157,7 @@ kind: board
                 id,
                 changed_fields,
                 is_create,
+                ..
             } => {
                 assert_eq!(id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
                 assert!(is_create, "first write must be flagged as create");
@@ -1164,6 +1191,7 @@ kind: board
                 id,
                 changed_fields,
                 is_create,
+                ..
             } => {
                 assert_eq!(id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
                 assert!(!is_create, "update must not be flagged as create");
@@ -1187,7 +1215,7 @@ kind: board
 
         let evt = rx.try_recv().unwrap();
         match evt {
-            ViewEvent::ViewDeleted { id } => {
+            ViewEvent::ViewDeleted { id, .. } => {
                 assert_eq!(id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
             }
             other => panic!("expected ViewDeleted, got {other:?}"),

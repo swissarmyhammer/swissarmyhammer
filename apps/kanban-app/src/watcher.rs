@@ -459,9 +459,9 @@ async fn resolve_event(
             changes,
             ..
         } => resolve_entity_changed(ctx, state, entity_type, id, changes).await,
-        EntityEvent::EntityDeleted { entity_type, id } => {
-            resolve_entity_deleted(ctx, state, entity_type, id).await
-        }
+        EntityEvent::EntityDeleted {
+            entity_type, id, ..
+        } => resolve_entity_deleted(ctx, state, entity_type, id).await,
         EntityEvent::AttachmentChanged {
             entity_type,
             filename,
@@ -1007,6 +1007,7 @@ fn process_perspective_event(evt: PerspectiveEvent, app: &tauri::AppHandle, boar
             id,
             changed_fields,
             is_create,
+            ..
         } => {
             if is_create {
                 // The frontend only needs the event signal to trigger a
@@ -1039,7 +1040,7 @@ fn process_perspective_event(evt: PerspectiveEvent, app: &tauri::AppHandle, boar
                 }
             }
         }
-        PerspectiveEvent::PerspectiveDeleted { id } => WatchEvent::EntityRemoved {
+        PerspectiveEvent::PerspectiveDeleted { id, .. } => WatchEvent::EntityRemoved {
             entity_type: "perspective".to_string(),
             id,
         },
@@ -1078,6 +1079,7 @@ fn view_event_to_watch_event(evt: ViewEvent) -> WatchEvent {
             id,
             changed_fields,
             is_create,
+            ..
         } => {
             if is_create {
                 // The frontend only needs the event signal to trigger a view
@@ -1109,7 +1111,7 @@ fn view_event_to_watch_event(evt: ViewEvent) -> WatchEvent {
                 }
             }
         }
-        ViewEvent::ViewDeleted { id } => WatchEvent::EntityRemoved {
+        ViewEvent::ViewDeleted { id, .. } => WatchEvent::EntityRemoved {
             entity_type: "view".to_string(),
             id,
         },
@@ -1445,6 +1447,8 @@ mod tests {
             id: "01VIEW".into(),
             changed_fields: vec!["name".into(), "kind".into()],
             is_create: true,
+            txn: None,
+            origin: "user".into(),
         };
         match view_event_to_watch_event(evt) {
             WatchEvent::EntityCreated {
@@ -1467,6 +1471,8 @@ mod tests {
             id: "01VIEW".into(),
             changed_fields: vec!["kind".into()],
             is_create: false,
+            txn: None,
+            origin: "user".into(),
         };
         match view_event_to_watch_event(evt) {
             WatchEvent::EntityFieldChanged {
@@ -1487,6 +1493,8 @@ mod tests {
     fn view_event_to_watch_event_delete_maps_to_entity_removed() {
         let evt = ViewEvent::ViewDeleted {
             id: "01VIEW".into(),
+            txn: None,
+            origin: "user".into(),
         };
         match view_event_to_watch_event(evt) {
             WatchEvent::EntityRemoved { entity_type, id } => {
@@ -1509,6 +1517,8 @@ mod tests {
             id: "01VIEW".into(),
             changed_fields: vec!["name".into()],
             is_create: true,
+            txn: None,
+            origin: "user".into(),
         });
         assert!(matches!(
             create,
@@ -1518,6 +1528,8 @@ mod tests {
         // Step 2: delete — bridge must emit EntityRemoved.
         let delete = view_event_to_watch_event(ViewEvent::ViewDeleted {
             id: "01VIEW".into(),
+            txn: None,
+            origin: "user".into(),
         });
         assert!(matches!(
             delete,
@@ -1531,6 +1543,8 @@ mod tests {
             id: "01VIEW".into(),
             changed_fields: vec![],
             is_create: false,
+            txn: None,
+            origin: "user".into(),
         });
         assert!(
             matches!(

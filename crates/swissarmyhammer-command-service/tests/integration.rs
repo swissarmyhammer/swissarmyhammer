@@ -39,5 +39,7 @@ mod host_bootstrap_e2e;
 mod mcp_notifications_e2e;
 #[path = "integration/override_stack_e2e.rs"]
 mod override_stack_e2e;
+#[path = "integration/undo_redo_notifies_dependents_e2e.rs"]
+mod undo_redo_notifies_dependents_e2e;
 #[path = "integration/unload_cleanup_e2e.rs"]
 mod unload_cleanup_e2e;

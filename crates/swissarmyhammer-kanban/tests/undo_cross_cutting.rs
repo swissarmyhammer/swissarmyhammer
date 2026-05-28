@@ -811,6 +811,7 @@ async fn perspective_group_undo_reverts_and_emits_event() {
             ref id,
             ref changed_fields,
             is_create,
+            ..
         } => {
             assert_eq!(id, &pid);
             assert!(!is_create);
@@ -1108,7 +1109,7 @@ async fn perspective_delete_undo_restores_cache_and_emits_event() {
         .try_recv()
         .expect("perspective.delete must emit a PerspectiveDeleted event");
     match delete_event {
-        PerspectiveEvent::PerspectiveDeleted { ref id } => {
+        PerspectiveEvent::PerspectiveDeleted { ref id, .. } => {
             assert_eq!(id, &pid);
         }
         other => panic!("expected PerspectiveDeleted from delete, got {other:?}"),
@@ -1182,7 +1183,7 @@ async fn perspective_delete_undo_restores_cache_and_emits_event() {
         .try_recv()
         .expect("redo of delete must emit a PerspectiveDeleted event");
     match redo_event {
-        PerspectiveEvent::PerspectiveDeleted { ref id } => {
+        PerspectiveEvent::PerspectiveDeleted { ref id, .. } => {
             assert_eq!(id, &pid);
         }
         other => panic!("expected PerspectiveDeleted from redo of delete, got {other:?}"),
@@ -1260,7 +1261,7 @@ async fn perspective_create_undo_evicts_cache_and_emits_deleted() {
         .try_recv()
         .expect("undo of create must emit a PerspectiveDeleted event");
     match undo_event {
-        PerspectiveEvent::PerspectiveDeleted { ref id } => {
+        PerspectiveEvent::PerspectiveDeleted { ref id, .. } => {
             assert_eq!(id, &pid);
         }
         other => panic!("expected PerspectiveDeleted from undo of create, got {other:?}"),
@@ -1357,7 +1358,7 @@ async fn view_delete_undo_restores_cache_and_emits_event() {
         .try_recv()
         .expect("delete_view must emit a ViewDeleted event");
     match delete_event {
-        ViewEvent::ViewDeleted { ref id } => {
+        ViewEvent::ViewDeleted { ref id, .. } => {
             assert_eq!(id, &vid);
         }
         other => panic!("expected ViewDeleted from delete, got {other:?}"),
@@ -1425,7 +1426,7 @@ async fn view_delete_undo_restores_cache_and_emits_event() {
         .try_recv()
         .expect("redo of delete must emit a ViewDeleted event");
     match redo_event {
-        ViewEvent::ViewDeleted { ref id } => {
+        ViewEvent::ViewDeleted { ref id, .. } => {
             assert_eq!(id, &vid);
         }
         other => panic!("expected ViewDeleted from redo of delete, got {other:?}"),

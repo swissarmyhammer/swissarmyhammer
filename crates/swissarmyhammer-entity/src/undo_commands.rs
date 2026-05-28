@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use swissarmyhammer_commands::{Command, CommandContext, CommandError};
-use swissarmyhammer_store::{StoreContext, UndoOutcome};
+use swissarmyhammer_store::{EventProvenance, StoreContext, UndoEntryId, UndoOutcome};
 
 use crate::context::EntityContext;
 
@@ -46,7 +46,7 @@ impl Command for UndoCmd {
 
         match store_ctx.undo().await {
             Ok(outcome) => {
-                sync_entity_cache(ctx, &outcome).await;
+                sync_entity_cache(ctx, &outcome, "undo").await;
                 Ok(json!({ "undone": true }))
             }
             Err(swissarmyhammer_store::StoreError::NotFound(_)) => Ok(json!({ "noop": true })),
@@ -81,7 +81,7 @@ impl Command for RedoCmd {
 
         match store_ctx.redo().await {
             Ok(outcome) => {
-                sync_entity_cache(ctx, &outcome).await;
+                sync_entity_cache(ctx, &outcome, "redo").await;
                 Ok(json!({ "redone": true }))
             }
             Err(swissarmyhammer_store::StoreError::NotFound(_)) => Ok(json!({ "noop": true })),
@@ -102,16 +102,23 @@ impl Command for RedoCmd {
 ///
 /// A no-op when no [`EntityContext`] extension is attached — the store-only
 /// callers (perspective tests, raw [`StoreContext`] users) are unaffected.
-async fn sync_entity_cache(ctx: &CommandContext, outcome: &UndoOutcome) {
+async fn sync_entity_cache(ctx: &CommandContext, outcome: &UndoOutcome, origin: &str) {
     let Some(ectx) = ctx.extension::<EntityContext>() else {
         return;
     };
+    // One undo/redo call is one command, so its N reconciled items share a
+    // single transaction id — a consumer coalesces them into one atomic
+    // re-render. The reversed group's own id is not exposed on `UndoOutcome`,
+    // so we mint one fresh id per call: the only invariant the UI needs is
+    // "same txn for all items of this one undo".
+    let txn = UndoEntryId::new().to_string();
+    let prov = EventProvenance::new(Some(txn), origin);
     // Iterate every item the undo group touched. A single-entry outcome
     // contains one pair; a group undo (e.g. column.reorder rewriting N
     // columns) contains every entry, all of which need their caches
     // resynced or the next read will see stale post-undo data.
     for (store_name, item_id) in &outcome.items {
-        ectx.sync_entity_cache_from_disk(store_name, item_id.as_str())
+        ectx.sync_entity_cache_from_disk_with(store_name, item_id.as_str(), prov.clone())
             .await;
     }
 }

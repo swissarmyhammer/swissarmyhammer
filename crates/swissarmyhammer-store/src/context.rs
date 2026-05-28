@@ -8,7 +8,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use tokio::sync::RwLock;
+use serde::{Deserialize, Serialize};
+use tokio::sync::{broadcast, RwLock};
 use tokio::task;
 use tracing;
 
@@ -81,6 +82,38 @@ pub struct UndoOutcome {
     pub items: Vec<(String, StoredItemId)>,
 }
 
+/// Default capacity for the undo-stack-state broadcast channel.
+///
+/// Stack-state events fire once per stack mutation (`push`/`undo`/`redo`),
+/// which is human-paced, so a small buffer comfortably absorbs a burst of a
+/// multi-write command's pushes without lapping a momentarily-behind UI
+/// subscriber. A subscriber that still falls behind observes `Lagged` and
+/// resyncs by reading `can_undo`/`can_redo` directly — it never blocks the
+/// producer.
+const STACK_STATE_CHANNEL_CAPACITY: usize = 64;
+
+/// A snapshot of the undo-stack's control state.
+///
+/// Carries everything a UI needs to render the Undo/Redo controls: whether
+/// each action is currently possible and the human-readable label of the
+/// entry at the top of each stack. Broadcast on every stack mutation
+/// (`push`, `undo`, `redo`) so the controls stay in sync without polling.
+///
+/// This is the one event the data-change path genuinely cannot carry: it is
+/// control state, not item data, and a plain `push` after an undo flips
+/// `can_redo` to false (the redo tail is discarded) with no item event at all.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StackState {
+    /// Whether there is at least one entry that can be undone.
+    pub can_undo: bool,
+    /// Whether there is at least one entry that can be redone.
+    pub can_redo: bool,
+    /// Label of the entry that would be undone next, if any.
+    pub undo_label: Option<String>,
+    /// Label of the entry that would be redone next, if any.
+    pub redo_label: Option<String>,
+}
+
 /// Central coordinator for multiple file-backed stores.
 ///
 /// Manages a shared undo/redo stack and dispatches operations to the
@@ -128,6 +161,15 @@ pub struct StoreContext {
     /// and synchronous (HashMap insert / remove); we never hold the
     /// lock across an `.await`.
     ambient_txn: Mutex<HashMap<AmbientKey, UndoEntryId>>,
+    /// Broadcast channel for undo-stack-state snapshots.
+    ///
+    /// A [`StackState`] is published here after every stack mutation
+    /// (`push`/`undo`/`redo`), so a UI subscriber can keep the Undo/Redo
+    /// controls in sync. This is the one event the store may emit directly:
+    /// it owns the [`UndoStack`] and the event carries no foreign types, so
+    /// the in-layer broadcast preserves the layering (no `-entity`/`-views`
+    /// dependency, no item-event emission from here).
+    stack_state_tx: broadcast::Sender<StackState>,
 }
 
 /// RAII guard that ends the active undo group when dropped.
@@ -174,12 +216,45 @@ impl StoreContext {
                 UndoStack::default()
             }
         };
+        let (stack_state_tx, _) = broadcast::channel(STACK_STATE_CHANNEL_CAPACITY);
         Self {
             stack: RwLock::new(stack),
             stores: RwLock::new(Vec::new()),
             root,
             ambient_txn: Mutex::new(HashMap::new()),
+            stack_state_tx,
         }
+    }
+
+    /// Subscribe to undo-stack-state snapshots.
+    ///
+    /// Returns a receiver that yields a [`StackState`] after every stack
+    /// mutation (`push`/`undo`/`redo`). The wiring layer normalizes these
+    /// into `notifications/store/undo_changed` for MCP clients; tests
+    /// subscribe directly. Missed events surface as `RecvError::Lagged`; the
+    /// caller resyncs by reading the latest snapshot.
+    pub fn subscribe_stack_state(&self) -> broadcast::Receiver<StackState> {
+        self.stack_state_tx.subscribe()
+    }
+
+    /// Snapshot the current stack state and broadcast it.
+    ///
+    /// Reads `can_undo`/`can_redo` and peeks the labels of the entries at the
+    /// top of each side of the pointer, then publishes a [`StackState`].
+    /// Called after every mutation of the stack. A send error (no
+    /// subscribers) is ignored — the steady state before any UI subscribes.
+    ///
+    /// Takes the already-held write lock guard so the snapshot reflects the
+    /// exact post-mutation state without a second lock acquisition or a
+    /// TOCTOU window against a concurrent mutation.
+    fn broadcast_stack_state(&self, stack: &UndoStack) {
+        let state = StackState {
+            can_undo: stack.can_undo(),
+            can_redo: stack.can_redo(),
+            undo_label: stack.undo_target().map(|e| e.label.clone()),
+            redo_label: stack.redo_target().map(|e| e.label.clone()),
+        };
+        let _ = self.stack_state_tx.send(state);
     }
 
     /// Begin a multi-write undo group bound to the current tokio task.
@@ -303,6 +378,11 @@ impl StoreContext {
         if let Err(e) = stack.save(&self.root.join("undo_stack.yaml")) {
             tracing::warn!(error = %e, "failed to save undo stack");
         }
+        // A push truncates the redo tail (UndoStack::push discards entries at
+        // or after the pointer), so `can_redo` flips to false here with no
+        // undo/redo call — a plain edit after an undo. Broadcasting on push is
+        // what keeps the Redo control from staying wrongly enabled.
+        self.broadcast_stack_state(&stack);
     }
 
     /// Undo the most recent operation.
@@ -360,6 +440,7 @@ impl StoreContext {
         if let Err(e) = stack.save(&self.root.join("undo_stack.yaml")) {
             tracing::warn!(error = %e, "failed to save undo stack");
         }
+        self.broadcast_stack_state(&stack);
 
         // `items` is non-empty here — `group_undo_range` returned `Some`.
         let (store_name, item_id) = items.last().cloned().expect("at least one entry processed");
@@ -421,6 +502,7 @@ impl StoreContext {
         if let Err(e) = stack.save(&self.root.join("undo_stack.yaml")) {
             tracing::warn!(error = %e, "failed to save undo stack");
         }
+        self.broadcast_stack_state(&stack);
 
         let (store_name, item_id) = items.last().cloned().expect("at least one entry processed");
         Ok(UndoOutcome {

@@ -8,5 +8,6 @@
 
 mod common;
 mod meta_snapshot;
+mod stack_state_events_e2e;
 mod store_server_e2e;
 mod txn_grouping_e2e;

@@ -69,6 +69,7 @@ pub mod derive_handlers;
 pub mod dispatch;
 pub mod dynamic_sources;
 mod error;
+pub mod notify_fanin;
 pub mod parse;
 mod processor;
 pub mod tag_parser;

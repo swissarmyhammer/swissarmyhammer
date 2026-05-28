@@ -26,10 +26,23 @@ pub enum ViewEvent {
         /// updates. Consumers use this to emit the correct event type
         /// (e.g. `entity-created` vs `entity-field-changed`).
         is_create: bool,
+        /// The ambient transaction id this change belongs to, when one was
+        /// active. `None` for an untransacted edit. A single command's N
+        /// changes share one `txn`.
+        txn: Option<String>,
+        /// The actor classification: `"user"`, `"agent:<id>"`, `"undo"`,
+        /// `"redo"`, or `"watcher"`. The plain `write_view` path stamps
+        /// `"user"`; the reconcile stamps `"undo"`/`"redo"`.
+        origin: String,
     },
     /// A view was deleted.
     ViewDeleted {
         /// The view ULID.
         id: String,
+        /// The ambient transaction id this deletion belongs to, when one was
+        /// active. See [`ViewEvent::ViewChanged::txn`].
+        txn: Option<String>,
+        /// The actor classification. See [`ViewEvent::ViewChanged::txn_origin`].
+        origin: String,
     },
 }

@@ -53,7 +53,7 @@ use crate::context::EntityContext;
 use crate::entity::Entity;
 use crate::error::Result;
 use crate::events::{EntityEvent, FieldChange};
-use swissarmyhammer_store::UndoEntryId;
+use swissarmyhammer_store::{EventProvenance, UndoEntryId};
 
 /// A cached entity with its content hash and version stamp.
 #[derive(Debug, Clone)]
@@ -444,11 +444,14 @@ impl EntityCache {
             .await;
 
         if changed {
+            let prov = EventProvenance::user();
             let _ = self.event_sender.send(EntityEvent::EntityChanged {
                 entity_type: entity.entity_type.to_string(),
                 id: entity.id.to_string(),
                 version,
                 changes,
+                txn: prov.txn,
+                origin: prov.origin,
             });
         }
 
@@ -473,9 +476,12 @@ impl EntityCache {
         // `unarchive` or re-creation does not see stale memoized values.
         self.purge_entity_caches(entity_type, id).await;
 
+        let prov = EventProvenance::user();
         let _ = self.event_sender.send(EntityEvent::EntityDeleted {
             entity_type: entity_type.to_string(),
             id: id.to_string(),
+            txn: prov.txn,
+            origin: prov.origin,
         });
 
         Ok(change_id)
@@ -498,9 +504,12 @@ impl EntityCache {
 
         self.purge_entity_caches(entity_type, id).await;
 
+        let prov = EventProvenance::user();
         let _ = self.event_sender.send(EntityEvent::EntityDeleted {
             entity_type: entity_type.to_string(),
             id: id.to_string(),
+            txn: prov.txn,
+            origin: prov.origin,
         });
 
         Ok(change_id)
@@ -541,11 +550,14 @@ impl EntityCache {
         // next compute pass re-reads both.
         self.invalidate_entity_caches(entity_type, id).await;
 
+        let prov = EventProvenance::user();
         let _ = self.event_sender.send(EntityEvent::EntityChanged {
             entity_type: entity_type.to_string(),
             id: id.to_string(),
             version,
             changes,
+            txn: prov.txn,
+            origin: prov.origin,
         });
 
         Ok(change_id)
@@ -553,9 +565,21 @@ impl EntityCache {
 
     /// Remove an entity from the cache without touching disk.
     ///
-    /// Used by the file watcher when an external process deletes a file.
-    /// Emits `EntityDeleted` if the entity was in the cache.
+    /// Used by the file watcher when an external process deletes a file, and
+    /// by post-undo/redo reconciliation when the reversed/reapplied state has
+    /// no on-disk file. Emits `EntityDeleted` if the entity was in the cache.
+    ///
+    /// Stamps `origin: "user"` / `txn: None`. Callers that know the
+    /// provenance (the watcher → `watcher`, the reconcile → `undo`/`redo`)
+    /// should use [`evict_with`](Self::evict_with).
     pub async fn evict(&self, entity_type: &str, id: &str) {
+        self.evict_with(entity_type, id, EventProvenance::user())
+            .await
+    }
+
+    /// Like [`evict`](Self::evict) but stamps the supplied provenance
+    /// (`txn` + `origin`) onto the emitted `EntityDeleted` event.
+    pub async fn evict_with(&self, entity_type: &str, id: &str, prov: EventProvenance) {
         let key = (entity_type.to_string(), id.to_string());
         let mut map = self.cache.write().await;
         let removed = map.shift_remove(&key).is_some();
@@ -566,6 +590,8 @@ impl EntityCache {
             let _ = self.event_sender.send(EntityEvent::EntityDeleted {
                 entity_type: entity_type.to_string(),
                 id: id.to_string(),
+                txn: prov.txn,
+                origin: prov.origin,
             });
         }
     }
@@ -578,6 +604,25 @@ impl EntityCache {
     /// field-level diff between the previous cached state and the freshly-read
     /// on-disk state.
     pub async fn refresh_from_disk(&self, entity_type: &str, id: &str) -> Result<bool> {
+        self.refresh_from_disk_with(entity_type, id, EventProvenance::user())
+            .await
+    }
+
+    /// Like [`refresh_from_disk`](Self::refresh_from_disk) but stamps the
+    /// supplied provenance (`txn` + `origin`) onto any emitted
+    /// `EntityChanged` event.
+    ///
+    /// The file watcher passes `origin: "watcher"`; post-undo/redo
+    /// reconciliation passes `origin: "undo"`/`"redo"` plus the reversed
+    /// command's transaction id. The plain `refresh_from_disk` wrapper stamps
+    /// `origin: "user"`. The byte transition (and therefore which event
+    /// fires) is identical across all callers — only the provenance differs.
+    pub async fn refresh_from_disk_with(
+        &self,
+        entity_type: &str,
+        id: &str,
+        prov: EventProvenance,
+    ) -> Result<bool> {
         // Read the raw on-disk form — we need the canonical on-disk fields
         // (no compute) to detect external edits and keep the cache free of
         // frozen aggregate values.
@@ -615,6 +660,8 @@ impl EntityCache {
                 id: id.to_string(),
                 version,
                 changes,
+                txn: prov.txn,
+                origin: prov.origin,
             });
         }
 
@@ -1228,6 +1275,7 @@ mod tests {
                 id,
                 version,
                 changes,
+                ..
             } => {
                 assert_eq!(entity_type, "tag");
                 assert_eq!(id, "t1");
@@ -1254,7 +1302,7 @@ mod tests {
 
         let event = rx.try_recv().unwrap();
         match event {
-            EntityEvent::EntityDeleted { entity_type, id } => {
+            EntityEvent::EntityDeleted { entity_type, id, .. } => {
                 assert_eq!(entity_type, "tag");
                 assert_eq!(id, "t1");
             }

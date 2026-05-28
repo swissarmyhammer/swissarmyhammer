@@ -33,6 +33,12 @@ swissarmyhammer-commands = { workspace = true }
 swissarmyhammer-ui-state = { workspace = true }
 swissarmyhammer-store = { workspace = true }
 swissarmyhammer-filter-expr = { workspace = true }
+# The MCP notification bridge lives in the platform crate. The kanban crate is
+# the natural fan-in home: it already depends on the entity/views/perspectives
+# event buses, and `swissarmyhammer-plugin` does not depend on this crate, so
+# the edge is acyclic (the bridge's own module docs explain why the platform
+# crate cannot subscribe to the domain buses itself).
+swissarmyhammer-plugin = { workspace = true }
 
 include_dir = { workspace = true }
 fractional_index = "2.0.2"
