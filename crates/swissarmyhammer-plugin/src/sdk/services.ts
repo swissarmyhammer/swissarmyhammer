@@ -65,6 +65,16 @@ export const RUST_MODULE_IDS: Readonly<Record<string, string>> = Object.freeze({
    * under id `"commands"` by `swissarmyhammer-command-service::bootstrap::install_commands_module`.
    */
   commands: "commands",
+
+  /**
+   * The kanban operation tool: the in-process board server every kanban-backed
+   * builtin command routes to (`move task`, `untag task`, `next task`, …).
+   * Exposed under id `"kanban"` by the host's `expose_rust_module` wiring
+   * (`apps/kanban-app/src/plugins.rs::expose_kanban_module`, mirrored in the
+   * plugin-platform test harness). A builtin plugin asks for it by the public
+   * name `"kanban"` and reaches it afterward as `this.kanban...`.
+   */
+  kanban: "kanban",
 });
 
 /**

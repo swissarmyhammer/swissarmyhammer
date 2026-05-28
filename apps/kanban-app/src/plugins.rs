@@ -44,14 +44,24 @@ use tokio::sync::{Mutex as TokioMutex, RwLock};
 
 /// The builtin plugin bundles shipped with the kanban app.
 ///
-/// The repository's top-level `builtin/plugins/` tree is embedded into the
-/// binary at compile time — the same `include_dir!` convention the kanban crate
-/// uses for its builtin definitions, entities, and command YAML. At startup the
-/// tree is extracted ([`extract_builtin_plugins`]) into the `plugins/`
-/// subdirectory of a cache directory, and that cache directory is handed to the
-/// host as its read-only builtin layer root so `discover_and_load_all`
-/// discovers each bundle as a first-class builtin-layer plugin.
-static BUILTIN_PLUGINS: Dir = include_dir!("$CARGO_MANIFEST_DIR/../../builtin/plugins");
+/// The repository's top-level `builtin/plugins/` tree holds every builtin
+/// bundle, but the kanban app can only host the ones whose services it has
+/// wired. Today it exposes only the in-process `kanban` tool (single-activation)
+/// and does NOT yet bootstrap the `commands` service — so the command-plugin
+/// bundles (`task-commands`, …) cannot load here yet. Those activate as part of
+/// the command-service cut-over (kanban card `01KS36Z0FQYYS7TZ005K5G5CDG`),
+/// which wires the `commands` module and the shared services before flipping
+/// this back to the full `builtin/plugins/` tree.
+///
+/// Until then the app embeds only the `kanban-builtin-probe` bundle — the
+/// read-only builtin-layer probe that exercises the layer end to end against
+/// the already-exposed `kanban` tool. At startup the embedded tree is extracted
+/// ([`extract_builtin_plugins`]) into the `plugins/` subdirectory of a cache
+/// directory, and that cache directory is handed to the host as its read-only
+/// builtin layer root so `discover_and_load_all` discovers each bundle as a
+/// first-class builtin-layer plugin.
+static BUILTIN_PLUGINS: Dir =
+    include_dir!("$CARGO_MANIFEST_DIR/../../builtin/plugins/kanban-builtin-probe");
 
 /// The module id the in-process `kanban` operation tool is exposed under.
 ///
@@ -249,12 +259,18 @@ async fn expose_kanban_module(host: &PluginHost, tool_working_dir: PathBuf) -> R
 /// Extracts the compiled-in builtin plugins into `cache_dir` so it can serve
 /// as the host's read-only builtin layer root.
 ///
-/// Plugin discovery resolves bundles under `<root>/plugins/`, so the embedded
-/// `builtin/plugins/` tree is written into the `plugins/` subdirectory of
-/// `cache_dir` — handing `cache_dir` itself to the host as the builtin layer
-/// root then makes `discover_and_load_all` find each bundle. The cache
-/// directory is removed and recreated first, so a previous extraction from an
-/// older binary cannot leave a stale bundle behind.
+/// Plugin discovery resolves bundles under `<root>/plugins/<bundle>/`, so the
+/// embedded bundle is written into a per-bundle subdirectory of the layer
+/// root's `plugins/` directory — handing `cache_dir` itself to the host as the
+/// builtin layer root then makes `discover_and_load_all` find the bundle. The
+/// cache directory is removed and recreated first, so a previous extraction
+/// from an older binary cannot leave a stale bundle behind.
+///
+/// `BUILTIN_PLUGINS` is embedded at the `kanban-builtin-probe` bundle directory
+/// itself (not the whole `builtin/plugins/` tree — see its doc-comment for
+/// why), so its contents are the bundle's files (`index.ts`). They are
+/// extracted into `plugins/kanban-builtin-probe/` so discovery sees a bundle
+/// directory, not loose files directly under `plugins/`.
 ///
 /// # Errors
 ///
@@ -265,14 +281,11 @@ fn extract_builtin_plugins(cache_dir: &Path) -> Result<(), String> {
         std::fs::remove_dir_all(cache_dir)
             .map_err(|e| format!("failed to clear builtin plugin cache: {e}"))?;
     }
-    // The embedded tree is `builtin/plugins/`'s *contents* — the bundle
-    // directories — so it must land under the layer root's `plugins/`
-    // subdirectory for discovery to resolve it.
-    let plugins_dir = cache_dir.join(PLUGINS_SUBDIR);
-    std::fs::create_dir_all(&plugins_dir)
+    let bundle_dir = cache_dir.join(PLUGINS_SUBDIR).join("kanban-builtin-probe");
+    std::fs::create_dir_all(&bundle_dir)
         .map_err(|e| format!("failed to create builtin plugin cache: {e}"))?;
     BUILTIN_PLUGINS
-        .extract(&plugins_dir)
+        .extract(&bundle_dir)
         .map_err(|e| format!("failed to extract builtin plugins: {e}"))?;
     Ok(())
 }

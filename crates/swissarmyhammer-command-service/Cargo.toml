@@ -26,5 +26,22 @@ serde_yaml_ng = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 
+# Used by the `builtin_task_commands_e2e` integration test to expose the REAL
+# in-process `kanban` operation tool to a `PluginHost` exactly as the kanban
+# app's production wiring does (`apps/kanban-app/src/plugins.rs`). The
+# `task-commands` builtin plugin's `execute` callbacks route to this server.
+# `swissarmyhammer-tools` depends on `swissarmyhammer-plugin` (which this crate
+# also depends on) as a normal dependency; the reverse edge here is dev-only,
+# so the pair forms a normal-dep + dev-dep cycle Cargo permits.
+swissarmyhammer-tools = { workspace = true }
+# Supplies `KanbanConfig` for `host.discover_and_load_all::<KanbanConfig>()` —
+# the builtin-layer discovery pass that loads the `task-commands` bundle.
+swissarmyhammer-directory = { workspace = true }
+# Supplies the empty `PromptLibrary`/`ModelConfig` and `GitOperations` the
+# `ToolContext` for the in-process `kanban` tool requires.
+swissarmyhammer-config = { workspace = true }
+swissarmyhammer-git = { workspace = true }
+swissarmyhammer-prompts = { workspace = true }
+
 [lints]
 workspace = true

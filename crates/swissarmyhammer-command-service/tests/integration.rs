@@ -2,6 +2,10 @@
 //!
 //! Each submodule covers one slice of the bootstrap wiring:
 //!
+//! - [`builtin_task_commands_e2e`] — the committed `task-commands` builtin
+//!   plugin (port of `task.yaml`) is discovered from a builtin layer,
+//!   registers its three commands with 1:1 metadata fidelity, and moves a
+//!   real task on the exposed `kanban` store through `task.move`.
 //! - [`host_bootstrap_e2e`] — the bootstrap exposes `commands` on the
 //!   host's registry, and a host caller's `register command` lands on the
 //!   override stack and surfaces through `list command`.
@@ -27,6 +31,8 @@
 #[path = "integration/support.rs"]
 mod support;
 
+#[path = "integration/builtin_task_commands_e2e.rs"]
+mod builtin_task_commands_e2e;
 #[path = "integration/host_bootstrap_e2e.rs"]
 mod host_bootstrap_e2e;
 #[path = "integration/mcp_notifications_e2e.rs"]
