@@ -10,7 +10,6 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { Filter } from "lucide-react";
 // `Filter` is retained for the formula-bar's static prefix glyph;
 // the per-tab `<FilterFocusButton>` was deleted by the migration in
@@ -36,6 +35,7 @@ import {
 import { useContextMenu } from "@/lib/context-menu";
 import { useBoardData } from "@/components/window-container";
 import { moniker } from "@/lib/moniker";
+import { useCommandList } from "@/hooks/use-command-list";
 import { CommandButton } from "@/components/command-button";
 import type {
   CommandDef as RegistryCommandDef,
@@ -269,9 +269,9 @@ function usePerspectiveTabBar() {
 // ---------------------------------------------------------------------------
 
 /**
- * Wire-format shape returned by the backend `list_commands_for_scope`
- * Tauri command. Mirrors `swissarmyhammer-kanban::scope_commands::ResolvedCommand`
- * — only the fields the tab bar reads are declared here; the dispatcher and
+ * Wire-format shape the tab bar reads off a `useCommandList` registry entry
+ * (a subset of `CommandMetadata`) — only the fields the tab bar renders are
+ * declared here; the dispatcher and
  * other consumers see more fields and use their own narrower shapes.
  *
  * Two fields drive the tab bar render path:
@@ -341,53 +341,54 @@ interface ResolvedTabCommand {
  *   board is loaded — in that case the hook returns an empty list
  *   without invoking the backend.
  * @returns Commands ready to feed to `<CommandButton>`. Empty until the
- *   first `list_commands_for_scope` response resolves.
+ *   first `useCommandList` fetch resolves.
  */
 function useScopedTabCommands(
-  perspectiveId: string,
-  activeViewId: string,
+  _perspectiveId: string,
+  _activeViewId: string,
   activeBoardId: string | undefined,
 ): ResolvedTabCommand[] {
-  const [commands, setCommands] = useState<ResolvedTabCommand[]>([]);
+  // Source tab-button commands from the metadata-driven Command registry,
+  // re-fetched live on `commands/changed`. The `entity:perspective` scope
+  // filter keeps global commands plus those scoped to a perspective; the
+  // `tab_button != null` predicate below narrows to tab-button affordances
+  // and the entity-vs-global split keeps `perspective.save` (global) out of
+  // the per-tab slot — `<BarRegistryTabButtons>` renders that at bar level.
+  const { commands: registry } = useCommandList({ scope: "entity:perspective" });
+  // The active view's kind drives the `view_kinds` filter (the metadata-driven
+  // replacement for the backend's old `filter_by_view_kind` pass) — a
+  // grid-only command must not surface on a board view.
+  const { activeView } = useViews();
+  const viewKind = activeView?.kind;
 
-  useEffect(() => {
-    if (!activeBoardId) {
-      setCommands([]);
-      return;
-    }
-    let cancelled = false;
-    const scopeChain = [
-      `perspective:${perspectiveId}`,
-      `view:${activeViewId}`,
-      `board:${activeBoardId}`,
-    ];
-    invoke<ResolvedTabCommand[]>("list_commands_for_scope", { scopeChain })
-      .then((resolved) => {
-        if (cancelled) return;
-        // Per-tab slot renders ENTITY-scoped tab buttons only.
-        // Unscoped (`group: "global"`) tab-button commands — today only
-        // `perspective.save` — are picked up by `<BarRegistryTabButtons>`
-        // at the bar level so the `+` affordance sits outside any
-        // individual perspective tab (matching the legacy
-        // `<AddPerspectiveButton>` placement and surviving the no-active-
-        // perspective edge case). Filtering here keeps a perspective.save
-        // row that incidentally ships with every scope-chain query from
-        // double-rendering inside the active tab.
-        const tabCommands = resolved.filter(
-          (c) => c.tab_button != null && c.group !== "global",
-        );
-        setCommands(tabCommands);
-      })
-      .catch((e) => {
-        console.error("[PerspectiveTabBar] list_commands_for_scope failed:", e);
-        if (!cancelled) setCommands([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [perspectiveId, activeViewId, activeBoardId]);
+  return useMemo(() => {
+    if (!activeBoardId) return [];
+    return registry.filter(
+      (c) =>
+        c.tab_button != null &&
+        c.scope != null &&
+        c.scope.length > 0 &&
+        isViewKindAdmitted(c.view_kinds, viewKind),
+    ) as unknown as ResolvedTabCommand[];
+  }, [registry, activeBoardId, viewKind]);
+}
 
-  return commands;
+/**
+ * Whether a command's `view_kinds` admits the active view's kind — the
+ * metadata-driven equivalent of the backend's `filter_by_view_kind` pass.
+ *
+ * An absent/empty `view_kinds` admits every view (the common case). A
+ * constrained `view_kinds` admits only when the active view's kind is in the
+ * list; an unknown active kind admits nothing constrained, matching the
+ * backend's "drop when the join finds no admitting view" behavior.
+ */
+function isViewKindAdmitted(
+  viewKinds: readonly string[] | undefined,
+  activeViewKind: string | undefined,
+): boolean {
+  if (!viewKinds || viewKinds.length === 0) return true;
+  if (!activeViewKind) return false;
+  return viewKinds.includes(activeViewKind);
 }
 
 /**
@@ -1100,34 +1101,18 @@ function BarRegistryTabButtons({
   activeViewId: string;
   activeBoardId: string | undefined;
 }) {
-  const [commands, setCommands] = useState<ResolvedTabCommand[]>([]);
-
-  useEffect(() => {
-    if (!activeBoardId) {
-      setCommands([]);
-      return;
-    }
-    let cancelled = false;
-    const scopeChain = [`view:${activeViewId}`, `board:${activeBoardId}`];
-    invoke<ResolvedTabCommand[]>("list_commands_for_scope", { scopeChain })
-      .then((resolved) => {
-        if (cancelled) return;
-        const tabCommands = resolved.filter(
-          (c) => c.tab_button != null && c.group === "global",
-        );
-        setCommands(tabCommands);
-      })
-      .catch((e) => {
-        console.error(
-          "[PerspectiveTabBar] list_commands_for_scope (bar) failed:",
-          e,
-        );
-        if (!cancelled) setCommands([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeViewId, activeBoardId]);
+  // Bar-level slot renders GLOBAL (unscoped) tab-button commands only — today
+  // just `perspective.save` (the `+` affordance). Sourced from the live
+  // registry; the empty-`scope` predicate is the metadata-driven equivalent
+  // of the legacy `group === "global"` filter, and keeps entity-scoped tab
+  // buttons (rendered inside their owning tab by `<RegistryTabButtons>`) out.
+  const { commands: registry } = useCommandList();
+  const commands = useMemo<ResolvedTabCommand[]>(() => {
+    if (!activeBoardId) return [];
+    return registry.filter(
+      (c) => c.tab_button != null && (c.scope == null || c.scope.length === 0),
+    ) as unknown as ResolvedTabCommand[];
+  }, [registry, activeBoardId]);
 
   // The bar-level surface uses the view id as the per-instance moniker
   // suffix so the `<CommandButton>`'s spatial-nav leaf is stable across
@@ -1254,8 +1239,7 @@ function PerspectiveTab({
         appear on the active perspective's tab, where their state is
         meaningful and where their spatial-nav leaves live next to the
         formula bar. Mounted only when the active view is known so the
-        scope chain (`perspective:` + `view:` + `board:`) is
-        well-formed for `list_commands_for_scope`.
+        active view's kind is available for the `view_kinds` filter.
       */}
       {isActive && activeViewId && (
         <RegistryTabButtons

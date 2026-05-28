@@ -31,6 +31,17 @@ vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
 }));
 
+// The right-click context menu reads commands from the Command registry via
+// `useCommandList`; drive it through `mockRegistry`.
+let mockRegistry: Array<Record<string, unknown>> = [];
+vi.mock("@/hooks/use-command-list", () => ({
+  useCommandList: () => ({
+    commands: mockRegistry,
+    loading: false,
+    refresh: vi.fn(),
+  }),
+}));
+
 vi.mock("@tauri-apps/plugin-log", () => ({
   error: vi.fn(),
   warn: vi.fn(),
@@ -96,6 +107,7 @@ const V2: ViewDef = { id: "v2", name: "View 2", kind: "grid", icon: "table" };
 describe("LeftNav — right-click context menu", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRegistry = [];
     mockViewsValue = {
       views: [V1, V2],
       activeView: V1,
@@ -110,12 +122,11 @@ describe("LeftNav — right-click context menu", () => {
    * uses to emit only the matching `view.switch:{id}` as a context-menu
    * entry.
    */
-  it("right-click on a view button queries commands with that view's scope", () => {
-    // First button corresponds to view v1.
-    mockInvoke.mockImplementationOnce(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (_cmd: string, _args?: any) => Promise.resolve([]),
-    );
+  it("right-click on a view button builds a menu carrying that view's scope", async () => {
+    // A global context-menu command so the menu renders; the item it produces
+    // must carry the right-clicked view's moniker (`view:v1`) in its
+    // `scope_chain`, which the dispatcher resolves against.
+    mockRegistry = [{ id: "app.help", name: "Help", context_menu: true }];
 
     renderLeftNav();
 
@@ -125,13 +136,15 @@ describe("LeftNav — right-click context menu", () => {
 
     fireEvent.contextMenu(buttons[0]);
 
-    expect(mockInvoke).toHaveBeenCalledWith(
-      "list_commands_for_scope",
-      expect.objectContaining({
-        scopeChain: expect.arrayContaining(["view:v1"]),
-        contextMenu: true,
-      }),
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const showCall = mockInvoke.mock.calls.find(
+      ([cmd]) => cmd === "show_context_menu",
     );
+    expect(showCall).toBeDefined();
+    const items = (showCall![1] as { items: { scope_chain: string[] }[] }).items;
+    expect(items[0].scope_chain).toEqual(expect.arrayContaining(["view:v1"]));
   });
 
   /**
@@ -143,25 +156,17 @@ describe("LeftNav — right-click context menu", () => {
    * `view.switch:*` items sneaking in.
    */
   it("right-click does not surface any view.switch:* entries", async () => {
-    mockInvoke.mockImplementation(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (cmd: string, _args?: any) => {
-        if (cmd === "list_commands_for_scope") {
-          // Backend returns an entity.add entry (what a view with an
-          // entity_type would legitimately surface) but no view.switch:*.
-          return Promise.resolve([
-            {
-              id: "entity.add:task",
-              name: "Add Task",
-              group: "entity",
-              context_menu: true,
-              available: true,
-            },
-          ]);
-        }
-        return Promise.resolve(null);
+    // The registry surfaces an entity.add entry (what a view with an
+    // entity_type would legitimately surface) but no view.switch:* — view
+    // switching is palette-only and never carries `context_menu`.
+    mockRegistry = [
+      {
+        id: "entity.add:task",
+        name: "Add Task",
+        context_menu: true,
+        scope: ["view:v1"],
       },
-    );
+    ];
 
     renderLeftNav();
 

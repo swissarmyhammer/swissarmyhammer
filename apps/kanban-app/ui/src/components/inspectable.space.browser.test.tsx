@@ -113,6 +113,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 import { Inspectable } from "./inspectable";
 import { FocusScope } from "./focus-scope";
 import { AppShell } from "./app-shell";
+import { commandToolCall } from "@/test/mock-command-list";
 import { FocusLayer } from "./focus-layer";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
@@ -174,6 +175,7 @@ function makeDefaultInvokeImpl(
     cmd: string,
     args?: unknown,
   ): Promise<unknown> {
+    if (cmd === "command_tool_call") return commandToolCall(args);
     if (cmd === "get_ui_state") {
       return {
         palette_open: false,

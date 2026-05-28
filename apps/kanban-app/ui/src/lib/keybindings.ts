@@ -377,8 +377,8 @@ export function createKeyHandler(
   mode: KeymapMode,
   executeCommand: (id: string) => Promise<boolean>,
   getScopeBindings?: () => BindingTable,
+  globalBindings: BindingTable = BINDING_TABLES[mode],
 ): (e: KeyboardEvent) => void {
-  const globalBindings = BINDING_TABLES[mode];
   const sequences = SEQUENCE_TABLES[mode];
 
   let pending: string | null = null;
@@ -458,6 +458,37 @@ export function extractScopeBindings(
       }
     }
     current = current.parent as typeof scope;
+  }
+  return result;
+}
+
+/**
+ * Build a flat `key → commandId` binding table for a keymap mode from the
+ * metadata-driven command registry.
+ *
+ * This is the registry-sourced replacement for the static `BINDING_TABLES`
+ * global layer: every command in the active `list command` result that
+ * declares a `keys[mode]` contributes one binding. First-id-wins on a key
+ * collision so the iteration order is deterministic (the registry returns a
+ * stable top-of-stack order). The result is fed to {@link createKeyHandler} as
+ * its `globalBindings`, so when the registry changes or the keymap switches
+ * (itself a `settings.keymap.*` command) the caller rebuilds the table and
+ * re-creates the handler — no command-id list is hardcoded in the hotkey path.
+ *
+ * @param commands - The active command list (from `useCommandList`).
+ * @param mode - The keymap mode to extract bindings for.
+ * @returns A flat BindingTable mapping canonical key strings to command IDs.
+ */
+export function extractKeymapBindings(
+  commands: readonly { id: string; keys?: Record<string, string> }[],
+  mode: KeymapMode,
+): BindingTable {
+  const result: BindingTable = {};
+  for (const cmd of commands) {
+    const key = cmd.keys?.[mode];
+    if (key && !(key in result)) {
+      result[key] = cmd.id;
+    }
   }
   return result;
 }

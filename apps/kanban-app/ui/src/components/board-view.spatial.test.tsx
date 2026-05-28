@@ -128,6 +128,7 @@ vi.mock("@/components/perspective-container", () => ({
 
 import { BoardView } from "./board-view";
 import { AppShell } from "./app-shell";
+import { commandToolCall } from "@/test/mock-command-list";
 import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -210,8 +211,9 @@ const tasks: Entity[] = [
 
 async function defaultInvokeImpl(
   cmd: string,
-  _args?: unknown,
+  args?: unknown,
 ): Promise<unknown> {
+  if (cmd === "command_tool_call") return commandToolCall(args);
   if (cmd === "list_entity_types") return ["task", "column"];
   if (cmd === "get_entity_schema") {
     return {

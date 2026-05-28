@@ -156,6 +156,31 @@ vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
 }));
 
+// The global keybinding layer is now sourced from the metadata-driven Command
+// registry via `useCommandList` (no hardcoded table in the React path). In
+// production the registry surfaces the global commands; here we synthesize that
+// registry from `BINDING_TABLES` so every keymap's global bindings resolve in
+// the no-focus case these tests exercise.
+vi.mock("@/hooks/use-command-list", async () => {
+  const { BINDING_TABLES } = await vi.importActual<
+    typeof import("@/lib/keybindings")
+  >("@/lib/keybindings");
+  // Collapse every keymap's `key → id` mapping into one command per id, each
+  // carrying its per-keymap `keys` map — exactly what `extractKeymapBindings`
+  // reads back out for the active mode.
+  const byId: Record<string, { id: string; name: string; keys: Record<string, string> }> = {};
+  for (const mode of ["vim", "cua", "emacs"] as const) {
+    for (const [key, id] of Object.entries(BINDING_TABLES[mode])) {
+      byId[id] ??= { id, name: id, keys: {} };
+      byId[id].keys[mode] = key;
+    }
+  }
+  const commands = Object.values(byId);
+  return {
+    useCommandList: () => ({ commands, loading: false, refresh: vi.fn() }),
+  };
+});
+
 import { AppShell } from "./app-shell";
 import { FocusScope } from "./focus-scope";
 import { FocusLayer } from "./focus-layer";

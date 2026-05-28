@@ -16,6 +16,16 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
 }));
+// The right-click context menu reads commands from the Command registry via
+// `useCommandList`; drive it through `mockRegistry`.
+let mockRegistry: Array<Record<string, unknown>> = [];
+vi.mock("@/hooks/use-command-list", () => ({
+  useCommandList: () => ({
+    commands: mockRegistry,
+    loading: false,
+    refresh: vi.fn(),
+  }),
+}));
 vi.mock("@tauri-apps/plugin-log", () => ({
   error: vi.fn(),
   warn: vi.fn(),
@@ -198,6 +208,7 @@ describe("ColumnView — Do This Next command", () => {
   afterEach(() => {
     mockInvoke.mockReset();
     mockInvoke.mockImplementation(async () => "ok");
+    mockRegistry = [];
   });
 
   it("context menu dispatches task.doThisNext through the backend, not task.move", async () => {
@@ -261,22 +272,18 @@ describe("ColumnView — Do This Next command", () => {
             ],
           };
         }
-        if (cmd === "list_commands_for_scope") {
-          return [
-            {
-              id: "task.doThisNext",
-              name: "Do This Next",
-              target: "task:t1",
-              group: "entity",
-              context_menu: true,
-              available: true,
-            },
-          ];
-        }
         if (cmd === "show_context_menu") return undefined;
         return "ok";
       },
     );
+    mockRegistry = [
+      {
+        id: "task.doThisNext",
+        name: "Do This Next",
+        context_menu: true,
+        scope: ["entity:task"],
+      },
+    ];
 
     const task = makeTask("t1");
     await renderColumn(
@@ -315,22 +322,18 @@ describe("ColumnView — Do This Next command", () => {
   it("context menu scope chain contains the task moniker", async () => {
     mockInvoke.mockImplementation(
       async (cmd: string, _args?: unknown): Promise<unknown> => {
-        if (cmd === "list_commands_for_scope") {
-          return [
-            {
-              id: "task.doThisNext",
-              name: "Do This Next",
-              target: "task:t2",
-              group: "entity",
-              context_menu: true,
-              available: true,
-            },
-          ];
-        }
         if (cmd === "show_context_menu") return undefined;
         return "ok";
       },
     );
+    mockRegistry = [
+      {
+        id: "task.doThisNext",
+        name: "Do This Next",
+        context_menu: true,
+        scope: ["entity:task"],
+      },
+    ];
 
     const task = makeTask("t2");
     await renderColumn(

@@ -34,6 +34,17 @@ vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
 }));
 
+// `useContextMenu` now sources commands from the Command registry via
+// `useCommandList`; drive it through `mockRegistry`.
+let mockRegistry: Array<Record<string, unknown>> = [];
+vi.mock("@/hooks/use-command-list", () => ({
+  useCommandList: () => ({
+    commands: mockRegistry,
+    loading: false,
+    refresh: vi.fn(),
+  }),
+}));
+
 vi.mock("@tauri-apps/plugin-log", () => ({
   error: vi.fn(),
   warn: vi.fn(),
@@ -141,18 +152,26 @@ function mockResolvedCommands(
     available: boolean;
   }>,
 ) {
-  mockInvoke.mockImplementation((cmd: string, _args?: unknown) => {
-    if (cmd === "list_commands_for_scope") return Promise.resolve(commands);
-    return Promise.resolve(undefined);
-  });
+  // Publish through the registry. `perspective.*` commands are scoped to
+  // `entity:perspective` so they match a chain carrying a `perspective:<id>`
+  // moniker (the scope-expression → moniker rule in `useContextMenu`).
+  mockRegistry = commands.map((c) => ({
+    id: c.id,
+    name: c.name,
+    context_menu: c.context_menu,
+    scope: ["entity:perspective"],
+  }));
 }
 
-/** Extract the scope chain that was passed to `list_commands_for_scope`. */
+/**
+ * The captured right-click scope chain. With the registry-driven context menu
+ * the chain is written into the `show_context_menu` items' `scope_chain` (the
+ * old `list_commands_for_scope` round-trip is gone), so read it from the first
+ * non-separator item.
+ */
 function capturedListScope(): string[] | undefined {
-  const listCall = mockInvoke.mock.calls.find(
-    (c) => c[0] === "list_commands_for_scope",
-  );
-  return (listCall?.[1] as { scopeChain?: string[] } | undefined)?.scopeChain;
+  const scopes = capturedItemScopes();
+  return scopes[0];
 }
 
 /** Extract the scope chain(s) that were written into `show_context_menu` items. */
@@ -426,7 +445,12 @@ describe("PerspectivesContainer view-body scope", () => {
       ...mockPerspectivesValue,
       activePerspective: null,
     };
-    mockResolvedCommands([]);
+    // A global (unscoped) command so the menu still renders and we can
+    // inspect the captured chain. The registry-driven context menu only
+    // shows `show_context_menu` when at least one command matches.
+    mockRegistry = [
+      { id: "app.help", name: "Help", context_menu: true },
+    ];
 
     renderWithBodyChild();
 

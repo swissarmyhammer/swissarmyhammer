@@ -56,10 +56,12 @@ const TASK_SCHEMA = {
   ],
 };
 
-const mockInvoke = vi.fn(async (cmd: string, _args?: any) => {
+const mockInvoke = vi.fn(async (cmd: string, args?: any) => {
   if (cmd === "list_entity_types") return ["task"];
   if (cmd === "get_entity_schema") return TASK_SCHEMA;
-  if (cmd === "list_commands_for_scope") return { commands: [] };
+  // Global keybindings + context menus read the Command registry through
+  // `command_tool_call`; serve the global keymap set by default.
+  if (cmd === "command_tool_call") return commandToolCall(args);
   if (cmd === "list_views") return [];
   if (cmd === "get_ui_state")
     return {
@@ -109,6 +111,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 import "@/components/fields/registrations";
 
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { commandToolCall } from "@/test/mock-command-list";
 
 import { DragSessionProvider } from "@/lib/drag-session-context";
 import { SchemaProvider } from "@/lib/schema-context";
@@ -485,17 +488,18 @@ describe("Board integration — real .kanban data", () => {
     const savedImpl = mockInvoke.getMockImplementation()!;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const doThisNextMock = async (cmd: string, args?: any): Promise<any> => {
-      if (cmd === "list_commands_for_scope") {
-        return [
-          {
-            id: "task.doThisNext",
-            name: "Do This Next",
-            target: `task:${testTaskIds[3]}`,
-            group: "entity",
-            context_menu: true,
-            available: true,
-          },
-        ];
+      if (cmd === "command_tool_call" && args?.op === "list command") {
+        return {
+          ok: true,
+          commands: [
+            {
+              id: "task.doThisNext",
+              name: "Do This Next",
+              context_menu: true,
+              scope: ["entity:task"],
+            },
+          ],
+        };
       }
       if (cmd === "show_context_menu") return null;
       return savedImpl(cmd, args);

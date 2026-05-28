@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 
 // ---------------------------------------------------------------------------
@@ -24,6 +24,16 @@ vi.mock("@tauri-apps/api/webview", () => ({
 }));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
+}));
+// The right-click context menu now reads commands from the Command registry
+// via `useCommandList`; drive it through `mockRegistry`.
+let mockRegistry: Array<Record<string, unknown>> = [];
+vi.mock("@/hooks/use-command-list", () => ({
+  useCommandList: () => ({
+    commands: mockRegistry,
+    loading: false,
+    refresh: vi.fn(),
+  }),
 }));
 // ---------------------------------------------------------------------------
 
@@ -190,6 +200,10 @@ describe("getFileIcon", () => {
 // ---------------------------------------------------------------------------
 
 describe("AttachmentItem", () => {
+  beforeEach(() => {
+    mockRegistry = [];
+  });
+
   it("renders filename and size", () => {
     render(
       <Wrapper>
@@ -229,27 +243,24 @@ describe("AttachmentItem", () => {
     mockInvoke.mockClear();
     mockListen.mockClear();
     mockListen.mockResolvedValue(() => {});
-    // list_commands_for_scope returns resolved commands from the backend
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mockInvoke.mockImplementation((cmd: any) => {
-      if (cmd === "list_commands_for_scope") {
-        return Promise.resolve([
-          {
-            id: "attachment.open",
-            name: "Open",
-            target: imageAttachment.path,
-            group: "attachment",
-          },
-          {
-            id: "attachment.reveal",
-            name: "Show in Finder",
-            target: imageAttachment.path,
-            group: "attachment",
-          },
-        ]);
-      }
-      return Promise.resolve("ok");
-    });
+    // The registry surfaces the attachment-scoped context-menu commands.
+    mockRegistry = [
+      {
+        id: "attachment.open",
+        name: "Open",
+        context_menu: true,
+        context_menu_group: 0,
+        scope: ["attachment"],
+      },
+      {
+        id: "attachment.reveal",
+        name: "Show in Finder",
+        context_menu: true,
+        context_menu_group: 0,
+        scope: ["attachment"],
+      },
+    ];
+    mockInvoke.mockImplementation(() => Promise.resolve("ok"));
     const { container } = render(
       <Wrapper>
         <AttachmentItem attachment={imageAttachment} />
@@ -296,62 +307,56 @@ describe("AttachmentItem", () => {
     mockInvoke.mockClear();
     mockListen.mockClear();
     mockListen.mockResolvedValue(() => {});
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mockInvoke.mockImplementation((cmd: any) => {
-      if (cmd === "list_commands_for_scope") {
-        return Promise.resolve([
-          {
-            id: "attachment.open",
-            name: "Open",
-            target: imageAttachment.path,
-            group: "attachment",
-            context_menu: true,
-            available: true,
-          },
-          {
-            id: "attachment.reveal",
-            name: "Show in Finder",
-            target: imageAttachment.path,
-            group: "attachment",
-            context_menu: true,
-            available: true,
-          },
-          {
-            id: "entity.cut",
-            name: "Cut Attachment",
-            target: `attachment:${imageAttachment.path}`,
-            group: "attachment:ctx1",
-            context_menu: true,
-            available: true,
-          },
-          {
-            id: "entity.copy",
-            name: "Copy Attachment",
-            target: `attachment:${imageAttachment.path}`,
-            group: "attachment:ctx1",
-            context_menu: true,
-            available: true,
-          },
-          {
-            id: "entity.paste",
-            name: "Paste Attachment",
-            target: `attachment:${imageAttachment.path}`,
-            group: "attachment:ctx1",
-            context_menu: true,
-            available: true,
-          },
-          {
-            id: "entity.delete",
-            name: "Delete Attachment",
-            target: `attachment:${imageAttachment.path}`,
-            group: "attachment:ctx2",
-            context_menu: true,
-            available: true,
-          },
-        ]);
-      }
-      return Promise.resolve("ok");
-    });
+    // Registry rows in three `context_menu_group` buckets — the menu inserts
+    // a separator between adjacent rows whose group differs:
+    //   group 0: Open, Show in Finder
+    //   group 1: Cut, Copy, Paste
+    //   group 2: Delete
+    mockRegistry = [
+      {
+        id: "attachment.open",
+        name: "Open",
+        context_menu: true,
+        context_menu_group: 0,
+        scope: ["attachment"],
+      },
+      {
+        id: "attachment.reveal",
+        name: "Show in Finder",
+        context_menu: true,
+        context_menu_group: 0,
+        scope: ["attachment"],
+      },
+      {
+        id: "entity.cut",
+        name: "Cut Attachment",
+        context_menu: true,
+        context_menu_group: 1,
+        scope: ["attachment"],
+      },
+      {
+        id: "entity.copy",
+        name: "Copy Attachment",
+        context_menu: true,
+        context_menu_group: 1,
+        scope: ["attachment"],
+      },
+      {
+        id: "entity.paste",
+        name: "Paste Attachment",
+        context_menu: true,
+        context_menu_group: 1,
+        scope: ["attachment"],
+      },
+      {
+        id: "entity.delete",
+        name: "Delete Attachment",
+        context_menu: true,
+        context_menu_group: 2,
+        scope: ["attachment"],
+      },
+    ];
+    mockInvoke.mockImplementation(() => Promise.resolve("ok"));
     const { container } = render(
       <Wrapper>
         <AttachmentItem attachment={imageAttachment} />
@@ -404,11 +409,16 @@ describe("AttachmentItem", () => {
   it("scope chain includes attachment moniker on right-click", async () => {
     mockInvoke.mockClear();
     mockListen.mockResolvedValue(() => {});
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mockInvoke.mockImplementation((cmd: any) => {
-      if (cmd === "list_commands_for_scope") return Promise.resolve([]);
-      return Promise.resolve("ok");
-    });
+    // A matching command so the menu renders and carries the captured chain.
+    mockRegistry = [
+      {
+        id: "attachment.open",
+        name: "Open",
+        context_menu: true,
+        scope: ["attachment"],
+      },
+    ];
+    mockInvoke.mockImplementation(() => Promise.resolve("ok"));
     const { container } = render(
       <Wrapper>
         <AttachmentItem attachment={imageAttachment} />
@@ -417,11 +427,14 @@ describe("AttachmentItem", () => {
     fireEvent.contextMenu(container.querySelector(".cursor-pointer")!);
     await vi.waitFor(() => {
       const call = mockInvoke.mock.calls.find(
-        (c: unknown[]) => c[0] === "list_commands_for_scope",
+        (c: unknown[]) => c[0] === "show_context_menu",
       );
       expect(call).toBeDefined();
-      const { scopeChain } = call![1] as { scopeChain: string[] };
-      expect(scopeChain[0]).toBe(`attachment:${imageAttachment.path}`);
+      const { items } = call![1] as {
+        items: { scope_chain: string[]; separator: boolean }[];
+      };
+      const first = items.find((i) => !i.separator)!;
+      expect(first.scope_chain[0]).toBe(`attachment:${imageAttachment.path}`);
     });
     mockInvoke.mockImplementation(() => Promise.resolve("ok"));
   });
@@ -429,11 +442,15 @@ describe("AttachmentItem", () => {
   it("nested inside parent FocusScope: right-click fires attachment scope, not parent", async () => {
     mockInvoke.mockClear();
     mockListen.mockResolvedValue(() => {});
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mockInvoke.mockImplementation((cmd: any) => {
-      if (cmd === "list_commands_for_scope") return Promise.resolve([]);
-      return Promise.resolve("ok");
-    });
+    mockRegistry = [
+      {
+        id: "attachment.open",
+        name: "Open",
+        context_menu: true,
+        scope: ["attachment"],
+      },
+    ];
+    mockInvoke.mockImplementation(() => Promise.resolve("ok"));
     const FocusScope = (await import("@/components/focus-scope")).FocusScope;
     const { container } = render(
       <Wrapper>
@@ -444,16 +461,18 @@ describe("AttachmentItem", () => {
     );
     fireEvent.contextMenu(container.querySelector(".cursor-pointer")!);
     await vi.waitFor(() => {
-      const calls = mockInvoke.mock.calls.filter(
-        (c: unknown[]) => c[0] === "list_commands_for_scope",
+      const showCalls = mockInvoke.mock.calls.filter(
+        (c: unknown[]) => c[0] === "show_context_menu",
       );
-      // Should be exactly one call — the attachment's, not the parent task's
-      expect(calls).toHaveLength(1);
-      const { scopeChain } = calls[0][1] as { scopeChain: string[] };
-      // Attachment moniker should be first (innermost)
-      expect(scopeChain[0]).toBe(`attachment:${imageAttachment.path}`);
-      // Parent task moniker should be second
-      expect(scopeChain[1]).toBe("task:01ABC");
+      // Exactly one menu — the attachment's, not the parent task's.
+      expect(showCalls).toHaveLength(1);
+      const { items } = showCalls[0][1] as {
+        items: { scope_chain: string[]; separator: boolean }[];
+      };
+      const { scope_chain } = items.find((i) => !i.separator)!;
+      // Attachment moniker is innermost, parent task moniker next.
+      expect(scope_chain[0]).toBe(`attachment:${imageAttachment.path}`);
+      expect(scope_chain[1]).toBe("task:01ABC");
     });
     mockInvoke.mockImplementation(() => Promise.resolve("ok"));
   });

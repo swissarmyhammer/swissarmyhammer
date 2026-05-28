@@ -228,6 +228,27 @@ vi.mock("@/lib/context-menu", () => ({
   useContextMenu: () => vi.fn(),
 }));
 
+// `<RegistryTabButtons>` sources perspective-scoped tab-button commands from
+// the Command registry via `useCommandList`. Return `perspective.filter.focus`
+// (scoped `entity:perspective`) so its `<CommandButton>` mounts in the active
+// tab and registers its spatial-nav leaf.
+vi.mock("@/hooks/use-command-list", () => ({
+  useCommandList: () => ({
+    commands: [
+      {
+        id: "perspective.filter.focus",
+        name: "Focus Filter",
+        scope: ["entity:perspective"],
+        tab_button: { icon: "filter" },
+        params: [{ name: "perspective_id", from: "scope_chain" }],
+        keys: {},
+      },
+    ],
+    loading: false,
+    refresh: vi.fn(),
+  }),
+}));
+
 vi.mock("@/lib/entity-store-context", () => ({
   useEntityStore: () => ({ getEntities: () => [] }),
   useFieldValue: () => "",

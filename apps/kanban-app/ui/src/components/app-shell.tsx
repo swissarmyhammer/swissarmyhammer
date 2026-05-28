@@ -24,9 +24,11 @@ import { useUIState } from "@/lib/ui-state-context";
 import { useAppMode } from "@/lib/app-mode-context";
 import {
   createKeyHandler,
+  extractKeymapBindings,
   extractScopeBindings,
   type KeymapMode,
 } from "@/lib/keybindings";
+import { useCommandList } from "@/hooks/use-command-list";
 import { reportDispatchError } from "@/lib/dispatch-error";
 import { CommandPalette } from "@/components/command-palette";
 import { FocusLayer } from "@/components/focus-layer";
@@ -72,6 +74,18 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
   const dispatch = useDispatchCommand();
   const focusedScope = useFocusedScope();
 
+  // Global keybindings are sourced from the metadata-driven Command registry,
+  // not a hardcoded table: every command that declares `keys[mode]`
+  // contributes one binding. The list re-fetches on `commands/changed`, so a
+  // newly-registered command's key is live without a reload. The effect below
+  // re-creates the handler whenever the keymap mode or the derived table
+  // changes (a keymap switch is itself a `settings.keymap.*` command).
+  const { commands: registryCommands } = useCommandList();
+  const globalBindings = useMemo(
+    () => extractKeymapBindings(registryCommands, mode),
+    [registryCommands, mode],
+  );
+
   const dispatchRef = useRef(dispatch);
   dispatchRef.current = dispatch;
   const focusedScopeRef = useRef(focusedScope);
@@ -104,12 +118,15 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
   useEffect(() => {
     // Pass scope bindings so command `keys` from the focused scope (inspector,
     // grid, board nav) are resolved through the same single key handler.
-    const handler = createKeyHandler(mode, executeCommand, () =>
-      extractScopeBindings(focusedScopeRef.current, mode),
+    const handler = createKeyHandler(
+      mode,
+      executeCommand,
+      () => extractScopeBindings(focusedScopeRef.current, mode),
+      globalBindings,
     );
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [mode, executeCommand]);
+  }, [mode, executeCommand, globalBindings]);
 
   // Listen for menu-command events from the native menu and route them
   // through the command scope so they behave identically to keybindings

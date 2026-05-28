@@ -100,6 +100,58 @@ export async function callCommandTool<T = unknown>(
 export const EXECUTE_COMMAND_OP = "execute command" as const;
 /** Verb constant for `list command`. */
 export const LIST_COMMAND_OP = "list command" as const;
+/** Verb constant for `available command`. */
+export const AVAILABLE_COMMAND_OP = "available command" as const;
+
+/**
+ * One command's availability verdict as returned by `available command`.
+ *
+ * Mirrors `swissarmyhammer-command-service`'s availability check: `available`
+ * is the gate, and `reason` is an optional human-readable explanation surfaced
+ * as a tooltip on grayed-out palette entries when `available` is `false`.
+ */
+export interface CommandAvailability {
+  /** True when the command can currently be dispatched. */
+  available: boolean;
+  /** Why the command is unavailable — rendered as the grayed-out entry's tooltip. */
+  reason?: string;
+}
+
+/** Envelope returned by the `available command` verb. */
+interface AvailableCommandResult {
+  ok: boolean;
+  available: boolean;
+  reason?: string;
+}
+
+/**
+ * Evaluate a single command's availability via the Command service's
+ * `available command` verb, in the supplied scope chain.
+ *
+ * The Command service enforces a latency budget (warn at 5ms, force-`false`
+ * at 50ms) so a slow availability predicate can never block the palette; this
+ * call simply surfaces the verdict. Callers (the palette) batch one call per
+ * visible command behind a concurrency limit and cache the results until the
+ * next `commands/changed` or scope change — see `use-command-availability`.
+ *
+ * @param id - The command id to evaluate.
+ * @param scopeChain - Active scope monikers, innermost first.
+ * @returns The `{ available, reason }` verdict; defaults to available on a
+ *   missing/garbled envelope so a transport hiccup never hides a command.
+ */
+export async function evaluateAvailableCommand(
+  id: string,
+  scopeChain: string[],
+): Promise<CommandAvailability> {
+  const result = await callCommandTool<AvailableCommandResult>(
+    AVAILABLE_COMMAND_OP,
+    { id, ctx: { scope_chain: scopeChain } },
+  );
+  return {
+    available: result?.available ?? true,
+    reason: result?.reason,
+  };
+}
 
 /** `ctx` payload shape carried by an `execute command` call. */
 interface ExecuteCommandParams {

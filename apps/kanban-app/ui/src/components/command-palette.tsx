@@ -21,6 +21,8 @@ import {
 } from "@/lib/command-scope";
 import { useUIState } from "@/lib/ui-state-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
+import { useCommandList } from "@/hooks/use-command-list";
+import { useCommandAvailability } from "@/hooks/use-command-availability";
 import { fuzzyMatch } from "@/lib/fuzzy-filter";
 import { moniker } from "@/lib/moniker";
 import { FocusScope } from "@/components/focus-scope";
@@ -91,54 +93,33 @@ export function CommandPalette({
   );
   const dispatch = useDispatchCommand();
 
-  /** Shape returned by the backend. */
-  interface ResolvedCommand {
-    id: string;
-    name: string;
-    target?: string;
-    context_menu: boolean;
-    keys?: { vim?: string; cua?: string; emacs?: string };
-    available: boolean;
-    /**
-     * Pre-filled dispatch arguments for fan-out palette rows.
-     *
-     * Dynamic emitters (e.g. per-view "Switch to X") ship the canonical
-     * command id (`view.set`) plus the distinguishing argument
-     * (`{ view_id: "..." }`) inside `args`. `executeSelectedCommand`
-     * forwards this bag to `dispatch(id, { args, target })` verbatim,
-     * so no client-side suffix parsing is needed.
-     */
-    args?: Record<string, unknown>;
-  }
+  // The innermost scope moniker is the palette's `useCommandList` filter:
+  // `list command` keeps global commands plus those whose `scope` contains it,
+  // matching the per-scope set the registry surfaces for this focus point.
+  const currentScope = scopeChain[0];
 
-  // Fetch commands from the backend when the palette opens or scope changes.
-  const [backendCommands, setBackendCommands] = useState<ResolvedCommand[]>([]);
-  useEffect(() => {
-    if (!open) return;
-    invoke<ResolvedCommand[]>("list_commands_for_scope", {
-      scopeChain,
-    })
-      .then(setBackendCommands)
-      .catch((e) => {
-        console.error("list_commands_for_scope failed:", e);
-        setBackendCommands([]);
-      });
-  }, [open, scopeChain]);
+  // Source commands from the metadata-driven Command registry rather than a
+  // hardcoded list — re-fetched live on `commands/changed`. The palette only
+  // renders in command mode, so the list is unused (but cheap) in search mode.
+  const { commands: registryCommands } = useCommandList(
+    currentScope !== undefined ? { scope: currentScope } : {},
+  );
 
-  // Adapt backend commands to the shape the palette expects (CommandAtDepth)
+  // Adapt registry commands to the shape the palette renders (CommandAtDepth).
+  // Hidden commands (`visible: false`) never reach a surface.
   const allCommands: CommandAtDepth[] = useMemo(
     () =>
-      backendCommands.map((cmd) => ({
-        command: {
-          id: cmd.id,
-          name: cmd.name,
-          target: cmd.target,
-          keys: cmd.keys,
-          args: cmd.args,
-        },
-        depth: 0,
-      })),
-    [backendCommands],
+      registryCommands
+        .filter((cmd) => cmd.visible !== false)
+        .map((cmd) => ({
+          command: {
+            id: cmd.id,
+            name: cmd.name,
+            keys: cmd.keys,
+          },
+          depth: 0,
+        })),
+    [registryCommands],
   );
 
   // Dispatch inspect for search mode — dispatches to the backend via
@@ -240,6 +221,21 @@ export function CommandPalette({
     return scored.map((s) => s.entry);
   }, [filter, allCommands, paletteMode]);
 
+  // Evaluate `available command` for every visible row. The hook batches the
+  // ids into one concurrency-limited fan-out and caches the verdicts until the
+  // scope chain changes — so re-opening or typing does not re-hit the service.
+  // Unevaluated ids are absent from the map and treated as available, so a
+  // command never flickers grayed-out before its verdict resolves.
+  const visibleIds = useMemo(
+    () => filteredCommands.map((entry) => entry.command.id),
+    [filteredCommands],
+  );
+  const { availability } = useCommandAvailability({
+    enabled: open && paletteMode === "command",
+    ids: visibleIds,
+    scopeChain,
+  });
+
   // Combined length for selection clamping
   const filteredLength =
     paletteMode === "search" ? searchResults.length : filteredCommands.length;
@@ -252,17 +248,13 @@ export function CommandPalette({
   // Execute the selected command (command mode)
   const executeSelectedCommand = useCallback(() => {
     const entry = filteredCommands[selectedIndex];
-    if (entry) {
-      onClose();
-      // `args` is populated by dynamic-emission rows (e.g. "Switch to
-      // Board View" carries `{ view_id: "board-view" }`). Forward it
-      // verbatim so the canonical command sees its pre-filled arg bag.
-      dispatch(entry.command.id, {
-        target: entry.command.target,
-        args: entry.command.args,
-      }).catch(console.error);
-    }
-  }, [filteredCommands, selectedIndex, onClose, dispatch]);
+    if (!entry) return;
+    // Unavailable commands are inert — Enter on a grayed-out row is a no-op,
+    // matching the grayed-out click affordance.
+    if (availability[entry.command.id]?.available === false) return;
+    onClose();
+    dispatch(entry.command.id).catch(console.error);
+  }, [filteredCommands, selectedIndex, onClose, dispatch, availability]);
 
   // Execute the selected entity result (search mode)
   const executeSelectedResult = useCallback(() => {
@@ -434,35 +426,39 @@ export function CommandPalette({
           ) : (
             filteredCommands.map((entry, index) => {
               const hint = keyHint(entry);
-              // Fan-out rows (e.g. multiple "view.set" entries with
-              // different `args.view_id`) share an id and target, so the
-              // React key must also depend on `args` or the list would
-              // collapse to a single row.
-              const argsKey = entry.command.args
-                ? JSON.stringify(entry.command.args)
-                : "";
+              // Availability is consulted per visible row. A missing verdict
+              // (not yet resolved) defaults to available so commands never
+              // flicker grayed-out; an explicit `available: false` grays the
+              // row out and surfaces `reason` as the tooltip.
+              const verdict = availability[entry.command.id];
+              const isUnavailable = verdict?.available === false;
+              const reason = verdict?.reason;
               return (
                 <div
-                  key={
-                    entry.command.id +
-                    ":" +
-                    (entry.command.target ?? "") +
-                    ":" +
-                    argsKey
-                  }
+                  key={entry.command.id}
                   role="option"
                   aria-selected={index === selectedIndex}
-                  data-testid={`command-item-${entry.command.id}${
-                    argsKey ? `:${argsKey}` : ""
-                  }`}
-                  className={`flex cursor-pointer items-center justify-between px-3 py-1.5 text-sm
-                      ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
+                  aria-disabled={isUnavailable}
+                  title={isUnavailable ? reason : undefined}
+                  data-testid={`command-item-${entry.command.id}`}
+                  data-available={isUnavailable ? "false" : "true"}
+                  className={`flex items-center justify-between px-3 py-1.5 text-sm
+                      ${
+                        isUnavailable
+                          ? "cursor-not-allowed text-muted-foreground/50"
+                          : "cursor-pointer"
+                      }
+                      ${
+                        index === selectedIndex
+                          ? "bg-accent text-accent-foreground"
+                          : "hover:bg-accent/50"
+                      }`}
                   onClick={() => {
+                    // Unavailable commands are inert — match the grayed-out
+                    // affordance by swallowing the click.
+                    if (isUnavailable) return;
                     onClose();
-                    dispatch(entry.command.id, {
-                      target: entry.command.target,
-                      args: entry.command.args,
-                    }).catch(console.error);
+                    dispatch(entry.command.id).catch(console.error);
                   }}
                   onMouseEnter={() => setSelectedIndex(index)}
                 >

@@ -79,6 +79,27 @@ vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main", setFocus: vi.fn() }),
 }));
 
+// The palette sources its command rows from the metadata-driven Command
+// registry via `useCommandList`. Tests drive that seam by setting
+// `mockRegistry`; availability defaults to available unless overridden.
+import type {
+  CommandMetadata,
+  UseCommandListOptions,
+} from "@/hooks/use-command-list";
+let mockRegistry: CommandMetadata[] = [];
+/** Records the options each `useCommandList` call received (scope forwarding). */
+let useCommandListCalls: UseCommandListOptions[] = [];
+vi.mock("@/hooks/use-command-list", () => ({
+  useCommandList: (options: UseCommandListOptions = {}) => {
+    useCommandListCalls.push(options);
+    return {
+      commands: mockRegistry,
+      loading: false,
+      refresh: vi.fn(),
+    };
+  },
+}));
+
 // Mock codemirror-vim: getCM returns a cm object, Vim.handleKey is the spy
 vi.mock("@replit/codemirror-vim", async () => {
   const actual = await vi.importActual<typeof import("@replit/codemirror-vim")>(
@@ -127,11 +148,20 @@ const TEST_COMMANDS: CommandDef[] = [
   },
 ];
 
+/** Registry rows mirroring TEST_COMMANDS (id/name/keys) for command-mode tests. */
+const TEST_REGISTRY: CommandMetadata[] = [
+  { id: "open-file", name: "Open File", keys: { vim: ":e", cua: "Ctrl+O" } },
+  { id: "save-file", name: "Save File", keys: { vim: ":w", cua: "Ctrl+S" } },
+  { id: "close-tab", name: "Close Tab", keys: { cua: "Ctrl+W" } },
+];
+
 beforeEach(() => {
   handleKeyMock.mockClear();
   getCMMock.mockClear();
   // Restore default getCM behavior
   getCMMock.mockReturnValue({ state: { vim: {} } } as any);
+  mockRegistry = TEST_REGISTRY;
+  useCommandListCalls = [];
 });
 
 async function renderPalette(open: boolean, onClose = vi.fn()) {
@@ -821,47 +851,13 @@ function mockBackendForView(opts: {
   entityAddId: string;
   entityAddName: string;
 }) {
-  vi.mocked(invoke).mockImplementation((cmd: string, args?: any) => {
-    if (cmd === "get_ui_state")
-      return Promise.resolve({
-        palette_open: false,
-        palette_mode: "command",
-        keymap_mode: "cua",
-        scope_chain: [],
-        open_boards: [],
-        windows: {},
-        recent_boards: [],
-      });
-    if (cmd === "list_commands_for_scope") {
-      // Sanity — the palette must forward exactly the scope chain we
-      // expect. If the frontend ever diverges from FocusedScopeContext
-      // this throws, catching the regression class "palette sent an empty
-      // scope chain".
-      if (
-        JSON.stringify(args?.scopeChain) !== JSON.stringify(opts.expectedScope)
-      ) {
-        return Promise.resolve([]);
-      }
-      return Promise.resolve([
-        {
-          id: opts.entityAddId,
-          name: opts.entityAddName,
-          group: "entity",
-          context_menu: true,
-          available: true,
-        },
-        {
-          id: "app.quit",
-          name: "Quit",
-          group: "global",
-          context_menu: false,
-          available: true,
-        },
-      ]);
-    }
-    if (cmd === "log_command") return Promise.resolve(null);
-    return Promise.resolve(null);
-  });
+  // The palette now sources rows from `useCommandList` (mocked via
+  // `mockRegistry`) rather than `list_commands_for_scope`. The registry
+  // returns the entity-add command for the active scope plus a global command.
+  mockRegistry = [
+    { id: opts.entityAddId, name: opts.entityAddName, scope: ["entity:task"] },
+    { id: "app.quit", name: "Quit" },
+  ];
 }
 
 /**
@@ -974,29 +970,9 @@ describe("CommandPalette scope chain sourcing", () => {
     vi.clearAllMocks();
   });
 
-  it("palette refetches commands when focused scope changes while open", async () => {
-    // Track what scope chain each `list_commands_for_scope` call saw, so we
-    // can assert the palette re-requested for the new chain on rerender.
-    const seenChains: unknown[] = [];
-    vi.mocked(invoke).mockImplementation((cmd: string, args?: any) => {
-      if (cmd === "get_ui_state")
-        return Promise.resolve({
-          palette_open: false,
-          palette_mode: "command",
-          keymap_mode: "cua",
-          scope_chain: [],
-          open_boards: [],
-          windows: {},
-          recent_boards: [],
-        });
-      if (cmd === "list_commands_for_scope") {
-        seenChains.push(args?.scopeChain);
-        return Promise.resolve([]);
-      }
-      if (cmd === "log_command") return Promise.resolve(null);
-      return Promise.resolve(null);
-    });
-
+  it("palette forwards the innermost focused-scope moniker to useCommandList", async () => {
+    // The palette filters `useCommandList` by the innermost moniker of the
+    // focused scope chain. When focus moves, it re-filters for the new scope.
     const scopeA = buildFocusedScope(["task:AAA", "board:my-board"]);
     const scopeB = buildFocusedScope(["task:BBB", "board:my-board"]);
 
@@ -1017,8 +993,8 @@ describe("CommandPalette scope chain sourcing", () => {
       await Promise.resolve();
     });
 
-    // Scope A: palette asked for A's chain.
-    expect(seenChains).toContainEqual(["task:AAA", "board:my-board"]);
+    // Scope A: palette asked useCommandList to filter by A's innermost scope.
+    expect(useCommandListCalls).toContainEqual({ scope: "task:AAA" });
 
     // Simulate focus moving to scope B while the palette is still open.
     await act(async () => {
@@ -1037,8 +1013,7 @@ describe("CommandPalette scope chain sourcing", () => {
       await Promise.resolve();
     });
 
-    // Scope B: palette re-asked for B's chain. The identical-prefix board
-    // moniker is retained; only the innermost scope changed.
-    expect(seenChains).toContainEqual(["task:BBB", "board:my-board"]);
+    // Scope B: palette re-filtered for B's innermost scope.
+    expect(useCommandListCalls).toContainEqual({ scope: "task:BBB" });
   });
 });

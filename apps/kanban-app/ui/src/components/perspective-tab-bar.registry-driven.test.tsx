@@ -107,6 +107,19 @@ vi.mock("@/lib/context-menu", () => ({
   useContextMenu: () => vi.fn(),
 }));
 
+// The tab bar now sources tab-button commands from the metadata-driven Command
+// registry via `useCommandList`. Tests drive that seam by setting
+// `mockRegistry`; the hook is filter-agnostic here (the component applies the
+// `tab_button` / scope / `view_kinds` predicates).
+let mockRegistry: Array<Record<string, unknown>> = [];
+vi.mock("@/hooks/use-command-list", () => ({
+  useCommandList: () => ({
+    commands: mockRegistry,
+    loading: false,
+    refresh: vi.fn(),
+  }),
+}));
+
 vi.mock("@/lib/entity-store-context", () => ({
   useEntityStore: () => ({ getEntities: () => [] }),
 }));
@@ -200,49 +213,32 @@ interface MockResolvedCommand {
 }
 
 /**
- * Install an `invoke` mock that returns `commands` for every
- * `list_commands_for_scope` call AND captures the scope chains it was
- * called with for assertions.
+ * Publish `commands` through the mocked `useCommandList` seam.
+ *
+ * Entity-scoped tab buttons must carry a non-empty `scope` so the tab bar's
+ * `entity:perspective` filter admits them — default it here unless a test sets
+ * one explicitly. The component applies the `tab_button` / `view_kinds`
+ * predicates itself, so the registry returns the raw set.
  */
 function mockResolvedCommands(commands: MockResolvedCommand[]) {
-  mockInvoke.mockImplementation((cmd: string, _args?: unknown) => {
-    if (cmd === "list_commands_for_scope") return Promise.resolve(commands);
-    return Promise.resolve(null);
-  });
+  mockRegistry = commands.map((c) => ({
+    scope: ["entity:perspective"],
+    ...c,
+  }));
 }
 
 /**
- * Install an `invoke` mock that simulates the backend's
- * `filter_by_view_kind` pass: every command with a `view_kinds` array
- * is dropped unless the scope chain carries a `view:{id}` whose
- * resolved kind matches at least one entry.
- *
- * The simulator looks up the view kind via the test-side `viewKindMap`
- * keyed on the view-id segment of the moniker (e.g. `"board-1" → "board"`),
- * mirroring how the real backend joins `view:{id}` against
- * `DynamicSources.views`.
+ * Publish commands carrying `view_kinds` constraints. The tab bar's own
+ * `isViewKindAdmitted` filter (the metadata-driven replacement for the
+ * backend's `filter_by_view_kind` pass) drops a grid-only command when the
+ * active view's kind is `board`, so the simulator is no longer needed — the
+ * registry simply returns every command and the component filters.
  */
 function mockResolvedCommandsWithViewKindFilter(
   commands: MockResolvedCommand[],
-  viewKindMap: Record<string, string>,
+  _viewKindMap: Record<string, string>,
 ) {
-  mockInvoke.mockImplementation(
-    (cmd: string, args?: unknown): Promise<unknown> => {
-      if (cmd !== "list_commands_for_scope") return Promise.resolve(null);
-      const chain =
-        (args as { scopeChain?: string[] } | undefined)?.scopeChain ?? [];
-      const viewMoniker = chain.find((m) => m.startsWith("view:"));
-      const viewKind = viewMoniker
-        ? viewKindMap[viewMoniker.slice("view:".length)]
-        : undefined;
-      const filtered = commands.filter((c) => {
-        if (!c.view_kinds || c.view_kinds.length === 0) return true;
-        if (!viewKind) return false;
-        return c.view_kinds.includes(viewKind);
-      });
-      return Promise.resolve(filtered);
-    },
-  );
+  mockResolvedCommands(commands);
 }
 
 /**
@@ -273,6 +269,7 @@ async function flushEffects() {
 describe("PerspectiveTabBar — registry-driven CommandButton rendering", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRegistry = [];
     mockBoardId = "test-board";
     mockPerspectivesValue = {
       perspectives: [{ id: "p1", name: "Sprint", view: "board" }],
@@ -416,37 +413,29 @@ describe("PerspectiveTabBar — registry-driven CommandButton rendering", () => 
     ).toBeNull();
   });
 
-  it("queries list_commands_for_scope with perspective/view/board monikers in the scope chain", async () => {
-    // The scope chain shape is what makes the backend's filter +
-    // resolver passes correct: every dependent pass walks innermost
-    // → outermost and reads `perspective:`, `view:`, and `board:` to
-    // resolve options or apply `view_kinds` filtering. Pin the shape
-    // explicitly so a future refactor that drops one of the segments
-    // is loud rather than silent.
-    mockResolvedCommands([]);
+  it("only renders entity-scoped tab-button commands in the per-perspective slot", async () => {
+    // The per-tab slot renders entity-scoped tab buttons; global (unscoped)
+    // tab-button commands belong to the bar-level slot. A command with an
+    // empty `scope` must not surface inside the perspective tab.
+    mockRegistry = [
+      {
+        id: "perspective.focusFilter",
+        name: "Focus filter",
+        scope: ["entity:perspective"],
+        tab_button: { icon: "filter" },
+      },
+      {
+        id: "perspective.save",
+        name: "Add perspective",
+        scope: [],
+        tab_button: { icon: "plus" },
+      },
+    ];
 
     renderTabBar();
     await flushEffects();
 
-    const listCalls = mockInvoke.mock.calls.filter(
-      (c) => c[0] === "list_commands_for_scope",
-    );
-    expect(listCalls.length).toBeGreaterThan(0);
-
-    // Pick the first call — every per-perspective call carries the same
-    // shape (perspective id varies; view and board do not).
-    //
-    // Assert on the exact array (not membership) so a refactor that
-    // flips the chain to outermost-first — e.g.
-    // `["board:test-board", "view:board-1", "perspective:p1"]` — fails
-    // loudly. The innermost-first convention is load-bearing: every
-    // dependent pass walks the chain in that order to resolve options
-    // and apply `view_kinds` filtering.
-    const chain = (listCalls[0][1] as { scopeChain?: string[] }).scopeChain;
-    expect(chain).toEqual([
-      "perspective:p1",
-      "view:board-1",
-      "board:test-board",
-    ]);
+    // Entity-scoped command renders inside the active perspective tab.
+    expect(screen.getByRole("button", { name: "Focus filter" })).toBeTruthy();
   });
 });

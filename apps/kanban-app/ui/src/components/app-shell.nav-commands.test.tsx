@@ -30,8 +30,10 @@ const listenCallbacks: Record<string, (event: unknown) => void> = {};
  */
 let invokeKeymapMode: "vim" | "cua" | "emacs" = "cua";
 
+import { commandToolCall } from "@/test/mock-command-list";
+
 /** Default `invoke` stub returning a populated UIState payload. */
-function defaultInvoke(cmd: string): Promise<unknown> {
+function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
   if (cmd === "get_ui_state")
     return Promise.resolve({
       palette_open: false,
@@ -42,11 +44,15 @@ function defaultInvoke(cmd: string): Promise<unknown> {
       windows: {},
       recent_boards: [],
     });
+  // The hotkey global layer is sourced from the Command registry via
+  // `useCommandList` → `command_tool_call("list command")`. Serve the global
+  // set (including vim `s` → nav.jump) so global keybindings resolve.
+  if (cmd === "command_tool_call") return commandToolCall(args);
   return Promise.resolve(null);
 }
 
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn((cmd: string) => defaultInvoke(cmd)),
+  invoke: vi.fn((cmd: string, args?: unknown) => defaultInvoke(cmd, args)),
 }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn((eventName: string, cb: (event: unknown) => void) => {

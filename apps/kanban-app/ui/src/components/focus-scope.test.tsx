@@ -26,6 +26,17 @@ vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
 }));
 
+// `useContextMenu` reads commands from the Command registry via
+// `useCommandList`; drive it through `mockRegistry`.
+let mockRegistry: Array<Record<string, unknown>> = [];
+vi.mock("@/hooks/use-command-list", () => ({
+  useCommandList: () => ({
+    commands: mockRegistry,
+    loading: false,
+    refresh: vi.fn(),
+  }),
+}));
+
 /**
  * Default invoke implementation that emits a synthetic `focus-changed`
  * event when `spatial_focus({fq})` is called. This mirrors the real
@@ -96,9 +107,23 @@ interface ResolvedCommand {
  * `list_commands_for_scope` is called, and resolve for everything else.
  */
 function mockListCommands(commands: ResolvedCommand[]) {
+  // Publish the commands as global (unscoped) context-menu rows so they match
+  // any right-click chain — mirroring the old mock that returned the same
+  // fixed list for every `list_commands_for_scope` call regardless of scope.
+  // `context_menu_group` is derived from the legacy `group` string so adjacent
+  // rows in different groups still get a separator between them.
+  const groupIndex = new Map<string, number>();
+  mockRegistry = commands.map((c) => {
+    if (!groupIndex.has(c.group)) groupIndex.set(c.group, groupIndex.size);
+    return {
+      id: c.id,
+      name: c.name,
+      context_menu: c.context_menu,
+      context_menu_group: groupIndex.get(c.group),
+    };
+  });
   (invoke as ReturnType<typeof vi.fn>).mockImplementation(
     (cmd: string, args?: unknown) => {
-      if (cmd === "list_commands_for_scope") return Promise.resolve(commands);
       if (cmd === "spatial_focus") {
         const a = (args ?? {}) as { fq?: string };
         const fq = a.fq ?? null;
@@ -149,6 +174,7 @@ function renderWithFocus(ui: React.ReactElement) {
 describe("FocusScope", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRegistry = [];
     focusListeners.length = 0;
     emitFocusChangedDefault();
   });
@@ -515,14 +541,9 @@ describe("FocusScope", () => {
       </FocusScope>,
     );
     fireEvent.contextMenu(getByText("tag"));
-    // Allow the async list_commands_for_scope call to settle
-    await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith(
-        "list_commands_for_scope",
-        expect.anything(),
-      );
-    });
-    // Backend returns empty: no context menu shown.
+    // Registry returns no matching context-menu commands (inner blocks outer):
+    // no menu is shown. Give the async right-click path a tick to settle.
+    await new Promise((r) => setTimeout(r, 10));
     expect(invoke).not.toHaveBeenCalledWith(
       "show_context_menu",
       expect.anything(),

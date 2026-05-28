@@ -200,6 +200,30 @@ vi.mock("@/lib/context-menu", () => ({
   useContextMenu: () => vi.fn(),
 }));
 
+// `<BarRegistryTabButtons>` sources global (unscoped) tab-button commands from
+// the Command registry via `useCommandList`. Return the `perspective.save`
+// payload (empty `scope` = global) so its `<CommandButton>` mounts at the bar
+// level and registers its spatial-nav leaf.
+vi.mock("@/hooks/use-command-list", () => ({
+  useCommandList: () => ({
+    commands: [
+      {
+        id: "perspective.save",
+        name: "Save Perspective",
+        scope: [],
+        tab_button: { icon: "plus" },
+        params: [
+          { name: "name", from: "args", shape: "text" },
+          { name: "view_id", from: "scope_chain", entity_type: "view" },
+        ],
+        keys: {},
+      },
+    ],
+    loading: false,
+    refresh: vi.fn(),
+  }),
+}));
+
 vi.mock("@/lib/entity-store-context", () => ({
   useEntityStore: () => ({ getEntities: () => [] }),
   useFieldValue: () => "",

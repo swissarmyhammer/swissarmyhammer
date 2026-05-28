@@ -101,6 +101,22 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
 }));
+// The right-click context menu reads commands from the Command registry via
+// `useCommandList`; an `entity:task`-scoped `ui.inspect` so the menu renders.
+vi.mock("@/hooks/use-command-list", () => ({
+  useCommandList: () => ({
+    commands: [
+      {
+        id: "ui.inspect",
+        name: "Inspect task",
+        context_menu: true,
+        scope: ["entity:task"],
+      },
+    ],
+    loading: false,
+    refresh: vi.fn(),
+  }),
+}));
 vi.mock("@tauri-apps/plugin-log", () => ({
   error: vi.fn(),
   warn: vi.fn(),

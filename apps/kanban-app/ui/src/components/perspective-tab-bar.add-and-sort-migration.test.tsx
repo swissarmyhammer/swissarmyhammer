@@ -136,6 +136,16 @@ vi.mock("@/lib/context-menu", () => ({
   useContextMenu: () => vi.fn(),
 }));
 
+// Tab buttons source from the Command registry via `useCommandList`.
+let mockRegistry: Array<Record<string, unknown>> = [];
+vi.mock("@/hooks/use-command-list", () => ({
+  useCommandList: () => ({
+    commands: mockRegistry,
+    loading: false,
+    refresh: vi.fn(),
+  }),
+}));
+
 vi.mock("@/lib/entity-store-context", () => ({
   useEntityStore: () => ({ getEntities: () => [] }),
 }));
@@ -279,10 +289,14 @@ function sortRegistryEntry(
  * the bar) handles the split.
  */
 function mockResolvedCommands(commands: unknown[]) {
-  mockInvoke.mockImplementation((cmd: string, _args?: unknown) => {
-    if (cmd === "list_commands_for_scope") return Promise.resolve(commands);
-    return Promise.resolve(null);
-  });
+  // The registry-driven split is by `scope` emptiness: global (unscoped)
+  // tab-button commands render at the bar level, perspective-scoped ones in
+  // the active tab. Map the legacy `group: "global"` marker onto an empty
+  // `scope` and everything else onto `entity:perspective`.
+  mockRegistry = (commands as Array<Record<string, unknown>>).map((c) => ({
+    scope: c.group === "global" ? [] : ["entity:perspective"],
+    ...c,
+  }));
 }
 
 /** Render `<PerspectiveTabBar>` inside the standard provider stack. */
@@ -324,6 +338,7 @@ async function flushEffects() {
 describe("perspective-tab-bar — Add perspective migration", () => {
   beforeEach(() => {
     mockInvoke.mockReset();
+    mockRegistry = [];
     mockBoardId = "test-board";
     mockPerspectivesValue = {
       perspectives: [{ id: "p1", name: "Sprint", view: "board" }],
@@ -439,6 +454,7 @@ describe("perspective-tab-bar — Add perspective migration", () => {
 describe("perspective-tab-bar — Sort migration", () => {
   beforeEach(() => {
     mockInvoke.mockReset();
+    mockRegistry = [];
     mockBoardId = "test-board";
     mockPerspectivesValue = {
       perspectives: [{ id: "p1", name: "Sprint", view: "grid" }],
@@ -593,6 +609,7 @@ describe("perspective-tab-bar — Sort migration", () => {
 describe("perspective-tab-bar — no hardcoded button JSX after migration", () => {
   beforeEach(() => {
     mockInvoke.mockReset();
+    mockRegistry = [];
     mockBoardId = "test-board";
     mockPerspectivesValue = {
       perspectives: [{ id: "p1", name: "Sprint", view: "board" }],

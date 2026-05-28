@@ -178,6 +178,7 @@ import {
 // ---------------------------------------------------------------------------
 
 import App from "@/App";
+import { commandToolCall } from "@/test/mock-command-list";
 import { JumpToOverlay } from "@/components/jump-to-overlay";
 import { FocusLayer } from "@/components/focus-layer";
 import { FocusScope } from "@/components/focus-scope";
@@ -270,6 +271,7 @@ async function bootstrapInvokeImpl(
   cmd: string,
   args?: unknown,
 ): Promise<unknown> {
+  if (cmd === "command_tool_call") return commandToolCall(args);
   // Schema discovery
   if (cmd === "list_entity_types") return listEntityTypesResponse();
   if (cmd === "get_entity_schema") {

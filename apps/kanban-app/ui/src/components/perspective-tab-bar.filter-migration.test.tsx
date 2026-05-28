@@ -135,6 +135,16 @@ vi.mock("@/lib/context-menu", () => ({
   useContextMenu: () => vi.fn(),
 }));
 
+// Tab buttons source from the Command registry via `useCommandList`.
+let mockRegistry: Array<Record<string, unknown>> = [];
+vi.mock("@/hooks/use-command-list", () => ({
+  useCommandList: () => ({
+    commands: mockRegistry,
+    loading: false,
+    refresh: vi.fn(),
+  }),
+}));
+
 vi.mock("@/lib/entity-store-context", () => ({
   useEntityStore: () => ({ getEntities: () => [] }),
 }));
@@ -190,7 +200,7 @@ import { asSegment } from "@/types/spatial";
 // Test helpers
 // ---------------------------------------------------------------------------
 
-/** Install an `invoke` mock that returns `commands` for every `list_commands_for_scope` call. */
+/** Publish `commands` through the `useCommandList` seam (perspective-scoped). */
 function mockResolvedCommands(
   commands: Array<{
     id: string;
@@ -200,10 +210,7 @@ function mockResolvedCommands(
     keys?: Record<string, string> | Record<string, never>;
   }>,
 ) {
-  mockInvoke.mockImplementation((cmd: string, _args?: unknown) => {
-    if (cmd === "list_commands_for_scope") return Promise.resolve(commands);
-    return Promise.resolve(null);
-  });
+  mockRegistry = commands.map((c) => ({ scope: ["entity:perspective"], ...c }));
 }
 
 /** Render `<PerspectiveTabBar>` inside the standard provider stack. */
@@ -260,6 +267,7 @@ describe("perspective-tab-bar — Filter command migration", () => {
     mockInvoke.mockReset();
     mockListen.mockClear();
     listeners.clear();
+    mockRegistry = [];
     mockBoardId = "test-board";
     mockPerspectivesValue = {
       perspectives: [{ id: "p1", name: "Sprint", view: "board" }],
