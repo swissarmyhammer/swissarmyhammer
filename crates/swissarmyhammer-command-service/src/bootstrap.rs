@@ -31,13 +31,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 use swissarmyhammer_plugin::{
-    CallerId, InProcessServer, McpServer, PluginHost, Result as PluginResult,
+    CallerId, InProcessServer, McpNotification, McpServer, NotificationBridge, PluginHost,
+    Result as PluginResult,
 };
 
 use crate::callbacks::CallbackHandle;
 use crate::invoke::{CallbackDispatcher, CallbackInvokeError};
 use crate::lifecycle::{CallerLifecycle, UnloadHook};
 use crate::service::CommandService;
+use crate::txn::{ActionSink, SharedTransactionSeam};
 
 /// The module id the command service is exposed under.
 ///
@@ -81,21 +83,77 @@ pub const COMMANDS_MODULE_ID: &str = "commands";
 /// rejects the [`COMMANDS_MODULE_ID`] — in practice, an id already
 /// exposed by a previous bootstrap call against the same host.
 pub async fn install_commands_module(host: &PluginHost) -> PluginResult<Arc<CommandService>> {
+    install_commands_module_with(host, None).await
+}
+
+/// Like [`install_commands_module`], but also wires a store-backed
+/// transaction seam.
+///
+/// The Tier-0 service core cannot name `swissarmyhammer-store`, so the
+/// store-backed [`TransactionSeam`](crate::TransactionSeam) is supplied by
+/// the embedder that owns the board's one `StoreContext` (the kanban app).
+/// Pass `Some(seam)` to bracket every `execute` in an ambient store
+/// transaction (one undo group per command, `txn`-tagged data events); pass
+/// `None` to fall back to the no-op seam (a `txn: null` action event, no
+/// undo group).
+///
+/// The action sink is always wired here to the host's
+/// [`NotificationBridge`](swissarmyhammer_plugin::NotificationBridge), so a
+/// successful `execute` publishes `notifications/commands/executed` to every
+/// subscriber regardless of whether a transaction seam was supplied.
+pub async fn install_commands_module_with(
+    host: &PluginHost,
+    transaction: Option<SharedTransactionSeam>,
+) -> PluginResult<Arc<CommandService>> {
     let dispatcher: Arc<dyn CallbackDispatcher> =
         Arc::new(HostCallbackDispatcher::new(host.clone()));
     let lifecycle: Arc<dyn CallerLifecycle> = Arc::new(HostCallerLifecycle::new(host.clone()));
+    let action_sink: Arc<dyn ActionSink> = Arc::new(BridgeActionSink::new(host.notification_bridge()));
 
-    let service = Arc::new(
-        CommandService::new()
-            .with_dispatcher(dispatcher)
-            .with_lifecycle(lifecycle),
-    );
+    let mut service = CommandService::new()
+        .with_dispatcher(dispatcher)
+        .with_lifecycle(lifecycle)
+        .with_action_sink(action_sink);
+    if let Some(transaction) = transaction {
+        service = service.with_transaction(transaction);
+    }
+    let service = Arc::new(service);
 
     let server: Arc<dyn McpServer> =
         Arc::new(InProcessServer::from_arc(Arc::clone(&service)).await?);
     host.expose_rust_module(COMMANDS_MODULE_ID, server).await?;
 
     Ok(service)
+}
+
+/// Action sink that publishes `commands/executed` onto a [`NotificationBridge`].
+///
+/// The production delivery seam for the `execute` action event: the engine
+/// hands a fully-formed [`McpNotification`] here and this sink fans it out to
+/// every subscriber (the in-process webview and any external agent) via
+/// [`NotificationBridge::publish`].
+pub struct BridgeActionSink {
+    /// Cheap clone of the host's one bridge; every clone shares the channel.
+    bridge: NotificationBridge,
+}
+
+impl BridgeActionSink {
+    /// Construct a sink that publishes onto `bridge`.
+    pub fn new(bridge: NotificationBridge) -> Self {
+        Self { bridge }
+    }
+}
+
+impl std::fmt::Debug for BridgeActionSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BridgeActionSink").finish()
+    }
+}
+
+impl ActionSink for BridgeActionSink {
+    fn commands_executed(&self, notification: McpNotification) {
+        self.bridge.publish(notification);
+    }
 }
 
 /// Callback dispatcher that routes invocations through a [`PluginHost`].

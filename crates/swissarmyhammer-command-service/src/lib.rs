@@ -20,6 +20,7 @@ mod notifications;
 mod operations;
 mod registry;
 mod service;
+mod txn;
 mod types;
 
 pub use callbacks::CallbackHandle;
@@ -38,6 +39,10 @@ pub use operations::{
 };
 pub use registry::{CommandRegistry, StackEntry};
 pub use service::{CommandService, DEFAULT_CHANGE_NOTIFICATION_DEBOUNCE};
+pub use txn::{
+    ActionSink, NoopActionSink, NoopTransactionSeam, SharedActionSink, SharedTransactionSeam,
+    TransactionSeam,
+};
 pub use types::{
     CallbackMarker, CommandContext, CommandError, CommandMetadata, CommandSchema, ParamDef,
     ParamOption, ParamShape, ParamSource,

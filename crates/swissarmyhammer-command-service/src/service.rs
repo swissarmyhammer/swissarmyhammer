@@ -48,6 +48,10 @@ use crate::operations::{
     UnregisterCommand,
 };
 use crate::registry::{CommandRegistry, StackEntry};
+use crate::txn::{
+    build_commands_executed, NoopActionSink, NoopTransactionSeam, SharedActionSink,
+    SharedTransactionSeam,
+};
 use crate::types::{CallbackMarker, CommandContext, CommandError, CommandMetadata, CommandSchema};
 
 /// Default debounce window for `notifications/commands/changed`.
@@ -84,6 +88,17 @@ pub struct CommandService {
     /// without a platform; production wiring substitutes a host-aware
     /// implementation that targets the calling plugin's ledger entry.
     lifecycle: SharedCallerLifecycle,
+    /// Seam used by `execute` to open/close the ambient transaction that
+    /// brackets the callback. Defaults to a no-op that grants no transaction
+    /// (a `txn: null` action event, no undo group); production wiring
+    /// replaces it with one backed by the `store` server's
+    /// `begin_transaction` / `end_transaction`.
+    transaction: SharedTransactionSeam,
+    /// Seam used by `execute` to deliver the `commands/executed` action event
+    /// on success. Defaults to a no-op that drops the event; production
+    /// wiring replaces it with one that publishes onto the platform's
+    /// notification bridge.
+    action_sink: SharedActionSink,
     /// Set of callers we have already installed an unload hook for.
     ///
     /// `handle_register` consults and updates this set so we install at
@@ -102,6 +117,8 @@ impl std::fmt::Debug for CommandService {
             .field("notifier", &self.notifier)
             .field("dispatcher", &self.dispatcher)
             .field("lifecycle", &self.lifecycle)
+            .field("transaction", &self.transaction)
+            .field("action_sink", &self.action_sink)
             .field("installed_hooks", &self.installed_hooks)
             .finish()
     }
@@ -144,6 +161,8 @@ impl CommandService {
             )),
             dispatcher: Arc::new(NoopCallbackDispatcher),
             lifecycle: Arc::new(NoopCallerLifecycle),
+            transaction: Arc::new(NoopTransactionSeam),
+            action_sink: Arc::new(NoopActionSink),
             installed_hooks: Mutex::new(HashSet::new()),
         }
     }
@@ -174,6 +193,28 @@ impl CommandService {
     /// plugin's registrations without the plugin's cooperation.
     pub fn with_lifecycle(mut self, lifecycle: SharedCallerLifecycle) -> Self {
         self.lifecycle = lifecycle;
+        self
+    }
+
+    /// Replace the transaction seam `execute` uses to bracket the callback.
+    ///
+    /// Returns `self` so construction can be chained. The supplied seam's
+    /// [`begin`](crate::TransactionSeam::begin) is called on the same tokio
+    /// task that runs the callback (the handler never spawns between open and
+    /// close), so the production seam — backed by the `store` server's
+    /// per-task ambient transaction — groups every write the callback makes.
+    pub fn with_transaction(mut self, transaction: SharedTransactionSeam) -> Self {
+        self.transaction = transaction;
+        self
+    }
+
+    /// Replace the action sink `execute` publishes `commands/executed` into.
+    ///
+    /// Returns `self` so construction can be chained. The production sink
+    /// publishes onto the platform's notification bridge; tests record the
+    /// delivered events.
+    pub fn with_action_sink(mut self, action_sink: SharedActionSink) -> Self {
+        self.action_sink = action_sink;
         self
     }
 
@@ -451,12 +492,30 @@ impl CommandService {
     ///   returns an error (transport failure, callback id not resolvable,
     ///   the function itself threw).
     ///
-    /// Transaction bracketing and the `commands/executed` action event
-    /// belong to a follow-up task — this handler is deliberately Tier-0
-    /// clean (no `store` server / notification surface dependency).
+    /// # Transaction bracketing
+    ///
+    /// The callback is wrapped in an ambient transaction: a `txn` is opened
+    /// via the [`TransactionSeam`](crate::TransactionSeam) **before** the
+    /// callback and closed **after** it resolves — on BOTH the success and
+    /// error paths, so a failing callback never leaks an open transaction.
+    /// Because the store's ambient slot is per-tokio-task and this handler
+    /// `.await`s the dispatcher inline (never spawning between open and
+    /// close), every store write the callback makes inherits the `txn`: the
+    /// command's writes land in one undo group and tag their emitted
+    /// `store/changed` events with the same `txn`.
+    ///
+    /// # Action event
+    ///
+    /// On success, a `notifications/commands/executed { id, ctx, result, txn,
+    /// origin }` is delivered through the
+    /// [`ActionSink`](crate::ActionSink). It shares the command's `txn` with
+    /// the data changes the command produced (so consumers correlate
+    /// action → data) and carries the caller-derived `origin`
+    /// (user / agent:id). A command that writes nothing still emits the
+    /// action event — its `txn` simply groups an empty undo set.
     async fn handle_execute(
         &self,
-        _caller: CallerId,
+        caller: CallerId,
         req: ExecuteCommand,
     ) -> Result<Value, McpError> {
         let active = self.active_entry_snapshot(&req.id)?;
@@ -468,15 +527,37 @@ impl CommandService {
 
         let execute_handle = CallbackHandle::from_marker(active.caller, &active.execute);
         let args = callback_args_with_ctx(&req.ctx);
-        let result = self
-            .dispatcher
-            .invoke(&execute_handle, args)
-            .await
-            .map_err(|err| {
-                command_error_to_mcp(CommandError::CallbackFailed {
-                    message: err.message,
-                })
-            })?;
+
+        // Open the transaction immediately before the callback so every
+        // downstream store write inherits the ambient `txn`. `begin` runs on
+        // this task; the inline `.await` below keeps the callback on the same
+        // task, so the per-task ambient slot reaches the callback's writes.
+        let txn = self.transaction.begin();
+
+        let outcome = self.dispatcher.invoke(&execute_handle, args).await;
+
+        // Close the transaction on BOTH paths before returning — a failing
+        // callback must not leak an open transaction onto this task.
+        if let Some(txn) = txn.as_deref() {
+            self.transaction.end(txn);
+        }
+
+        let result = outcome.map_err(|err| {
+            command_error_to_mcp(CommandError::CallbackFailed {
+                message: err.message,
+            })
+        })?;
+
+        // Success: emit the action event, sharing the command's `txn` with
+        // the data changes it produced and stamping the caller-derived origin.
+        let ctx_value = serde_json::to_value(&req.ctx).unwrap_or(Value::Null);
+        self.action_sink.commands_executed(build_commands_executed(
+            &req.id,
+            ctx_value,
+            result.clone(),
+            &caller,
+            txn,
+        ));
 
         Ok(serde_json::json!({
             "ok": true,

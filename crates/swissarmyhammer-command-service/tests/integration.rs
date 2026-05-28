@@ -50,6 +50,12 @@ mod builtin_perspective_commands_e2e;
 mod builtin_task_commands_e2e;
 #[path = "integration/builtin_ui_commands_e2e.rs"]
 mod builtin_ui_commands_e2e;
+#[path = "integration/execute_emits_action_event.rs"]
+mod execute_emits_action_event;
+#[path = "integration/execute_error_closes_txn.rs"]
+mod execute_error_closes_txn;
+#[path = "integration/execute_transaction_grouping.rs"]
+mod execute_transaction_grouping;
 #[path = "integration/host_bootstrap_e2e.rs"]
 mod host_bootstrap_e2e;
 #[path = "integration/mcp_notifications_e2e.rs"]
