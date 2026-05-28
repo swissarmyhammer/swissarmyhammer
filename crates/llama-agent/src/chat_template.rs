@@ -281,6 +281,52 @@ impl ToolParsingStrategy {
     }
 }
 
+/// Build the human-readable identifier string used to detect a model's
+/// template family from its [`ModelConfig`] source.
+///
+/// For a HuggingFace source this is the repository name; for a local source it
+/// is `"<folder>/<filename>"` when a filename is present, otherwise just the
+/// folder path. The returned string is what [`classify_model_identifier`]
+/// keyword-matches against.
+///
+/// # Returns
+///
+/// The identifier string derived from the config's [`ModelSource`].
+fn model_config_identifier(config: &ModelConfig) -> String {
+    match &config.source {
+        crate::types::ModelSource::HuggingFace { repo, .. } => repo.clone(),
+        crate::types::ModelSource::Local { folder, filename } => match filename {
+            Some(filename) => format!("{}/{}", folder.display(), filename),
+            None => folder.to_string_lossy().to_string(),
+        },
+    }
+}
+
+/// Classify a model identifier string into a template family name.
+///
+/// Performs case-insensitive substring matching for the supported families,
+/// checked in priority order: `minimax`, then `qwen`, then `phi`. This is the
+/// single source of truth for the model-name -> template-strategy derivation,
+/// shared by every detection source (config, env var, args, cwd).
+///
+/// # Returns
+///
+/// `Some("minimax" | "qwen" | "phi3")` when a family keyword is found, or
+/// `None` when the identifier matches no known family (the caller then falls
+/// through to the next detection source or the default).
+fn classify_model_identifier(identifier: &str) -> Option<&'static str> {
+    let identifier_lower = identifier.to_lowercase();
+    if identifier_lower.contains("minimax") {
+        Some("minimax")
+    } else if identifier_lower.contains("qwen") {
+        Some("qwen")
+    } else if identifier_lower.contains("phi") {
+        Some("phi3")
+    } else {
+        None
+    }
+}
+
 pub struct ChatTemplateEngine {
     tool_call_parsers: HashMap<String, Box<dyn ToolCallParser>>,
     parsing_strategy: Option<ToolParsingStrategy>,
@@ -866,88 +912,53 @@ impl ChatTemplateEngine {
         }
     }
 
-    /// Detect model type from model information
+    /// Detect model type from model information.
+    ///
+    /// Resolves a template family name (`"minimax"`, `"qwen"`, or `"phi3"`)
+    /// by inspecting, in priority order: the explicit [`ModelConfig`] source,
+    /// the `MODEL_REPO` environment variable, the process arguments, and the
+    /// current working directory. When nothing matches it defaults to
+    /// `"qwen"`, which works well with most instruction-tuned models.
+    ///
+    /// The `_model` handle is accepted to keep the call signature uniform with
+    /// the native-template path; the detection itself is pure string logic
+    /// delegated to [`classify_model_identifier`].
+    ///
+    /// # Returns
+    ///
+    /// The detected template family name as a `String`.
     fn detect_model_type(&self, _model: &LlamaModel, model_config: Option<&ModelConfig>) -> String {
         // First check model config if available
         if let Some(config) = model_config {
-            let model_identifier = match &config.source {
-                crate::types::ModelSource::HuggingFace { repo, .. } => repo.clone(),
-                crate::types::ModelSource::Local { folder, filename } => {
-                    if let Some(filename) = filename {
-                        format!("{}/{}", folder.display(), filename)
-                    } else {
-                        folder.to_string_lossy().to_string()
-                    }
-                }
-            };
-
-            let model_identifier_lower = model_identifier.to_lowercase();
-            if model_identifier_lower.contains("minimax") {
+            let model_identifier = model_config_identifier(config);
+            if let Some(model_type) = classify_model_identifier(&model_identifier) {
                 debug!(
-                    "Detected MiniMax model from model config: {}",
-                    model_identifier
+                    "Detected {} model from model config: {}",
+                    model_type, model_identifier
                 );
-                return "minimax".to_string();
-            }
-            if model_identifier_lower.contains("qwen") {
-                debug!(
-                    "Detected Qwen model from model config: {}",
-                    model_identifier
-                );
-                return "qwen".to_string();
-            }
-            if model_identifier_lower.contains("phi") {
-                debug!("Detected Phi model from model config: {}", model_identifier);
-                return "phi3".to_string();
+                return model_type.to_string();
             }
         }
 
         // Fallback to environment variable (for explicit override)
         let model_repo = std::env::var("MODEL_REPO").unwrap_or_default();
-        let model_repo_lower = model_repo.to_lowercase();
-        if model_repo_lower.contains("minimax") {
-            debug!("Detected MiniMax model from MODEL_REPO env var");
-            return "minimax".to_string();
-        }
-        if model_repo_lower.contains("qwen") {
-            debug!("Detected Qwen model from MODEL_REPO env var");
-            return "qwen".to_string();
-        }
-        if model_repo_lower.contains("phi") {
-            debug!("Detected Phi model from MODEL_REPO env var");
-            return "phi3".to_string();
+        if let Some(model_type) = classify_model_identifier(&model_repo) {
+            debug!("Detected {} model from MODEL_REPO env var", model_type);
+            return model_type.to_string();
         }
 
         // Check process arguments for model path/name (common when running examples)
-        let args: Vec<String> = std::env::args().collect();
-        let args_string = args.join(" ").to_lowercase();
-        if args_string.contains("minimax") {
-            debug!("Detected MiniMax model from process arguments");
-            return "minimax".to_string();
-        }
-        if args_string.contains("qwen") {
-            debug!("Detected Qwen model from process arguments");
-            return "qwen".to_string();
-        }
-        if args_string.contains("phi") {
-            debug!("Detected Phi model from process arguments");
-            return "phi3".to_string();
+        let args_string = std::env::args().collect::<Vec<String>>().join(" ");
+        if let Some(model_type) = classify_model_identifier(&args_string) {
+            debug!("Detected {} model from process arguments", model_type);
+            return model_type.to_string();
         }
 
         // Check current working directory for clues (model files often contain model name)
         if let Ok(cwd) = std::env::current_dir() {
-            let cwd_string = cwd.to_string_lossy().to_lowercase();
-            if cwd_string.contains("minimax") {
-                debug!("Detected MiniMax model from current directory path");
-                return "minimax".to_string();
-            }
-            if cwd_string.contains("qwen") {
-                debug!("Detected Qwen model from current directory path");
-                return "qwen".to_string();
-            }
-            if cwd_string.contains("phi") {
-                debug!("Detected Phi model from current directory path");
-                return "phi3".to_string();
+            if let Some(model_type) = classify_model_identifier(&cwd.to_string_lossy()) {
+                debug!("Detected {} model from current directory path", model_type);
+                return model_type.to_string();
             }
         }
 
@@ -5632,6 +5643,52 @@ I apologize for the confusion. Let me try again with the correct format."#;
         );
     }
 
+    /// Pin the Qwen3.6 derivation question raised by the 0-token bug.
+    ///
+    /// The 0-token investigation (kanban `01KSNJ7CBK9333J0T9G4TCA7DH`)
+    /// observed `strategy: Some(Qwen3)` derived for the production model id
+    /// `unsloth/Qwen3.6-27B-GGUF/Qwen3.6-27B-IQ4_NL.gguf` and asked whether
+    /// the Qwen3 template was wrong for Qwen3.6 weights.
+    ///
+    /// The bug was resolved with root cause identified as a budget-arithmetic
+    /// underflow in the streaming generation path — explicitly **NOT** a
+    /// template/model mismatch. Qwen3.6 ships the same Qwen3-family chat
+    /// template (ChatML `<|im_start|>` markers + `<tools>`/`<tool_call>`
+    /// rendering), so the `Qwen3` strategy is correct for 3.6 and no distinct
+    /// `Qwen3_6` variant is needed. This test locks that conclusion against
+    /// the exact identifier from the bug's OS log so a future regression that
+    /// silently re-routes 3.6 elsewhere is caught immediately.
+    #[test]
+    fn test_detect_from_model_name_qwen36_uses_qwen3_strategy() {
+        // The literal model id from the 0-token bug's OS log.
+        assert_eq!(
+            ToolParsingStrategy::detect_from_model_name(
+                "unsloth/Qwen3.6-27B-GGUF/Qwen3.6-27B-IQ4_NL.gguf"
+            ),
+            ToolParsingStrategy::Qwen3,
+            "Qwen3.6 weights use the Qwen3-family chat template; the Qwen3 \
+             strategy is correct (see bug 01KSNJ7CBK9333J0T9G4TCA7DH — the \
+             0-token symptom was a streaming budget bug, not a template mismatch)"
+        );
+
+        // Bare 3.6 names and other point releases also resolve to Qwen3.
+        assert_eq!(
+            ToolParsingStrategy::detect_from_model_name("Qwen3.6-27B"),
+            ToolParsingStrategy::Qwen3
+        );
+        assert_eq!(
+            ToolParsingStrategy::detect_from_model_name("Qwen3.5-14B-Instruct"),
+            ToolParsingStrategy::Qwen3
+        );
+
+        // A hypothetical Qwen3.6-Coder still wins the more-specific Coder
+        // branch — point releases must not bypass the coder detection.
+        assert_eq!(
+            ToolParsingStrategy::detect_from_model_name("unsloth/Qwen3.6-Coder-30B-GGUF"),
+            ToolParsingStrategy::Qwen3Coder
+        );
+    }
+
     #[test]
     fn test_detect_from_model_name_openai() {
         // Test OpenAI detection patterns
@@ -6139,6 +6196,486 @@ That should work."#;
                 calls[0].arguments.get("path").and_then(Value::as_str),
                 Some("/a.rs"),
                 "stringified arguments inside the canonical wrapper must be re-parsed"
+            );
+        }
+    }
+
+    /// Golden-string coverage for the per-model-family *prompt* rendering.
+    ///
+    /// Every fallback template builder in `ChatTemplateEngine`
+    /// (`format_qwen_template`, `format_phi3_template`,
+    /// `format_minimax_template`, and the generic `format_chat_template`)
+    /// is a pure `messages -> String` transformation. A drift of even a
+    /// single special token (`<|im_start|>`, `<|end|>`, `]~b]`, …) pushes
+    /// the model off its training distribution and is a prime suspect for
+    /// the garbage/empty-generation failures this epic chases.
+    ///
+    /// These tests pin the exact rendered bytes for each strategy. Because
+    /// the builders concatenate fixed literals there is no fixture file to
+    /// regenerate — the expected string lives inline so a reviewer can read
+    /// the template and its golden side by side.
+    mod render_golden_tests {
+        use super::*;
+
+        /// Build a `(role, content)` message list from string slices, the
+        /// exact shape the `format_*_template` builders consume after a
+        /// session has been flattened. Centralised so each golden test reads
+        /// as "input -> expected" with no per-test boilerplate.
+        fn msgs(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+            pairs
+                .iter()
+                .map(|(r, c)| (r.to_string(), c.to_string()))
+                .collect()
+        }
+
+        // --- Qwen / ChatML ------------------------------------------------
+
+        /// Canonical ChatML multi-turn render: system + user + assistant +
+        /// tool, each wrapped in `<|im_start|>role\n...<|im_end|>\n`, with a
+        /// trailing open `<|im_start|>assistant\n` generation prompt.
+        #[test]
+        fn test_qwen_template_multi_turn_golden() {
+            let engine = ChatTemplateEngine::new();
+            let messages = msgs(&[
+                ("system", "You are helpful."),
+                ("user", "Hi"),
+                ("assistant", "Hello!"),
+                ("tool", "result-payload"),
+            ]);
+
+            let rendered = engine.format_qwen_template(&messages, None).unwrap();
+
+            let expected = "<|im_start|>system\nYou are helpful.<|im_end|>\n\
+                 <|im_start|>user\nHi<|im_end|>\n\
+                 <|im_start|>assistant\nHello!<|im_end|>\n\
+                 <|im_start|>tool\nresult-payload<|im_end|>\n\
+                 <|im_start|>assistant\n";
+            assert_eq!(rendered, expected);
+        }
+
+        /// A tools context is injected as the very first ChatML system block,
+        /// ahead of any conversation system message.
+        #[test]
+        fn test_qwen_template_with_tools_context_golden() {
+            let engine = ChatTemplateEngine::new();
+            let messages = msgs(&[("user", "List files")]);
+
+            let rendered = engine
+                .format_qwen_template(&messages, Some("TOOLS-BLOCK"))
+                .unwrap();
+
+            let expected = "<|im_start|>system\nTOOLS-BLOCK<|im_end|>\n\
+                 <|im_start|>user\nList files<|im_end|>\n\
+                 <|im_start|>assistant\n";
+            assert_eq!(rendered, expected);
+        }
+
+        /// An unrecognised role falls back to the `user` ChatML marker rather
+        /// than emitting an invalid `<|im_start|>{role}` block.
+        #[test]
+        fn test_qwen_template_unknown_role_falls_back_to_user() {
+            let engine = ChatTemplateEngine::new();
+            let messages = msgs(&[("function", "weird content")]);
+
+            let rendered = engine.format_qwen_template(&messages, None).unwrap();
+
+            let expected = "<|im_start|>user\nweird content<|im_end|>\n<|im_start|>assistant\n";
+            assert_eq!(rendered, expected);
+        }
+
+        /// An empty message list still emits the trailing generation prompt
+        /// so the model has somewhere to begin generating.
+        #[test]
+        fn test_qwen_template_empty_messages_golden() {
+            let engine = ChatTemplateEngine::new();
+            let rendered = engine.format_qwen_template(&[], None).unwrap();
+            assert_eq!(rendered, "<|im_start|>assistant\n");
+        }
+
+        // --- Phi-3 --------------------------------------------------------
+
+        /// Phi-3 uses `<|role|>\n...<|end|>\n` markers with a trailing
+        /// `<|assistant|>\n` generation prompt.
+        #[test]
+        fn test_phi3_template_multi_turn_golden() {
+            let engine = ChatTemplateEngine::new();
+            let messages = msgs(&[
+                ("system", "Be terse."),
+                ("user", "Hi"),
+                ("assistant", "Hello!"),
+                ("tool", "tool-out"),
+            ]);
+
+            let rendered = engine.format_phi3_template(&messages, None).unwrap();
+
+            let expected = "<|system|>\nBe terse.<|end|>\n\
+                 <|user|>\nHi<|end|>\n\
+                 <|assistant|>\nHello!<|end|>\n\
+                 <|tool|>\ntool-out<|end|>\n\
+                 <|assistant|>\n";
+            assert_eq!(rendered, expected);
+        }
+
+        /// Phi-3 prepends the tools context as a leading `<|system|>` block.
+        #[test]
+        fn test_phi3_template_with_tools_context_golden() {
+            let engine = ChatTemplateEngine::new();
+            let messages = msgs(&[("user", "go")]);
+
+            let rendered = engine
+                .format_phi3_template(&messages, Some("TOOLS"))
+                .unwrap();
+
+            let expected = "<|system|>\nTOOLS<|end|>\n\
+                 <|user|>\ngo<|end|>\n\
+                 <|assistant|>\n";
+            assert_eq!(rendered, expected);
+        }
+
+        /// Unknown roles fall back to the `<|user|>` Phi-3 marker.
+        #[test]
+        fn test_phi3_template_unknown_role_falls_back_to_user() {
+            let engine = ChatTemplateEngine::new();
+            let messages = msgs(&[("developer", "x")]);
+
+            let rendered = engine.format_phi3_template(&messages, None).unwrap();
+
+            assert_eq!(rendered, "<|user|>\nx<|end|>\n<|assistant|>\n");
+        }
+
+        // --- MiniMax ------------------------------------------------------
+
+        /// MiniMax wraps each turn in `]~b]role\n...[e~[` and hoists every
+        /// `system` message into a single leading system block, then replays
+        /// the non-system turns in order with a trailing assistant opener.
+        #[test]
+        fn test_minimax_template_multi_turn_golden() {
+            let engine = ChatTemplateEngine::new();
+            let messages = msgs(&[
+                ("system", "Sys one."),
+                ("user", "Hi"),
+                ("assistant", "Hello!"),
+            ]);
+
+            let rendered = engine.format_minimax_template(&messages, None).unwrap();
+
+            let expected = "]~b]system\nSys one.[e~[\
+                 ]~b]user\nHi[e~[\
+                 ]~b]assistant\nHello![e~[\
+                 ]~b]assistant\n";
+            assert_eq!(rendered, expected);
+        }
+
+        /// Multiple system messages are concatenated with a single newline
+        /// into the one hoisted MiniMax system block.
+        #[test]
+        fn test_minimax_template_merges_multiple_system_messages() {
+            let engine = ChatTemplateEngine::new();
+            let messages = msgs(&[("system", "First."), ("user", "Hi"), ("system", "Second.")]);
+
+            let rendered = engine.format_minimax_template(&messages, None).unwrap();
+
+            let expected = "]~b]system\nFirst.\nSecond.[e~[\
+                 ]~b]user\nHi[e~[\
+                 ]~b]assistant\n";
+            assert_eq!(rendered, expected);
+        }
+
+        /// Tool responses use the dedicated `tool\n<response>...</response>`
+        /// shape inside the MiniMax message envelope.
+        #[test]
+        fn test_minimax_template_tool_response_golden() {
+            let engine = ChatTemplateEngine::new();
+            let messages = msgs(&[("user", "go"), ("tool", "the-output")]);
+
+            let rendered = engine.format_minimax_template(&messages, None).unwrap();
+
+            let expected = "]~b]user\ngo[e~[\
+                 ]~b]tool\n<response>the-output</response>[e~[\
+                 ]~b]assistant\n";
+            assert_eq!(rendered, expected);
+        }
+
+        /// With a tools context (and no conversation system message) MiniMax
+        /// synthesises a system block carrying the `# Tools` instructions and
+        /// the JSON call format, then the user turn.
+        #[test]
+        fn test_minimax_template_with_tools_context_golden() {
+            let engine = ChatTemplateEngine::new();
+            let messages = msgs(&[("user", "go")]);
+
+            let rendered = engine
+                .format_minimax_template(&messages, Some("TOOLS-JSON"))
+                .unwrap();
+
+            let expected = "]~b]system\n# Tools\n\
+                 You may call one or more tools to assist with the user query.\n\
+                 Here are the available tools:\n\n\
+                 TOOLS-JSON\n\n\
+                 To call a tool, output a JSON object with this format:\n\
+                 ```json\n{\n  \"function_name\": \"tool_name\",\n  \"arguments\": { ... }\n}\n```\n\
+                 [e~[\
+                 ]~b]user\ngo[e~[\
+                 ]~b]assistant\n";
+            assert_eq!(rendered, expected);
+        }
+
+        /// An unknown role falls through to the generic `]~b]{role}\n...`
+        /// envelope rather than being dropped.
+        #[test]
+        fn test_minimax_template_unknown_role_uses_raw_role() {
+            let engine = ChatTemplateEngine::new();
+            let messages = msgs(&[("observer", "noted")]);
+
+            let rendered = engine.format_minimax_template(&messages, None).unwrap();
+
+            let expected = "]~b]observer\nnoted[e~[]~b]assistant\n";
+            assert_eq!(rendered, expected);
+        }
+
+        // --- Generic fallback (### Role:) ---------------------------------
+
+        /// The generic fallback uses Markdown-style `### Role:` headers and a
+        /// trailing `### Assistant:\n` opener.
+        #[test]
+        fn test_generic_template_multi_turn_golden() {
+            let engine = ChatTemplateEngine::new();
+            let messages = msgs(&[
+                ("system", "Sys."),
+                ("user", "Hi"),
+                ("assistant", "Hello!"),
+                ("tool", "tool-out"),
+            ]);
+
+            let rendered = engine.format_chat_template(&messages, None).unwrap();
+
+            let expected = "### System:\nSys.\n\n\
+                 ### Human:\nHi\n\n\
+                 ### Assistant:\nHello!\n\n\
+                 ### Tool Result:\ntool-out\n\n\
+                 ### Assistant:\n";
+            assert_eq!(rendered, expected);
+        }
+
+        /// Unknown roles are rendered with a titled `### {role}:` header in
+        /// the generic fallback.
+        #[test]
+        fn test_generic_template_unknown_role_uses_titled_role() {
+            let engine = ChatTemplateEngine::new();
+            let messages = msgs(&[("critic", "meh")]);
+
+            let rendered = engine.format_chat_template(&messages, None).unwrap();
+
+            assert_eq!(rendered, "### critic:\nmeh\n\n### Assistant:\n");
+        }
+
+        /// The generic fallback injects the tools context as a leading
+        /// `### System:` block ahead of the conversation.
+        #[test]
+        fn test_generic_template_with_tools_context_golden() {
+            let engine = ChatTemplateEngine::new();
+            let messages = msgs(&[("user", "go")]);
+
+            let rendered = engine
+                .format_chat_template(&messages, Some("TOOLS"))
+                .unwrap();
+
+            let expected = "### System:\nTOOLS\n\n\
+                 ### Human:\ngo\n\n\
+                 ### Assistant:\n";
+            assert_eq!(rendered, expected);
+        }
+
+        // --- Edge cases shared across builders ----------------------------
+
+        /// System-only inputs render the single system block plus the
+        /// generation prompt across every family.
+        #[test]
+        fn test_system_only_inputs_render_generation_prompt() {
+            let engine = ChatTemplateEngine::new();
+            let messages = msgs(&[("system", "S")]);
+
+            assert_eq!(
+                engine.format_qwen_template(&messages, None).unwrap(),
+                "<|im_start|>system\nS<|im_end|>\n<|im_start|>assistant\n"
+            );
+            assert_eq!(
+                engine.format_phi3_template(&messages, None).unwrap(),
+                "<|system|>\nS<|end|>\n<|assistant|>\n"
+            );
+            assert_eq!(
+                engine.format_minimax_template(&messages, None).unwrap(),
+                "]~b]system\nS[e~[]~b]assistant\n"
+            );
+            assert_eq!(
+                engine.format_chat_template(&messages, None).unwrap(),
+                "### System:\nS\n\n### Assistant:\n"
+            );
+        }
+
+        /// Very long content is passed through verbatim (no truncation),
+        /// preserved exactly between the role markers.
+        #[test]
+        fn test_very_long_content_passes_through_verbatim() {
+            let engine = ChatTemplateEngine::new();
+            let long = "x".repeat(50_000);
+            let messages = msgs(&[("user", long.as_str())]);
+
+            let rendered = engine.format_qwen_template(&messages, None).unwrap();
+
+            let expected = format!(
+                "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+                long
+            );
+            assert_eq!(rendered, expected);
+        }
+    }
+
+    /// Pure-logic coverage for the model-name -> template-family derivation
+    /// that `detect_model_type` performs. The branches here are the in-scope
+    /// "strategy derivation / fallback" cover items; the surrounding
+    /// `detect_model_type` wrapper only adds real-`LlamaModel` plumbing plus
+    /// env/args/cwd fallbacks layered on top of these same helpers.
+    mod detect_model_type_tests {
+        use super::*;
+        use crate::types::{ModelConfig, ModelSource, RetryConfig};
+        use std::path::PathBuf;
+
+        /// Build a HuggingFace-source `ModelConfig` for the given repo so the
+        /// config -> identifier derivation can be exercised without a real
+        /// model on disk.
+        fn hf_config(repo: &str) -> ModelConfig {
+            ModelConfig {
+                source: ModelSource::HuggingFace {
+                    repo: repo.to_string(),
+                    filename: None,
+                    folder: None,
+                },
+                batch_size: 1,
+                n_seq_max: 1,
+                n_threads: 1,
+                n_threads_batch: 1,
+                use_hf_params: false,
+                retry_config: RetryConfig::default(),
+                debug: false,
+            }
+        }
+
+        #[test]
+        fn test_classify_minimax_wins_over_other_keywords() {
+            assert_eq!(
+                classify_model_identifier("MiniMaxAI/MiniMax-Text-01"),
+                Some("minimax")
+            );
+        }
+
+        #[test]
+        fn test_classify_qwen_case_insensitive() {
+            assert_eq!(
+                classify_model_identifier("Qwen/Qwen3-30B-A3B"),
+                Some("qwen")
+            );
+            assert_eq!(classify_model_identifier("QWEN3.6-27B"), Some("qwen"));
+        }
+
+        #[test]
+        fn test_classify_phi_maps_to_phi3() {
+            assert_eq!(
+                classify_model_identifier("microsoft/Phi-3-mini-4k-instruct"),
+                Some("phi3")
+            );
+        }
+
+        #[test]
+        fn test_classify_unknown_identifier_is_none() {
+            assert_eq!(classify_model_identifier("meta-llama/Llama-3-8B"), None);
+            assert_eq!(classify_model_identifier(""), None);
+        }
+
+        /// `minimax` is checked before `qwen`/`phi`, so an identifier carrying
+        /// several family keywords resolves to the highest-priority match.
+        #[test]
+        fn test_classify_priority_order_is_minimax_qwen_phi() {
+            assert_eq!(
+                classify_model_identifier("minimax-qwen-phi-blend"),
+                Some("minimax")
+            );
+            assert_eq!(classify_model_identifier("qwen-phi-blend"), Some("qwen"));
+        }
+
+        #[test]
+        fn test_model_config_identifier_huggingface_uses_repo() {
+            let config = hf_config("Qwen/Qwen3-30B-A3B-Instruct");
+            assert_eq!(
+                model_config_identifier(&config),
+                "Qwen/Qwen3-30B-A3B-Instruct"
+            );
+        }
+
+        #[test]
+        fn test_model_config_identifier_local_with_filename_joins_path() {
+            let config = ModelConfig {
+                source: ModelSource::Local {
+                    folder: PathBuf::from("/models/qwen"),
+                    filename: Some("model.gguf".to_string()),
+                },
+                batch_size: 1,
+                n_seq_max: 1,
+                n_threads: 1,
+                n_threads_batch: 1,
+                use_hf_params: false,
+                retry_config: RetryConfig::default(),
+                debug: false,
+            };
+            assert_eq!(model_config_identifier(&config), "/models/qwen/model.gguf");
+        }
+
+        #[test]
+        fn test_model_config_identifier_local_without_filename_uses_folder() {
+            let config = ModelConfig {
+                source: ModelSource::Local {
+                    folder: PathBuf::from("/models/phi3"),
+                    filename: None,
+                },
+                batch_size: 1,
+                n_seq_max: 1,
+                n_threads: 1,
+                n_threads_batch: 1,
+                use_hf_params: false,
+                retry_config: RetryConfig::default(),
+                debug: false,
+            };
+            assert_eq!(model_config_identifier(&config), "/models/phi3");
+        }
+
+        /// End-to-end of the config branch: a config identifier is derived and
+        /// then classified, covering the same path `detect_model_type` takes
+        /// for its first (and primary) detection source. Qwen3.6 resolves to
+        /// the `qwen` family — the same Qwen-family template the strategy
+        /// derivation pins elsewhere.
+        #[test]
+        fn test_config_branch_classifies_each_family() {
+            assert_eq!(
+                classify_model_identifier(&model_config_identifier(&hf_config(
+                    "MiniMaxAI/MiniMax-Text-01"
+                ))),
+                Some("minimax")
+            );
+            assert_eq!(
+                classify_model_identifier(&model_config_identifier(&hf_config("Qwen/Qwen3.6-27B"))),
+                Some("qwen")
+            );
+            assert_eq!(
+                classify_model_identifier(&model_config_identifier(&hf_config(
+                    "microsoft/Phi-3-mini"
+                ))),
+                Some("phi3")
+            );
+            assert_eq!(
+                classify_model_identifier(&model_config_identifier(&hf_config(
+                    "meta-llama/Llama-3-8B"
+                ))),
+                None
             );
         }
     }

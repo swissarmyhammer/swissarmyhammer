@@ -193,6 +193,11 @@ pub use resources::{ResourceError, ResourceLoader};
 // Re-export generation functionality
 pub use generation::{GenerationConfig, GenerationError, LlamaCppGenerator, TextGenerator};
 
+// Re-export the weight-free scripted test double for deterministic generation
+// tests. Available in test builds and when the `test-utils` feature is enabled.
+#[cfg(any(test, feature = "test-utils"))]
+pub use generation::{ScriptToken, ScriptedModel};
+
 // Re-export session management and compaction functionality
 pub use session::{
     CompactionResult, CompactionStats, CompactionSummary, SessionManager, SessionStats,

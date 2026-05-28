@@ -34,12 +34,19 @@ pub mod config;
 pub mod error;
 pub mod generator;
 
+/// Weight-free [`TextGenerator`] test double for deterministic generation tests.
+#[cfg(any(test, feature = "test-utils"))]
+pub mod scripted;
+
 #[cfg(test)]
 pub mod tests;
 
 pub use config::GenerationConfig;
 pub use error::GenerationError;
 pub use generator::LlamaCppGenerator;
+
+#[cfg(any(test, feature = "test-utils"))]
+pub use scripted::{ScriptToken, ScriptedModel};
 
 use tracing::warn;
 
