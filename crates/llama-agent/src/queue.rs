@@ -6,6 +6,7 @@ use crate::types::{
     FinishReason, GenerationRequest, GenerationResponse, QueueConfig, QueueError, Session,
     StreamChunk,
 };
+use async_trait::async_trait;
 use llama_common::async_utils;
 use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::model::LlamaModel;
@@ -382,6 +383,145 @@ pub struct QueueStats {
     pub current_throughput_tps: u64,
 }
 
+/// The inference half of the queue, abstracted behind a trait so the worker
+/// loop's lifecycle (dequeue → run a turn → release the worker → record metrics)
+/// can be exercised deterministically without a live llama.cpp model.
+///
+/// The single production implementation is [`ModelManagerExecutor`], which runs
+/// the real `with_model(...)` + `GenerationHelper` inference path byte-for-byte.
+/// Tests substitute a scripted executor so they can drive every turn outcome
+/// (normal / EOS / max-tokens / context-full / error / cancel) and assert that
+/// the worker is always released afterwards — the regression guard for the
+/// "Queue is full on retry" bug.
+///
+/// Each method performs only the inference itself: it returns the outcome (or,
+/// for streaming, pushes chunks onto the supplied sender) and leaves
+/// metric-recording and response relay to the worker, exactly as the original
+/// inline dispatch did.
+#[async_trait]
+pub(crate) trait QueueExecutor: Send + Sync {
+    /// Run a batch (non-streaming) turn and return the full response, or a
+    /// queue-level error if inference failed.
+    async fn execute_batch(
+        &self,
+        worker_id: usize,
+        queued_request: &QueuedRequest,
+    ) -> Result<GenerationResponse, QueueError>;
+
+    /// Run a streaming turn, pushing `StreamChunk`s onto `stream_sender` as they
+    /// are produced. Returns `Ok(())` when the turn finished (the worker is then
+    /// released regardless of outcome) or an error to relay onto the stream.
+    async fn execute_streaming(
+        &self,
+        worker_id: usize,
+        queued_request: &QueuedRequest,
+        stream_sender: mpsc::Sender<Result<StreamChunk, QueueError>>,
+    ) -> Result<(), QueueError>;
+}
+
+/// Production [`QueueExecutor`]: drives the real llama.cpp model through the
+/// `ModelManager::with_model` borrow and `GenerationHelper`. This carries the
+/// exact inference logic that previously lived inline in
+/// `RequestQueue::dispatch_{batch,streaming}_request`.
+pub(crate) struct ModelManagerExecutor {
+    model_manager: Arc<ModelManager>,
+    chat_template: Arc<ChatTemplateEngine>,
+    session_config: crate::types::SessionConfig,
+    session_state_cache: SessionStateCache,
+}
+
+impl ModelManagerExecutor {
+    /// Build the production executor from the shared model and queue state.
+    fn new(
+        model_manager: Arc<ModelManager>,
+        chat_template: Arc<ChatTemplateEngine>,
+        session_config: crate::types::SessionConfig,
+        session_state_cache: SessionStateCache,
+    ) -> Self {
+        Self {
+            model_manager,
+            chat_template,
+            session_config,
+            session_state_cache,
+        }
+    }
+}
+
+#[async_trait]
+impl QueueExecutor for ModelManagerExecutor {
+    async fn execute_batch(
+        &self,
+        worker_id: usize,
+        queued_request: &QueuedRequest,
+    ) -> Result<GenerationResponse, QueueError> {
+        if !self.model_manager.is_loaded().await {
+            return Err(QueueError::WorkerError("Model not loaded".to_string()));
+        }
+        let request_id = queued_request.id.clone();
+        let start_time = Instant::now();
+        let result = self
+            .model_manager
+            .with_model(|model| {
+                RequestQueue::process_batch_request_sync(
+                    worker_id,
+                    request_id.clone(),
+                    &queued_request.request,
+                    &queued_request.session,
+                    model,
+                    &self.model_manager,
+                    &queued_request.cancellation_token,
+                    &self.chat_template,
+                    &self.session_config,
+                    &self.session_state_cache,
+                )
+            })
+            .await;
+        let _ = start_time;
+        match result {
+            Ok(inner) => inner,
+            Err(model_error) => Err(QueueError::WorkerError(format!(
+                "Model error: {}",
+                model_error
+            ))),
+        }
+    }
+
+    async fn execute_streaming(
+        &self,
+        worker_id: usize,
+        queued_request: &QueuedRequest,
+        stream_sender: mpsc::Sender<Result<StreamChunk, QueueError>>,
+    ) -> Result<(), QueueError> {
+        if !self.model_manager.is_loaded().await {
+            return Err(QueueError::WorkerError("Model not loaded".to_string()));
+        }
+        let request_id = queued_request.id.clone();
+        let result = self
+            .model_manager
+            .with_model(|model| {
+                RequestQueue::process_streaming_request_sync(
+                    worker_id,
+                    request_id.clone(),
+                    &queued_request.request,
+                    &queued_request.session,
+                    model,
+                    &self.model_manager,
+                    stream_sender.clone(),
+                    &queued_request.cancellation_token,
+                    &self.chat_template,
+                )
+            })
+            .await;
+        match result {
+            Ok(inner) => inner,
+            Err(model_error) => Err(QueueError::WorkerError(format!(
+                "Model error: {}",
+                model_error
+            ))),
+        }
+    }
+}
+
 /// Envelope carrying a single request from `submit_request` to a worker task.
 #[derive(Debug)]
 pub struct QueuedRequest {
@@ -441,15 +581,41 @@ impl RequestQueue {
         let chat_template = Arc::new(ChatTemplateEngine::with_model_strategy(&model_identifier));
         let session_state_cache: SessionStateCache = Arc::new(Mutex::new(HashMap::new()));
 
-        let worker_handles = Self::spawn_workers(
-            &config,
-            &receiver,
-            &model_manager,
-            &metrics,
-            &chat_template,
-            &session_config,
-            &session_state_cache,
-        );
+        let executor: Arc<dyn QueueExecutor> = Arc::new(ModelManagerExecutor::new(
+            model_manager.clone(),
+            chat_template.clone(),
+            session_config.clone(),
+            session_state_cache.clone(),
+        ));
+
+        Self::assemble(
+            sender,
+            receiver,
+            config,
+            metrics,
+            chat_template,
+            session_config,
+            session_state_cache,
+            executor,
+        )
+    }
+
+    /// Shared constructor body: spawn the workers against `executor` and build
+    /// the `RequestQueue`. Both the production [`RequestQueue::new`] and the
+    /// test-only `with_executor` constructor funnel through here so worker setup
+    /// stays in one place.
+    #[allow(clippy::too_many_arguments)]
+    fn assemble(
+        sender: mpsc::Sender<QueuedRequest>,
+        receiver: Arc<tokio::sync::Mutex<mpsc::Receiver<QueuedRequest>>>,
+        config: QueueConfig,
+        metrics: Arc<QueueMetrics>,
+        chat_template: Arc<ChatTemplateEngine>,
+        session_config: crate::types::SessionConfig,
+        session_state_cache: SessionStateCache,
+        executor: Arc<dyn QueueExecutor>,
+    ) -> Self {
+        let worker_handles = Self::spawn_workers(&config, &receiver, &metrics, &executor);
 
         info!(
             "RequestQueue initialized with {} workers, max queue size: {}",
@@ -467,39 +633,77 @@ impl RequestQueue {
         }
     }
 
-    /// Spawn the configured number of worker tasks, cloning all shared state
-    /// each iteration. Kept out of `new` so the constructor stays concise.
-    #[allow(clippy::too_many_arguments)]
+    /// Enqueue a batch request without awaiting its response, returning only the
+    /// enqueue outcome. Used by capacity tests to fill the bounded channel and
+    /// observe `QueueError::Full` at — and only at — capacity, exercising
+    /// [`RequestQueue::enqueue_request`] directly.
+    #[cfg(test)]
+    fn try_enqueue_for_test(&self, session: &Session) -> Result<(), QueueError> {
+        let (response_sender, _response_receiver) = oneshot::channel();
+        let queued_request = QueuedRequest {
+            id: Ulid::new().to_string(),
+            request: GenerationRequest {
+                session_id: session.id,
+                max_tokens: Some(8),
+                temperature: Some(0.0),
+                top_p: None,
+                stop_tokens: Vec::new(),
+                stopping_config: None,
+            },
+            session: session.clone(),
+            response_sender,
+            stream_sender: None,
+            submitted_at: Instant::now(),
+            cancellation_token: CancellationToken::new(),
+        };
+        self.metrics.record_request_submitted();
+        self.enqueue_request(queued_request)
+    }
+
+    /// Build a `RequestQueue` whose workers run turns through a caller-supplied
+    /// [`QueueExecutor`] instead of the production model-backed executor.
+    ///
+    /// This is the seam the queue-lifecycle tests use to drive deterministic
+    /// turn outcomes (normal / EOS / max-tokens / context-full / error / cancel)
+    /// without a live llama.cpp model, exercising the real worker loop, release
+    /// invariants, FIFO ordering, backpressure, and queue-full handling.
+    #[cfg(test)]
+    fn with_executor(config: QueueConfig, executor: Arc<dyn QueueExecutor>) -> Self {
+        let (sender, receiver) = mpsc::channel(config.max_queue_size);
+        let receiver = Arc::new(tokio::sync::Mutex::new(receiver));
+        let metrics = Arc::new(QueueMetrics::new());
+        let chat_template = Arc::new(ChatTemplateEngine::new());
+        let session_state_cache: SessionStateCache = Arc::new(Mutex::new(HashMap::new()));
+        let session_config = crate::types::SessionConfig::default();
+
+        Self::assemble(
+            sender,
+            receiver,
+            config,
+            metrics,
+            chat_template,
+            session_config,
+            session_state_cache,
+            executor,
+        )
+    }
+
+    /// Spawn the configured number of worker tasks, cloning the shared receiver,
+    /// metrics, and executor each iteration. Kept out of `new` so the
+    /// constructor stays concise.
     fn spawn_workers(
         config: &QueueConfig,
         receiver: &Arc<tokio::sync::Mutex<mpsc::Receiver<QueuedRequest>>>,
-        model_manager: &Arc<ModelManager>,
         metrics: &Arc<QueueMetrics>,
-        chat_template: &Arc<ChatTemplateEngine>,
-        session_config: &crate::types::SessionConfig,
-        session_state_cache: &SessionStateCache,
+        executor: &Arc<dyn QueueExecutor>,
     ) -> Vec<JoinHandle<()>> {
         (0..config.worker_threads)
             .map(|worker_id| {
                 let receiver = receiver.clone();
-                let model_manager = model_manager.clone();
-                let config = config.clone();
                 let metrics = metrics.clone();
-                let chat_template = chat_template.clone();
-                let session_config = session_config.clone();
-                let session_state_cache = session_state_cache.clone();
+                let executor = executor.clone();
                 tokio::spawn(async move {
-                    Self::worker_loop(
-                        worker_id,
-                        receiver,
-                        model_manager,
-                        config,
-                        metrics,
-                        chat_template,
-                        session_config,
-                        session_state_cache,
-                    )
-                    .await;
+                    Self::worker_loop(worker_id, receiver, metrics, executor).await;
                 })
             })
             .collect()
@@ -660,16 +864,11 @@ impl RequestQueue {
         self.metrics.get_stats()
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn worker_loop(
         worker_id: usize,
         receiver: Arc<tokio::sync::Mutex<mpsc::Receiver<QueuedRequest>>>,
-        model_manager: Arc<ModelManager>,
-        _config: QueueConfig,
         metrics: Arc<QueueMetrics>,
-        chat_template: Arc<ChatTemplateEngine>,
-        session_config: crate::types::SessionConfig,
-        session_state_cache: SessionStateCache,
+        executor: Arc<dyn QueueExecutor>,
     ) {
         info!("Worker {} started", worker_id);
         while let Some(queued_request) = recv_next_request(&receiver, worker_id).await {
@@ -682,58 +881,38 @@ impl RequestQueue {
                 reject_cancelled_request(worker_id, queued_request, queue_time, &metrics);
                 continue;
             }
-            Self::process_request(
-                worker_id,
-                queued_request,
-                model_manager.clone(),
-                metrics.clone(),
-                chat_template.clone(),
-                session_config.clone(),
-                session_state_cache.clone(),
-            )
-            .await;
+            Self::process_request(worker_id, queued_request, &metrics, executor.as_ref()).await;
         }
     }
 
+    /// Run a single dequeued request through the executor, then release the
+    /// worker by recording the outcome and relaying the response. This is the
+    /// heart of the worker-release invariant: every path through here ends with
+    /// a metric update and a response send, so the live queue size always
+    /// returns to its pre-request value once the turn finishes — regardless of
+    /// whether the turn completed, hit EOS, ran out of budget, filled the
+    /// context, errored, or was cancelled.
     async fn process_request(
         worker_id: usize,
         queued_request: QueuedRequest,
-        model_manager: Arc<ModelManager>,
-        metrics: Arc<QueueMetrics>,
-        chat_template: Arc<ChatTemplateEngine>,
-        session_config: crate::types::SessionConfig,
-        session_state_cache: SessionStateCache,
+        metrics: &QueueMetrics,
+        executor: &dyn QueueExecutor,
     ) {
         let start_time = Instant::now();
-
-        if !model_manager.is_loaded().await {
-            Self::reject_unloaded_request(queued_request, &metrics).await;
-            return;
-        }
-
         let request_id = queued_request.id.clone();
+
         if queued_request.stream_sender.is_some() {
             Self::dispatch_streaming_request(
                 worker_id,
                 queued_request,
-                &model_manager,
-                &metrics,
-                &chat_template,
+                metrics,
+                executor,
                 start_time,
             )
             .await;
         } else {
-            Self::dispatch_batch_request(
-                worker_id,
-                queued_request,
-                &model_manager,
-                &metrics,
-                &chat_template,
-                &session_config,
-                &session_state_cache,
-                start_time,
-            )
-            .await;
+            Self::dispatch_batch_request(worker_id, queued_request, metrics, executor, start_time)
+                .await;
         }
 
         let processing_time = start_time.elapsed();
@@ -743,30 +922,13 @@ impl RequestQueue {
         );
     }
 
-    /// Short-circuit path when `model_manager.is_loaded()` is false: return a
-    /// "Model not loaded" error on whichever sender the request is waiting on
-    /// (streaming or batch).
-    async fn reject_unloaded_request(queued_request: QueuedRequest, metrics: &QueueMetrics) {
-        let error = QueueError::WorkerError("Model not loaded".to_string());
-        match queued_request.stream_sender {
-            Some(stream_sender) => {
-                let _ = stream_sender.send(Err(error)).await;
-            }
-            None => {
-                let _ = queued_request.response_sender.send(Err(error));
-            }
-        }
-        metrics.record_request_failed();
-    }
-
-    /// Drive a streaming request through the model and relay completion/error
+    /// Drive a streaming request through the executor and relay completion/error
     /// back onto the stream sender and metrics.
     async fn dispatch_streaming_request(
         worker_id: usize,
         queued_request: QueuedRequest,
-        model_manager: &Arc<ModelManager>,
         metrics: &QueueMetrics,
-        chat_template: &ChatTemplateEngine,
+        executor: &dyn QueueExecutor,
         start_time: Instant,
     ) {
         let stream_sender = queued_request
@@ -774,80 +936,40 @@ impl RequestQueue {
             .as_ref()
             .expect("streaming dispatch requires stream_sender")
             .clone();
-        let request_id = queued_request.id.clone();
-        let result = model_manager
-            .with_model(|model| {
-                Self::process_streaming_request_sync(
-                    worker_id,
-                    request_id.clone(),
-                    &queued_request.request,
-                    &queued_request.session,
-                    model,
-                    model_manager,
-                    stream_sender.clone(),
-                    &queued_request.cancellation_token,
-                    chat_template,
-                )
-            })
+        let result = executor
+            .execute_streaming(worker_id, &queued_request, stream_sender.clone())
             .await;
         match result {
             Ok(_) => {
-                // Tokens are tracked inside process_streaming_request_sync.
+                // Tokens are tracked inside the executor's streaming path.
                 metrics.record_request_completed(start_time.elapsed(), 0);
             }
-            Err(model_error) => {
-                let queue_error = QueueError::WorkerError(format!("Model error: {}", model_error));
+            Err(queue_error) => {
                 let _ = stream_sender.send(Err(queue_error)).await;
                 metrics.record_request_failed();
             }
         }
     }
 
-    /// Drive a batch request through the model and send the GenerationResponse
-    /// back on the request's oneshot response channel.
-    #[allow(clippy::too_many_arguments)]
+    /// Drive a batch request through the executor and send the
+    /// GenerationResponse back on the request's oneshot response channel.
     async fn dispatch_batch_request(
         worker_id: usize,
         queued_request: QueuedRequest,
-        model_manager: &Arc<ModelManager>,
         metrics: &QueueMetrics,
-        chat_template: &ChatTemplateEngine,
-        session_config: &crate::types::SessionConfig,
-        session_state_cache: &SessionStateCache,
+        executor: &dyn QueueExecutor,
         start_time: Instant,
     ) {
-        let request_id = queued_request.id.clone();
-        let response_sender = queued_request.response_sender;
-        let result = model_manager
-            .with_model(|model| {
-                Self::process_batch_request_sync(
-                    worker_id,
-                    request_id.clone(),
-                    &queued_request.request,
-                    &queued_request.session,
-                    model,
-                    model_manager,
-                    &queued_request.cancellation_token,
-                    chat_template,
-                    session_config,
-                    session_state_cache,
-                )
-            })
-            .await;
-        let final_result = match result {
-            Ok(inner) => inner,
-            Err(model_error) => Err(QueueError::WorkerError(format!(
-                "Model error: {}",
-                model_error
-            ))),
-        };
+        // Run the turn while only borrowing the request, then move the response
+        // sender out afterwards to deliver the result on its oneshot channel.
+        let final_result = executor.execute_batch(worker_id, &queued_request).await;
         match &final_result {
             Ok(response) => {
                 metrics.record_request_completed(start_time.elapsed(), response.tokens_generated)
             }
             Err(_) => metrics.record_request_failed(),
         }
-        let _ = response_sender.send(final_result);
+        let _ = queued_request.response_sender.send(final_result);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1204,8 +1326,13 @@ impl RequestQueue {
             stats.current_queue_size, stats.total_requests
         );
 
-        // Close the sender to signal workers to shutdown
-        // (sender will be dropped when this method ends)
+        // Close the sender to signal workers to shut down. This MUST happen
+        // before we await the worker handles: a worker only exits its loop once
+        // `recv()` returns `None`, which only happens after every sender is
+        // dropped. Dropping the sender here (rather than letting `self` drop at
+        // the end of the method) is what lets the awaits below complete instead
+        // of deadlocking.
+        self.sender = None;
 
         // Wait for all worker handles to complete gracefully
         let mut successful_shutdowns = 0;
@@ -2019,6 +2146,825 @@ mod tests {
             // Verify no tokens are lost
             let reconstructed: Vec<i32> = chunks.into_iter().flatten().copied().collect();
             assert_eq!(reconstructed, tokens);
+        }
+    }
+
+    /// Worker-lifecycle / state-machine coverage driven by a deterministic,
+    /// weight-free executor.
+    ///
+    /// These tests run the *real* `RequestQueue` worker loop — `worker_loop`,
+    /// `process_request`, `dispatch_{batch,streaming}_request`, enqueue, FIFO,
+    /// cancellation, and backpressure — but substitute a [`ScriptedExecutor`]
+    /// for the model-backed `ModelManagerExecutor` so every turn outcome is
+    /// reproducible without a GPU or weights. The central invariant under test
+    /// is the one the "Queue is full on retry" bug violated: **after any turn
+    /// outcome the single worker must be released and the live queue size must
+    /// return to zero, so a subsequent enqueue succeeds** (never a spurious
+    /// `QueueError::Full`).
+    mod worker_lifecycle_tests {
+        use super::*;
+        use crate::generation::scripted::{ScriptToken, ScriptedModel};
+        use crate::generation::TextGenerator;
+        use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+        /// What a scripted turn should do when the worker runs it. This lets a
+        /// single executor cover the whole turn-outcome matrix the queue cares
+        /// about: a turn that produces tokens and stops for some reason, a turn
+        /// that produces nothing (the 0-token / immediate-EOS bug shape), and a
+        /// turn that fails outright.
+        #[derive(Clone)]
+        enum TurnOutcome {
+            /// Replay the scripted model to completion (reason determined by the
+            /// script + the request's `max_tokens` / `stop_tokens` / context).
+            Scripted(ScriptedModel),
+            /// Fail the turn with a worker error, as a runaway/aborted turn
+            /// would. The worker must still be released afterward.
+            Error(String),
+        }
+
+        /// A [`QueueExecutor`] backed by [`TurnOutcome`] rather than a live
+        /// model. Counts how many turns it has run so FIFO/serialization can be
+        /// asserted.
+        struct ScriptedExecutor {
+            outcome: TurnOutcome,
+            turns_run: Arc<AtomicUsize>,
+        }
+
+        impl ScriptedExecutor {
+            fn new(outcome: TurnOutcome) -> Self {
+                Self {
+                    outcome,
+                    turns_run: Arc::new(AtomicUsize::new(0)),
+                }
+            }
+
+            /// Derive a deterministic prompt from the session's messages so the
+            /// scripted model has something to record. Queue-lifecycle tests do
+            /// not depend on a chat template, only on the worker mechanics.
+            fn prompt_for(session: &Session) -> String {
+                session
+                    .messages
+                    .iter()
+                    .map(|m| m.content.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            }
+        }
+
+        #[async_trait]
+        impl QueueExecutor for ScriptedExecutor {
+            async fn execute_batch(
+                &self,
+                _worker_id: usize,
+                queued_request: &QueuedRequest,
+            ) -> Result<GenerationResponse, QueueError> {
+                self.turns_run.fetch_add(1, AtomicOrdering::SeqCst);
+                match &self.outcome {
+                    TurnOutcome::Error(msg) => Err(QueueError::WorkerError(msg.clone())),
+                    TurnOutcome::Scripted(model) => {
+                        let prompt = Self::prompt_for(&queued_request.session);
+                        let mut model = model.clone();
+                        model
+                            .generate_text(
+                                &prompt,
+                                queued_request.request.clone(),
+                                queued_request.cancellation_token.clone(),
+                            )
+                            .map_err(|e| {
+                                QueueError::WorkerError(format!("Generation failed: {}", e))
+                            })
+                    }
+                }
+            }
+
+            async fn execute_streaming(
+                &self,
+                _worker_id: usize,
+                queued_request: &QueuedRequest,
+                stream_sender: mpsc::Sender<Result<StreamChunk, QueueError>>,
+            ) -> Result<(), QueueError> {
+                self.turns_run.fetch_add(1, AtomicOrdering::SeqCst);
+                if let TurnOutcome::Error(msg) = &self.outcome {
+                    return Err(QueueError::WorkerError(msg.clone()));
+                }
+                let TurnOutcome::Scripted(model) = &self.outcome else {
+                    unreachable!("Error handled above");
+                };
+
+                let prompt = Self::prompt_for(&queued_request.session);
+                let mut model = model.clone();
+
+                // The scripted model streams into an unbounded channel; bridge
+                // those chunks onto the bounded client channel, mirroring the
+                // production streaming relay.
+                let (tx, mut rx) = mpsc::unbounded_channel();
+                let gen_result = model.generate_stream(
+                    &prompt,
+                    queued_request.request.clone(),
+                    tx,
+                    queued_request.cancellation_token.clone(),
+                );
+                while let Ok(chunk) = rx.try_recv() {
+                    if stream_sender.send(chunk).await.is_err() {
+                        break;
+                    }
+                }
+                gen_result.map_err(|e| QueueError::WorkerError(format!("Generation failed: {}", e)))
+            }
+        }
+
+        /// A single-worker queue running every turn through `outcome`.
+        fn scripted_queue(outcome: TurnOutcome) -> (RequestQueue, Arc<AtomicUsize>) {
+            let executor = ScriptedExecutor::new(outcome);
+            let turns_run = executor.turns_run.clone();
+            let config = QueueConfig {
+                max_queue_size: 10,
+                worker_threads: 1,
+            };
+            let queue = RequestQueue::with_executor(config, Arc::new(executor));
+            (queue, turns_run)
+        }
+
+        fn streaming_request(session: &Session, max_tokens: u32) -> GenerationRequest {
+            GenerationRequest {
+                session_id: session.id,
+                max_tokens: Some(max_tokens),
+                temperature: Some(0.0),
+                top_p: None,
+                stop_tokens: Vec::new(),
+                stopping_config: None,
+            }
+        }
+
+        /// Poll the live queue size until it drains to zero or the budget runs
+        /// out, so completion metrics (recorded after the stream sender drops)
+        /// have a chance to land.
+        async fn await_queue_drained(queue: &RequestQueue) {
+            for _ in 0..200 {
+                if queue.get_queue_size() == 0 {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }
+
+        /// Drive one streaming turn to completion and return the chunks observed.
+        async fn run_streaming_turn(
+            queue: &RequestQueue,
+            session: &Session,
+            request: GenerationRequest,
+        ) -> Vec<Result<StreamChunk, QueueError>> {
+            let mut receiver = queue
+                .submit_streaming_request(request, session)
+                .await
+                .expect("streaming request should enqueue");
+            let mut chunks = Vec::new();
+            while let Some(item) = receiver.recv().await {
+                chunks.push(item);
+            }
+            chunks
+        }
+
+        /// The heart of the regression suite: run a streaming turn with the
+        /// given outcome, assert the worker was released (queue drains to zero),
+        /// and assert a second turn still enqueues without `Full`. Returns the
+        /// first turn's chunks so callers can additionally assert the outcome
+        /// shape.
+        async fn assert_worker_released_after(
+            outcome: TurnOutcome,
+            max_tokens: u32,
+        ) -> Vec<Result<StreamChunk, QueueError>> {
+            let (queue, turns_run) = scripted_queue(outcome);
+            let session = create_test_session();
+
+            let chunks =
+                run_streaming_turn(&queue, &session, streaming_request(&session, max_tokens)).await;
+
+            await_queue_drained(&queue).await;
+            assert_eq!(
+                queue.get_queue_size(),
+                0,
+                "worker was not released after the turn — live queue size should return to 0"
+            );
+
+            // The single worker must accept a second turn (no spurious Full).
+            let second = queue
+                .submit_streaming_request(streaming_request(&session, max_tokens), &session)
+                .await;
+            assert!(
+                !matches!(second, Err(QueueError::Full)),
+                "second turn rejected with Queue is full after release: {:?}",
+                second.err()
+            );
+            if let Ok(mut receiver) = second {
+                while receiver.recv().await.is_some() {}
+            }
+            await_queue_drained(&queue).await;
+            assert!(
+                turns_run.load(AtomicOrdering::SeqCst) >= 2,
+                "both turns should have reached the worker"
+            );
+
+            chunks
+        }
+
+        /// Extract the completion chunk's finish reason from a stream.
+        fn completion_reason(chunks: &[Result<StreamChunk, QueueError>]) -> Option<FinishReason> {
+            chunks.iter().rev().find_map(|c| match c {
+                Ok(chunk) if chunk.is_complete => chunk.finish_reason.clone(),
+                _ => None,
+            })
+        }
+
+        // --- Worker-release-on-every-outcome matrix -------------------------
+
+        #[tokio::test]
+        async fn worker_released_after_normal_completion() {
+            // A short script that ends on its own EndOfSequence — the ordinary
+            // "model finished talking" turn.
+            let model = ScriptedModel::from_texts(["Hello", " world"]);
+            let chunks = assert_worker_released_after(TurnOutcome::Scripted(model), 64).await;
+            let text: String = chunks
+                .iter()
+                .filter_map(|c| c.as_ref().ok())
+                .filter(|c| !c.is_complete)
+                .map(|c| c.text.clone())
+                .collect();
+            assert_eq!(text, "Hello world");
+            assert_eq!(
+                completion_reason(&chunks),
+                Some(FinishReason::Stopped("EndOfSequence".to_string()))
+            );
+        }
+
+        #[tokio::test]
+        async fn worker_released_after_immediate_eos_zero_tokens() {
+            // The 0-token bug shape: the model emits EOS before any token. The
+            // worker must still be released and re-enqueue must succeed.
+            let model = ScriptedModel::new([ScriptToken::EndOfSequence]);
+            let chunks = assert_worker_released_after(TurnOutcome::Scripted(model), 64).await;
+            let token_chunks = chunks
+                .iter()
+                .filter_map(|c| c.as_ref().ok())
+                .filter(|c| !c.is_complete)
+                .count();
+            assert_eq!(token_chunks, 0, "immediate EOS yields zero token chunks");
+            assert_eq!(
+                completion_reason(&chunks),
+                Some(FinishReason::Stopped("EndOfSequence".to_string()))
+            );
+        }
+
+        #[tokio::test]
+        async fn worker_released_after_max_tokens() {
+            // A script longer than the budget stops at MaxTokens — the
+            // runaway-but-bounded turn.
+            let model = ScriptedModel::from_texts(["a", "b", "c", "d", "e", "f"]);
+            let chunks = assert_worker_released_after(TurnOutcome::Scripted(model), 3).await;
+            assert_eq!(
+                completion_reason(&chunks),
+                Some(FinishReason::Stopped("MaxTokens".to_string()))
+            );
+        }
+
+        #[tokio::test]
+        async fn worker_released_after_context_full() {
+            // A tiny context window trips the context-window guard mid-turn.
+            // create_test_session()'s single message "Hello" is one word, so
+            // simulated_prompt_tokens == 1; with context_size 3 the guard fires
+            // when 1 + generated >= 2, i.e. after one generated token.
+            let model = ScriptedModel::from_texts(["x", "y", "z", "w"]).with_context_size(3);
+            let chunks = assert_worker_released_after(TurnOutcome::Scripted(model), 64).await;
+            assert_eq!(
+                completion_reason(&chunks),
+                Some(FinishReason::Stopped("ContextWindowFull".to_string()))
+            );
+        }
+
+        #[tokio::test]
+        async fn worker_released_after_error() {
+            // A turn that fails outright must still release the worker — this is
+            // the literal second symptom of the shipped bug.
+            let chunks =
+                assert_worker_released_after(TurnOutcome::Error("runaway turn aborted".into()), 64)
+                    .await;
+            // The error is relayed onto the stream.
+            let has_error = chunks.iter().any(|c| {
+                matches!(c, Err(QueueError::WorkerError(msg)) if msg.contains("runaway turn aborted"))
+            });
+            assert!(
+                has_error,
+                "the worker error should be relayed onto the stream"
+            );
+        }
+
+        #[tokio::test]
+        async fn worker_released_after_cancelled_turn() {
+            // A turn whose cancellation token is already fired releases the
+            // worker without corrupting the queue, and a fresh turn still runs.
+            let model = ScriptedModel::from_texts(["never", "emitted"]);
+            let (queue, turns_run) = scripted_queue(TurnOutcome::Scripted(model));
+            let session = create_test_session();
+
+            // Submit, then immediately cancel this session's request. The worker
+            // either rejects it pre-process (cancelled before dequeue) or the
+            // scripted loop observes the cancel and stops cleanly — either way
+            // the worker is released.
+            let request = streaming_request(&session, 64);
+            let mut receiver = queue
+                .submit_streaming_request(request, &session)
+                .await
+                .expect("streaming request should enqueue");
+            queue.cancel_session(&session.id).await;
+            while receiver.recv().await.is_some() {}
+
+            await_queue_drained(&queue).await;
+            assert_eq!(
+                queue.get_queue_size(),
+                0,
+                "cancelled turn must release the worker"
+            );
+
+            // A subsequent turn on a fresh session enqueues and runs.
+            let session2 = create_test_session();
+            let chunks =
+                run_streaming_turn(&queue, &session2, streaming_request(&session2, 64)).await;
+            assert!(
+                !chunks.is_empty(),
+                "a turn after cancellation should still produce a completion"
+            );
+            await_queue_drained(&queue).await;
+            assert!(turns_run.load(AtomicOrdering::SeqCst) >= 1);
+        }
+
+        #[tokio::test]
+        async fn worker_released_after_batch_completion() {
+            // The batch (non-streaming) path must release the worker too, and
+            // return the collected response.
+            let model = ScriptedModel::from_texts(["one", "two", "three"]);
+            let (queue, _turns) = scripted_queue(TurnOutcome::Scripted(model));
+            let session = create_test_session();
+
+            let response = queue
+                .submit_request(streaming_request(&session, 64), &session)
+                .await
+                .expect("batch turn should succeed");
+            assert_eq!(response.generated_text, "onetwothree");
+            assert_eq!(response.tokens_generated, 3);
+
+            await_queue_drained(&queue).await;
+            assert_eq!(queue.get_queue_size(), 0, "batch turn must release worker");
+
+            // Re-enqueue succeeds.
+            let second = queue
+                .submit_request(streaming_request(&session, 64), &session)
+                .await;
+            assert!(second.is_ok(), "second batch turn should not be rejected");
+        }
+
+        // --- Queue-full only at capacity -----------------------------------
+
+        /// An executor that parks every turn on a release gate until the test
+        /// fires it, so the queue can be filled to capacity deterministically.
+        struct GatedExecutor {
+            gate: Arc<tokio::sync::Notify>,
+            entered: Arc<AtomicUsize>,
+        }
+        #[async_trait]
+        impl QueueExecutor for GatedExecutor {
+            async fn execute_batch(
+                &self,
+                _worker_id: usize,
+                _queued_request: &QueuedRequest,
+            ) -> Result<GenerationResponse, QueueError> {
+                self.entered.fetch_add(1, AtomicOrdering::SeqCst);
+                self.gate.notified().await;
+                Ok(GenerationResponse {
+                    generated_text: String::new(),
+                    tokens_generated: 0,
+                    generation_time: Duration::from_millis(0),
+                    finish_reason: FinishReason::Stopped("EndOfSequence".to_string()),
+                    complete_token_sequence: None,
+                })
+            }
+            async fn execute_streaming(
+                &self,
+                _worker_id: usize,
+                _queued_request: &QueuedRequest,
+                _stream_sender: mpsc::Sender<Result<StreamChunk, QueueError>>,
+            ) -> Result<(), QueueError> {
+                self.entered.fetch_add(1, AtomicOrdering::SeqCst);
+                self.gate.notified().await;
+                Ok(())
+            }
+        }
+
+        #[tokio::test]
+        async fn enqueue_returns_full_only_at_capacity() {
+            // Park the single worker on a gated turn, then fill the bounded
+            // channel to exactly capacity and prove the next enqueue — and only
+            // it — returns Full, while every enqueue up to capacity succeeds.
+            let gate = Arc::new(tokio::sync::Notify::new());
+            let entered = Arc::new(AtomicUsize::new(0));
+            let max_queue_size = 3;
+            let config = QueueConfig {
+                max_queue_size,
+                worker_threads: 1,
+            };
+            let queue = RequestQueue::with_executor(
+                config,
+                Arc::new(GatedExecutor {
+                    gate: gate.clone(),
+                    entered: entered.clone(),
+                }),
+            );
+            let session = create_test_session();
+
+            // First request reaches the worker and parks on the gate, removing
+            // itself from the channel buffer.
+            let _busy = queue.submit_request(streaming_request(&session, 8), &session);
+            tokio::pin!(_busy);
+            // Poll it once to dispatch into the channel, then leave it pending.
+            tokio::select! {
+                _ = &mut _busy => panic!("gated turn returned early"),
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+            }
+            assert_eq!(
+                entered.load(AtomicOrdering::SeqCst),
+                1,
+                "the worker should be parked on the first turn"
+            );
+
+            // Now the worker is busy; the bounded channel holds `max_queue_size`
+            // pending requests. Each enqueue up to capacity must succeed.
+            let mut buffered = Vec::new();
+            for i in 0..max_queue_size {
+                let result = queue.try_enqueue_for_test(&session);
+                assert!(
+                    result.is_ok(),
+                    "enqueue {} within capacity must succeed, got {:?}",
+                    i,
+                    result.err()
+                );
+                buffered.push(result);
+            }
+
+            // Capacity reached: the next enqueue must return Full.
+            let overflow = queue.try_enqueue_for_test(&session);
+            assert!(
+                matches!(overflow, Err(QueueError::Full)),
+                "enqueue past capacity must return QueueError::Full, got {:?}",
+                overflow
+            );
+
+            // Release the worker so the test shuts down cleanly.
+            gate.notify_waiters();
+        }
+
+        // --- FIFO ordering through the single worker ------------------------
+
+        #[tokio::test]
+        async fn batch_turns_processed_in_fifo_order() {
+            // A single worker processes submitted requests in submission order.
+            // We record the per-turn prompt the executor sees and assert it
+            // matches submission order.
+            let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+
+            struct RecordingExecutor {
+                seen: Arc<Mutex<Vec<String>>>,
+            }
+            #[async_trait]
+            impl QueueExecutor for RecordingExecutor {
+                async fn execute_batch(
+                    &self,
+                    _worker_id: usize,
+                    queued_request: &QueuedRequest,
+                ) -> Result<GenerationResponse, QueueError> {
+                    let content = queued_request.session.messages[0].content.clone();
+                    self.seen.lock().unwrap().push(content.clone());
+                    Ok(GenerationResponse {
+                        generated_text: content,
+                        tokens_generated: 1,
+                        generation_time: Duration::from_millis(0),
+                        finish_reason: FinishReason::Stopped("EndOfSequence".to_string()),
+                        complete_token_sequence: None,
+                    })
+                }
+                async fn execute_streaming(
+                    &self,
+                    _worker_id: usize,
+                    _queued_request: &QueuedRequest,
+                    _stream_sender: mpsc::Sender<Result<StreamChunk, QueueError>>,
+                ) -> Result<(), QueueError> {
+                    Ok(())
+                }
+            }
+
+            let config = QueueConfig {
+                max_queue_size: 16,
+                worker_threads: 1,
+            };
+            let queue = RequestQueue::with_executor(
+                config,
+                Arc::new(RecordingExecutor { seen: seen.clone() }),
+            );
+
+            // Submit several batch requests in a fixed order, awaiting each so
+            // the single worker handles them one at a time in submission order.
+            let order = ["first", "second", "third", "fourth"];
+            for label in order {
+                let mut session = create_test_session();
+                session.messages[0].content = label.to_string();
+                let response = queue
+                    .submit_request(streaming_request(&session, 8), &session)
+                    .await
+                    .expect("each batch turn should succeed");
+                assert_eq!(response.generated_text, label);
+            }
+
+            let recorded = seen.lock().unwrap().clone();
+            assert_eq!(
+                recorded,
+                order.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                "the single worker must process requests in FIFO order"
+            );
+        }
+
+        // --- Backpressure: worker_threads = 1 serializes -------------------
+
+        #[tokio::test]
+        async fn single_worker_serializes_concurrent_turns() {
+            // With worker_threads = 1, concurrently-submitted turns must not run
+            // in parallel. The executor tracks concurrent entries and asserts
+            // the peak is exactly 1.
+            let in_flight = Arc::new(AtomicUsize::new(0));
+            let peak = Arc::new(AtomicUsize::new(0));
+
+            struct SerializingExecutor {
+                in_flight: Arc<AtomicUsize>,
+                peak: Arc<AtomicUsize>,
+            }
+            #[async_trait]
+            impl QueueExecutor for SerializingExecutor {
+                async fn execute_batch(
+                    &self,
+                    _worker_id: usize,
+                    _queued_request: &QueuedRequest,
+                ) -> Result<GenerationResponse, QueueError> {
+                    let now = self.in_flight.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+                    self.peak.fetch_max(now, AtomicOrdering::SeqCst);
+                    // Hold the worker briefly so any parallel entry would be
+                    // observed as concurrency > 1.
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    self.in_flight.fetch_sub(1, AtomicOrdering::SeqCst);
+                    Ok(GenerationResponse {
+                        generated_text: String::new(),
+                        tokens_generated: 0,
+                        generation_time: Duration::from_millis(0),
+                        finish_reason: FinishReason::Stopped("EndOfSequence".to_string()),
+                        complete_token_sequence: None,
+                    })
+                }
+                async fn execute_streaming(
+                    &self,
+                    _worker_id: usize,
+                    _queued_request: &QueuedRequest,
+                    _stream_sender: mpsc::Sender<Result<StreamChunk, QueueError>>,
+                ) -> Result<(), QueueError> {
+                    Ok(())
+                }
+            }
+
+            let config = QueueConfig {
+                max_queue_size: 16,
+                worker_threads: 1,
+            };
+            let queue = Arc::new(RequestQueue::with_executor(
+                config,
+                Arc::new(SerializingExecutor {
+                    in_flight: in_flight.clone(),
+                    peak: peak.clone(),
+                }),
+            ));
+
+            // Fire several requests concurrently; the single worker must
+            // serialize them.
+            let mut handles = Vec::new();
+            for _ in 0..5 {
+                let queue = queue.clone();
+                let session = create_test_session();
+                handles.push(tokio::spawn(async move {
+                    let _ = queue
+                        .submit_request(streaming_request(&session, 8), &session)
+                        .await;
+                }));
+            }
+            for h in handles {
+                h.await.unwrap();
+            }
+
+            assert_eq!(
+                peak.load(AtomicOrdering::SeqCst),
+                1,
+                "a single worker must never run two turns concurrently"
+            );
+        }
+
+        // --- Stats / metrics snapshot --------------------------------------
+
+        #[tokio::test]
+        async fn stats_reflect_completed_turns() {
+            // After a batch turn completes, the stats snapshot reports it as
+            // completed with the generated token count, and the live size is 0.
+            let model = ScriptedModel::from_texts(["a", "b"]);
+            let (queue, _turns) = scripted_queue(TurnOutcome::Scripted(model));
+            let session = create_test_session();
+
+            let _ = queue
+                .submit_request(streaming_request(&session, 8), &session)
+                .await
+                .expect("batch turn should succeed");
+            await_queue_drained(&queue).await;
+
+            let stats = queue.get_stats();
+            assert_eq!(stats.total_requests, 1);
+            assert_eq!(stats.completed_requests, 1);
+            assert_eq!(stats.failed_requests, 0);
+            assert_eq!(stats.current_queue_size, 0);
+            assert_eq!(stats.total_tokens_generated, 2);
+            assert!(stats.peak_queue_size >= 1);
+        }
+
+        #[tokio::test]
+        async fn stats_reflect_failed_turns() {
+            // A failed turn is counted as failed (not completed) and still
+            // releases the worker.
+            let (queue, _turns) = scripted_queue(TurnOutcome::Error("boom".into()));
+            let session = create_test_session();
+
+            let result = queue
+                .submit_request(streaming_request(&session, 8), &session)
+                .await;
+            assert!(matches!(result, Err(QueueError::WorkerError(_))));
+            await_queue_drained(&queue).await;
+
+            let stats = queue.get_stats();
+            assert_eq!(stats.completed_requests, 0);
+            assert_eq!(stats.failed_requests, 1);
+            assert_eq!(stats.current_queue_size, 0);
+        }
+
+        // --- cancel_session bookkeeping ------------------------------------
+
+        #[tokio::test]
+        async fn cancel_session_returns_false_when_no_active_request() {
+            // Cancelling a session with no in-flight request returns false and
+            // does not disturb the queue.
+            let model = ScriptedModel::from_texts(["x"]);
+            let (queue, _turns) = scripted_queue(TurnOutcome::Scripted(model));
+            let unknown = SessionId::new();
+            assert!(
+                !queue.cancel_session(&unknown).await,
+                "cancelling an unknown session returns false"
+            );
+        }
+
+        // --- Queue-full on the streaming submit path -----------------------
+
+        #[tokio::test]
+        async fn streaming_submit_returns_full_at_capacity() {
+            // The streaming submit path has its own try_send + Full branch.
+            // Park the worker and fill the bounded channel to prove it fires.
+            let gate = Arc::new(tokio::sync::Notify::new());
+            let entered = Arc::new(AtomicUsize::new(0));
+            let max_queue_size = 2;
+            let config = QueueConfig {
+                max_queue_size,
+                worker_threads: 1,
+            };
+            let queue = RequestQueue::with_executor(
+                config,
+                Arc::new(GatedExecutor {
+                    gate: gate.clone(),
+                    entered: entered.clone(),
+                }),
+            );
+            let session = create_test_session();
+
+            // Occupy the worker with one streaming turn parked on the gate.
+            let _busy = queue
+                .submit_streaming_request(streaming_request(&session, 8), &session)
+                .await
+                .expect("first streaming request occupies the worker");
+            for _ in 0..40 {
+                if entered.load(AtomicOrdering::SeqCst) == 1 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+
+            // Fill the channel; eventually streaming submit must return Full.
+            let mut held = Vec::new();
+            let mut full_seen = false;
+            for _ in 0..16 {
+                match queue
+                    .submit_streaming_request(streaming_request(&session, 8), &session)
+                    .await
+                {
+                    Ok(rx) => held.push(rx),
+                    Err(QueueError::Full) => {
+                        full_seen = true;
+                        break;
+                    }
+                    Err(other) => panic!("unexpected error: {:?}", other),
+                }
+            }
+            assert!(full_seen, "streaming submit must return Full at capacity");
+            gate.notify_waiters();
+        }
+
+        // --- Shutdown closes the sender, rejecting later enqueues ----------
+
+        #[tokio::test]
+        async fn graceful_shutdown_drains_workers() {
+            // `shutdown()` closes the sender channel and joins every worker
+            // handle, exercising the graceful shutdown loop.
+            let model = ScriptedModel::from_texts(["x"]);
+            let (queue, _turns) = scripted_queue(TurnOutcome::Scripted(model));
+            let session = create_test_session();
+            let _ = queue
+                .submit_request(streaming_request(&session, 8), &session)
+                .await;
+            await_queue_drained(&queue).await;
+            queue.shutdown().await;
+        }
+
+        #[tokio::test]
+        async fn shutdown_with_timeout_returns_stats() {
+            // shutdown_with_timeout drains workers within the budget and returns
+            // a pre-shutdown stats snapshot.
+            let model = ScriptedModel::from_texts(["x"]);
+            let (queue, _turns) = scripted_queue(TurnOutcome::Scripted(model));
+            let session = create_test_session();
+            let _ = queue
+                .submit_request(streaming_request(&session, 8), &session)
+                .await;
+            let stats = queue.shutdown_with_timeout(Duration::from_secs(5)).await;
+            assert_eq!(stats.total_requests, 1);
+        }
+    }
+
+    /// Unit tests for the module-private free functions that do not need a
+    /// model, exercising branches the worker only reaches under specific
+    /// conditions (e.g. cache growth past the per-process limit).
+    mod free_fn_unit_tests {
+        use super::*;
+
+        /// The same limit the function computes internally, so the test can
+        /// insert one more than the limit and guarantee eviction fires.
+        fn cache_limit() -> usize {
+            std::thread::available_parallelism()
+                .map(|n| (n.get() / 2).max(1))
+                .unwrap_or(4)
+        }
+
+        #[test]
+        fn evict_session_states_is_a_noop_under_limit() {
+            // At or below the limit nothing is evicted.
+            let mut cache: HashMap<String, Vec<u8>> = HashMap::new();
+            cache.insert("only".to_string(), vec![1, 2, 3]);
+            evict_oldest_session_states(0, &mut cache);
+            assert_eq!(cache.len(), 1, "a single entry is never evicted");
+        }
+
+        #[test]
+        fn evict_session_states_drops_down_to_limit() {
+            // Growing the cache past the limit evicts the overflow back down to
+            // exactly the limit — the eviction branch the worker only hits after
+            // many distinct sessions have been cached.
+            let limit = cache_limit();
+            let mut cache: HashMap<String, Vec<u8>> = HashMap::new();
+            for i in 0..(limit + 5) {
+                cache.insert(format!("session-{i}"), vec![i as u8]);
+            }
+            assert!(cache.len() > limit, "precondition: cache exceeds the limit");
+
+            evict_oldest_session_states(0, &mut cache);
+
+            assert_eq!(
+                cache.len(),
+                limit,
+                "eviction must bring the cache back down to exactly the limit"
+            );
+        }
+
+        #[test]
+        fn template_token_count_maps_position_to_next() {
+            // A non-negative KV-cache position maps to the next position; a
+            // negative position (fresh context) maps to None.
+            assert_eq!(compute_template_token_count(0, -1), None);
+            assert_eq!(compute_template_token_count(0, 0), Some(1));
+            assert_eq!(compute_template_token_count(0, 41), Some(42));
         }
     }
 }

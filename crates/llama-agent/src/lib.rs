@@ -191,7 +191,7 @@ pub use stopper::{EosStopper, MaxTokensStopper, Stopper};
 pub use resources::{ResourceError, ResourceLoader};
 
 // Re-export generation functionality
-pub use generation::{GenerationConfig, GenerationError, LlamaCppGenerator, TextGenerator};
+pub use generation::{GenerationConfig, GenerationError, TextGenerator};
 
 // Re-export the weight-free scripted test double for deterministic generation
 // tests. Available in test builds and when the `test-utils` feature is enabled.

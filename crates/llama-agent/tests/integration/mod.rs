@@ -1,5 +1,6 @@
 //! Integration test modules for llama-agent
 
+mod acp_agentic_loop;
 mod acp_config_file;
 mod acp_error_propagation;
 mod acp_read_file;

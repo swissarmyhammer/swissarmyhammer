@@ -11,9 +11,10 @@
 //! GPU.
 //!
 //! [`ScriptedModel`] is the seam that makes that possible. It implements the
-//! same public [`TextGenerator`] trait that the real [`LlamaCppGenerator`]
-//! implements, so the generation paths drive it exactly as they drive the real
-//! model. Instead of sampling logits it replays a caller-supplied list of
+//! same public [`TextGenerator`] trait that the production [`GenerationHelper`]
+//! streaming path mirrors, so the generation paths drive it exactly as they
+//! drive the real model. Instead of sampling logits it replays a
+//! caller-supplied list of
 //! [`ScriptToken`]s and then signals end-of-sequence. The streamed [`StreamChunk`]
 //! contract it produces is byte-for-byte identical to the production
 //! `GenerationHelper` streaming path:
@@ -29,7 +30,7 @@
 //! drive `generate_stream` / `generate_text` through a `ScriptedModel`, then
 //! assert on the observable behaviour with no real-model download.
 //!
-//! [`LlamaCppGenerator`]: crate::generation::LlamaCppGenerator
+//! [`GenerationHelper`]: crate::generation::GenerationHelper
 
 use std::sync::{Arc, Mutex};
 use std::time::Instant;

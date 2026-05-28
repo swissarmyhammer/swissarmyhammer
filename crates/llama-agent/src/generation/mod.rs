@@ -13,10 +13,20 @@
 //! - Manual batch management and decoding
 //! - Direct parameter validation for better error messages
 //!
+//! ## Canonical streaming loop
+//!
+//! [`GenerationHelper`] (in this module) is the single canonical text/streaming
+//! generation implementation. It works against borrowed model/context references
+//! within the `ModelManager::with_model()` pattern and is the path the production
+//! request queue drives. Do **not** reintroduce a parallel hand-copied streaming
+//! loop: an earlier duplicate (`LlamaCppGenerator` in `generator.rs`) drifted out
+//! of sync and silently carried token-accounting bugs that had already been fixed
+//! here, so it was deleted. Extend or fix [`GenerationHelper`] in place instead.
+//!
 //! ## Usage
 //!
 //! ```text
-//! use llama_agent::generation::{TextGenerator, GenerationConfig, LlamaCppGenerator};
+//! use llama_agent::generation::{GenerationConfig, GenerationHelper};
 //!
 //! let config = GenerationConfig {
 //!     max_tokens: 512,
@@ -26,13 +36,11 @@
 //!     ..Default::default()
 //! };
 //!
-//! let mut generator = LlamaCppGenerator::new(model, context);
-//! let response = generator.generate_text(request, cancellation_token).await?;
+//! // Generation runs through GenerationHelper against a borrowed model/context.
 //! ```
 
 pub mod config;
 pub mod error;
-pub mod generator;
 
 /// Weight-free [`TextGenerator`] test double for deterministic generation tests.
 #[cfg(any(test, feature = "test-utils"))]
@@ -43,7 +51,6 @@ pub mod tests;
 
 pub use config::GenerationConfig;
 pub use error::GenerationError;
-pub use generator::LlamaCppGenerator;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub use scripted::{ScriptToken, ScriptedModel};
