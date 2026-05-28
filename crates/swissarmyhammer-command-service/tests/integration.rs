@@ -6,6 +6,11 @@
 //!   plugin (port of `task.yaml`) is discovered from a builtin layer,
 //!   registers its three commands with 1:1 metadata fidelity, and moves a
 //!   real task on the exposed `kanban` store through `task.move`.
+//! - [`builtin_file_commands_e2e`] — the committed `file-commands` builtin
+//!   plugin (port of `file.yaml`) is discovered from a builtin layer,
+//!   registers its four board-file lifecycle commands with 1:1 metadata
+//!   fidelity, and drives the `window` board-lifecycle verbs over a recording
+//!   shell (with `file.newBoard` exercising the board-creation effect).
 //! - [`host_bootstrap_e2e`] — the bootstrap exposes `commands` on the
 //!   host's registry, and a host caller's `register command` lands on the
 //!   override stack and surfaces through `list command`.
@@ -31,6 +36,8 @@
 #[path = "integration/support.rs"]
 mod support;
 
+#[path = "integration/builtin_file_commands_e2e.rs"]
+mod builtin_file_commands_e2e;
 #[path = "integration/builtin_kanban_misc_e2e.rs"]
 mod builtin_kanban_misc_e2e;
 #[path = "integration/builtin_task_commands_e2e.rs"]

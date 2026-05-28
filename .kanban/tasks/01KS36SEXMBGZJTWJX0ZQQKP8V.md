@@ -5,8 +5,8 @@ depends_on:
 - 01KS36QGEVVP064EKW0JDGD94B
 - 01KS3BK37R2P0RYSYSXGZTS0Z3
 - 01KS612DV4W0N1X1RPXWAKMT4B
-position_column: todo
-position_ordinal: '8980'
+position_column: review
+position_ordinal: '80'
 project: builtin-commands
 title: 'Builtin plugin: file/board commands (port file.yaml)'
 ---
