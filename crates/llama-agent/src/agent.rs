@@ -2403,4 +2403,100 @@ mod tests {
             }
         }
     }
+
+    /// `is_tool_error_retriable` is the model-free decision at the heart of
+    /// `execute_tool_with_retry`: it classifies an MCP tool error message as
+    /// transient (retry with backoff) or terminal (fail fast). It is pure
+    /// `&str -> bool`, so every branch is pinned here without a model. The
+    /// retry *loop* itself (backoff timing, attempt count) is driven by the
+    /// real-model tool tests; this locks the classification it depends on.
+    mod is_tool_error_retriable {
+        use super::*;
+
+        #[test]
+        fn server_5xx_errors_are_retriable() {
+            for msg in [
+                "500",
+                "Internal Server Error",
+                "502",
+                "Bad Gateway",
+                "503",
+                "Service Unavailable",
+                "504",
+                "Gateway Timeout",
+            ] {
+                assert!(
+                    AgentServer::is_tool_error_retriable(msg),
+                    "5xx error should be retriable: {msg:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn network_level_errors_are_retriable() {
+            for msg in [
+                "connection refused",
+                "request timeout",
+                "network unreachable",
+                "DNS resolution failed",
+                "connection reset by peer",
+            ] {
+                assert!(
+                    AgentServer::is_tool_error_retriable(msg),
+                    "network error should be retriable: {msg:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn rate_limiting_is_not_retriable() {
+            // 429 must fail fast — retrying immediately would worsen throttling.
+            assert!(!AgentServer::is_tool_error_retriable("429"));
+            assert!(!AgentServer::is_tool_error_retriable("Too Many Requests"));
+        }
+
+        #[test]
+        fn client_4xx_errors_are_not_retriable() {
+            for msg in [
+                "400 Bad Request",
+                "401 Unauthorized",
+                "403 Forbidden",
+                "404 Not Found",
+            ] {
+                assert!(
+                    !AgentServer::is_tool_error_retriable(msg),
+                    "4xx error should not be retriable: {msg:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn validation_errors_are_not_retriable() {
+            for msg in [
+                "invalid argument",
+                "schema validation failed",
+                "malformed JSON body",
+            ] {
+                assert!(
+                    !AgentServer::is_tool_error_retriable(msg),
+                    "validation error should not be retriable: {msg:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn unknown_errors_default_to_not_retriable() {
+            // Tool errors are usually deterministic; default to fail-fast.
+            assert!(!AgentServer::is_tool_error_retriable(
+                "the tool exploded for an unspecified reason"
+            ));
+            assert!(!AgentServer::is_tool_error_retriable(""));
+        }
+
+        #[test]
+        fn classification_is_case_insensitive() {
+            assert!(AgentServer::is_tool_error_retriable("CONNECTION REFUSED"));
+            assert!(!AgentServer::is_tool_error_retriable("INVALID"));
+        }
+    }
 }

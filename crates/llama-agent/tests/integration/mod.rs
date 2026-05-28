@@ -8,6 +8,7 @@ mod acp_slash_command;
 mod acp_stdio_transport;
 mod acp_write_file;
 mod agent_cache_integration;
+mod agent_generate_path;
 mod backward_compatibility;
 mod incremental_processing;
 mod long_conversation;
