@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KSNANRDMEDCD5N8VDWAF4JHF
-position_column: todo
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffb380
 title: 'Doctor/install: Zed-aware MCP — probe configured servers_key + write source:"custom"'
 ---
 ## What

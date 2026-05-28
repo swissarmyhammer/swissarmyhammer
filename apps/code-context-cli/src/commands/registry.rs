@@ -22,10 +22,11 @@ pub fn register_all(registry: &mut InitRegistry) {
 
 // ── CodeContextMcpRegistration (priority 10) ─────────────────────────────────
 
-/// Resolved agent MCP config path with its servers key.
+/// Resolved agent MCP config path with its servers key and entry extras.
 struct AgentMcpTarget {
     config_path: std::path::PathBuf,
     servers_key: String,
+    entry_extras: BTreeMap<String, serde_json::Value>,
 }
 
 /// Load detected agents and resolve their MCP config paths for the given scope.
@@ -50,9 +51,16 @@ fn resolve_agent_targets(scope: &InitScope) -> Result<Vec<AgentMcpTarget>, Strin
                 .as_ref()
                 .map(|c| c.servers_key.clone())
                 .unwrap_or_else(|| "mcpServers".to_string());
+            let entry_extras = agent
+                .def
+                .mcp_config
+                .as_ref()
+                .map(|c| c.entry_extras.clone())
+                .unwrap_or_default();
             Some(AgentMcpTarget {
                 config_path,
                 servers_key,
+                entry_extras,
             })
         })
         .collect())
@@ -95,6 +103,7 @@ impl Initializable for CodeContextMcpRegistration {
                 &t.servers_key,
                 "code-context",
                 &entry,
+                &t.entry_extras,
             ) {
                 Ok(()) => {
                     reporter.emit(&InitEvent::Action {

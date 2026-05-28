@@ -4,6 +4,7 @@
 //! at compile time; users can override with ~/.mirdan/agents.yaml or
 //! the MIRDAN_AGENTS_CONFIG env var.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -44,6 +45,20 @@ pub struct McpConfigDef {
     /// JSON key under which MCP servers are stored (default: `"mcpServers"`).
     #[serde(default = "default_servers_key")]
     pub servers_key: String,
+    /// Additional per-agent fields merged into each MCP server entry.
+    ///
+    /// Most agents accept the standard `{command, args, env}` shape and need
+    /// nothing here. A small number of agents require extra fields — for
+    /// example, Zed's `context_servers` schema treats an entry without
+    /// `"source": "custom"` as an extension reference and silently ignores
+    /// stdio servers — so the agent definition can specify the fields here
+    /// and the writer merges them into every entry it writes for that agent.
+    ///
+    /// Stored as `BTreeMap` so JSON output is deterministic. Defaults to an
+    /// empty map when the YAML omits the field, so older configs continue to
+    /// parse unchanged.
+    #[serde(default)]
+    pub entry_extras: BTreeMap<String, serde_json::Value>,
 }
 
 fn default_servers_key() -> String {

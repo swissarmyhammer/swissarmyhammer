@@ -182,7 +182,10 @@ pub fn check_component(
                 component.label()
             ),
         ),
-        Some(path) => detect_component(component, path),
+        Some(path) => {
+            let servers_key = agent.mcp_config.as_ref().map(|c| c.servers_key.as_str());
+            detect_component(component, path, servers_key)
+        }
     };
 
     ComponentStatus {
@@ -198,10 +201,17 @@ pub fn check_component(
 
 /// Run the component-specific detection for a resolved path.
 ///
-/// Returns the detected state plus a human-readable detail.
-fn detect_component(component: Component, path: &Path) -> (ComponentState, String) {
+/// Returns the detected state plus a human-readable detail. `servers_key`
+/// is the agent's configured MCP `servers_key` (e.g. Zed's
+/// `"context_servers"`) and is consulted only for the [`Component::Mcp`]
+/// branch; the other components ignore it.
+fn detect_component(
+    component: Component,
+    path: &Path,
+    servers_key: Option<&str>,
+) -> (ComponentState, String) {
     let installed = match component {
-        Component::Mcp => mcp_server_installed(path),
+        Component::Mcp => mcp_server_installed(path, servers_key),
         Component::Skills | Component::Agents => dir_non_empty(path),
         Component::Preamble => preamble_present(path),
         Component::Permissions => permissions_present(path),
@@ -502,13 +512,17 @@ fn init_command(scope: InitScope) -> &'static str {
 
 /// True when the MCP config at `path` registers the sah server.
 ///
-/// Installed when a `sah` entry exists under one of the common server keys and
-/// its `command` is `sah` or ends with `/sah`. We probe the conventional
-/// `mcpServers` key (the default `servers_key` used by JSON-based agents like
-/// Claude Code), the `servers` key used by a handful of agents (e.g. vscode),
-/// and the `mcp_servers` key used by Codex's TOML config. We do not consult
-/// the agent's configured `servers_key`: an agent with a key beyond these is
-/// not currently detected here.
+/// Installed when a `sah` entry exists under either the agent's configured
+/// `servers_key` (when one is supplied) or one of the hardcoded fallback
+/// keys, and its `command` is `sah` or ends with `/sah`. The fallback list —
+/// `["mcpServers", "servers", "mcp_servers"]` — is always probed in addition
+/// to `servers_key` so legacy configs (and agents whose `AgentDef` predates
+/// the `servers_key` field) still detect correctly.
+///
+/// `servers_key` is the JSON key under which the agent stores its MCP
+/// servers map. For agents like Zed this is `"context_servers"`, which the
+/// hardcoded list does not cover. Pass `None` when no agent-specific key is
+/// known (e.g. detection against a synthetic path with no agent context).
 ///
 /// Supports both JSON and TOML — for files with a `.toml` extension the
 /// content is parsed as TOML and converted to a `serde_json::Value` so the
@@ -517,13 +531,25 @@ fn init_command(scope: InitScope) -> &'static str {
 /// This is the **single source of truth** for "is the sah MCP server installed
 /// at this path?" and is consumed by both `mirdan::status` and the sah-cli
 /// install layer so detection and installation cannot drift.
-pub fn mcp_server_installed(path: &Path) -> bool {
+pub fn mcp_server_installed(path: &Path, servers_key: Option<&str>) -> bool {
     let Some(root) = read_config_doc(path) else {
         return false;
     };
-    // Probe the three common server keys: "mcpServers" (the JSON default),
-    // "servers" (vscode-style), and "mcp_servers" (Codex's TOML convention).
-    for key in ["mcpServers", "servers", "mcp_servers"] {
+    // Probe the agent's configured servers_key first when known. We then fall
+    // back to the conventional keys — `"mcpServers"` (the JSON default),
+    // `"servers"` (vscode-style), and `"mcp_servers"` (Codex's TOML
+    // convention) — so legacy installs and agents whose definition lacks an
+    // `mcp_config` still detect.
+    let mut keys: Vec<&str> = Vec::with_capacity(4);
+    if let Some(key) = servers_key {
+        keys.push(key);
+    }
+    for fallback in ["mcpServers", "servers", "mcp_servers"] {
+        if !keys.contains(&fallback) {
+            keys.push(fallback);
+        }
+    }
+    for key in keys {
         if let Some(server) = root.get(key).and_then(|s| s.get("sah")) {
             if is_sah_command(server) {
                 return true;
@@ -648,6 +674,7 @@ mod tests {
                 project_path: p("mcp.json"),
                 global_path: Some(p("global-mcp.json")),
                 servers_key: "mcpServers".to_string(),
+                entry_extras: std::collections::BTreeMap::new(),
             }),
             plugin_path: None,
             global_plugin_path: None,
@@ -751,6 +778,40 @@ mod tests {
         )
         .unwrap();
         assert_eq!(state_of(&agent, Component::Mcp), ComponentState::Missing);
+    }
+
+    #[test]
+    fn test_mcp_installed_respects_servers_key() {
+        // Regression for the Zed detection bug: when an agent declares
+        // `servers_key: context_servers`, an installed entry under that key
+        // must be detected even though it is not in the hardcoded fallback
+        // list (`mcpServers`, `servers`, `mcp_servers`).
+        let dir = TempDir::new().unwrap();
+        let mut agent = temp_agent(dir.path());
+        agent.mcp_config.as_mut().unwrap().servers_key = "context_servers".to_string();
+        std::fs::write(
+            dir.path().join("mcp.json"),
+            r#"{"context_servers": {"sah": {"command": "sah", "source": "custom"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(state_of(&agent, Component::Mcp), ComponentState::Installed);
+    }
+
+    #[test]
+    fn test_mcp_installed_falls_back_to_default_keys() {
+        // When no servers_key is provided (or the agent's key is the legacy
+        // default), the detector must still find a sah entry under
+        // `mcpServers`. This covers legacy JSON configs and agents whose
+        // AgentDef predates the entry_extras work.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("mcp.json");
+        std::fs::write(
+            &path,
+            r#"{"mcpServers": {"sah": {"command": "sah", "args": ["serve"]}}}"#,
+        )
+        .unwrap();
+        // Direct call with no servers_key — exercises the fallback path.
+        assert!(mcp_server_installed(&path, None));
     }
 
     #[test]
@@ -1112,6 +1173,7 @@ mod tests {
                 project_path: p("config.toml"),
                 global_path: Some(p("global-config.toml")),
                 servers_key: "mcp_servers".to_string(),
+                entry_extras: std::collections::BTreeMap::new(),
             }),
             plugin_path: None,
             global_plugin_path: None,

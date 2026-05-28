@@ -95,11 +95,20 @@ pub fn parse_tool_frontmatter(
 /// JSON object. The boolean indicates whether the resulting value differs
 /// from what was already there (so `false` means the entry was already
 /// equal to `entry`).
+///
+/// `extras` are merged into the resulting entry object after the standard
+/// `{command, args, env}` shape is written. Extras win on key collision —
+/// callers that need to override the default-shape fields (e.g. to write a
+/// different `command`) can do so via extras, and an agent-specific field
+/// such as Zed's `"source": "custom"` is added as a top-level sibling of
+/// `command`. An empty extras map is the no-op default for agents that
+/// accept the plain shape.
 pub fn set_mcp_server_entry(
     root: &mut Value,
     servers_key: &str,
     tool_name: &str,
     entry: &McpServerEntry,
+    extras: &BTreeMap<String, Value>,
 ) -> Result<bool, RegistryError> {
     let obj = root.as_object_mut().ok_or_else(|| {
         RegistryError::Validation("MCP config root is not a JSON object".to_string())
@@ -113,8 +122,19 @@ pub fn set_mcp_server_entry(
         .as_object_mut()
         .ok_or_else(|| RegistryError::Validation(format!("'{}' is not an object", servers_key)))?;
 
-    let serialized = serde_json::to_value(entry)
+    let mut serialized = serde_json::to_value(entry)
         .map_err(|e| RegistryError::Validation(format!("Failed to serialize MCP entry: {}", e)))?;
+
+    // Merge extras into the entry object. Extras win on key collision so the
+    // YAML can override a default-shape field if a future agent ever needs to.
+    if !extras.is_empty() {
+        let entry_obj = serialized.as_object_mut().ok_or_else(|| {
+            RegistryError::Validation("Serialized MCP entry is not a JSON object".to_string())
+        })?;
+        for (k, v) in extras {
+            entry_obj.insert(k.clone(), v.clone());
+        }
+    }
 
     if servers_map.get(tool_name) == Some(&serialized) {
         return Ok(false);
@@ -141,14 +161,20 @@ pub fn remove_mcp_server_entry(root: &mut Value, servers_key: &str, tool_name: &
 /// Reads the existing config (or creates a new one), merges the entry into
 /// the `servers_key` object, and writes back with pretty-printing.
 /// Creates parent directories if needed.
+///
+/// `extras` are agent-specific additional fields merged into the per-tool
+/// entry object (e.g. Zed requires `"source": "custom"` for custom stdio
+/// servers under `context_servers`). Pass `&BTreeMap::new()` for agents
+/// that accept the plain shape.
 pub fn register_mcp_server(
     config_path: &Path,
     servers_key: &str,
     tool_name: &str,
     entry: &McpServerEntry,
+    extras: &BTreeMap<String, Value>,
 ) -> Result<(), RegistryError> {
     let mut root = crate::settings::read_json(config_path)?;
-    set_mcp_server_entry(&mut root, servers_key, tool_name, entry)?;
+    set_mcp_server_entry(&mut root, servers_key, tool_name, entry, extras)?;
     crate::settings::write_json(config_path, &root)
 }
 
@@ -333,7 +359,14 @@ mcp:
             env: BTreeMap::new(),
         };
 
-        register_mcp_server(&config_path, "mcpServers", "my-tool", &entry).unwrap();
+        register_mcp_server(
+            &config_path,
+            "mcpServers",
+            "my-tool",
+            &entry,
+            &BTreeMap::new(),
+        )
+        .unwrap();
 
         let content = std::fs::read_to_string(&config_path).unwrap();
         let json: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -361,7 +394,14 @@ mcp:
             env: BTreeMap::new(),
         };
 
-        register_mcp_server(&config_path, "mcpServers", "new-tool", &entry).unwrap();
+        register_mcp_server(
+            &config_path,
+            "mcpServers",
+            "new-tool",
+            &entry,
+            &BTreeMap::new(),
+        )
+        .unwrap();
 
         let content = std::fs::read_to_string(&config_path).unwrap();
         let json: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -464,7 +504,14 @@ mcp:
             env: BTreeMap::new(),
         };
 
-        register_mcp_server(&config_path, "context_servers", "sah", &entry).unwrap();
+        register_mcp_server(
+            &config_path,
+            "context_servers",
+            "sah",
+            &entry,
+            &BTreeMap::new(),
+        )
+        .unwrap();
 
         // Written file is now strict JSON; round-trips with `read_plugin_json`-
         // style strict parsing.
@@ -491,7 +538,8 @@ mcp:
             args: vec!["serve".to_string()],
             env: BTreeMap::new(),
         };
-        let changed = set_mcp_server_entry(&mut root, "mcpServers", "sah", &entry).unwrap();
+        let changed =
+            set_mcp_server_entry(&mut root, "mcpServers", "sah", &entry, &BTreeMap::new()).unwrap();
         assert!(changed);
         assert_eq!(root["mcpServers"]["sah"]["command"], "sah");
         assert_eq!(root["mcpServers"]["sah"]["args"], json!(["serve"]));
@@ -505,8 +553,9 @@ mcp:
             env: BTreeMap::new(),
         };
         let mut root = json!({});
-        set_mcp_server_entry(&mut root, "mcpServers", "sah", &entry).unwrap();
-        let changed = set_mcp_server_entry(&mut root, "mcpServers", "sah", &entry).unwrap();
+        set_mcp_server_entry(&mut root, "mcpServers", "sah", &entry, &BTreeMap::new()).unwrap();
+        let changed =
+            set_mcp_server_entry(&mut root, "mcpServers", "sah", &entry, &BTreeMap::new()).unwrap();
         assert!(!changed);
     }
 
@@ -521,7 +570,7 @@ mcp:
             args: vec![],
             env: BTreeMap::new(),
         };
-        set_mcp_server_entry(&mut root, "mcpServers", "sah", &entry).unwrap();
+        set_mcp_server_entry(&mut root, "mcpServers", "sah", &entry, &BTreeMap::new()).unwrap();
         assert_eq!(root["mcpServers"]["other"]["command"], "node");
         assert_eq!(root["mcpServers"]["sah"]["command"], "sah");
         assert_eq!(root["otherKey"], "value");
@@ -600,6 +649,104 @@ mcp:
         ensure_project_entry(&mut root, "/new/project");
         assert!(root["projects"]["/other/project"].is_object());
         assert!(root["projects"]["/new/project"].is_object());
+    }
+
+    #[test]
+    fn test_register_mcp_server_writes_entry_extras() {
+        // Regression for the Zed install bug: when an agent specifies
+        // `entry_extras: {source: custom}` in its mcp_config, the writer must
+        // merge those fields into the per-tool entry alongside the standard
+        // `{command, args, env}` shape so Zed treats the entry as a custom
+        // stdio server rather than an unknown extension reference.
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("settings.json");
+
+        let entry = McpServerEntry {
+            command: "sah".to_string(),
+            args: vec!["serve".to_string()],
+            env: BTreeMap::new(),
+        };
+        let mut extras = BTreeMap::new();
+        extras.insert("source".to_string(), Value::String("custom".to_string()));
+
+        register_mcp_server(&config_path, "context_servers", "sah", &entry, &extras).unwrap();
+
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(json["context_servers"]["sah"]["source"], "custom");
+        assert_eq!(json["context_servers"]["sah"]["command"], "sah");
+        assert_eq!(json["context_servers"]["sah"]["args"][0], "serve");
+    }
+
+    #[test]
+    fn test_register_mcp_server_preserves_other_agents_shape() {
+        // When extras is empty (the default for every agent other than Zed),
+        // the written entry must contain only the standard fields — no stray
+        // `source` key creeping into Claude Code / Codex / VS Code configs.
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join(".mcp.json");
+
+        let entry = McpServerEntry {
+            command: "sah".to_string(),
+            args: vec!["serve".to_string()],
+            env: BTreeMap::new(),
+        };
+
+        register_mcp_server(&config_path, "mcpServers", "sah", &entry, &BTreeMap::new()).unwrap();
+
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+        let written = json["mcpServers"]["sah"].as_object().unwrap();
+        assert_eq!(written["command"], "sah");
+        assert!(
+            !written.contains_key("source"),
+            "agents without entry_extras must not get a stray `source` field; got {:?}",
+            written
+        );
+    }
+
+    #[test]
+    fn test_zed_install_against_jsonc_settings() {
+        // End-to-end: a hand-edited Zed-style JSONC settings.json with a
+        // header comment, trailing commas, and an existing `context_servers`
+        // entry. After `register_mcp_server` writes the `sah` entry with
+        // `entry_extras: {source: custom}`, the file is strict JSON, the
+        // entry includes `source: "custom"`, and the file parses cleanly.
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("settings.json");
+        std::fs::write(
+            &config_path,
+            "// Settings for Zed AI\n\
+             {\n  \
+               \"context_servers\": {\n    \
+                 \"other\": { \"source\": \"extension\", },\n  \
+               },\n\
+             }",
+        )
+        .unwrap();
+
+        let entry = McpServerEntry {
+            command: "sah".to_string(),
+            args: vec!["serve".to_string()],
+            env: BTreeMap::new(),
+        };
+        let mut extras = BTreeMap::new();
+        extras.insert("source".to_string(), Value::String("custom".to_string()));
+
+        register_mcp_server(&config_path, "context_servers", "sah", &entry, &extras).unwrap();
+
+        // File round-trips as strict JSON (the JSONC has been re-serialized).
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&content)
+            .expect("rewritten Zed settings must parse as strict JSON");
+
+        // The new sah entry carries `source: custom` plus the standard shape.
+        assert_eq!(json["context_servers"]["sah"]["source"], "custom");
+        assert_eq!(json["context_servers"]["sah"]["command"], "sah");
+        assert_eq!(json["context_servers"]["sah"]["args"][0], "serve");
+
+        // The pre-existing `other` entry under context_servers is preserved.
+        assert_eq!(json["context_servers"]["other"]["source"], "extension");
     }
 
     #[test]

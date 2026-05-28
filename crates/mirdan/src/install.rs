@@ -534,7 +534,13 @@ async fn install_tool_from_mcp_config(
                 agents::agent_project_mcp_config(&agent.def)
             };
             if let Some(config_path) = config_path {
-                mcp_config::register_mcp_server(&config_path, &mcp_cfg.servers_key, name, &entry)?;
+                mcp_config::register_mcp_server(
+                    &config_path,
+                    &mcp_cfg.servers_key,
+                    name,
+                    &entry,
+                    &mcp_cfg.entry_extras,
+                )?;
                 tracing::debug!(
                     "  Registered in {} ({})",
                     config_path.display(),
@@ -1034,7 +1040,13 @@ pub async fn run_install_mcp(
             };
 
             if let Some(config_path) = config_path {
-                mcp_config::register_mcp_server(&config_path, &mcp_cfg.servers_key, name, &entry)?;
+                mcp_config::register_mcp_server(
+                    &config_path,
+                    &mcp_cfg.servers_key,
+                    name,
+                    &entry,
+                    &mcp_cfg.entry_extras,
+                )?;
                 tracing::debug!(
                     "  Installed MCP server '{}' for {} ({})",
                     name,
@@ -1228,7 +1240,13 @@ fn deploy_tool(
             };
 
             if let Some(config_path) = config_path {
-                mcp_config::register_mcp_server(&config_path, &mcp_cfg.servers_key, name, &entry)?;
+                mcp_config::register_mcp_server(
+                    &config_path,
+                    &mcp_cfg.servers_key,
+                    name,
+                    &entry,
+                    &mcp_cfg.entry_extras,
+                )?;
                 tracing::debug!(
                     "  Registered in {} ({})",
                     config_path.display(),
@@ -1300,6 +1318,7 @@ fn deploy_plugin(
                                                 &mcp_cfg.servers_key,
                                                 server_name,
                                                 &entry,
+                                                &mcp_cfg.entry_extras,
                                             );
                                             tracing::debug!(
                                                 "  Registered MCP server '{}' from plugin",

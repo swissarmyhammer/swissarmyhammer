@@ -97,6 +97,8 @@ agents:
       project_path: .zed/settings.json
       global_path: "~/.config/zed/settings.json"
       servers_key: context_servers
+      entry_extras:
+        source: custom
     doctor: true
   - id: void
     name: Void
