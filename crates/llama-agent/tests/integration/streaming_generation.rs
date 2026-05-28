@@ -243,6 +243,100 @@ async fn test_streaming_with_prompt_larger_than_max_tokens() {
     );
 }
 
+/// Pin the completion-reason and per-chunk token-accounting contract.
+///
+/// The ACP agentic loop relies on two stream invariants:
+/// 1. Exactly one terminal chunk arrives last, with `is_complete == true` and a
+///    `finish_reason` set (it is how the loop knows the turn ended and why).
+/// 2. Per-token chunks each carry `token_count == 1` and the terminal chunk
+///    carries `token_count == 0`, so summing `token_count` across the whole
+///    stream equals the number of text-bearing chunks — never double-counts.
+///
+/// The "0-token" bug shipped partly because nothing asserted this contract on
+/// the live streaming path; a healthy turn must satisfy both invariants.
+#[tokio::test]
+#[serial]
+async fn test_streaming_completion_reason_and_chunk_accounting() {
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_test_writer()
+        .try_init();
+
+    let Some(agent) = try_init_agent().await else {
+        return;
+    };
+
+    let session = agent
+        .create_session()
+        .await
+        .expect("create_session should succeed");
+    add_user_message(&agent, &session.id, "Reply with the single word: ok.").await;
+
+    let mut stream = agent
+        .generate_stream(
+            GenerationRequest::new(session.id)
+                .with_max_tokens(64)
+                .with_temperature(0.0),
+        )
+        .await
+        .expect("generate_stream should succeed");
+
+    let mut text_chunks = 0usize;
+    let mut summed_tokens = 0usize;
+    let mut terminal_chunks = 0usize;
+    let mut finish_reason: Option<llama_agent::types::FinishReason> = None;
+
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = chunk_result.expect("stream chunk should not be an error");
+        summed_tokens += chunk.token_count;
+        if chunk.is_complete {
+            terminal_chunks += 1;
+            finish_reason = chunk.finish_reason.clone();
+            assert_eq!(
+                chunk.token_count, 0,
+                "terminal completion chunk must carry 0 new tokens"
+            );
+        } else {
+            text_chunks += 1;
+            assert_eq!(
+                chunk.token_count, 1,
+                "each per-token chunk must carry exactly 1 token"
+            );
+        }
+    }
+
+    info!(
+        "completion: {} text chunks, summed_tokens={}, finish_reason={:?}",
+        text_chunks, summed_tokens, finish_reason
+    );
+
+    assert_eq!(
+        terminal_chunks, 1,
+        "exactly one terminal (is_complete) chunk must close the stream"
+    );
+    assert_eq!(
+        summed_tokens, text_chunks,
+        "sum of per-chunk token_count must equal the number of text-bearing chunks"
+    );
+    assert!(text_chunks > 0, "a healthy turn must produce text chunks");
+
+    let llama_agent::types::FinishReason::Stopped(reason) =
+        finish_reason.expect("terminal chunk must carry a finish reason");
+    // The single short reply ends either at EOS (model emits a stop) or, for the
+    // tiny test model, by hitting the max-tokens budget — both are valid
+    // terminal reasons produced by the live decode loop's completion path.
+    assert!(
+        [
+            "EndOfSequence",
+            "StopToken",
+            "MaxTokens",
+            "ContextWindowFull"
+        ]
+        .contains(&reason.as_str()),
+        "unexpected finish reason: {reason}"
+    );
+}
+
 /// Regression test for symptom 2 (queue jamming after a turn).
 ///
 /// After one streaming turn completes, the single worker must be released so a

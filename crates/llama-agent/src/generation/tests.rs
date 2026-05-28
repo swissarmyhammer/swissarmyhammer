@@ -202,74 +202,38 @@ mod unit_tests {
 
 #[cfg(test)]
 mod template_offset_tests {
-    //! Tests for template offset functionality.
+    //! Tests for the template-offset decision the production decode loop makes.
     //!
-    //! These tests verify that the template offset methods exist and have correct behavior.
-    //! Full integration testing with actual models will be done in separate integration tests.
+    //! These exercise the real `budget::template_offset_exhausted` predicate that
+    //! both offset variants call to decide whether to enter the decode loop or
+    //! return an empty response — not inline copies of the arithmetic. The
+    //! decode loop itself binds a model and is covered by the small-model
+    //! integration tests.
+
+    use crate::generation::budget::template_offset_exhausted;
 
     #[test]
-    fn test_template_offset_zero_is_valid() {
-        // Verify that a template offset of zero is valid.
-        // Zero offset means no template, process all tokens.
-        let offset = Some(0_usize);
-        assert_eq!(offset, Some(0_usize));
+    fn zero_offset_with_tokens_is_not_exhausted() {
+        // Zero offset means "no template" — every token is new, so the loop runs.
+        assert!(!template_offset_exhausted(0, 150));
     }
 
     #[test]
-    fn test_template_offset_none_is_valid() {
-        // Verify that None offset is valid.
-        // None means no template offset, process all tokens normally.
-        let offset: Option<usize> = None;
-        assert!(offset.is_none());
+    fn partial_offset_leaves_new_tokens() {
+        // 100-token template prefix, 150-token prompt -> 50 new tokens to decode.
+        assert!(!template_offset_exhausted(100, 150));
     }
 
     #[test]
-    fn test_template_offset_nonzero_is_valid() {
-        // Verify that a non-zero template offset is valid.
-        let offset = Some(100_usize);
-        assert_eq!(offset, Some(100_usize));
-        if let Some(val) = offset {
-            assert!(val > 0);
-        }
+    fn offset_equal_to_total_is_exhausted() {
+        // The cached template covers the whole prompt -> nothing new to process.
+        assert!(template_offset_exhausted(100, 100));
     }
 
     #[test]
-    fn test_template_offset_calculation() {
-        // Test the logic for calculating tokens to skip and process
-        let total_tokens: usize = 150;
-        let template_offset = Some(100_usize);
-
-        if let Some(offset) = template_offset {
-            let tokens_to_skip = offset;
-            let tokens_to_process = total_tokens.saturating_sub(offset);
-
-            assert_eq!(tokens_to_skip, 100);
-            assert_eq!(tokens_to_process, 50);
-        }
-    }
-
-    #[test]
-    fn test_template_offset_edge_case_equal() {
-        // Test when template offset equals total tokens
-        let total_tokens: usize = 100;
-        let template_offset = Some(100_usize);
-
-        if let Some(offset) = template_offset {
-            let tokens_to_process = total_tokens.saturating_sub(offset);
-            assert_eq!(tokens_to_process, 0, "Should have no tokens to process");
-        }
-    }
-
-    #[test]
-    fn test_template_offset_edge_case_exceeds() {
-        // Test when template offset exceeds total tokens
-        let total_tokens: usize = 50;
-        let template_offset = Some(100_usize);
-
-        if let Some(offset) = template_offset {
-            // Using saturating_sub ensures we don't underflow
-            let tokens_to_process = total_tokens.saturating_sub(offset);
-            assert_eq!(tokens_to_process, 0, "Should have no tokens to process");
-        }
+    fn offset_exceeding_total_is_exhausted_without_underflow() {
+        // An offset larger than the prompt must report "exhausted" rather than
+        // letting the production `skip(offset)` underflow.
+        assert!(template_offset_exhausted(100, 50));
     }
 }

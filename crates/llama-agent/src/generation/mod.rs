@@ -39,6 +39,7 @@
 //! // Generation runs through GenerationHelper against a borrowed model/context.
 //! ```
 
+pub mod budget;
 pub mod config;
 pub mod error;
 
@@ -391,7 +392,7 @@ impl GenerationHelper {
         // (usize) or collapsed to zero whenever the rendered prompt approached or
         // exceeded the budget — producing the "0 tokens generated" turns seen in
         // production. See bug 01KSNJ7CBK9333J0T9G4TCA7DH.
-        let max_tokens = request.max_tokens.unwrap_or(512) as usize;
+        let max_tokens = budget::generation_budget(request.max_tokens);
         let context_size = context.n_ctx() as usize;
         let prompt_tokens = tokens_list.len();
         let mut generated_text = String::new();
@@ -403,7 +404,7 @@ impl GenerationHelper {
             // Stop if we've reached the context window limit, mirroring the
             // batch path's guard. Without this, a large prompt could drive
             // generation past the context size and fail inside `decode`.
-            if prompt_tokens + tokens_generated >= context_size.saturating_sub(1) {
+            if budget::reached_context_limit(prompt_tokens, tokens_generated, context_size) {
                 debug!(
                     "Reached context window limit in streaming (prompt={} + generated={} >= context_size={} - 1)",
                     prompt_tokens, tokens_generated, context_size
@@ -655,7 +656,7 @@ impl GenerationHelper {
         );
 
         // Validate that offset doesn't exceed token count
-        if template_offset >= total_token_count {
+        if budget::template_offset_exhausted(template_offset, total_token_count) {
             warn!(
                 "Template offset ({}) >= total tokens ({}), no new tokens to process. Session may have no new messages.",
                 template_offset, total_token_count
@@ -714,7 +715,7 @@ impl GenerationHelper {
             LlamaSampler::greedy(),
         ]);
 
-        let max_tokens = request.max_tokens.unwrap_or(512) as usize;
+        let max_tokens = budget::generation_budget(request.max_tokens);
         let mut generated_text = String::new();
         let mut tokens_generated = 0usize;
         let mut n_cur = total_token_count;
@@ -909,7 +910,7 @@ impl GenerationHelper {
         );
 
         // Validate that offset doesn't exceed token count
-        if template_offset >= total_token_count {
+        if budget::template_offset_exhausted(template_offset, total_token_count) {
             warn!(
                 "Template offset ({}) >= total tokens ({}), no new tokens to process. Session may have no new messages.",
                 template_offset, total_token_count
@@ -987,7 +988,7 @@ impl GenerationHelper {
         // tokens to produce. We must NOT subtract the prompt length again here;
         // see the matching note in `generate_stream_with_borrowed_model` and bug
         // 01KSNJ7CBK9333J0T9G4TCA7DH.
-        let max_tokens = request.max_tokens.unwrap_or(512) as usize;
+        let max_tokens = budget::generation_budget(request.max_tokens);
         let context_size = context.n_ctx() as usize;
         // The full prompt — including the cached template prefix — occupies
         // `total_token_count` slots in the KV cache; generation continues from
@@ -1004,7 +1005,7 @@ impl GenerationHelper {
             // batch path's guard and the non-offset streaming path. Without
             // this, a large prompt could drive generation past the context
             // size and fail inside `decode`.
-            if prompt_tokens + tokens_generated >= context_size.saturating_sub(1) {
+            if budget::reached_context_limit(prompt_tokens, tokens_generated, context_size) {
                 debug!(
                     "Reached context window limit in streaming with template offset (prompt={} + generated={} >= context_size={} - 1)",
                     prompt_tokens, tokens_generated, context_size
@@ -1173,7 +1174,7 @@ impl GenerationHelper {
             LlamaSampler::greedy(),
         ]);
 
-        let max_tokens = request.max_tokens.unwrap_or(512) as usize;
+        let max_tokens = budget::generation_budget(request.max_tokens);
         tracing::debug!("generate_common: max_tokens set to {}", max_tokens);
         let mut generated_text = String::new();
         let mut tokens_generated = 0usize;
@@ -1190,7 +1191,7 @@ impl GenerationHelper {
 
         while tokens_generated < max_tokens {
             // Stop if we've reached context window limit
-            if prompt_tokens + tokens_generated >= context_size - 1 {
+            if budget::reached_context_limit(prompt_tokens, tokens_generated, context_size) {
                 tracing::debug!(
                     "generate_common: Reached context window limit (prompt={} + generated={} >= context_size={} - 1)",
                     prompt_tokens,
