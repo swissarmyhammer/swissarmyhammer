@@ -6,45 +6,22 @@ partial: true
 
 ### Go Project Guidelines
 
-**Common Commands:**
-- Build: `go build` or `go build ./...` (all packages)
-- **Run ALL tests:** `go test ./...` (tests all packages recursively)
-- **Run tests with coverage:** `go test -cover ./...`
-- **Run specific package tests:** `go test ./path/to/package`
-- **Run specific test:** `go test -run TestName ./path/to/package`
-- Run: `go run .` or `go run main.go`
-- Format: `go fmt ./...` (auto-format code)
+**Testing — do NOT glob; Go discovers `*_test.go` automatically:**
+- All: `go test ./...`
+- With coverage: `go test -cover ./...`
+- Package: `go test ./path/to/pkg`
+- Single: `go test -run TestName ./path/to/pkg`
+
+**Common commands:**
+- Build: `go build ./...`
+- Run: `go run .`
+- Format: `go fmt ./...` (or `goimports -w .` to also fix imports) — Go enforces this; always run before committing
+- Vet: `go vet ./...`
 - Lint: `golangci-lint run` (if installed)
-- Tidy dependencies: `go mod tidy`
-- Download dependencies: `go mod download`
+- Deps: `go mod tidy`, `go mod download`, `go get <pkg>`
 
-**IMPORTANT:** Do NOT glob for test files. Use `go test ./...` to run all tests - Go discovers `*_test.go` files automatically.
-
-**Formatting:**
-- **Format command:** `go fmt ./...`
-- **Check with imports:** `goimports -w .` (if installed, also fixes imports)
-- Go enforces formatting as a language standard — ALWAYS run `go fmt` before committing
-- `go fmt` is idempotent and safe to run at any time
-
-**Linting:**
-- **Vet:** `go vet ./...` (catches common mistakes)
-- **golangci-lint:** `golangci-lint run` (comprehensive, if installed)
-
-**Best Practices:**
-- Always run `go fmt` before committing (Go standard)
-- Use `go mod tidy` to clean up dependencies
-- Test coverage: `go test -cover ./...`
-- Consider using `golangci-lint` for comprehensive linting
-
-**Module Management:**
-- Dependencies defined in `go.mod`
-- Use `go get` to add dependencies
-- Use `go mod tidy` to remove unused dependencies
-- Vendor dependencies: `go mod vendor` (optional)
-
-**File Locations:**
-- Main package: Root or `cmd/` directory
-- Source code: Root or organized by package
-- Tests: Same directory as source (e.g., `file_test.go`)
-- Build output: Binary with module name (git-ignored)
+**File locations:**
+- Main: root or `cmd/`
+- Tests: alongside source as `*_test.go`
 - Vendor: `vendor/` (git-ignored unless vendoring)
+- Module config: `go.mod`

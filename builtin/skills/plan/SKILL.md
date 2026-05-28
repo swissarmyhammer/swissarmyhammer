@@ -12,62 +12,65 @@ metadata:
 
 # Plan
 
-Use this skill whenever you enter Plan Mode or the user asks you to plan work.
+Use whenever you enter Plan Mode or the user asks you to plan work.
 
 ## Goals
 
-1. **Understand the work** — research the codebase deeply enough to know what needs to change and what will be affected.
-2. **Produce a kanban board** — the plan artifact is kanban tasks with subtasks. Not a markdown document, not built-in task tools (TodoWrite, TaskCreate, TaskUpdate).
-3. **Right-size the tasks** — each task is a single focused unit of work that can be independently implemented and verified.
-4. **Collaborate with the user** — present tasks, discuss, iterate, and refine until the user is satisfied with the plan.
-5. **Hand off cleanly** — when planning is complete, remind the user they can execute with `/finish` (autonomous) or `/implement` (one task at a time).
+1. **Understand the work** — research deeply enough to know what changes and what's affected.
+2. **Produce a kanban board** — the artifact is kanban tasks with subtasks. Not markdown. Not TodoWrite/TaskCreate/TaskUpdate.
+3. **Right-size tasks** — each is one focused unit, independently implementable and verifiable.
+4. **Collaborate** — present, discuss, iterate until the user is satisfied.
+5. **Hand off cleanly** — when done, remind the user: `/finish` (autonomous) or `/implement` (one at a time).
 
-## Examples
+## Example
 
-### Example 1: a feature request turns into a decomposed kanban board
+**Feature request → decomposed board:** User says "I want to add authentication to the app".
 
-User says: "I want to add authentication to the app"
+1. Research with `code_context`: `search symbol "user"`, `search symbol "session"`, `get blastradius src/server.rs max_hops 3` to find boundaries and callers.
+2. As design crystallizes in conversation, create tasks one at a time — not as an end-of-discussion batch:
+   - `add task "Design auth architecture"` — design task, no code tests
+   - `add task "Add User model and migration"` — model + migration
+   - `add task "Implement POST /api/login"` with `depends_on: [<user-model-id>]`
+3. Encode ordering with `depends_on` so foundational tasks precede integration.
+4. Present the board, iterate.
+5. User approves → remind: `/finish` (autonomous) or `/implement` (one at a time). Do NOT call `ExitPlanMode`, do NOT start implementing.
 
-Actions:
-1. Research with `code_context`: `{"op": "search symbol", "query": "user"}`, `{"op": "search symbol", "query": "session"}`, and `{"op": "get blastradius", "file_path": "src/server.rs", "max_hops": 3}` to find existing boundaries and callers that will need to participate.
-2. As the design crystallizes in conversation, create tasks on the kanban board one at a time — not as a batch at the end:
-   - `{"op": "add task", "title": "Design auth architecture", "description": "What: Decide JWT vs session, storage strategy. Acceptance Criteria: strategy documented in task comments; token format and expiry policy decided. Tests: no code tests — design task."}`
-   - `{"op": "add task", "title": "Add User model and migration", "description": "What: Add users table and User struct in src/models/user.rs..."}`
-   - `{"op": "add task", "title": "Implement POST /api/login", "description": "What: ...", "depends_on": ["<user-model-task-id>"]}`
-3. Encode ordering with `depends_on` so foundational tasks (model, migration) come before integration (login endpoint).
-4. Present the resulting board to the user, iterate on titles/descriptions/ordering.
-5. When the user approves the plan, remind them: use `/finish` to drive the batch autonomously, or `/implement` for one task at a time. Do NOT call `ExitPlanMode` or start implementing.
-
-Result: A kanban board with foundational → integration → test tasks, each independently implementable. The board IS the plan — no markdown plan file was created.
+The board IS the plan — no markdown plan file.
 
 ## Constraints
 
 ### Plans are kanban tasks — created as you go
-Every planned work item becomes a kanban task. The kanban board IS the plan. No markdown plan files. **Create tasks as they crystallize during discussion, not as a batch at the end.** If a work item is defined enough to describe in conversation, it is defined enough to be a task. Don't wait for the user to ask for tasks — the act of planning IS creating tasks.
+
+Every planned item becomes a kanban task. The board IS the plan; no markdown files. **Create tasks as they crystallize during discussion, not at the end.** If a work item is defined enough to describe in conversation, it's defined enough to be a task. Don't wait to be asked.
 
 ### Research before tasks
-Use `code_context` as the primary research tool. Always check blast radius (`op: "get blastradius"`) on files you expect to change — this is how you discover downstream work you'd otherwise miss. Use symbol search, call graphs, and text search (Glob/Grep/Read) to fill in the picture.
+
+`code_context` is primary. Always run `get blastradius` on files you expect to change — that's how you find downstream work you'd otherwise miss. Use symbol search, callgraphs, and text search (Glob/Grep/Read) to fill in the picture.
 
 {% include "_partials/task-standards" %}
 
 ### Board naming
-Name the board for the workspace/repository, not the specific feature being planned.
 
-### User controls plan mode exit
-Do NOT call ExitPlanMode yourself. The user decides when the plan is ready.
+Name the board for the workspace/repository, not the feature being planned.
+
+### User controls plan-mode exit
+
+Do NOT call `ExitPlanMode`. The user decides when the plan is ready.
 
 ### No auto-implementation on exit
-When the user exits plan mode or approves the plan, do NOT begin implementing. Instead, remind them:
-- Use `/finish` to drive tasks all the way to `done` (implement → test → review) autonomously
-- Use `/implement` to implement one task at a time
+
+When the user exits plan mode or approves, do NOT begin implementing. Remind:
+- `/finish` — drives tasks to `done` (implement → test → review) autonomously
+- `/implement` — one task at a time
 
 ### Ordering
-Foundational changes come first (data models, types, configuration), then core logic, then integration, then tests, then cleanup. Use `depends_on` to encode ordering constraints between tasks.
+
+Foundational changes (data models, types, config) → core logic → integration → tests → cleanup. Use `depends_on` for ordering constraints.
 
 ## Autonomous Agent Mode
 
-When operating as an autonomous agent (no Plan Mode UI), follow the `references/PLANNING_GUIDE.md` resource file bundled with this skill.
+No Plan Mode UI? Follow `references/PLANNING_GUIDE.md`.
 
 ## Updating an Existing Plan
 
-Update kanban tasks directly — add new tasks, update existing ones with `op: "update task"`, remove obsolete ones with `op: "delete task"`, and reorder dependencies as needed. The board is a living document.
+Update kanban directly — add tasks, `update task` to edit, `delete task` to remove, reorder dependencies. The board is a living document.

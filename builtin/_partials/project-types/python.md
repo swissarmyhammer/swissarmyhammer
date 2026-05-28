@@ -6,43 +6,25 @@ partial: true
 
 ### Python Project Guidelines
 
-**Environment Management:**
-- Check for virtual environment: `venv/`, `.venv/`, or `env/`
-- Activate before running commands: `source venv/bin/activate` (Unix) or `venv\Scripts\activate` (Windows)
-- Create new venv: `python -m venv venv`
+**Virtualenv:** look for `venv/`, `.venv/`, or `env/`. Activate before running anything: `source venv/bin/activate` (Unix) or `venv\Scripts\activate` (Windows). Create: `python -m venv venv`.
 
-**Dependency Management:**
-- `requirements.txt` → use `pip install -r requirements.txt`
-- `pyproject.toml` with Poetry → use `poetry install`
-- `setup.py` → use `pip install -e .` for editable install
+**Dependencies:**
+- `requirements.txt` → `pip install -r requirements.txt`
+- `pyproject.toml` (Poetry) → `poetry install`
+- `setup.py` → `pip install -e .` (editable)
 
-**Common Commands:**
-- Install dependencies: `pip install -r requirements.txt` or `poetry install`
-- **Run ALL tests:** `pytest` or `python -m pytest` (discovers all tests automatically)
-- **Run specific test file:** `pytest tests/test_file.py`
-- **Run specific test:** `pytest tests/test_file.py::test_function_name`
-- **For unittest:** `python -m unittest discover` (runs all tests)
-- Format: `black .` (if using Black formatter)
-- Lint: `pylint` or `flake8` or `ruff check`
-- Type check: `mypy .` (if using type hints)
+**Testing — let the runner discover tests; do NOT glob:**
+- All: `pytest` (or `python -m pytest`); unittest: `python -m unittest discover`
+- File: `pytest tests/test_file.py`
+- Single: `pytest tests/test_file.py::test_function_name`
 
-**IMPORTANT:** Do NOT glob for test files. Use `pytest` or `python -m unittest discover` - these tools automatically find all tests.
+**Formatting** (check `pyproject.toml` for what's configured):
+- Black: `black .` / `black --check .`
+- Ruff: `ruff format .` / `ruff format --check .`
+- isort: `isort .` / `isort --check .`
 
-**Formatting:**
-- **Black:** `black .` (format) or `black --check .` (verify)
-- **Ruff format:** `ruff format .` (format) or `ruff format --check .` (verify)
-- **isort:** `isort .` (sort imports) or `isort --check .` (verify)
-- Check `pyproject.toml` for configured formatters
-- ALWAYS run the project's formatter before committing
+**Lint/type:** `ruff check`, `pylint`, `flake8`; `mypy .` for types.
 
-**Best Practices:**
-- Always activate the virtual environment before running commands
-- Use `pytest` for testing when available (more features than unittest)
-- Check for `tox.ini` or `noxfile.py` for automated testing across Python versions
-- Look for `.python-version` or `pyproject.toml` to determine required Python version
+**Best practices:** activate venv first; prefer pytest; check `tox.ini`/`noxfile.py` for multi-version testing; check `.python-version`/`pyproject.toml` for required Python version.
 
-**File Locations:**
-- Source code: `src/`, package name directory, or root
-- Tests: `tests/` or `test/`
-- Virtual environment: `venv/`, `.venv/`, or `env/` (git-ignored)
-- Cache: `__pycache__/`, `.pytest_cache/` (git-ignored)
+**File locations:** `src/` or package dir (source), `tests/` or `test/`, `venv/` and `__pycache__/` git-ignored.

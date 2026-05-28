@@ -14,73 +14,38 @@ metadata:
 
 # Deduplicate
 
-Find near-duplicate code using tree-sitter semantic similarity analysis, then refactor to eliminate redundancy.
+Find near-duplicates with tree-sitter semantic similarity, then refactor to remove redundancy.
 
 ## Process
 
-### 1. Determine scope
+1. **Scope:**
+   - **Changed files** (default) — `{"op": "get changes"}` from `git`
+   - **Specific files** — user-named
+   - **Whole codebase** — broad sweep
 
-- **Changed files** (default) — use `git` with `op: "get changes"` to get files modified on the current branch:
+2. **Check tree-sitter index**: `{"op": "get status"}` — must be ready before detection.
 
-```json
-{"op": "get changes"}
-```
+3. **Detect**: `treesitter` `op: "find duplicates"` on scoped files. For each cluster note: what's duplicated, severity, refactor opportunity (extract function, module, trait).
 
-- **Specific files** — the user named files directly
-- **Whole codebase** — the user asked for a broad sweep
+4. **Refactor** (if requested, not just analysis):
+   - Extract shared logic
+   - Replace duplicates with calls
+   - Run tests after each extraction
+   - Follow TDD — if no test covers it, write one
 
-### 2. Check the tree-sitter index
+5. **Track on kanban** for clusters needing human decision:
 
-```json
-{"op": "get status"}
-```
+   ```json
+   {"op": "init board"}
+   {"op": "add tag", "id": "duplicate", "name": "Duplicate Code", "color": "ff8800", "description": "Near-duplicate code needing refactoring"}
+   {"op": "add task", "title": "<concise description>", "description": "<files and lines>\n\n<what's duplicated>\n\n<suggested refactoring>", "tags": ["duplicate"]}
+   ```
 
-Ensure the tree-sitter index is ready before running duplicate detection.
-
-### 3. Run duplicate detection
-
-Use `treesitter` with `op: "find duplicates"` on the scoped files. Analyze each duplicate cluster:
-
-- What's duplicated and where
-- Severity (how much code is repeated)
-- Refactoring opportunity (extract function, shared module, trait, etc.)
-
-### 4. Refactor duplicates
-
-If the user wants refactoring (not just analysis):
-
-- Extract shared logic into a function, module, or trait
-- Replace each duplicate with a call to the shared code
-- Run tests after each extraction to ensure nothing breaks
-- Follow TDD — if no test covers the extracted code, write one
-
-### 5. Track results on the kanban board
-
-For duplicate clusters that need human decision before refactoring:
-
-```json
-{"op": "init board"}
-```
-
-```json
-{"op": "add tag", "id": "duplicate", "name": "Duplicate Code", "color": "ff8800", "description": "Near-duplicate code needing refactoring"}
-```
-
-```json
-{"op": "add task", "title": "<concise description>", "description": "<files and lines>\n\n<what's duplicated>\n\n<suggested refactoring>", "tags": ["duplicate"]}
-```
-
-### 6. Summarize
-
-Report:
-- Duplicate clusters found, grouped by severity
-- What was refactored (if any)
-- Kanban tasks created for clusters needing decisions
-- Recommendation on next steps
+6. **Summarize**: clusters by severity, refactors done, kanban tasks created, next-step recommendation.
 
 ## Rules
 
-- Report only actionable duplication. Ignore: test fixtures, generated code, trait impl boilerplate, and single-line matches.
-- Prefer the smallest extraction that removes the duplication. Do not over-abstract.
-- If duplicate code exists across different crates or packages, note the dependency implications.
-- Do NOT use TodoWrite, TaskCreate, or any other task tracking — the kanban board is the single source of truth.
+- Report only actionable duplication. Ignore test fixtures, generated code, trait-impl boilerplate, single-line matches.
+- Prefer the smallest extraction; don't over-abstract.
+- Note dependency implications when duplicates cross crates/packages.
+- Kanban is the single source of truth — no TodoWrite/TaskCreate.

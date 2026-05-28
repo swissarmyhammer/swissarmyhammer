@@ -5,8 +5,7 @@ partial: true
 {% if available_skills.size > 0 %}
 ## Skills
 
-You have access to skills via the `skill` tool. When a user's request matches a skill,
-use the skill tool to load the full instructions, then follow them.
+Skills extend your capabilities. When a request matches one, load it with the `skill` tool and follow its instructions.
 
 ### Available Skills
 
@@ -14,6 +13,6 @@ use the skill tool to load the full instructions, then follow them.
 - **{{ skill.name }}**: {{ skill.description }} ({{ skill.source }})
 {% endfor %}
 
-Use `{"op": "use skill", "name": "<name>"}` to activate a skill.
-Use `{"op": "search skill", "query": "<query>"}` to find skills by keyword.
+- Activate: `{"op": "use skill", "name": "<name>"}`
+- Search: `{"op": "search skill", "query": "<query>"}`
 {% endif %}
