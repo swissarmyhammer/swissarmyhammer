@@ -96,6 +96,18 @@ export const RUST_MODULE_IDS: Readonly<Record<string, string>> = Object.freeze({
    * `this.views...`.
    */
   views: "views",
+
+  /**
+   * The entity operation tool: the generic, type-agnostic CRUD + clipboard
+   * face over the entity kernel that the cross-cutting `entity.*` commands
+   * (`add entity`, `update field`, `delete entity`, `archive`/`unarchive`,
+   * `copy`/`cut`/`paste`) route to. Exposed under id `"entity"` by the host's
+   * `expose_rust_module` wiring (the kanban app wraps a
+   * `swissarmyhammer_entity_mcp::EntityServer` — clipboard-wired via
+   * `with_clipboard` — in an `InProcessServer`). A builtin plugin asks for it
+   * by the public name `"entity"` and reaches it as `this.entity...`.
+   */
+  entity: "entity",
 });
 
 /**

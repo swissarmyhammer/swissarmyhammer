@@ -36,6 +36,8 @@
 #[path = "integration/support.rs"]
 mod support;
 
+#[path = "integration/builtin_entity_commands_e2e.rs"]
+mod builtin_entity_commands_e2e;
 #[path = "integration/builtin_file_commands_e2e.rs"]
 mod builtin_file_commands_e2e;
 #[path = "integration/builtin_kanban_misc_e2e.rs"]

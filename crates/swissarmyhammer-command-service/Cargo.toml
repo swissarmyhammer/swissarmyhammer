@@ -42,6 +42,14 @@ swissarmyhammer-perspectives = { workspace = true }
 # `WindowService` the kanban app uses. Dev-only edge, same shape as the others.
 swissarmyhammer-window-service = { workspace = true }
 swissarmyhammer-kanban = { workspace = true }
+# The `builtin_entity_commands_e2e` integration test exposes the REAL in-process
+# generic `entity` operation tool to a `PluginHost`. CRUD round-trips use the
+# bare `EntityServer::new`; the clipboard copy→paste round-trip needs the
+# clipboard-wired `EntityServer::with_clipboard` (over a `KanbanContext` board
+# substrate + `InMemoryClipboard` + `UIState`). Dev-only edge, same shape as
+# the other reverse dev edges in this section.
+swissarmyhammer-entity-mcp = { workspace = true }
+swissarmyhammer-ui-state = { workspace = true }
 swissarmyhammer-fields = { workspace = true }
 swissarmyhammer-store = { workspace = true }
 swissarmyhammer-commands = { workspace = true }

@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KS36WW3Q3N8518ZZJR431E7K
-position_column: doing
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffc980
 project: builtin-commands
 title: 'Frontend: palette + hotkey + menu wiring via `list command`'
 ---
