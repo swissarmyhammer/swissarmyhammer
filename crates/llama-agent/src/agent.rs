@@ -2499,4 +2499,253 @@ mod tests {
             assert!(!AgentServer::is_tool_error_retriable("INVALID"));
         }
     }
+
+    /// Deterministic coverage for the tool-dispatch paths of `AgentServer`:
+    /// `execute_tools_parallel` (parallel join) and `execute_tool_with_retry`
+    /// (the fail→retry→succeed loop and the fail-fast path).
+    ///
+    /// These methods touch only the MCP client, the dependency analyzer, and
+    /// the ACP client capabilities — never the model — so we drive the REAL
+    /// methods against a headless `AgentServer` whose model is never loaded
+    /// (`ModelManager::new` defers loading; the queue worker idles on its
+    /// channel because we submit no generation request) and a scripted
+    /// `MCPClient`. No real model, no model-output dependence, no flakiness —
+    /// this is why the sibling card explicitly could not drive these via the
+    /// tiny qwen-0.6B (it can't be made to emit ≥2 / flaky tool calls on cue).
+    mod tool_execution {
+        use super::*;
+        use crate::mcp::MCPClient;
+        use crate::types::{MCPError, Session, SessionId, ToolCall, ToolCallId, ToolDefinition};
+        use async_trait::async_trait;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Mutex};
+
+        type CallBehavior = Box<dyn Fn(usize, &str) -> Result<String, MCPError> + Send + Sync>;
+
+        /// An `MCPClient` whose `call_tool` outcome is scripted by a closure of
+        /// `(zero-based call index, tool name)`, recording every call so a test
+        /// can assert how many attempts happened.
+        struct ScriptedMcpClient {
+            calls: Mutex<Vec<String>>,
+            index: AtomicUsize,
+            behavior: CallBehavior,
+        }
+
+        impl ScriptedMcpClient {
+            fn new(behavior: CallBehavior) -> Arc<Self> {
+                Arc::new(Self {
+                    calls: Mutex::new(Vec::new()),
+                    index: AtomicUsize::new(0),
+                    behavior,
+                })
+            }
+            fn calls(&self) -> Vec<String> {
+                self.calls.lock().unwrap().clone()
+            }
+        }
+
+        #[async_trait]
+        impl MCPClient for ScriptedMcpClient {
+            async fn list_tools(&self) -> Result<Vec<String>, MCPError> {
+                Ok(vec![])
+            }
+            async fn call_tool(
+                &self,
+                name: &str,
+                _arguments: serde_json::Value,
+            ) -> Result<String, MCPError> {
+                let idx = self.index.fetch_add(1, Ordering::SeqCst);
+                self.calls.lock().unwrap().push(name.to_string());
+                (self.behavior)(idx, name)
+            }
+            async fn list_prompts(&self) -> Result<Vec<rmcp::model::Prompt>, MCPError> {
+                Ok(vec![])
+            }
+            async fn get_prompt(
+                &self,
+                _name: &str,
+                _arguments: Option<std::collections::HashMap<String, serde_json::Value>>,
+            ) -> Result<Vec<String>, MCPError> {
+                Ok(vec![])
+            }
+            async fn health_check(&self) -> Result<(), MCPError> {
+                Ok(())
+            }
+            async fn shutdown_all(&self) -> Result<(), MCPError> {
+                Ok(())
+            }
+            async fn set_session(&self, _session_id: agent_client_protocol::schema::SessionId) {}
+            async fn clear_session(&self) {}
+        }
+
+        /// Build an `AgentServer` whose model is never loaded. The tool-dispatch
+        /// methods under test do not touch the model/queue, so this is sound.
+        fn headless_agent(mcp_client: Arc<dyn MCPClient>) -> AgentServer {
+            let config = create_test_config();
+            let model_manager =
+                Arc::new(ModelManager::new(config.model.clone()).expect("ModelManager::new"));
+            let request_queue = Arc::new(RequestQueue::new(
+                model_manager.clone(),
+                config.queue_config.clone(),
+                config.session_config.clone(),
+            ));
+            let session_manager = Arc::new(SessionManager::new(config.session_config.clone()));
+            let chat_template = Arc::new(ChatTemplateEngine::new());
+            let dependency_analyzer = Arc::new(DependencyAnalyzer::new(
+                config.parallel_execution_config.clone(),
+            ));
+            AgentServer::new(
+                model_manager,
+                request_queue,
+                session_manager,
+                mcp_client,
+                chat_template,
+                dependency_analyzer,
+                config,
+            )
+        }
+
+        /// A session advertising `tools` (null param schema → arg validation is
+        /// skipped). `execute_tool` looks tools up here by name.
+        fn session_with_tools(tools: &[&str]) -> Session {
+            Session {
+                id: SessionId::new(),
+                messages: Vec::new(),
+                cwd: PathBuf::from("/"),
+                mcp_servers: Vec::new(),
+                available_tools: tools
+                    .iter()
+                    .map(|n| ToolDefinition {
+                        name: n.to_string(),
+                        description: format!("test tool {n}"),
+                        parameters: serde_json::Value::Null,
+                        server_name: "mock".to_string(),
+                    })
+                    .collect(),
+                available_prompts: Vec::new(),
+                created_at: SystemTime::now(),
+                updated_at: SystemTime::now(),
+                compaction_history: Vec::new(),
+                transcript_path: None,
+                context_state: None,
+                available_commands: Vec::new(),
+                current_mode: None,
+                client_capabilities: None,
+                cached_message_count: 0,
+                cached_token_count: 0,
+                title: None,
+            }
+        }
+
+        fn tool_call(name: &str) -> ToolCall {
+            ToolCall {
+                id: ToolCallId::new(),
+                name: name.to_string(),
+                arguments: serde_json::json!({}),
+            }
+        }
+
+        #[tokio::test]
+        async fn execute_tools_parallel_runs_every_call_and_preserves_ids() {
+            let mock = ScriptedMcpClient::new(Box::new(|_idx, name| Ok(format!("ok:{name}"))));
+            let agent = headless_agent(mock.clone());
+            let session = session_with_tools(&["alpha", "beta"]);
+
+            let calls = vec![tool_call("alpha"), tool_call("beta")];
+            let ids: Vec<ToolCallId> = calls.iter().map(|c| c.id).collect();
+
+            let results = agent.execute_tools_parallel(calls, &session).await;
+
+            assert_eq!(results.len(), 2, "one result per tool call");
+            assert!(
+                results.iter().all(|r| r.error.is_none()),
+                "all parallel calls succeeded: {results:?}"
+            );
+            // join_all preserves input order, so call_ids line up with inputs.
+            assert_eq!(results[0].call_id, ids[0]);
+            assert_eq!(results[1].call_id, ids[1]);
+            assert_eq!(mock.calls().len(), 2, "both tools were actually invoked");
+        }
+
+        #[tokio::test]
+        async fn execute_tools_parallel_captures_a_failing_tool_without_dropping_others() {
+            // alpha succeeds; beta fails with a non-retriable (4xx) error so it
+            // fails fast rather than retrying.
+            let mock = ScriptedMcpClient::new(Box::new(|_idx, name| {
+                if name == "beta" {
+                    Err(MCPError::ToolCallFailed("400 bad request".to_string()))
+                } else {
+                    Ok(format!("ok:{name}"))
+                }
+            }));
+            let agent = headless_agent(mock.clone());
+            let session = session_with_tools(&["alpha", "beta"]);
+
+            let results = agent
+                .execute_tools_parallel(vec![tool_call("alpha"), tool_call("beta")], &session)
+                .await;
+
+            assert_eq!(results.len(), 2);
+            assert!(results[0].error.is_none(), "alpha should succeed");
+            assert!(
+                results[1].error.is_some(),
+                "beta's failure must surface as a ToolResult error, not be dropped"
+            );
+        }
+
+        #[tokio::test]
+        async fn execute_tool_with_retry_recovers_after_a_retriable_failure() {
+            // First attempt fails with a retriable 5xx; the retry succeeds.
+            let mock = ScriptedMcpClient::new(Box::new(|idx, _name| {
+                if idx == 0 {
+                    Err(MCPError::ToolCallFailed(
+                        "503 service unavailable".to_string(),
+                    ))
+                } else {
+                    Ok("recovered".to_string())
+                }
+            }));
+            let agent = headless_agent(mock.clone());
+            let session = session_with_tools(&["count_tasks"]);
+
+            let result = agent
+                .execute_tool_with_retry(&tool_call("count_tasks"), &session)
+                .await;
+
+            assert!(
+                result.error.is_none(),
+                "a retriable failure must be retried and recover: {result:?}"
+            );
+            assert_eq!(result.result, serde_json::Value::String("recovered".into()));
+            assert!(
+                mock.calls().len() >= 2,
+                "the retry loop must have re-invoked the tool, got {} call(s)",
+                mock.calls().len()
+            );
+        }
+
+        #[tokio::test]
+        async fn execute_tool_with_retry_fails_fast_on_non_retriable_error() {
+            // A 4xx is terminal: exactly one attempt, surfaced as an error.
+            let mock = ScriptedMcpClient::new(Box::new(|_idx, _name| {
+                Err(MCPError::ToolCallFailed("404 not found".to_string()))
+            }));
+            let agent = headless_agent(mock.clone());
+            let session = session_with_tools(&["count_tasks"]);
+
+            let result = agent
+                .execute_tool_with_retry(&tool_call("count_tasks"), &session)
+                .await;
+
+            assert!(
+                result.error.is_some(),
+                "a non-retriable failure must surface as an error"
+            );
+            assert_eq!(
+                mock.calls().len(),
+                1,
+                "a non-retriable error must NOT be retried"
+            );
+        }
+    }
 }
