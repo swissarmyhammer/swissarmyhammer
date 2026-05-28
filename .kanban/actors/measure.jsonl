@@ -1,0 +1,1 @@
+{"id":"01KSR60J0JCXAMXVGJ700FAK9V","timestamp":"2026-05-28T20:56:58.642263Z","op":"create","item_id":"measure","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: 38a169\n+name: measure\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: 38a169\n-name: measure\n","transaction_id":null}

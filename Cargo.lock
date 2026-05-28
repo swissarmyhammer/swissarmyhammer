@@ -4527,6 +4527,7 @@ dependencies = [
  "hf-hub",
  "http",
  "jsonschema",
+ "libc",
  "llama-common",
  "llama-cpp-2",
  "md5",
