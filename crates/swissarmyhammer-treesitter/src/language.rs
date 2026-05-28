@@ -50,7 +50,7 @@ fn lang_javascript() -> Language {
 }
 
 fn lang_dart() -> Language {
-    tree_sitter_dart::language()
+    tree_sitter_dart::LANGUAGE.into()
 }
 
 fn lang_go() -> Language {
