@@ -73,6 +73,7 @@ members = [
     "crates/swissarmyhammer-cli-completions",
     "crates/swissarmyhammer-plugin",
     "crates/swissarmyhammer-command-service",
+    "crates/swissarmyhammer-app-service",
 ]
 resolver = "2"
 

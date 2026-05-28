@@ -2,8 +2,8 @@
 assignees:
 - claude-code
 depends_on: []
-position_column: todo
-position_ordinal: 8f80
+position_column: review
+position_ordinal: '80'
 project: command-backends
 title: '`app` MCP server (app-shell actions: quit/about/help)'
 ---

@@ -9383,6 +9383,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-app-service"
+version = "0.13.5"
+dependencies = [
+ "async-trait",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "swissarmyhammer-operations",
+ "swissarmyhammer-operations-macros",
+ "swissarmyhammer-plugin",
+ "tauri",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "swissarmyhammer-build"
 version = "0.13.5"
 
