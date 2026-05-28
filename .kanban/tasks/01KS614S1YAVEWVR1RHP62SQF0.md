@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KS5EAD57PCBFJGMVB74FF4MK
-position_column: review
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffbf80
 project: entity-service
 title: '`entity` server: clipboard (cut/copy/paste via PasteMatrix)'
 ---

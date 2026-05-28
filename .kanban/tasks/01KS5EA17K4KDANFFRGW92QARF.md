@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KS5F5ZNA0621X8KM2NPERXNV
-position_column: review
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffba80
 project: command-backends
 title: '`views` MCP server (perspective + view state)'
 ---

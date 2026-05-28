@@ -2,8 +2,8 @@
 assignees:
 - claude-code
 depends_on: []
-position_column: review
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffbd80
 project: command-backends
 title: '`window` MCP server (window ops + OS file open/reveal)'
 ---

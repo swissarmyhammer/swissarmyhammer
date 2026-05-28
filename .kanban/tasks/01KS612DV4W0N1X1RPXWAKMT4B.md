@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KS36VTN9K8C41P20SJ2WQA6X
-position_column: review
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffc080
 project: command-backends
 title: '`window` server: board-file lifecycle (switch/close/new/open + OS dialog)'
 ---
