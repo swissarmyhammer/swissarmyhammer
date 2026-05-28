@@ -9527,6 +9527,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "swissarmyhammer-app-service",
  "swissarmyhammer-commands",
  "swissarmyhammer-config",
  "swissarmyhammer-directory",

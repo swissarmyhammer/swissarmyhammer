@@ -108,6 +108,41 @@ export const RUST_MODULE_IDS: Readonly<Record<string, string>> = Object.freeze({
    * by the public name `"entity"` and reaches it as `this.entity...`.
    */
   entity: "entity",
+
+  /**
+   * The app-shell operation tool: the genuine window-manager / OS-chrome
+   * actions (`quit app`, `show about`, `show help`) that back `app.quit` /
+   * `app.about` / `app.help`. Exposed under id `"app"` by the host's
+   * `expose_rust_module` wiring (the kanban app wraps a
+   * `swissarmyhammer_app_service::AppService` over a `TauriAppShell` in an
+   * `InProcessServer`). A builtin plugin asks for it by the public name
+   * `"app"` and reaches it as `this.app...`.
+   */
+  app: "app",
+
+  /**
+   * The UI-state operation tool: the transient/persisted UI toggles the
+   * app-shell commands route to — command palette / search toggles
+   * (`show command` / `show palette` / `show search` / `dismiss ui`), the
+   * active keymap mode (`set keymap`, backing `settings.keymap.*`), and the
+   * cross-window drag state machine (`start` / `cancel` / `complete drag`).
+   * Exposed under id `"ui_state"` by the host's `expose_rust_module` wiring
+   * (the kanban app wraps a `swissarmyhammer_ui_state::UiStateServer` over a
+   * file-backed `UIState` in an `InProcessServer`). A builtin plugin asks for
+   * it by the public name `"ui_state"` and reaches it as `this.ui_state...`.
+   */
+  ui_state: "ui_state",
+
+  /**
+   * The store operation tool: the stack-wide undo / redo over the one unified
+   * `StoreContext` that spans every store in the substrate. Backs `app.undo` /
+   * `app.redo` (`undo stack` / `redo stack`). Exposed under id `"store"` by the
+   * host's `expose_rust_module` wiring (the kanban app wraps a
+   * `swissarmyhammer_store::StoreServer` over the board's shared `StoreContext`
+   * in an `InProcessServer`). A builtin plugin asks for it by the public name
+   * `"store"` and reaches it as `this.store...`.
+   */
+  store: "store",
 });
 
 /**

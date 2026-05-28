@@ -8,8 +8,8 @@ depends_on:
 - 01KS5E9M7ZNPNA0E7GR1C9N42R
 - 01KS5F7BR6850RKT67X4CNHPAZ
 - 01KS61511W6EGZ88043S261RSH
-position_column: todo
-position_ordinal: 8d80
+position_column: review
+position_ordinal: '80'
 project: builtin-commands
 title: 'Builtin plugin: app + settings + drag commands (port app.yaml + settings.yaml + drag.yaml)'
 ---
