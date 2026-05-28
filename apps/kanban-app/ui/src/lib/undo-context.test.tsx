@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderHook, act } from "@testing-library/react";
+import { renderHook, act, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -19,6 +19,17 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 
 import { UndoProvider, useUndoState } from "./undo-context";
+
+/** Wait for the lazy `subscribeUndoChanged` import to register its listener. */
+async function waitForUndoSubscription() {
+  await waitFor(() => {
+    expect(
+      mockListen.mock.calls.some(
+        (c: unknown[]) => c[0] === "notifications/store/undo_changed",
+      ),
+    ).toBe(true);
+  });
+}
 
 describe("UndoProvider", () => {
   function wrapper({ children }: { children: ReactNode }) {
@@ -69,19 +80,51 @@ describe("UndoProvider", () => {
     });
   });
 
-  it("listens for all three entity mutation events", async () => {
+  it("subscribes to the MCP undo-state plane, not entity mutation events", async () => {
     renderHook(() => useUndoState(), { wrapper });
 
-    // Wait for effects to run
+    // Wait for effects + the lazy subscription import to run.
     await act(async () => {});
+    await waitForUndoSubscription();
 
     const listenedEvents = mockListen.mock.calls.map(
       (call: unknown[]) => call[0],
     );
-    expect(listenedEvents).toContain("entity-created");
-    expect(listenedEvents).toContain("entity-removed");
-    expect(listenedEvents).toContain("entity-field-changed");
-    expect(listenedEvents).not.toContain("entity-changed");
+    expect(listenedEvents).toContain("notifications/store/undo_changed");
+    expect(listenedEvents).not.toContain("entity-created");
+    expect(listenedEvents).not.toContain("entity-removed");
+    expect(listenedEvents).not.toContain("entity-field-changed");
+  });
+
+  it("reflects a pushed undo_changed notification into canUndo/canRedo", async () => {
+    // Capture the undo_changed handler the provider registers.
+    let undoHandler:
+      | ((event: { payload: unknown }) => void)
+      | undefined;
+    mockListen.mockImplementation(
+      (name: string, handler: (event: { payload: unknown }) => void) => {
+        if (name === "notifications/store/undo_changed") {
+          undoHandler = handler;
+        }
+        return Promise.resolve(() => {});
+      },
+    );
+
+    const { result } = renderHook(() => useUndoState(), { wrapper });
+    await act(async () => {});
+    await waitForUndoSubscription();
+
+    expect(result.current.canUndo).toBe(false);
+    expect(result.current.canRedo).toBe(false);
+
+    await act(async () => {
+      undoHandler?.({
+        payload: { can_undo: true, can_redo: false },
+      });
+    });
+
+    expect(result.current.canUndo).toBe(true);
+    expect(result.current.canRedo).toBe(false);
   });
 
   it("fetchUndoState error fallback returns false for both", async () => {

@@ -277,10 +277,13 @@ describe("PerspectiveProvider", () => {
     const initialInvokeCount = mockInvoke.mock.calls.length;
 
     await act(async () => {
-      listenCallbacks["entity-field-changed"]?.({
+      listenCallbacks["notifications/store/changed"]?.({
         payload: {
-          entity_type: "perspective",
-          id: "p1",
+          store: "perspective",
+          item: "p1",
+          op: "updated",
+          txn: null,
+          origin: "user",
         },
       });
       await new Promise((r) => setTimeout(r, 0));
@@ -317,7 +320,7 @@ describe("PerspectiveProvider", () => {
     ).toBe("#bug");
   });
 
-  it("refreshes on entity-created event for perspective type", async () => {
+  it("refreshes on a store/changed created notification for perspective store", async () => {
     mockInvoke.mockResolvedValue({
       result: { perspectives: [], count: 0 },
       undoable: false,
@@ -332,8 +335,14 @@ describe("PerspectiveProvider", () => {
     });
 
     await act(async () => {
-      listenCallbacks["entity-created"]?.({
-        payload: { entity_type: "perspective", id: "p2" },
+      listenCallbacks["notifications/store/changed"]?.({
+        payload: {
+          store: "perspective",
+          item: "p2",
+          op: "created",
+          txn: null,
+          origin: "user",
+        },
       });
       await new Promise((r) => setTimeout(r, 0));
     });
@@ -342,7 +351,7 @@ describe("PerspectiveProvider", () => {
     expect(result.current.perspectives[0].name).toBe("Brand New");
   });
 
-  it("refreshes on entity-removed event for perspective type", async () => {
+  it("refreshes on a store/changed removed notification for perspective store", async () => {
     const ps = [
       makePerspective("p1", "First"),
       makePerspective("p2", "Second"),
@@ -363,8 +372,14 @@ describe("PerspectiveProvider", () => {
     });
 
     await act(async () => {
-      listenCallbacks["entity-removed"]?.({
-        payload: { entity_type: "perspective", id: "p2" },
+      listenCallbacks["notifications/store/changed"]?.({
+        payload: {
+          store: "perspective",
+          item: "p2",
+          op: "removed",
+          txn: null,
+          origin: "user",
+        },
       });
       await new Promise((r) => setTimeout(r, 0));
     });
@@ -372,7 +387,7 @@ describe("PerspectiveProvider", () => {
     expect(result.current.perspectives).toHaveLength(1);
   });
 
-  it("ignores entity events for non-perspective types", async () => {
+  it("ignores store/changed notifications for non-perspective stores", async () => {
     mockInvoke.mockResolvedValue({
       result: { perspectives: [], count: 0 },
       undoable: false,
@@ -386,17 +401,24 @@ describe("PerspectiveProvider", () => {
     const callCountBefore = mockInvoke.mock.calls.length;
 
     await act(async () => {
-      listenCallbacks["entity-field-changed"]?.({
-        payload: { entity_type: "task", id: "t1" },
+      listenCallbacks["notifications/store/changed"]?.({
+        payload: {
+          store: "task",
+          item: "t1",
+          op: "updated",
+          changes: [{ field: "title", value: "x" }],
+          txn: null,
+          origin: "user",
+        },
       });
       await new Promise((r) => setTimeout(r, 0));
     });
 
-    // No additional invoke calls for non-perspective events
+    // No additional invoke calls for non-perspective stores
     expect(mockInvoke.mock.calls.length).toBe(callCountBefore);
   });
 
-  it("refreshes on board-changed event", async () => {
+  it("refreshes on a structural board store/changed notification", async () => {
     mockInvoke.mockResolvedValue({
       result: { perspectives: [], count: 0 },
       undoable: false,
@@ -414,7 +436,16 @@ describe("PerspectiveProvider", () => {
     });
 
     await act(async () => {
-      listenCallbacks["board-changed"]?.({ payload: undefined });
+      listenCallbacks["notifications/store/changed"]?.({
+        payload: {
+          store: "board",
+          item: "b1",
+          op: "updated",
+          changes: [{ field: "name", value: "x" }],
+          txn: null,
+          origin: "user",
+        },
+      });
       await new Promise((r) => setTimeout(r, 0));
     });
 
@@ -628,7 +659,7 @@ describe("PerspectiveProvider", () => {
   // show the reverted group/filter/sort. These tests pin that behavior so
   // any future optimization of the field-delta fast path doesn't
   // accidentally drop the undo refresh.
-  it("refetches perspective.list on entity-field-changed without fields (post-undo shape)", async () => {
+  it("refetches perspective.list on a reload-item store/changed (post-undo shape)", async () => {
     // Start with a grouped perspective — simulates the state immediately
     // after `perspective.group` succeeded but before the user invokes Undo.
     const before = [
@@ -653,15 +684,18 @@ describe("PerspectiveProvider", () => {
       undoable: false,
     });
 
-    // Fire the entity-field-changed event with no `fields` key — the exact
-    // shape the bridge emits after reload_from_disk with changed_fields=[].
-    // The listener must detect the missing fields and trigger a refresh().
+    // Fire the reload-item store/changed for the perspective store — the wire
+    // shape omits `changes` (perspectives re-fetch from canonical YAML). The
+    // subscriber must treat it as a refetch signal.
     await act(async () => {
-      listenCallbacks["entity-field-changed"]?.({
+      listenCallbacks["notifications/store/changed"]?.({
         payload: {
-          entity_type: "perspective",
-          id: "p1",
-          // no fields / no changes — simulating the post-undo wire shape
+          store: "perspective",
+          item: "p1",
+          op: "updated",
+          txn: null,
+          origin: "undo",
+          // no `changes` — reload-item semantics
         },
       });
       await new Promise((r) => setTimeout(r, 0));
@@ -673,7 +707,7 @@ describe("PerspectiveProvider", () => {
     ).toBeUndefined();
   });
 
-  it("refetches on entity-removed (post-undo-of-create shape)", async () => {
+  it("refetches on a store/changed removed (post-undo-of-create shape)", async () => {
     // Start with one perspective — simulates "just created".
     const before = [makePerspective("p1", "Ephemeral")];
     mockInvoke.mockResolvedValue({
@@ -693,8 +727,14 @@ describe("PerspectiveProvider", () => {
     });
 
     await act(async () => {
-      listenCallbacks["entity-removed"]?.({
-        payload: { entity_type: "perspective", id: "p1" },
+      listenCallbacks["notifications/store/changed"]?.({
+        payload: {
+          store: "perspective",
+          item: "p1",
+          op: "removed",
+          txn: null,
+          origin: "undo",
+        },
       });
       await new Promise((r) => setTimeout(r, 0));
     });

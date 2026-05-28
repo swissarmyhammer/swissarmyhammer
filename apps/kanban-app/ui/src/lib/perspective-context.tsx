@@ -8,8 +8,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { subscribeStoreChanged } from "@/lib/mcp-notifications";
 import { useDispatchCommand } from "@/lib/command-scope";
 import type { PerspectiveDef } from "@/types/kanban";
 import { useUIState } from "./ui-state-context";
@@ -17,22 +17,6 @@ import { useViews } from "./views-context";
 
 /** This window's label — stable for the lifetime of the window. */
 const WINDOW_LABEL = getCurrentWindow().label;
-
-/**
- * Payload shape for the `entity-field-changed` Tauri event, limited to
- * the keys this listener reads.
- *
- * The backend bridge (`kanban-app/src/watcher.rs::process_perspective_event`)
- * emits `WatchEvent::EntityFieldChanged { entity_type, id, changes }` for
- * perspective field changes, with `value = Value::Null` on every change
- * because the frontend is expected to re-fetch via `perspective.list`
- * rather than trust the wire values. There is no field-delta fast path
- * for perspectives on this channel.
- */
-interface EntityFieldChangedEvent {
-  entity_type: string;
-  id: string;
-}
 
 interface PerspectivesContextValue {
   perspectives: PerspectiveDef[];
@@ -246,40 +230,35 @@ function useAutoSelectActivePerspective(
 }
 
 /**
- * Wire event listeners for perspective entity updates.
+ * Subscribe to MCP store changes for perspective updates.
  *
- * All four events for a perspective — created, field-changed, removed,
- * board-changed — trigger a full `perspective.list` re-fetch. The backend
- * bridge emits `entity-field-changed` with empty/null values (the wire
- * format is `{ entity_type, id, changes }` where each change carries a
- * `Value::Null` placeholder) because perspective values are re-fetched
- * from the canonical YAML, not patched from the event payload. Given that
- * semantic, there is no usable field-delta fast path for perspectives,
- * so every event is a refetch signal.
+ * Every perspective change — and every structural board change — triggers a
+ * full `perspective.list` re-fetch. Perspectives are a reload-item store: the
+ * `notifications/store/changed` notification for `store: "perspective"` omits
+ * `changes` (the values are re-fetched from canonical YAML, not patched from
+ * the wire), so each notification is simply a refetch signal. A structural
+ * board/column change reloads the perspective set for the new board.
  */
 function usePerspectiveEventListeners(refresh: () => Promise<void>) {
   useEffect(() => {
-    const unlisteners = [
-      listen<EntityFieldChangedEvent>("entity-field-changed", (event) => {
-        if (event.payload.entity_type !== "perspective") return;
+    let disposed = false;
+    const unsubPromise = subscribeStoreChanged((batch) => {
+      if (
+        batch.some(
+          (n) =>
+            n.store === "perspective" ||
+            n.store === "board" ||
+            n.store === "column",
+        )
+      ) {
         refresh();
-      }),
-      listen<{ entity_type: string }>("entity-created", (event) => {
-        if (event.payload.entity_type === "perspective") {
-          refresh();
-        }
-      }),
-      listen<{ entity_type: string }>("entity-removed", (event) => {
-        if (event.payload.entity_type === "perspective") {
-          refresh();
-        }
-      }),
-      listen("board-changed", () => {
-        refresh();
-      }),
-    ];
+      }
+    });
     return () => {
-      for (const p of unlisteners) p.then((fn) => fn());
+      disposed = true;
+      unsubPromise.then((unsub) => {
+        if (disposed) unsub();
+      });
     };
   }, [refresh]);
 }

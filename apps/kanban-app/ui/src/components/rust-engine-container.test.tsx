@@ -106,6 +106,42 @@ function emitTauriEvent(eventName: string, payload: unknown) {
   }
 }
 
+const STORE_CHANGED = "notifications/store/changed";
+
+interface StoreChangeNote {
+  store: string;
+  item: string;
+  op?: "created" | "removed" | "updated";
+  changes?: Array<{ field: string; value: unknown }>;
+  txn?: string | null;
+  origin?: string;
+}
+
+/**
+ * Wait for the lazily-imported `subscribeStoreChanged` to register its
+ * `notifications/store/changed` listener. The subscription resolves a dynamic
+ * `import()`, so a couple of microtask flushes are needed after mount.
+ */
+async function waitForStoreSubscription() {
+  await waitFor(() => {
+    expect((listeners.get(STORE_CHANGED)?.length ?? 0) > 0).toBe(true);
+  });
+}
+
+/** Emit one un-txned `store/changed` notification (flushes immediately). */
+async function fireStore(note: StoreChangeNote) {
+  await act(async () => {
+    emitTauriEvent(STORE_CHANGED, {
+      op: "updated",
+      txn: null,
+      origin: "user",
+      ...note,
+    });
+    // Allow the txn batcher microtask + any setState to flush.
+    await Promise.resolve();
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Probe components that verify contexts are available
 // ---------------------------------------------------------------------------
@@ -206,9 +242,9 @@ describe("RustEngineContainer", () => {
     expect(screen.getByTestId("refresh-btn")).toBeTruthy();
   });
 
-  it("entity-created with populated fields adds entity without get_entity call", async () => {
-    // When the watcher provides fields in the event payload, the handler
-    // should use them directly — no IPC round-trip via get_entity.
+  it("store/changed created upserts an entity from its changes (no get_entity)", async () => {
+    // The MCP `store/changed` notification carries the full field set in
+    // `changes`; the reducer upserts directly — no IPC round-trip.
     let getEntityCalled = false;
     mockInvoke.mockImplementation((cmd: string) => {
       if (cmd === "get_entity") {
@@ -236,19 +272,17 @@ describe("RustEngineContainer", () => {
         </RustEngineContainer>,
       );
     });
+    await waitForStoreSubscription();
 
     expect(screen.getByTestId("entity-store-ok").textContent).toBe(
       "entity-store-ok:0",
     );
 
-    // Emit entity-created with populated fields — fast path
-    await act(async () => {
-      emitTauriEvent("entity-created", {
-        kind: "entity-created",
-        entity_type: "task",
-        id: "t1",
-        fields: { title: "New Task" },
-      });
+    await fireStore({
+      store: "task",
+      item: "t1",
+      op: "created",
+      changes: [{ field: "title", value: "New Task" }],
     });
 
     await waitFor(() => {
@@ -257,18 +291,17 @@ describe("RustEngineContainer", () => {
       );
     });
 
-    // get_entity should NOT have been called — fields came from event payload
+    // get_entity should NOT have been called — fields came from the changes.
     expect(getEntityCalled).toBe(false);
   });
 
-  it("entity-created with computed fields populates entity store with progress/tags/virtual_tags/filter_tags", async () => {
-    // Regression guard for the parent-side enrichment fix: after Rust-side
-    // enrichment extends to EntityCreated events, the Tauri payload arrives
-    // with computed fields (progress, tags, virtual_tags, filter_tags)
-    // already merged in. The fast-path handler in handleEntityCreated must
-    // store these fields verbatim so the frontend's progress rings, virtual
-    // tag badges, and filter DSL evaluation all work on fresh entities
-    // without waiting for a follow-up entity-field-changed event.
+  it("store/changed created populates the entity store with progress/tags/virtual_tags/filter_tags", async () => {
+    // Regression guard for the parent-side enrichment fix: the `store/changed`
+    // notification arrives with computed fields (progress, tags, virtual_tags,
+    // filter_tags) already merged into `changes`. The reducer stores these
+    // verbatim so the frontend's progress rings, virtual tag badges, and
+    // filter DSL evaluation all work on fresh entities without a follow-up
+    // notification.
     mockInvoke.mockImplementation((cmd: string) => {
       if (cmd === "get_ui_state")
         return Promise.resolve({
@@ -316,24 +349,23 @@ describe("RustEngineContainer", () => {
         </RustEngineContainer>,
       );
     });
+    await waitForStoreSubscription();
 
-    // Emit entity-created with raw + computed fields — the shape Rust emits
-    // after `enrich_computed_fields` runs on an EntityCreated event for a
-    // task with GFM checkboxes in its body.
-    await act(async () => {
-      emitTauriEvent("entity-created", {
-        kind: "entity-created",
-        entity_type: "task",
-        id: "t1",
-        fields: {
-          title: "Task with checklist",
-          body: "- [x] one\n- [ ] two\n",
-          progress: { total: 2, completed: 1, percent: 50 },
-          tags: ["feature"],
-          virtual_tags: ["READY"],
-          filter_tags: ["feature", "READY"],
-        },
-      });
+    // Emit store/changed with raw + computed fields — the shape the fan-in
+    // emits after `enrich_computed_fields` runs for a task with GFM checkboxes
+    // in its body.
+    await fireStore({
+      store: "task",
+      item: "t1",
+      op: "created",
+      changes: [
+        { field: "title", value: "Task with checklist" },
+        { field: "body", value: "- [x] one\n- [ ] two\n" },
+        { field: "progress", value: { total: 2, completed: 1, percent: 50 } },
+        { field: "tags", value: ["feature"] },
+        { field: "virtual_tags", value: ["READY"] },
+        { field: "filter_tags", value: ["feature", "READY"] },
+      ],
     });
 
     await waitFor(() => {
@@ -352,15 +384,15 @@ describe("RustEngineContainer", () => {
     );
   });
 
-  it("entity-created with empty fields falls back to get_entity", async () => {
-    // When fields are empty (store event before watcher cached), fall back
-    // to get_entity to fetch the full entity.
-    const taskBag = { entity_type: "task", id: "t1", title: "Fetched" };
+  it("store/changed with no changes is a safe no-op (never refetches)", async () => {
+    // Unlike the old Tauri create event, the MCP reducer does not refetch via
+    // get_entity: a notification with no usable `changes` simply leaves the
+    // store untouched.
     let getEntityCalled = false;
     mockInvoke.mockImplementation((cmd: string) => {
       if (cmd === "get_entity") {
         getEntityCalled = true;
-        return Promise.resolve(taskBag);
+        return Promise.resolve({ entity_type: "task", id: "t1", title: "X" });
       }
       if (cmd === "get_ui_state")
         return Promise.resolve({
@@ -383,28 +415,17 @@ describe("RustEngineContainer", () => {
         </RustEngineContainer>,
       );
     });
+    await waitForStoreSubscription();
 
-    // Emit entity-created with EMPTY fields — fallback path
-    await act(async () => {
-      emitTauriEvent("entity-created", {
-        kind: "entity-created",
-        entity_type: "task",
-        id: "t1",
-        fields: {},
-      });
-    });
+    await fireStore({ store: "task", item: "t1", op: "created", changes: [] });
 
-    await waitFor(() => {
-      expect(screen.getByTestId("entity-store-ok").textContent).toBe(
-        "entity-store-ok:1",
-      );
-    });
-
-    // get_entity SHOULD have been called as fallback
-    expect(getEntityCalled).toBe(true);
+    expect(screen.getByTestId("entity-store-ok").textContent).toBe(
+      "entity-store-ok:0",
+    );
+    expect(getEntityCalled).toBe(false);
   });
 
-  it("entity-removed event removes entities from the store", async () => {
+  it("store/changed removed removes entities from the store", async () => {
     // Seed with an entity via refreshEntities
     const taskBag = {
       entity_type: "task",
@@ -473,6 +494,7 @@ describe("RustEngineContainer", () => {
     await act(async () => {
       await refreshFn!("/board");
     });
+    await waitForStoreSubscription();
 
     await waitFor(() => {
       expect(screen.getByTestId("entity-store-ok").textContent).toBe(
@@ -481,13 +503,7 @@ describe("RustEngineContainer", () => {
     });
 
     // Now remove the entity
-    await act(async () => {
-      emitTauriEvent("entity-removed", {
-        kind: "entity-removed",
-        entity_type: "task",
-        id: "t1",
-      });
-    });
+    await fireStore({ store: "task", item: "t1", op: "removed" });
 
     await waitFor(() => {
       expect(screen.getByTestId("entity-store-ok").textContent).toBe(
@@ -496,25 +512,8 @@ describe("RustEngineContainer", () => {
     });
   });
 
-  it("entity-field-changed event updates existing entities", async () => {
-    const taskBagV1 = {
-      entity_type: "task",
-      id: "t1",
-      title: "Original",
-    };
-    const taskBagV2 = {
-      entity_type: "task",
-      id: "t1",
-      title: "Updated",
-    };
-
-    let fetchCount = 0;
-    mockInvoke.mockImplementation((cmd: string, _args?: unknown) => {
-      if (cmd === "get_entity") {
-        fetchCount++;
-        // First fetch returns v1, subsequent returns v2
-        return Promise.resolve(fetchCount <= 1 ? taskBagV1 : taskBagV2);
-      }
+  it("store/changed updated patches existing entities in place", async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
       if (cmd === "get_ui_state")
         return Promise.resolve({
           palette_open: false,
@@ -545,29 +544,26 @@ describe("RustEngineContainer", () => {
         </RustEngineContainer>,
       );
     });
+    await waitForStoreSubscription();
 
-    // Seed with entity-created
-    await act(async () => {
-      emitTauriEvent("entity-created", {
-        kind: "entity-created",
-        entity_type: "task",
-        id: "t1",
-        fields: {},
-      });
+    // Seed via a created notification carrying the initial title.
+    await fireStore({
+      store: "task",
+      item: "t1",
+      op: "created",
+      changes: [{ field: "title", value: "Original" }],
     });
 
     await waitFor(() => {
       expect(screen.getByTestId("task-title").textContent).toBe("Original");
     });
 
-    // Now trigger field-changed
-    await act(async () => {
-      emitTauriEvent("entity-field-changed", {
-        kind: "entity-field-changed",
-        entity_type: "task",
-        id: "t1",
-        changes: [{ field: "title", value: "Updated" }],
-      });
+    // Now patch the title in place.
+    await fireStore({
+      store: "task",
+      item: "t1",
+      op: "updated",
+      changes: [{ field: "title", value: "Updated" }],
     });
 
     await waitFor(() => {
@@ -575,17 +571,10 @@ describe("RustEngineContainer", () => {
     });
   });
 
-  it("entity-field-changed with empty changes is a no-op", async () => {
-    // Architecture rule: empty changes means nothing actually changed.
-    // The handler should skip the event — no patching, no re-fetch.
-    const taskBag = { entity_type: "task", id: "t1", title: "Original" };
-
-    let getEntityCallCount = 0;
+  it("store/changed with empty changes is a no-op", async () => {
+    // Empty changes means nothing actually changed — the reducer leaves the
+    // existing entity untouched.
     mockInvoke.mockImplementation((cmd: string) => {
-      if (cmd === "get_entity") {
-        getEntityCallCount++;
-        return Promise.resolve(taskBag);
-      }
       if (cmd === "get_ui_state")
         return Promise.resolve({
           palette_open: false,
@@ -616,99 +605,26 @@ describe("RustEngineContainer", () => {
         </RustEngineContainer>,
       );
     });
+    await waitForStoreSubscription();
 
-    // Seed with entity-created
-    await act(async () => {
-      emitTauriEvent("entity-created", {
-        kind: "entity-created",
-        entity_type: "task",
-        id: "t1",
-        fields: {},
-      });
+    await fireStore({
+      store: "task",
+      item: "t1",
+      op: "created",
+      changes: [{ field: "title", value: "Original" }],
     });
 
     await waitFor(() => {
       expect(screen.getByTestId("task-title").textContent).toBe("Original");
     });
 
-    const callsBefore = getEntityCallCount;
+    // Emit an update with EMPTY changes — should be skipped.
+    await fireStore({ store: "task", item: "t1", op: "updated", changes: [] });
 
-    // Emit entity-field-changed with EMPTY changes — should be skipped
-    await act(async () => {
-      emitTauriEvent("entity-field-changed", {
-        kind: "entity-field-changed",
-        entity_type: "task",
-        id: "t1",
-        changes: [],
-      });
-    });
-
-    // Title should remain unchanged — no re-fetch triggered
     expect(screen.getByTestId("task-title").textContent).toBe("Original");
-    // No additional get_entity calls
-    expect(getEntityCallCount).toBe(callsBefore);
   });
 
-  it("entity events with mismatched board_path are ignored", async () => {
-    mockInvoke.mockImplementation((cmd: string) => {
-      if (cmd === "get_entity")
-        return Promise.resolve({
-          entity_type: "task",
-          id: "t1",
-          title: "Task",
-        });
-      if (cmd === "get_ui_state")
-        return Promise.resolve({
-          palette_open: false,
-          palette_mode: "command",
-          keymap_mode: "cua",
-          scope_chain: [],
-          open_boards: [],
-          windows: {},
-          recent_boards: [],
-        });
-      if (cmd === "list_schemas") return Promise.resolve([]);
-      return Promise.resolve(null);
-    });
-
-    let refreshFn: ((path: string) => void) | null = null;
-    function CaptureRefresh() {
-      const r = useRefreshEntities();
-      refreshFn = r;
-      return null;
-    }
-
-    await act(async () => {
-      render(
-        <RustEngineContainer>
-          <EntityStoreProbe />
-          <CaptureRefresh />
-        </RustEngineContainer>,
-      );
-    });
-
-    // Set active board path by calling refreshEntities
-    await act(async () => {
-      await refreshFn!("/active/board");
-    });
-
-    const countBefore = screen.getByTestId("entity-store-ok").textContent;
-
-    // Emit event for a different board — should be ignored
-    await act(async () => {
-      emitTauriEvent("entity-created", {
-        kind: "entity-created",
-        entity_type: "task",
-        id: "t99",
-        fields: {},
-        board_path: "/other/board",
-      });
-    });
-
-    expect(screen.getByTestId("entity-store-ok").textContent).toBe(countBefore);
-  });
-
-  it("registers entity event listeners on mount", async () => {
+  it("subscribes to the MCP store-change plane on mount (not entity-* events)", async () => {
     await act(async () => {
       render(
         <RustEngineContainer>
@@ -716,14 +632,15 @@ describe("RustEngineContainer", () => {
         </RustEngineContainer>,
       );
     });
+    await waitForStoreSubscription();
 
-    // Check that listen was called for entity events
     const listenCalls = mockListen.mock.calls.map(
       (c: unknown[]) => c[0],
     ) as string[];
-    expect(listenCalls).toContain("entity-created");
-    expect(listenCalls).toContain("entity-removed");
-    expect(listenCalls).toContain("entity-field-changed");
+    expect(listenCalls).toContain("notifications/store/changed");
+    expect(listenCalls).not.toContain("entity-created");
+    expect(listenCalls).not.toContain("entity-removed");
+    expect(listenCalls).not.toContain("entity-field-changed");
   });
 
   it("refreshEntities updates the store with fetched entities", async () => {
@@ -1226,7 +1143,7 @@ describe("RustEngineContainer", () => {
   // cards, inspector rows, and grid cells).
   // --------------------------------------------------------------------------
 
-  it("useFieldValue re-renders for a non-task entity when entity-field-changed patches a non-hardcoded field", async () => {
+  it("useFieldValue re-renders for a non-task entity when store/changed patches a non-hardcoded field", async () => {
     // Probe that subscribes to a tag's `color` field via the production
     // `useFieldValue` hook — the same hook every `<Field>` uses.
     function TagColorProbe() {
@@ -1243,38 +1160,37 @@ describe("RustEngineContainer", () => {
         </RustEngineContainer>,
       );
     });
+    await waitForStoreSubscription();
 
-    // Seed the tag via entity-created so the entity is in the store.
-    await act(async () => {
-      emitTauriEvent("entity-created", {
-        kind: "entity-created",
-        entity_type: "tag",
-        id: "tag-1",
-        fields: { tag_name: "bug", color: "#ff0000" },
-      });
+    // Seed the tag via a created notification so the entity is in the store.
+    await fireStore({
+      store: "tag",
+      item: "tag-1",
+      op: "created",
+      changes: [
+        { field: "tag_name", value: "bug" },
+        { field: "color", value: "#ff0000" },
+      ],
     });
 
     await waitFor(() => {
       expect(screen.getByTestId("tag-color").textContent).toBe("#ff0000");
     });
 
-    // Snapshot the get_entity call count immediately before the field-changed
-    // emit — we then assert below that the production listener did NOT issue
-    // a get_entity refetch in response. Acceptance criterion #4: the field
-    // must update purely from the event payload.
+    // Snapshot the get_entity call count immediately before the patch emit —
+    // we then assert below that the reducer did NOT issue a get_entity
+    // refetch. The field must update purely from the notification's changes.
     const getEntityCallsBefore = mockInvoke.mock.calls.filter(
       (c) => c[0] === "get_entity",
     ).length;
 
-    // Now patch the color via entity-field-changed — the same path the
+    // Now patch the color via a store/changed update — the same path the
     // backend uses after an inspector edit.
-    await act(async () => {
-      emitTauriEvent("entity-field-changed", {
-        kind: "entity-field-changed",
-        entity_type: "tag",
-        id: "tag-1",
-        changes: [{ field: "color", value: "#00ff00" }],
-      });
+    await fireStore({
+      store: "tag",
+      item: "tag-1",
+      op: "updated",
+      changes: [{ field: "color", value: "#00ff00" }],
     });
 
     // The subscriber must see the new value without any manual refresh.
@@ -1306,14 +1222,16 @@ describe("RustEngineContainer", () => {
         </RustEngineContainer>,
       );
     });
+    await waitForStoreSubscription();
 
-    await act(async () => {
-      emitTauriEvent("entity-created", {
-        kind: "entity-created",
-        entity_type: "project",
-        id: "proj-1",
-        fields: { name: "Project One", description: "Initial" },
-      });
+    await fireStore({
+      store: "project",
+      item: "proj-1",
+      op: "created",
+      changes: [
+        { field: "name", value: "Project One" },
+        { field: "description", value: "Initial" },
+      ],
     });
 
     await waitFor(() => {
@@ -1326,13 +1244,11 @@ describe("RustEngineContainer", () => {
       (c) => c[0] === "get_entity",
     ).length;
 
-    await act(async () => {
-      emitTauriEvent("entity-field-changed", {
-        kind: "entity-field-changed",
-        entity_type: "project",
-        id: "proj-1",
-        changes: [{ field: "description", value: "Updated description" }],
-      });
+    await fireStore({
+      store: "project",
+      item: "proj-1",
+      op: "updated",
+      changes: [{ field: "description", value: "Updated description" }],
     });
 
     await waitFor(() => {
@@ -1368,14 +1284,14 @@ describe("RustEngineContainer", () => {
       );
     });
 
+    await waitForStoreSubscription();
+
     // Seed without the description field.
-    await act(async () => {
-      emitTauriEvent("entity-created", {
-        kind: "entity-created",
-        entity_type: "tag",
-        id: "tag-2",
-        fields: { tag_name: "new" },
-      });
+    await fireStore({
+      store: "tag",
+      item: "tag-2",
+      op: "created",
+      changes: [{ field: "tag_name", value: "new" }],
     });
 
     await waitFor(() => {
@@ -1387,13 +1303,11 @@ describe("RustEngineContainer", () => {
     ).length;
 
     // Add the description for the first time.
-    await act(async () => {
-      emitTauriEvent("entity-field-changed", {
-        kind: "entity-field-changed",
-        entity_type: "tag",
-        id: "tag-2",
-        changes: [{ field: "description", value: "Newly added" }],
-      });
+    await fireStore({
+      store: "tag",
+      item: "tag-2",
+      op: "updated",
+      changes: [{ field: "description", value: "Newly added" }],
     });
 
     await waitFor(() => {
@@ -1427,14 +1341,16 @@ describe("RustEngineContainer", () => {
         </RustEngineContainer>,
       );
     });
+    await waitForStoreSubscription();
 
-    await act(async () => {
-      emitTauriEvent("entity-created", {
-        kind: "entity-created",
-        entity_type: "task",
-        id: "task-due-1",
-        fields: { title: "Date task", due: "2026-05-01" },
-      });
+    await fireStore({
+      store: "task",
+      item: "task-due-1",
+      op: "created",
+      changes: [
+        { field: "title", value: "Date task" },
+        { field: "due", value: "2026-05-01" },
+      ],
     });
 
     await waitFor(() => {
@@ -1446,13 +1362,11 @@ describe("RustEngineContainer", () => {
     ).length;
 
     // Patch to a new ISO date — same wire shape, different value.
-    await act(async () => {
-      emitTauriEvent("entity-field-changed", {
-        kind: "entity-field-changed",
-        entity_type: "task",
-        id: "task-due-1",
-        changes: [{ field: "due", value: "2026-06-15" }],
-      });
+    await fireStore({
+      store: "task",
+      item: "task-due-1",
+      op: "updated",
+      changes: [{ field: "due", value: "2026-06-15" }],
     });
 
     await waitFor(() => {
@@ -1485,14 +1399,16 @@ describe("RustEngineContainer", () => {
         </RustEngineContainer>,
       );
     });
+    await waitForStoreSubscription();
 
-    await act(async () => {
-      emitTauriEvent("entity-created", {
-        kind: "entity-created",
-        entity_type: "task",
-        id: "task-enum-1",
-        fields: { title: "Enum task", position_column: "todo" },
-      });
+    await fireStore({
+      store: "task",
+      item: "task-enum-1",
+      op: "created",
+      changes: [
+        { field: "title", value: "Enum task" },
+        { field: "position_column", value: "todo" },
+      ],
     });
 
     await waitFor(() => {
@@ -1503,13 +1419,11 @@ describe("RustEngineContainer", () => {
       (c) => c[0] === "get_entity",
     ).length;
 
-    await act(async () => {
-      emitTauriEvent("entity-field-changed", {
-        kind: "entity-field-changed",
-        entity_type: "task",
-        id: "task-enum-1",
-        changes: [{ field: "position_column", value: "doing" }],
-      });
+    await fireStore({
+      store: "task",
+      item: "task-enum-1",
+      op: "updated",
+      changes: [{ field: "position_column", value: "doing" }],
     });
 
     await waitFor(() => {

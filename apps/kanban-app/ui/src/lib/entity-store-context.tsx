@@ -217,11 +217,11 @@ export function useEntityStore(): EntityStoreContextValue {
  * Grid navigation (arrow keys, cell clicks, focus changes that don't touch
  * entity data) must NEVER trigger a backend data-fetch. Field cells
  * subscribe to their value through this hook and redraw from the store
- * whenever the backend emits `entity-field-changed` (see the entity event
- * handlers in `rust-engine-container.tsx` — `handleEntityFieldChanged`
- * and friends are module-level functions, not class methods). Navigation dispatches
- * `ui.setFocus` only — no `list_entities`, `get_entity`, `get_board_data`,
- * or `perspective.list`. The regression test
+ * whenever the backend emits a `notifications/store/changed` MCP
+ * notification (see the store-change reducer in `rust-engine-container.tsx`
+ * — `applyStoreChangeBatch` patches entities in place from the batched MCP
+ * stream). Navigation dispatches `ui.setFocus` only — no `list_entities`,
+ * `get_entity`, `get_board_data`, or `perspective.list`. The regression test
  * `grid-view.nav-is-eventdriven.test.tsx` enforces this invariant.
  *
  * Consequences:

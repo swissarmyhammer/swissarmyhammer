@@ -257,7 +257,7 @@ describe("WindowContainer", () => {
     expect(windowListenCalls).toContain("board-opened");
   });
 
-  it("registers board-changed global listener on mount", async () => {
+  it("subscribes to the MCP store-change plane on mount (not board-changed)", async () => {
     await act(async () => {
       render(
         withSpatialFocus(
@@ -269,11 +269,16 @@ describe("WindowContainer", () => {
         ),
       );
     });
+    // Wait for the lazy `subscribeStoreChanged` import to register.
+    await waitFor(() => {
+      const calls = mockListen.mock.calls.map((c: unknown[]) => c[0]);
+      expect(calls).toContain("notifications/store/changed");
+    });
 
     const listenCalls = mockListen.mock.calls.map(
       (c: unknown[]) => c[0],
     ) as string[];
-    expect(listenCalls).toContain("board-changed");
+    expect(listenCalls).not.toContain("board-changed");
   });
 
   it("board-opened event updates activeBoardPath", async () => {
@@ -338,7 +343,7 @@ describe("WindowContainer", () => {
     });
   });
 
-  it("board-changed event refreshes open boards list", async () => {
+  it("a structural store/changed refreshes the open boards list", async () => {
     mockInvoke.mockImplementation((cmd: string) => {
       if (cmd === "get_ui_state")
         return Promise.resolve({
@@ -387,9 +392,22 @@ describe("WindowContainer", () => {
       );
     });
 
-    // Emit board-changed global event
+    // Let the lazy subscribeStoreChanged import register its listener.
+    await waitFor(() => {
+      const calls = mockListen.mock.calls.map((c: unknown[]) => c[0]);
+      expect(calls).toContain("notifications/store/changed");
+    });
+
+    // Emit a structural store/changed (the MCP replacement for board-changed).
     await act(async () => {
-      emitTauriEvent("board-changed", {});
+      emitTauriEvent("notifications/store/changed", {
+        store: "board",
+        item: "b1",
+        op: "updated",
+        changes: [{ field: "name", value: "Board A" }],
+        txn: null,
+        origin: "user",
+      });
     });
 
     await waitFor(() => {

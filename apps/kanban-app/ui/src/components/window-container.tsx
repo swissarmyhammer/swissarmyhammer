@@ -34,8 +34,8 @@ import {
   type ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { subscribeStoreChanged } from "@/lib/mcp-notifications";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "sonner";
 import { InitProgressListener } from "@/components/init-progress-listener";
@@ -455,25 +455,36 @@ async function runBoardChanged(deps: WindowBoardDeps): Promise<void> {
 }
 
 /**
- * Registers board-level Tauri event listeners (`board-opened`, `board-changed`)
- * for the lifetime of the window. Entity-level events are owned by
- * `RustEngineContainer`.
+ * Registers board-level listeners for the lifetime of the window:
+ *
+ * - `board-opened` — a Tauri window-lifecycle event (this window was assigned
+ *   a board), not a data-change event, so it stays on the window event API.
+ * - structural `notifications/store/changed` (board/column) — the MCP
+ *   replacement for the former `board-changed` event; a board rename, column
+ *   add/remove, or board switch triggers a window-level board reconcile.
+ *
+ * Entity-level changes are owned by `RustEngineContainer`'s store reducer.
  */
 function useBoardEventListeners(deps: WindowBoardDeps): void {
   useEffect(() => {
-    const unlisteners = [
-      getCurrentWindow().listen<{ path: string }>(
-        "board-opened",
-        async (event) => {
-          await adoptBoard(deps, event.payload.path, true);
-        },
-      ),
-      listen("board-changed", () => runBoardChanged(deps)),
-    ];
-    return () => {
-      for (const p of unlisteners) {
-        p.then((fn: () => void) => fn());
+    let disposed = false;
+    const openedPromise = getCurrentWindow().listen<{ path: string }>(
+      "board-opened",
+      async (event) => {
+        await adoptBoard(deps, event.payload.path, true);
+      },
+    );
+    const storePromise = subscribeStoreChanged((batch) => {
+      if (batch.some((n) => n.store === "board" || n.store === "column")) {
+        runBoardChanged(deps);
       }
+    });
+    return () => {
+      disposed = true;
+      openedPromise.then((fn: () => void) => fn());
+      storePromise.then((unsub) => {
+        if (disposed) unsub();
+      });
     };
   }, [deps]);
 }

@@ -20,8 +20,11 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import {
+  subscribeStoreChanged,
+  type StoreChanged,
+  type StoreChangeBatch,
+} from "@/lib/mcp-notifications";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -32,46 +35,8 @@ import {
   CommandScopeProvider,
   useSetCommandInflight,
 } from "@/lib/command-scope";
-import type { Entity, EntityBag } from "@/types/kanban";
-import { entityFromBag } from "@/types/kanban";
+import type { Entity } from "@/types/kanban";
 import { refreshBoards, type RefreshResult } from "@/lib/refresh";
-
-// ---------------------------------------------------------------------------
-// Event payload types
-// ---------------------------------------------------------------------------
-
-/** Payload for entity-created Tauri event. */
-interface EntityCreatedEvent {
-  kind: "entity-created";
-  entity_type: string;
-  id: string;
-  fields: Record<string, unknown>;
-  board_path?: string;
-}
-
-/** Payload for entity-removed Tauri event. */
-interface EntityRemovedEvent {
-  kind: "entity-removed";
-  entity_type: string;
-  id: string;
-  board_path?: string;
-}
-
-/**
- * Payload for entity-field-changed Tauri event.
- *
- * Architecture rule (event-architecture): events are thin signals.
- * Each change carries ONE field name and its new value. The frontend
- * patches individual fields in place — no full-state replacement,
- * no get_entity re-fetch. DO NOT add a `fields` map here.
- */
-interface EntityFieldChangedEvent {
-  kind: "entity-field-changed";
-  entity_type: string;
-  id: string;
-  changes: Array<{ field: string; value: unknown }>;
-  board_path?: string;
-}
 
 // ---------------------------------------------------------------------------
 // RefreshEntities context — lets the parent trigger entity refresh
@@ -213,15 +178,6 @@ export function RustEngineContainer({ children }: RustEngineContainerProps) {
   /** Ref tracking the active board path for event filtering. */
   const activeBoardPathRef = useRef<string | undefined>(undefined);
 
-  const setEntitiesFor = useCallback(
-    (type: string, updater: (prev: Entity[]) => Entity[]) =>
-      setEntitiesByType((prev) => ({
-        ...prev,
-        [type]: updater(prev[type] ?? []),
-      })),
-    [],
-  );
-
   const refreshEntities = useGuardedRefreshEntities(
     activeBoardPathRef,
     setEntitiesByType,
@@ -231,7 +187,11 @@ export function RustEngineContainer({ children }: RustEngineContainerProps) {
     activeBoardPathRef.current = path;
   }, []);
 
-  useEntityEventListeners(activeBoardPathRef, refreshEntities, setEntitiesFor);
+  useMcpStoreSubscription(
+    activeBoardPathRef,
+    refreshEntities,
+    setEntitiesByType,
+  );
 
   return (
     <EngineProviderStack
@@ -246,187 +206,163 @@ export function RustEngineContainer({ children }: RustEngineContainerProps) {
 }
 
 // ---------------------------------------------------------------------------
-// Entity event listeners — extracted from RustEngineContainer for readability
+// MCP store-change reducer — entity store kept live by the MCP notification
+// stream (`notifications/store/changed`), not Tauri `entity-*` events.
 //
-// Architecture rule (event-architecture): events are thin signals with
-// exactly two granularities. Each handler has ONE code path:
+// Input source migration (this task): the webview is a pure MCP client. The
+// change stream is the same one external agents receive. The reducer below is
+// the SAME field-patch / removal / column-refresh logic that the Tauri
+// `entity-created` / `entity-removed` / `entity-field-changed` handlers
+// applied — only the input source changed from those three Tauri events to
+// the one generic `store/changed` notification:
 //
-//   entity-created       → add from payload fields (fast) or get_entity (fallback)
-//   entity-field-changed → patch individual fields from changes array
-//   entity-removed       → remove from store by id
+//   op:"updated"|"created" with changes → patch individual fields in place,
+//                                          upserting if the item is absent
+//   op:"removed"                        → remove from store by id
+//   structural type (column)            → trigger a full refresh
 //
-// DO NOT add full-state replacement or get_entity re-fetch to field-changed.
+// DO NOT add full-state replacement or get_entity re-fetch to field patches.
+//
+// Transaction batching: a command's N `store/changed` notifications share one
+// `txn` and arrive as ONE batch (see `subscribeStoreChanged`). The whole batch
+// is applied in a single `setEntitiesByType` so a multi-write command (or an
+// undo of one) re-renders exactly once, not N times.
 //
 // Architecture contract — event-driven grid:
 // Grid navigation (arrow keys, cell clicks, focus changes that don't touch
 // entity data) must NEVER trigger a backend data-fetch. The grid body
-// stays in sync exclusively through these three event handlers: field
-// cells subscribe via `useFieldValue` (see `entity-store-context.tsx`)
-// and redraw from the store when this code patches an entity in place.
-// On navigation only `ui.setFocus` is dispatched — no `list_entities`,
-// `get_entity`, `get_board_data`, or `perspective.list`. The regression
-// test `grid-view.nav-is-eventdriven.test.tsx` enforces this invariant.
+// stays in sync exclusively through this reducer: field cells subscribe via
+// `useFieldValue` (see `entity-store-context.tsx`) and redraw from the store
+// when this code patches an entity in place. On navigation only `ui.setFocus`
+// is dispatched — no `list_entities`, `get_entity`, `get_board_data`, or
+// `perspective.list`. The regression test `grid-view.nav-is-eventdriven.test.tsx`
+// enforces this invariant.
 // ---------------------------------------------------------------------------
 
-/** Deps shared by all entity event handlers. */
-interface EventHandlerDeps {
-  activeBoardPathRef: React.RefObject<string | undefined>;
-  refreshEntities: RefreshEntitiesFn;
-  setEntitiesFor: (type: string, updater: (prev: Entity[]) => Entity[]) => void;
-}
+/** Stores whose changes are reload-item signals, not field patches. */
+const RELOAD_ITEM_STORES: ReadonlySet<string> = new Set(["view", "perspective"]);
 
-/** Check if an event's board_path matches the active board. */
-function isBoardMismatch(
-  boardPath: string | undefined,
-  activeRef: React.RefObject<string | undefined>,
-): boolean {
-  return !!(boardPath && activeRef.current && boardPath !== activeRef.current);
-}
+/** Structural entity types whose changes require a full board refresh. */
+const STRUCTURAL_TYPES: ReadonlySet<string> = new Set(["column"]);
 
 /**
- * Handle entity-created events.
+ * Apply one `store/changed` notification to a single entity-type list.
  *
- * Fast path: use payload fields directly when available.
- * Fallback: fetch via get_entity when fields are empty.
+ * This is the unchanged per-entity reducer logic, lifted out of the former
+ * `handleEntityFieldChanged` / `handleEntityRemoved` Tauri handlers so a whole
+ * batch can be folded in one `setEntitiesByType`.
+ *
+ * - `op:"removed"` → drop the item by id.
+ * - `op:"updated"|"created"` with `changes` → patch fields in place, upserting
+ *   from the changes array when the item is absent (race with create).
  */
-function handleEntityCreated(
-  payload: EntityCreatedEvent,
-  deps: EventHandlerDeps,
-): void {
-  const { entity_type, id, fields, board_path } = payload;
-  if (isBoardMismatch(board_path, deps.activeBoardPathRef)) return;
+function applyStoreChangeToList(prev: Entity[], note: StoreChanged): Entity[] {
+  const { store: entity_type, item: id, op, changes } = note;
 
-  if (entity_type === "column") {
-    if (deps.activeBoardPathRef.current)
-      deps.refreshEntities(deps.activeBoardPathRef.current);
-    return;
+  if (op === "removed") {
+    return prev.filter((e) => e.id !== id);
   }
 
-  if (fields && Object.keys(fields).length > 0) {
-    const entity: Entity = {
-      id,
-      entity_type,
-      moniker: `${entity_type}:${id}`,
-      fields: fields as Record<string, unknown>,
-    };
-    deps.setEntitiesFor(entity_type, (prev) =>
-      prev.some((e) => e.id === id)
-        ? prev.map((e) => (e.id === id ? entity : e))
-        : [...prev, entity],
-    );
-    return;
-  }
+  if (!changes || changes.length === 0) return prev;
 
-  invoke<EntityBag>("get_entity", {
-    entityType: entity_type,
-    id,
-    ...(deps.activeBoardPathRef.current
-      ? { boardPath: deps.activeBoardPathRef.current }
-      : {}),
-  })
-    .then((bag) => {
-      const entity = entityFromBag(bag);
-      deps.setEntitiesFor(entity_type, (prev) =>
-        prev.some((e) => e.id === id)
-          ? prev.map((e) => (e.id === id ? entity : e))
-          : [...prev, entity],
-      );
-    })
-    .catch((err) =>
-      console.error(
-        `[entity-created] Failed to fetch ${entity_type}/${id}:`,
-        err,
-      ),
-    );
-}
-
-/**
- * Handle entity-removed events.
- *
- * Structural types (column) trigger a full refresh; others are removed by ID.
- */
-function handleEntityRemoved(
-  payload: EntityRemovedEvent,
-  deps: EventHandlerDeps,
-): void {
-  const { entity_type, id, board_path } = payload;
-  if (isBoardMismatch(board_path, deps.activeBoardPathRef)) return;
-
-  if (entity_type === "column") {
-    if (deps.activeBoardPathRef.current)
-      deps.refreshEntities(deps.activeBoardPathRef.current);
-  } else {
-    deps.setEntitiesFor(entity_type, (prev) => prev.filter((e) => e.id !== id));
-  }
-}
-
-/**
- * Handle entity-field-changed events.
- *
- * Patches individual fields in place. If the entity isn't in the store yet
- * (race with entity-created), upserts from the changes array.
- */
-function handleEntityFieldChanged(
-  payload: EntityFieldChangedEvent,
-  deps: EventHandlerDeps,
-): void {
-  const { entity_type, id, changes, board_path } = payload;
-  if (isBoardMismatch(board_path, deps.activeBoardPathRef)) return;
-  if (!changes || changes.length === 0) return;
-
-  deps.setEntitiesFor(entity_type, (prev) => {
-    let found = false;
-    const next = prev.map((e) => {
-      if (e.id !== id) return e;
-      found = true;
-      const patched = { ...e.fields };
-      for (const { field, value } of changes) patched[field] = value;
-      return { ...e, fields: patched };
-    });
-    if (!found) {
-      const fields: Record<string, unknown> = {};
-      for (const { field, value } of changes) fields[field] = value;
-      return [
-        ...next,
-        { entity_type, id, moniker: `${entity_type}:${id}`, fields },
-      ];
-    }
-    return next;
+  let found = false;
+  const next = prev.map((e) => {
+    if (e.id !== id) return e;
+    found = true;
+    const patched = { ...e.fields };
+    for (const { field, value } of changes) patched[field] = value;
+    return { ...e, fields: patched };
   });
+  if (!found) {
+    const fields: Record<string, unknown> = {};
+    for (const { field, value } of changes) fields[field] = value;
+    next.push({
+      entity_type,
+      id,
+      moniker: `${entity_type}:${id}`,
+      fields,
+    });
+  }
+  return next;
 }
 
 /**
- * Hook that subscribes to Tauri entity events and dispatches to handlers.
+ * Fold a batch of same-`txn` `store/changed` notifications into the entity map.
  *
- * Listens for entity-created, entity-removed, and entity-field-changed events
- * and cleans up subscriptions on unmount.
+ * Returns the next `entitiesByType` map (referentially new only for the types
+ * a notification touched) plus the set of structural types that need a full
+ * refresh (columns), which the caller dispatches outside the state update.
+ * Views/perspectives are reload-item stores owned by their own contexts and
+ * are skipped here.
  */
-function useEntityEventListeners(
+export function applyStoreChangeBatch(
+  prev: Record<string, Entity[]>,
+  batch: StoreChangeBatch,
+): { next: Record<string, Entity[]>; refreshNeeded: boolean } {
+  let next = prev;
+  let mutated = false;
+  let refreshNeeded = false;
+
+  for (const note of batch) {
+    if (RELOAD_ITEM_STORES.has(note.store)) continue; // owned by views/perspective ctx
+    if (STRUCTURAL_TYPES.has(note.store)) {
+      refreshNeeded = true;
+      continue;
+    }
+    const type = note.store;
+    const before = next[type] ?? [];
+    const after = applyStoreChangeToList(before, note);
+    if (after !== before) {
+      if (!mutated) {
+        next = { ...next };
+        mutated = true;
+      }
+      next[type] = after;
+    }
+  }
+
+  return { next, refreshNeeded };
+}
+
+/**
+ * Subscribe the entity store to the MCP `store/changed` plane.
+ *
+ * Replaces the former Tauri `entity-created` / `entity-removed` /
+ * `entity-field-changed` listeners. Each transaction's notifications arrive as
+ * one batch and are applied in a single state update (see
+ * `applyStoreChangeBatch`). Structural (column) changes trigger a guarded
+ * board refresh, matching the prior `handleEntityRemoved`/`handleEntityCreated`
+ * column branch.
+ */
+function useMcpStoreSubscription(
   activeBoardPathRef: React.RefObject<string | undefined>,
   refreshEntities: RefreshEntitiesFn,
-  setEntitiesFor: (type: string, updater: (prev: Entity[]) => Entity[]) => void,
+  setEntitiesByType: SetEntitiesByTypeFn,
 ): void {
   useEffect(() => {
-    const deps: EventHandlerDeps = {
-      activeBoardPathRef,
-      refreshEntities,
-      setEntitiesFor,
+    let disposed = false;
+
+    const onBatch = (batch: StoreChangeBatch) => {
+      setEntitiesByType((prev) => {
+        const { next, refreshNeeded } = applyStoreChangeBatch(prev, batch);
+        if (refreshNeeded && activeBoardPathRef.current) {
+          // Defer the refresh so it does not run inside the state updater.
+          const path = activeBoardPathRef.current;
+          queueMicrotask(() => {
+            if (!disposed) refreshEntities(path);
+          });
+        }
+        return next;
+      });
     };
-    const unlisteners = [
-      listen<EntityCreatedEvent>("entity-created", (e) =>
-        handleEntityCreated(e.payload, deps),
-      ),
-      listen<EntityRemovedEvent>("entity-removed", (e) =>
-        handleEntityRemoved(e.payload, deps),
-      ),
-      listen<EntityFieldChangedEvent>("entity-field-changed", (e) =>
-        handleEntityFieldChanged(e.payload, deps),
-      ),
-    ];
+
+    const unsubPromise = subscribeStoreChanged(onBatch);
+
     return () => {
-      for (const p of unlisteners) p.then((fn: () => void) => fn());
+      disposed = true;
+      unsubPromise.then((unsub) => unsub());
     };
-  }, [activeBoardPathRef, refreshEntities, setEntitiesFor]);
+  }, [activeBoardPathRef, refreshEntities, setEntitiesByType]);
 }
 
 // ---------------------------------------------------------------------------
