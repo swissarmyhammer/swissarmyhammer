@@ -3326,6 +3326,78 @@ mod tests {
         }
     }
 
+    /// A mock agent whose `prompt` blocks on a shared [`tokio::sync::Barrier`]
+    /// until `parties` prompts are in flight at the same instant.
+    ///
+    /// This lets the parallelism test prove overlap *structurally* rather than
+    /// by wall-clock time: the barrier only releases once all `parties` prompts
+    /// have arrived together, which can only happen if the runner is executing
+    /// the rules concurrently. If execution went serial, the first prompt would
+    /// block on the barrier forever and the test's surrounding `timeout` would
+    /// fire. There is no timing threshold to flake under heavy CI load.
+    struct BarrierAgent {
+        next_session: std::sync::atomic::AtomicUsize,
+        barrier: Arc<tokio::sync::Barrier>,
+    }
+
+    impl BarrierAgent {
+        fn new(parties: usize) -> Self {
+            Self {
+                next_session: std::sync::atomic::AtomicUsize::new(0),
+                barrier: Arc::new(tokio::sync::Barrier::new(parties)),
+            }
+        }
+
+        async fn new_session(
+            &self,
+            _request: agent_client_protocol::schema::NewSessionRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::NewSessionResponse>
+        {
+            let n = self
+                .next_session
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let session_id =
+                agent_client_protocol::schema::SessionId::new(format!("barrier-sess-{}", n));
+            Ok(agent_client_protocol::schema::NewSessionResponse::new(
+                session_id,
+            ))
+        }
+
+        async fn prompt(
+            &self,
+            _request: agent_client_protocol::schema::PromptRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::PromptResponse> {
+            // Block until `parties` prompts are concurrently in flight. Returns
+            // immediately for every party once the last one arrives.
+            self.barrier.wait().await;
+            Ok(agent_client_protocol::schema::PromptResponse::new(
+                agent_client_protocol::schema::StopReason::EndTurn,
+            ))
+        }
+    }
+
+    impl MockAgent for BarrierAgent {
+        fn new_session<'a>(
+            &'a self,
+            request: agent_client_protocol::schema::NewSessionRequest,
+        ) -> futures::future::BoxFuture<
+            'a,
+            agent_client_protocol::Result<agent_client_protocol::schema::NewSessionResponse>,
+        > {
+            Box::pin(async move { BarrierAgent::new_session(self, request).await })
+        }
+
+        fn prompt<'a>(
+            &'a self,
+            request: agent_client_protocol::schema::PromptRequest,
+        ) -> futures::future::BoxFuture<
+            'a,
+            agent_client_protocol::Result<agent_client_protocol::schema::PromptResponse>,
+        > {
+            Box::pin(async move { BarrierAgent::prompt(self, request).await })
+        }
+    }
+
     /// Helper: build a RuleSet whose default timeout is `timeout_secs` and
     /// which contains `n` rules. Used by the timeout / parallelism tests.
     fn create_ruleset_with_timeout(rule_names: &[&str], timeout_secs: u32) -> RuleSet {
@@ -3413,13 +3485,19 @@ mod tests {
         .await;
     }
 
-    /// Multiple rules whose individual prompt sleeps would, in series, take
-    /// longer than the wall budget must still be evaluated in parallel. With
-    /// 3 rules sleeping 200ms each and an in-flight cap of at least 2, the
-    /// total wall time should be well under the 600ms serial sum.
+    /// Multiple rules must be evaluated concurrently, not one after another.
+    ///
+    /// This is proven *structurally* with a [`BarrierAgent`]: each rule's prompt
+    /// blocks until all 3 prompts are in flight together, so the call can only
+    /// complete if the runner ran them in parallel. A serial runner would block
+    /// the first prompt on the barrier forever, and the surrounding `timeout`
+    /// would fire. There is deliberately NO wall-clock threshold — the previous
+    /// `elapsed < 500ms` assertion flaked under heavy parallel CI load even when
+    /// execution was genuinely concurrent (scheduler contention stretched the
+    /// wall time past the bound).
     #[tokio::test]
     async fn test_execute_ruleset_runs_rules_in_parallel() {
-        let agent = Arc::new(SlowAgent::new(200));
+        let agent = Arc::new(BarrierAgent::new(3));
         let (notifier, _) = claude_agent::NotificationSender::new(64);
         let notifier = Arc::new(notifier);
         let notifier_body = Arc::clone(&notifier);
@@ -3427,28 +3505,31 @@ mod tests {
         run_with_mock_agent(agent, notifier, move |conn| async move {
             // Force a non-trivial in-flight cap so the test does not depend on the
             // host's CPU count: 3 in-flight slots is enough to run all 3 rules
-            // concurrently.
+            // concurrently and satisfy the 3-party barrier.
             let mut runner = ValidatorRunner::new(conn, notifier_body).unwrap();
             runner.rule_concurrency = Arc::new(Semaphore::new(3));
 
+            // Generous per-rule timeout (30s) so the rule-level deadline never
+            // fires first; the 10s outer timeout below is the real guard.
             let ruleset = create_ruleset_with_timeout(&["a", "b", "c"], 30);
             let context = serde_json::json!({"tool_name": "Write"});
 
-            let start = std::time::Instant::now();
-            let (executed, _is_rate_limited) = runner
-                .execute_ruleset(&ruleset, HookType::Stop, &context, None)
-                .await;
-            let elapsed = start.elapsed();
+            // If the rules run in parallel, all 3 prompts reach the barrier, it
+            // releases, and this completes near-instantly. If they run serially,
+            // the first prompt blocks on the barrier and this never returns — the
+            // 10s timeout (well under the 30s per-rule budget) then fires and the
+            // expect() fails with a clear message.
+            let (executed, _is_rate_limited) = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                runner.execute_ruleset(&ruleset, HookType::Stop, &context, None),
+            )
+            .await
+            .expect(
+                "rules did not run in parallel: the 3 prompts never reached the barrier \
+                 together, so the runner is executing rules serially",
+            );
 
             assert_eq!(executed.rule_results.len(), 3);
-            // 3 sequential rules at 200ms each would take ~600ms. With parallel
-            // execution we expect well under 600ms — give plenty of headroom for
-            // CI noise but still fail loudly if the loop went serial.
-            assert!(
-                elapsed.as_millis() < 500,
-                "rules must run in parallel (3x200ms in series = ~600ms), got {:?}",
-                elapsed,
-            );
         })
         .await;
     }
