@@ -10250,11 +10250,17 @@ dependencies = [
 name = "swissarmyhammer-views"
 version = "0.13.5"
 dependencies = [
+ "async-trait",
  "chrono",
+ "rmcp",
  "serde",
  "serde_json",
  "serde_yaml_ng",
  "swissarmyhammer-commands",
+ "swissarmyhammer-operations",
+ "swissarmyhammer-operations-macros",
+ "swissarmyhammer-perspectives",
+ "swissarmyhammer-plugin",
  "swissarmyhammer-store",
  "tempfile",
  "thiserror 2.0.18",

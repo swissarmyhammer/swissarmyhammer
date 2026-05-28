@@ -16,9 +16,16 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 ulid = { workspace = true }
 chrono = { workspace = true }
+async-trait = { workspace = true }
+rmcp = { workspace = true }
 swissarmyhammer-commands = { path = "../swissarmyhammer-commands" }
 swissarmyhammer-store = { path = "../swissarmyhammer-store" }
+swissarmyhammer-perspectives = { path = "../swissarmyhammer-perspectives" }
+swissarmyhammer-operations = { workspace = true }
+swissarmyhammer-operations-macros = { workspace = true }
+swissarmyhammer-plugin = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio-test = { workspace = true }
+rmcp = { workspace = true }
