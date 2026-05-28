@@ -163,7 +163,8 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use swissarmyhammer_commands::{CommandContext, UIState};
+    use swissarmyhammer_commands::{CommandContext};
+    use swissarmyhammer_ui_state::{UIState};
 
     /// Build a minimal CommandContext with the given UIState, scope, and args.
     fn make_ctx(

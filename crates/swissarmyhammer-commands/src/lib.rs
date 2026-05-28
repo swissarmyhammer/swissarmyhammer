@@ -17,7 +17,6 @@ pub mod macros;
 pub mod options_resolver;
 pub mod registry;
 pub mod types;
-pub mod ui_state;
 pub mod window_info;
 
 pub use command::Command;
@@ -31,8 +30,5 @@ pub use registry::{builtin_yaml_sources, load_yaml_dir, CommandsRegistry};
 pub use types::{
     CommandDef, CommandInvocation, KeysDef, MenuPlacement, ParamDef, ParamOption, ParamShape,
     ParamSource, TabButtonDef,
-};
-pub use ui_state::{
-    DragDestination, DragSession, DragSource, RecentBoard, UIState, UIStateChange, WindowState,
 };
 pub use window_info::WindowInfo;

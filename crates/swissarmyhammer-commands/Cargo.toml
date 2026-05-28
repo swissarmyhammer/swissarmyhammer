@@ -15,6 +15,7 @@ async-trait = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 include_dir = { workspace = true }
+swissarmyhammer-ui-state = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }

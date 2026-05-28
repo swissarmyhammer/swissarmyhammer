@@ -3,7 +3,8 @@
 use crate::state::{resolve_kanban_path, AppState, MenuItemHandle};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use swissarmyhammer_commands::{CommandDef, CommandsRegistry, RecentBoard, UIState, WindowInfo};
+use swissarmyhammer_commands::{CommandDef, CommandsRegistry, WindowInfo};
+use swissarmyhammer_ui_state::{RecentBoard, UIState};
 use swissarmyhammer_kanban::{
     board::InitBoard, KanbanContext, KanbanOperationProcessor, OperationProcessor,
 };
@@ -841,7 +842,8 @@ async fn open_and_notify(handle: &AppHandle, path: &Path, source_window_label: O
 #[cfg(test)]
 mod tests {
     use super::{collect_menu_entries, is_valid_accelerator_key, resolve_accelerator};
-    use swissarmyhammer_commands::{compose_registry, CommandDef, KeysDef, UIState};
+    use swissarmyhammer_commands::{compose_registry, CommandDef, KeysDef};
+    use swissarmyhammer_ui_state::{UIState};
 
     /// Build a minimal `CommandDef` carrying only the per-mode keys —
     /// enough for `resolve_accelerator` to operate. All other fields

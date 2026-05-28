@@ -355,7 +355,8 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use swissarmyhammer_commands::{CommandContext, UIState};
+    use swissarmyhammer_commands::{CommandContext};
+    use swissarmyhammer_ui_state::{UIState};
 
     /// Helper to build a CommandContext with UIState and a window scope chain.
     fn ctx_with_mode_arg(mode: &str) -> CommandContext {

@@ -74,6 +74,7 @@ members = [
     "crates/swissarmyhammer-plugin",
     "crates/swissarmyhammer-command-service",
     "crates/swissarmyhammer-app-service",
+    "crates/swissarmyhammer-ui-state",
 ]
 resolver = "2"
 
@@ -296,6 +297,7 @@ swissarmyhammer-store = { path = "crates/swissarmyhammer-store" }
 swissarmyhammer-templating = { path = "crates/swissarmyhammer-templating" }
 swissarmyhammer-tools = { path = "crates/swissarmyhammer-tools" }
 swissarmyhammer-treesitter = { path = "crates/swissarmyhammer-treesitter" }
+swissarmyhammer-ui-state = { path = "crates/swissarmyhammer-ui-state" }
 swissarmyhammer-views = { path = "crates/swissarmyhammer-views" }
 swissarmyhammer-web = { path = "crates/swissarmyhammer-web" }
 swissarmyhammer-workspace-init = { path = "crates/swissarmyhammer-workspace-init" }

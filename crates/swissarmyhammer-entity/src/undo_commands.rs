@@ -121,7 +121,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use swissarmyhammer_commands::ui_state::UIState;
+    use swissarmyhammer_ui_state::UIState;
 
     #[tokio::test]
     async fn undo_cmd_available_false_without_ui_state() {

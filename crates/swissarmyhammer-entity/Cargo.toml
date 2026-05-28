@@ -37,6 +37,7 @@ test-support = ["dep:tempfile"]
 
 [dev-dependencies]
 swissarmyhammer-entity = { path = ".", features = ["test-support"] }
+swissarmyhammer-ui-state = { workspace = true }
 tempfile = { workspace = true }
 tokio-test = { workspace = true }
 criterion = { workspace = true, features = ["async_tokio"] }

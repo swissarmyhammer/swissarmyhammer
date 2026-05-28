@@ -7,7 +7,8 @@
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
-use swissarmyhammer_commands::{Command, CommandContext, CommandError, CommandsRegistry, UIState};
+use swissarmyhammer_commands::{Command, CommandContext, CommandError, CommandsRegistry};
+use swissarmyhammer_ui_state::{UIState};
 use swissarmyhammer_entity::EntityTypeStore;
 use swissarmyhammer_kanban::clipboard::{
     ClipboardProvider, ClipboardProviderExt, InMemoryClipboard,

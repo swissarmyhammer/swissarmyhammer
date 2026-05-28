@@ -1307,7 +1307,7 @@ mod tests {
         let pid = create_perspective_with_view(&kanban, "Palette Sort", "grid").await;
 
         // Mark this perspective as UIState-active for the default window.
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
         ui.set_active_perspective("main", &pid);
 
         // Seed a sort entry on it.
@@ -1686,7 +1686,7 @@ mod tests {
     fn make_ctx_with_ui(
         kanban: Arc<KanbanContext>,
         args: HashMap<String, Value>,
-        ui: Arc<swissarmyhammer_commands::UIState>,
+        ui: Arc<swissarmyhammer_ui_state::UIState>,
     ) -> CommandContext {
         let mut ctx = CommandContext::new("test", vec![], None, args);
         ctx.set_extension(kanban);
@@ -1698,7 +1698,7 @@ mod tests {
     async fn test_next_perspective_cycles_forward_with_wrapping() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         let id_a = create_perspective_with_view(&kanban, "A", "board").await;
         let id_b = create_perspective_with_view(&kanban, "B", "board").await;
@@ -1734,7 +1734,7 @@ mod tests {
     async fn test_prev_perspective_cycles_backward_with_wrapping() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         let id_a = create_perspective_with_view(&kanban, "A", "grid").await;
         let id_b = create_perspective_with_view(&kanban, "B", "grid").await;
@@ -1769,7 +1769,7 @@ mod tests {
     async fn test_cycle_noop_with_zero_matching_perspectives() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         // Create perspectives for "board" but query for "grid"
         create_perspective_with_view(&kanban, "A", "board").await;
@@ -1785,7 +1785,7 @@ mod tests {
     async fn test_cycle_noop_with_one_matching_perspective() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         let id_a = create_perspective_with_view(&kanban, "A", "board").await;
         ui.set_active_perspective("main", &id_a);
@@ -1801,7 +1801,7 @@ mod tests {
     async fn test_cycle_filters_by_view_kind() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         let id_board = create_perspective_with_view(&kanban, "Board1", "board").await;
         let _id_grid = create_perspective_with_view(&kanban, "Grid1", "grid").await;
@@ -1844,7 +1844,7 @@ mod tests {
         kanban: Arc<KanbanContext>,
         args: HashMap<String, Value>,
         scope_chain: Vec<String>,
-        ui: Arc<swissarmyhammer_commands::UIState>,
+        ui: Arc<swissarmyhammer_ui_state::UIState>,
     ) -> CommandContext {
         let mut ctx = CommandContext::new("test", scope_chain, None, args);
         ctx.set_extension(kanban);
@@ -1856,7 +1856,7 @@ mod tests {
     async fn test_next_perspective_derives_view_kind_from_scope_chain() {
         let (_temp, ctx) = setup_with_views().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         // Create board perspectives
         let id_a = create_perspective_with_view(&kanban, "A", "board").await;
@@ -1878,7 +1878,7 @@ mod tests {
     async fn test_next_perspective_explicit_view_kind_overrides_scope() {
         let (_temp, ctx) = setup_with_views().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         // Create board and grid perspectives
         let _id_board_a = create_perspective_with_view(&kanban, "BoardA", "board").await;
@@ -1911,7 +1911,7 @@ mod tests {
     async fn test_goto_perspective_valid_id_sets_active() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         let id = create_perspective_with_view(&kanban, "Target", "board").await;
 
@@ -1928,7 +1928,7 @@ mod tests {
     async fn test_goto_perspective_invalid_id_returns_error() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         let mut args = HashMap::new();
         args.insert("id".into(), Value::String("nonexistent".into()));
@@ -1942,7 +1942,7 @@ mod tests {
     async fn test_goto_perspective_mismatched_view_kind_returns_error() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         let id = create_perspective_with_view(&kanban, "BoardView", "board").await;
 
@@ -1959,7 +1959,7 @@ mod tests {
     async fn test_goto_perspective_without_view_kind_succeeds() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         let id = create_perspective_with_view(&kanban, "GridView", "grid").await;
 
@@ -2027,7 +2027,7 @@ mod tests {
         kanban: Arc<KanbanContext>,
         args: HashMap<String, Value>,
         scope_chain: Vec<String>,
-        ui: Arc<swissarmyhammer_commands::UIState>,
+        ui: Arc<swissarmyhammer_ui_state::UIState>,
     ) -> CommandContext {
         let mut ctx = CommandContext::new("test", scope_chain, None, args);
         ctx.set_extension(kanban);
@@ -2039,7 +2039,7 @@ mod tests {
     async fn resolve_perspective_id_prefers_explicit_arg() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         // Populate UIState so every fallback path has an id available —
         // the explicit arg must still win.
@@ -2063,7 +2063,7 @@ mod tests {
     async fn resolve_perspective_id_falls_back_to_scope_chain() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
         ui.set_active_perspective("main", "ui-id");
 
         // No arg — scope chain's perspective moniker should win over UIState.
@@ -2083,7 +2083,7 @@ mod tests {
     async fn resolve_perspective_id_falls_back_to_uistate() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
         ui.set_active_perspective("main", "ui-id");
 
         // No arg, no scope-chain perspective moniker — UIState wins.
@@ -2103,7 +2103,7 @@ mod tests {
     async fn resolve_perspective_id_falls_back_to_first_for_view_kind() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         // Two perspectives: one for each view kind.
         let board_pid = create_perspective_with_view(&kanban, "Board", "board").await;
@@ -2129,7 +2129,7 @@ mod tests {
     async fn resolve_and_persist_writes_uistate_when_fallback_used() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         let board_pid = create_perspective_with_view(&kanban, "Board", "board").await;
 
@@ -2162,7 +2162,7 @@ mod tests {
     async fn resolve_and_persist_does_not_touch_uistate_when_arg_supplied() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         let mut args = HashMap::new();
         args.insert("perspective_id".into(), Value::String("arg-id".into()));
@@ -2186,7 +2186,7 @@ mod tests {
     async fn resolve_and_persist_does_not_touch_uistate_when_scope_supplied() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         let cmd_ctx = make_full_ctx(
             Arc::clone(&kanban),
@@ -2211,7 +2211,7 @@ mod tests {
         // missing-arg error so the caller can report it.
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         let cmd_ctx = make_full_ctx(
             Arc::clone(&kanban),
@@ -2235,7 +2235,7 @@ mod tests {
     async fn clear_filter_works_from_palette_with_no_args() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         // Create a perspective with a filter, then mark it active in UIState.
         let pid = create_perspective_with_view(&kanban, "Active", "board").await;
@@ -2280,7 +2280,7 @@ mod tests {
     async fn clear_group_works_from_palette_with_no_args() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         let pid = create_perspective_with_view(&kanban, "Active", "board").await;
         // Seed a group value via SetGroupCmd (explicit arg, full scope).
@@ -2320,7 +2320,7 @@ mod tests {
     async fn toggle_sort_works_from_palette_with_no_perspective_arg() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         let pid = create_perspective_with_view(&kanban, "Active", "board").await;
         ui.set_active_perspective("main", &pid);
@@ -2415,7 +2415,7 @@ mod tests {
         // fallback walks the view_id-aware filter rather than kind-only.
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         let pid_a = create_perspective_scoped(&kanban, "GridA", "grid", GRID_VIEW_A_ID).await;
         let pid_b = create_perspective_scoped(&kanban, "GridB", "grid", GRID_VIEW_B_ID).await;
@@ -2454,7 +2454,7 @@ mod tests {
         // it must fall back to the legacy perspective.
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         let pid_legacy = create_perspective_with_view(&kanban, "Legacy", "grid").await;
         let pid_scoped = create_perspective_scoped(&kanban, "Scoped", "grid", GRID_VIEW_A_ID).await;
@@ -2487,7 +2487,7 @@ mod tests {
         // view B. With `view_id=A`, NextPerspective must cycle within A only.
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         let pid_a1 = create_perspective_scoped(&kanban, "A1", "grid", GRID_VIEW_A_ID).await;
         let pid_a2 = create_perspective_scoped(&kanban, "A2", "grid", GRID_VIEW_A_ID).await;
@@ -2525,7 +2525,7 @@ mod tests {
         // perspective is scoped to that view must succeed.
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         let pid = create_perspective_scoped(&kanban, "Pinned", "grid", GRID_VIEW_A_ID).await;
 
@@ -2547,7 +2547,7 @@ mod tests {
         // where two grid views shared every scoped perspective.
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         let pid = create_perspective_scoped(&kanban, "Pinned to A", "grid", GRID_VIEW_A_ID).await;
 
@@ -2625,7 +2625,7 @@ mod tests {
     /// test needs.
     fn switch_ctx(
         kanban: Arc<KanbanContext>,
-        ui: Arc<swissarmyhammer_commands::UIState>,
+        ui: Arc<swissarmyhammer_ui_state::UIState>,
         perspective_id: &str,
     ) -> CommandContext {
         let mut args = HashMap::new();
@@ -2660,7 +2660,7 @@ mod tests {
         // Crucially, it must NOT silently mutate UIState.
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         let cmd_ctx = switch_ctx(Arc::clone(&kanban), Arc::clone(&ui), "does-not-exist");
         let err = SwitchPerspectiveCmd
@@ -2688,7 +2688,7 @@ mod tests {
         // task on the board (filter empty → no-filter).
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         // Two tasks; no filter on the perspective.
         let t1 = add_task_with_body(&kanban, "Bug task", "#bug fix this").await;
@@ -2715,7 +2715,7 @@ mod tests {
         // `task_helpers::tests`).
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         let t_bug = add_task_with_body(&kanban, "Bug", "#bug top of body").await;
         let _t_feat = add_task_with_body(&kanban, "Feature", "#feature pretty").await;
@@ -2744,7 +2744,7 @@ mod tests {
         // event per click — never two.
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         let t = add_task_with_body(&kanban, "Bug", "#bug oops").await;
         let mut args = HashMap::new();
@@ -2763,10 +2763,10 @@ mod tests {
         // The result must deserialize as `PerspectiveSwitch` — not a pair
         // of `ActivePerspective` + something-else, and not as a tuple of
         // two changes.
-        let change: swissarmyhammer_commands::UIStateChange =
+        let change: swissarmyhammer_ui_state::UIStateChange =
             serde_json::from_value(result).expect("result must be a single UIStateChange");
         match change {
-            swissarmyhammer_commands::UIStateChange::PerspectiveSwitch {
+            swissarmyhammer_ui_state::UIStateChange::PerspectiveSwitch {
                 perspective_id,
                 filtered_task_ids,
             } => {
@@ -2784,7 +2784,7 @@ mod tests {
         // window_label_from_scope path the production app uses.
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         add_task_with_body(&kanban, "Bug", "#bug").await;
         let pid = create_perspective_with_view(&kanban, "All", "board").await;
@@ -2817,7 +2817,7 @@ mod tests {
         // registration, no name typo).
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         let t = add_task_with_body(&kanban, "Bug", "#bug oops").await;
         let mut args = HashMap::new();
@@ -2852,7 +2852,7 @@ mod tests {
         // can't silently pass an empty switch.
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
 
         let mut cmd_ctx = CommandContext::new("perspective.switch", vec![], None, HashMap::new());
         cmd_ctx.set_extension(Arc::clone(&kanban));

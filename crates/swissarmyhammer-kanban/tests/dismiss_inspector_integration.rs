@@ -29,13 +29,14 @@
 //! `dispatch_move_placement.rs`).
 //!
 //! [`CommandContext`]: swissarmyhammer_commands::CommandContext
-//! [`UIState`]: swissarmyhammer_commands::UIState
+//! [`UIState`]: swissarmyhammer_ui_state::UIState
 //! [`01KQ9TVZYXN65JHA479D1CS91T`]: # "Escape does not close the inspector"
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use swissarmyhammer_commands::{CommandContext, UIState};
+use swissarmyhammer_commands::{CommandContext};
+use swissarmyhammer_ui_state::{UIState};
 use swissarmyhammer_kanban::commands::register_commands;
 
 /// Build a minimal [`CommandContext`] for `app.dismiss` carrying the

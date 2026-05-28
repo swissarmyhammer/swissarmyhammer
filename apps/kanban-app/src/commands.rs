@@ -1779,23 +1779,23 @@ fn emit_ui_state_change_if_needed(app: &AppHandle, state: &AppState, result: &Va
 ///   `UIStateProvider` renders.
 fn ui_state_change_kind(result: &Value) -> Option<&'static str> {
     if let Ok(change) =
-        serde_json::from_value::<swissarmyhammer_commands::UIStateChange>(result.clone())
+        serde_json::from_value::<swissarmyhammer_ui_state::UIStateChange>(result.clone())
     {
         return Some(match change {
-            swissarmyhammer_commands::UIStateChange::ScopeChain(_) => "scope_chain",
-            swissarmyhammer_commands::UIStateChange::PaletteOpen(_) => "palette_open",
-            swissarmyhammer_commands::UIStateChange::KeymapMode(_) => "keymap_mode",
-            swissarmyhammer_commands::UIStateChange::InspectorStack(_) => "inspector_stack",
-            swissarmyhammer_commands::UIStateChange::ActiveView(_) => "active_view",
-            swissarmyhammer_commands::UIStateChange::ActivePerspective(_) => "active_perspective",
-            swissarmyhammer_commands::UIStateChange::AppMode(_) => "app_mode",
-            swissarmyhammer_commands::UIStateChange::InspectorWidth { .. } => "inspector_width",
+            swissarmyhammer_ui_state::UIStateChange::ScopeChain(_) => "scope_chain",
+            swissarmyhammer_ui_state::UIStateChange::PaletteOpen(_) => "palette_open",
+            swissarmyhammer_ui_state::UIStateChange::KeymapMode(_) => "keymap_mode",
+            swissarmyhammer_ui_state::UIStateChange::InspectorStack(_) => "inspector_stack",
+            swissarmyhammer_ui_state::UIStateChange::ActiveView(_) => "active_view",
+            swissarmyhammer_ui_state::UIStateChange::ActivePerspective(_) => "active_perspective",
+            swissarmyhammer_ui_state::UIStateChange::AppMode(_) => "app_mode",
+            swissarmyhammer_ui_state::UIStateChange::InspectorWidth { .. } => "inspector_width",
             // `PerspectiveSwitch` is the atomic id+filtered-ids update emitted
             // by `perspective.switch`. We classify it as `perspective_switch`
             // so the frontend can register its own debounce/skip policy
             // independently of the legacy `active_perspective` kind (which
             // covered id-only mutations).
-            swissarmyhammer_commands::UIStateChange::PerspectiveSwitch { .. } => {
+            swissarmyhammer_ui_state::UIStateChange::PerspectiveSwitch { .. } => {
                 "perspective_switch"
             }
         });
@@ -2775,7 +2775,7 @@ mod tests {
     // re-renders through every `useUIState()` consumer).
 
     use super::ui_state_change_kind;
-    use swissarmyhammer_commands::UIStateChange;
+    use swissarmyhammer_ui_state::UIStateChange;
 
     #[test]
     fn ui_state_change_kind_scope_chain() {

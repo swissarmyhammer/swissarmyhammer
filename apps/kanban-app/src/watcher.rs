@@ -904,7 +904,7 @@ async fn recompute_and_emit_perspective_filters(ctx: &Arc<KanbanContext>, app: &
 /// `perspective.switch`.
 pub async fn recompute_perspective_filters(
     ctx: &KanbanContext,
-    ui_state: &swissarmyhammer_commands::UIState,
+    ui_state: &swissarmyhammer_ui_state::UIState,
 ) -> Vec<String> {
     use swissarmyhammer_kanban::commands::perspective_commands::evaluate_perspective_filter;
 
@@ -2011,7 +2011,7 @@ mod tests {
     // actually moved.
     // ------------------------------------------------------------------------
 
-    use swissarmyhammer_commands::UIState;
+    use swissarmyhammer_ui_state::UIState;
 
     /// Add a `#bug` perspective to the board and return its id.
     async fn add_bug_perspective(ctx: &Arc<KanbanContext>) -> String {

@@ -181,7 +181,7 @@ pub(crate) fn ui_state_xdg_config_path(app_subdir: &str) -> std::path::PathBuf {
         })
 }
 
-/// Load a [`swissarmyhammer_commands::UIState`] from the per-consumer
+/// Load a [`swissarmyhammer_ui_state::UIState`] from the per-consumer
 /// XDG config file, or return defaults if the file is missing or
 /// malformed.
 ///
@@ -197,10 +197,10 @@ pub(crate) fn ui_state_xdg_config_path(app_subdir: &str) -> std::path::PathBuf {
 /// the others. Subsequent mutations auto-save to the resolved path
 /// just as with [`UIState::load`].
 ///
-/// [`UIState`]: swissarmyhammer_commands::UIState
-/// [`UIState::load`]: swissarmyhammer_commands::UIState::load
-pub fn default_ui_state(app_subdir: &str) -> swissarmyhammer_commands::UIState {
-    swissarmyhammer_commands::UIState::load(ui_state_xdg_config_path(app_subdir))
+/// [`UIState`]: swissarmyhammer_ui_state::UIState
+/// [`UIState::load`]: swissarmyhammer_ui_state::UIState::load
+pub fn default_ui_state(app_subdir: &str) -> swissarmyhammer_ui_state::UIState {
+    swissarmyhammer_ui_state::UIState::load(ui_state_xdg_config_path(app_subdir))
 }
 
 // Re-export commonly used types

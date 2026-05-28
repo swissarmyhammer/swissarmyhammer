@@ -30,7 +30,8 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use swissarmyhammer_commands::{UIState, WindowInfo};
+use swissarmyhammer_commands::{WindowInfo};
+use swissarmyhammer_ui_state::{UIState};
 use swissarmyhammer_perspectives::{PerspectiveFieldInfo, PerspectiveInfo};
 use swissarmyhammer_views::ViewInfo;
 

@@ -353,7 +353,8 @@ mod tests {
     use super::*;
     use serde_json::Value;
     use std::sync::Arc;
-    use swissarmyhammer_commands::{CommandContext, UIState};
+    use swissarmyhammer_commands::{CommandContext};
+    use swissarmyhammer_ui_state::{UIState};
 
     /// Build a CommandContext with the given scope chain, target, and optional UIState.
     fn ctx_with(scope: &[&str], target: Option<&str>, ui: Option<Arc<UIState>>) -> CommandContext {

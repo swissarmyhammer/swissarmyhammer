@@ -18,6 +18,7 @@ path = "src/main.rs"
 swissarmyhammer-kanban = { workspace = true }
 swissarmyhammer-fields = { workspace = true }
 swissarmyhammer-commands = { workspace = true }
+swissarmyhammer-ui-state = { workspace = true }
 swissarmyhammer-common = { workspace = true }
 swissarmyhammer-entity-search = { workspace = true }
 swissarmyhammer-entity = { workspace = true }

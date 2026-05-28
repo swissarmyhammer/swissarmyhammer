@@ -184,7 +184,7 @@ mod tests {
     use crate::task::AddTask;
     use crate::Execute;
     use std::sync::Arc;
-    use swissarmyhammer_commands::UIState;
+    use swissarmyhammer_ui_state::UIState;
 
     /// Bring up the default-board set of fixtures shared by most
     /// `task_into_board` tests. Wraps the shared `setup()` helper so each

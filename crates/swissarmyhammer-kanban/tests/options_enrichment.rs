@@ -23,7 +23,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use swissarmyhammer_commands::{Command, CommandsRegistry, UIState, WindowInfo};
+use swissarmyhammer_commands::{Command, CommandsRegistry, WindowInfo};
+use swissarmyhammer_ui_state::{UIState};
 use swissarmyhammer_kanban::commands::options_resolvers::default_options_registry;
 use swissarmyhammer_kanban::dynamic_sources::{build_dynamic_sources, DynamicSourcesInputs};
 use swissarmyhammer_kanban::scope_commands::{commands_for_scope, DynamicSources, ResolvedCommand};

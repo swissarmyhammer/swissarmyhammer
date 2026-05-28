@@ -2,8 +2,8 @@
 assignees:
 - claude-code
 depends_on: []
-position_column: todo
-position_ordinal: '9680'
+position_column: review
+position_ordinal: '80'
 project: command-backends
 title: '`ui-state` MCP server (relocate UIState out of swissarmyhammer-commands)'
 ---

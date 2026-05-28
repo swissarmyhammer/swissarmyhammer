@@ -6,9 +6,8 @@
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use swissarmyhammer_commands::{
-    parse_moniker, Command, CommandContext, CommandError, DragSession, DragSource,
-};
+use swissarmyhammer_commands::{parse_moniker, Command, CommandContext, CommandError};
+use swissarmyhammer_ui_state::{DragSession, DragSource};
 
 use crate::clipboard::{ClipboardData, ClipboardPayload};
 
@@ -814,7 +813,8 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use swissarmyhammer_commands::{CommandContext, UIState};
+    use swissarmyhammer_commands::{CommandContext};
+    use swissarmyhammer_ui_state::{UIState};
     use swissarmyhammer_operations::Execute;
 
     /// Build a CommandContext with the given scope chain, target, and optional UIState.

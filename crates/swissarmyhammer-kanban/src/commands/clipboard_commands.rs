@@ -498,7 +498,7 @@ mod tests {
     use crate::Execute;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use swissarmyhammer_commands::UIState;
+    use swissarmyhammer_ui_state::UIState;
 
     async fn setup() -> (
         tempfile::TempDir,

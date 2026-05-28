@@ -127,7 +127,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use swissarmyhammer_commands::UIState;
+    use swissarmyhammer_ui_state::UIState;
 
     /// Build a bare `CommandContext` with an empty scope chain and no UIState.
     fn ctx_bare() -> CommandContext {

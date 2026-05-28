@@ -79,7 +79,8 @@ mod tests {
     use crate::Execute;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use swissarmyhammer_commands::{CommandContext, UIState};
+    use swissarmyhammer_commands::{CommandContext};
+    use swissarmyhammer_ui_state::{UIState};
 
     /// Build a `CommandContext` whose scope chain looks like the real
     /// frontend's attachment row focus chain, with the supplied `target`

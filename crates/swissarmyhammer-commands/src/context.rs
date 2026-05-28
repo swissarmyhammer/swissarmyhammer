@@ -1,6 +1,6 @@
 use crate::error::{CommandError, Result};
-use crate::ui_state::UIState;
 use serde_json::Value;
+use swissarmyhammer_ui_state::UIState;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::Arc;

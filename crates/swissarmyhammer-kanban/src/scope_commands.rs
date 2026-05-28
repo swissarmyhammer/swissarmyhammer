@@ -42,8 +42,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use swissarmyhammer_commands::{
     Command, CommandContext, CommandDef, CommandsRegistry, KeysDef, OptionsContext,
-    OptionsRegistry, ParamDef, ParamSource, TabButtonDef, UIState, WindowInfo,
+    OptionsRegistry, ParamDef, ParamSource, TabButtonDef, WindowInfo,
 };
+use swissarmyhammer_ui_state::UIState;
 use swissarmyhammer_fields::FieldsContext;
 use swissarmyhammer_perspectives::PerspectiveInfo;
 use swissarmyhammer_views::ViewInfo;

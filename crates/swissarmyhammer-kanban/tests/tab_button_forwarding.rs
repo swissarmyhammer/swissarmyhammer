@@ -22,7 +22,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use swissarmyhammer_commands::{Command, CommandsRegistry, UIState};
+use swissarmyhammer_commands::{Command, CommandsRegistry};
+use swissarmyhammer_ui_state::{UIState};
 use swissarmyhammer_kanban::scope_commands::{commands_for_scope, ResolvedCommand};
 
 /// Build a [`CommandsRegistry`] with one or more synthetic commands.

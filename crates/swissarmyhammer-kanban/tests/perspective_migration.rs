@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::json;
-use swissarmyhammer_commands::UIState;
+use swissarmyhammer_ui_state::UIState;
 use swissarmyhammer_kanban::dynamic_sources::{build_dynamic_sources, DynamicSourcesInputs};
 use swissarmyhammer_kanban::{
     board::InitBoard, dispatch::execute_operation, parse::parse_input, Execute, KanbanContext,

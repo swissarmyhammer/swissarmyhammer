@@ -4,7 +4,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
-use swissarmyhammer_commands::{load_yaml_dir, Command, CommandsRegistry, UIState};
+use swissarmyhammer_commands::{load_yaml_dir, Command, CommandsRegistry};
+use swissarmyhammer_ui_state::{UIState};
 use swissarmyhammer_entity::Entity;
 use swissarmyhammer_entity_search::EntitySearchIndex;
 use swissarmyhammer_focus::{SpatialRegistry, SpatialState};
@@ -1007,7 +1008,7 @@ fn try_home_backstop(cwd: &Path) -> Option<PathBuf> {
 ///
 /// Reads the MRU list from UIState and returns the first entry whose
 /// path still exists on disk, or `None` if no valid MRU entry is found.
-fn try_mru_fallback(ui_state: &swissarmyhammer_commands::UIState) -> Option<PathBuf> {
+fn try_mru_fallback(ui_state: &swissarmyhammer_ui_state::UIState) -> Option<PathBuf> {
     let recent_boards = ui_state.recent_boards();
     let recent = recent_boards.first()?;
     let path = PathBuf::from(&recent.path);
@@ -1321,7 +1322,7 @@ mod tests {
 
     #[test]
     fn test_mru_uistate_touch_and_truncate() {
-        let ui_state = swissarmyhammer_commands::UIState::new();
+        let ui_state = swissarmyhammer_ui_state::UIState::new();
 
         for i in 0..25 {
             ui_state.touch_recent(&format!("/board/{}", i), &format!("Board {}", i));
@@ -1366,7 +1367,7 @@ mod tests {
 
     #[test]
     fn test_mru_deduplicates() {
-        let ui_state = swissarmyhammer_commands::UIState::new();
+        let ui_state = swissarmyhammer_ui_state::UIState::new();
 
         ui_state.touch_recent("/board/a", "Board A");
         ui_state.touch_recent("/board/b", "Board B");
@@ -1553,10 +1554,10 @@ mod tests {
     // Drag session tests
     // =========================================================================
 
-    fn make_drag_session(task_id: &str, board_path: &str) -> swissarmyhammer_commands::DragSession {
-        swissarmyhammer_commands::DragSession {
+    fn make_drag_session(task_id: &str, board_path: &str) -> swissarmyhammer_ui_state::DragSession {
+        swissarmyhammer_ui_state::DragSession {
             session_id: ulid::Ulid::new().to_string(),
-            from: swissarmyhammer_commands::DragSource::FocusChain {
+            from: swissarmyhammer_ui_state::DragSource::FocusChain {
                 entity_type: "task".to_string(),
                 entity_id: task_id.to_string(),
                 fields: serde_json::json!({"title": "Test task"}),

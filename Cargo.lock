@@ -4704,6 +4704,7 @@ dependencies = [
  "swissarmyhammer-plugin",
  "swissarmyhammer-store",
  "swissarmyhammer-tools",
+ "swissarmyhammer-ui-state",
  "swissarmyhammer-views",
  "swissarmyhammer-workspace-init",
  "tauri",
@@ -9532,6 +9533,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "swissarmyhammer-ui-state",
  "tempfile",
  "thiserror 2.0.18",
  "tokio-test",
@@ -9659,6 +9661,7 @@ dependencies = [
  "swissarmyhammer-operations-macros",
  "swissarmyhammer-plugin",
  "swissarmyhammer-store",
+ "swissarmyhammer-ui-state",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -9785,6 +9788,7 @@ dependencies = [
  "swissarmyhammer-operations",
  "swissarmyhammer-perspectives",
  "swissarmyhammer-store",
+ "swissarmyhammer-ui-state",
  "swissarmyhammer-views",
  "tempfile",
  "thiserror 2.0.18",
@@ -10260,6 +10264,22 @@ dependencies = [
  "tree-sitter-typescript",
  "tree-sitter-yaml",
  "tree-sitter-zig",
+]
+
+[[package]]
+name = "swissarmyhammer-ui-state"
+version = "0.13.5"
+dependencies = [
+ "rmcp",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "swissarmyhammer-operations",
+ "swissarmyhammer-operations-macros",
+ "swissarmyhammer-plugin",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

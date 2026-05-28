@@ -6,8 +6,8 @@
 //! headless test callers can construct a live `UIState` without pulling
 //! in the desktop crate.
 //!
-//! The tests cover two paths that live entirely inside the Tier 0
-//! `swissarmyhammer-commands` crate:
+//! The tests cover two paths owned by [`UIState`], which now lives in the
+//! `swissarmyhammer-ui-state` crate:
 //!
 //! 1. Load from an explicit fixture path — the happy path that CLI and
 //!    MCP callers use when they already know where the config lives.
@@ -15,13 +15,14 @@
 //!    branch; defaults must be seeded without surfacing an error.
 //!
 //! The XDG-aware entry point (`default_ui_state`) lives in
-//! `swissarmyhammer-kanban` to keep `swissarmyhammer-commands` free of
-//! `swissarmyhammer-directory` (Tier 0 purity). See
-//! `swissarmyhammer-kanban/tests/default_ui_state.rs` for its coverage.
+//! `swissarmyhammer-kanban` to keep both `swissarmyhammer-commands` and
+//! `swissarmyhammer-ui-state` free of `swissarmyhammer-directory` (Tier 0
+//! purity). See `swissarmyhammer-kanban/tests/default_ui_state.rs` for its
+//! coverage.
 
 use std::fs;
 
-use swissarmyhammer_commands::UIState;
+use swissarmyhammer_ui_state::UIState;
 use tempfile::TempDir;
 
 /// Build a minimal but non-default YAML fixture covering both persisted
