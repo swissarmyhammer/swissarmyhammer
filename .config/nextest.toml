@@ -53,6 +53,22 @@ filter = "package(swissarmyhammer-tools) and test(/^mcp::tools::code_context::te
 test-group = "treesitter-embedding"
 slow-timeout = { period = "60s", terminate-after = 6 }
 
+# Same root cause again, but for the code_context END-TO-END tests, which live
+# in *separate test binaries* (not the in-crate unit module matched above):
+#   - the `code_context_mcp_e2e_test` binary (rebuild/detect tests), and
+#   - the `tools_tests` `qwen_embedding_*` / `semantic_search` integration tests.
+# Each calls the real indexer (qwen-embedding model load) plus LSP indexing and
+# file-watching. Run in parallel, N cold model loads contend and the rebuild/
+# detect/qwen tests hang until the slow-timeout kills them at 300s; they all
+# pass under `--test-threads=1`. Serialise them into the shared embedding group.
+# This MUST be a nextest test-group, not `#[serial]`: the tests span two test
+# binaries (= two processes), and `#[serial]` only coordinates within a single
+# process, whereas a test-group caps concurrency across the whole run.
+[[profile.default.overrides]]
+filter = "package(swissarmyhammer-tools) and (binary(code_context_mcp_e2e_test) or test(/qwen_embedding/) or test(/semantic_search/))"
+test-group = "treesitter-embedding"
+slow-timeout = { period = "60s", terminate-after = 6 }
+
 # Apply serial execution to llama-embedding tests
 [[profile.default.overrides]]
 filter = "package(llama-embedding)"
