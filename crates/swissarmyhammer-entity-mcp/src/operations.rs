@@ -21,6 +21,11 @@
 //!   `.archive/` directory without trashing them.
 //! - **search** (`search`) — free-text query over the entities, backed by
 //!   `EntitySearchIndex`, optionally narrowed to a single type.
+//! - **clipboard** (`copy`, `cut`, `paste`) — copy/cut snapshot an entity to
+//!   the clipboard; paste dispatches through the shared `kanban` `PasteMatrix`
+//!   onto a target moniker. These reuse the exact command structs that back
+//!   the domain face, so there is no duplicate clipboard logic. Cut and paste
+//!   write through the kernel, so they are undoable and emit events.
 
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
@@ -229,6 +234,110 @@ pub struct Search {
     pub entity_type: Option<String>,
 }
 
+// Clipboard operations ──────────────────────────────────────────────────
+//
+// Copy / Cut / Paste reuse the *exact* clipboard machinery that backs the
+// domain `kanban` face — `CopyEntityCmd`, `CutEntityCmd`, `PasteEntityCmd`
+// from `swissarmyhammer_kanban::commands::clipboard_commands`, dispatched
+// over the same `PasteMatrix`. The server constructs a `CommandContext`
+// over the shared kernel and runs those command structs, so there is one
+// copy/cut/paste implementation in the codebase, not two.
+//
+// External drag-in and clipboard paste both create through the paste
+// matrix (this is the paste path). Internal drag — repositioning an entity
+// already on the board — is a property mutation handled by the drag
+// commands elsewhere, NOT here.
+
+/// Copy an entity of the given type to the clipboard.
+///
+/// Snapshots the `type:id` entity's field set into a clipboard payload via
+/// the shared `CopyEntityCmd`, which reads through the kernel and writes
+/// the JSON to the injected clipboard provider. Copy is non-destructive —
+/// the source entity is untouched.
+///
+/// Returns the underlying command's result, e.g.
+/// `{ copied: true, id, entity_type, clipboard_json }`.
+#[operation(
+    verb = "copy",
+    noun = "entity",
+    description = "Copy an entity of the given type to the clipboard"
+)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Copy {
+    /// The entity type (e.g. `"task"`, `"tag"`).
+    #[serde(default, rename = "type")]
+    pub entity_type: String,
+    /// The entity id within that type.
+    #[serde(default)]
+    pub id: String,
+    /// Optional scope chain (innermost-first monikers like
+    /// `["task:01T", "column:todo"]`). Required only when copying an
+    /// `attachment`, which the shared command resolves against its parent
+    /// `task:` moniker; ignored for self-contained types.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scope: Vec<String>,
+}
+
+/// Cut an entity of the given type: copy it, then run its destructive op.
+///
+/// Delegates to the shared `CutEntityCmd`, which snapshots the entity to
+/// the clipboard and then deletes / detaches the source (task delete, tag
+/// untag, attachment removal). The destructive step flows through the
+/// kernel's `StoreContext`, so the cut is undoable and emits entity events.
+/// Types without a defined destructive operation are rejected.
+///
+/// Returns the underlying command's result (shape depends on entity type;
+/// always carries `clipboard_json` and `cut: true`).
+#[operation(
+    verb = "cut",
+    noun = "entity",
+    description = "Cut an entity of the given type (copy to clipboard, then delete/detach the source)"
+)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Cut {
+    /// The entity type (e.g. `"task"`, `"tag"`).
+    #[serde(default, rename = "type")]
+    pub entity_type: String,
+    /// The entity id within that type.
+    #[serde(default)]
+    pub id: String,
+    /// Optional scope chain (innermost-first monikers). Required when
+    /// cutting a `tag` or `attachment`, whose destructive op needs the
+    /// owning `task:` moniker in scope; ignored for self-contained types
+    /// like `task`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scope: Vec<String>,
+}
+
+/// Paste the clipboard onto a target entity, via the shared `PasteMatrix`.
+///
+/// Delegates to the shared `PasteEntityCmd`, which deserializes the
+/// clipboard payload, looks up the `(clipboard_type, target_type)` handler
+/// in the `PasteMatrix`, and runs it. The handler's writes flow through the
+/// kernel's `StoreContext`, so the paste is undoable and emits entity
+/// events. This is the external/clipboard paste path; internal drag
+/// repositioning is handled elsewhere.
+///
+/// Returns the paste handler's result (shape depends on the matched pair,
+/// e.g. `{ id, ... }` for a new task, `{ tagged: true, ... }` for a tag).
+#[operation(
+    verb = "paste",
+    noun = "entity",
+    description = "Paste the clipboard onto the target moniker via the shared PasteMatrix"
+)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Paste {
+    /// The destination moniker (e.g. `"column:doing"`, `"task:01T"`). The
+    /// `(clipboard_type, target_type)` pair selects the paste handler.
+    #[serde(default)]
+    pub target: String,
+    /// Optional scope chain (innermost-first monikers). Some paste handlers
+    /// (e.g. `attachment_onto_attachment`) resolve a parent entity from the
+    /// scope chain; supply it when pasting onto association-shaped targets.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scope: Vec<String>,
+}
+
 /// All entity operations — the canonical list used for schema generation.
 ///
 /// Both the wire-schema generator (`generate_mcp_schema`) and the
@@ -245,6 +354,9 @@ static ENTITY_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(
         Box::leak(Box::<ArchiveEntity>::default()) as &dyn Operation,
         Box::leak(Box::<UnarchiveEntity>::default()) as &dyn Operation,
         Box::leak(Box::<Search>::default()) as &dyn Operation,
+        Box::leak(Box::<Copy>::default()) as &dyn Operation,
+        Box::leak(Box::<Cut>::default()) as &dyn Operation,
+        Box::leak(Box::<Paste>::default()) as &dyn Operation,
     ]
 });
 

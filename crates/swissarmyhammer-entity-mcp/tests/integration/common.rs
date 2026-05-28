@@ -22,7 +22,11 @@ use serde_json::Value;
 use swissarmyhammer_entity::test_utils::test_fields_context;
 use swissarmyhammer_entity::{EntityContext, EntityTypeStore};
 use swissarmyhammer_entity_mcp::EntityServer;
+use swissarmyhammer_kanban::board::InitBoard;
+use swissarmyhammer_kanban::clipboard::InMemoryClipboard;
+use swissarmyhammer_kanban::{KanbanContext, KanbanOperationProcessor, OperationProcessor};
 use swissarmyhammer_store::{StoreContext, StoreHandle};
+use swissarmyhammer_ui_state::UIState;
 use tempfile::TempDir;
 
 /// A transport that yields no messages and closes immediately, used solely
@@ -125,6 +129,76 @@ impl Harness {
     /// Build an `EntityServer` over the harness's shared kernel.
     pub fn server(&self) -> EntityServer {
         EntityServer::new(Arc::clone(&self.entity_ctx))
+    }
+}
+
+/// A full board-backed harness for the clipboard ops.
+///
+/// The bare [`Harness`] wires a minimal `tag`/`task` kernel from
+/// `test_fields_context`, which is enough for CRUD but not for paste — the
+/// paste handlers need real columns, the kanban field definitions, and a
+/// `KanbanContext` to dispatch sub-ops against. This harness stands up the
+/// production board substrate exactly the way `swissarmyhammer-kanban`'s
+/// `wire_store_substrate` does: a `KanbanContext` with an initialized board
+/// and one shared `Arc<StoreContext>` wired into the kernel, so writes made
+/// by the paste handlers push onto the *same* undo stack the test drives.
+///
+/// The `EntityServer` it builds shares that `KanbanContext`'s
+/// `entity_context()` (via [`EntityServer::with_clipboard`]), so an
+/// `entity copy/cut/paste` is visible through the generic face and
+/// reversible via `store_ctx.undo()`.
+pub struct ClipboardHarness {
+    pub dir: TempDir,
+    pub store_ctx: Arc<StoreContext>,
+    pub kanban: Arc<KanbanContext>,
+    pub entity_ctx: Arc<EntityContext>,
+    pub clipboard: Arc<InMemoryClipboard>,
+    pub ui_state: Arc<UIState>,
+}
+
+impl ClipboardHarness {
+    /// Stand up a board, wire the shared store substrate, and return the
+    /// harness. Mirrors `wire_store_substrate` so undo behaves like
+    /// production.
+    pub async fn new() -> Self {
+        let dir = TempDir::new().unwrap();
+        let kanban = KanbanContext::new(dir.path().join(".kanban"));
+
+        KanbanOperationProcessor::new()
+            .process(&InitBoard::new("Clipboard Test"), &kanban)
+            .await
+            .expect("board init");
+
+        let kanban = Arc::new(kanban);
+
+        // Wire the one shared StoreContext into the kernel exactly as
+        // production does, so paste writes are undoable on this stack.
+        let store_ctx = swissarmyhammer_kanban::wire_store_substrate(&kanban).await;
+        let entity_ctx = kanban.entity_context().await.expect("entity_context");
+
+        let clipboard = Arc::new(InMemoryClipboard::new());
+        let ui_state = Arc::new(UIState::new());
+
+        Self {
+            dir,
+            store_ctx,
+            kanban,
+            entity_ctx,
+            clipboard,
+            ui_state,
+        }
+    }
+
+    /// Build a clipboard-wired `EntityServer` over the harness's shared
+    /// board context and in-memory clipboard.
+    pub async fn server(&self) -> EntityServer {
+        EntityServer::with_clipboard(
+            Arc::clone(&self.kanban),
+            Arc::clone(&self.clipboard) as Arc<dyn swissarmyhammer_kanban::clipboard::ClipboardProvider>,
+            Arc::clone(&self.ui_state),
+        )
+        .await
+        .expect("clipboard-wired server")
     }
 }
 

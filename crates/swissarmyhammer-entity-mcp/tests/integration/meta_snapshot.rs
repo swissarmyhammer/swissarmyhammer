@@ -45,6 +45,9 @@ async fn entity_tool_meta_operations_tree_is_complete() {
         ("entity", "archive", "archive entity"),
         ("entity", "unarchive", "unarchive entity"),
         ("entities", "search", "search entities"),
+        ("entity", "copy", "copy entity"),
+        ("entity", "cut", "cut entity"),
+        ("entity", "paste", "paste entity"),
     ];
 
     for (noun, verb, op_str) in &expected {
