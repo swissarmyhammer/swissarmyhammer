@@ -78,6 +78,7 @@ use crate::discovery::{
 };
 use crate::error::{Error, Result};
 use crate::ledger::{CallbackId, PluginLedger, RegistrationHandle};
+use crate::notify::NotificationBridge;
 use crate::registry::{
     RegisterOutcome, ServerName, ServerRegistry, ServerSource, ServerStatus, UnregisterOutcome,
 };
@@ -205,6 +206,22 @@ struct HostInner {
     /// a live peer instead of one whose loop was torn down with an ephemeral
     /// runtime.
     bridge_runtime: BridgeRuntime,
+
+    /// The app-wide MCP notification bridge.
+    ///
+    /// The platform-layer face of the app's in-process event buses: the
+    /// wiring layer's per-bus fan-in adapters publish normalized
+    /// [`McpNotification`](crate::notify::McpNotification)s here, and every
+    /// client — the in-process webview/host and external agents over a
+    /// transport — subscribes through it. Held on the host (rather than
+    /// threaded separately) because every transport and every wiring layer
+    /// already holds the host, so this is the one canonical instance they
+    /// share; the bridge is itself `Clone` over one broadcast channel and one
+    /// subscription registry, so it sits with the immutable-after-construction
+    /// fields outside the host mutex. A `NotificationBridge` with no
+    /// subscribers is inert, so a host whose embedder never wires the bus
+    /// adapters pays nothing.
+    notification_bridge: NotificationBridge,
 
     /// The mutable host state guarded by one mutex.
     state: Mutex<HostState>,
@@ -751,6 +768,7 @@ impl PluginHost {
                 next_plugin_seq: AtomicU64::new(0),
                 types_emitter,
                 bridge_runtime,
+                notification_bridge: NotificationBridge::new(),
                 state: Mutex::new(HostState {
                     registry: ServerRegistry::new(),
                     ledger: PluginLedger::new(),
@@ -784,6 +802,19 @@ impl PluginHost {
     /// The writable user-layer plugin root this host was given.
     pub fn user_root(&self) -> &Path {
         &self.inner.user_root
+    }
+
+    /// The app-wide MCP notification bridge.
+    ///
+    /// Returns a clone of the host's one [`NotificationBridge`]; every clone
+    /// shares the same broadcast channel and subscription registry, so a
+    /// notification published on any clone reaches every subscriber. This is
+    /// the canonical instance the embedder hands to the wiring layer (whose
+    /// per-bus fan-in adapters [`publish`](NotificationBridge::publish) into
+    /// it) and that each transport subscribes through to deliver
+    /// server→client `notifications/…`.
+    pub fn notification_bridge(&self) -> NotificationBridge {
+        self.inner.notification_bridge.clone()
     }
 
     /// The writable project-layer plugin root, if the host has one.

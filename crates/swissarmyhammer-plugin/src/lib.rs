@@ -14,6 +14,11 @@
 //! - [`registry`] — tracks the set of registered MCP servers by name.
 //! - [`dispatcher`] — routes generic operation requests to a registered server.
 //! - [`server`] — the MCP server abstraction and its transports.
+//! - [`notify`] — the MCP notification surface: the bridge, the per-client
+//!   subscription registry, and the normalized four-plane notification model
+//!   (`store/changed`, `commands/executed`, `commands/changed` /
+//!   `tools/list_changed`, `ui_state/changed` / `store/undo_changed`), each
+//!   carrying `txn` (correlation) and `origin` (provenance).
 //! - [`runtime`] — the JavaScript runtime that hosts plugin code.
 //! - [`sdk`] — the `@swissarmyhammer/plugin` TypeScript SDK, embedded.
 //! - [`host`] — host-side bindings exposed to plugins.
@@ -32,6 +37,7 @@ pub mod dispatcher;
 pub mod error;
 pub mod host;
 pub mod ledger;
+pub mod notify;
 pub mod registry;
 pub mod reload;
 pub mod runtime;
@@ -43,6 +49,10 @@ pub use dispatcher::Dispatcher;
 pub use error::{Error, Result};
 pub use host::PluginHost;
 pub use ledger::{CallbackId, PluginLedger, RegistrationHandle};
+pub use notify::{
+    ChangeOp, FieldChange, McpNotification, NotificationBridge, NotificationSubscription,
+    Provenance, SubscriberId, SubscriberKind,
+};
 pub use registry::{
     RegisterOutcome, ServerName, ServerRegistry, ServerSource, ServerStatus, UnregisterOutcome,
 };

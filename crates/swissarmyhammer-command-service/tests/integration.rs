@@ -11,6 +11,13 @@
 //! - [`override_stack_e2e`] — the headline scenario: A registers, B
 //!   overrides, B unloads → A re-emerges, A unloads → the host's original
 //!   registration is active again.
+//! - [`mcp_notifications_e2e`] — the notification bridge's four planes:
+//!   one multi-write command's `store/changed` events share a `txn` and
+//!   carry `origin:"user"`, the `commands/executed` action event is
+//!   delivered, a perspective edit produces a `store/changed{store:
+//!   "perspective"}` with no `changes`, a palette toggle produces
+//!   `ui_state/changed`, an undo emits the inverse batch under a new `txn`
+//!   with `origin:"undo"`, and an external client receives the same stream.
 //!
 //! Shared test helpers live in [`support`]. Every submodule lives under
 //! `tests/integration/`; the `#[path = ...]` attributes make this
@@ -22,6 +29,8 @@ mod support;
 
 #[path = "integration/host_bootstrap_e2e.rs"]
 mod host_bootstrap_e2e;
+#[path = "integration/mcp_notifications_e2e.rs"]
+mod mcp_notifications_e2e;
 #[path = "integration/override_stack_e2e.rs"]
 mod override_stack_e2e;
 #[path = "integration/unload_cleanup_e2e.rs"]
