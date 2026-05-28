@@ -75,6 +75,27 @@ export const RUST_MODULE_IDS: Readonly<Record<string, string>> = Object.freeze({
    * name `"kanban"` and reaches it afterward as `this.kanban...`.
    */
   kanban: "kanban",
+
+  /**
+   * The window operation tool: window-manager actions plus the OS file actions
+   * (`open path`, `reveal path`) that back `attachment.open` / `attachment.reveal`
+   * and the board-file lifecycle verbs. Exposed under id `"window"` by the
+   * host's `expose_rust_module` wiring (the kanban app wraps a
+   * `swissarmyhammer_window_service::WindowService` in an `InProcessServer`).
+   * A builtin plugin asks for it by the public name `"window"` and reaches it
+   * as `this.window...`.
+   */
+  window: "window",
+
+  /**
+   * The views operation tool: the perspective/view state mutations the
+   * `perspective.*` and `view.set` commands depend on (`set view`, …). Exposed
+   * under id `"views"` by the host's `expose_rust_module` wiring (the kanban
+   * app wraps a `swissarmyhammer_views::ViewsServer` in an `InProcessServer`).
+   * A builtin plugin asks for it by the public name `"views"` and reaches it as
+   * `this.views...`.
+   */
+  views: "views",
 });
 
 /**

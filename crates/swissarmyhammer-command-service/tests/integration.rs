@@ -31,6 +31,8 @@
 #[path = "integration/support.rs"]
 mod support;
 
+#[path = "integration/builtin_kanban_misc_e2e.rs"]
+mod builtin_kanban_misc_e2e;
 #[path = "integration/builtin_task_commands_e2e.rs"]
 mod builtin_task_commands_e2e;
 #[path = "integration/host_bootstrap_e2e.rs"]

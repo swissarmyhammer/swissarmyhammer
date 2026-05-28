@@ -5,8 +5,8 @@ depends_on:
 - 01KS5F7BR6850RKT67X4CNHPAZ
 - 01KS5F5ZNA0621X8KM2NPERXNV
 - 01KS5G3AKZXDN7K6YR415E0V4K
-position_column: review
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffc580
 project: command-events
 title: 'Change propagation: undo/redo emit edit-shaped data events + a stack-state event (caches + UI)'
 ---

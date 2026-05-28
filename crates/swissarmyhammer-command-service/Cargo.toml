@@ -36,6 +36,11 @@ tokio = { workspace = true, features = ["test-util"] }
 swissarmyhammer-entity = { workspace = true, features = ["test-support"] }
 swissarmyhammer-views = { workspace = true }
 swissarmyhammer-perspectives = { workspace = true }
+# The `builtin_kanban_misc_e2e` integration test exposes the REAL in-process
+# `window` operation tool (over a recording spy `WindowShell`) so the ported
+# `attachment.open` / `attachment.reveal` commands route through the same
+# `WindowService` the kanban app uses. Dev-only edge, same shape as the others.
+swissarmyhammer-window-service = { workspace = true }
 swissarmyhammer-kanban = { workspace = true }
 swissarmyhammer-fields = { workspace = true }
 swissarmyhammer-store = { workspace = true }

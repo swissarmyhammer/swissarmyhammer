@@ -9542,6 +9542,7 @@ dependencies = [
  "swissarmyhammer-store",
  "swissarmyhammer-tools",
  "swissarmyhammer-views",
+ "swissarmyhammer-window-service",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
