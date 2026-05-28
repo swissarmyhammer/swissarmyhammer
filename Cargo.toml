@@ -58,6 +58,7 @@ members = [
     "apps/kanban-cli",
     "crates/swissarmyhammer-fields",
     "crates/swissarmyhammer-entity",
+    "crates/swissarmyhammer-entity-mcp",
     "crates/swissarmyhammer-entity-search",
     "crates/swissarmyhammer-views",
     "crates/swissarmyhammer-perspectives",
@@ -277,6 +278,7 @@ swissarmyhammer-directory = { path = "crates/swissarmyhammer-directory" }
 swissarmyhammer-doctor = { path = "crates/swissarmyhammer-doctor" }
 swissarmyhammer-embedding = { path = "crates/swissarmyhammer-embedding" }
 swissarmyhammer-entity = { path = "crates/swissarmyhammer-entity" }
+swissarmyhammer-entity-mcp = { path = "crates/swissarmyhammer-entity-mcp" }
 swissarmyhammer-entity-search = { path = "crates/swissarmyhammer-entity-search" }
 swissarmyhammer-fields = { path = "crates/swissarmyhammer-fields" }
 swissarmyhammer-filter-expr = { path = "crates/swissarmyhammer-filter-expr" }

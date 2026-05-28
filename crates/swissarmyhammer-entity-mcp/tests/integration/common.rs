@@ -20,7 +20,8 @@ use rmcp::transport::Transport;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use serde_json::Value;
 use swissarmyhammer_entity::test_utils::test_fields_context;
-use swissarmyhammer_entity::{EntityContext, EntityServer, EntityTypeStore};
+use swissarmyhammer_entity::{EntityContext, EntityTypeStore};
+use swissarmyhammer_entity_mcp::EntityServer;
 use swissarmyhammer_store::{StoreContext, StoreHandle};
 use tempfile::TempDir;
 

@@ -24,7 +24,8 @@ use rmcp::service::{serve_directly, Peer, RequestContext, RxJsonRpcMessage, TxJs
 use rmcp::transport::Transport;
 use rmcp::{RoleServer, ServerHandler};
 use serde_json::{json, Value};
-use swissarmyhammer_entity::{EntityServer, EntityTypeStore};
+use swissarmyhammer_entity::EntityTypeStore;
+use swissarmyhammer_entity_mcp::EntityServer;
 use swissarmyhammer_kanban::board::InitBoard;
 use swissarmyhammer_kanban::schema::kanban_operations;
 use swissarmyhammer_kanban::task::AddTask;

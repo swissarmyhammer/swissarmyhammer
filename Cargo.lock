@@ -9649,7 +9649,6 @@ dependencies = [
  "indexmap 2.13.1",
  "mime_guess",
  "notify 6.1.1",
- "rmcp",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -9657,9 +9656,6 @@ dependencies = [
  "swissarmyhammer-common",
  "swissarmyhammer-entity",
  "swissarmyhammer-fields",
- "swissarmyhammer-operations",
- "swissarmyhammer-operations-macros",
- "swissarmyhammer-plugin",
  "swissarmyhammer-store",
  "swissarmyhammer-ui-state",
  "tempfile",
@@ -9668,6 +9664,27 @@ dependencies = [
  "tokio-test",
  "tracing",
  "ulid",
+]
+
+[[package]]
+name = "swissarmyhammer-entity-mcp"
+version = "0.13.5"
+dependencies = [
+ "async-trait",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "swissarmyhammer-entity",
+ "swissarmyhammer-entity-search",
+ "swissarmyhammer-kanban",
+ "swissarmyhammer-operations",
+ "swissarmyhammer-operations-macros",
+ "swissarmyhammer-plugin",
+ "swissarmyhammer-store",
+ "tempfile",
+ "tokio",
+ "tokio-test",
+ "tracing",
 ]
 
 [[package]]
@@ -9772,7 +9789,6 @@ dependencies = [
  "fs2",
  "include_dir",
  "open",
- "rmcp",
  "serde",
  "serde_json",
  "serde_yaml_ng",

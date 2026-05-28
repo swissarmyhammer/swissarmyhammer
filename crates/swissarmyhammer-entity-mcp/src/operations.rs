@@ -19,6 +19,8 @@
 //!   `StoreContext` (undoable) and broadcasts `EntityEvent`s.
 //! - **archive** (`archive`, `unarchive`) — move entities to / from the
 //!   `.archive/` directory without trashing them.
+//! - **search** (`search`) — free-text query over the entities, backed by
+//!   `EntitySearchIndex`, optionally narrowed to a single type.
 
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
@@ -200,6 +202,33 @@ pub struct UnarchiveEntity {
     pub id: String,
 }
 
+// Search operations ─────────────────────────────────────────────────────
+
+/// Search entities by free-text query, optionally narrowed to one type.
+///
+/// Backed by `swissarmyhammer_entity_search::EntitySearchIndex`, which the
+/// server builds from the live entities of the searchable types. The query
+/// runs fuzzy matching over entity fields; when `type` is supplied, results
+/// are filtered down to that single entity type.
+///
+/// Returns `{ ok: true, results: [{ id, type, score, entity }, ...] }`,
+/// ordered best-match first.
+#[operation(
+    verb = "search",
+    noun = "entities",
+    description = "Search entities by free-text query, optionally filtered to one type"
+)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Search {
+    /// The free-text query to match against entity fields.
+    #[serde(default)]
+    pub query: String,
+    /// Optional entity type filter (e.g. `"task"`). When omitted, every
+    /// searchable type is considered.
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub entity_type: Option<String>,
+}
+
 /// All entity operations — the canonical list used for schema generation.
 ///
 /// Both the wire-schema generator (`generate_mcp_schema`) and the
@@ -215,6 +244,7 @@ static ENTITY_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(
         Box::leak(Box::<DeleteEntity>::default()) as &dyn Operation,
         Box::leak(Box::<ArchiveEntity>::default()) as &dyn Operation,
         Box::leak(Box::<UnarchiveEntity>::default()) as &dyn Operation,
+        Box::leak(Box::<Search>::default()) as &dyn Operation,
     ]
 });
 

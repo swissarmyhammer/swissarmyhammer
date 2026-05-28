@@ -29,13 +29,12 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use swissarmyhammer_operations_macros::operation_tool;
 
-use crate::context::EntityContext;
-use crate::entity::Entity;
-use crate::error::EntityError;
-use crate::id_types::EntityId;
+use swissarmyhammer_entity::{Entity, EntityContext, EntityError, EntityId};
+use swissarmyhammer_entity_search::EntitySearchIndex;
+
 use crate::operations::{
-    operations, AddEntity, ArchiveEntity, DeleteEntity, GetEntity, ListEntities, UnarchiveEntity,
-    UpdateField,
+    operations, AddEntity, ArchiveEntity, DeleteEntity, GetEntity, ListEntities, Search,
+    UnarchiveEntity, UpdateField,
 };
 
 /// In-process `rmcp::ServerHandler` for the `entity` operation tool.
@@ -191,7 +190,77 @@ impl EntityServer {
             "entry_id": entry_id.map(|e| e.to_string()),
         }))
     }
+
+    /// Handle a `Search` call — free-text query over the live entities.
+    ///
+    /// The index is built fresh from the kernel's current entities on every
+    /// call so results never go stale after a write made through this same
+    /// server. When `type` is supplied only that one type is loaded (which
+    /// both narrows the result set and avoids scanning the other types);
+    /// otherwise every entity type the kernel knows about is loaded. The
+    /// query runs `EntitySearchIndex::search` (fuzzy over entity fields), and
+    /// each hit is resolved back to its full entity for the response.
+    async fn handle_search(&self, req: Search) -> Result<Value, McpError> {
+        let entities = self.collect_searchable(req.entity_type.as_deref()).await?;
+        let index = EntitySearchIndex::from_entities(entities);
+        let hits = index.search(&req.query, SEARCH_LIMIT);
+
+        let results: Vec<Value> = hits
+            .into_iter()
+            .filter_map(|hit| {
+                index.get(&hit.entity_id).map(|entity| {
+                    serde_json::json!({
+                        "id": hit.entity_id,
+                        "type": entity.entity_type,
+                        "score": hit.score,
+                        "entity": entity.to_json(),
+                    })
+                })
+            })
+            .collect();
+
+        Ok(serde_json::json!({
+            "ok": true,
+            "results": results,
+        }))
+    }
+
+    /// Collect the entities to search: a single type when `entity_type` is
+    /// given, otherwise every entity type the kernel's schema declares.
+    ///
+    /// An unknown explicit type surfaces the kernel's structured error;
+    /// types that simply have no entities yet contribute nothing.
+    async fn collect_searchable(
+        &self,
+        entity_type: Option<&str>,
+    ) -> Result<Vec<Entity>, McpError> {
+        match entity_type {
+            Some(ty) => self.ctx.list(ty).await.map_err(entity_error_to_mcp),
+            None => {
+                let types: Vec<String> = self
+                    .ctx
+                    .fields()
+                    .all_entities()
+                    .iter()
+                    .map(|def| def.name.as_str().to_string())
+                    .collect();
+                let mut all = Vec::new();
+                for ty in types {
+                    // A type with no live entities lists empty; skip read
+                    // errors for types that aren't backed by a store so one
+                    // unbacked type can't sink the whole search.
+                    if let Ok(entities) = self.ctx.list(&ty).await {
+                        all.extend(entities);
+                    }
+                }
+                Ok(all)
+            }
+        }
+    }
 }
+
+/// Maximum number of search hits returned by a `Search` call.
+const SEARCH_LIMIT: usize = 50;
 
 /// Map a JSON value into one of the operation structs, returning a
 /// readable rmcp error when the shape is wrong.
@@ -303,6 +372,10 @@ impl ServerHandler for EntityServer {
             "unarchive entity" => {
                 let req: UnarchiveEntity = deserialize_op(arguments, &op)?;
                 self.handle_unarchive(req).await?
+            }
+            "search entities" => {
+                let req: Search = deserialize_op(arguments, &op)?;
+                self.handle_search(req).await?
             }
             other => {
                 return Err(McpError::invalid_params(

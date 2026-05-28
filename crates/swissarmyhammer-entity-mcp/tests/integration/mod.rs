@@ -1,4 +1,4 @@
-//! Integration tests for the `swissarmyhammer-entity` crate.
+//! Integration tests for the `swissarmyhammer-entity-mcp` crate.
 //!
 //! These tests stand up a real `EntityContext` kernel wired to a shared
 //! `StoreContext` with `EntityTypeStore` handles registered for a couple of
@@ -7,6 +7,7 @@
 //! `ServerHandler` impl without spinning up the full plugin host.
 
 mod common;
+mod entity_search_e2e;
 mod entity_server_e2e;
 mod meta_snapshot;
 mod undo;

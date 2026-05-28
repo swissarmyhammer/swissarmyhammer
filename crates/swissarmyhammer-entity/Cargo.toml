@@ -18,13 +18,9 @@ chrono = { workspace = true }
 ulid = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
-rmcp = { workspace = true }
 swissarmyhammer-common = { workspace = true }
 swissarmyhammer-commands = { workspace = true }
 swissarmyhammer-fields = { workspace = true }
-swissarmyhammer-operations = { workspace = true }
-swissarmyhammer-operations-macros = { workspace = true }
-swissarmyhammer-plugin = { workspace = true }
 swissarmyhammer-store = { workspace = true }
 diffy = { workspace = true }
 mime_guess = "2"

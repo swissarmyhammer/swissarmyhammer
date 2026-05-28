@@ -1,0 +1,29 @@
+[package]
+name = "swissarmyhammer-entity-mcp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "In-process MCP server (the `entity` operation tool) over the entity kernel, with search"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+rmcp = { workspace = true }
+swissarmyhammer-entity = { workspace = true }
+swissarmyhammer-entity-search = { workspace = true }
+swissarmyhammer-operations = { workspace = true }
+swissarmyhammer-operations-macros = { workspace = true }
+swissarmyhammer-plugin = { workspace = true }
+
+[dev-dependencies]
+swissarmyhammer-entity = { workspace = true, features = ["test-support"] }
+swissarmyhammer-store = { workspace = true }
+swissarmyhammer-kanban = { workspace = true }
+rmcp = { workspace = true }
+tempfile = { workspace = true }
+tokio-test = { workspace = true }

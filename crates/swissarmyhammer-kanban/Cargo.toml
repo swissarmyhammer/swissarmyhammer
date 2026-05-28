@@ -46,9 +46,6 @@ test-support = []
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio-test = { workspace = true }
-# Drives the in-process `EntityServer` (rmcp `ServerHandler`) in the
-# entity-surface parity guard test.
-rmcp = { workspace = true }
 swissarmyhammer-entity = { workspace = true, features = ["test-support"] }
 # Composed-registry tests stack the focus crate alongside this crate via
 # `compose_registry!` to assert the full nav.* + kanban command set.
