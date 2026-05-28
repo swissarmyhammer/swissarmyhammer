@@ -13,6 +13,7 @@ mod long_conversation;
 mod long_conversation_unit;
 mod read_file_mcp_server;
 mod session_state_preservation;
+mod streaming_generation;
 mod tool_call_round_trip;
 mod tool_call_round_trip_via_mcp;
 mod tool_use_multi_turn;

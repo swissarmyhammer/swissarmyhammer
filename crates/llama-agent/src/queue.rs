@@ -1505,6 +1505,77 @@ mod tests {
         }
     }
 
+    /// Queue-lifecycle regression for bug 01KSNJ7CBK9333J0T9G4TCA7DH.
+    ///
+    /// With a single worker (the production config), a streaming turn must
+    /// release the worker and decrement the live queue size once it finishes —
+    /// success, empty, or error — so that a subsequent prompt still enqueues
+    /// instead of being rejected with "Queue is full". This test drives the real
+    /// `RequestQueue` (no mocks) with `worker_threads: 1`, drains a streaming
+    /// turn to completion, then asserts the queue drained and a second streaming
+    /// request enqueues without `QueueError::Full`.
+    #[tokio::test]
+    async fn test_streaming_worker_released_after_turn() {
+        let model_manager = setup_loaded_model_manager().await;
+        let config = QueueConfig {
+            max_queue_size: 10,
+            worker_threads: 1,
+        };
+        let session_config = crate::types::SessionConfig::default();
+        let queue = RequestQueue::new(model_manager, config, session_config);
+
+        let session = create_test_session();
+        let make_request = || GenerationRequest {
+            session_id: session.id,
+            max_tokens: Some(16),
+            temperature: Some(0.0),
+            top_p: None,
+            stop_tokens: Vec::new(),
+            stopping_config: None,
+        };
+
+        // First streaming turn: drain it fully so the worker finishes and the
+        // single worker is released back to the pool.
+        let mut receiver = queue
+            .submit_streaming_request(make_request(), &session)
+            .await
+            .expect("first streaming request should enqueue");
+        while receiver.recv().await.is_some() {
+            // Drain every chunk (the unloaded dummy model yields a single error
+            // chunk) until the stream closes.
+        }
+
+        // Give the worker a moment to record completion metrics after the stream
+        // sender is dropped.
+        for _ in 0..50 {
+            if queue.get_queue_size() == 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            queue.get_queue_size(),
+            0,
+            "worker was not released after the first streaming turn — live queue \
+             size should return to 0"
+        );
+
+        // Second streaming turn must NOT be rejected with Queue is full.
+        let second = queue
+            .submit_streaming_request(make_request(), &session)
+            .await;
+        assert!(
+            !matches!(second, Err(QueueError::Full)),
+            "second streaming request was rejected with Queue is full after the \
+             first turn released: {:?}",
+            second.err()
+        );
+        // Drain the second stream too so the test leaves no dangling work.
+        if let Ok(mut receiver) = second {
+            while receiver.recv().await.is_some() {}
+        }
+    }
+
     #[tokio::test]
     async fn test_streaming_request_functionality() {
         // Validates streaming queue submission and chunk handling when the

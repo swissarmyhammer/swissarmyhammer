@@ -41,7 +41,7 @@ pub use config::GenerationConfig;
 pub use error::GenerationError;
 pub use generator::LlamaCppGenerator;
 
-use tracing::{trace, warn};
+use tracing::warn;
 
 use crate::types::{GenerationRequest, GenerationResponse, StreamChunk};
 // Note: Not using async_trait due to Send requirements with LlamaContext raw pointers
@@ -368,13 +368,41 @@ impl GenerationHelper {
             LlamaSampler::greedy(),
         ]);
 
-        let max_tokens = request.max_tokens.unwrap_or(512) as usize - tokens_list.len();
+        // The caller's `max_tokens` is the generation budget — the number of NEW
+        // tokens to produce — exactly as the batch path (`generate_common`)
+        // treats it. The ACP agentic loop already derives this from the
+        // remaining context window (`context_size - current_tokens`), so we must
+        // NOT subtract the prompt length again here. The previous
+        // `unwrap_or(512) - tokens_list.len()` did exactly that, which underflowed
+        // (usize) or collapsed to zero whenever the rendered prompt approached or
+        // exceeded the budget — producing the "0 tokens generated" turns seen in
+        // production. See bug 01KSNJ7CBK9333J0T9G4TCA7DH.
+        let max_tokens = request.max_tokens.unwrap_or(512) as usize;
+        let context_size = context.n_ctx() as usize;
+        let prompt_tokens = tokens_list.len();
         let mut generated_text = String::new();
         let mut tokens_generated = 0;
         let mut n_cur = tokens_list.len();
 
         // Generation loop with streaming
         while tokens_generated < max_tokens {
+            // Stop if we've reached the context window limit, mirroring the
+            // batch path's guard. Without this, a large prompt could drive
+            // generation past the context size and fail inside `decode`.
+            if prompt_tokens + tokens_generated >= context_size.saturating_sub(1) {
+                debug!(
+                    "Reached context window limit in streaming (prompt={} + generated={} >= context_size={} - 1)",
+                    prompt_tokens, tokens_generated, context_size
+                );
+                return Self::handle_streaming_completion(
+                    &generated_text,
+                    tokens_generated,
+                    start_time,
+                    stream_sender,
+                    "ContextWindowFull",
+                );
+            }
+
             if cancellation_token.is_cancelled() {
                 let _ = stream_sender.try_send(Err(QueueError::WorkerError(
                     "Request cancelled".to_string(),
@@ -395,43 +423,36 @@ impl GenerationHelper {
                 );
             }
 
-            // Always increment token count and advance model state, even if token can't be converted to string
-            let token_str = match token_to_str_lossy(model, token, Special::Tokenize) {
-                Ok(s) => s,
-                Err(e) => {
-                    trace!("Failed to convert token to string in streaming: {}", e);
-                    continue;
-                }
-            };
-
-            if generated_text.capacity() - generated_text.len() < token_str.len() {
-                generated_text.reserve(token_str.len() * STRING_CAPACITY_MULTIPLIER);
-            }
-            generated_text.push_str(&token_str);
+            // Count the token and advance model state, even if it cannot be
+            // converted to a display string (multi-token UTF-8 sequences, etc.).
             tokens_generated += 1;
 
-            // Log progress every batch_size tokens
-            if tokens_generated % batch_size == 0 {
-                debug!(
-                    "Generation progress: {} tokens generated ({} batches)\n{}",
-                    tokens_generated,
-                    tokens_generated / batch_size,
-                    generated_text
-                );
-            }
-
-            // Try to convert token to string and send if successful
-            if let Ok(token_str) = model.token_to_str(token, Special::Tokenize) {
+            // Try to convert the token to a string and stream it. We append to
+            // `generated_text` exactly once — the prior code pushed each token
+            // twice, duplicating the accumulated text.
+            if let Ok(token_str) = token_to_str_lossy(model, token, Special::Tokenize) {
                 if generated_text.capacity() - generated_text.len() < token_str.len() {
                     generated_text.reserve(token_str.len() * STRING_CAPACITY_MULTIPLIER);
                 }
                 generated_text.push_str(&token_str);
 
-                // Send the token as a stream chunk
+                // Log progress every batch_size tokens
+                if tokens_generated % batch_size == 0 {
+                    debug!(
+                        "Generation progress: {} tokens generated ({} batches)",
+                        tokens_generated,
+                        tokens_generated / batch_size,
+                    );
+                }
+
+                // Send the token as a stream chunk. `token_count` is the count of
+                // NEW tokens carried by this chunk (always 1 here) so that a
+                // consumer summing `token_count` across the stream arrives at the
+                // true total — the ACP agentic loop does exactly this.
                 let chunk = StreamChunk {
                     text: token_str.clone(),
                     is_complete: false,
-                    token_count: tokens_generated,
+                    token_count: 1,
                     finish_reason: None,
                 };
 
@@ -499,11 +520,14 @@ impl GenerationHelper {
         use crate::types::StreamChunk;
         use tracing::debug;
 
-        // Send final completion chunk
+        // Send final completion chunk. `token_count` is 0 because this chunk
+        // carries no new tokens — it only signals completion. Per-token chunks
+        // already accounted for every generated token with `token_count: 1`, so a
+        // consumer summing `token_count` across the stream gets the true total.
         let final_chunk = StreamChunk {
             text: String::new(),
             is_complete: true,
-            token_count: tokens_generated,
+            token_count: 0,
             finish_reason: Some(crate::types::FinishReason::Stopped(reason.to_string())),
         };
         let _ = stream_sender.try_send(Ok(final_chunk));
@@ -945,13 +969,41 @@ impl GenerationHelper {
             LlamaSampler::greedy(),
         ]);
 
+        // The caller's `max_tokens` is the generation budget — the number of NEW
+        // tokens to produce. We must NOT subtract the prompt length again here;
+        // see the matching note in `generate_stream_with_borrowed_model` and bug
+        // 01KSNJ7CBK9333J0T9G4TCA7DH.
         let max_tokens = request.max_tokens.unwrap_or(512) as usize;
+        let context_size = context.n_ctx() as usize;
+        // The full prompt — including the cached template prefix — occupies
+        // `total_token_count` slots in the KV cache; generation continues from
+        // `n_cur = total_token_count`. The context guard must therefore measure
+        // against the full prompt length, not the post-offset slice.
+        let prompt_tokens = total_token_count;
         let mut generated_text = String::new();
         let mut tokens_generated = 0usize;
         let mut n_cur = total_token_count;
 
         // Generation loop with streaming
         while tokens_generated < max_tokens {
+            // Stop if we've reached the context window limit, mirroring the
+            // batch path's guard and the non-offset streaming path. Without
+            // this, a large prompt could drive generation past the context
+            // size and fail inside `decode`.
+            if prompt_tokens + tokens_generated >= context_size.saturating_sub(1) {
+                debug!(
+                    "Reached context window limit in streaming with template offset (prompt={} + generated={} >= context_size={} - 1)",
+                    prompt_tokens, tokens_generated, context_size
+                );
+                return Self::handle_streaming_completion(
+                    &generated_text,
+                    tokens_generated,
+                    start_time,
+                    stream_sender,
+                    "ContextWindowFull",
+                );
+            }
+
             if cancellation_token.is_cancelled() {
                 let _ = stream_sender.try_send(Err(QueueError::WorkerError(
                     "Request cancelled".to_string(),
@@ -975,18 +1027,23 @@ impl GenerationHelper {
             // Always increment token count and advance model state, even if token can't be converted to string
             tokens_generated += 1;
 
-            // Try to convert token to string and send if successful
-            if let Ok(token_str) = model.token_to_str(token, Special::Tokenize) {
+            // Try to convert token to string and send if successful. We use the
+            // lossy decoder (consistent with the non-offset streaming path) so a
+            // partial multi-token UTF-8 sequence does not drop the token.
+            if let Ok(token_str) = token_to_str_lossy(model, token, Special::Tokenize) {
                 if generated_text.capacity() - generated_text.len() < token_str.len() {
                     generated_text.reserve(token_str.len() * STRING_CAPACITY_MULTIPLIER);
                 }
                 generated_text.push_str(&token_str);
 
-                // Send the token as a stream chunk
+                // Send the token as a stream chunk. `token_count` is the count of
+                // NEW tokens in this chunk (always 1) — consistent with the
+                // non-offset streaming path — so summing across the stream yields
+                // the true total.
                 let chunk = StreamChunk {
                     text: token_str.clone(),
                     is_complete: false,
-                    token_count: tokens_generated,
+                    token_count: 1,
                     finish_reason: None,
                 };
 
