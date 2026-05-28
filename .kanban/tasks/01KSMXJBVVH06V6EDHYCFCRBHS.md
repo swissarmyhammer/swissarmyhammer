@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KSMXH3N2YKCNB3HGDYBF5E6B
-position_column: todo
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffaf80
 title: 'Doctor: restrict install-stack to YAML-declared doctored agents'
 ---
 ## What
@@ -61,3 +61,11 @@ Files:
 
 ## Depends on
 - 01KSMXH3N2YKCNB3HGDYBF5E6B (agents_default.yaml edits for the 4 agents)
+
+## Review Findings (2026-05-27 11:33)
+
+### Warnings
+- [x] `crates/mirdan/src/doctor.rs:280-301` and `apps/swissarmyhammer-cli/src/commands/doctor/checks.rs:78-100` — In `test_check_install_stack_only_emits_doctored_agents`, both `claude-code` (doctored) and `cursor` (undoctored) use `/nonexistent/...` detect paths. Because neither detects, `get_detected_agents` triggers the `claude-code` fallback in `agents.rs:227-235` and `cursor` never enters the input set to `check_all_doctored` — the doctor filter is never actually exercised. The "no check name contains 'Cursor'" assertion would pass even against the unfiltered `check_all`. Fix by creating real temp dirs (as `status.rs::test_check_all_doctored_filters_by_doctor_field` already does) so both agents detect and the filter is what excludes cursor. The `status.rs` test does cover the filter correctly, so the regression coverage is not zero, but these two consumer tests don't add the boundary they claim.
+
+### Nits
+- [x] `crates/mirdan/src/status.rs:260-270` — `check_all_doctored` duplicates the scope/component iteration loop with `check_all` (lines 236-245). Three lines of shared body is below the threshold where extraction pays off, but if a third caller appears, fold the loop into a private `check_for_agents(&[DetectedAgent], &[InitScope])` helper that both wrappers delegate to.

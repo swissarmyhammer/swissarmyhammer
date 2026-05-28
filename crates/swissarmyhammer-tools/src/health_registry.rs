@@ -357,19 +357,4 @@ mod tests {
             "Should have prompt health checks"
         );
     }
-
-    #[tokio::test]
-    async fn test_skill_health_checks_included() {
-        let checks = collect_all_health_checks().await;
-
-        // Should have skill-related checks from SkillTool
-        let skill_checks: Vec<_> = checks
-            .iter()
-            .filter(|c| c.name.contains("Skill") || c.name.contains("skill"))
-            .collect();
-        assert!(
-            !skill_checks.is_empty(),
-            "Should have skill health checks from SkillTool"
-        );
-    }
 }

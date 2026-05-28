@@ -182,7 +182,10 @@ pub fn check_component(
                 component.label()
             ),
         ),
-        Some(path) => detect_component(component, path),
+        Some(path) => {
+            let servers_key = agent.mcp_config.as_ref().map(|c| c.servers_key.as_str());
+            detect_component(component, path, servers_key)
+        }
     };
 
     ComponentStatus {
@@ -198,10 +201,17 @@ pub fn check_component(
 
 /// Run the component-specific detection for a resolved path.
 ///
-/// Returns the detected state plus a human-readable detail.
-fn detect_component(component: Component, path: &Path) -> (ComponentState, String) {
+/// Returns the detected state plus a human-readable detail. `servers_key`
+/// is the agent's configured MCP `servers_key` (e.g. Zed's
+/// `"context_servers"`) and is consulted only for the [`Component::Mcp`]
+/// branch; the other components ignore it.
+fn detect_component(
+    component: Component,
+    path: &Path,
+    servers_key: Option<&str>,
+) -> (ComponentState, String) {
     let installed = match component {
-        Component::Mcp => mcp_server_installed(path),
+        Component::Mcp => mcp_server_installed(path, servers_key),
         Component::Skills | Component::Agents => dir_non_empty(path),
         Component::Preamble => preamble_present(path),
         Component::Permissions => permissions_present(path),
@@ -244,6 +254,31 @@ pub fn check_all(config: &AgentsConfig, scopes: &[InitScope]) -> Vec<ComponentSt
     out
 }
 
+/// Check every component for every detected, doctor-enabled agent across the
+/// given scopes.
+///
+/// The contract: this is the install-stack capability that `sah doctor` and
+/// `mirdan doctor` consume. It mirrors [`check_all`] but filters the detected
+/// agents to those whose [`AgentDef::doctor`] is `true` — i.e. the agents that
+/// opt in via the `doctor: true` field in `agents_default.yaml`. The YAML is
+/// the single source of truth; this function deliberately does not hard-code
+/// any id list.
+///
+/// `mirdan status` (the table command) intentionally uses [`check_all`]
+/// instead: that view is "where are the packages installed across every
+/// detected agent" and is not gated by the doctor opt-in.
+pub fn check_all_doctored(config: &AgentsConfig, scopes: &[InitScope]) -> Vec<ComponentStatus> {
+    let detected = agents::get_detected_agents(config);
+    let doctored: Vec<_> = detected.into_iter().filter(|a| a.def.doctor).collect();
+    let mut out = Vec::with_capacity(doctored.len() * scopes.len() * Component::all().len());
+    for agent in &doctored {
+        for &scope in scopes {
+            out.extend(check_agent(&agent.def, scope));
+        }
+    }
+    out
+}
+
 /// Map a [`ComponentStatus`] into a doctor [`Check`].
 ///
 /// - [`ComponentState::Installed`] → [`CheckStatus::Ok`], no fix.
@@ -278,6 +313,85 @@ pub fn to_check(status: &ComponentStatus) -> Check {
             message: status.detail.clone(),
             fix: None,
         },
+    }
+}
+
+/// Convert a slice of [`ComponentStatus`] into [`Check`]s, applying the
+/// scope-pair policy.
+///
+/// Statuses are grouped by `(agent_id, component)` so the per-scope rows for
+/// the same component can see each other. For each group:
+///
+/// - Both scopes `Installed` → both rows `Ok` (same as [`to_check`]).
+/// - Both scopes `Missing` → both rows `Warning` with `sah init` / `sah init
+///   user` fix hints (same as [`to_check`]).
+/// - One scope `Installed`, the other `Missing` → the installed-scope row is
+///   `Ok` as today; the missing-scope row is demoted to `Ok` with `fix: None`
+///   and a message that names where the component was found.
+///
+/// [`ComponentState::NotApplicable`] statuses are filtered at this layer and
+/// produce no [`Check`] — callers receive only actionable rows.
+pub fn statuses_to_checks(statuses: &[ComponentStatus]) -> Vec<Check> {
+    let mut out = Vec::with_capacity(statuses.len());
+    for status in statuses {
+        if status.state == ComponentState::NotApplicable {
+            continue;
+        }
+        if status.state == ComponentState::Missing {
+            if let Some(peer) = find_installed_peer(statuses, status) {
+                out.push(demoted_missing_check(status, peer));
+                continue;
+            }
+        }
+        out.push(to_check(status));
+    }
+    out
+}
+
+/// Find an `Installed` peer for `status`: same `agent_id` and `component`,
+/// different `scope`.
+///
+/// Returns `None` when no peer scope has the component installed.
+fn find_installed_peer<'a>(
+    statuses: &'a [ComponentStatus],
+    status: &ComponentStatus,
+) -> Option<&'a ComponentStatus> {
+    statuses.iter().find(|other| {
+        other.agent_id == status.agent_id
+            && other.component == status.component
+            && other.scope != status.scope
+            && other.state == ComponentState::Installed
+    })
+}
+
+/// Build the demoted [`Check`] for a `Missing` row when a peer scope has the
+/// component installed.
+///
+/// The check is `Ok` with `fix: None` and a message that names both the missing
+/// path and the installed peer's scope and path.
+fn demoted_missing_check(status: &ComponentStatus, peer: &ComponentStatus) -> Check {
+    let name = format!(
+        "{} · {} · {}",
+        status.agent_name,
+        scope_label(status.scope),
+        status.component.label()
+    );
+    let peer_path = peer
+        .path
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "<unknown path>".to_string());
+    let message = format!(
+        "{}; installed at {} scope ({})",
+        status.detail,
+        scope_label(peer.scope),
+        peer_path,
+    );
+    Check {
+        name,
+        status: CheckStatus::Ok,
+        message,
+        fix: None,
     }
 }
 
@@ -396,24 +510,46 @@ fn init_command(scope: InitScope) -> &'static str {
     }
 }
 
-/// True when the MCP config JSON at `path` registers the sah server.
+/// True when the MCP config at `path` registers the sah server.
 ///
-/// Installed when a `sah` entry exists under one of the two common server keys
-/// and its `command` is `sah` or ends with `/sah`. We probe the conventional
-/// `mcpServers` key (the default `servers_key`) and the `servers` key used by a
-/// handful of agents (e.g. vscode). We do not consult the agent's configured
-/// `servers_key`: an agent with a non-default key beyond these two is not
-/// currently detected here.
+/// Installed when a `sah` entry exists under either the agent's configured
+/// `servers_key` (when one is supplied) or one of the hardcoded fallback
+/// keys, and its `command` is `sah` or ends with `/sah`. The fallback list —
+/// `["mcpServers", "servers", "mcp_servers"]` — is always probed in addition
+/// to `servers_key` so legacy configs (and agents whose `AgentDef` predates
+/// the `servers_key` field) still detect correctly.
+///
+/// `servers_key` is the JSON key under which the agent stores its MCP
+/// servers map. For agents like Zed this is `"context_servers"`, which the
+/// hardcoded list does not cover. Pass `None` when no agent-specific key is
+/// known (e.g. detection against a synthetic path with no agent context).
+///
+/// Supports both JSON and TOML — for files with a `.toml` extension the
+/// content is parsed as TOML and converted to a `serde_json::Value` so the
+/// downstream probing is identical to the JSON case.
 ///
 /// This is the **single source of truth** for "is the sah MCP server installed
 /// at this path?" and is consumed by both `mirdan::status` and the sah-cli
 /// install layer so detection and installation cannot drift.
-pub fn mcp_server_installed(path: &Path) -> bool {
-    let Some(root) = read_json(path) else {
+pub fn mcp_server_installed(path: &Path, servers_key: Option<&str>) -> bool {
+    let Some(root) = read_config_doc(path) else {
         return false;
     };
-    // Probe the two common server keys: "mcpServers" (default) and "servers".
-    for key in ["mcpServers", "servers"] {
+    // Probe the agent's configured servers_key first when known. We then fall
+    // back to the conventional keys — `"mcpServers"` (the JSON default),
+    // `"servers"` (vscode-style), and `"mcp_servers"` (Codex's TOML
+    // convention) — so legacy installs and agents whose definition lacks an
+    // `mcp_config` still detect.
+    let mut keys: Vec<&str> = Vec::with_capacity(4);
+    if let Some(key) = servers_key {
+        keys.push(key);
+    }
+    for fallback in ["mcpServers", "servers", "mcp_servers"] {
+        if !keys.contains(&fallback) {
+            keys.push(fallback);
+        }
+    }
+    for key in keys {
         if let Some(server) = root.get(key).and_then(|s| s.get("sah")) {
             if is_sah_command(server) {
                 return true;
@@ -481,9 +617,35 @@ pub fn permissions_present(path: &Path) -> bool {
 }
 
 /// Read and parse JSON at `path`, returning `None` on any error or missing file.
+///
+/// Accepts JSONC (comments and trailing commas) so detection of an agent's
+/// installed components mirrors the lenient input format we accept on install.
 fn read_json(path: &Path) -> Option<serde_json::Value> {
     let content = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&content).ok()
+    crate::parse_jsonc(&content).ok()
+}
+
+/// Read and parse an MCP config document at `path` as a `serde_json::Value`.
+///
+/// Picks the parser from the file extension: `.toml` paths are parsed as TOML
+/// and converted to a `serde_json::Value` so downstream probing (the
+/// `mcpServers.sah.command` walk) is identical regardless of input format;
+/// every other extension is parsed as JSONC (JSON with comments and trailing
+/// commas) so detection mirrors the lenient input format the installer
+/// accepts. Returns `None` for missing files and parse errors so the detector
+/// reports `Missing` rather than panicking on malformed user config.
+fn read_config_doc(path: &Path) -> Option<serde_json::Value> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let is_toml = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("toml"));
+    if is_toml {
+        let value: toml::Value = toml::from_str(&content).ok()?;
+        serde_json::to_value(value).ok()
+    } else {
+        crate::parse_jsonc(&content).ok()
+    }
 }
 
 #[cfg(test)]
@@ -512,6 +674,7 @@ mod tests {
                 project_path: p("mcp.json"),
                 global_path: Some(p("global-mcp.json")),
                 servers_key: "mcpServers".to_string(),
+                entry_extras: std::collections::BTreeMap::new(),
             }),
             plugin_path: None,
             global_plugin_path: None,
@@ -578,6 +741,22 @@ mod tests {
     }
 
     #[test]
+    fn test_mcp_installed_jsonc_json_branch() {
+        // Agents like Zed ship JSONC settings.json files (line comments and
+        // trailing commas). The detector must read them via the same lenient
+        // parser the installer uses, otherwise install would silently succeed
+        // while detection reports Missing.
+        let dir = TempDir::new().unwrap();
+        let agent = temp_agent(dir.path());
+        std::fs::write(
+            dir.path().join("mcp.json"),
+            "// Zed-style header comment\n{\n  \"mcpServers\": {\n    \"sah\": {\n      \"command\": \"sah\",\n      \"args\": [\"serve\",],\n    },\n  },\n}",
+        )
+        .unwrap();
+        assert_eq!(state_of(&agent, Component::Mcp), ComponentState::Installed);
+    }
+
+    #[test]
     fn test_mcp_other_server_is_missing() {
         let dir = TempDir::new().unwrap();
         let agent = temp_agent(dir.path());
@@ -598,6 +777,97 @@ mod tests {
             r#"{"mcpServers": {"sah": {"command": "not-sah"}}}"#,
         )
         .unwrap();
+        assert_eq!(state_of(&agent, Component::Mcp), ComponentState::Missing);
+    }
+
+    #[test]
+    fn test_mcp_installed_respects_servers_key() {
+        // Regression for the Zed detection bug: when an agent declares
+        // `servers_key: context_servers`, an installed entry under that key
+        // must be detected even though it is not in the hardcoded fallback
+        // list (`mcpServers`, `servers`, `mcp_servers`).
+        let dir = TempDir::new().unwrap();
+        let mut agent = temp_agent(dir.path());
+        agent.mcp_config.as_mut().unwrap().servers_key = "context_servers".to_string();
+        std::fs::write(
+            dir.path().join("mcp.json"),
+            r#"{"context_servers": {"sah": {"command": "sah", "source": "custom"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(state_of(&agent, Component::Mcp), ComponentState::Installed);
+    }
+
+    #[test]
+    fn test_mcp_installed_falls_back_to_default_keys() {
+        // When no servers_key is provided (or the agent's key is the legacy
+        // default), the detector must still find a sah entry under
+        // `mcpServers`. This covers legacy JSON configs and agents whose
+        // AgentDef predates the entry_extras work.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("mcp.json");
+        std::fs::write(
+            &path,
+            r#"{"mcpServers": {"sah": {"command": "sah", "args": ["serve"]}}}"#,
+        )
+        .unwrap();
+        // Direct call with no servers_key — exercises the fallback path.
+        assert!(mcp_server_installed(&path, None));
+    }
+
+    #[test]
+    fn test_mcp_installed_toml_basic() {
+        let dir = TempDir::new().unwrap();
+        let mut agent = temp_agent(dir.path());
+        // Point the MCP config at a .toml file so the detector recognizes
+        // the format from the path extension.
+        let toml_path = dir.path().join("config.toml").to_string_lossy().to_string();
+        agent.mcp_config.as_mut().unwrap().project_path = toml_path.clone();
+        std::fs::write(&toml_path, "[mcp_servers.sah]\ncommand = \"sah\"\n").unwrap();
+        assert_eq!(state_of(&agent, Component::Mcp), ComponentState::Installed);
+    }
+
+    #[test]
+    fn test_mcp_installed_toml_absolute_path() {
+        let dir = TempDir::new().unwrap();
+        let mut agent = temp_agent(dir.path());
+        let toml_path = dir.path().join("config.toml").to_string_lossy().to_string();
+        agent.mcp_config.as_mut().unwrap().project_path = toml_path.clone();
+        std::fs::write(
+            &toml_path,
+            "[mcp_servers.sah]\ncommand = \"/usr/local/bin/sah\"\n",
+        )
+        .unwrap();
+        assert_eq!(state_of(&agent, Component::Mcp), ComponentState::Installed);
+    }
+
+    #[test]
+    fn test_mcp_installed_toml_wrong_command() {
+        let dir = TempDir::new().unwrap();
+        let mut agent = temp_agent(dir.path());
+        let toml_path = dir.path().join("config.toml").to_string_lossy().to_string();
+        agent.mcp_config.as_mut().unwrap().project_path = toml_path.clone();
+        std::fs::write(&toml_path, "[mcp_servers.sah]\ncommand = \"not-sah\"\n").unwrap();
+        assert_eq!(state_of(&agent, Component::Mcp), ComponentState::Missing);
+    }
+
+    #[test]
+    fn test_mcp_installed_toml_other_server() {
+        let dir = TempDir::new().unwrap();
+        let mut agent = temp_agent(dir.path());
+        let toml_path = dir.path().join("config.toml").to_string_lossy().to_string();
+        agent.mcp_config.as_mut().unwrap().project_path = toml_path.clone();
+        std::fs::write(&toml_path, "[mcp_servers.other]\ncommand = \"node\"\n").unwrap();
+        assert_eq!(state_of(&agent, Component::Mcp), ComponentState::Missing);
+    }
+
+    #[test]
+    fn test_mcp_installed_toml_malformed_returns_false() {
+        let dir = TempDir::new().unwrap();
+        let mut agent = temp_agent(dir.path());
+        let toml_path = dir.path().join("config.toml").to_string_lossy().to_string();
+        agent.mcp_config.as_mut().unwrap().project_path = toml_path.clone();
+        // Not valid TOML — an unterminated table header.
+        std::fs::write(&toml_path, "[mcp_servers.sah\ncommand = ").unwrap();
         assert_eq!(state_of(&agent, Component::Mcp), ComponentState::Missing);
     }
 
@@ -903,6 +1173,7 @@ mod tests {
                 project_path: p("config.toml"),
                 global_path: Some(p("global-config.toml")),
                 servers_key: "mcp_servers".to_string(),
+                entry_extras: std::collections::BTreeMap::new(),
             }),
             plugin_path: None,
             global_plugin_path: None,
@@ -994,6 +1265,338 @@ mod tests {
             .find(|s| s.component == Component::Preamble && s.scope == InitScope::User)
             .unwrap();
         assert_eq!(user_preamble.state, ComponentState::Installed);
+    }
+
+    /// `check_all_doctored` must filter agents by `AgentDef.doctor` before
+    /// running the per-component sweep. Given a config that contains one
+    /// doctor-enabled agent and one doctor-disabled agent (both detectable),
+    /// every emitted `ComponentStatus` must belong to the doctor-enabled
+    /// agent — the disabled one contributes nothing.
+    #[test]
+    fn test_check_all_doctored_filters_by_doctor_field() {
+        let dir = TempDir::new().unwrap();
+        // Make both agents detectable so `get_detected_agents` returns both.
+        let detect_a = dir.path().join("detect-a");
+        let detect_b = dir.path().join("detect-b");
+        std::fs::create_dir_all(&detect_a).unwrap();
+        std::fs::create_dir_all(&detect_b).unwrap();
+
+        let p = |sub: &str, name: &str| {
+            dir.path()
+                .join(sub)
+                .join(name)
+                .to_string_lossy()
+                .to_string()
+        };
+
+        // Doctor-enabled agent: claude-code shape, opts in via `doctor: true`.
+        let doctored = AgentDef {
+            id: "claude-code".to_string(),
+            name: "Claude Code".to_string(),
+            project_path: p("a", "skills"),
+            global_path: p("a", "global-skills"),
+            detect: vec![DetectMethod::Dir {
+                dir: detect_a.to_string_lossy().to_string(),
+            }],
+            symlink_policy: SymlinkPolicy::default(),
+            mcp_config: None,
+            plugin_path: None,
+            global_plugin_path: None,
+            agent_path: None,
+            global_agent_path: None,
+            instructions_path: None,
+            global_instructions_path: None,
+            settings_path: None,
+            global_settings_path: None,
+            doctor: true,
+        };
+        // Doctor-disabled agent: also detected, but the install-stack must skip it.
+        let undoctored = AgentDef {
+            id: "cursor".to_string(),
+            name: "Cursor".to_string(),
+            project_path: p("b", "skills"),
+            global_path: p("b", "global-skills"),
+            detect: vec![DetectMethod::Dir {
+                dir: detect_b.to_string_lossy().to_string(),
+            }],
+            symlink_policy: SymlinkPolicy::default(),
+            mcp_config: None,
+            plugin_path: None,
+            global_plugin_path: None,
+            agent_path: None,
+            global_agent_path: None,
+            instructions_path: None,
+            global_instructions_path: None,
+            settings_path: None,
+            global_settings_path: None,
+            doctor: false,
+        };
+        let config = AgentsConfig {
+            agents: vec![doctored, undoctored],
+        };
+
+        let statuses = check_all_doctored(&config, &[InitScope::Project, InitScope::User]);
+
+        assert!(
+            !statuses.is_empty(),
+            "expected at least one row for the doctor-enabled agent"
+        );
+        for status in &statuses {
+            assert_eq!(
+                status.agent_id, "claude-code",
+                "every install-stack row must belong to a doctor: true agent; got '{}'",
+                status.agent_id
+            );
+        }
+        assert!(
+            statuses.iter().all(|s| s.agent_id != "cursor"),
+            "doctor: false agent 'cursor' must not appear in check_all_doctored output"
+        );
+    }
+
+    /// Build a synthetic `ComponentStatus` for tests of `statuses_to_checks`.
+    ///
+    /// Lets each test compose the (agent_id, component, scope, state, path)
+    /// tuple it needs without going through the filesystem detector.
+    fn synthetic_status(
+        agent_id: &str,
+        component: Component,
+        scope: InitScope,
+        state: ComponentState,
+        path: Option<PathBuf>,
+    ) -> ComponentStatus {
+        let detail = match (&state, &path) {
+            (ComponentState::Installed, Some(p)) => format!("found at {}", p.display()),
+            (ComponentState::Missing, Some(p)) => format!("missing at {}", p.display()),
+            (ComponentState::NotApplicable, _) => {
+                format!(
+                    "{} not supported for this agent at this scope",
+                    component.label()
+                )
+            }
+            (_, None) => String::new(),
+        };
+        ComponentStatus {
+            agent_id: agent_id.to_string(),
+            agent_name: "Claude Code".to_string(),
+            component,
+            scope,
+            path,
+            state,
+            detail,
+        }
+    }
+
+    #[test]
+    fn test_statuses_to_checks_demotes_project_missing_when_user_installed() {
+        let user_path = PathBuf::from("/Users/test/.claude/CLAUDE.md");
+        let project_path = PathBuf::from("/work/repo/CLAUDE.md");
+        let statuses = vec![
+            synthetic_status(
+                "claude-code",
+                Component::Preamble,
+                InitScope::Project,
+                ComponentState::Missing,
+                Some(project_path.clone()),
+            ),
+            synthetic_status(
+                "claude-code",
+                Component::Preamble,
+                InitScope::User,
+                ComponentState::Installed,
+                Some(user_path.clone()),
+            ),
+        ];
+
+        let checks = statuses_to_checks(&statuses);
+        assert_eq!(checks.len(), 2);
+
+        let project_check = checks
+            .iter()
+            .find(|c| c.name == "Claude Code · project · Preamble")
+            .expect("project preamble row");
+        assert_eq!(
+            project_check.status,
+            CheckStatus::Ok,
+            "project-missing with user-installed should demote to Ok"
+        );
+        assert!(
+            project_check.fix.is_none(),
+            "demoted row should have no fix"
+        );
+        assert!(
+            project_check
+                .message
+                .contains(&user_path.display().to_string()),
+            "message should mention the user-scope path; got: {}",
+            project_check.message
+        );
+        assert!(
+            project_check.message.contains("user"),
+            "message should name the user scope; got: {}",
+            project_check.message
+        );
+
+        let user_check = checks
+            .iter()
+            .find(|c| c.name == "Claude Code · user · Preamble")
+            .expect("user preamble row");
+        assert_eq!(user_check.status, CheckStatus::Ok);
+        assert!(user_check.fix.is_none());
+    }
+
+    #[test]
+    fn test_statuses_to_checks_demotes_user_missing_when_project_installed() {
+        let user_path = PathBuf::from("/Users/test/.claude/CLAUDE.md");
+        let project_path = PathBuf::from("/work/repo/CLAUDE.md");
+        let statuses = vec![
+            synthetic_status(
+                "claude-code",
+                Component::Preamble,
+                InitScope::Project,
+                ComponentState::Installed,
+                Some(project_path.clone()),
+            ),
+            synthetic_status(
+                "claude-code",
+                Component::Preamble,
+                InitScope::User,
+                ComponentState::Missing,
+                Some(user_path.clone()),
+            ),
+        ];
+
+        let checks = statuses_to_checks(&statuses);
+        let user_check = checks
+            .iter()
+            .find(|c| c.name == "Claude Code · user · Preamble")
+            .expect("user preamble row");
+        assert_eq!(
+            user_check.status,
+            CheckStatus::Ok,
+            "user-missing with project-installed should demote to Ok"
+        );
+        assert!(user_check.fix.is_none());
+        assert!(
+            user_check
+                .message
+                .contains(&project_path.display().to_string()),
+            "message should reference the project path; got: {}",
+            user_check.message
+        );
+        assert!(
+            user_check.message.contains("project"),
+            "message should name the project scope; got: {}",
+            user_check.message
+        );
+    }
+
+    #[test]
+    fn test_statuses_to_checks_both_missing_stays_warning() {
+        let statuses = vec![
+            synthetic_status(
+                "claude-code",
+                Component::Preamble,
+                InitScope::Project,
+                ComponentState::Missing,
+                Some(PathBuf::from("/work/repo/CLAUDE.md")),
+            ),
+            synthetic_status(
+                "claude-code",
+                Component::Preamble,
+                InitScope::User,
+                ComponentState::Missing,
+                Some(PathBuf::from("/Users/test/.claude/CLAUDE.md")),
+            ),
+        ];
+
+        let checks = statuses_to_checks(&statuses);
+        assert_eq!(checks.len(), 2);
+
+        let project_check = checks
+            .iter()
+            .find(|c| c.name == "Claude Code · project · Preamble")
+            .unwrap();
+        assert_eq!(project_check.status, CheckStatus::Warning);
+        let project_fix = project_check
+            .fix
+            .as_ref()
+            .expect("missing should carry fix");
+        assert!(project_fix.contains("sah init"));
+        assert!(!project_fix.contains("sah init user"));
+
+        let user_check = checks
+            .iter()
+            .find(|c| c.name == "Claude Code · user · Preamble")
+            .unwrap();
+        assert_eq!(user_check.status, CheckStatus::Warning);
+        assert!(user_check
+            .fix
+            .as_ref()
+            .expect("missing should carry fix")
+            .contains("sah init user"));
+    }
+
+    #[test]
+    fn test_statuses_to_checks_both_installed_stays_ok() {
+        let statuses = vec![
+            synthetic_status(
+                "claude-code",
+                Component::Preamble,
+                InitScope::Project,
+                ComponentState::Installed,
+                Some(PathBuf::from("/work/repo/CLAUDE.md")),
+            ),
+            synthetic_status(
+                "claude-code",
+                Component::Preamble,
+                InitScope::User,
+                ComponentState::Installed,
+                Some(PathBuf::from("/Users/test/.claude/CLAUDE.md")),
+            ),
+        ];
+
+        let checks = statuses_to_checks(&statuses);
+        assert_eq!(checks.len(), 2);
+        for check in &checks {
+            assert_eq!(check.status, CheckStatus::Ok);
+            assert!(check.fix.is_none());
+        }
+    }
+
+    #[test]
+    fn test_statuses_to_checks_filters_not_applicable() {
+        let statuses = vec![
+            synthetic_status(
+                "claude-code",
+                Component::Mcp,
+                InitScope::Project,
+                ComponentState::NotApplicable,
+                None,
+            ),
+            synthetic_status(
+                "claude-code",
+                Component::Mcp,
+                InitScope::User,
+                ComponentState::NotApplicable,
+                None,
+            ),
+            synthetic_status(
+                "claude-code",
+                Component::Preamble,
+                InitScope::Project,
+                ComponentState::Missing,
+                Some(PathBuf::from("/work/repo/CLAUDE.md")),
+            ),
+        ];
+
+        let checks = statuses_to_checks(&statuses);
+        assert_eq!(
+            checks.len(),
+            1,
+            "NotApplicable statuses should produce no checks"
+        );
+        assert_eq!(checks[0].name, "Claude Code · project · Preamble");
     }
 
     #[test]

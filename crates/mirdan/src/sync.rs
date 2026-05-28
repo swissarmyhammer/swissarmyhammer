@@ -98,9 +98,10 @@ pub fn sync(
                         if let Some(path) = config_path {
                             if path.exists() {
                                 if let Ok(content) = std::fs::read_to_string(&path) {
-                                    if let Ok(settings) =
-                                        serde_json::from_str::<serde_json::Value>(&content)
-                                    {
+                                    // Agent MCP configs are user-written (Zed/VS
+                                    // Code ship JSONC). Mirror the lenient input
+                                    // format we accept on install.
+                                    if let Ok(settings) = crate::parse_jsonc(&content) {
                                         if settings
                                             .get(&mcp_def.servers_key)
                                             .and_then(|s| s.get(name))

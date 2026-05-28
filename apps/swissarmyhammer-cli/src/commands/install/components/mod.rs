@@ -213,8 +213,13 @@ fn register_agent_mcp(
         None => return false,
     };
 
-    match mirdan::mcp_config::register_mcp_server(&config_path, &mcp_def.servers_key, "sah", entry)
-    {
+    match mirdan::mcp_config::register_mcp_server(
+        &config_path,
+        &mcp_def.servers_key,
+        "sah",
+        entry,
+        &mcp_def.entry_extras,
+    ) {
         Ok(()) => {
             reporter.emit(&InitEvent::Action {
                 verb: "Installed".to_string(),
@@ -318,6 +323,7 @@ impl Initializable for ClaudeLocalScope {
             "mcpServers",
             "sah",
             &sah_mcp_server_entry(),
+            &std::collections::BTreeMap::new(),
         ) {
             Ok(c) => c,
             Err(e) => return vec![InitResult::error(self.name(), e.to_string())],
@@ -1716,7 +1722,7 @@ mod tests {
         let mcp_json = temp.path().join("mcp.json");
 
         // Detector reports missing before any install.
-        assert!(!mirdan::status::mcp_server_installed(&mcp_json));
+        assert!(!mirdan::status::mcp_server_installed(&mcp_json, None));
 
         // Install via the same `mirdan::mcp_config` entry point the install
         // layer calls in `register_agent_mcp`.
@@ -1725,12 +1731,13 @@ mod tests {
             "mcpServers",
             "sah",
             &sah_mcp_server_entry(),
+            &std::collections::BTreeMap::new(),
         )
         .expect("register_mcp_server should succeed");
 
         // Detector now reports installed.
         assert!(
-            mirdan::status::mcp_server_installed(&mcp_json),
+            mirdan::status::mcp_server_installed(&mcp_json, None),
             "mcp_server_installed must agree with what register_mcp_server wrote"
         );
     }

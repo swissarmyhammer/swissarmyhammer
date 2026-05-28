@@ -18,6 +18,7 @@ agents:
     global_instructions_path: "~/.claude/CLAUDE.md"
     settings_path: .claude/settings.json
     global_settings_path: "~/.claude/settings.json"
+    doctor: true
   - id: cursor
     name: Cursor
     project_path: .cursor/skills
@@ -67,6 +68,9 @@ agents:
     global_path: "~/.config/github-copilot/skills"
     detect:
       - dir: "~/.config/github-copilot"
+    instructions_path: .github/copilot-instructions.md
+    global_instructions_path: "~/.config/github-copilot/intellij/global-copilot-instructions.md"
+    doctor: true
   - id: continue
     name: Continue
     project_path: .continue/skills
@@ -89,6 +93,13 @@ agents:
     global_path: "~/.config/zed/skills"
     detect:
       - dir: "~/.config/zed"
+    mcp_config:
+      project_path: .zed/settings.json
+      global_path: "~/.config/zed/settings.json"
+      servers_key: context_servers
+      entry_extras:
+        source: custom
+    doctor: true
   - id: void
     name: Void
     project_path: .void/skills
@@ -261,6 +272,13 @@ agents:
     detect:
       - dir: "~/.codex"
       - command: codex
+    mcp_config:
+      project_path: .codex/config.toml
+      global_path: "~/.codex/config.toml"
+      servers_key: mcp_servers
+    instructions_path: AGENTS.md
+    global_instructions_path: "~/.codex/AGENTS.md"
+    doctor: true
   - id: gemini-cli
     name: Gemini CLI
     project_path: .gemini/skills

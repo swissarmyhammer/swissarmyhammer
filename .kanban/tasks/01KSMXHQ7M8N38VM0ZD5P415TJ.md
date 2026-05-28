@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KSMXH3N2YKCNB3HGDYBF5E6B
-position_column: todo
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffae80
 title: 'Doctor: detect Codex-style TOML MCP config in mirdan::status::mcp_server_installed'
 ---
 ## What
