@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: a480
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffb880
 project: store-service
 title: Substrate-guard test should call into production wiring, not mirror it
 ---

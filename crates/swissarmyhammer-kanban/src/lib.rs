@@ -91,6 +91,7 @@ pub mod focus;
 pub mod project;
 pub mod schema;
 pub mod scope_commands;
+pub mod substrate;
 pub mod tag;
 pub mod task;
 pub mod virtual_tags;
@@ -106,6 +107,7 @@ pub use derive_handlers::kanban_derive_registry;
 pub use dynamic_sources::board_display_name;
 pub use error::{KanbanError, Result};
 pub use processor::KanbanOperationProcessor;
+pub use substrate::wire_store_substrate;
 
 // Re-export entity types for dynamic entity access
 pub use swissarmyhammer_entity::changelog::{ChangeEntry, FieldChange};

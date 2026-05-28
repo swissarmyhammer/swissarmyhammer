@@ -3,40 +3,37 @@
 //!
 //! # What this test pins
 //!
-//! Production wiring lives at `apps/kanban-app/src/state.rs::BoardHandle::open`.
-//! That function constructs exactly one `Arc<StoreContext>`, then passes it
-//! by `Arc::clone` to three registration helpers that wire it into the
-//! `EntityContext`, `PerspectiveContext`, and `ViewsContext`. Every
-//! `TrackedStore` (entity-type stores, perspective store, view store) is
-//! registered into that one `StoreContext`, so `store.undo` / `store.redo`
-//! revert across heterogeneous stores on a single LIFO stack.
+//! Production wiring lives at `apps/kanban-app/src/state.rs::BoardHandle::open`,
+//! which delegates the entire substrate wiring to
+//! `swissarmyhammer_kanban::wire_store_substrate`. That function constructs
+//! exactly one `Arc<StoreContext>`, then wires it into the `EntityContext`,
+//! `PerspectiveContext`, and `ViewsContext`. Every `TrackedStore` (entity-type
+//! stores, perspective store, view store) is registered into that one
+//! `StoreContext`, so `store.undo` / `store.redo` revert across heterogeneous
+//! stores on a single LIFO stack.
 //!
-//! This test mirrors that wiring step-by-step against a temp `.kanban` dir
-//! and then verifies, via `Arc::ptr_eq`, that the `StoreContext` each
-//! subsystem holds is the *same* allocation as the one constructed at the
-//! top of the substrate. If a future change ever splits the substrate —
-//! e.g. a setter that quietly constructs its own `StoreContext` instead of
-//! storing the one it was handed, or a registration helper that builds a
-//! second context — this test fails loudly.
-//!
-//! The wiring below intentionally tracks
-//! `state.rs::{register_entity_stores, register_perspective_store,
-//! register_view_store}` line-for-line. If those change shape, this guard
-//! must be updated in lock-step.
+//! This test does NOT mirror that wiring — it **calls** `wire_store_substrate`
+//! directly, the exact same function production runs, against a temp `.kanban`
+//! dir. It then verifies, via `Arc::ptr_eq`, that the `StoreContext` each
+//! subsystem holds is the *same* allocation as the one the helper returned. If
+//! a future change ever splits the substrate — e.g. a setter that quietly
+//! constructs its own `StoreContext` instead of storing the one it was handed,
+//! or the helper building a second context — this test fails loudly, because
+//! it exercises the production code path rather than a copy of it.
 
 use std::sync::Arc;
 
-use swissarmyhammer_entity::EntityTypeStore;
 use swissarmyhammer_kanban::board::InitBoard;
-use swissarmyhammer_kanban::{KanbanContext, KanbanOperationProcessor, OperationProcessor};
-use swissarmyhammer_perspectives::PerspectiveStore;
-use swissarmyhammer_store::{StoreContext, StoreHandle};
-use swissarmyhammer_views::ViewStore;
+use swissarmyhammer_kanban::{
+    wire_store_substrate, KanbanContext, KanbanOperationProcessor, OperationProcessor,
+};
+use swissarmyhammer_store::StoreContext;
 use tempfile::TempDir;
 
-/// Open a production-shape `KanbanContext` with the same three-store
-/// registration sequence `BoardHandle::open` performs. Returns the kanban
-/// context and the single `Arc<StoreContext>` the test will check against.
+/// Open a production-shape `KanbanContext` and run the real production
+/// substrate wiring (`wire_store_substrate`) against it. Returns the kanban
+/// context and the single `Arc<StoreContext>` the helper produced, which the
+/// test checks every subsystem shares.
 async fn open_production_shape() -> (TempDir, Arc<KanbanContext>, Arc<StoreContext>) {
     let temp = TempDir::new().expect("temp dir");
     let kanban_dir = temp.path().join(".kanban");
@@ -57,65 +54,18 @@ async fn open_production_shape() -> (TempDir, Arc<KanbanContext>, Arc<StoreConte
             .expect("reopen kanban context"),
     );
 
-    // === The one-and-only StoreContext for this board. ===
-    let store_context = Arc::new(StoreContext::new(kanban.root().to_path_buf()));
-
-    // --- Mirror `register_entity_stores` ---
-    let ectx = kanban.entity_context().await.expect("entity context");
-    ectx.set_store_context(Arc::clone(&store_context));
-    let fields_ctx = ectx.fields();
-    for entity_def in fields_ctx.all_entities() {
-        let entity_type = entity_def.name.as_str();
-        let owned_defs: Vec<_> = fields_ctx
-            .fields_for_entity(entity_type)
-            .into_iter()
-            .cloned()
-            .collect();
-        let entity_type_store = EntityTypeStore::new(
-            ectx.entity_dir(entity_type),
-            entity_type,
-            Arc::new(entity_def.clone()),
-            Arc::new(owned_defs),
-        );
-        let handle = Arc::new(StoreHandle::new(Arc::new(entity_type_store)));
-        ectx.register_store(entity_type, handle.clone()).await;
-        store_context.register(handle).await;
-    }
-
-    // --- Mirror `register_perspective_store` ---
-    let perspectives_dir = kanban.root().join("perspectives");
-    let perspective_store = PerspectiveStore::new(&perspectives_dir);
-    let perspective_handle = Arc::new(StoreHandle::new(Arc::new(perspective_store)));
-    store_context.register(perspective_handle.clone()).await;
-    {
-        let pctx = kanban
-            .perspective_context()
-            .await
-            .expect("perspective context");
-        let mut pctx = pctx.write().await;
-        pctx.set_store_handle(perspective_handle);
-        pctx.set_store_context(Arc::clone(&store_context));
-    }
-
-    // --- Mirror `register_view_store` ---
-    let views_dir = kanban.root().join("views");
-    let view_store = ViewStore::new(&views_dir);
-    let view_handle = Arc::new(StoreHandle::new(Arc::new(view_store)));
-    store_context.register(view_handle.clone()).await;
-    if let Some(views_lock) = kanban.views() {
-        let mut views = views_lock.write().await;
-        views.set_store_handle(view_handle);
-        views.set_store_context(Arc::clone(&store_context));
-    }
+    // Run the EXACT production wiring — the same call `BoardHandle::open`
+    // makes. The returned Arc is the one-and-only StoreContext for this board.
+    let store_context = wire_store_substrate(&kanban).await;
 
     (temp, kanban, store_context)
 }
 
-/// After the production-shape wiring runs, the entity, perspective, and
-/// views contexts must each hold an `Arc<StoreContext>` whose allocation is
-/// the same as the one the board owns. `Arc::ptr_eq` returns true iff the
-/// two `Arc`s point at the *same* allocation, so this is the strict
-/// "no-fork" check the substrate invariant demands.
+/// After the production wiring runs, the entity, perspective, and views
+/// contexts must each hold an `Arc<StoreContext>` whose allocation is the same
+/// as the one the helper returned. `Arc::ptr_eq` returns true iff the two
+/// `Arc`s point at the *same* allocation, so this is the strict "no-fork"
+/// check the substrate invariant demands.
 #[tokio::test(flavor = "multi_thread")]
 async fn all_subsystems_share_one_store_context() {
     let (_temp, kanban, board_store_context) = open_production_shape().await;

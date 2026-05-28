@@ -158,85 +158,6 @@ async fn read_board_name(handle: &BoardHandle, canonical: &Path) -> String {
     }
 }
 
-/// Register a per-entity-type store for each entity type discovered on disk.
-/// Wires the shared `StoreContext` into `EntityContext` so writes/deletes push
-/// onto the undo stack, then creates an `EntityTypeStore` for every entity
-/// def and registers it with both contexts.
-async fn register_entity_stores(
-    ctx: &KanbanContext,
-    store_context: &Arc<swissarmyhammer_store::StoreContext>,
-) {
-    let Ok(ectx) = ctx.entity_context().await else {
-        return;
-    };
-    ectx.set_store_context(Arc::clone(store_context));
-
-    let fields_ctx = ectx.fields();
-    for entity_def in fields_ctx.all_entities() {
-        let entity_type = entity_def.name.as_str();
-        let field_defs = fields_ctx.fields_for_entity(entity_type);
-        let owned_defs: Vec<_> = field_defs.into_iter().cloned().collect();
-        let entity_type_store = swissarmyhammer_entity::EntityTypeStore::new(
-            ectx.entity_dir(entity_type),
-            entity_type,
-            Arc::new(entity_def.clone()),
-            Arc::new(owned_defs),
-        );
-        let handle = Arc::new(swissarmyhammer_store::StoreHandle::new(Arc::new(
-            entity_type_store,
-        )));
-        ectx.register_store(entity_type, handle.clone()).await;
-        store_context.register(handle).await;
-    }
-}
-
-/// Register the perspective store for undo/redo and wire it into
-/// `PerspectiveContext` so writes delegate to it and push onto the undo stack.
-async fn register_perspective_store(
-    ctx: &KanbanContext,
-    store_context: &Arc<swissarmyhammer_store::StoreContext>,
-    kanban_path: &Path,
-) {
-    let perspectives_dir = kanban_path.join("perspectives");
-    let perspective_store = swissarmyhammer_perspectives::PerspectiveStore::new(&perspectives_dir);
-    let handle = Arc::new(swissarmyhammer_store::StoreHandle::new(Arc::new(
-        perspective_store,
-    )));
-    store_context.register(handle.clone()).await;
-
-    if let Ok(pctx) = ctx.perspective_context().await {
-        let mut pctx = pctx.write().await;
-        pctx.set_store_handle(handle);
-        pctx.set_store_context(Arc::clone(store_context));
-    }
-}
-
-/// Register the view store for undo/redo and wire it into `ViewsContext` so
-/// writes delegate to it and push onto the undo stack.
-///
-/// Mirrors [`register_perspective_store`]: creates a `ViewStore` rooted at the
-/// `views/` directory, wraps it in a `StoreHandle`, registers the handle with
-/// the shared `StoreContext`, and attaches both to the `ViewsContext` that
-/// `KanbanContext::open` already constructed.
-async fn register_view_store(
-    ctx: &KanbanContext,
-    store_context: &Arc<swissarmyhammer_store::StoreContext>,
-    kanban_path: &Path,
-) {
-    let views_dir = kanban_path.join("views");
-    let view_store = swissarmyhammer_views::ViewStore::new(&views_dir);
-    let handle = Arc::new(swissarmyhammer_store::StoreHandle::new(Arc::new(
-        view_store,
-    )));
-    store_context.register(handle.clone()).await;
-
-    if let Some(views_lock) = ctx.views() {
-        let mut views = views_lock.write().await;
-        views.set_store_handle(handle);
-        views.set_store_context(Arc::clone(store_context));
-    }
-}
-
 /// Load every searchable entity (task, tag, column, actor, board) into a
 /// fresh `EntitySearchIndex`.
 async fn load_search_index(ctx: &KanbanContext) -> EntitySearchIndex {
@@ -326,20 +247,18 @@ impl BoardHandle {
         // `Arc::clone(&store_context)`, so `store.undo` / `store.redo` revert
         // across all of them on a single LIFO stack.
         //
-        // Never construct a second `StoreContext` for the same board — that
-        // would fork the undo stack: entity edits would land on one stack,
-        // perspective edits on another, and `undo` would silently revert
-        // only the one the caller happened to dispatch to. The substrate
-        // guard test at `apps/kanban-app/tests/substrate_guard.rs` enforces
-        // this by `Arc::ptr_eq`-comparing the context each subsystem holds
-        // against the one constructed here; if anybody splits the substrate,
-        // that test fails loudly.
-        let store_context = Arc::new(swissarmyhammer_store::StoreContext::new(
-            kanban_path.to_path_buf(),
-        ));
-        register_entity_stores(&ctx, &store_context).await;
-        register_perspective_store(&ctx, &store_context, &kanban_path).await;
-        register_view_store(&ctx, &store_context, &kanban_path).await;
+        // `wire_store_substrate` is the single source of truth for that
+        // wiring — it constructs the one `StoreContext` and registers all
+        // three store kinds into it. Never construct a second `StoreContext`
+        // for the same board (here or inside the helper) — that would fork
+        // the undo stack: entity edits would land on one stack, perspective
+        // edits on another, and `undo` would silently revert only the one the
+        // caller happened to dispatch to. The substrate guard test at
+        // `apps/kanban-app/tests/substrate_guard.rs` calls the SAME helper and
+        // `Arc::ptr_eq`-compares the context each subsystem holds against the
+        // returned one; if the helper ever splits the substrate, that test
+        // fails loudly.
+        let store_context = swissarmyhammer_kanban::wire_store_substrate(&ctx).await;
 
         // Ensure the entity context is initialized — this also constructs
         // and attaches the `EntityCache`. After this call,
@@ -453,7 +372,7 @@ impl BoardHandle {
         // Subscribe to the perspective broadcast channel so the bridge can
         // forward perspective mutations as Tauri events.
         //
-        // Invariant: `start_watcher` must be called after `register_perspective_store`
+        // Invariant: `start_watcher` must be called after `wire_store_substrate`
         // has initialized the PerspectiveContext (via `perspective_context().await`)
         // and before any concurrent perspective writes begin. This ensures:
         //   1. `perspective_context_if_ready()` returns `Some` (context is initialized)
