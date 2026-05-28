@@ -68,6 +68,7 @@ tauri-build = { version = "2", features = [] }
 [dev-dependencies]
 tempfile = { workspace = true }
 swissarmyhammer-entity = { workspace = true, features = ["test-support"] }
+swissarmyhammer-operations = { workspace = true }
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
 serde_json = { workspace = true }

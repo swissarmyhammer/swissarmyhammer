@@ -69,6 +69,22 @@ filter = "package(swissarmyhammer-tools) and (binary(code_context_mcp_e2e_test) 
 test-group = "treesitter-embedding"
 slow-timeout = { period = "60s", terminate-after = 6 }
 
+# The kanban-app AI-panel E2E tests each spin up an in-process llama-agent and
+# load the qwen-0.6B model. There are only two, but nextest's process-per-test
+# isolation would cold-load the model twice concurrently; serialising them keeps
+# the loads sequential (same reasoning as the embedding groups above). A small
+# dedicated group avoids coupling them to the larger llama serial group, so they
+# do not wait behind the whole llama-agent suite.
+[test-groups.kanban-ai-panel-e2e]
+max-threads = 1
+
+[[profile.default.overrides]]
+filter = "package(kanban-app) and binary(ai_panel_e2e)"
+test-group = "kanban-ai-panel-e2e"
+# The MCP tool-loop test runs several real agentic generation rounds (~50s);
+# warn every 60s, hard-kill after 6 periods.
+slow-timeout = { period = "60s", terminate-after = 6 }
+
 # Apply serial execution to llama-embedding tests
 [[profile.default.overrides]]
 filter = "package(llama-embedding)"

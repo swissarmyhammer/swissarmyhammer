@@ -4203,6 +4203,7 @@ dependencies = [
  "swissarmyhammer-filter-expr",
  "swissarmyhammer-focus",
  "swissarmyhammer-kanban",
+ "swissarmyhammer-operations",
  "swissarmyhammer-perspectives",
  "swissarmyhammer-store",
  "swissarmyhammer-tools",
