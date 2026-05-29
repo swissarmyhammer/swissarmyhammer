@@ -42,9 +42,23 @@
 //!    on the cross axis (horizontal overlap for `Up`/`Down`, vertical
 //!    overlap for `Left`/`Right`).
 //! 3. Are not the focused entry itself.
+//! 4. Are not an **ancestor** of the focused entry — navigating onto your
+//!    own enclosing card / column / board is drill-out's job, never a
+//!    cardinal move.
+//! 5. Are not **nested inside another candidate that is a sibling of the
+//!    focused entry** (a candidate whose own `parent_zone` equals the
+//!    focused entry's). This is the structural rule that keeps Up/Down on a
+//!    board card landing on the *card above* rather than diving into a field
+//!    in the middle of it: the card above is a sibling of the focused card
+//!    (same column), and its title / inspect button descend from it, so they
+//!    are dropped and the card itself wins. The next column's card is NOT a
+//!    sibling (different column), so cross-column Left/Right still lands on
+//!    it by beam score; and a field's siblings are the other fields of the
+//!    same card (the parent card is not their sibling), so within-card
+//!    Up/Down is unaffected. See `nested_in_focused_sibling_candidate`.
 //!
-//! No structural filtering — `parent_zone` and "has children" are
-//! tie-breakers and observability only.
+//! Beyond those two structural exclusions the pick is geometric;
+//! "has children" remains a tie-breaker and observability only.
 //!
 //! ## Tie-break: leaves over containers
 //!
@@ -317,9 +331,18 @@ fn geometric_pick(
         .filter_map(|s| s.parent_zone.clone())
         .collect();
     let from_rect = focused.rect;
-    let mut best: Option<BestCandidate> = None;
+
+    // Pass 1 — collect every scope that passes the geometric gate
+    // (half-plane + in-beam), excluding the focused scope itself and any
+    // ANCESTOR of the focused scope. Navigating onto your own enclosing
+    // container is drill-out's job, never a cardinal move, so a parent
+    // card / column / board is not a cardinal target.
+    let mut raw: Vec<(&SnapshotScope, f64)> = Vec::new();
     for cand in view.scopes() {
         if cand.fq == focused.fq {
+            continue;
+        }
+        if is_ancestor_of(view, &cand.fq, &focused.fq) {
             continue;
         }
         if !in_strict_half_plane(&from_rect, &cand.rect, direction) {
@@ -331,9 +354,30 @@ fn geometric_pick(
         if !in_beam {
             continue;
         }
+        raw.push((cand, score));
+    }
+
+    // Pass 2 — drop any candidate that is nested inside ANOTHER candidate
+    // which is a *sibling* of the focused scope (shares its `parent_zone`).
+    // This is the load-bearing fix for "Up on a card jumps into the middle
+    // of the card above": the card above is a sibling of the focused card
+    // (both children of the same column), and its title / inspect-button
+    // are descendants of it — so they are dropped and the card itself is
+    // kept. The next column's card is NOT a sibling of the focused card
+    // (different column), so cross-column Left/Right still lands on it by
+    // beam score. And once focus is inside a card, the focused field's
+    // siblings are the other fields of the SAME card (the parent card is
+    // not their sibling), so within-card Up/Down is unaffected.
+    let cand_fqs: HashSet<FullyQualifiedMoniker> =
+        raw.iter().map(|(c, _)| c.fq.clone()).collect();
+    let mut best: Option<BestCandidate> = None;
+    for (cand, score) in &raw {
+        if nested_in_focused_sibling_candidate(view, &cand.fq, &cand_fqs, &focused.parent_zone) {
+            continue;
+        }
         let cand_summary = BestCandidate {
             fq: cand.fq.clone(),
-            score,
+            score: *score,
             has_children: parent_fqs.contains(&cand.fq),
         };
         if better_candidate(&best, &cand_summary) {
@@ -344,6 +388,63 @@ fn geometric_pick(
         Some(b) => b.fq,
         None => focused_fq.clone(),
     }
+}
+
+/// `true` when `ancestor_fq` appears in the `parent_zone` chain of `fq`
+/// (excluding `fq` itself). Cycle-guarded against torn snapshots whose
+/// `parent_zone` edges form a loop.
+fn is_ancestor_of(
+    view: &IndexedSnapshot<'_>,
+    ancestor_fq: &FullyQualifiedMoniker,
+    fq: &FullyQualifiedMoniker,
+) -> bool {
+    let mut seen: HashSet<FullyQualifiedMoniker> = HashSet::new();
+    let mut current = view.get(fq).and_then(|s| s.parent_zone.clone());
+    while let Some(parent) = current {
+        if &parent == ancestor_fq {
+            return true;
+        }
+        if !seen.insert(parent.clone()) {
+            break;
+        }
+        current = view.get(&parent).and_then(|s| s.parent_zone.clone());
+    }
+    false
+}
+
+/// `true` when `fq` descends (via `parent_zone`) from some candidate in
+/// `cand_fqs` that is a *sibling* of the focused scope — i.e. that
+/// candidate's own `parent_zone` equals `focused_parent_zone`. Such a
+/// candidate is a peer container of the focused scope (e.g. the card above,
+/// a sibling under the same column); a cardinal move must land on it, not
+/// dive into its interior. Cycle-guarded against torn `parent_zone` loops.
+///
+/// The focused scope's own ancestors are deliberately NOT matched here:
+/// the focused field's parent card is not a sibling of the field, so the
+/// field's siblings (the card's other fields) survive and within-card
+/// Up/Down keeps working.
+fn nested_in_focused_sibling_candidate(
+    view: &IndexedSnapshot<'_>,
+    fq: &FullyQualifiedMoniker,
+    cand_fqs: &HashSet<FullyQualifiedMoniker>,
+    focused_parent_zone: &Option<FullyQualifiedMoniker>,
+) -> bool {
+    let mut seen: HashSet<FullyQualifiedMoniker> = HashSet::new();
+    let mut current = view.get(fq).and_then(|s| s.parent_zone.clone());
+    while let Some(parent) = current {
+        if cand_fqs.contains(&parent) {
+            if let Some(parent_scope) = view.get(&parent) {
+                if &parent_scope.parent_zone == focused_parent_zone {
+                    return true;
+                }
+            }
+        }
+        if !seen.insert(parent.clone()) {
+            break;
+        }
+        current = view.get(&parent).and_then(|s| s.parent_zone.clone());
+    }
+    false
 }
 
 /// Running best candidate inside [`geometric_pick`]: FQM, beam score, and
@@ -800,8 +901,11 @@ mod tests {
     }
 
     /// `parent_zone` cycle does not freeze pathfinding — the
-    /// has-children precomputation reads `parent_zone` only as a
-    /// flat-set membership check.
+    /// has-children precomputation and the sibling-exclusion walk both
+    /// read `parent_zone` under a cycle-guard. `/L/src` has no
+    /// `parent_zone`, so neither `/L/a` nor `/L/b` is its sibling and the
+    /// exclusion does not fire; the geometric pick stands and the closer
+    /// neighbour `/L/a` wins.
     #[test]
     fn parent_zone_cycle_does_not_hang() {
         let snap = snapshot(vec![
@@ -812,6 +916,151 @@ mod tests {
         assert_eq!(
             pick(&snap, "/L/src", Direction::Right),
             FullyQualifiedMoniker::from_string("/L/a"),
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Board card / nested-field navigation — the user-symptom contract.
+    //
+    // A board column holds two cards; each card is a container whose
+    // children are a title field (filling most of the card) and a small
+    // inspect button. These tests pin that Up/Down between cards lands on
+    // the *card*, never a field inside it, and that once focus is inside a
+    // card, Up/Down walks that card's own fields.
+    //
+    // Layout (single column, x in [0,200]):
+    //   /L/col              zone  y   0..400   (showFocus=false container)
+    //   /L/col/cardTop      card  y  10..190
+    //   /L/col/cardTop/title  field y 20..70  (fills card width)
+    //   /L/col/cardTop/inspect leaf y 20..40 (top-right)
+    //   /L/col/cardBot      card  y 210..390
+    //   /L/col/cardBot/title  field y 220..270
+    //   /L/col/cardBot/inspect leaf y 220..240
+    // -----------------------------------------------------------------
+
+    /// Build the two-card column snapshot described above.
+    fn two_card_column() -> NavSnapshot {
+        snapshot(vec![
+            scope("/L/col", None, rect(0.0, 0.0, 200.0, 400.0)),
+            scope("/L/col/cardTop", Some("/L/col"), rect(0.0, 10.0, 200.0, 180.0)),
+            scope(
+                "/L/col/cardTop/title",
+                Some("/L/col/cardTop"),
+                rect(10.0, 20.0, 150.0, 50.0),
+            ),
+            scope(
+                "/L/col/cardTop/inspect",
+                Some("/L/col/cardTop"),
+                rect(170.0, 20.0, 20.0, 20.0),
+            ),
+            scope(
+                "/L/col/cardBot",
+                Some("/L/col"),
+                rect(0.0, 210.0, 200.0, 180.0),
+            ),
+            scope(
+                "/L/col/cardBot/title",
+                Some("/L/col/cardBot"),
+                rect(10.0, 220.0, 150.0, 50.0),
+            ),
+            scope(
+                "/L/col/cardBot/inspect",
+                Some("/L/col/cardBot"),
+                rect(170.0, 220.0, 20.0, 20.0),
+            ),
+        ])
+    }
+
+    /// Up from the bottom card must land on the TOP CARD — not the top
+    /// card's title field (which sits in the geometric "middle" of the
+    /// card above) and not its inspect button. This is the exact reported
+    /// regression.
+    #[test]
+    fn up_from_card_lands_on_card_above_not_its_fields() {
+        let snap = two_card_column();
+        assert_eq!(
+            pick(&snap, "/L/col/cardBot", Direction::Up),
+            FullyQualifiedMoniker::from_string("/L/col/cardTop"),
+            "Up on a card must focus the card above, never a field inside it",
+        );
+    }
+
+    /// Down from the top card must land on the bottom CARD, symmetric to
+    /// the Up case.
+    #[test]
+    fn down_from_card_lands_on_card_below_not_its_fields() {
+        let snap = two_card_column();
+        assert_eq!(
+            pick(&snap, "/L/col/cardTop", Direction::Down),
+            FullyQualifiedMoniker::from_string("/L/col/cardBot"),
+            "Down on a card must focus the card below, never a field inside it",
+        );
+    }
+
+    /// Once focus is INSIDE a card (on its title field), Down walks to the
+    /// next field in the SAME card — not to the card itself, and not to a
+    /// field in the other card. Here the inspect button sits just below the
+    /// title within the same card, so Down from the title lands on it.
+    #[test]
+    fn down_within_card_moves_between_that_cards_fields() {
+        // Stack the two fields vertically inside the top card so Down has a
+        // same-card target directly below the title.
+        let snap = snapshot(vec![
+            scope("/L/col", None, rect(0.0, 0.0, 200.0, 400.0)),
+            scope("/L/col/cardTop", Some("/L/col"), rect(0.0, 10.0, 200.0, 180.0)),
+            scope(
+                "/L/col/cardTop/title",
+                Some("/L/col/cardTop"),
+                rect(10.0, 20.0, 180.0, 50.0),
+            ),
+            scope(
+                "/L/col/cardTop/body",
+                Some("/L/col/cardTop"),
+                rect(10.0, 90.0, 180.0, 50.0),
+            ),
+            scope(
+                "/L/col/cardBot",
+                Some("/L/col"),
+                rect(0.0, 210.0, 200.0, 180.0),
+            ),
+            scope(
+                "/L/col/cardBot/title",
+                Some("/L/col/cardBot"),
+                rect(10.0, 220.0, 180.0, 50.0),
+            ),
+        ]);
+        assert_eq!(
+            pick(&snap, "/L/col/cardTop/title", Direction::Down),
+            FullyQualifiedMoniker::from_string("/L/col/cardTop/body"),
+            "Down inside a card walks that card's own fields, not the card or another card's fields",
+        );
+    }
+
+    /// Cross-column nav still works: Right from a card in the left column
+    /// lands on the geometrically-aligned card in the right column (cards
+    /// in different columns have different `parent_zone`s, so this is the
+    /// cross-zone path), and never on a field inside that card.
+    #[test]
+    fn right_crosses_to_card_in_next_column_not_its_fields() {
+        let snap = snapshot(vec![
+            scope("/L/colL", None, rect(0.0, 0.0, 200.0, 400.0)),
+            scope("/L/colL/card", Some("/L/colL"), rect(0.0, 10.0, 190.0, 100.0)),
+            scope("/L/colR", None, rect(210.0, 0.0, 200.0, 400.0)),
+            scope(
+                "/L/colR/card",
+                Some("/L/colR"),
+                rect(210.0, 10.0, 190.0, 100.0),
+            ),
+            scope(
+                "/L/colR/card/title",
+                Some("/L/colR/card"),
+                rect(220.0, 20.0, 150.0, 50.0),
+            ),
+        ]);
+        assert_eq!(
+            pick(&snap, "/L/colL/card", Direction::Right),
+            FullyQualifiedMoniker::from_string("/L/colR/card"),
+            "Right must cross to the next column's card, not dive into its title field",
         );
     }
 
