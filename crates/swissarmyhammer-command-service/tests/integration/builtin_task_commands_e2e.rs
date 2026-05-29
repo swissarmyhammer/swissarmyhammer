@@ -204,6 +204,53 @@ fn task_column(list_result: &Value, task_id: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Read the `position.ordinal` of the task with `task_id` off a `list tasks`
+/// result, or `None` if absent.
+fn task_ordinal(list_result: &Value, task_id: &str) -> Option<String> {
+    kanban_payload(list_result)
+        .get("tasks")
+        .and_then(Value::as_array)
+        .expect("list tasks must carry a `tasks` array")
+        .iter()
+        .find(|task| task.get("id").and_then(Value::as_str) == Some(task_id))
+        .and_then(|task| task.get("position").and_then(|p| p.get("ordinal")))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+/// Return the ids of all tasks in `column`, sorted by `position.ordinal`
+/// ascending — the on-board visual order within the column.
+fn column_task_order(list_result: &Value, column: &str) -> Vec<String> {
+    let mut tasks: Vec<(String, String)> = kanban_payload(list_result)
+        .get("tasks")
+        .and_then(Value::as_array)
+        .expect("list tasks must carry a `tasks` array")
+        .iter()
+        .filter(|task| {
+            task.get("position")
+                .and_then(|p| p.get("column"))
+                .and_then(Value::as_str)
+                == Some(column)
+        })
+        .map(|task| {
+            let id = task
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let ord = task
+                .get("position")
+                .and_then(|p| p.get("ordinal"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            (ord, id)
+        })
+        .collect();
+    tasks.sort();
+    tasks.into_iter().map(|(_, id)| id).collect()
+}
+
 /// Pull the `commands` array out of a `list command` response, keyed by id.
 fn commands_by_id(list_result: &Value) -> BTreeMap<String, Value> {
     list_result
@@ -371,6 +418,203 @@ async fn task_commands_plugin_registers_and_moves_a_task() {
         task_column(&after, &task_id).as_deref(),
         Some("doing"),
         "task.move must have moved the task to the doing column on the real store"
+    );
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Shared harness for the positioning tests
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Stand up the host + command service + exposed kanban tool with the staged
+/// `task-commands` bundle loaded, returning the live service and kanban handle.
+///
+/// Keeps the temp dirs alive by returning them so the caller drops them last.
+type BootedTaskCommands = (
+    TempDir,
+    TempDir,
+    TempDir,
+    PluginHost,
+    Arc<swissarmyhammer_command_service::CommandService>,
+    ExposedKanban,
+);
+
+async fn boot_with_task_commands() -> BootedTaskCommands {
+    let user_root = TempDir::new().expect("user root temp dir");
+    let builtin_root = TempDir::new().expect("builtin layer root temp dir");
+    let board_dir = TempDir::new().expect("kanban board temp dir");
+
+    stage_task_commands(builtin_root.path());
+
+    let host = PluginHost::new(
+        Some(builtin_root.path().to_path_buf()),
+        user_root.path().to_path_buf(),
+        None,
+        false,
+        user_root.path().to_path_buf(),
+    );
+
+    let service = install_commands_module(&host)
+        .await
+        .expect("install_commands_module must succeed");
+
+    let kanban = expose_kanban_module(board_dir.path()).await;
+    tokio::time::timeout(TIMEOUT, kanban.expose_to(&host))
+        .await
+        .expect("exposing kanban should not hang");
+
+    (user_root, builtin_root, board_dir, host, service, kanban)
+}
+
+/// Add a task to `column` and return its id.
+async fn add_task_in_column(kanban: &ExposedKanban, title: &str, column: &str) -> String {
+    let added = kanban
+        .call(json!({ "op": "add task", "title": title, "column": column }))
+        .await;
+    kanban_payload(&added)
+        .get("id")
+        .and_then(Value::as_str)
+        .expect("add task must return the new task id")
+        .to_string()
+}
+
+/// Executing `task.move` with a numeric `drop_index` lands the task at the
+/// CORRECT position within the target column — not merely in the column.
+///
+/// This is the regression guard for the `drop_index` → positioning routing: the
+/// old port passed the numeric `drop_index` straight through as `ordinal`,
+/// which the `move task` op parses as a FractionalIndex STRING. A number-shaped
+/// ordinal parses to a garbage/default index, so the task mis-positions while
+/// the column still changes — which a column-only assertion would not catch.
+/// Here we seed THREE tasks in `doing`, move a fourth task to drop_index 1, and
+/// assert it lands at index 1 (second), with the relative order of the others
+/// preserved.
+#[tokio::test]
+async fn task_move_with_drop_index_positions_in_column() {
+    let (_user, _builtin, _board, host, service, kanban) = boot_with_task_commands().await;
+
+    kanban
+        .call(json!({ "op": "init board", "name": "Drop Index Board" }))
+        .await;
+
+    // Three anchors already in `doing`, in a known order.
+    let a = add_task_in_column(&kanban, "A", "doing").await;
+    let b = add_task_in_column(&kanban, "B", "doing").await;
+    let c = add_task_in_column(&kanban, "C", "doing").await;
+    // The mover starts in `todo`.
+    let mover = add_task_in_column(&kanban, "Mover", "todo").await;
+
+    let before = kanban.call(json!({ "op": "list tasks" })).await;
+    assert_eq!(
+        column_task_order(&before, "doing"),
+        vec![a.clone(), b.clone(), c.clone()],
+        "anchors should start in order A,B,C in doing"
+    );
+
+    tokio::time::timeout(TIMEOUT, host.discover_and_load_all::<KanbanConfig>())
+        .await
+        .expect("discovery should not hang")
+        .expect("discovering the task-commands builtin plugin should succeed");
+
+    // Drop the mover at index 1 of `doing` → it should sit between A and B.
+    let executed = call_command(
+        &service,
+        CallerId::HostInternal,
+        json!({
+            "op": "execute command",
+            "id": "task.move",
+            "ctx": {
+                "scope_chain": [format!("task:{mover}")],
+                "target": "column:doing",
+                "args": { "drop_index": 1 },
+            },
+        }),
+    )
+    .await;
+    assert_eq!(
+        executed["structuredContent"]["ok"],
+        json!(true),
+        "executing task.move with drop_index should succeed, got {executed}"
+    );
+
+    let after = kanban.call(json!({ "op": "list tasks" })).await;
+    assert_eq!(
+        column_task_order(&after, "doing"),
+        vec![a.clone(), mover.clone(), b.clone(), c.clone()],
+        "task.move drop_index=1 must position the mover at index 1 (A, Mover, B, C), got {after}"
+    );
+}
+
+/// Executing `task.doThisNext` MOVES the scoped task to the FRONT of the first
+/// column — it is an undoable mutation, not a read-only "next task" query.
+///
+/// This is the regression guard for the `doThisNext` routing: the old port
+/// called the read-only `next task` op, which mutates nothing. Here we put the
+/// scoped task in a NON-first column (and behind an existing task in the first
+/// column), execute, and assert it moved to the top of the first column.
+#[tokio::test]
+async fn task_do_this_next_moves_to_front_of_first_column() {
+    let (_user, _builtin, _board, host, service, kanban) = boot_with_task_commands().await;
+
+    kanban
+        .call(json!({ "op": "init board", "name": "Do This Next Board" }))
+        .await;
+
+    // `todo` is the first column (order 0). Seed an anchor at the front of it.
+    let anchor = add_task_in_column(&kanban, "Anchor", "todo").await;
+    // The target starts in `doing` — NOT the first column.
+    let target = add_task_in_column(&kanban, "Target", "doing").await;
+
+    let before = kanban.call(json!({ "op": "list tasks" })).await;
+    assert_eq!(
+        task_column(&before, &target).as_deref(),
+        Some("doing"),
+        "the target should start in doing"
+    );
+    assert_eq!(
+        column_task_order(&before, "todo"),
+        vec![anchor.clone()],
+        "todo should start with just the anchor"
+    );
+
+    tokio::time::timeout(TIMEOUT, host.discover_and_load_all::<KanbanConfig>())
+        .await
+        .expect("discovery should not hang")
+        .expect("discovering the task-commands builtin plugin should succeed");
+
+    let executed = call_command(
+        &service,
+        CallerId::HostInternal,
+        json!({
+            "op": "execute command",
+            "id": "task.doThisNext",
+            "ctx": { "scope_chain": [format!("task:{target}")] },
+        }),
+    )
+    .await;
+    assert_eq!(
+        executed["structuredContent"]["ok"],
+        json!(true),
+        "executing task.doThisNext should succeed, got {executed}"
+    );
+
+    let after = kanban.call(json!({ "op": "list tasks" })).await;
+    // The target moved into the first column...
+    assert_eq!(
+        task_column(&after, &target).as_deref(),
+        Some("todo"),
+        "task.doThisNext must move the target into the first column (todo), got {after}"
+    );
+    // ...and to the FRONT of it (ahead of the anchor).
+    assert_eq!(
+        column_task_order(&after, "todo"),
+        vec![target.clone(), anchor.clone()],
+        "task.doThisNext must place the target at the front of todo (Target, Anchor), got {after}"
+    );
+    let target_ord = task_ordinal(&after, &target).expect("target ordinal");
+    let anchor_ord = task_ordinal(&after, &anchor).expect("anchor ordinal");
+    assert!(
+        target_ord < anchor_ord,
+        "target ordinal {target_ord:?} must sort before anchor ordinal {anchor_ord:?}"
     );
 }
 

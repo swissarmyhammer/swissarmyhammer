@@ -487,21 +487,41 @@ async fn kanban_misc_commands_plugin_registers_and_executes() {
     assert_tag_update_metadata(&commands["tag.update"]);
     assert_view_set_metadata(&commands["view.set"]);
 
-    // ── (3a) Real effect: column.reorder → kanban `update column` ──────────
-    // `doing` starts at order 1; reorder it to index 0.
+    // ── (3a) Real effect: column.reorder → full column reindex ─────────────
+    // Use a FOUR-column board and move a column to a non-trivial middle index,
+    // then assert EVERY column ends with the correct sequential order. The old
+    // assertion only checked that the moved column's order == target_index —
+    // which the buggy single-write port satisfied while leaving a duplicate
+    // order on whatever column already sat there. This shape catches that: a
+    // single `update column { order: target_index }` leaves two columns sharing
+    // the moved column's old/new neighbors' orders.
+    //
+    // Seed a fourth column `review` at order 3. Board: todo=0, doing=1, done=2,
+    // review=3.
+    kanban
+        .call(json!({ "op": "add column", "id": "review", "name": "Review", "order": 3 }))
+        .await;
     let before = kanban.call(json!({ "op": "list columns" })).await;
     assert_eq!(
-        column_order(&before, "doing"),
-        Some(1),
-        "the seeded `doing` column should start at order 1"
+        (
+            column_order(&before, "todo"),
+            column_order(&before, "doing"),
+            column_order(&before, "done"),
+            column_order(&before, "review"),
+        ),
+        (Some(0), Some(1), Some(2), Some(3)),
+        "the seeded four columns should start at orders 0,1,2,3"
     );
+
+    // Move `done` (currently order 2) to index 1. Expected final sequence:
+    // todo=0, done=1, doing=2, review=3.
     let reorder = call_command(
         &service,
         CallerId::HostInternal,
         json!({
             "op": "execute command",
             "id": "column.reorder",
-            "ctx": { "args": { "id": "doing", "target_index": 0 } },
+            "ctx": { "args": { "id": "done", "target_index": 1 } },
         }),
     )
     .await;
@@ -510,11 +530,30 @@ async fn kanban_misc_commands_plugin_registers_and_executes() {
         json!(true),
         "executing column.reorder should succeed, got {reorder}"
     );
+
     let after = kanban.call(json!({ "op": "list columns" })).await;
+    // Every column has its expected, sequential, non-duplicate order.
     assert_eq!(
-        column_order(&after, "doing"),
-        Some(0),
-        "column.reorder must have written `doing`'s new order through the kanban store"
+        (
+            column_order(&after, "todo"),
+            column_order(&after, "done"),
+            column_order(&after, "doing"),
+            column_order(&after, "review"),
+        ),
+        (Some(0), Some(1), Some(2), Some(3)),
+        "column.reorder must re-sequence ALL columns to todo=0, done=1, doing=2, review=3, got {after}"
+    );
+    // No two columns may share an order — the precise failure the single-write
+    // port produced.
+    let mut all_orders: Vec<u64> = ["todo", "doing", "done", "review"]
+        .iter()
+        .filter_map(|c| column_order(&after, c))
+        .collect();
+    all_orders.sort_unstable();
+    assert_eq!(
+        all_orders,
+        vec![0, 1, 2, 3],
+        "the four columns must hold exactly the orders 0,1,2,3 with no duplicates, got {all_orders:?}"
     );
 
     // ── (3b) Real effect: tag.update → kanban `update tag` ─────────────────

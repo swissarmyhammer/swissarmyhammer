@@ -51,6 +51,74 @@ interface CommandContext {
 type Availability = { ok: true } | { ok: false; reason: string };
 
 /**
+ * Parse the JSON payload a kanban operation tool returns.
+ *
+ * The kanban tool answers `tools/call` with a `CallToolResult` whose single
+ * text content item carries the operation's JSON payload as a string (it does
+ * NOT populate `structuredContent`). To read `tasks` / `columns` arrays back,
+ * the plugin must pull `content[0].text` and `JSON.parse` it — the same shape
+ * the in-process `kanban` module returns to any caller.
+ */
+function kanbanPayload(result: unknown): Record<string, unknown> {
+  const content = (result as { content?: unknown[] } | undefined)?.content;
+  const first = Array.isArray(content) ? content[0] : undefined;
+  const text = (first as { text?: unknown } | undefined)?.text;
+  if (typeof text !== "string") return {};
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object"
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+/** A task as it appears in a `list tasks` payload (only the fields we read). */
+interface ListedTask {
+  id: string;
+  ordinal: string;
+}
+
+/**
+ * List the tasks in `column`, excluding `excludeId`, sorted by ordinal ascending.
+ *
+ * Mirrors `task_commands::load_sorted_column_tasks`: the neighbor list the
+ * legacy server-side ordinal computation walks. The plugin can't compute
+ * FractionalIndex ordinals itself, so it materializes this ordered neighbor
+ * list and then references a neighbor by id (`before_id`) — letting the
+ * canonical `MoveTask::execute` compute the ordinal exactly as the legacy
+ * `compute_ordinal_for_drop` did.
+ */
+async function sortedColumnTasks(
+  plugin: TaskCommandsPlugin,
+  column: string,
+  excludeId: string | undefined,
+): Promise<ListedTask[]> {
+  const listed = await plugin.kanban.kanban.tasks.list({ column });
+  const tasks = kanbanPayload(listed).tasks;
+  if (!Array.isArray(tasks)) return [];
+  const out: ListedTask[] = [];
+  for (const raw of tasks) {
+    const task = raw as {
+      id?: unknown;
+      position?: { column?: unknown; ordinal?: unknown };
+    };
+    const id = typeof task.id === "string" ? task.id : undefined;
+    if (id === undefined || id === excludeId) continue;
+    // `list tasks { column }` is already column-scoped, but guard anyway so a
+    // future server change to that filter can't silently pull in other columns.
+    const taskColumn = task.position?.column;
+    if (typeof taskColumn === "string" && taskColumn !== column) continue;
+    const ordinal =
+      typeof task.position?.ordinal === "string" ? task.position.ordinal : "";
+    out.push({ id, ordinal });
+  }
+  out.sort((a, b) => (a.ordinal < b.ordinal ? -1 : a.ordinal > b.ordinal ? 1 : 0));
+  return out;
+}
+
+/**
  * Resolve the id of the first scope-chain moniker of `entityType`.
  *
  * A `from: scope_chain` param with `entity_type: <t>` resolves to the id half
@@ -139,9 +207,28 @@ class TaskCommandsPlugin extends Plugin {
           const ctx = (rawCtx ?? {}) as CommandContext;
           const id = scopeId(ctx, "task");
           const column = targetId(ctx, "column");
-          const ordinal = ctx.args?.drop_index;
           const args: Record<string, unknown> = { id, column };
-          if (ordinal !== undefined) args.ordinal = ordinal;
+
+          // `drop_index` is a NUMERIC index into the target column, but the
+          // `move task` op only understands an `ordinal` FractionalIndex STRING
+          // or a `before_id` / `after_id` neighbor reference. Translate the
+          // index into a neighbor reference (the legacy `MoveTaskCmd` computed
+          // the ordinal server-side via `compute_ordinal_for_drop`; the
+          // `before_id` path computes the SAME ordinal from the same neighbor
+          // list inside `MoveTask::execute`). Passing the raw number as
+          // `ordinal` would parse to a garbage FractionalIndex and mis-position
+          // the task — the regression this replaces.
+          const dropIndex = ctx.args?.drop_index;
+          if (typeof dropIndex === "number" && column !== undefined) {
+            const neighbors = await sortedColumnTasks(this, column, id);
+            // index 0 → before the first; 0 < i < len → before the task that
+            // currently sits at the index (it shifts right); i >= len → append
+            // (no neighbor reference, MoveTask appends at the end).
+            if (dropIndex < neighbors.length) {
+              const beforeId = neighbors[Math.max(0, dropIndex)].id;
+              args.before_id = beforeId;
+            }
+          }
           return await this.kanban.kanban.task.move(args);
         },
       },
@@ -196,8 +283,47 @@ class TaskCommandsPlugin extends Plugin {
           }
           return { ok: true } satisfies Availability;
         },
-        execute: async () => {
-          return await this.kanban.kanban.task.next({});
+        execute: async (rawCtx) => {
+          const ctx = (rawCtx ?? {}) as CommandContext;
+          const id = scopeId(ctx, "task");
+
+          // The legacy `DoThisNextCmd` is an undoable MUTATION: it moves the
+          // scoped task to the FRONT of the first column. (The kanban `next
+          // task` op is a read-only query — routing here would do nothing, the
+          // regression this replaces.) Find the order-0 column, then move the
+          // task before that column's current first task so it lands at the top.
+          const listedColumns = await this.kanban.kanban.columns.list({});
+          const columns = kanbanPayload(listedColumns).columns;
+          if (!Array.isArray(columns) || columns.length === 0) {
+            // No columns on the board — nothing to do (matches the legacy
+            // "no columns on board" failure surface).
+            return await this.kanban.kanban.columns.list({});
+          }
+          // `list columns` is already sorted by `order` ascending (lowest
+          // first); break ties by id so the choice is deterministic, matching
+          // the legacy `first_column_id`.
+          const sortedColumns = [...columns].sort((a, b) => {
+            const ao = Number((a as { order?: unknown }).order ?? 0);
+            const bo = Number((b as { order?: unknown }).order ?? 0);
+            if (ao !== bo) return ao - bo;
+            const ai = String((a as { id?: unknown }).id ?? "");
+            const bi = String((b as { id?: unknown }).id ?? "");
+            return ai < bi ? -1 : ai > bi ? 1 : 0;
+          });
+          const firstColumn = String(
+            (sortedColumns[0] as { id?: unknown }).id ?? "",
+          );
+
+          const neighbors = await sortedColumnTasks(this, firstColumn, id);
+          const args: Record<string, unknown> = { id, column: firstColumn };
+          // Place before the column's current first task so the scoped task
+          // lands at position zero — exactly what `MoveTask::with_before(first)`
+          // does. With no other task in the column, MoveTask appends (which is
+          // position zero in an otherwise-empty column).
+          if (neighbors.length > 0) {
+            args.before_id = neighbors[0].id;
+          }
+          return await this.kanban.kanban.task.move(args);
         },
       },
     ]);

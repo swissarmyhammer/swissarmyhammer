@@ -5,8 +5,8 @@ depends_on:
 - 01KS36P9C8CFT5HMQWY2WCA9ZE
 - 01KS5F7BR6850RKT67X4CNHPAZ
 - 01KS5G3AKZXDN7K6YR415E0V4K
-position_column: review
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffcf80
 project: command-service
 title: '`execute` transaction bracketing + `commands/executed` action event'
 ---

@@ -6,8 +6,8 @@ depends_on:
 - 01KS3BK37R2P0RYSYSXGZTS0Z3
 - 01KS36VTN9K8C41P20SJ2WQA6X
 - 01KS5EA17K4KDANFFRGW92QARF
-position_column: done
-position_ordinal: ffffffffffffffffffffffffffffffffffffc680
+position_column: doing
+position_ordinal: '8180'
 project: builtin-commands
 title: 'Builtin plugin: column/attachment/tag/view commands (port 4 small YAMLs)'
 ---

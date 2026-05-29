@@ -57,6 +57,29 @@ interface CommandContext {
 type Availability = { ok: true } | { ok: false; reason: string };
 
 /**
+ * Parse the JSON payload a kanban operation tool returns.
+ *
+ * The kanban tool answers `tools/call` with a `CallToolResult` whose single
+ * text content item carries the operation's JSON payload as a string (it does
+ * NOT populate `structuredContent`). To read the `columns` array back, the
+ * plugin must pull `content[0].text` and `JSON.parse` it.
+ */
+function kanbanPayload(result: unknown): Record<string, unknown> {
+  const content = (result as { content?: unknown[] } | undefined)?.content;
+  const first = Array.isArray(content) ? content[0] : undefined;
+  const text = (first as { text?: unknown } | undefined)?.text;
+  if (typeof text !== "string") return {};
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object"
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
  * Resolve the id of the first scope-chain moniker of `entityType`.
  *
  * A `from: scope_chain` param with `entity_type: <t>` resolves to the id half
@@ -126,8 +149,65 @@ class KanbanMiscCommandsPlugin extends Plugin {
         execute: async (rawCtx) => {
           const ctx = (rawCtx ?? {}) as CommandContext;
           const id = ctx.args?.id;
-          const order = ctx.args?.target_index;
-          return await this.kanban.kanban.column.update({ id, order });
+          const targetIndex = ctx.args?.target_index;
+
+          // The legacy `ColumnReorderCmd` is NOT a single-column write: it lists
+          // every column by current order, removes the moved one, re-inserts it
+          // at `target_index`, then RE-SEQUENCES every column to 0,1,2,… so the
+          // board has no gaps or duplicate orders. The previous port wrote only
+          // the moved column's `order = target_index`, which collides with
+          // whatever column already held that order — the regression this
+          // replaces. Reproduce the full reindex here.
+          if (typeof id !== "string" || typeof targetIndex !== "number") {
+            // Match the legacy MissingArg failure surface: nothing sensible to
+            // do without both a column id and a numeric target index.
+            return await this.kanban.kanban.columns.list({});
+          }
+
+          const listed = await this.kanban.kanban.columns.list({});
+          const rawColumns = kanbanPayload(listed).columns;
+          const columns = Array.isArray(rawColumns) ? rawColumns : [];
+          // `list columns` already comes back sorted by `order` ascending, but
+          // sort defensively so a future server change can't reorder us.
+          const sorted = [...columns].sort((a, b) => {
+            const ao = Number((a as { order?: unknown }).order ?? 0);
+            const bo = Number((b as { order?: unknown }).order ?? 0);
+            return ao - bo;
+          });
+          const ids = sorted.map((c) => String((c as { id?: unknown }).id ?? ""));
+
+          const fromIndex = ids.indexOf(id);
+          if (fromIndex === -1) {
+            // Column not on the board — surface as a no-op error path, matching
+            // the legacy "column not found" ExecutionFailed.
+            return await this.kanban.kanban.columns.list({});
+          }
+          if (fromIndex === targetIndex) {
+            return { updated: 0 };
+          }
+
+          // Remove and re-insert at the (clamped) target index.
+          ids.splice(fromIndex, 1);
+          const insertAt = Math.min(targetIndex, ids.length);
+          ids.splice(insertAt, 0, id);
+
+          // Re-sequence ALL columns to their new 0-based order. Each is one
+          // `update column` write.
+          //
+          // GROUPING LIMITATION: the legacy command opens a StoreContext undo
+          // group so these N writes pop off the undo stack as ONE step. The
+          // plugin layer makes one MCP call per `execute` and has no API to open
+          // a server-side transaction spanning multiple `update column` ops, so
+          // these writes are NOT grouped into a single undo step here. The final
+          // board state is correct (sequential, non-duplicate orders); only the
+          // undo granularity differs from the legacy behavior. Flagged for the
+          // SDK to grow a transaction/undo-group primitive.
+          let updated = 0;
+          for (let i = 0; i < ids.length; i += 1) {
+            await this.kanban.kanban.column.update({ id: ids[i], order: i });
+            updated += 1;
+          }
+          return { updated };
         },
       },
 
