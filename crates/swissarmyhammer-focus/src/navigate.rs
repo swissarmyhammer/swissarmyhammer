@@ -49,29 +49,27 @@
 //! 4. Are not an **ancestor** of the focused entry — navigating onto your
 //!    own enclosing card / column / board is drill-out's job, never a
 //!    cardinal move.
-//! 5. Are not **nested inside another candidate that is a sibling of the
-//!    focused entry** (a candidate whose own `parent_zone` equals the
-//!    focused entry's). This is the structural rule that keeps Up/Down on a
-//!    board card landing on the *card above* rather than diving into a field
-//!    in the middle of it: the card above is a sibling of the focused card
-//!    (same column), and its title / inspect button descend from it, so they
-//!    are dropped and the card itself wins. The next column's card is NOT a
-//!    sibling (different column), so cross-column Left/Right still lands on
-//!    it by beam score; and a field's siblings are the other fields of the
-//!    same card (the parent card is not their sibling), so within-card
-//!    Up/Down is unaffected. See `nested_in_focused_sibling_candidate`.
 //!
-//! Beyond those two structural exclusions the pick is geometric;
-//! "has children" remains a tie-breaker and observability only.
+//! Beyond those exclusions the pick is geometric, with the ancestry-aware
+//! tie-break below.
 //!
-//! ## Tie-break: leaves over containers
+//! ## Tie-break: card over its own inner control; leaf over unrelated zone
 //!
-//! When two candidates have equal beam scores, **leaves win over
-//! containers** (a leaf is a scope no other snapshot entry names as
-//! `parent_zone`; a container is a scope at least one other entry
-//! names as `parent_zone`). This ensures that when the geometric pick
-//! would land equally on a `showFocus=false` container and an inner
-//! leaf, the user sees the focus indicator paint on the leaf.
+//! Equal beam scores are common when a card shares an edge with a control
+//! inside it — a card and its top-right inspect button, or a short card and
+//! its edge-to-edge title field, score identically. The tie resolves
+//! structurally (see [`better_candidate`]):
+//!
+//!   1. If one tied candidate is an **ancestor** of the other, the ancestor
+//!      wins. Both are focusable (non-focusable zones were already excluded
+//!      as candidates), so this means "land on the *card*, not the focusable
+//!      leaf inside it" — a cardinal move never dives into a card's interior
+//!      (that is drill-in's job). This is the rule that keeps Up/Down within
+//!      a column and Left/Right across columns landing on the **card**, not
+//!      its field/inspect-button.
+//!   2. Otherwise (the tied scopes are unrelated) the **leaf** wins over the
+//!      container, so a tie between a still-present `showFocus=false` wrapper
+//!      and an inner leaf paints the indicator on the leaf.
 //!
 //! ## When the half-plane is empty
 //!
@@ -336,21 +334,22 @@ fn geometric_pick(
         .collect();
     let from_rect = focused.rect;
 
-    // Pass 1 — collect every scope that passes the geometric gate
-    // (half-plane + in-beam), excluding the focused scope itself and any
-    // ANCESTOR of the focused scope. Navigating onto your own enclosing
-    // container is drill-out's job, never a cardinal move, so a parent
-    // card / column / board is not a cardinal target.
-    let mut raw: Vec<(&SnapshotScope, f64)> = Vec::new();
+    // Single geometric pass. A candidate must:
+    //  - not be the focused scope itself;
+    //  - be **focusable** — structural zones (`focusable: false`: board
+    //    well, perspective bar, column, panel/view-area wrappers) paint no
+    //    focus indicator and are never a cardinal target, so a move passes
+    //    straight through them to the focusable unit beyond;
+    //  - not be an **ancestor** of the focused scope (landing on your own
+    //    enclosing container is drill-out's job);
+    //  - pass the strict half-plane + in-beam test.
+    // Lowest beam score wins; ties resolve via `better_candidate` (which
+    // keeps a cardinal move on the *card*, never its inner field/button).
+    let mut best: Option<BestCandidate> = None;
     for cand in view.scopes() {
         if cand.fq == focused.fq {
             continue;
         }
-        // Non-focusable scopes are structural zones (board well, perspective
-        // bar, board-selector wrapper). They group children but are never a
-        // cardinal target — landing on one paints no focus indicator. Skip
-        // them as candidates so a move passes straight through to the
-        // focusable child beneath. (See `SnapshotScope::focusable`.)
         if !cand.focusable {
             continue;
         }
@@ -366,33 +365,12 @@ fn geometric_pick(
         if !in_beam {
             continue;
         }
-        raw.push((cand, score));
-    }
-
-    // Pass 2 — drop any candidate that is nested inside ANOTHER candidate
-    // which is a *sibling* of the focused scope (shares its `parent_zone`).
-    // This is the load-bearing fix for "Up on a card jumps into the middle
-    // of the card above": the card above is a sibling of the focused card
-    // (both children of the same column), and its title / inspect-button
-    // are descendants of it — so they are dropped and the card itself is
-    // kept. The next column's card is NOT a sibling of the focused card
-    // (different column), so cross-column Left/Right still lands on it by
-    // beam score. And once focus is inside a card, the focused field's
-    // siblings are the other fields of the SAME card (the parent card is
-    // not their sibling), so within-card Up/Down is unaffected.
-    let cand_fqs: HashSet<FullyQualifiedMoniker> =
-        raw.iter().map(|(c, _)| c.fq.clone()).collect();
-    let mut best: Option<BestCandidate> = None;
-    for (cand, score) in &raw {
-        if nested_in_focused_sibling_candidate(view, &cand.fq, &cand_fqs, &focused.parent_zone) {
-            continue;
-        }
         let cand_summary = BestCandidate {
             fq: cand.fq.clone(),
-            score: *score,
+            score,
             has_children: parent_fqs.contains(&cand.fq),
         };
-        if better_candidate(&best, &cand_summary) {
+        if better_candidate(view, &best, &cand_summary) {
             best = Some(cand_summary);
         }
     }
@@ -424,41 +402,6 @@ fn is_ancestor_of(
     false
 }
 
-/// `true` when `fq` descends (via `parent_zone`) from some candidate in
-/// `cand_fqs` that is a *sibling* of the focused scope — i.e. that
-/// candidate's own `parent_zone` equals `focused_parent_zone`. Such a
-/// candidate is a peer container of the focused scope (e.g. the card above,
-/// a sibling under the same column); a cardinal move must land on it, not
-/// dive into its interior. Cycle-guarded against torn `parent_zone` loops.
-///
-/// The focused scope's own ancestors are deliberately NOT matched here:
-/// the focused field's parent card is not a sibling of the field, so the
-/// field's siblings (the card's other fields) survive and within-card
-/// Up/Down keeps working.
-fn nested_in_focused_sibling_candidate(
-    view: &IndexedSnapshot<'_>,
-    fq: &FullyQualifiedMoniker,
-    cand_fqs: &HashSet<FullyQualifiedMoniker>,
-    focused_parent_zone: &Option<FullyQualifiedMoniker>,
-) -> bool {
-    let mut seen: HashSet<FullyQualifiedMoniker> = HashSet::new();
-    let mut current = view.get(fq).and_then(|s| s.parent_zone.clone());
-    while let Some(parent) = current {
-        if cand_fqs.contains(&parent) {
-            if let Some(parent_scope) = view.get(&parent) {
-                if &parent_scope.parent_zone == focused_parent_zone {
-                    return true;
-                }
-            }
-        }
-        if !seen.insert(parent.clone()) {
-            break;
-        }
-        current = view.get(&parent).and_then(|s| s.parent_zone.clone());
-    }
-    false
-}
-
 /// Running best candidate inside [`geometric_pick`]: FQM, beam score, and
 /// the has-children flag used for the leaves-over-containers tie-break.
 #[derive(Clone)]
@@ -470,15 +413,37 @@ struct BestCandidate {
 
 /// `true` when `cand` should replace the current best candidate.
 ///
-/// Primary order is the Android beam score: lower is better. When two
-/// candidates have equal scores, the leaf wins over the container.
-fn better_candidate(current: &Option<BestCandidate>, cand: &BestCandidate) -> bool {
+/// Primary order is the Android beam score: lower is better. Ties (equal
+/// score — common when a card and a control inside it share an edge, e.g.
+/// a card and its top-right inspect button, or a short card and its
+/// edge-to-edge title field) resolve structurally:
+///
+///   1. If one candidate is an **ancestor** of the other, the ancestor
+///      wins. Both are already known to be focusable (non-focusable zones
+///      were filtered out as candidates), so this is "land on the *card*,
+///      not the focusable leaf inside it" — a cardinal move never dives
+///      into a card's interior; that is drill-in's job. This is the fix
+///      for "Up/Left onto a card jumps into a field / inspect-button".
+///   2. Otherwise (unrelated scopes) the **leaf** wins over the container —
+///      so when the geometric pick ties a still-present `showFocus=false`
+///      wrapper with an inner leaf the user sees the leaf's indicator.
+fn better_candidate(
+    view: &IndexedSnapshot<'_>,
+    current: &Option<BestCandidate>,
+    cand: &BestCandidate,
+) -> bool {
     match current {
         None => true,
         Some(cur) => {
             if cand.score < cur.score {
                 true
             } else if cand.score > cur.score {
+                false
+            } else if is_ancestor_of(view, &cand.fq, &cur.fq) {
+                // `cand` encloses `cur` — prefer the enclosing card.
+                true
+            } else if is_ancestor_of(view, &cur.fq, &cand.fq) {
+                // `cur` encloses `cand` — keep the enclosing card.
                 false
             } else {
                 !cand.has_children && cur.has_children
@@ -1106,6 +1071,38 @@ mod tests {
             pick(&snap, "/L/navbtn", Direction::Down),
             FullyQualifiedMoniker::from_string("/L/board/card"),
             "Down must skip the non-focusable board well and land on the card inside it",
+        );
+    }
+
+    /// The cross-column regression that motivated option B: from a card in
+    /// the right column, Left must land on the LEFT column's CARD — even
+    /// though that card and its inner inspect-button TIE on beam score (the
+    /// button is at the card's top-right, sharing the card's right edge, so
+    /// the Left-move major/minor match). The ancestry-aware tie-break makes
+    /// the enclosing card win over its own focusable button.
+    #[test]
+    fn left_crosses_to_card_not_its_tied_inner_button() {
+        let snap = snapshot(vec![
+            // Non-focusable column zones (skipped as candidates).
+            zone("/L/colL", None, rect(0.0, 0.0, 100.0, 100.0)),
+            zone("/L/colR", None, rect(120.0, 0.0, 100.0, 100.0)),
+            // Left card + its inspect button, sharing the right edge (x=90)
+            // and vertically aligned with the focused card → equal score.
+            scope("/L/colL/cardL", Some("/L/colL"), rect(0.0, 0.0, 90.0, 40.0)),
+            // cy = 20 and right edge = 90 match cardL exactly → equal beam
+            // score (a true tie, resolved by ancestry, not by geometry).
+            scope(
+                "/L/colL/cardL/inspect",
+                Some("/L/colL/cardL"),
+                rect(70.0, 10.0, 20.0, 20.0),
+            ),
+            // Focused card in the right column.
+            scope("/L/colR/cardR", Some("/L/colR"), rect(120.0, 0.0, 90.0, 40.0)),
+        ]);
+        assert_eq!(
+            pick(&snap, "/L/colR/cardR", Direction::Left),
+            FullyQualifiedMoniker::from_string("/L/colL/cardL"),
+            "Left must land on the card, not its score-tied inner inspect button",
         );
     }
 

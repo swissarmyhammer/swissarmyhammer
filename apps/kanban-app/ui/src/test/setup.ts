@@ -98,6 +98,7 @@ installRegistryHook({
       layerFq,
       parentZone: entry.parentZone,
       overrides: entry.navOverride ?? {},
+      focusable: entry.showFocus ?? true,
     });
   },
   onDelete(_layerFq, fq, _entry) {

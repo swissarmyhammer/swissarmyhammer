@@ -177,6 +177,11 @@ export interface ShadowEntry {
   layerFq: FullyQualifiedMoniker;
   parentZone: FullyQualifiedMoniker | null;
   overrides: Record<string, unknown>;
+  /** Whether this scope is a real focus target (`<FocusScope showFocus>`).
+   * Non-focusable structural zones are skipped as cardinal-nav candidates,
+   * mirroring `SnapshotScope.focusable`. Defaults to `true` when a register
+   * payload omits it. */
+  focusable: boolean;
 }
 
 /** Cardinal direction the JS port handles. */
@@ -209,49 +214,37 @@ export function rectFromWire(r: unknown): RectLike {
 }
 
 // ---------------------------------------------------------------------------
-// JS port of `BeamNavStrategy::next` — cardinal directions only.
+// JS port of the kernel's `pick_target` / `geometric_pick` — cardinal
+// directions only.
 //
-// Mirrors the unified cascade implemented in
-// `swissarmyhammer-focus/src/navigate.rs`:
+// A faithful mirror of `swissarmyhammer-focus/src/navigate.rs` (NOT the old
+// sibling-scoped cascade, which had drifted out of sync with the rewritten
+// kernel). The pick is geometric over the candidate set with structural
+// gates:
 //
-//   1. Iter 0 — ANY-KIND beam search among scopes sharing `from.parentZone`
-//      (excluding `from` itself), filtered by layer. Both zones and
-//      leaves are siblings under the same parent zone, so iter 0
-//      considers them peers.
-//   2. Escalate to `from.parentZone` (with a layer-boundary guard).
-//      If the focused entry has no `parentZone`, return `null`.
-//   3. Iter 1 — same-kind beam search among ZONES sharing the parent's
-//      `parentZone` (excluding the parent itself). The parent IS a
-//      zone, so its peers are zones by construction — this is
-//      structural, not a kind policy.
-//   4. Drill-out fallback — when neither iter finds a peer, return
-//      the parent zone itself.
+//   1. Per-direction override (`check_override`): `null` is a wall
+//      (stay-put); a target FQM redirects when it resolves in-layer.
+//   2. Candidate gate: same layer, not the focused scope, **focusable**
+//      (structural zones with `focusable: false` — columns, board well,
+//      panel & view-area wrappers — are skipped), not an ancestor of the
+//      focused scope, then the strict half-plane + in-beam test
+//      (`scoreCandidate`).
+//   3. Lowest beam score wins; ties resolve by ancestry (the enclosing
+//      card beats its own inner control) else leaf-over-container — see
+//      `betterCandidate`.
+//
+// Keeping this in lock-step with the Rust kernel is the whole point — the
+// authoritative coverage lives in `navigate.rs` unit tests; this port
+// exists so full-App UI tests reproduce the same answers.
 // ---------------------------------------------------------------------------
 
 /**
- * In-test JS port of the Rust `BeamNavStrategy::next` for cardinal
- * directions, mirroring the unified cascade from
- * `swissarmyhammer-focus/src/navigate.rs`.
+ * In-test JS port of `pick_target` for cardinal directions, mirroring
+ * `geometric_pick` in `swissarmyhammer-focus/src/navigate.rs`.
  *
- * The cascade has three observable outcomes:
- *
- *   1. **Iter 0** — peer match at the focused scope's level. All
- *      registered scopes sharing a `parent_zone` are siblings.
- *   2. **Iter 1** — peer match at the parent scope's level (after
- *      escalation, with a layer-boundary guard).
- *   3. **Drill-out** — return the parent scope itself when neither
- *      iter finds a peer. Returns `null` only when the focused entry
- *      sits at the very root of its layer with no parent scope.
- *
- * After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the legacy
- * split primitives into a single `<FocusScope>`, the cascade no longer
- * filters on a kind discriminator — every registered entry is a scope,
- * and structural shape (container vs leaf) is determined by whether the
- * scope has child scopes. See `swissarmyhammer-focus/README.md` for
- * the prose contract.
- *
- * Returns the FQM of the next focus target, or `null` when the
- * navigator declines to navigate.
+ * Returns the FQM of the next focus target, or `null` when the navigator
+ * declines to move (no in-direction candidate, an override wall, or a
+ * missing focused entry — the no-silent-dropout "stay put").
  */
 export function navigateInShadow(
   registry: Map<FullyQualifiedMoniker, ShadowEntry>,
@@ -261,137 +254,94 @@ export function navigateInShadow(
   const from = registry.get(fromFq);
   if (!from) return null;
 
-  // Iter 0: peers sharing from.parentZone — under the unified primitive
-  // every registered entry is a scope, so any sibling under the same
-  // parent counts.
-  const iter0 = beamAmongInZoneAnyKind(
-    registry,
-    from.layerFq,
-    from.rect,
-    from.parentZone,
-    from.fq,
-    direction,
-  );
-  if (iter0) return iter0;
-
-  // Escalate. The layer-boundary guard refuses to cross layer FQMs —
-  // an inspector layer's panel scope never lifts focus into the window
-  // layer that hosts ui:board.
-  if (from.parentZone === null) return null;
-  const parent = registry.get(from.parentZone);
-  if (!parent) return null;
-  if (parent.layerFq !== from.layerFq) return null;
-
-  // Iter 1: peers of the parent scope sharing its parent_zone. After
-  // the single-primitive collapse there is no kind filter — every
-  // registered entry is a scope, so any sibling of the parent is a
-  // valid candidate.
-  const iter1 = beamAmongSiblings(
-    registry,
-    parent.layerFq,
-    parent.rect,
-    parent.parentZone,
-    parent.fq,
-    direction,
-  );
-  if (iter1) return iter1;
-
-  // Drill-out fallback: return the parent scope itself.
-  return { nextFq: parent.fq, nextSegment: parent.segment };
-}
-
-/**
- * Beam-search candidates sharing `fromParent` (excluding `fromFq`),
- * filtered by `layer`. Matches `beam_among_in_zone_any_kind` in the
- * Rust kernel — this is the iter-0 helper.
- *
- * After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the legacy
- * split primitives into a single `<FocusScope>`, every registered
- * entry is a scope; the kernel and this simulator filter only by
- * layer membership and shared `parentZone`.
- */
-function beamAmongInZoneAnyKind(
-  registry: Map<FullyQualifiedMoniker, ShadowEntry>,
-  layer: FullyQualifiedMoniker,
-  fromRect: RectLike,
-  fromParent: FullyQualifiedMoniker | null,
-  fromFq: FullyQualifiedMoniker,
-  direction: Direction,
-): { nextFq: FullyQualifiedMoniker; nextSegment: SegmentMoniker } | null {
-  const candidates: ShadowEntry[] = [];
-  for (const e of registry.values()) {
-    if (e.layerFq === layer && e.parentZone === fromParent && e.fq !== fromFq) {
-      candidates.push(e);
+  // Per-direction override (mirrors `check_override`): an explicit wall
+  // (`null`) blocks the move; a target FQM redirects when it resolves
+  // in-layer; anything unresolved falls through to the geometric pick.
+  const override = from.overrides?.[direction] as
+    | FullyQualifiedMoniker
+    | null
+    | undefined;
+  if (override !== undefined) {
+    if (override === null) return null;
+    const target = registry.get(override);
+    if (target && target.layerFq === from.layerFq) {
+      return { nextFq: target.fq, nextSegment: target.segment };
     }
   }
-  return pickBestRect(fromRect, candidates, direction);
-}
 
-/**
- * Beam-search candidates sharing `fromParent` (excluding `fromFq`),
- * filtered by `layer`. Matches `beam_among_siblings` in the Rust
- * kernel — used by iter 1.
- *
- * After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the legacy
- * split primitives into a single `<FocusScope>`, the kind filter was
- * removed: every registered entry is a scope, so any sibling of the
- * parent is a valid candidate.
- */
-function beamAmongSiblings(
-  registry: Map<FullyQualifiedMoniker, ShadowEntry>,
-  layer: FullyQualifiedMoniker,
-  fromRect: RectLike,
-  fromParent: FullyQualifiedMoniker | null,
-  fromFq: FullyQualifiedMoniker,
-  direction: Direction,
-): { nextFq: FullyQualifiedMoniker; nextSegment: SegmentMoniker } | null {
-  const candidates: ShadowEntry[] = [];
+  // Single geometric pass over the focused scope's layer, mirroring
+  // `geometric_pick` in navigate.rs: skip the focused scope, non-focusable
+  // structural zones (columns / board well / panel & view-area wrappers —
+  // never cardinal targets), and ancestors of the focused scope; require
+  // the strict half-plane + in-beam test. Lowest beam score wins, ties via
+  // `betterCandidate` (ancestor card beats its own inner control).
+  const parentFqs = new Set<FullyQualifiedMoniker>();
   for (const e of registry.values()) {
-    if (e.layerFq === layer && e.parentZone === fromParent && e.fq !== fromFq) {
-      candidates.push(e);
-    }
+    if (e.parentZone !== null) parentFqs.add(e.parentZone);
   }
-  return pickBestRect(fromRect, candidates, direction);
-}
-
-/**
- * Mirror of `pick_best_candidate` in the Rust kernel. The cross-axis
- * beam test is a hard filter: out-of-beam candidates are dropped before
- * scoring runs. Among in-beam candidates the lowest-scored one wins.
- *
- * The hard-filter behavior was tightened from a soft tier preference in
- * the directional-nav supersession card `01KQ7STZN3G5N2WB3FF4PM4DKX` —
- * out-of-beam fallbacks were letting visually disconnected scopes
- * (e.g. a navbar leaf above a card grid) win cardinal-direction nav
- * from cards in the rightmost column. See `pick_best_candidate` in
- * `swissarmyhammer-focus/src/navigate.rs` for the canonical rationale.
- *
- * Takes a `RectLike` rather than a `ShadowEntry` for `from` so the
- * cascade's iter-1 step can pass the parent zone's rect (the parent
- * is identified by FQM, not by the focused entry's `ShadowEntry`).
- */
-function pickBestRect(
-  fromRect: RectLike,
-  candidates: ShadowEntry[],
-  direction: Direction,
-): { nextFq: FullyQualifiedMoniker; nextSegment: SegmentMoniker } | null {
-  let bestEntry: ShadowEntry | null = null;
-  let bestScore = Infinity;
-
-  for (const cand of candidates) {
-    const scored = scoreCandidate(fromRect, cand.rect, direction);
+  let best: {
+    entry: ShadowEntry;
+    score: number;
+    hasChildren: boolean;
+  } | null = null;
+  for (const e of registry.values()) {
+    if (e.layerFq !== from.layerFq) continue;
+    if (e.fq === from.fq) continue;
+    if (e.focusable === false) continue;
+    if (isAncestorOf(registry, e.fq, from.fq)) continue;
+    const scored = scoreCandidate(from.rect, e.rect, direction);
     if (!scored) continue;
     const [inBeam, score] = scored;
-    // Hard in-beam filter — see function docs.
     if (!inBeam) continue;
-    if (bestEntry === null || score < bestScore) {
-      bestEntry = cand;
-      bestScore = score;
-    }
+    const cand = {
+      entry: e,
+      score,
+      hasChildren: parentFqs.has(e.fq),
+    };
+    if (betterCandidate(registry, best, cand)) best = cand;
   }
-  if (!bestEntry) return null;
-  return { nextFq: bestEntry.fq, nextSegment: bestEntry.segment };
+  if (!best) return null;
+  return { nextFq: best.entry.fq, nextSegment: best.entry.segment };
 }
+
+/**
+ * `true` when `ancestorFq` is in the `parentZone` chain of `fq` (excluding
+ * `fq`). Cycle-guarded. Mirrors `is_ancestor_of` in navigate.rs.
+ */
+function isAncestorOf(
+  registry: Map<FullyQualifiedMoniker, ShadowEntry>,
+  ancestorFq: FullyQualifiedMoniker,
+  fq: FullyQualifiedMoniker,
+): boolean {
+  const seen = new Set<FullyQualifiedMoniker>();
+  let current = registry.get(fq)?.parentZone ?? null;
+  while (current !== null) {
+    if (current === ancestorFq) return true;
+    if (seen.has(current)) break;
+    seen.add(current);
+    current = registry.get(current)?.parentZone ?? null;
+  }
+  return false;
+}
+
+/**
+ * Mirror of `better_candidate` in navigate.rs. Lower beam score wins; on a
+ * tie the **ancestor** (the enclosing card) wins over the focusable leaf
+ * inside it, else the leaf wins over an unrelated container.
+ */
+function betterCandidate(
+  registry: Map<FullyQualifiedMoniker, ShadowEntry>,
+  current: { entry: ShadowEntry; score: number; hasChildren: boolean } | null,
+  cand: { entry: ShadowEntry; score: number; hasChildren: boolean },
+): boolean {
+  if (current === null) return true;
+  if (cand.score < current.score) return true;
+  if (cand.score > current.score) return false;
+  if (isAncestorOf(registry, cand.entry.fq, current.entry.fq)) return true;
+  if (isAncestorOf(registry, current.entry.fq, cand.entry.fq)) return false;
+  return !cand.hasChildren && current.hasChildren;
+}
+
 
 /**
  * JS port of `score_candidate` for cardinal directions. Returns
@@ -574,6 +524,7 @@ export function installShadowNavigator(
         layerFq: a.layerFq as FullyQualifiedMoniker,
         parentZone: (a.parentZone ?? null) as FullyQualifiedMoniker | null,
         overrides: (a.overrides ?? {}) as Record<string, unknown>,
+        focusable: (a.focusable ?? true) as boolean,
       };
       registry.set(entry.fq, entry);
       return undefined;
@@ -594,6 +545,7 @@ export function installShadowNavigator(
           layerFq: e.layer_fq as FullyQualifiedMoniker,
           parentZone: (e.parent_zone ?? null) as FullyQualifiedMoniker | null,
           overrides: (e.overrides ?? {}) as Record<string, unknown>,
+          focusable: (e.focusable ?? true) as boolean,
         };
         registry.set(entry.fq, entry);
       }

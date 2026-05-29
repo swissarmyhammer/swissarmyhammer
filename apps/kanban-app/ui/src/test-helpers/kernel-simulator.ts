@@ -118,6 +118,8 @@ export interface RegistrationRecord {
   parentZone: FullyQualifiedMoniker | null;
   rect: RectLike;
   overrides: Record<string, unknown>;
+  /** Real focus target vs structural zone — see `ShadowEntry.focusable`. */
+  focusable: boolean;
 }
 
 /** Unified history entry — mirrors IPC arrival order. */
@@ -251,6 +253,7 @@ export function installKernelSimulator(
     layerFq: rec.layerFq,
     parentZone: rec.parentZone,
     overrides: rec.overrides,
+    focusable: rec.focusable,
   });
 
   mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
@@ -293,6 +296,7 @@ export function installKernelSimulator(
         parentZone: (a.parentZone ?? null) as FullyQualifiedMoniker | null,
         rect: rectFromWire(a.rect),
         overrides: (a.overrides ?? {}) as Record<string, unknown>,
+        focusable: (a.focusable ?? true) as boolean,
       };
       registrations.set(record.fq, record);
       history.push({ type: "register", record });

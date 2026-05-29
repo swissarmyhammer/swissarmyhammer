@@ -232,10 +232,15 @@ async function renderPanel(script: SessionScript = {}) {
         <FocusLayer name={asSegment("window")}>
           <EntityFocusProvider>
             {/* Sibling stand-in for the view area — a peer of the panel
-                zone under the same window layer. */}
+                zone under the same window layer. Focusable, because it
+                stands in for the focusable board content (a card) that a
+                cross-zone cardinal move lands on: under the geometric
+                kernel a move never stops on a `showFocus={false}` zone, so
+                the placeholder must be a real target to represent the
+                landing. */}
             <FocusScope
               moniker={asSegment("ui:view-area")}
-              showFocus={false}
+              showFocus
               style={{ flex: "1 1 0%", height: "100%" }}
             >
               <div style={{ height: "100%" }}>view area</div>
