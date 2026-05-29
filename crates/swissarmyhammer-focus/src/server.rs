@@ -144,7 +144,7 @@ impl FocusServer {
             return Ok(serde_json::json!({ "ok": true, "event": Value::Null }));
         };
         let event = self
-            .with_spatial(|registry, state| state.focus(registry, &snapshot, req.fq.clone()))
+            .with_spatial(|registry, state| state.focus(registry, &snapshot, req.fq.clone(), None))
             .await;
         Ok(serde_json::json!({ "ok": true, "event": event }))
     }
@@ -170,7 +170,13 @@ impl FocusServer {
         };
         let event = self
             .with_spatial(|registry, state| {
-                state.navigate(registry, &snapshot, req.focused_fq.clone(), req.direction)
+                state.navigate(
+                    registry,
+                    &snapshot,
+                    req.focused_fq.clone(),
+                    req.direction,
+                    None,
+                )
             })
             .await;
         Ok(serde_json::json!({ "ok": true, "event": event }))
@@ -187,6 +193,7 @@ impl FocusServer {
                     req.lost_parent_zone.as_ref(),
                     &req.lost_layer_fq,
                     req.lost_rect,
+                    None,
                 )
             })
             .await;

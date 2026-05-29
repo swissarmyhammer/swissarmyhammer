@@ -929,7 +929,11 @@ mod tests {
     fn two_card_column() -> NavSnapshot {
         snapshot(vec![
             scope("/L/col", None, rect(0.0, 0.0, 200.0, 400.0)),
-            scope("/L/col/cardTop", Some("/L/col"), rect(0.0, 10.0, 200.0, 180.0)),
+            scope(
+                "/L/col/cardTop",
+                Some("/L/col"),
+                rect(0.0, 10.0, 200.0, 180.0),
+            ),
             scope(
                 "/L/col/cardTop/title",
                 Some("/L/col/cardTop"),
@@ -994,7 +998,11 @@ mod tests {
         // same-card target directly below the title.
         let snap = snapshot(vec![
             scope("/L/col", None, rect(0.0, 0.0, 200.0, 400.0)),
-            scope("/L/col/cardTop", Some("/L/col"), rect(0.0, 10.0, 200.0, 180.0)),
+            scope(
+                "/L/col/cardTop",
+                Some("/L/col"),
+                rect(0.0, 10.0, 200.0, 180.0),
+            ),
             scope(
                 "/L/col/cardTop/title",
                 Some("/L/col/cardTop"),
@@ -1031,7 +1039,11 @@ mod tests {
     fn right_crosses_to_card_in_next_column_not_its_fields() {
         let snap = snapshot(vec![
             scope("/L/colL", None, rect(0.0, 0.0, 200.0, 400.0)),
-            scope("/L/colL/card", Some("/L/colL"), rect(0.0, 10.0, 190.0, 100.0)),
+            scope(
+                "/L/colL/card",
+                Some("/L/colL"),
+                rect(0.0, 10.0, 190.0, 100.0),
+            ),
             scope("/L/colR", None, rect(210.0, 0.0, 200.0, 400.0)),
             scope(
                 "/L/colR/card",
@@ -1065,7 +1077,11 @@ mod tests {
             // closest thing under the button — but it is a structural zone.
             zone("/L/board", None, rect(0.0, 30.0, 400.0, 400.0)),
             // A card inside the well, lower down.
-            scope("/L/board/card", Some("/L/board"), rect(0.0, 40.0, 200.0, 60.0)),
+            scope(
+                "/L/board/card",
+                Some("/L/board"),
+                rect(0.0, 40.0, 200.0, 60.0),
+            ),
         ]);
         assert_eq!(
             pick(&snap, "/L/navbtn", Direction::Down),
@@ -1097,7 +1113,11 @@ mod tests {
                 rect(70.0, 10.0, 20.0, 20.0),
             ),
             // Focused card in the right column.
-            scope("/L/colR/cardR", Some("/L/colR"), rect(120.0, 0.0, 90.0, 40.0)),
+            scope(
+                "/L/colR/cardR",
+                Some("/L/colR"),
+                rect(120.0, 0.0, 90.0, 40.0),
+            ),
         ]);
         assert_eq!(
             pick(&snap, "/L/colR/cardR", Direction::Left),

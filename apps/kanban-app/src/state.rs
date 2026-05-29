@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use swissarmyhammer_commands::{load_yaml_dir, Command, CommandsRegistry};
-use swissarmyhammer_ui_state::{UIState};
 use swissarmyhammer_entity::Entity;
 use swissarmyhammer_entity_search::EntitySearchIndex;
 use swissarmyhammer_focus::{SpatialRegistry, SpatialState};
@@ -14,6 +13,7 @@ use swissarmyhammer_kanban::KanbanContext;
 use swissarmyhammer_tools::mcp::unified_server::{
     start_mcp_server_with_options, McpServerHandle, McpServerMode,
 };
+use swissarmyhammer_ui_state::UIState;
 use tauri::menu::{CheckMenuItem, MenuItem};
 use tokio::sync::{Mutex as TokioMutex, RwLock};
 

@@ -204,11 +204,24 @@ impl SpatialState {
         Self::default()
     }
 
-    /// Move focus to `fq`, scoped to the window the snapshot's layer
-    /// belongs to.
+    /// Move focus to `fq`, scoped to `window`.
     ///
-    /// The window is derived from `registry.layer(snapshot.layer_fq)`;
-    /// the segment is the trailing path component of `fq`. The walk
+    /// `window` is the **authoritative** owning window — the label the
+    /// adapter derived from the calling `tauri::Window`. Pass `Some(label)`
+    /// from any window-aware caller; the kernel uses it verbatim for the
+    /// emitted event and the per-window focus slot.
+    ///
+    /// `None` falls back to the layer-derived window
+    /// (`registry.layer(snapshot.layer_fq).window_label`) for callers with
+    /// no ambient window (the MCP face). **The fallback is unreliable
+    /// across windows**: every window's root layer FQM is `/window`, so the
+    /// registry — keyed by FQM — holds whichever window pushed last, and a
+    /// second window clobbers the first's `window_label`. That is the
+    /// "navigation moves focus in the wrong window / both windows" bug.
+    /// The Tauri path always passes `Some(window)` so it never hits the
+    /// ambiguous fallback.
+    ///
+    /// The segment is the trailing path component of `fq`. The walk
     /// invoked by [`SpatialRegistry::record_focus`] reads scope ancestry
     /// from `snapshot` and layer ancestry from `registry`.
     ///
@@ -223,6 +236,7 @@ impl SpatialState {
         registry: &mut SpatialRegistry,
         snapshot: &NavSnapshot,
         fq: FullyQualifiedMoniker,
+        window: Option<WindowLabel>,
     ) -> Option<FocusChangedEvent> {
         let Some(layer) = registry.layer(&snapshot.layer_fq) else {
             // The snapshot names a layer the kernel has never seen (or has
@@ -241,7 +255,9 @@ impl SpatialState {
             );
             return None;
         };
-        let window = layer.window_label.clone();
+        // The calling window is authoritative; fall back to the layer's
+        // (cross-window-ambiguous) label only for window-unaware callers.
+        let window = window.unwrap_or_else(|| layer.window_label.clone());
 
         let indexed = IndexedSnapshot::new(snapshot);
         if indexed.get(&fq).is_none() {
@@ -290,12 +306,27 @@ impl SpatialState {
         lost_parent_zone: Option<&FullyQualifiedMoniker>,
         lost_layer_fq: &FullyQualifiedMoniker,
         lost_rect: Rect,
+        window: Option<WindowLabel>,
     ) -> Option<FocusChangedEvent> {
-        let window = self
-            .focus_by_window
-            .iter()
-            .find(|(_, focused)| *focused == lost_fq)
-            .map(|(w, _)| w.clone())?;
+        // The calling window is authoritative when supplied: only react if
+        // `lost_fq` is actually the focused slot for *that* window. Falling
+        // back to a value-search over `focus_by_window` is ambiguous because
+        // FQMs are not unique across windows — the same card FQM can be the
+        // focused slot in two windows, and the search would pick an arbitrary
+        // one. The window-aware (Tauri) path always passes `Some(window)`.
+        let window = match window {
+            Some(w) => {
+                if self.focus_by_window.get(&w) != Some(lost_fq) {
+                    return None;
+                }
+                w
+            }
+            None => self
+                .focus_by_window
+                .iter()
+                .find(|(_, focused)| *focused == lost_fq)
+                .map(|(w, _)| w.clone())?,
+        };
 
         let indexed = IndexedSnapshot::new(snapshot);
         let ctx = LostFocusContext {
@@ -455,12 +486,13 @@ impl SpatialState {
         snapshot: &NavSnapshot,
         from: FullyQualifiedMoniker,
         direction: Direction,
+        window: Option<WindowLabel>,
     ) -> Option<FocusChangedEvent> {
         let view = IndexedSnapshot::new(snapshot);
         let focused_segment = from.last_segment();
         let target_fq = crate::navigate::pick_target(&view, &from, &focused_segment, direction);
         view.get(&target_fq)?;
-        self.focus(registry, snapshot, target_fq)
+        self.focus(registry, snapshot, target_fq, window)
     }
 
     /// Clear focus for `window`.
@@ -544,7 +576,7 @@ mod tests {
         let fq = FullyQualifiedMoniker::from_string("/L/k1");
 
         let event = state
-            .focus(&mut registry, &snapshot, fq.clone())
+            .focus(&mut registry, &snapshot, fq.clone(), None)
             .expect("focus emits an event");
         assert_eq!(event.window_label, WindowLabel::from_string("main"));
         assert_eq!(event.prev_fq, None);
@@ -565,6 +597,7 @@ mod tests {
                 &mut registry,
                 &empty_snapshot,
                 FullyQualifiedMoniker::from_string("/ghost"),
+                None,
             )
             .is_none());
     }
@@ -576,7 +609,65 @@ mod tests {
         let mut state = SpatialState::new();
         let fq = FullyQualifiedMoniker::from_string("/L/k1");
 
-        assert!(state.focus(&mut registry, &snapshot, fq.clone()).is_some());
-        assert!(state.focus(&mut registry, &snapshot, fq).is_none());
+        assert!(state
+            .focus(&mut registry, &snapshot, fq.clone(), None)
+            .is_some());
+        assert!(state.focus(&mut registry, &snapshot, fq, None).is_none());
+    }
+
+    /// Two windows whose root layers share the FQM `/L` (every window's
+    /// real root is `/window`, so the registry — keyed by FQM — holds only
+    /// the *last* pushed layer). The second push clobbers the first's
+    /// `window_label`, so the layer-derived window is "win-b" even for a
+    /// commit that came from "win-a". Passing the authoritative calling
+    /// window (`Some("win-a")`) must win: the event and the focus slot land
+    /// in "win-a", never "win-b". This is the regression guard for
+    /// "navigation moves focus in the wrong window / both windows".
+    #[test]
+    fn focus_uses_authoritative_window_over_clobbered_layer_label() {
+        let (mut registry, layer_fq) = registry_with_layer("win-a", "/L");
+        // Window B mounts and pushes the *same* root FQM — clobbering A's
+        // layer entry (and its window_label) in the FQM-keyed registry.
+        registry.push_layer(FocusLayer {
+            fq: layer_fq.clone(),
+            segment: SegmentMoniker::from_string("window"),
+            name: LayerName::from_string("window"),
+            parent: None,
+            window_label: WindowLabel::from_string("win-b"),
+            last_focused: None,
+        });
+        assert_eq!(
+            registry.layer(&layer_fq).unwrap().window_label,
+            WindowLabel::from_string("win-b"),
+            "precondition: the registry layer now reports win-b (last push wins)",
+        );
+
+        let snapshot = snapshot_with_scope(layer_fq, "/L/k1");
+        let mut state = SpatialState::new();
+        let fq = FullyQualifiedMoniker::from_string("/L/k1");
+
+        let event = state
+            .focus(
+                &mut registry,
+                &snapshot,
+                fq.clone(),
+                Some(WindowLabel::from_string("win-a")),
+            )
+            .expect("focus emits an event");
+        assert_eq!(
+            event.window_label,
+            WindowLabel::from_string("win-a"),
+            "the authoritative calling window must win over the clobbered layer label",
+        );
+        assert_eq!(
+            state.focused_in(&WindowLabel::from_string("win-a")),
+            Some(&fq),
+            "the focus slot must be recorded under the authoritative window",
+        );
+        assert_eq!(
+            state.focused_in(&WindowLabel::from_string("win-b")),
+            None,
+            "the wrong (clobbered-label) window must not receive the focus",
+        );
     }
 }

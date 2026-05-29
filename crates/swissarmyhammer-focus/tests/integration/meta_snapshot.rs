@@ -39,13 +39,13 @@ async fn focus_tool_meta_operations_tree_is_complete() {
 
     // (noun, verb, op-string) — one row per spatial_* Tauri command.
     let expected: Vec<(&str, &str, &str)> = vec![
-        ("focus", "set", "set focus"),            // spatial_focus / ui.setFocus
-        ("focus", "clear", "clear focus"),        // spatial_clear_focus
-        ("focus", "navigate", "navigate focus"),  // spatial_navigate
-        ("focus", "lose", "lose focus"),          // spatial_focus_lost
-        ("layer", "push", "push layer"),          // spatial_push_layer
-        ("layer", "pop", "pop layer"),            // spatial_pop_layer
-        ("layer", "drill_in", "drill_in layer"),  // spatial_drill_in
+        ("focus", "set", "set focus"),           // spatial_focus / ui.setFocus
+        ("focus", "clear", "clear focus"),       // spatial_clear_focus
+        ("focus", "navigate", "navigate focus"), // spatial_navigate
+        ("focus", "lose", "lose focus"),         // spatial_focus_lost
+        ("layer", "push", "push layer"),         // spatial_push_layer
+        ("layer", "pop", "pop layer"),           // spatial_pop_layer
+        ("layer", "drill_in", "drill_in layer"), // spatial_drill_in
         ("layer", "drill_out", "drill_out layer"), // spatial_drill_out
     ];
 

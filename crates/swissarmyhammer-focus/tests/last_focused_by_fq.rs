@@ -103,7 +103,7 @@ fn focus_writes_last_focused_by_fq_for_each_ancestor() {
 
     let mut state = SpatialState::new();
     state
-        .focus(&mut reg, &snapshot, lost_fq.clone())
+        .focus(&mut reg, &snapshot, lost_fq.clone(), None)
         .expect("focus emits an event");
 
     assert_eq!(reg.last_focused_by_fq.get(&inner_fq), Some(&lost_fq));
@@ -118,10 +118,10 @@ fn second_focus_overwrites_ancestor_entries() {
 
     let mut state = SpatialState::new();
     state
-        .focus(&mut reg, &snapshot, lost_fq)
+        .focus(&mut reg, &snapshot, lost_fq, None)
         .expect("first focus emits");
     state
-        .focus(&mut reg, &snapshot, remembered_fq.clone())
+        .focus(&mut reg, &snapshot, remembered_fq.clone(), None)
         .expect("second focus emits");
 
     assert_eq!(reg.last_focused_by_fq.get(&outer_fq), Some(&remembered_fq));
@@ -146,7 +146,7 @@ fn fallback_reads_parent_zone_last_focused_from_map() {
     // Stake the map by focusing remembered first.
     let mut state = SpatialState::new();
     state
-        .focus(&mut reg, &snapshot, remembered_fq.clone())
+        .focus(&mut reg, &snapshot, remembered_fq.clone(), None)
         .expect("focus remembered");
 
     assert_eq!(reg.last_focused_by_fq.get(&outer_fq), Some(&remembered_fq));

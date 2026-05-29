@@ -69,7 +69,7 @@ fn focus_lost_picks_sibling_in_zone() {
     };
 
     state
-        .focus(&mut reg, &pre_unmount, fq("/L/zone/lost"))
+        .focus(&mut reg, &pre_unmount, fq("/L/zone/lost"), None)
         .expect("focus lost initially");
 
     // Post-unmount snapshot: lost scope removed.
@@ -93,6 +93,7 @@ fn focus_lost_picks_sibling_in_zone() {
             Some(&fq("/L/zone")),
             &fq("/L"),
             rect(0.0, 0.0, 10.0, 10.0),
+            None,
         )
         .expect("focus_lost emits");
 
@@ -133,10 +134,10 @@ fn focus_lost_picks_parent_zone_last_focused() {
 
     // Stake the map: focus remembered first, then focus the lost FQM.
     state
-        .focus(&mut reg, &pre_unmount, fq("/L/outer/remembered"))
+        .focus(&mut reg, &pre_unmount, fq("/L/outer/remembered"), None)
         .expect("focus remembered seeds last_focused_by_fq[outer]");
     state
-        .focus(&mut reg, &pre_unmount, fq("/L/outer/inner/lost"))
+        .focus(&mut reg, &pre_unmount, fq("/L/outer/inner/lost"), None)
         .expect("focus lost overwrites last_focused_by_fq for outer");
 
     // Re-stake the map by focusing remembered then lost so that
@@ -172,6 +173,7 @@ fn focus_lost_picks_parent_zone_last_focused() {
             Some(&fq("/L/outer/inner")),
             &fq("/L"),
             rect(0.0, 0.0, 10.0, 10.0),
+            None,
         )
         .expect("focus_lost emits");
 
@@ -192,7 +194,7 @@ fn focus_lost_emits_none_when_layer_is_empty() {
         scopes: vec![snap("/L/lost", None, rect(0.0, 0.0, 10.0, 10.0))],
     };
     state
-        .focus(&mut reg, &pre, fq("/L/lost"))
+        .focus(&mut reg, &pre, fq("/L/lost"), None)
         .expect("focus seed");
 
     // Post-unmount: the layer is empty.
@@ -208,6 +210,7 @@ fn focus_lost_emits_none_when_layer_is_empty() {
             None,
             &fq("/L"),
             rect(0.0, 0.0, 10.0, 10.0),
+            None,
         )
         .expect("focus_lost emits");
 
@@ -232,7 +235,9 @@ fn focus_lost_on_unfocused_fq_is_noop() {
             snap("/L/b", None, rect(20.0, 0.0, 10.0, 10.0)),
         ],
     };
-    state.focus(&mut reg, &pre, fq("/L/a")).expect("focus a");
+    state
+        .focus(&mut reg, &pre, fq("/L/a"), None)
+        .expect("focus a");
 
     let post = NavSnapshot {
         layer_fq: fq("/L"),
@@ -247,6 +252,7 @@ fn focus_lost_on_unfocused_fq_is_noop() {
         None,
         &fq("/L"),
         rect(20.0, 0.0, 10.0, 10.0),
+        None,
     );
 
     assert!(event.is_none());

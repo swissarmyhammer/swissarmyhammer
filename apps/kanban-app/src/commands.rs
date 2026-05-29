@@ -2237,8 +2237,9 @@ pub async fn spatial_focus(
         );
         return Ok(());
     };
+    let label = window_label_from(&window);
     let event = with_spatial(&state, |registry, spatial_state| {
-        spatial_state.focus(registry, &snapshot, fq.clone())
+        spatial_state.focus(registry, &snapshot, fq.clone(), Some(label))
     })
     .await;
 
@@ -2313,8 +2314,15 @@ pub async fn spatial_navigate(
         );
         return Ok(());
     };
+    let label = window_label_from(&window);
     let event = with_spatial(&state, |registry, spatial_state| {
-        spatial_state.navigate(registry, &snapshot, focused_fq.clone(), direction)
+        spatial_state.navigate(
+            registry,
+            &snapshot,
+            focused_fq.clone(),
+            direction,
+            Some(label),
+        )
     })
     .await;
 
@@ -2343,6 +2351,7 @@ pub async fn spatial_focus_lost(
     lost_rect: Rect,
     snapshot: NavSnapshot,
 ) -> Result<(), String> {
+    let label = window_label_from(&window);
     let event = with_spatial(&state, |registry, spatial_state| {
         spatial_state.focus_lost(
             registry,
@@ -2351,6 +2360,7 @@ pub async fn spatial_focus_lost(
             lost_parent_zone.as_ref(),
             &lost_layer_fq,
             lost_rect,
+            Some(label),
         )
     })
     .await;

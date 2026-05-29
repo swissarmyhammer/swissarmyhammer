@@ -90,10 +90,10 @@ fn arrow_down_picks_card_below() {
     let mut state = SpatialState::new();
 
     state
-        .focus(&mut reg, &snapshot, cards[0].clone())
+        .focus(&mut reg, &snapshot, cards[0].clone(), None)
         .expect("focus first card");
     let event = state
-        .navigate(&mut reg, &snapshot, cards[0].clone(), Direction::Down)
+        .navigate(&mut reg, &snapshot, cards[0].clone(), Direction::Down, None)
         .expect("Down moves to next card");
 
     assert_eq!(event.next_fq, Some(cards[1].clone()));
@@ -108,10 +108,16 @@ fn arrow_right_crosses_columns() {
     let mut state = SpatialState::new();
 
     state
-        .focus(&mut reg, &snapshot, cards[0].clone())
+        .focus(&mut reg, &snapshot, cards[0].clone(), None)
         .expect("focus first card");
     let event = state
-        .navigate(&mut reg, &snapshot, cards[0].clone(), Direction::Right)
+        .navigate(
+            &mut reg,
+            &snapshot,
+            cards[0].clone(),
+            Direction::Right,
+            None,
+        )
         .expect("Right crosses columns");
 
     // First card in column 1 is at index 3 in the row-major list.
@@ -128,7 +134,7 @@ fn click_focus_writes_ancestor_walk() {
     let mut state = SpatialState::new();
 
     let event = state
-        .focus(&mut reg, &snapshot, cards[1].clone())
+        .focus(&mut reg, &snapshot, cards[1].clone(), None)
         .expect("focus emits");
     assert_eq!(event.prev_fq, None);
     assert_eq!(event.next_fq, Some(cards[1].clone()));
@@ -150,7 +156,7 @@ fn filter_change_hides_focused_card_falls_back_to_sibling() {
 
     let lost = cards[1].clone();
     state
-        .focus(&mut reg, &pre_snapshot, lost.clone())
+        .focus(&mut reg, &pre_snapshot, lost.clone(), None)
         .expect("focus middle card");
 
     // Post-filter snapshot: drop the focused card, keep the rest.
@@ -172,6 +178,7 @@ fn filter_change_hides_focused_card_falls_back_to_sibling() {
             Some(&fq("/L/col:0")),
             &fq("/L"),
             rect(10.0, 120.0, 160.0, 60.0),
+            None,
         )
         .expect("focus_lost emits");
 
@@ -196,7 +203,7 @@ fn bulk_delete_falls_back_to_layer_root_sibling() {
 
     let lost = cards[1].clone();
     state
-        .focus(&mut reg, &pre_snapshot, lost.clone())
+        .focus(&mut reg, &pre_snapshot, lost.clone(), None)
         .expect("focus middle card of col:0");
 
     // Post-delete snapshot: drop the entire col:0 + all its cards.
@@ -221,6 +228,7 @@ fn bulk_delete_falls_back_to_layer_root_sibling() {
             Some(&fq("/L/col:0")),
             &fq("/L"),
             rect(10.0, 120.0, 160.0, 60.0),
+            None,
         )
         .expect("focus_lost emits");
 
@@ -266,7 +274,7 @@ fn inspector_layer_focus_lost_resolves_within_layer() {
         ],
     };
     state
-        .focus(&mut reg, &pre, title.clone())
+        .focus(&mut reg, &pre, title.clone(), None)
         .expect("focus title");
 
     let post = NavSnapshot {
@@ -288,6 +296,7 @@ fn inspector_layer_focus_lost_resolves_within_layer() {
             Some(&panel),
             &inspector_layer,
             rect(810.0, 10.0, 380.0, 40.0),
+            None,
         )
         .expect("focus_lost emits");
 
@@ -304,8 +313,8 @@ fn re_focus_same_fq_emits_no_event() {
     let mut state = SpatialState::new();
 
     state
-        .focus(&mut reg, &snapshot, cards[0].clone())
+        .focus(&mut reg, &snapshot, cards[0].clone(), None)
         .expect("first focus emits");
-    let second = state.focus(&mut reg, &snapshot, cards[0].clone());
+    let second = state.focus(&mut reg, &snapshot, cards[0].clone(), None);
     assert!(second.is_none(), "re-focus same FQM must not emit");
 }
