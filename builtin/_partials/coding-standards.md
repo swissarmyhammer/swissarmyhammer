@@ -19,6 +19,15 @@ partial: true
 - Within the task, find the best solution, not just the first one that works
 - Keep functions small and focused; avoid deep nesting; cap at ~50 lines
 
+## Reuse & Data-Driven Design
+
+Left unchecked, generated code trends toward duplication and hardcoding. Push the other way by default.
+
+- **Reuse before re-implementing.** Before writing a new function, search for one that already does it (`search symbol` / `grep code`). A near-match you can extend beats a fresh copy.
+- **Extract before copy-pasting.** Two blocks that differ only by a value are one function with an argument. Don't paste-and-tweak.
+- **Be data-driven.** Before hardcoding a value or enumerating cases in control flow, ask whether it's *data*. A `match`/`if`-chain over a known set whose arms differ only in constants is a table, not branching. Repeated literals are a named constant or config entry. Express variation as data (tables, maps, config, declarative specs) interpreted by a single code path — not as parallel code paths a human must keep in lockstep.
+- **Calibrate, don't over-correct.** Warranted generalization removes *existing* duplication or serves a *real* variation axis. Rule of three: two occurrences is coincidence, three is a pattern. No second caller → no parameter. The right abstraction beats three copies; the wrong abstraction is worse than five.
+
 ## Style
 
 Match the project's existing naming, formatting, indentation, and quoting. Respect any formatter config (prettier, rustfmt, black).
