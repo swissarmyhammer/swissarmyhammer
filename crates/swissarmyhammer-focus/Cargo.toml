@@ -23,7 +23,7 @@ tracing = { workspace = true }
 ulid = { workspace = true }
 
 [dev-dependencies]
+serde = { workspace = true }
 serde_yaml_ng = { workspace = true }
-swissarmyhammer-commands = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
 tracing-subscriber = { workspace = true }

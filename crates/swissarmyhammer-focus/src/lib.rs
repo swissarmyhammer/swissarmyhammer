@@ -88,8 +88,8 @@ pub mod types;
 /// (`kanban-app/ui/src/components/app-shell.tsx`) because they need
 /// live `SpatialFocusActions`; the YAML carries id, name, keys, and
 /// menu placement only. The app layer (kanban-app, kanban-cli, etc.)
-/// composes this contributor with the others via
-/// `swissarmyhammer_commands::compose_registry!`.
+/// composes this contributor with the others via the app's
+/// `compose_registry!`.
 static BUILTIN_COMMANDS: include_dir::Dir =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/builtin/commands");
 

@@ -15,15 +15,13 @@
 //! and every reconcile-sourced event carries `origin: "undo"` / `"redo"`
 //! and a single shared `txn` across the command's reconciled items.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde_json::json;
-use swissarmyhammer_commands::{Command, CommandContext};
 use swissarmyhammer_entity::events::EntityEvent;
 use swissarmyhammer_entity::test_utils::test_fields_context;
-use swissarmyhammer_entity::{Entity, EntityContext, EntityTypeStore, RedoCmd, UndoCmd};
-use swissarmyhammer_store::{StoreContext, StoreHandle};
+use swissarmyhammer_entity::{Entity, EntityContext, EntityTypeStore};
+use swissarmyhammer_store::{EventProvenance, StoreContext, StoreHandle, UndoEntryId, UndoOutcome};
 use tempfile::TempDir;
 
 /// Build an `EntityContext` + `EntityCache` + `StoreContext` for one entity
@@ -68,13 +66,26 @@ async fn setup(
     (dir, ctx, cache, store_context)
 }
 
-/// Build a `CommandContext` carrying the `EntityContext` + `StoreContext`
-/// extensions the undo/redo command glue reads.
-fn command_ctx(ectx: &Arc<EntityContext>, sctx: &Arc<StoreContext>) -> CommandContext {
-    let mut cctx = CommandContext::new("test", vec![], None, HashMap::new());
-    cctx.set_extension(Arc::clone(ectx));
-    cctx.set_extension(Arc::clone(sctx));
-    cctx
+/// Reconcile the entity cache against post-undo/redo disk state — the same
+/// loop the deleted `UndoCmd`/`RedoCmd` glue ran. All items of one
+/// undo/redo call share a single fresh `txn`.
+async fn reconcile(ctx: &EntityContext, outcome: &UndoOutcome, origin: &str) {
+    let txn = UndoEntryId::new().to_string();
+    for (store_name, item_id) in &outcome.items {
+        let prov = EventProvenance::new(Some(txn.clone()), origin);
+        ctx.sync_entity_cache_from_disk_with(store_name, item_id.as_str(), prov)
+            .await;
+    }
+}
+
+async fn undo_and_reconcile(ctx: &EntityContext, store: &StoreContext) {
+    let outcome = store.undo().await.expect("undo must succeed");
+    reconcile(ctx, &outcome, "undo").await;
+}
+
+async fn redo_and_reconcile(ctx: &EntityContext, store: &StoreContext) {
+    let outcome = store.redo().await.expect("redo must succeed");
+    reconcile(ctx, &outcome, "redo").await;
 }
 
 fn drain(rx: &mut tokio::sync::broadcast::Receiver<EntityEvent>) {
@@ -87,7 +98,6 @@ fn drain(rx: &mut tokio::sync::broadcast::Receiver<EntityEvent>) {
 #[tokio::test]
 async fn create_undo_emits_removed_redo_emits_created_with_provenance() {
     let (_dir, ctx, cache, store_context) = setup("tag").await;
-    let cctx = command_ctx(&ctx, &store_context);
 
     // Create the tag through the entity context (write-through cache).
     let mut tag = Entity::new("tag", "bug");
@@ -99,7 +109,7 @@ async fn create_undo_emits_removed_redo_emits_created_with_provenance() {
 
     // Undo the create — the file is trashed, so the reconcile must emit
     // EntityDeleted (`removed`) with origin "undo".
-    UndoCmd.execute(&cctx).await.unwrap();
+    undo_and_reconcile(&ctx, &store_context).await;
     let evt = rx.recv().await.expect("undo of create must emit an event");
     let undo_txn = match evt {
         EntityEvent::EntityDeleted {
@@ -118,7 +128,7 @@ async fn create_undo_emits_removed_redo_emits_created_with_provenance() {
 
     // Redo the create — the file is restored, so the reconcile must emit
     // EntityChanged (`created`) with origin "redo".
-    RedoCmd.execute(&cctx).await.unwrap();
+    redo_and_reconcile(&ctx, &store_context).await;
     let evt = rx.recv().await.expect("redo of create must emit an event");
     match evt {
         EntityEvent::EntityChanged {
@@ -150,7 +160,6 @@ async fn create_undo_emits_removed_redo_emits_created_with_provenance() {
 #[tokio::test]
 async fn update_undo_emits_old_values_redo_emits_new_values() {
     let (_dir, ctx, cache, store_context) = setup("tag").await;
-    let cctx = command_ctx(&ctx, &store_context);
 
     // Create then update so the undo stack has an update entry on top.
     let mut tag = Entity::new("tag", "bug");
@@ -165,7 +174,7 @@ async fn update_undo_emits_old_values_redo_emits_new_values() {
 
     // Undo the update — disk reverts to "Old Name"; the reconcile diffs the
     // cached "New Name" against disk and emits the OLD value.
-    UndoCmd.execute(&cctx).await.unwrap();
+    undo_and_reconcile(&ctx, &store_context).await;
     let evt = rx.recv().await.expect("undo of update must emit an event");
     let undo_txn = match evt {
         EntityEvent::EntityChanged {
@@ -188,7 +197,7 @@ async fn update_undo_emits_old_values_redo_emits_new_values() {
     };
 
     // Redo the update — disk goes back to "New Name".
-    RedoCmd.execute(&cctx).await.unwrap();
+    redo_and_reconcile(&ctx, &store_context).await;
     let evt = rx.recv().await.expect("redo of update must emit an event");
     match evt {
         EntityEvent::EntityChanged {
@@ -216,7 +225,6 @@ async fn update_undo_emits_old_values_redo_emits_new_values() {
 #[tokio::test]
 async fn grouped_undo_shares_one_txn_across_items() {
     let (_dir, ctx, cache, store_context) = setup("tag").await;
-    let cctx = command_ctx(&ctx, &store_context);
 
     // Write two tags inside one transaction so they form one undo group.
     let guard = store_context.begin_undo_group().await;
@@ -232,7 +240,7 @@ async fn grouped_undo_shares_one_txn_across_items() {
     drain(&mut rx);
 
     // One undo reverses the whole group → two reconcile events, one txn.
-    UndoCmd.execute(&cctx).await.unwrap();
+    undo_and_reconcile(&ctx, &store_context).await;
 
     let e1 = rx.recv().await.expect("first grouped undo event");
     let e2 = rx.recv().await.expect("second grouped undo event");

@@ -18,7 +18,7 @@ ulid = { workspace = true }
 chrono = { workspace = true }
 async-trait = { workspace = true }
 rmcp = { workspace = true }
-swissarmyhammer-commands = { path = "../swissarmyhammer-commands" }
+swissarmyhammer-command-options = { workspace = true }
 swissarmyhammer-store = { path = "../swissarmyhammer-store" }
 swissarmyhammer-perspectives = { path = "../swissarmyhammer-perspectives" }
 swissarmyhammer-operations = { workspace = true }

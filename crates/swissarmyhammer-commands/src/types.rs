@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
+pub use swissarmyhammer_command_options::ParamOption;
+
 /// Keybindings for a command, per keymap mode.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct KeysDef {
@@ -48,19 +50,6 @@ pub enum ParamShape {
     Number,
     Date,
     Boolean,
-}
-
-/// A single option value for an enum-shaped param.
-///
-/// Used as an inline alternative to a backend resolver: when the option
-/// list is static and known at YAML write time, write it directly on the
-/// `ParamDef` rather than wiring up an `options_from` resolver.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ParamOption {
-    /// Machine-readable value that flows into the command's args bag.
-    pub value: String,
-    /// Human-readable label shown in the picker UI.
-    pub label: String,
 }
 
 /// A parameter definition for a command.

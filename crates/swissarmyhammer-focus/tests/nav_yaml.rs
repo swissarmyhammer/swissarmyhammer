@@ -17,18 +17,41 @@
 
 use std::collections::HashMap;
 
-use swissarmyhammer_commands::CommandDef;
+#[derive(serde::Deserialize)]
+struct NavCommandDef {
+    id: String,
+    #[serde(default)]
+    menu: Option<NavMenu>,
+    #[serde(default)]
+    keys: Option<NavKeys>,
+}
+
+#[derive(serde::Deserialize)]
+struct NavMenu {
+    #[serde(default)]
+    path: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct NavKeys {
+    #[serde(default)]
+    vim: Option<String>,
+    #[serde(default)]
+    cua: Option<String>,
+    #[serde(default)]
+    emacs: Option<String>,
+}
 
 /// Parse every YAML source contributed by the focus crate and collapse
 /// them into a single `id → CommandDef` map.
 ///
 /// Mirrors the loader used by `CommandsRegistry::from_yaml_sources` —
 /// each source is a top-level YAML sequence of `CommandDef` entries.
-fn load_focus_commands() -> HashMap<String, CommandDef> {
+fn load_focus_commands() -> HashMap<String, NavCommandDef> {
     let sources = swissarmyhammer_focus::builtin_yaml_sources();
     let mut commands = HashMap::new();
     for (name, content) in sources {
-        let defs: Vec<CommandDef> = serde_yaml_ng::from_str(content)
+        let defs: Vec<NavCommandDef> = serde_yaml_ng::from_str(content)
             .unwrap_or_else(|e| panic!("focus YAML source `{name}` failed to parse: {e}"));
         for def in defs {
             commands.insert(def.id.clone(), def);

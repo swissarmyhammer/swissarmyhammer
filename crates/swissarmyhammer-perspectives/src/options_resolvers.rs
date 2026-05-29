@@ -12,12 +12,12 @@
 //! [`register_perspective_resolvers`]; mirror that helper from the
 //! consumer crate that owns the registry.
 //!
-//! [`OptionsRegistry`]: swissarmyhammer_commands::OptionsRegistry
-//! [`OptionsContext::data`]: swissarmyhammer_commands::OptionsContext::data
-//! [`OptionsResolver`]: swissarmyhammer_commands::OptionsResolver
-//! [`OptionsSources`]: swissarmyhammer_commands::OptionsSources
+//! [`OptionsRegistry`]: swissarmyhammer_command_options::OptionsRegistry
+//! [`OptionsContext::data`]: swissarmyhammer_command_options::OptionsContext::data
+//! [`OptionsResolver`]: swissarmyhammer_command_options::OptionsResolver
+//! [`OptionsSources`]: swissarmyhammer_command_options::OptionsSources
 
-use swissarmyhammer_commands::{
+use swissarmyhammer_command_options::{
     OptionsContext, OptionsRegistry, OptionsResolver, OptionsSources, ParamOption,
 };
 

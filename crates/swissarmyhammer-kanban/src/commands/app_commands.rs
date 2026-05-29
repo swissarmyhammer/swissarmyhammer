@@ -207,7 +207,7 @@ impl Command for KanbanUndoCmd {
     /// Delegates to the generic `UndoCmd::available` so the availability
     /// contract stays consistent across crates.
     fn available(&self, ctx: &CommandContext) -> bool {
-        swissarmyhammer_entity::UndoCmd.available(ctx)
+        ctx.ui_state.as_ref().map(|ui| ui.can_undo()).unwrap_or(false)
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
@@ -237,7 +237,7 @@ pub struct KanbanRedoCmd;
 impl Command for KanbanRedoCmd {
     /// Returns `true` only when the undo stack has entries to redo.
     fn available(&self, ctx: &CommandContext) -> bool {
-        swissarmyhammer_entity::RedoCmd.available(ctx)
+        ctx.ui_state.as_ref().map(|ui| ui.can_redo()).unwrap_or(false)
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {

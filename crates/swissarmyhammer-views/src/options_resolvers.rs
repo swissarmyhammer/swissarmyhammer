@@ -8,10 +8,10 @@
 //! registry calls this alongside the other per-domain registration
 //! helpers.
 //!
-//! [`OptionsRegistry`]: swissarmyhammer_commands::OptionsRegistry
-//! [`OptionsResolver`]: swissarmyhammer_commands::OptionsResolver
+//! [`OptionsRegistry`]: swissarmyhammer_command_options::OptionsRegistry
+//! [`OptionsResolver`]: swissarmyhammer_command_options::OptionsResolver
 
-use swissarmyhammer_commands::{OptionsContext, OptionsRegistry, OptionsResolver, ParamOption};
+use swissarmyhammer_command_options::{OptionsContext, OptionsRegistry, OptionsResolver, ParamOption};
 
 use crate::types::ViewKind;
 
@@ -85,7 +85,7 @@ fn title_case(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swissarmyhammer_commands::OptionsSources;
+    use swissarmyhammer_command_options::OptionsSources;
 
     /// The resolver enumerates every [`ViewKind`] variant via its
     /// canonical [`ViewKind::as_kebab_str`] helper, so the wire

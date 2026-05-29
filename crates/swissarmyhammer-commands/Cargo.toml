@@ -16,6 +16,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 include_dir = { workspace = true }
 swissarmyhammer-ui-state = { workspace = true }
+swissarmyhammer-command-options = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }

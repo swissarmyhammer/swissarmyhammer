@@ -19,7 +19,6 @@ ulid = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
 swissarmyhammer-common = { workspace = true }
-swissarmyhammer-commands = { workspace = true }
 swissarmyhammer-fields = { workspace = true }
 swissarmyhammer-store = { workspace = true }
 diffy = { workspace = true }

@@ -77,6 +77,7 @@ members = [
     "crates/swissarmyhammer-app-service",
     "crates/swissarmyhammer-window-service",
     "crates/swissarmyhammer-ui-state",
+    "crates/swissarmyhammer-command-options",
 ]
 resolver = "2"
 
@@ -272,6 +273,7 @@ swissarmyhammer-app-service = { path = "crates/swissarmyhammer-app-service" }
 swissarmyhammer-build = { path = "crates/swissarmyhammer-build" }
 swissarmyhammer-cli-completions = { path = "crates/swissarmyhammer-cli-completions" }
 swissarmyhammer-code-context = { path = "crates/swissarmyhammer-code-context" }
+swissarmyhammer-command-options = { path = "crates/swissarmyhammer-command-options" }
 swissarmyhammer-command-service = { path = "crates/swissarmyhammer-command-service" }
 swissarmyhammer-commands = { path = "crates/swissarmyhammer-commands" }
 swissarmyhammer-common = { path = "crates/swissarmyhammer-common" }

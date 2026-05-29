@@ -9520,6 +9520,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-command-options"
+version = "0.13.6"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "swissarmyhammer-command-service"
 version = "0.13.6"
 dependencies = [
@@ -9563,6 +9570,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "swissarmyhammer-command-options",
  "swissarmyhammer-ui-state",
  "tempfile",
  "thiserror 2.0.18",
@@ -9682,7 +9690,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
- "swissarmyhammer-commands",
  "swissarmyhammer-common",
  "swissarmyhammer-entity",
  "swissarmyhammer-fields",
@@ -9767,7 +9774,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
- "swissarmyhammer-commands",
  "swissarmyhammer-common",
  "swissarmyhammer-operations",
  "swissarmyhammer-operations-macros",
@@ -9975,7 +9981,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
- "swissarmyhammer-commands",
+ "swissarmyhammer-command-options",
  "swissarmyhammer-common",
  "swissarmyhammer-store",
  "tempfile",
@@ -10346,7 +10352,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
- "swissarmyhammer-commands",
+ "swissarmyhammer-command-options",
  "swissarmyhammer-operations",
  "swissarmyhammer-operations-macros",
  "swissarmyhammer-perspectives",
