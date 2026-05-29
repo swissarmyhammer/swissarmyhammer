@@ -17,166 +17,166 @@ _mirdan() {
                 cmd="mirdan"
                 ;;
             mirdan,agents)
-                cmd="mirdan__agents"
+                cmd="mirdan__subcmd__agents"
                 ;;
             mirdan,completion)
-                cmd="mirdan__completion"
+                cmd="mirdan__subcmd__completion"
                 ;;
             mirdan,doctor)
-                cmd="mirdan__doctor"
+                cmd="mirdan__subcmd__doctor"
                 ;;
             mirdan,help)
-                cmd="mirdan__help"
+                cmd="mirdan__subcmd__help"
                 ;;
             mirdan,info)
-                cmd="mirdan__info"
+                cmd="mirdan__subcmd__info"
                 ;;
             mirdan,install)
-                cmd="mirdan__install"
+                cmd="mirdan__subcmd__install"
                 ;;
             mirdan,list)
-                cmd="mirdan__list"
+                cmd="mirdan__subcmd__list"
                 ;;
             mirdan,login)
-                cmd="mirdan__login"
+                cmd="mirdan__subcmd__login"
                 ;;
             mirdan,logout)
-                cmd="mirdan__logout"
+                cmd="mirdan__subcmd__logout"
                 ;;
             mirdan,new)
-                cmd="mirdan__new"
+                cmd="mirdan__subcmd__new"
                 ;;
             mirdan,outdated)
-                cmd="mirdan__outdated"
+                cmd="mirdan__subcmd__outdated"
                 ;;
             mirdan,publish)
-                cmd="mirdan__publish"
+                cmd="mirdan__subcmd__publish"
                 ;;
             mirdan,search)
-                cmd="mirdan__search"
+                cmd="mirdan__subcmd__search"
                 ;;
             mirdan,start)
-                cmd="mirdan__start"
+                cmd="mirdan__subcmd__start"
                 ;;
             mirdan,status)
-                cmd="mirdan__status"
+                cmd="mirdan__subcmd__status"
                 ;;
             mirdan,sync)
-                cmd="mirdan__sync"
+                cmd="mirdan__subcmd__sync"
                 ;;
             mirdan,uninstall)
-                cmd="mirdan__uninstall"
+                cmd="mirdan__subcmd__uninstall"
                 ;;
             mirdan,unpublish)
-                cmd="mirdan__unpublish"
+                cmd="mirdan__subcmd__unpublish"
                 ;;
             mirdan,update)
-                cmd="mirdan__update"
+                cmd="mirdan__subcmd__update"
                 ;;
             mirdan,whoami)
-                cmd="mirdan__whoami"
+                cmd="mirdan__subcmd__whoami"
                 ;;
-            mirdan__help,agents)
-                cmd="mirdan__help__agents"
+            mirdan__subcmd__help,agents)
+                cmd="mirdan__subcmd__help__subcmd__agents"
                 ;;
-            mirdan__help,completion)
-                cmd="mirdan__help__completion"
+            mirdan__subcmd__help,completion)
+                cmd="mirdan__subcmd__help__subcmd__completion"
                 ;;
-            mirdan__help,doctor)
-                cmd="mirdan__help__doctor"
+            mirdan__subcmd__help,doctor)
+                cmd="mirdan__subcmd__help__subcmd__doctor"
                 ;;
-            mirdan__help,help)
-                cmd="mirdan__help__help"
+            mirdan__subcmd__help,help)
+                cmd="mirdan__subcmd__help__subcmd__help"
                 ;;
-            mirdan__help,info)
-                cmd="mirdan__help__info"
+            mirdan__subcmd__help,info)
+                cmd="mirdan__subcmd__help__subcmd__info"
                 ;;
-            mirdan__help,install)
-                cmd="mirdan__help__install"
+            mirdan__subcmd__help,install)
+                cmd="mirdan__subcmd__help__subcmd__install"
                 ;;
-            mirdan__help,list)
-                cmd="mirdan__help__list"
+            mirdan__subcmd__help,list)
+                cmd="mirdan__subcmd__help__subcmd__list"
                 ;;
-            mirdan__help,login)
-                cmd="mirdan__help__login"
+            mirdan__subcmd__help,login)
+                cmd="mirdan__subcmd__help__subcmd__login"
                 ;;
-            mirdan__help,logout)
-                cmd="mirdan__help__logout"
+            mirdan__subcmd__help,logout)
+                cmd="mirdan__subcmd__help__subcmd__logout"
                 ;;
-            mirdan__help,new)
-                cmd="mirdan__help__new"
+            mirdan__subcmd__help,new)
+                cmd="mirdan__subcmd__help__subcmd__new"
                 ;;
-            mirdan__help,outdated)
-                cmd="mirdan__help__outdated"
+            mirdan__subcmd__help,outdated)
+                cmd="mirdan__subcmd__help__subcmd__outdated"
                 ;;
-            mirdan__help,publish)
-                cmd="mirdan__help__publish"
+            mirdan__subcmd__help,publish)
+                cmd="mirdan__subcmd__help__subcmd__publish"
                 ;;
-            mirdan__help,search)
-                cmd="mirdan__help__search"
+            mirdan__subcmd__help,search)
+                cmd="mirdan__subcmd__help__subcmd__search"
                 ;;
-            mirdan__help,start)
-                cmd="mirdan__help__start"
+            mirdan__subcmd__help,start)
+                cmd="mirdan__subcmd__help__subcmd__start"
                 ;;
-            mirdan__help,status)
-                cmd="mirdan__help__status"
+            mirdan__subcmd__help,status)
+                cmd="mirdan__subcmd__help__subcmd__status"
                 ;;
-            mirdan__help,sync)
-                cmd="mirdan__help__sync"
+            mirdan__subcmd__help,sync)
+                cmd="mirdan__subcmd__help__subcmd__sync"
                 ;;
-            mirdan__help,uninstall)
-                cmd="mirdan__help__uninstall"
+            mirdan__subcmd__help,uninstall)
+                cmd="mirdan__subcmd__help__subcmd__uninstall"
                 ;;
-            mirdan__help,unpublish)
-                cmd="mirdan__help__unpublish"
+            mirdan__subcmd__help,unpublish)
+                cmd="mirdan__subcmd__help__subcmd__unpublish"
                 ;;
-            mirdan__help,update)
-                cmd="mirdan__help__update"
+            mirdan__subcmd__help,update)
+                cmd="mirdan__subcmd__help__subcmd__update"
                 ;;
-            mirdan__help,whoami)
-                cmd="mirdan__help__whoami"
+            mirdan__subcmd__help,whoami)
+                cmd="mirdan__subcmd__help__subcmd__whoami"
                 ;;
-            mirdan__help__new,plugin)
-                cmd="mirdan__help__new__plugin"
+            mirdan__subcmd__help__subcmd__new,plugin)
+                cmd="mirdan__subcmd__help__subcmd__new__subcmd__plugin"
                 ;;
-            mirdan__help__new,skill)
-                cmd="mirdan__help__new__skill"
+            mirdan__subcmd__help__subcmd__new,skill)
+                cmd="mirdan__subcmd__help__subcmd__new__subcmd__skill"
                 ;;
-            mirdan__help__new,tool)
-                cmd="mirdan__help__new__tool"
+            mirdan__subcmd__help__subcmd__new,tool)
+                cmd="mirdan__subcmd__help__subcmd__new__subcmd__tool"
                 ;;
-            mirdan__help__new,validator)
-                cmd="mirdan__help__new__validator"
+            mirdan__subcmd__help__subcmd__new,validator)
+                cmd="mirdan__subcmd__help__subcmd__new__subcmd__validator"
                 ;;
-            mirdan__new,help)
-                cmd="mirdan__new__help"
+            mirdan__subcmd__new,help)
+                cmd="mirdan__subcmd__new__subcmd__help"
                 ;;
-            mirdan__new,plugin)
-                cmd="mirdan__new__plugin"
+            mirdan__subcmd__new,plugin)
+                cmd="mirdan__subcmd__new__subcmd__plugin"
                 ;;
-            mirdan__new,skill)
-                cmd="mirdan__new__skill"
+            mirdan__subcmd__new,skill)
+                cmd="mirdan__subcmd__new__subcmd__skill"
                 ;;
-            mirdan__new,tool)
-                cmd="mirdan__new__tool"
+            mirdan__subcmd__new,tool)
+                cmd="mirdan__subcmd__new__subcmd__tool"
                 ;;
-            mirdan__new,validator)
-                cmd="mirdan__new__validator"
+            mirdan__subcmd__new,validator)
+                cmd="mirdan__subcmd__new__subcmd__validator"
                 ;;
-            mirdan__new__help,help)
-                cmd="mirdan__new__help__help"
+            mirdan__subcmd__new__subcmd__help,help)
+                cmd="mirdan__subcmd__new__subcmd__help__subcmd__help"
                 ;;
-            mirdan__new__help,plugin)
-                cmd="mirdan__new__help__plugin"
+            mirdan__subcmd__new__subcmd__help,plugin)
+                cmd="mirdan__subcmd__new__subcmd__help__subcmd__plugin"
                 ;;
-            mirdan__new__help,skill)
-                cmd="mirdan__new__help__skill"
+            mirdan__subcmd__new__subcmd__help,skill)
+                cmd="mirdan__subcmd__new__subcmd__help__subcmd__skill"
                 ;;
-            mirdan__new__help,tool)
-                cmd="mirdan__new__help__tool"
+            mirdan__subcmd__new__subcmd__help,tool)
+                cmd="mirdan__subcmd__new__subcmd__help__subcmd__tool"
                 ;;
-            mirdan__new__help,validator)
-                cmd="mirdan__new__help__validator"
+            mirdan__subcmd__new__subcmd__help,validator)
+                cmd="mirdan__subcmd__new__subcmd__help__subcmd__validator"
                 ;;
             *)
                 ;;
@@ -202,7 +202,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__agents)
+        mirdan__subcmd__agents)
             opts="-d -y -h --all --json --debug --yes --agent --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -220,7 +220,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__completion)
+        mirdan__subcmd__completion)
             opts="-d -y -h --debug --yes --agent --help bash elvish fish powershell zsh"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -238,7 +238,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__doctor)
+        mirdan__subcmd__doctor)
             opts="-v -d -y -h --verbose --debug --yes --agent --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -256,7 +256,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__help)
+        mirdan__subcmd__help)
             opts="agents new install uninstall list search info login logout whoami publish unpublish outdated update sync status doctor start completion help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -270,7 +270,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__help__agents)
+        mirdan__subcmd__help__subcmd__agents)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -284,7 +284,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__help__completion)
+        mirdan__subcmd__help__subcmd__completion)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -298,7 +298,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__help__doctor)
+        mirdan__subcmd__help__subcmd__doctor)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -312,7 +312,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__help__help)
+        mirdan__subcmd__help__subcmd__help)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -326,7 +326,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__help__info)
+        mirdan__subcmd__help__subcmd__info)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -340,7 +340,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__help__install)
+        mirdan__subcmd__help__subcmd__install)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -354,7 +354,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__help__list)
+        mirdan__subcmd__help__subcmd__list)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -368,7 +368,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__help__login)
+        mirdan__subcmd__help__subcmd__login)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -382,7 +382,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__help__logout)
+        mirdan__subcmd__help__subcmd__logout)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -396,7 +396,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__help__new)
+        mirdan__subcmd__help__subcmd__new)
             opts="skill validator tool plugin"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -410,7 +410,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__help__new__plugin)
+        mirdan__subcmd__help__subcmd__new__subcmd__plugin)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -424,7 +424,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__help__new__skill)
+        mirdan__subcmd__help__subcmd__new__subcmd__skill)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -438,7 +438,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__help__new__tool)
+        mirdan__subcmd__help__subcmd__new__subcmd__tool)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -452,7 +452,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__help__new__validator)
+        mirdan__subcmd__help__subcmd__new__subcmd__validator)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -466,7 +466,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__help__outdated)
+        mirdan__subcmd__help__subcmd__outdated)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -480,7 +480,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__help__publish)
+        mirdan__subcmd__help__subcmd__publish)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -494,7 +494,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__help__search)
+        mirdan__subcmd__help__subcmd__search)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -508,7 +508,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__help__start)
+        mirdan__subcmd__help__subcmd__start)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -522,7 +522,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__help__status)
+        mirdan__subcmd__help__subcmd__status)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -536,7 +536,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__help__sync)
+        mirdan__subcmd__help__subcmd__sync)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -550,7 +550,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__help__uninstall)
+        mirdan__subcmd__help__subcmd__uninstall)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -564,7 +564,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__help__unpublish)
+        mirdan__subcmd__help__subcmd__unpublish)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -578,7 +578,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__help__update)
+        mirdan__subcmd__help__subcmd__update)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -592,7 +592,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__help__whoami)
+        mirdan__subcmd__help__subcmd__whoami)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -606,7 +606,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__info)
+        mirdan__subcmd__info)
             opts="-d -y -h --debug --yes --agent --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -624,7 +624,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__install)
+        mirdan__subcmd__install)
             opts="-d -y -h --global --git --skill --mcp --command --args --debug --yes --agent --help <PACKAGE>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -654,7 +654,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__list)
+        mirdan__subcmd__list)
             opts="-d -y -h --skills --validators --tools --plugins --json --debug --yes --agent --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -672,7 +672,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__login)
+        mirdan__subcmd__login)
             opts="-d -y -h --debug --yes --agent --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -690,7 +690,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__logout)
+        mirdan__subcmd__logout)
             opts="-d -y -h --debug --yes --agent --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -708,7 +708,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__new)
+        mirdan__subcmd__new)
             opts="-d -y -h --debug --yes --agent --help skill validator tool plugin help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -726,7 +726,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__new__help)
+        mirdan__subcmd__new__subcmd__help)
             opts="skill validator tool plugin help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -740,7 +740,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__new__help__help)
+        mirdan__subcmd__new__subcmd__help__subcmd__help)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -754,7 +754,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__new__help__plugin)
+        mirdan__subcmd__new__subcmd__help__subcmd__plugin)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -768,7 +768,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__new__help__skill)
+        mirdan__subcmd__new__subcmd__help__subcmd__skill)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -782,7 +782,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__new__help__tool)
+        mirdan__subcmd__new__subcmd__help__subcmd__tool)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -796,7 +796,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__new__help__validator)
+        mirdan__subcmd__new__subcmd__help__subcmd__validator)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -810,7 +810,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__new__plugin)
+        mirdan__subcmd__new__subcmd__plugin)
             opts="-d -y -h --global --debug --yes --agent --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -828,7 +828,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__new__skill)
+        mirdan__subcmd__new__subcmd__skill)
             opts="-d -y -h --global --debug --yes --agent --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -846,7 +846,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__new__tool)
+        mirdan__subcmd__new__subcmd__tool)
             opts="-d -y -h --global --debug --yes --agent --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -864,7 +864,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__new__validator)
+        mirdan__subcmd__new__subcmd__validator)
             opts="-d -y -h --global --debug --yes --agent --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -882,7 +882,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__outdated)
+        mirdan__subcmd__outdated)
             opts="-d -y -h --debug --yes --agent --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -900,7 +900,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__publish)
+        mirdan__subcmd__publish)
             opts="-d -y -h --dry-run --debug --yes --agent --help [SOURCE]"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -918,7 +918,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__search)
+        mirdan__subcmd__search)
             opts="-d -y -h --json --debug --yes --agent --help [QUERY]"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -936,7 +936,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__start)
+        mirdan__subcmd__start)
             opts="-d -y -h --debug --yes --agent --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -954,7 +954,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__status)
+        mirdan__subcmd__status)
             opts="-d -y -h --all --json --debug --yes --agent --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -972,7 +972,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__sync)
+        mirdan__subcmd__sync)
             opts="-d -y -h --global --debug --yes --agent --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -990,7 +990,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__uninstall)
+        mirdan__subcmd__uninstall)
             opts="-d -y -h --global --debug --yes --agent --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1008,7 +1008,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__unpublish)
+        mirdan__subcmd__unpublish)
             opts="-d -y -h --debug --yes --agent --help <NAME_VERSION>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1026,7 +1026,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__update)
+        mirdan__subcmd__update)
             opts="-d -y -h --global --debug --yes --agent --help [NAME]"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1044,7 +1044,7 @@ _mirdan() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mirdan__whoami)
+        mirdan__subcmd__whoami)
             opts="-d -y -h --debug --yes --agent --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
