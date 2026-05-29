@@ -18,7 +18,29 @@ use crate::erased::ErasedStore;
 use crate::error::{Result, StoreError};
 use crate::event::ChangeEvent;
 use crate::id::{StoredItemId, UndoEntryId};
+use crate::provenance::EventProvenance;
 use crate::stack::UndoStack;
+
+/// The ambient state pinned to a tokio task while a transaction is open.
+///
+/// Carries both the undo-group `id` that every `push` from this task stamps
+/// onto its undo entries AND the `origin` classification that forward
+/// data-change events emitted on this task should report. Holding the origin
+/// here — rather than just the id — is what lets a forward entity write read
+/// back the command's full provenance (`txn` + `origin`) at emit time,
+/// closing the correlation gap where forward writes hardcoded
+/// `origin: "user"`.
+#[derive(Debug, Clone)]
+struct AmbientTxn {
+    /// The undo-group id shared by every entry pushed under this transaction.
+    id: UndoEntryId,
+    /// The actor classification for changes made under this transaction
+    /// (`"user"`, `"agent:<id>"`, …). `None` means "no explicit origin was
+    /// set" — `current_provenance` then falls back to `"user"`, preserving
+    /// the legacy behavior for callers (the `store` MCP `BeginTransaction`
+    /// verb) that open a transaction without naming a caller.
+    origin: Option<String>,
+}
 
 /// Key used to scope ambient transaction state by tokio task.
 ///
@@ -160,7 +182,12 @@ pub struct StoreContext {
     /// `Mutex` is the right primitive here — every mutation is short
     /// and synchronous (HashMap insert / remove); we never hold the
     /// lock across an `.await`.
-    ambient_txn: Mutex<HashMap<AmbientKey, UndoEntryId>>,
+    ///
+    /// Each slot now carries an [`AmbientTxn`] (id + origin) rather than a
+    /// bare id, so a forward write running on the transaction's task can
+    /// recover the command's full provenance via
+    /// [`current_provenance`](Self::current_provenance).
+    ambient_txn: Mutex<HashMap<AmbientKey, AmbientTxn>>,
     /// Broadcast channel for undo-stack-state snapshots.
     ///
     /// A [`StackState`] is published here after every stack mutation
@@ -277,7 +304,13 @@ impl StoreContext {
         let mut slots = self.ambient_txn.lock().expect("ambient_txn poisoned");
         let already_open = slots.contains_key(&key);
         if !already_open {
-            slots.insert(key, UndoEntryId::new());
+            slots.insert(
+                key,
+                AmbientTxn {
+                    id: UndoEntryId::new(),
+                    origin: None,
+                },
+            );
         }
         UndoGroupGuard {
             ctx: self,
@@ -306,9 +339,36 @@ impl StoreContext {
     /// returns the existing id and does not allocate a new one, so
     /// nested calls do not create sub-groups.
     pub fn begin_transaction(&self) -> UndoEntryId {
+        self.begin_transaction_with_origin(None)
+    }
+
+    /// Like [`begin_transaction`], but also records the `origin` that forward
+    /// data-change events emitted on this task should report.
+    ///
+    /// This is the entry point the command service's transaction seam uses:
+    /// it opens the ambient transaction *and* stamps the caller-derived
+    /// origin (`"user"`, `"agent:<id>"`, …) so a forward entity write made by
+    /// the command's callback — running on this same tokio task — reads back
+    /// the full provenance (`txn` + `origin`) via
+    /// [`current_provenance`](Self::current_provenance) at emit time, instead
+    /// of hardcoding `origin: "user"`.
+    ///
+    /// `origin: None` is equivalent to [`begin_transaction`] — the slot
+    /// records no explicit origin and `current_provenance` falls back to
+    /// `"user"`. As with [`begin_transaction`], calling this while a
+    /// transaction is already open on the same task returns the existing id
+    /// and leaves the already-recorded origin untouched (no sub-grouping, no
+    /// origin clobber).
+    pub fn begin_transaction_with_origin(&self, origin: Option<String>) -> UndoEntryId {
         let key = AmbientKey::current();
         let mut slots = self.ambient_txn.lock().expect("ambient_txn poisoned");
-        *slots.entry(key).or_insert_with(UndoEntryId::new)
+        slots
+            .entry(key)
+            .or_insert_with(|| AmbientTxn {
+                id: UndoEntryId::new(),
+                origin,
+            })
+            .id
     }
 
     /// End the transaction with the given id on the current task.
@@ -321,7 +381,7 @@ impl StoreContext {
     pub fn end_transaction(&self, id: UndoEntryId) {
         let key = AmbientKey::current();
         let mut slots = self.ambient_txn.lock().expect("ambient_txn poisoned");
-        if matches!(slots.get(&key), Some(current) if *current == id) {
+        if matches!(slots.get(&key), Some(current) if current.id == id) {
             slots.remove(&key);
         }
     }
@@ -354,7 +414,40 @@ impl StoreContext {
             .lock()
             .expect("ambient_txn poisoned")
             .get(&key)
-            .copied()
+            .map(|t| t.id)
+    }
+
+    /// Return the provenance a forward data-change event made on the current
+    /// task should carry.
+    ///
+    /// When a transaction is open on this task (via
+    /// [`begin_transaction_with_origin`](Self::begin_transaction_with_origin)
+    /// — the command service's seam — or [`begin_transaction`] /
+    /// [`begin_undo_group`]), the returned [`EventProvenance`] carries that
+    /// transaction's id as `txn` and its recorded `origin` (falling back to
+    /// `"user"` when none was set). When **no** transaction is open (a direct
+    /// API write, a test, or an agent write outside a command), it returns
+    /// [`EventProvenance::user`] — `txn: None`, `origin: "user"` — preserving
+    /// the pre-existing forward-write behavior.
+    ///
+    /// This is the read side of the forward-edit correlation fix: the entity
+    /// cache calls it at emit time so a command's N forward writes all carry
+    /// the command's `txn`, matching its `commands/executed` event. The
+    /// per-task ambient slot is why this works without threading the
+    /// provenance through every call: the command handler opens the
+    /// transaction and `.await`s its callback inline on the same task, so the
+    /// callback's writes — and the cache emits they trigger — observe the
+    /// slot the handler set.
+    pub fn current_provenance(&self) -> EventProvenance {
+        let key = AmbientKey::current();
+        let slots = self.ambient_txn.lock().expect("ambient_txn poisoned");
+        match slots.get(&key) {
+            Some(txn) => EventProvenance::new(
+                Some(txn.id.to_string()),
+                txn.origin.clone().unwrap_or_else(|| "user".to_string()),
+            ),
+            None => EventProvenance::user(),
+        }
     }
 
     /// Register a store with this context.
@@ -894,6 +987,47 @@ mod tests {
 
         assert_eq!(gadget_event.event_name(), "item-created");
         assert_eq!(gadget_event.payload()["id"], "gadget1");
+    }
+
+    #[tokio::test]
+    async fn current_provenance_defaults_to_user_when_no_txn() {
+        let dir = TempDir::new().unwrap();
+        let ctx = StoreContext::new(dir.path().to_path_buf());
+
+        let prov = ctx.current_provenance();
+        assert_eq!(prov, EventProvenance::user());
+        assert!(prov.txn.is_none());
+        assert_eq!(prov.origin, "user");
+    }
+
+    #[tokio::test]
+    async fn current_provenance_carries_open_txn_and_origin() {
+        let dir = TempDir::new().unwrap();
+        let ctx = StoreContext::new(dir.path().to_path_buf());
+
+        let id = ctx.begin_transaction_with_origin(Some("agent:plugin-x".to_string()));
+
+        let prov = ctx.current_provenance();
+        assert_eq!(prov.txn.as_deref(), Some(id.to_string().as_str()));
+        assert_eq!(prov.origin, "agent:plugin-x");
+
+        // Closing the txn restores the user/None default.
+        ctx.end_transaction(id);
+        assert_eq!(ctx.current_provenance(), EventProvenance::user());
+    }
+
+    #[tokio::test]
+    async fn current_provenance_origin_defaults_to_user_when_unset() {
+        let dir = TempDir::new().unwrap();
+        let ctx = StoreContext::new(dir.path().to_path_buf());
+
+        // `begin_transaction` (no origin) still carries the txn but reports
+        // origin "user" — the legacy `BeginTransaction` verb shape.
+        let id = ctx.begin_transaction();
+        let prov = ctx.current_provenance();
+        assert_eq!(prov.txn.as_deref(), Some(id.to_string().as_str()));
+        assert_eq!(prov.origin, "user");
+        ctx.end_transaction(id);
     }
 
     #[tokio::test]

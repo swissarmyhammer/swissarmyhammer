@@ -36,8 +36,12 @@ impl std::fmt::Debug for StoreTransactionSeam {
 }
 
 impl TransactionSeam for StoreTransactionSeam {
-    fn begin(&self) -> Option<String> {
-        Some(self.store.begin_transaction().to_string())
+    fn begin(&self, origin: &str) -> Option<String> {
+        Some(
+            self.store
+                .begin_transaction_with_origin(Some(origin.to_string()))
+                .to_string(),
+        )
     }
 
     fn end(&self, txn: &str) {

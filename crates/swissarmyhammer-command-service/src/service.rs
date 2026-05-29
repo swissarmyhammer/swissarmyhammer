@@ -33,7 +33,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::sync::Mutex;
 use swissarmyhammer_operations_macros::operation_tool;
-use swissarmyhammer_plugin::CallerId;
+use swissarmyhammer_plugin::{CallerId, Provenance};
 
 use crate::callbacks::{is_callback_present, CallbackHandle};
 use crate::invoke::{NoopCallbackDispatcher, SharedCallbackDispatcher};
@@ -532,7 +532,15 @@ impl CommandService {
         // downstream store write inherits the ambient `txn`. `begin` runs on
         // this task; the inline `.await` below keeps the callback on the same
         // task, so the per-task ambient slot reaches the callback's writes.
-        let txn = self.transaction.begin();
+        //
+        // Pass the caller-derived `origin` through the seam so the store-backed
+        // impl stamps it into the ambient slot alongside the `txn`. A forward
+        // entity write the callback makes then reads BOTH back at emit time
+        // (`StoreContext::current_provenance`), so its `store/changed` carries
+        // the same `txn`+`origin` as the `commands/executed` event built below
+        // — closing the forward-edit correlation gap.
+        let origin = Provenance::origin_for_caller(&caller);
+        let txn = self.transaction.begin(&origin);
 
         let outcome = self.dispatcher.invoke(&execute_handle, args).await;
 

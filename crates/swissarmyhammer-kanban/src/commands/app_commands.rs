@@ -5,9 +5,10 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use swissarmyhammer_commands::{Command, CommandContext, CommandError};
 use swissarmyhammer_entity::EntityContext;
-use swissarmyhammer_perspectives::PERSPECTIVE_STORE_NAME;
+use swissarmyhammer_perspectives::{PerspectiveContext, PERSPECTIVE_STORE_NAME};
 use swissarmyhammer_store::{EventProvenance, StoreContext, StoreError, UndoEntryId, UndoOutcome};
-use swissarmyhammer_views::VIEW_STORE_NAME;
+use swissarmyhammer_views::{ViewsContext, VIEW_STORE_NAME};
+use tokio::sync::RwLock;
 
 use crate::context::KanbanContext;
 
@@ -309,53 +310,83 @@ impl StoreCategory {
 /// Per-category failures are independent and logged at warn-level, not
 /// surfaced as command errors — the undo/redo already succeeded on disk.
 async fn reconcile_post_undo_caches(ctx: &CommandContext, outcome: &UndoOutcome, origin: &str) {
-    let txn = UndoEntryId::new().to_string();
-
     // Resolve the optional cache handles once, up front. Each is `None` when
     // its extension/sub-context is not attached (entity-only boards, cold
     // perspective context, …), and the per-item dispatch simply skips that
     // category — no bespoke guard per store name.
     let ectx = ctx.extension::<EntityContext>();
     let kanban = ctx.extension::<KanbanContext>();
+    let perspectives = kanban
+        .as_ref()
+        .and_then(|k| k.perspective_context_if_ready());
+    let views = kanban.as_ref().and_then(|k| k.views());
+
+    reconcile_caches(
+        outcome,
+        origin,
+        ectx.as_deref(),
+        views,
+        perspectives,
+    )
+    .await;
+}
+
+/// The category-keyed, per-item cache reconcile shared by production
+/// (`reconcile_post_undo_caches`) and the change-propagation e2e test.
+///
+/// Extracted so the two cannot diverge: this is the single body that turns one
+/// finished `UndoOutcome` into the dependent-cache resyncs + their emitted
+/// `store/changed` events. Production resolves the cache handles off the
+/// [`CommandContext`] extensions; the test holds them directly — both then
+/// pass them here.
+///
+/// Each handle is `Option` because a category may be absent on a given board
+/// (entity-only boards have no views/perspectives; a cold board has no entity
+/// cache attached yet). A `None` handle means the per-item dispatch skips that
+/// category — there is no bespoke guard per store name.
+///
+/// All items of one undo/redo call share a single fresh `txn`: one undo/redo
+/// is one command, so a consumer coalesces its items into one atomic
+/// re-render. `origin` is `"undo"` or `"redo"`.
+pub async fn reconcile_caches(
+    outcome: &UndoOutcome,
+    origin: &str,
+    entity: Option<&EntityContext>,
+    views: Option<&RwLock<ViewsContext>>,
+    perspectives: Option<&RwLock<PerspectiveContext>>,
+) {
+    let txn = UndoEntryId::new().to_string();
 
     for (store_name, item_id) in &outcome.items {
         let prov = EventProvenance::new(Some(txn.clone()), origin);
         match StoreCategory::of(store_name) {
             StoreCategory::Entity => {
-                if let Some(ectx) = &ectx {
+                if let Some(ectx) = entity {
                     ectx.sync_entity_cache_from_disk_with(store_name, item_id.as_str(), prov)
                         .await;
                 }
             }
             StoreCategory::Perspective => {
-                if let Some(kanban) = &kanban {
-                    if let Some(pctx) = kanban.perspective_context_if_ready() {
-                        let mut pctx = pctx.write().await;
-                        if let Err(e) =
-                            pctx.reload_from_disk_with(item_id.as_str(), prov).await
-                        {
-                            tracing::warn!(
-                                id = %item_id.as_str(),
-                                error = %e,
-                                "perspective reload_from_disk after undo/redo failed"
-                            );
-                        }
+                if let Some(pctx) = perspectives {
+                    let mut pctx = pctx.write().await;
+                    if let Err(e) = pctx.reload_from_disk_with(item_id.as_str(), prov).await {
+                        tracing::warn!(
+                            id = %item_id.as_str(),
+                            error = %e,
+                            "perspective reload_from_disk after undo/redo failed"
+                        );
                     }
                 }
             }
             StoreCategory::View => {
-                if let Some(kanban) = &kanban {
-                    if let Some(views_lock) = kanban.views() {
-                        let mut views = views_lock.write().await;
-                        if let Err(e) =
-                            views.reload_from_disk_with(item_id.as_str(), prov).await
-                        {
-                            tracing::warn!(
-                                id = %item_id.as_str(),
-                                error = %e,
-                                "view reload_from_disk after undo/redo failed"
-                            );
-                        }
+                if let Some(views_lock) = views {
+                    let mut views = views_lock.write().await;
+                    if let Err(e) = views.reload_from_disk_with(item_id.as_str(), prov).await {
+                        tracing::warn!(
+                            id = %item_id.as_str(),
+                            error = %e,
+                            "view reload_from_disk after undo/redo failed"
+                        );
                     }
                 }
             }

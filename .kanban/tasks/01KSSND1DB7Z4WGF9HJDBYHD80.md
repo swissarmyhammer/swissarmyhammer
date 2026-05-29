@@ -1,6 +1,6 @@
 ---
-position_column: todo
-position_ordinal: a480
+position_column: review
+position_ordinal: '80'
 project: command-events
 title: Thread ambient txn into forward-edit store/changed emission
 ---

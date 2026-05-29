@@ -28,14 +28,13 @@ use tempfile::TempDir;
 
 use swissarmyhammer_entity::test_utils::test_fields_context;
 use swissarmyhammer_entity::{Entity, EntityCache, EntityContext, EntityTypeStore};
+use swissarmyhammer_kanban::commands::app_commands::reconcile_caches;
 use swissarmyhammer_kanban::notify_fanin::spawn_notification_fanin;
 use swissarmyhammer_perspectives::types::Perspective;
-use swissarmyhammer_perspectives::{PerspectiveContext, PerspectiveStore, PERSPECTIVE_STORE_NAME};
+use swissarmyhammer_perspectives::{PerspectiveContext, PerspectiveStore};
 use swissarmyhammer_plugin::{McpNotification, NotificationBridge, NotificationSubscription};
-use swissarmyhammer_store::{
-    EventProvenance, StoreContext, StoreHandle, UndoEntryId, UndoOutcome,
-};
-use swissarmyhammer_views::{ViewDef, ViewKind, ViewStore, ViewsContext, VIEW_STORE_NAME};
+use swissarmyhammer_store::{StoreContext, StoreHandle, UndoOutcome};
+use swissarmyhammer_views::{ViewDef, ViewKind, ViewStore, ViewsContext};
 
 /// The whole booted substrate plus the bridge client, kept together so the
 /// test body reads as a script.
@@ -129,34 +128,21 @@ async fn boot() -> World {
 }
 
 impl World {
-    /// Reconcile every dependent cache for a finished undo/redo `outcome`,
-    /// stamping `origin` and one shared `txn` — the exact per-item, category-
-    /// keyed dispatch the unified `reconcile_post_undo_caches` performs, with
-    /// no per-store bespoke code.
+    /// Reconcile every dependent cache for a finished undo/redo `outcome` by
+    /// calling the **production** shared reconcile helper
+    /// ([`reconcile_caches`]) — the exact body `reconcile_post_undo_caches`
+    /// runs. The test holds its cache handles directly (rather than off a
+    /// `CommandContext`) and passes them in, so it cannot drift from the
+    /// production per-item, category-keyed dispatch + one-shared-txn stamping.
     async fn reconcile(&self, outcome: &UndoOutcome, origin: &str) {
-        let txn = UndoEntryId::new().to_string();
-        for (store_name, item_id) in &outcome.items {
-            let prov = EventProvenance::new(Some(txn.clone()), origin);
-            if store_name == PERSPECTIVE_STORE_NAME {
-                self.perspectives
-                    .write()
-                    .await
-                    .reload_from_disk_with(item_id.as_str(), prov)
-                    .await
-                    .unwrap();
-            } else if store_name == VIEW_STORE_NAME {
-                self.views
-                    .write()
-                    .await
-                    .reload_from_disk_with(item_id.as_str(), prov)
-                    .await
-                    .unwrap();
-            } else {
-                self.entity
-                    .sync_entity_cache_from_disk_with(store_name, item_id.as_str(), prov)
-                    .await;
-            }
-        }
+        reconcile_caches(
+            outcome,
+            origin,
+            Some(self.entity.as_ref()),
+            Some(&self.views),
+            Some(&self.perspectives),
+        )
+        .await;
     }
 
     /// Drain notifications buffered on the bridge client (give the async

@@ -8,38 +8,45 @@
 //!
 //! ## What is real here vs. what is a cross-task seam
 //!
-//! The bridge itself ([`NotificationBridge`]) is the unit under test: its
-//! ingress ([`publish`](swissarmyhammer_plugin::NotificationBridge::publish)),
-//! its fan-out to in-process subscribers
-//! ([`subscribe`](swissarmyhammer_plugin::NotificationBridge::subscribe)), and
-//! its fan-out to external clients
-//! ([`forward`](swissarmyhammer_plugin::NotificationBridge::forward)).
+//! The headline correlation test
+//! ([`multi_write_command_shares_one_txn_and_delivers_commands_executed`])
+//! drives the **real** forward-edit path end to end: a real `CommandService`
+//! brackets a command's `execute` in a store-backed transaction seam; the
+//! command's callback makes REAL forward entity writes through an
+//! `EntityCache` wired to one shared `StoreContext`; the real
+//! `swissarmyhammer-kanban` fan-in adapter normalizes the resulting
+//! `EntityEvent`s into `store/changed` notifications on the bridge; and the
+//! real `BridgeActionSink` publishes the `commands/executed` action event.
+//! Nothing in the correlation assertion is hand-built — if the ambient txn
+//! were not threaded into the forward `store/changed` emission, the two data
+//! events would carry `txn: null` and the test would FAIL.
 //!
-//! The *upstream* of the bridge — the per-bus fan-in adapters that subscribe
-//! to `EntityEvent` / `ViewEvent` / `PerspectiveEvent` / UI-state changes and
-//! normalize them — lives in a higher crate that depends on those domain
-//! crates (the platform crate must not depend on them: `swissarmyhammer-views`
-//! already depends on it, so the edge would cycle). The
-//! `swissarmyhammer-command-service` crate, where this integration suite
-//! lives, depends only on `swissarmyhammer-plugin`. So these tests stand in
-//! for that fan-in by **publishing the already-normalized notifications a
-//! command's writes would produce** — exactly the [`McpNotification`] values
-//! the adapters emit — and assert the bridge delivers and correlates them.
-//!
-//! Likewise the `commands/executed` *emission* is owned by the command
-//! engine's txn task (`01KS613VPH2G4ZWKZPGW9ZCJAA`); here we publish a test
-//! `commands/executed` into the same delivery seam to prove the bridge fans
-//! it out alongside the data changes under the shared `txn`. And the
-//! `store/undo_changed` *emission* is owned by the change-propagation task
-//! (`01KS5F8THM`); the bridge delivers it through the same seam.
+//! The remaining tests still exercise the bridge's *delivery* contract
+//! (fan-out to in-process + external subscribers, the
+//! `perspective`/`ui_state`/`undo` planes) by publishing the already-
+//! normalized notifications the relevant upstream would produce — those are
+//! genuinely delivery-only assertions, so a canned publish is faithful.
 
 use std::sync::Arc;
 
-use serde_json::json;
+use async_trait::async_trait;
+use serde_json::{json, Value};
+use swissarmyhammer_command_service::bootstrap::BridgeActionSink;
+use swissarmyhammer_command_service::{
+    ActionSink, CallbackDispatcher, CallbackHandle, CallbackInvokeError, CommandService,
+    TransactionSeam,
+};
+use swissarmyhammer_entity::test_utils::test_fields_context;
+use swissarmyhammer_entity::{Entity, EntityCache, EntityContext, EntityTypeStore};
+use swissarmyhammer_kanban::notify_fanin::spawn_notification_fanin;
 use swissarmyhammer_plugin::{
     CallerId, ChangeOp, FieldChange, McpNotification, NotificationBridge, Provenance,
 };
+use swissarmyhammer_store::{StoreContext, StoreHandle, UndoEntryId};
+use tempfile::TempDir;
 use tokio::sync::Mutex as AsyncMutex;
+
+use super::support::{call_command, execute_args, register_args};
 
 /// Drain every notification currently buffered on `sub` without awaiting new
 /// ones, returning them in arrival order.
@@ -67,92 +74,261 @@ fn drain(
     out
 }
 
-/// A multi-write command's data changes all share the command's `txn`, carry
-/// `origin:"user"`, and are delivered alongside the command's
-/// `commands/executed` action event.
+/// Store-backed transaction seam over a shared `StoreContext`, mirroring the
+/// production seam the kanban app wires: `begin` opens the per-task ambient
+/// transaction stamped with the caller-derived `origin`, `end` closes it.
+struct StoreTransactionSeam {
+    store: Arc<StoreContext>,
+}
+
+impl std::fmt::Debug for StoreTransactionSeam {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoreTransactionSeam").finish()
+    }
+}
+
+impl TransactionSeam for StoreTransactionSeam {
+    fn begin(&self, origin: &str) -> Option<String> {
+        Some(
+            self.store
+                .begin_transaction_with_origin(Some(origin.to_string()))
+                .to_string(),
+        )
+    }
+
+    fn end(&self, txn: &str) {
+        if let Ok(id) = txn.parse::<UndoEntryId>() {
+            self.store.end_transaction(id);
+        }
+    }
+}
+
+/// A dispatcher whose single `execute` callback makes TWO REAL forward entity
+/// writes through the cache-aware `EntityContext`. These run on the same task
+/// the engine opened the transaction on (the handler `.await`s inline), so the
+/// writes inherit the ambient `txn`+`origin` and the cache emits `EntityEvent`s
+/// the kanban fan-in turns into `store/changed`.
+struct TwoForwardWriteDispatcher {
+    entity: Arc<EntityContext>,
+}
+
+impl std::fmt::Debug for TwoForwardWriteDispatcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TwoForwardWriteDispatcher").finish()
+    }
+}
+
+#[async_trait]
+impl CallbackDispatcher for TwoForwardWriteDispatcher {
+    async fn invoke(
+        &self,
+        _handle: &CallbackHandle,
+        _args: Value,
+    ) -> Result<Value, CallbackInvokeError> {
+        let mut a = Entity::new("tag", "alpha");
+        a.set("tag_name", json!("Alpha"));
+        self.entity
+            .write(&a)
+            .await
+            .map_err(|e| CallbackInvokeError::new(e.to_string()))?;
+
+        let mut b = Entity::new("tag", "bravo");
+        b.set("tag_name", json!("Bravo"));
+        self.entity
+            .write(&b)
+            .await
+            .map_err(|e| CallbackInvokeError::new(e.to_string()))?;
+
+        Ok(json!({ "wrote": 2 }))
+    }
+}
+
+/// The booted real substrate the headline test drives.
+struct Substrate {
+    _dir: TempDir,
+    entity: Arc<EntityContext>,
+    // Held alive: the cache is the source of the EntityEvents the fan-in
+    // forwards; dropping the only strong Arc would sever the path.
+    _cache: Arc<EntityCache>,
+    store: Arc<StoreContext>,
+    bridge: NotificationBridge,
+    _fanin: swissarmyhammer_kanban::notify_fanin::NotificationFanin,
+}
+
+/// Boot a real entity substrate over one shared `StoreContext`, wire its cache
+/// events through the real kanban fan-in into a `NotificationBridge`.
+async fn boot_real_substrate() -> Substrate {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().to_path_buf();
+
+    let store = Arc::new(StoreContext::new(root.clone()));
+
+    let fields = test_fields_context();
+    let entity = Arc::new(EntityContext::new(&root, fields.clone()));
+    let tag_dir = root.join("tags");
+    std::fs::create_dir_all(&tag_dir).unwrap();
+    let tag_def = fields.get_entity("tag").unwrap();
+    let tag_fields: Vec<_> = fields.fields_for_entity("tag").into_iter().cloned().collect();
+    let tag_store = EntityTypeStore::new(
+        &tag_dir,
+        "tag",
+        Arc::new(tag_def.clone()),
+        Arc::new(tag_fields),
+    );
+    let tag_handle = Arc::new(StoreHandle::new(Arc::new(tag_store)));
+    entity.register_store("tag", Arc::clone(&tag_handle)).await;
+    store.register(tag_handle).await;
+    entity.set_store_context(Arc::clone(&store));
+
+    // The cache the EntityContext dispatches forward writes through; attach it
+    // so `EntityContext::write` routes through the cache's emit path.
+    let cache = Arc::new(EntityCache::new(Arc::clone(&entity)));
+    entity.attach_cache(&cache);
+
+    let bridge = NotificationBridge::new();
+    let fanin = spawn_notification_fanin(
+        bridge.clone(),
+        Some(cache.subscribe()),
+        None,
+        None,
+        None,
+    );
+    // Let the forwarder register its subscription before the first write.
+    tokio::task::yield_now().await;
+
+    Substrate {
+        _dir: dir,
+        entity,
+        _cache: cache,
+        store,
+        bridge,
+        _fanin: fanin,
+    }
+}
+
+/// Drain notifications buffered on `client`, giving the async fan-in
+/// forwarder a few scheduler turns to deliver (it runs on its own task).
+async fn drain_async(
+    client: &mut swissarmyhammer_plugin::NotificationSubscription,
+) -> Vec<McpNotification> {
+    let mut out = Vec::new();
+    for _ in 0..200 {
+        let mut drained_any = false;
+        while let Ok(note) = client.try_recv() {
+            out.push(note);
+            drained_any = true;
+        }
+        if !out.is_empty() && !drained_any {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+    out
+}
+
+/// A multi-write command's REAL forward data changes all share the command's
+/// `txn` (matching its `commands/executed` event) and carry the caller-derived
+/// `origin`.
 ///
-/// This is the headline correlation test the card calls for. It models a
-/// `task.archive`-style command that, inside one transaction, writes two
-/// entities (a task field update + a column reorder) and then emits its
-/// action event. A subscribed in-process client must receive:
+/// This is the headline correlation test the card calls for, driven end to end
+/// through the real path — NOT canned publishes:
 ///
-/// - a `commands/executed` for the command (delivery — the engine owns the
-///   emission gate; here the test publishes it into the same seam),
-/// - two `store/changed` events that share the command's `txn`,
-/// - all carrying `origin:"user"`.
+/// 1. A real `CommandService` brackets `execute` in the store-backed
+///    [`StoreTransactionSeam`], which opens the ambient txn stamped with the
+///    caller-derived origin.
+/// 2. The command's callback makes two REAL forward writes through the
+///    `EntityContext`/`EntityCache`, on the same task, so they inherit the
+///    ambient `txn`+`origin` (the fix under test).
+/// 3. The real kanban fan-in normalizes the cache's `EntityEvent`s into
+///    `store/changed` notifications on the bridge.
+/// 4. The real `BridgeActionSink` publishes the `commands/executed` event.
+///
+/// The subscribed client must receive two `store/changed` and one
+/// `commands/executed`, all sharing one `txn` and `origin:"user"`. If the
+/// ambient txn were not threaded into the forward emission, the two data
+/// events would carry `txn: null` and this test FAILS.
 #[tokio::test]
 async fn multi_write_command_shares_one_txn_and_delivers_commands_executed() {
-    let bridge = NotificationBridge::new();
-    let mut client = bridge.subscribe();
+    let substrate = boot_real_substrate().await;
+    let mut client = substrate.bridge.subscribe();
+    tokio::task::yield_now().await;
 
-    // The command service generates one `txn` per execute and threads it via
-    // `RequestContext::extensions`; the store server's `current_transaction()`
-    // reads it back. Here we stand in for that ambient id with a fixed value.
-    let txn = "txn-archive-01";
-    let caller = CallerId::HostInternal; // a host/user-initiated command
-    let prov = || Provenance::for_caller(&caller, Some(txn));
+    let dispatcher = Arc::new(TwoForwardWriteDispatcher {
+        entity: Arc::clone(&substrate.entity),
+    });
+    let transaction = Arc::new(StoreTransactionSeam {
+        store: Arc::clone(&substrate.store),
+    });
+    // The production action-event delivery seam: publishes commands/executed
+    // onto the same bridge the data changes flow through.
+    let action_sink: Arc<dyn ActionSink> =
+        Arc::new(BridgeActionSink::new(substrate.bridge.clone()));
 
-    // Two entity writes inside the command's transaction — each normalized to
-    // the generic `store/changed` schema with field-level `changes`.
-    bridge.publish(McpNotification::store_changed(
-        "task",
-        "01TASK",
-        ChangeOp::Updated,
-        Some(vec![FieldChange {
-            field: "column".to_string(),
-            value: json!("done"),
-        }]),
-        prov(),
-    ));
-    bridge.publish(McpNotification::store_changed(
-        "column",
-        "01COL",
-        ChangeOp::Updated,
-        Some(vec![FieldChange {
-            field: "task_ids".to_string(),
-            value: json!(["01TASK"]),
-        }]),
-        prov(),
-    ));
+    let service = CommandService::new()
+        .with_dispatcher(dispatcher)
+        .with_transaction(transaction)
+        .with_action_sink(action_sink);
 
-    // The command engine's txn task emits the action event; the bridge
-    // delivers it. The test publishes it into that delivery seam.
-    bridge.publish(McpNotification::commands_executed(
-        "task.archive",
-        json!({ "scope": ["board"], "target": "task:01TASK" }),
-        json!({ "ok": true }),
-        prov(),
-    ));
+    // Register a command whose execute callback makes the two forward writes.
+    // HostInternal → origin "user".
+    call_command(
+        &service,
+        CallerId::HostInternal,
+        register_args("tag.makeTwo", "Make Two Tags", "cb_two"),
+    )
+    .await;
 
-    let notes = drain(&mut client);
-    assert_eq!(notes.len(), 3, "client should receive all three notifications");
+    // Execute it. The two callback writes happen inside the bracketed txn.
+    call_command(&service, CallerId::HostInternal, execute_args("tag.makeTwo")).await;
+
+    let notes = drain_async(&mut client).await;
 
     // (a) The client RECEIVES a `commands/executed`.
     let executed: Vec<_> = notes
         .iter()
         .filter(|n| n.method == "notifications/commands/executed")
         .collect();
-    assert_eq!(executed.len(), 1, "exactly one commands/executed delivered");
-    assert_eq!(executed[0].params["id"], "task.archive");
+    assert_eq!(
+        executed.len(),
+        1,
+        "exactly one commands/executed delivered; got {notes:?}"
+    );
+    assert_eq!(executed[0].params["id"], "tag.makeTwo");
+    let command_txn = executed[0]
+        .txn()
+        .expect("the command's action event carries a txn")
+        .to_string();
 
-    // (b) All `store/changed` events share the command's `txn`.
+    // (b) Both REAL forward `store/changed` events share the command's `txn`.
     let changes: Vec<_> = notes
         .iter()
         .filter(|n| n.method == "notifications/store/changed")
         .collect();
-    assert_eq!(changes.len(), 2, "both data changes delivered");
+    assert_eq!(
+        changes.len(),
+        2,
+        "both real forward data changes delivered; got {notes:?}"
+    );
     for change in &changes {
         assert_eq!(
             change.txn(),
-            Some(txn),
-            "every data change shares the command's txn so the UI coalesces them"
+            Some(command_txn.as_str()),
+            "every forward data change must share the command's txn so the UI \
+             coalesces them — this is the threaded-ambient-txn contract under test"
         );
-        // (c) origin:"user".
+        // (c) origin:"user" — the HostInternal caller.
         assert_eq!(change.origin(), Some("user"));
     }
+    // Both entities were actually written (real path, not canned).
+    let stores: std::collections::HashSet<_> =
+        changes.iter().map(|c| c.params["store"].as_str()).collect();
+    assert_eq!(stores, std::collections::HashSet::from([Some("tag")]));
 
-    // The action event shares the same txn, correlating action → data changes.
-    assert_eq!(executed[0].txn(), Some(txn));
+    // The transaction was closed: no ambient txn leaks onto the task.
+    assert!(
+        substrate.store.current_transaction().is_none(),
+        "execute must close the transaction it opened"
+    );
 }
 
 /// Editing a perspective produces a `store/changed{store:"perspective"}` with

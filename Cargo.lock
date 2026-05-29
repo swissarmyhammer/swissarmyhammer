@@ -9397,7 +9397,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-app-service"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "async-trait",
  "rmcp",
@@ -9520,7 +9520,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-command-service"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "async-trait",
  "rmcp",
@@ -9697,7 +9697,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-entity-mcp"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "async-trait",
  "rmcp",
@@ -9987,7 +9987,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-plugin"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "async-trait",
  "axum",
@@ -10321,7 +10321,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-ui-state"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "rmcp",
  "serde",
@@ -10387,7 +10387,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-window-service"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "async-trait",
  "open",

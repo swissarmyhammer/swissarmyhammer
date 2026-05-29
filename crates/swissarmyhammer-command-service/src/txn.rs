@@ -51,7 +51,18 @@ pub trait TransactionSeam: Send + Sync + std::fmt::Debug {
     /// inherits it. The no-op seam returns `None` — there is no store to
     /// group against, and a `None` `txn` flows through `Provenance` to mean
     /// "made outside any transaction".
-    fn begin(&self) -> Option<String>;
+    ///
+    /// `origin` is the caller-derived actor classification
+    /// (`"user"` / `"agent:<id>"`, from
+    /// [`Provenance::origin_for_caller`](swissarmyhammer_plugin::Provenance::origin_for_caller)).
+    /// The store-backed impl stamps it into the ambient slot alongside the
+    /// `txn` so a forward entity write the callback makes — reading the slot
+    /// back at emit time — reports the same `origin` the command's
+    /// `commands/executed` event carries, not a hardcoded `"user"`. The
+    /// no-op seam ignores it. Keeping `origin` a `&str` (not a store type) is
+    /// what lets the Tier-0 core pass it through without naming
+    /// `swissarmyhammer-store`.
+    fn begin(&self, origin: &str) -> Option<String>;
 
     /// Close the transaction `txn` on the current task.
     ///
@@ -75,7 +86,7 @@ pub type SharedTransactionSeam = Arc<dyn TransactionSeam>;
 pub struct NoopTransactionSeam;
 
 impl TransactionSeam for NoopTransactionSeam {
-    fn begin(&self) -> Option<String> {
+    fn begin(&self, _origin: &str) -> Option<String> {
         None
     }
 

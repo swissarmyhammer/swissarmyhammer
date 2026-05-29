@@ -361,6 +361,31 @@ impl EntityCache {
             .collect()
     }
 
+    /// Provenance for a forward (non-undo, non-watcher) cache emit.
+    ///
+    /// Reads the StoreContext's ambient transaction for the **current tokio
+    /// task** when one is installed (`set_store_context` ran and a transaction
+    /// is open), so a forward write made inside a command's execute bracket
+    /// emits `store/changed` carrying the command's `txn` and caller-derived
+    /// `origin` — correlating it with the command's `commands/executed` event.
+    ///
+    /// Falls back to [`EventProvenance::user`] (`txn: None`, `origin: "user"`)
+    /// when no `StoreContext` is attached or no transaction is open on this
+    /// task (direct API writes, tests, agent writes outside a command) —
+    /// preserving the pre-fix behavior for those paths.
+    ///
+    /// Same-task guarantee: the command handler opens the ambient transaction
+    /// and `.await`s its callback inline (never spawning), so the callback's
+    /// `EntityCache::{write,delete,archive,unarchive}` calls run on the same
+    /// task and observe the slot the handler set. This is read at emit time,
+    /// not write-dispatch time, but both happen on that one task.
+    fn forward_provenance(&self) -> EventProvenance {
+        match self.inner.store_context() {
+            Some(ctx) => ctx.current_provenance(),
+            None => EventProvenance::user(),
+        }
+    }
+
     /// Write an entity to disk and update the cache.
     ///
     /// Delegates to `inner.write()` first. On success, computes the content hash
@@ -444,7 +469,7 @@ impl EntityCache {
             .await;
 
         if changed {
-            let prov = EventProvenance::user();
+            let prov = self.forward_provenance();
             let _ = self.event_sender.send(EntityEvent::EntityChanged {
                 entity_type: entity.entity_type.to_string(),
                 id: entity.id.to_string(),
@@ -476,7 +501,7 @@ impl EntityCache {
         // `unarchive` or re-creation does not see stale memoized values.
         self.purge_entity_caches(entity_type, id).await;
 
-        let prov = EventProvenance::user();
+        let prov = self.forward_provenance();
         let _ = self.event_sender.send(EntityEvent::EntityDeleted {
             entity_type: entity_type.to_string(),
             id: id.to_string(),
@@ -504,7 +529,7 @@ impl EntityCache {
 
         self.purge_entity_caches(entity_type, id).await;
 
-        let prov = EventProvenance::user();
+        let prov = self.forward_provenance();
         let _ = self.event_sender.send(EntityEvent::EntityDeleted {
             entity_type: entity_type.to_string(),
             id: id.to_string(),
@@ -550,7 +575,7 @@ impl EntityCache {
         // next compute pass re-reads both.
         self.invalidate_entity_caches(entity_type, id).await;
 
-        let prov = EventProvenance::user();
+        let prov = self.forward_provenance();
         let _ = self.event_sender.send(EntityEvent::EntityChanged {
             entity_type: entity_type.to_string(),
             id: id.to_string(),
@@ -1286,6 +1311,129 @@ mod tests {
                 );
             }
             _ => panic!("expected EntityChanged"),
+        }
+    }
+
+    /// Build an `EntityCache` whose inner `EntityContext` is wired to a
+    /// shared `StoreContext` with a registered `tag` store — the same shape
+    /// the kanban app boots, and the shape needed to exercise the ambient
+    /// transaction on forward writes.
+    async fn setup_store_backed() -> (TempDir, EntityCache, Arc<swissarmyhammer_store::StoreContext>)
+    {
+        use swissarmyhammer_store::{StoreContext, StoreHandle};
+
+        let fields = test_fields_context();
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().to_path_buf();
+        let tag_dir = root.join("tags");
+        std::fs::create_dir_all(&tag_dir).unwrap();
+
+        let store = Arc::new(StoreContext::new(root.clone()));
+
+        let ctx = Arc::new(EntityContext::new(&root, fields.clone()));
+        let tag_def = fields.get_entity("tag").unwrap();
+        let tag_fields: Vec<_> = fields.fields_for_entity("tag").into_iter().cloned().collect();
+        let tag_store = crate::EntityTypeStore::new(
+            &tag_dir,
+            "tag",
+            Arc::new(tag_def.clone()),
+            Arc::new(tag_fields),
+        );
+        let tag_handle = Arc::new(StoreHandle::new(Arc::new(tag_store)));
+        ctx.register_store("tag", Arc::clone(&tag_handle)).await;
+        store.register(tag_handle).await;
+        ctx.set_store_context(Arc::clone(&store));
+
+        let cache = EntityCache::new(ctx);
+        (temp, cache, store)
+    }
+
+    /// The headline forward-edit correlation test: N forward writes made
+    /// while an ambient transaction is open all emit `store/changed` events
+    /// carrying that transaction's `txn` and its `origin` — matching what the
+    /// command's `commands/executed` event would carry.
+    ///
+    /// This runs on a single tokio task (the test task), mirroring the
+    /// execute bracket's same-task invariant: the transaction is opened, the
+    /// writes happen, and the cache emits all read the ambient slot back on
+    /// that one task.
+    #[tokio::test]
+    async fn forward_writes_inside_txn_share_txn_and_origin() {
+        let (_dir, cache, store) = setup_store_backed().await;
+        let mut rx = cache.subscribe();
+
+        // No txn open → forward write falls back to user/None (legacy path).
+        let mut warmup = Entity::new("tag", "warmup");
+        warmup.set("tag_name", json!("Warmup"));
+        cache.write(&warmup).await.unwrap();
+        match rx.try_recv().unwrap() {
+            EntityEvent::EntityChanged { txn, origin, .. } => {
+                assert!(txn.is_none(), "no txn open → txn must be null");
+                assert_eq!(origin, "user", "no txn open → origin defaults to user");
+            }
+            other => panic!("expected EntityChanged, got {other:?}"),
+        }
+
+        // Open an ambient transaction with an agent origin, then make TWO
+        // forward writes — exactly what a command's execute bracket does.
+        let txn_id = store.begin_transaction_with_origin(Some("agent:plugin-x".to_string()));
+        let expected_txn = txn_id.to_string();
+
+        let mut a = Entity::new("tag", "alpha");
+        a.set("tag_name", json!("Alpha"));
+        cache.write(&a).await.unwrap();
+
+        let mut b = Entity::new("tag", "bravo");
+        b.set("tag_name", json!("Bravo"));
+        cache.write(&b).await.unwrap();
+
+        // And a delete inside the same txn.
+        cache.delete("tag", "warmup").await.unwrap();
+
+        store.end_transaction(txn_id);
+
+        // All three events share the command's txn + origin.
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            match rx.try_recv().unwrap() {
+                EntityEvent::EntityChanged {
+                    id, txn, origin, ..
+                } => {
+                    assert_eq!(txn.as_deref(), Some(expected_txn.as_str()));
+                    assert_eq!(origin, "agent:plugin-x");
+                    seen.push(format!("changed:{id}"));
+                }
+                EntityEvent::EntityDeleted {
+                    id, txn, origin, ..
+                } => {
+                    assert_eq!(txn.as_deref(), Some(expected_txn.as_str()));
+                    assert_eq!(origin, "agent:plugin-x");
+                    seen.push(format!("deleted:{id}"));
+                }
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+        seen.sort();
+        assert_eq!(
+            seen,
+            vec![
+                "changed:alpha".to_string(),
+                "changed:bravo".to_string(),
+                "deleted:warmup".to_string()
+            ],
+            "every forward write inside the txn must carry the txn + origin"
+        );
+
+        // After the txn closes, a forward write falls back to user/None again.
+        let mut c = Entity::new("tag", "charlie");
+        c.set("tag_name", json!("Charlie"));
+        cache.write(&c).await.unwrap();
+        match rx.try_recv().unwrap() {
+            EntityEvent::EntityChanged { txn, origin, .. } => {
+                assert!(txn.is_none(), "txn closed → txn must be null again");
+                assert_eq!(origin, "user", "txn closed → origin back to user");
+            }
+            other => panic!("expected EntityChanged, got {other:?}"),
         }
     }
 
