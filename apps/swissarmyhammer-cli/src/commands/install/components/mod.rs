@@ -58,7 +58,10 @@ pub fn register_all(registry: &mut InitRegistry, remove_directory: bool) {
     // Register tools that have lifecycle operations.
     // Each tool implements Initializable — tools with no-op init/deinit
     // are harmless to include (they'll be skipped automatically).
-    registry.register(swissarmyhammer_tools::mcp::tools::kanban::KanbanTool);
+    // sah exposes kanban through `sah serve`, NOT a separate `kanban` MCP
+    // server — so it constructs the tool WITHOUT an injected MCP entry. The
+    // tool's init/deinit then only manage `.kanban/` merge drivers.
+    registry.register(swissarmyhammer_tools::mcp::tools::kanban::KanbanTool::new());
 }
 
 // ── McpRegistration (priority 10) ────────────────────────────────────

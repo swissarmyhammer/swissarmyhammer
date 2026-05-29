@@ -12,7 +12,8 @@
 //! - `skill`: Resolve, render, and deploy the builtin `kanban` skill to
 //!   detected agents (`KanbanSkillDeployment` — `Initializable` priority 20).
 //! - `registry`: `Initializable` component registry for `kanban init` /
-//!   `kanban deinit`. Exposes `register_all` and `KanbanMcpRegistration`.
+//!   `kanban deinit`. Exposes `register_all`, which wires up the
+//!   `KanbanTool` (MCP registration via mirdan) and `KanbanSkillDeployment`.
 
 pub mod doctor;
 pub mod registry;
