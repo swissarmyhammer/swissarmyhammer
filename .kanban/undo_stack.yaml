@@ -395,5 +395,9 @@ entries:
   label: update board board
   item_id: board
   group_id: null
-pointer: 99
+- id: 01KSSQ6ZBN7Z3TANM2WWYJDGR4
+  label: update board board
+  item_id: board
+  group_id: null
+pointer: 100
 max_size: 100
