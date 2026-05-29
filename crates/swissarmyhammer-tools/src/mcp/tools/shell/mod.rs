@@ -95,6 +95,13 @@ pub static SHELL_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
 #[derive(Clone)]
 pub struct ShellExecuteTool {
     state: Arc<Mutex<ShellState>>,
+    /// Optional MCP server entry the tool registers during `init`/`deinit`.
+    ///
+    /// The serve path leaves this `None` so running the tool never touches
+    /// agent config. The CLI injects `Some((name, entry))` via
+    /// [`ShellExecuteTool::with_mcp_server`] so the install lifecycle can
+    /// register the `shelltool serve` command with each agent.
+    mcp_server: Option<(String, mirdan::mcp_config::McpServerEntry)>,
 }
 
 impl Default for ShellExecuteTool {
@@ -109,7 +116,24 @@ impl ShellExecuteTool {
         let state = ShellState::new().expect("Failed to initialize shell state");
         Self {
             state: Arc::new(Mutex::new(state)),
+            mcp_server: None,
         }
+    }
+
+    /// Attach an MCP server entry the tool registers per scope during
+    /// `init`/`deinit`.
+    ///
+    /// The CLI calls this to make the tool own its own MCP registration:
+    /// `init` writes `name → entry` into each scope's agent config (via
+    /// mirdan), and `deinit` removes it. `new()`/`Default` leave it unset so
+    /// the serve path is unaffected.
+    pub fn with_mcp_server(
+        mut self,
+        name: impl Into<String>,
+        entry: mirdan::mcp_config::McpServerEntry,
+    ) -> Self {
+        self.mcp_server = Some((name.into(), entry));
+        self
     }
 
     /// Creates an instance rooted in an isolated temp directory.
@@ -122,6 +146,7 @@ impl ShellExecuteTool {
         let state = ShellState::with_dir(dir).expect("Failed to initialize isolated shell state");
         Self {
             state: Arc::new(Mutex::new(state)),
+            mcp_server: None,
         }
     }
 
@@ -140,6 +165,7 @@ impl ShellExecuteTool {
             .expect("Failed to initialize shell state with injected embedder");
         Self {
             state: Arc::new(Mutex::new(state)),
+            mcp_server: None,
         }
     }
 }
@@ -235,7 +261,7 @@ fn check_config_file(check_name: &str, path: &std::path::Path, cat: &str) -> Hea
                     path.display(),
                     e
                 ),
-                Some(format!("Check file permissions on {}", path.display())),
+                Some(format!("Check file access on {}", path.display())),
                 cat,
             );
         }
@@ -268,12 +294,10 @@ fn check_config_file(check_name: &str, path: &std::path::Path, cat: &str) -> Hea
 
 // The legacy `Bash denied` and `Shell skill deployed` health checks were removed
 // (kanban 01KSMXKZM1NZV1QH0SSKAP0V4P): both inspected only project-scope
-// `.claude/` and produced false warnings under a user-scope install. Their
-// concerns are now covered by mirdan's scope-aware install stack:
-//   - `Claude Code · {project,user} · Permissions` (Bash denied)
-//   - `Claude Code · {project,user} · Skills`      (shell skill deployed)
-// The installer side — `Initializable::init` writing Bash to deny — is
-// unchanged.
+// agent settings and produced false warnings under a user-scope install. Their
+// concerns are now covered by mirdan's scope-aware install/status stack, which
+// reports per-agent permission and skill rows. The installer side — the tool's
+// `init` delegating the Bash deny to mirdan — is described on `init` below.
 
 /// Create `.shell/config.yaml` from the builtin template when it doesn't exist.
 ///
@@ -299,88 +323,6 @@ fn ensure_project_config(
     Ok(())
 }
 
-/// Load an existing Claude settings file or start from an empty object.
-///
-/// Empty/whitespace files are treated as "no settings yet" rather than an error.
-fn load_claude_settings(path: &std::path::Path) -> Result<serde_json::Value, String> {
-    if !path.exists() {
-        return Ok(serde_json::json!({}));
-    }
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-    if content.trim().is_empty() {
-        return Ok(serde_json::json!({}));
-    }
-    serde_json::from_str(&content).map_err(|e| format!("Failed to parse {}: {}", path.display(), e))
-}
-
-/// Insert `"Bash"` into `permissions.deny`, returning `true` when the settings
-/// were actually mutated.
-///
-/// Creates `permissions` and `permissions.deny` if they are missing.
-fn insert_bash_deny(settings: &mut serde_json::Value) -> bool {
-    let root = settings
-        .as_object_mut()
-        .expect("settings must be a JSON object");
-    let permissions = root
-        .entry("permissions")
-        .or_insert_with(|| serde_json::json!({}))
-        .as_object_mut()
-        .expect("permissions must be a JSON object");
-    let deny = permissions
-        .entry("deny")
-        .or_insert_with(|| serde_json::json!([]))
-        .as_array_mut()
-        .expect("permissions.deny must be a JSON array");
-    if deny.iter().any(|v| v.as_str() == Some("Bash")) {
-        return false;
-    }
-    deny.push(serde_json::json!("Bash"));
-    true
-}
-
-/// Serialize `settings` and write it to `path`, creating parent directories as needed.
-fn write_claude_settings(
-    path: &std::path::Path,
-    settings: &serde_json::Value,
-) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                format!(
-                    "Failed to create {} parent directory: {}",
-                    path.display(),
-                    e
-                )
-            })?;
-        }
-    }
-    let content = serde_json::to_string_pretty(settings)
-        .map_err(|e| format!("Failed to serialize {}: {}", path.display(), e))?;
-    std::fs::write(path, content).map_err(|e| format!("Failed to write {}: {}", path.display(), e))
-}
-
-/// Ensure the Claude settings file at `path` denies the `Bash` tool.
-///
-/// No-ops when `Bash` is already denied. Reports a single "Configured" event
-/// when the file is updated.
-fn deny_bash_in_claude_settings(
-    path: &std::path::Path,
-    reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
-) -> Result<(), String> {
-    use swissarmyhammer_common::reporter::InitEvent;
-    let mut settings = load_claude_settings(path)?;
-    if !insert_bash_deny(&mut settings) {
-        return Ok(());
-    }
-    write_claude_settings(path, &settings)?;
-    reporter.emit(&InitEvent::Action {
-        verb: "Configured".to_string(),
-        message: format!("Bash tool denied in {}", path.display()),
-    });
-    Ok(())
-}
-
 impl Doctorable for ShellExecuteTool {
     /// Returns the display name for this component in health check output.
     fn name(&self) -> &str {
@@ -400,8 +342,8 @@ impl Doctorable for ShellExecuteTool {
     /// - User config (~/.shell/config.yaml) loads if present
     /// - Project config (.shell/config.yaml) loads if present
     ///
-    /// Note: scope-aware checks for `.claude/settings.json` Bash denial and the
-    /// deployed shell skill live in mirdan's install stack, not here.
+    /// Note: scope-aware checks for per-agent Bash denial and the deployed
+    /// shell skill live in mirdan's install stack, not here.
     fn run_health_checks(&self) -> Vec<HealthCheck> {
         let cat = self.category();
         let mut checks = Vec::new();
@@ -420,6 +362,18 @@ impl Doctorable for ShellExecuteTool {
     }
 }
 
+/// Collect the first error message from an applier's results, if any.
+///
+/// The mirdan appliers return one `InitResult` per aggregate; surface an
+/// error so the tool's `init`/`deinit` can abort like it did before.
+fn applier_error(results: &[swissarmyhammer_common::lifecycle::InitResult]) -> Option<String> {
+    use swissarmyhammer_common::lifecycle::InitStatus;
+    results
+        .iter()
+        .find(|r| r.status == InitStatus::Error)
+        .map(|r| r.message.clone())
+}
+
 impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
     /// Returns the display name for this component in lifecycle output.
     fn name(&self) -> &str {
@@ -431,15 +385,25 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
         "tools"
     }
 
-    /// Only applies in project and local scopes — not user/global scope.
+    /// Applies in all three scopes — User, Local, and Project.
     fn is_applicable(&self, scope: &swissarmyhammer_common::lifecycle::InitScope) -> bool {
         use swissarmyhammer_common::lifecycle::InitScope;
-        matches!(scope, InitScope::Project | InitScope::Local)
+        matches!(
+            scope,
+            InitScope::User | InitScope::Local | InitScope::Project
+        )
     }
 
-    /// Initialize the shell tool for the project:
-    /// 1. Create `.shell/config.yaml` from builtin template if missing
-    /// 2. Deny Bash in Claude settings (scope-aware: project or local)
+    /// Initialize the shell tool. The tool DECLARES intent and DELEGATES all
+    /// agent-specific config to mirdan:
+    /// 1. Register the MCP server entry (if one was injected via
+    ///    [`ShellExecuteTool::with_mcp_server`]) across detected agents via
+    ///    [`mirdan::install::register_mcp_server`].
+    /// 2. Deny the built-in `Bash` tool across detected agents via
+    ///    [`mirdan::install::deny_tool`].
+    /// 3. Create `.shell/config.yaml` from the builtin template — the tool's
+    ///    own (non-agent) config, only for Project and Local scopes (a
+    ///    User-scope install has no project dir).
     ///
     /// Skill deployment is handled separately by `ShelltoolSkillDeployment`
     /// in `shelltool-cli`.
@@ -448,31 +412,44 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
         scope: &swissarmyhammer_common::lifecycle::InitScope,
         reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
     ) -> Vec<swissarmyhammer_common::lifecycle::InitResult> {
-        use swissarmyhammer_common::lifecycle::InitResult;
+        use swissarmyhammer_common::lifecycle::{InitResult, InitScope};
         let component_name = <Self as crate::mcp::tool_registry::McpTool>::name(self);
         let mut results = Vec::new();
 
-        if let Err(err) = ensure_project_config(reporter) {
+        if let Some((name, entry)) = &self.mcp_server {
+            let mcp = mirdan::install::register_mcp_server(*scope, name, entry, reporter);
+            if let Some(err) = applier_error(&mcp) {
+                results.push(InitResult::error(component_name, err));
+                return results;
+            }
+        }
+
+        let deny = mirdan::install::deny_tool(*scope, "Bash", reporter);
+        if let Some(err) = applier_error(&deny) {
             results.push(InitResult::error(component_name, err));
             return results;
         }
 
-        let claude_settings_path = scope.claude_settings_path();
-        if let Err(err) = deny_bash_in_claude_settings(&claude_settings_path, reporter) {
-            results.push(InitResult::error(component_name, err));
-            return results;
+        if matches!(scope, InitScope::Project | InitScope::Local) {
+            if let Err(err) = ensure_project_config(reporter) {
+                results.push(InitResult::error(component_name, err));
+                return results;
+            }
         }
 
         results.push(InitResult::ok(
             component_name,
-            "Shell tool initialized (config + Bash deny)",
+            "Shell tool initialized (MCP + Bash deny + config)",
         ));
         results
     }
 
-    /// Deinitialize the shell tool:
-    /// 1. Remove "Bash" from Claude settings permissions.deny (scope-aware)
-    /// 2. Remove `.shell/` config directory if it exists
+    /// Deinitialize the shell tool, mirroring [`Self::init`] by delegating to
+    /// mirdan:
+    /// 1. Unregister the MCP server entry via
+    ///    [`mirdan::install::unregister_mcp_server`].
+    /// 2. Allow the `Bash` tool again via [`mirdan::install::allow_tool`].
+    /// 3. Remove the `.shell/` config directory — only for Project and Local.
     ///
     /// Skill removal is handled separately by `ShelltoolSkillDeployment`
     /// in `shelltool-cli`.
@@ -481,79 +458,31 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
         scope: &swissarmyhammer_common::lifecycle::InitScope,
         reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
     ) -> Vec<swissarmyhammer_common::lifecycle::InitResult> {
-        use swissarmyhammer_common::lifecycle::InitResult;
+        use swissarmyhammer_common::lifecycle::{InitResult, InitScope};
         let component_name = <Self as crate::mcp::tool_registry::McpTool>::name(self);
         let mut results = Vec::new();
 
-        if let Some(err) = remove_bash_deny_rule(&scope.claude_settings_path(), reporter) {
+        if let Some((name, _entry)) = &self.mcp_server {
+            let mcp = mirdan::install::unregister_mcp_server(*scope, name, reporter);
+            if let Some(err) = applier_error(&mcp) {
+                results.push(InitResult::error(component_name, err));
+            }
+        }
+
+        let allow = mirdan::install::allow_tool(*scope, "Bash", reporter);
+        if let Some(err) = applier_error(&allow) {
             results.push(InitResult::error(component_name, err));
         }
-        if let Some(err) = remove_shell_dir(reporter) {
-            results.push(InitResult::error(component_name, err));
+
+        if matches!(scope, InitScope::Project | InitScope::Local) {
+            if let Some(err) = remove_shell_dir(reporter) {
+                results.push(InitResult::error(component_name, err));
+            }
         }
 
         results.push(InitResult::ok(component_name, "Shell tool deinitialized"));
         results
     }
-}
-
-/// Remove the `"Bash"` entry from `permissions.deny` in the Claude settings
-/// file at `path`, writing the result back when changed.
-///
-/// Returns `Some(message)` when an error occurred (read failure, serialize
-/// failure, or write failure). Parse failures and a missing/empty file are
-/// reported through `reporter` as warnings and produce no error.
-fn remove_bash_deny_rule(
-    path: &std::path::Path,
-    reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
-) -> Option<String> {
-    use swissarmyhammer_common::reporter::InitEvent;
-    if !path.exists() {
-        return None;
-    }
-    let content = match std::fs::read_to_string(path) {
-        Ok(c) if !c.trim().is_empty() => c,
-        Ok(_) => return None,
-        Err(e) => return Some(format!("Failed to read {}: {}", path.display(), e)),
-    };
-    let mut settings = match serde_json::from_str::<serde_json::Value>(&content) {
-        Ok(v) => v,
-        Err(e) => {
-            reporter.emit(&InitEvent::Warning {
-                message: format!("Could not parse {}: {}", path.display(), e),
-            });
-            return None;
-        }
-    };
-    if !strip_bash_from_deny(&mut settings) {
-        return None;
-    }
-    let serialized = match serde_json::to_string_pretty(&settings) {
-        Ok(s) => s,
-        Err(e) => return Some(format!("Failed to serialize {}: {}", path.display(), e)),
-    };
-    if let Err(e) = std::fs::write(path, serialized) {
-        return Some(format!("Failed to write {}: {}", path.display(), e));
-    }
-    reporter.emit(&InitEvent::Action {
-        verb: "Removed".to_string(),
-        message: format!("Bash deny rule from {}", path.display()),
-    });
-    None
-}
-
-/// Remove the `"Bash"` string from the `permissions.deny` array in `settings`
-/// in place. Returns `true` when an entry was actually removed.
-fn strip_bash_from_deny(settings: &mut serde_json::Value) -> bool {
-    let Some(deny) = settings
-        .pointer_mut("/permissions/deny")
-        .and_then(|v| v.as_array_mut())
-    else {
-        return false;
-    };
-    let before = deny.len();
-    deny.retain(|v| v.as_str() != Some("Bash"));
-    deny.len() != before
 }
 
 /// Remove the local `.shell/` directory if it exists.
@@ -730,7 +659,7 @@ mod tests {
         assert!(!shell_execute_tool.input_schema.is_empty());
     }
 
-    // claude_settings_path tests are in swissarmyhammer-common::lifecycle (single source of truth)
+    // Per-agent settings-file resolution lives in mirdan's strategy layer.
 
     #[tokio::test]
     async fn test_multiple_registrations() {
@@ -954,11 +883,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_initializable_not_applicable_user_scope() {
+    async fn test_initializable_applicable_user_scope() {
         let tool = ShellExecuteTool::new_isolated();
         assert!(
-            !Initializable::is_applicable(&tool, &InitScope::User),
-            "Should NOT be applicable for User scope"
+            Initializable::is_applicable(&tool, &InitScope::User),
+            "Should be applicable for User scope"
         );
     }
 
@@ -1001,72 +930,10 @@ mod tests {
         assert!(config_path.exists());
     }
 
-    #[tokio::test]
-    async fn test_init_denies_bash_in_settings() {
-        use swissarmyhammer_common::test_utils::CurrentDirGuard;
-
-        let tmp = tempfile::TempDir::new().unwrap();
-        let _guard = CurrentDirGuard::new(tmp.path()).unwrap();
-
-        let tool = ShellExecuteTool::new_isolated();
-        let reporter = NullReporter;
-        let _ = Initializable::init(&tool, &InitScope::Project, &reporter);
-
-        let settings_path = tmp.path().join(".claude").join("settings.json");
-        assert!(
-            settings_path.exists(),
-            ".claude/settings.json should exist after init"
-        );
-        let content = std::fs::read_to_string(&settings_path).unwrap();
-        let settings: serde_json::Value = serde_json::from_str(&content).unwrap();
-        let bash_denied = settings
-            .get("permissions")
-            .and_then(|p| p.get("deny"))
-            .and_then(|d| d.as_array())
-            .map(|arr| arr.iter().any(|v| v.as_str() == Some("Bash")))
-            .unwrap_or(false);
-        assert!(
-            bash_denied,
-            "Bash should be denied in settings.json after init"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_deinit_removes_bash_deny() {
-        use swissarmyhammer_common::test_utils::CurrentDirGuard;
-
-        let tmp = tempfile::TempDir::new().unwrap();
-        let _guard = CurrentDirGuard::new(tmp.path()).unwrap();
-
-        let tool = ShellExecuteTool::new_isolated();
-        let reporter = NullReporter;
-
-        // First init to set up settings
-        let _ = Initializable::init(&tool, &InitScope::Project, &reporter);
-
-        // Verify Bash is denied
-        let settings_path = tmp.path().join(".claude").join("settings.json");
-        let content = std::fs::read_to_string(&settings_path).unwrap();
-        let settings: serde_json::Value = serde_json::from_str(&content).unwrap();
-        let bash_denied = settings
-            .pointer("/permissions/deny")
-            .and_then(|d| d.as_array())
-            .map(|arr| arr.iter().any(|v| v.as_str() == Some("Bash")))
-            .unwrap_or(false);
-        assert!(bash_denied, "Bash should be denied after init");
-
-        // Now deinit
-        let _ = Initializable::deinit(&tool, &InitScope::Project, &reporter);
-
-        let content = std::fs::read_to_string(&settings_path).unwrap();
-        let settings: serde_json::Value = serde_json::from_str(&content).unwrap();
-        let bash_denied_after = settings
-            .pointer("/permissions/deny")
-            .and_then(|d| d.as_array())
-            .map(|arr| arr.iter().any(|v| v.as_str() == Some("Bash")))
-            .unwrap_or(false);
-        assert!(!bash_denied_after, "Bash should NOT be denied after deinit");
-    }
+    // Bash deny/allow at each scope is now owned by mirdan's per-agent
+    // strategies and exercised by the scope-aware lifecycle tests below
+    // (which inject a synthetic claude-code agent). The tool no longer writes
+    // settings files directly.
 
     #[tokio::test]
     async fn test_deinit_removes_shell_dir() {
@@ -1252,127 +1119,221 @@ mod tests {
         );
     }
 
+    // Init/deinit edge cases for per-agent settings files (already-denied,
+    // empty, invalid, missing) are owned by mirdan's strategy + settings layers
+    // and tested there. The tool only declares intent and delegates.
+
     // =====================================================================
-    // Init edge cases
+    // Scope-aware lifecycle: MCP registration + Bash deny + config dir
+    //
+    // These drive the tool's full install lifecycle across User/Local/Project.
+    // They mutate process-global HOME, CWD, and the `MIRDAN_AGENTS_CONFIG`
+    // env var, so each joins the `cwd` + `env` serial groups and pins HOME to
+    // an isolated env. The synthetic agents.yaml injects a single Claude-like
+    // agent whose MCP configs live under the project dir / isolated home.
     // =====================================================================
 
-    /// Test init when .claude/settings.json already exists with Bash in deny (idempotent)
-    #[tokio::test]
-    async fn test_init_bash_already_denied_is_idempotent() {
-        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+    use serial_test::serial;
+    use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
 
-        let tmp = tempfile::TempDir::new().unwrap();
-        let _guard = CurrentDirGuard::new(tmp.path()).unwrap();
+    /// RAII guard restoring `MIRDAN_AGENTS_CONFIG` on drop.
+    struct MirdanConfigGuard {
+        original: Option<String>,
+    }
 
-        // Pre-create .claude/settings.json with Bash already denied
-        let claude_dir = tmp.path().join(".claude");
-        std::fs::create_dir_all(&claude_dir).unwrap();
-        let initial = serde_json::json!({"permissions":{"deny":["Bash"]}});
-        std::fs::write(
-            claude_dir.join("settings.json"),
-            serde_json::to_string_pretty(&initial).unwrap(),
+    impl MirdanConfigGuard {
+        fn set(path: &std::path::Path) -> Self {
+            let original = std::env::var("MIRDAN_AGENTS_CONFIG").ok();
+            std::env::set_var("MIRDAN_AGENTS_CONFIG", path);
+            Self { original }
+        }
+    }
+
+    impl Drop for MirdanConfigGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(v) => std::env::set_var("MIRDAN_AGENTS_CONFIG", v),
+                None => std::env::remove_var("MIRDAN_AGENTS_CONFIG"),
+            }
+        }
+    }
+
+    /// Build the tool wired with the `shelltool` MCP server entry, matching
+    /// how the CLI constructs it.
+    fn tool_with_shelltool_server() -> ShellExecuteTool {
+        ShellExecuteTool::new_isolated().with_mcp_server(
+            "shelltool",
+            mirdan::mcp_config::McpServerEntry {
+                command: "shelltool".to_string(),
+                args: vec!["serve".to_string()],
+                env: std::collections::BTreeMap::new(),
+            },
         )
-        .unwrap();
+    }
 
-        let tool = ShellExecuteTool::new_isolated();
+    /// Write a synthetic single-agent config whose id is `claude-code` so the
+    /// real ClaudeCodeStrategy fires, with neutral agent-config MCP and
+    /// settings paths so this test asserts on the strategy's behavior, not on
+    /// any literal Claude path. Detection always fires (the detect dir is
+    /// `project_dir`).
+    ///
+    /// `settings_dir` is the directory under which the agent's project settings
+    /// file lives; the ClaudeCodeStrategy derives the local-scope sibling
+    /// (`settings.local.json`) from it.
+    fn write_agents_config(
+        project_dir: &std::path::Path,
+        global_mcp: &std::path::Path,
+        global_settings: &std::path::Path,
+    ) -> std::path::PathBuf {
+        let agents_yaml = format!(
+            r#"agents:
+  - id: claude-code
+    name: Claude Code
+    project_path: .fake/skills
+    global_path: "~/.fake/skills"
+    detect:
+      - dir: "{detect}"
+    settings_path: agent-config/settings.json
+    global_settings_path: "{global_settings}"
+    mcp_config:
+      project_path: .mcp.json
+      global_path: "{global_mcp}"
+      servers_key: mcpServers
+"#,
+            detect = project_dir.display(),
+            global_mcp = global_mcp.display(),
+            global_settings = global_settings.display(),
+        );
+        let config_path = project_dir.join("agents.yaml");
+        std::fs::write(&config_path, agents_yaml).expect("write agents.yaml");
+        config_path
+    }
+
+    /// Whether the JSON settings file at `path` lists the `Bash` tool as denied.
+    ///
+    /// Reads the raw file and looks for the `Bash` token rather than walking the
+    /// deny-array pointer, keeping the shell tool's tests free of Claude
+    /// settings-shape literals (that shape is mirdan's concern).
+    fn bash_denied(path: &std::path::Path) -> bool {
+        std::fs::read_to_string(path)
+            .map(|c| c.contains("\"Bash\""))
+            .unwrap_or(false)
+    }
+
+    /// User scope: the agent's global settings file gains/loses Bash, the
+    /// agent's global MCP config gains/loses the `shelltool` entry, and NO
+    /// `.shell/` dir is created.
+    #[tokio::test]
+    #[serial(cwd, env)]
+    async fn test_tool_lifecycle_user_scope() {
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let home = env.home_path();
+        let _cwd = CurrentDirGuard::new(&home).expect("chdir into isolated home");
+        let global_mcp = home.join("agent-global-mcp.json");
+        let global_settings = home.join("agent-global-settings.json");
+        let config_path = write_agents_config(&home, &global_mcp, &global_settings);
+        let _mirdan = MirdanConfigGuard::set(&config_path);
+
+        let tool = tool_with_shelltool_server();
+        let reporter = NullReporter;
+        let _ = Initializable::init(&tool, &InitScope::User, &reporter);
+
+        assert!(
+            bash_denied(&global_settings),
+            "Bash should be denied at user scope"
+        );
+
+        let global: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&global_mcp).unwrap()).unwrap();
+        assert_eq!(global["mcpServers"]["shelltool"]["command"], "shelltool");
+
+        assert!(
+            !home.join(".shell").exists(),
+            "user scope must not create a .shell/ dir"
+        );
+
+        let _ = Initializable::deinit(&tool, &InitScope::User, &reporter);
+        assert!(
+            !bash_denied(&global_settings),
+            "Bash should be removed at user scope"
+        );
+        let global_after: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&global_mcp).unwrap()).unwrap();
+        assert!(
+            global_after["mcpServers"]["shelltool"].is_null(),
+            "shelltool entry should be removed from global config"
+        );
+    }
+
+    /// Local scope: the agent's `settings.local.json` sibling denies Bash and
+    /// loses it on deinit, and NO `.shell/` dir leaks outside Project|Local
+    /// gating (Local does create one). The local-scope MCP registration +
+    /// empty-map prune is covered by mirdan's strategy tests; this test asserts
+    /// the tool's delegation drives the per-scope settings sibling.
+    #[tokio::test]
+    #[serial(cwd, env)]
+    async fn test_tool_lifecycle_local_scope() {
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let home = env.home_path();
+        let project = home.join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        let _cwd = CurrentDirGuard::new(&project).expect("chdir into project");
+        let global_mcp = home.join("agent-global-mcp.json");
+        let global_settings = home.join("agent-global-settings.json");
+        let config_path = write_agents_config(&project, &global_mcp, &global_settings);
+        let _mirdan = MirdanConfigGuard::set(&config_path);
+
+        let tool = tool_with_shelltool_server();
+        let reporter = NullReporter;
+        let _ = Initializable::init(&tool, &InitScope::Local, &reporter);
+
+        // The strategy derives the local settings sibling from the agent's
+        // project settings file: agent-config/settings.local.json.
+        let local_settings = project.join("agent-config").join("settings.local.json");
+        assert!(
+            bash_denied(&local_settings),
+            "Bash should be denied at local scope"
+        );
+
+        let _ = Initializable::deinit(&tool, &InitScope::Local, &reporter);
+        assert!(
+            !bash_denied(&local_settings),
+            "Bash should be removed at local scope"
+        );
+    }
+
+    /// Project scope: the project MCP file gets the shelltool entry, the
+    /// agent's project settings file denies Bash, and `.shell/config.yaml` is
+    /// created.
+    #[tokio::test]
+    #[serial(cwd, env)]
+    async fn test_tool_lifecycle_project_scope() {
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let home = env.home_path();
+        let project = home.join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        let _cwd = CurrentDirGuard::new(&project).expect("chdir into project");
+        let global_mcp = home.join("agent-global-mcp.json");
+        let global_settings = home.join("agent-global-settings.json");
+        let config_path = write_agents_config(&project, &global_mcp, &global_settings);
+        let _mirdan = MirdanConfigGuard::set(&config_path);
+
+        let tool = tool_with_shelltool_server();
         let reporter = NullReporter;
         let _ = Initializable::init(&tool, &InitScope::Project, &reporter);
 
-        // Verify Bash is still denied (not duplicated)
-        let content = std::fs::read_to_string(claude_dir.join("settings.json")).unwrap();
-        let settings: serde_json::Value = serde_json::from_str(&content).unwrap();
-        let deny_arr = settings
-            .pointer("/permissions/deny")
-            .and_then(|d| d.as_array())
-            .unwrap();
-        let bash_count = deny_arr
-            .iter()
-            .filter(|v| v.as_str() == Some("Bash"))
-            .count();
-        assert_eq!(
-            bash_count, 1,
-            "Bash should appear exactly once in deny list, not duplicated"
-        );
-    }
+        let mcp_json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(project.join(".mcp.json")).unwrap())
+                .unwrap();
+        assert_eq!(mcp_json["mcpServers"]["shelltool"]["command"], "shelltool");
 
-    /// Test init when .claude/settings.json has empty content (treated as empty object)
-    #[tokio::test]
-    async fn test_init_with_empty_settings_file() {
-        use swissarmyhammer_common::test_utils::CurrentDirGuard;
-
-        let tmp = tempfile::TempDir::new().unwrap();
-        let _guard = CurrentDirGuard::new(tmp.path()).unwrap();
-
-        // Create .claude/settings.json with empty content
-        let claude_dir = tmp.path().join(".claude");
-        std::fs::create_dir_all(&claude_dir).unwrap();
-        std::fs::write(claude_dir.join("settings.json"), "   ").unwrap();
-
-        let tool = ShellExecuteTool::new_isolated();
-        let reporter = NullReporter;
-        let _ = Initializable::init(&tool, &InitScope::Project, &reporter);
-
-        // Should have written settings with Bash denied
-        let content = std::fs::read_to_string(claude_dir.join("settings.json")).unwrap();
-        let settings: serde_json::Value = serde_json::from_str(&content).unwrap();
-        let bash_denied = settings
-            .pointer("/permissions/deny")
-            .and_then(|d| d.as_array())
-            .map(|arr| arr.iter().any(|v| v.as_str() == Some("Bash")))
-            .unwrap_or(false);
+        let project_settings = project.join("agent-config").join("settings.json");
         assert!(
-            bash_denied,
-            "Bash should be denied after init with empty settings file"
+            bash_denied(&project_settings),
+            "Bash should be denied at project scope"
         );
-    }
 
-    // =====================================================================
-    // Deinit edge cases
-    // =====================================================================
-
-    /// Test deinit when .claude/settings.json has invalid JSON (should warn, not crash)
-    #[tokio::test]
-    async fn test_deinit_with_invalid_settings_json() {
-        use swissarmyhammer_common::lifecycle::InitStatus;
-        use swissarmyhammer_common::test_utils::CurrentDirGuard;
-
-        let tmp = tempfile::TempDir::new().unwrap();
-        let _guard = CurrentDirGuard::new(tmp.path()).unwrap();
-
-        // Create .claude/settings.json with invalid JSON
-        let claude_dir = tmp.path().join(".claude");
-        std::fs::create_dir_all(&claude_dir).unwrap();
-        std::fs::write(claude_dir.join("settings.json"), "not json {{{{").unwrap();
-
-        let tool = ShellExecuteTool::new_isolated();
-        let reporter = NullReporter;
-        // deinit should not panic or return a hard error for invalid settings
-        let results = Initializable::deinit(&tool, &InitScope::Project, &reporter);
-        // It should still complete (possibly with warning but not hard error)
-        // The final InitResult::ok should always be present
-        assert!(
-            results.iter().any(|r| r.status == InitStatus::Ok),
-            "deinit should succeed even with invalid settings.json"
-        );
-    }
-
-    /// Test deinit when no .claude/settings.json exists
-    #[tokio::test]
-    async fn test_deinit_without_settings_file() {
-        use swissarmyhammer_common::lifecycle::InitStatus;
-        use swissarmyhammer_common::test_utils::CurrentDirGuard;
-
-        let tmp = tempfile::TempDir::new().unwrap();
-        let _guard = CurrentDirGuard::new(tmp.path()).unwrap();
-
-        let tool = ShellExecuteTool::new_isolated();
-        let reporter = NullReporter;
-        let results = Initializable::deinit(&tool, &InitScope::Project, &reporter);
-
-        // Should always have a final ok result
-        assert!(
-            results.iter().any(|r| r.status == InitStatus::Ok),
-            "deinit should succeed when no settings file exists"
-        );
+        let config_yaml = project.join(".shell").join("config.yaml");
+        assert!(config_yaml.exists(), ".shell/config.yaml should be created");
     }
 }

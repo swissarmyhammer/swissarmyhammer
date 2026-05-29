@@ -2,127 +2,28 @@
 //!
 //! Defines the `Initializable` components for `shelltool init` and `shelltool deinit`,
 //! and exposes `register_all` to populate an `InitRegistry` with them.
+//!
+//! The MCP-server registration lifecycle is owned by [`ShellExecuteTool`]
+//! itself (in `swissarmyhammer-tools`) via the `with_mcp_server` builder; the
+//! CLI only injects the `shelltool serve` entry. Per-scope agent-config
+//! merging lives in `mirdan::mcp_config`, so neither the CLI nor the tool
+//! reimplements scope logic.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
-use mirdan::agents::DetectedAgent;
 use mirdan::mcp_config::McpServerEntry;
-use swissarmyhammer_common::lifecycle::{InitRegistry, InitResult, InitScope, Initializable};
-use swissarmyhammer_common::reporter::{InitEvent, InitReporter};
+use swissarmyhammer_common::lifecycle::InitRegistry;
 use swissarmyhammer_tools::mcp::tools::shell::ShellExecuteTool;
 
-/// The MCP server name this component registers under each agent's config.
+/// The MCP server name the tool registers under each agent's config.
 const SERVER_NAME: &str = "shelltool";
 
-/// Default JSON key that holds the MCP servers map if an agent doesn't override it.
-const DEFAULT_SERVERS_KEY: &str = "mcpServers";
-
-/// Return the per-agent JSON key that contains its MCP servers map.
-fn agent_servers_key(agent: &DetectedAgent) -> &str {
-    agent
-        .def
-        .mcp_config
-        .as_ref()
-        .map(|c| c.servers_key.as_str())
-        .unwrap_or(DEFAULT_SERVERS_KEY)
-}
-
-/// Return the per-agent extras merged into each MCP entry the writer
-/// produces. Most agents return an empty map; a small number (e.g. Zed)
-/// require additional fields like `"source": "custom"`.
-fn agent_entry_extras(agent: &DetectedAgent) -> BTreeMap<String, serde_json::Value> {
-    agent
-        .def
-        .mcp_config
-        .as_ref()
-        .map(|c| c.entry_extras.clone())
-        .unwrap_or_default()
-}
-
-/// Resolve the MCP config file path for an agent given the install scope.
-fn resolve_mcp_config_path(agent: &DetectedAgent, global: bool) -> Option<PathBuf> {
-    if global {
-        mirdan::agents::agent_global_mcp_config(&agent.def)
-    } else {
-        mirdan::agents::agent_project_mcp_config(&agent.def)
-    }
-}
-
-/// Load detected agents, or return a pre-built error `InitResult` on failure.
-fn load_detected_agents(component_name: &str) -> Result<Vec<DetectedAgent>, InitResult> {
-    match mirdan::agents::load_agents_config() {
-        Ok(c) => Ok(mirdan::agents::get_detected_agents(&c)),
-        Err(e) => Err(InitResult::error(
-            component_name,
-            format!("Failed to load agents config: {}", e),
-        )),
-    }
-}
-
-/// Register `shelltool` into a single agent's MCP config file.
-///
-/// Returns `true` if the entry was written, `false` otherwise (including when
-/// the agent has no config path or the write failed). Error and success events
-/// are emitted through `reporter`.
-fn register_agent(
-    agent: &DetectedAgent,
-    entry: &McpServerEntry,
-    global: bool,
-    reporter: &dyn InitReporter,
-) -> bool {
-    let Some(config_path) = resolve_mcp_config_path(agent, global) else {
-        return false;
-    };
-    let servers_key = agent_servers_key(agent);
-    let extras = agent_entry_extras(agent);
-    match mirdan::mcp_config::register_mcp_server(
-        &config_path,
-        servers_key,
-        SERVER_NAME,
-        entry,
-        &extras,
-    ) {
-        Ok(()) => {
-            reporter.emit(&InitEvent::Action {
-                verb: "Registered".to_string(),
-                message: format!("shelltool MCP server in {}", config_path.display()),
-            });
-            true
-        }
-        Err(e) => {
-            reporter.emit(&InitEvent::Warning {
-                message: format!("Failed to register in {}: {}", config_path.display(), e),
-            });
-            false
-        }
-    }
-}
-
-/// Unregister `shelltool` from a single agent's MCP config file.
-///
-/// Returns `true` only when an entry was actually removed. `Ok(false)` (entry
-/// already absent) and error paths are both handled silently / via reporter.
-fn unregister_agent(agent: &DetectedAgent, global: bool, reporter: &dyn InitReporter) -> bool {
-    let Some(config_path) = resolve_mcp_config_path(agent, global) else {
-        return false;
-    };
-    let servers_key = agent_servers_key(agent);
-    match mirdan::mcp_config::unregister_mcp_server(&config_path, servers_key, SERVER_NAME) {
-        Ok(true) => {
-            reporter.emit(&InitEvent::Action {
-                verb: "Removed".to_string(),
-                message: format!("shelltool MCP server from {}", config_path.display()),
-            });
-            true
-        }
-        Ok(false) => false,
-        Err(e) => {
-            reporter.emit(&InitEvent::Warning {
-                message: format!("Failed to unregister from {}: {}", config_path.display(), e),
-            });
-            false
-        }
+/// Build the `shelltool serve` MCP server entry the CLI injects into the tool.
+fn shelltool_mcp_entry() -> McpServerEntry {
+    McpServerEntry {
+        command: SERVER_NAME.to_string(),
+        args: vec!["serve".to_string()],
+        env: BTreeMap::new(),
     }
 }
 
@@ -130,78 +31,12 @@ fn unregister_agent(agent: &DetectedAgent, global: bool, reporter: &dyn InitRepo
 ///
 /// Components are registered; `InitRegistry` sorts them by priority at
 /// execution time. Actual execution order:
-/// - priority  0: `ShellExecuteTool` (config file, Bash deny — uses trait default)
-/// - priority 10: `ShelltoolMcpRegistration` (MCP server config for detected agents)
+/// - priority  0: `ShellExecuteTool` (MCP registration, Bash deny, config —
+///   owns its full lifecycle via the injected `shelltool serve` entry)
 /// - priority 30: `ShelltoolSkillDeployment` (shell skill to agent `.skills/` dirs)
 pub fn register_all(registry: &mut InitRegistry) {
-    registry.register(ShelltoolMcpRegistration);
-    registry.register(ShellExecuteTool::new());
+    registry.register(ShellExecuteTool::new().with_mcp_server(SERVER_NAME, shelltool_mcp_entry()));
     registry.register(super::skill::ShelltoolSkillDeployment);
-}
-
-// ── ShelltoolMcpRegistration (priority 10) ───────────────────────────────────
-
-/// Registers/unregisters the `shelltool serve` MCP server entry in all detected
-/// agent config files (e.g. `.mcp.json`, `~/.claude.json`).
-pub struct ShelltoolMcpRegistration;
-
-impl Initializable for ShelltoolMcpRegistration {
-    /// The component name shown in init/deinit output.
-    fn name(&self) -> &str {
-        "shelltool-mcp-registration"
-    }
-
-    /// Component category: configuration.
-    fn category(&self) -> &str {
-        "configuration"
-    }
-
-    /// Priority 10 — runs after ShellExecuteTool (priority 0, the default).
-    fn priority(&self) -> i32 {
-        10
-    }
-
-    /// Register `shelltool serve` as an MCP server in all detected agents.
-    ///
-    /// Resolves which agents are installed via mirdan's agent detection and writes
-    /// the `shelltool` entry into each agent's MCP config file.
-    fn init(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        let agents = match load_detected_agents(self.name()) {
-            Ok(a) => a,
-            Err(err) => return vec![err],
-        };
-        let entry = McpServerEntry {
-            command: SERVER_NAME.to_string(),
-            args: vec!["serve".to_string()],
-            env: BTreeMap::new(),
-        };
-        let global = matches!(scope, InitScope::User);
-        let installed_count = agents
-            .iter()
-            .filter(|agent| register_agent(agent, &entry, global, reporter))
-            .count();
-        vec![InitResult::ok(
-            self.name(),
-            format!("MCP server registered for {} agent(s)", installed_count),
-        )]
-    }
-
-    /// Unregister `shelltool` from all detected agent MCP config files.
-    fn deinit(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        let agents = match load_detected_agents(self.name()) {
-            Ok(a) => a,
-            Err(err) => return vec![err],
-        };
-        let global = matches!(scope, InitScope::User);
-        let removed_count = agents
-            .iter()
-            .filter(|agent| unregister_agent(agent, global, reporter))
-            .count();
-        vec![InitResult::ok(
-            self.name(),
-            format!("MCP server removed from {} agent config(s)", removed_count),
-        )]
-    }
 }
 
 #[cfg(test)]
@@ -210,30 +45,9 @@ mod tests {
     use serial_test::serial;
     use std::env;
     use std::path::PathBuf;
+    use swissarmyhammer_common::lifecycle::{InitScope, Initializable};
     use swissarmyhammer_common::reporter::NullReporter;
-    use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
     use tempfile::TempDir;
-
-    /// Isolate a test from the real source tree before it runs `init`/`deinit`.
-    ///
-    /// `ShelltoolMcpRegistration::init`/`deinit` resolve each detected agent's
-    /// MCP config from a CWD-relative path (e.g. `.mcp.json`) and the global
-    /// config from a HOME-relative path (e.g. `~/.claude.json`). During
-    /// `cargo test` the CWD is the crate manifest dir, which contains a
-    /// committed `apps/shelltool-cli/.mcp.json` — so an unisolated `deinit`
-    /// would strip the `shelltool` entry straight out of that tracked file.
-    ///
-    /// This helper pins HOME to a fresh isolated env and chdir's into that
-    /// env's temp dir, so both project- and global-scope writes land in a
-    /// throwaway location. The returned tuple keeps the guards alive for the
-    /// duration of the test (CWD is restored, HOME is restored, temp dir is
-    /// removed on drop). Callers must also carry `#[serial(cwd)]` so the CWD
-    /// change is mutually exclusive with every other CWD-touching test.
-    fn isolated_init_env() -> (IsolatedTestEnvironment, CurrentDirGuard) {
-        let env = IsolatedTestEnvironment::new().expect("create isolated test env");
-        let guard = CurrentDirGuard::new(env.temp_dir()).expect("chdir into isolated temp dir");
-        (env, guard)
-    }
 
     /// RAII guard that restores `env::current_dir` on drop.
     struct CwdGuard {
@@ -279,94 +93,31 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_shelltool_mcp_registration_name_and_priority() {
-        let component = ShelltoolMcpRegistration;
-        assert_eq!(component.name(), "shelltool-mcp-registration");
-        assert_eq!(component.category(), "configuration");
-        assert_eq!(component.priority(), 10);
-    }
-
     #[tokio::test]
     async fn test_register_all_populates_registry() {
+        // Two components now: the tool (owning MCP + Bash deny + config) and
+        // skill deployment. The former `shelltool-mcp-registration` component
+        // was folded into the tool's own lifecycle.
         let mut registry = InitRegistry::new();
         register_all(&mut registry);
-        assert_eq!(registry.len(), 3);
+        assert_eq!(registry.len(), 2);
     }
 
-    #[test]
-    #[serial(cwd)]
-    fn test_init_returns_ok_result() {
-        // `init` writes each detected agent's project `.mcp.json` relative to
-        // CWD — isolate CWD (and HOME) to a temp dir so it cannot strip or
-        // rewrite the committed `apps/shelltool-cli/.mcp.json`.
-        let (_env, _cwd) = isolated_init_env();
-        let component = ShelltoolMcpRegistration;
-        let reporter = NullReporter;
-        let results = component.init(&InitScope::Project, &reporter);
-        // Should return exactly one result with Ok or Error status (depending on env)
-        assert_eq!(results.len(), 1);
-    }
-
-    #[test]
-    #[serial(cwd)]
-    fn test_deinit_returns_ok_result() {
-        // `deinit` removes the `shelltool` entry from each detected agent's
-        // CWD-relative `.mcp.json`. Without isolation this strips the entry
-        // from the tracked `apps/shelltool-cli/.mcp.json` — isolate CWD here.
-        let (_env, _cwd) = isolated_init_env();
-        let component = ShelltoolMcpRegistration;
-        let reporter = NullReporter;
-        let results = component.deinit(&InitScope::Project, &reporter);
-        assert_eq!(results.len(), 1);
-    }
-
-    /// Exercises the `global { agent_global_mcp_config(..) }` arm of `init`
-    /// by invoking it with `InitScope::User`. Regardless of which agents
-    /// mirdan detects, the global branch is always traversed.
-    #[test]
-    #[serial(cwd)]
-    fn test_init_global_scope() {
-        // Global scope writes HOME-relative agent configs; project-scope
-        // detection still touches CWD. Isolate both via `isolated_init_env`.
-        let (_env, _cwd) = isolated_init_env();
-        let component = ShelltoolMcpRegistration;
-        let reporter = NullReporter;
-        let results = component.init(&InitScope::User, &reporter);
-        assert_eq!(results.len(), 1);
-    }
-
-    /// Exercises the `global { agent_global_mcp_config(..) }` arm of `deinit`
-    /// by invoking it with `InitScope::User`.
-    #[test]
-    #[serial(cwd)]
-    fn test_deinit_global_scope() {
-        let (_env, _cwd) = isolated_init_env();
-        let component = ShelltoolMcpRegistration;
-        let reporter = NullReporter;
-        let results = component.deinit(&InitScope::User, &reporter);
-        assert_eq!(results.len(), 1);
-    }
-
-    /// Exercises the register success path of `init` and the `Ok(true)` arm
-    /// of `deinit` by driving through a synthetic agent whose MCP config
-    /// lives under a tempdir.
+    /// Drives the tool's project-scope `init`/`deinit` (as `register_all`
+    /// wires it) and verifies a `.mcp.json` shelltool entry is created and
+    /// then removed.
     ///
     /// Uses `MIRDAN_AGENTS_CONFIG` to inject a single detected agent pointing
     /// at a relative `.mcp.json` path. With the cwd chdired into the tempdir,
-    /// the register call creates `.mcp.json`, and the subsequent deinit call
-    /// removes the `shelltool` entry from it.
+    /// `init` creates `.mcp.json`, and `deinit` removes the `shelltool` entry.
     ///
     /// This test mutates BOTH process-global CWD (`env::set_current_dir`) and
     /// the `MIRDAN_AGENTS_CONFIG` env var, so it joins BOTH the crate-wide
     /// `cwd` group (shared by every CWD-touching test in `skill.rs`,
-    /// `logging.rs`, `main.rs`, `doctor.rs`) and the `env` group. Without the
-    /// `cwd` group, a skill-deployment test's `CurrentDirGuard` could restore
-    /// CWD to the crate dir mid-test and the `deinit` call would write
-    /// `.mcp.json` straight into `apps/shelltool-cli/`.
-    #[test]
+    /// `logging.rs`, `main.rs`, `doctor.rs`) and the `env` group.
+    #[tokio::test]
     #[serial(cwd, env)]
-    fn test_init_and_deinit_register_success_path() {
+    async fn test_tool_init_and_deinit_register_success_path() {
         let _cwd = CwdGuard::capture();
         let _mirdan_env = MirdanConfigGuard::capture();
 
@@ -378,7 +129,6 @@ mod tests {
 
         // Synthetic agents config: one agent, always-detected via the tempdir
         // itself, with a relative project-level MCP config path.
-        let detect_dir = tmp_path.display();
         let agents_yaml = format!(
             r#"agents:
   - id: fake-agent
@@ -391,7 +141,7 @@ mod tests {
       project_path: .mcp.json
       servers_key: mcpServers
 "#,
-            detect_dir
+            tmp_path.display()
         );
         let config_path = tmp_path.join("agents.yaml");
         std::fs::write(&config_path, agents_yaml).expect("write agents.yaml");
@@ -399,11 +149,10 @@ mod tests {
         env::set_var("MIRDAN_AGENTS_CONFIG", &config_path);
         env::set_current_dir(&tmp_path).expect("set_current_dir to tempdir");
 
-        // Run init and verify .mcp.json was created with a shelltool entry.
-        let component = ShelltoolMcpRegistration;
+        // Build the tool exactly as `register_all` does and drive its lifecycle.
+        let tool = ShellExecuteTool::new().with_mcp_server(SERVER_NAME, shelltool_mcp_entry());
         let reporter = NullReporter;
-        let init_results = component.init(&InitScope::Project, &reporter);
-        assert_eq!(init_results.len(), 1);
+        let _ = tool.init(&InitScope::Project, &reporter);
 
         let mcp_json_path = tmp_path.join(".mcp.json");
         assert!(
@@ -421,10 +170,7 @@ mod tests {
             contents
         );
 
-        // Run deinit and verify the shelltool entry was removed (hits
-        // the `Ok(true)` arm).
-        let deinit_results = component.deinit(&InitScope::Project, &reporter);
-        assert_eq!(deinit_results.len(), 1);
+        let _ = tool.deinit(&InitScope::Project, &reporter);
 
         let contents_after =
             std::fs::read_to_string(&mcp_json_path).expect("read .mcp.json after deinit");
