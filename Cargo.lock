@@ -4761,6 +4761,7 @@ dependencies = [
  "swissarmyhammer-operations",
  "swissarmyhammer-skills",
  "swissarmyhammer-templating",
+ "swissarmyhammer-tools",
  "tempfile",
  "tokio",
  "tracing",

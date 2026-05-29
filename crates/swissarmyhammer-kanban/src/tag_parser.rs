@@ -1,7 +1,10 @@
 //! Parse `#tag` patterns from markdown text.
 //!
-//! Tags are `#word` tokens where `word` is one or more lowercase alphanumeric
-//! characters or hyphens. The parser skips code blocks and inline code.
+//! Tags are `#word` tokens where `word` is one or more alphanumeric characters
+//! or hyphens (`[A-Za-z0-9-]`). The character immediately after `#` must be
+//! ASCII alphanumeric, so `#[`, `#(`, `#!`, and a leading hyphen `#-x` are not
+//! tags. Trailing punctuation is trimmed: `#bug,` and `#bug.` both yield `bug`.
+//! The parser skips code blocks and inline code.
 
 use std::collections::BTreeSet;
 
@@ -48,15 +51,20 @@ pub fn parse_tags(text: &str) -> Vec<String> {
                 continue;
             }
 
-            // Match #tag — a tag is # followed by any non-whitespace, non-# characters
+            // Match #tag — a slug of [A-Za-z0-9-], requiring an alphanumeric first char
             if bytes[i] == b'#' {
                 // Must be start of line or preceded by whitespace/punctuation (not alphanumeric/underscore)
                 let preceded_ok =
                     i == 0 || (!bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_');
-                if preceded_ok {
+                // The char right after # must be alphanumeric, else it is not a tag
+                // (rejects "#[", "#(", "#!", and leading-hyphen "#-x").
+                let first_ok = i + 1 < len && bytes[i + 1].is_ascii_alphanumeric();
+                if preceded_ok && first_ok {
                     let start = i + 1;
                     let mut end = start;
-                    while end < len && bytes[end] != b'#' && !bytes[end].is_ascii_whitespace() {
+                    // Slug runs over [A-Za-z0-9-]; stop at the first char outside it,
+                    // which naturally trims trailing punctuation ("#bug," -> "bug").
+                    while end < len && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'-') {
                         end += 1;
                     }
                     if end > start {
@@ -338,14 +346,47 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_allows_any_non_whitespace_non_hash() {
-        // Tags can contain any characters except whitespace and #
+    fn test_parse_slug_charset_only() {
+        // A slug is [A-Za-z0-9-]; the char after # must be alphanumeric, and the
+        // slug stops at the first char outside the charset (trailing trim).
         let tags = parse_tags("#Bug #sample! #CamelCase #emoji🎉");
         assert_eq!(tags.len(), 4);
         assert!(tags.contains(&"Bug".to_string()));
-        assert!(tags.contains(&"sample!".to_string()));
+        assert!(tags.contains(&"sample".to_string())); // '!' trims the slug
         assert!(tags.contains(&"CamelCase".to_string()));
-        assert!(tags.contains(&"emoji🎉".to_string()));
+        // "#emoji🎉" trims at the non-ASCII char, yielding "emoji"
+        assert!(tags.contains(&"emoji".to_string()));
+        assert!(!tags.contains(&"emoji🎉".to_string()));
+    }
+
+    #[test]
+    fn test_parse_rejects_punctuation_after_hash() {
+        // The char immediately after # must be ASCII alphanumeric.
+        // Regression: "#[serial(cwd)]" must NOT auto-tag (card 01KSR24VH91GS5SN5J3573J6TG).
+        assert!(parse_tags("#[serial(cwd)]").is_empty());
+        assert!(parse_tags("#(foo)").is_empty());
+        assert!(parse_tags("#!x").is_empty());
+    }
+
+    #[test]
+    fn test_parse_rejects_leading_hyphen() {
+        // A leading hyphen is not alphanumeric, so "#-x" is not a tag.
+        assert!(parse_tags("#-x").is_empty());
+    }
+
+    #[test]
+    fn test_parse_trims_trailing_punctuation() {
+        assert_eq!(parse_tags("#bug,"), vec!["bug".to_string()]);
+        assert_eq!(parse_tags("#bug."), vec!["bug".to_string()]);
+    }
+
+    #[test]
+    fn test_parse_happy_path_slugs() {
+        assert_eq!(parse_tags("#bug"), vec!["bug".to_string()]);
+        assert_eq!(
+            parse_tags("#multi-word-tag"),
+            vec!["multi-word-tag".to_string()]
+        );
     }
 
     #[test]

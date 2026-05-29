@@ -671,7 +671,6 @@ impl ContentFetcher {
         // Extract basic metadata from content
         let title = self.extract_title_from_content(content);
         let language = self.detect_language(content);
-        let tags = self.extract_tags(content);
 
         ContentMetadata {
             title,
@@ -680,7 +679,6 @@ impl ContentFetcher {
             content_type,
             language,
             reading_time_minutes,
-            tags,
         }
     }
 
@@ -771,55 +769,6 @@ impl ContentFetcher {
         } else {
             None
         }
-    }
-
-    /// Extract tags/topics from content
-    fn extract_tags(&self, content: &str) -> Vec<String> {
-        let mut tags = Vec::new();
-
-        // Look for common tech keywords
-        let tech_keywords = [
-            "rust",
-            "python",
-            "javascript",
-            "typescript",
-            "react",
-            "vue",
-            "angular",
-            "docker",
-            "kubernetes",
-            "aws",
-            "database",
-            "api",
-            "rest",
-            "graphql",
-            "machine learning",
-            "ai",
-            "blockchain",
-            "security",
-            "testing",
-        ];
-
-        let content_lower = content.to_lowercase();
-        for &keyword in &tech_keywords {
-            if content_lower.contains(keyword) {
-                tags.push(keyword.to_string());
-            }
-        }
-
-        // Look for hashtags
-        let hashtag_regex = Regex::new(r"#(\w+)").unwrap();
-        for cap in hashtag_regex.captures_iter(content) {
-            if let Some(tag) = cap.get(1) {
-                let tag = tag.as_str().to_lowercase();
-                if tag.len() > 2 && !tags.contains(&tag) {
-                    tags.push(tag);
-                }
-            }
-        }
-
-        tags.truncate(10);
-        tags
     }
 
     /// Clone the fetcher for concurrent use (shares client and domain trackers)
@@ -1243,63 +1192,6 @@ mod tests {
         assert_eq!(fetcher.detect_language(content), None);
     }
 
-    // ── extract_tags ────────────────────────────────────────────────
-
-    #[test]
-    fn test_extract_tags_tech_keywords() {
-        let fetcher = ContentFetcher::with_defaults();
-        let content = "This article covers rust programming and docker containers with kubernetes orchestration.";
-        let tags = fetcher.extract_tags(content);
-        assert!(tags.contains(&"rust".to_string()));
-        assert!(tags.contains(&"docker".to_string()));
-        assert!(tags.contains(&"kubernetes".to_string()));
-    }
-
-    #[test]
-    fn test_extract_tags_hashtags() {
-        let fetcher = ContentFetcher::with_defaults();
-        let content = "Check out this post #webdev #coding #opensource";
-        let tags = fetcher.extract_tags(content);
-        assert!(tags.contains(&"webdev".to_string()));
-        assert!(tags.contains(&"coding".to_string()));
-        assert!(tags.contains(&"opensource".to_string()));
-    }
-
-    #[test]
-    fn test_extract_tags_no_short_hashtags() {
-        let fetcher = ContentFetcher::with_defaults();
-        // Hashtags with <=2 chars should be excluded
-        let content = "Tags: #ab #a #longertag";
-        let tags = fetcher.extract_tags(content);
-        assert!(!tags.contains(&"ab".to_string()));
-        assert!(!tags.contains(&"a".to_string()));
-        assert!(tags.contains(&"longertag".to_string()));
-    }
-
-    #[test]
-    fn test_extract_tags_no_duplicate_hashtag_and_keyword() {
-        let fetcher = ContentFetcher::with_defaults();
-        let content = "Learn rust programming #rust";
-        let tags = fetcher.extract_tags(content);
-        let rust_count = tags.iter().filter(|t| *t == "rust").count();
-        assert_eq!(rust_count, 1);
-    }
-
-    #[test]
-    fn test_extract_tags_truncates_at_ten() {
-        let fetcher = ContentFetcher::with_defaults();
-        let content = "rust python javascript typescript react vue angular docker kubernetes aws database api rest graphql machine learning ai blockchain security testing #extra1 #extra2 #extra3";
-        let tags = fetcher.extract_tags(content);
-        assert!(tags.len() <= 10);
-    }
-
-    #[test]
-    fn test_extract_tags_empty_content() {
-        let fetcher = ContentFetcher::with_defaults();
-        let tags = fetcher.extract_tags("");
-        assert!(tags.is_empty());
-    }
-
     #[test]
     fn test_content_fetch_error_severity() {
         use swissarmyhammer_common::Severity;
@@ -1633,29 +1525,6 @@ mod tests {
         };
         let metadata = fetcher.extract_metadata(content, &result);
         assert_eq!(metadata.title, Some("My Page Title".to_string()));
-    }
-
-    #[test]
-    fn test_extract_metadata_tags_populated() {
-        let fetcher = ContentFetcher::with_defaults();
-        let content = "This article discusses rust and docker in detail. ".repeat(5);
-        let result = SearchResult {
-            title: "Test".to_string(),
-            url: "https://example.com/article".to_string(),
-            description: "desc".to_string(),
-            score: 0.9,
-            engine: "test".to_string(),
-            content: None,
-        };
-        let metadata = fetcher.extract_metadata(&content, &result);
-        assert!(
-            metadata.tags.contains(&"rust".to_string()),
-            "Tags should include 'rust'"
-        );
-        assert!(
-            metadata.tags.contains(&"docker".to_string()),
-            "Tags should include 'docker'"
-        );
     }
 
     // ── fetch_search_results async pipeline (mock HTTP server) ───────

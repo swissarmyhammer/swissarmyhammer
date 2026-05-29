@@ -129,10 +129,6 @@ mod tests {
     //! are exercised by integration tests that go through a real rmcp transport
     //! rather than by unit tests here. The same restriction applies to
     //! `run_serve`, which blocks on real stdio I/O.
-    //!
-    //! All tests use `#[tokio::test]` because `ShellExecuteTool::new` spawns a
-    //! background embedding worker via `tokio::spawn` during construction, which
-    //! requires an active Tokio runtime.
     use super::*;
 
     /// `ShellToolServer::new` must construct without panicking.

@@ -1,12 +1,11 @@
-//! Shell tool for MCP — virtual shell with history, process management, and semantic search.
+//! Shell tool for MCP — virtual shell with history and process management.
 //!
 //! ## Operations
 //!
-//! Dispatches between six operations:
+//! Dispatches between five operations:
 //! - `execute command`: Run a shell command with timeout and output capture
 //! - `list processes`: Show all commands with status, timing, exit codes
 //! - `kill process`: Stop a running command by ID
-//! - `search history`: Semantic search across command output
 //! - `grep history`: Regex pattern match across command output
 //! - `get lines`: Retrieve specific lines from a command's output
 //!
@@ -20,7 +19,7 @@
 //! Output is streamed through an [`OutputBuffer`](infrastructure::OutputBuffer) that
 //! enforces size limits (10 MB default), detects binary content, and truncates at
 //! line boundaries. All output is stored in [`ShellState`](state::ShellState) for
-//! later retrieval via `get lines`, `grep history`, or `search history`.
+//! later retrieval via `get lines` or `grep history`.
 //!
 //! ## Security
 //!
@@ -33,9 +32,9 @@
 //!
 //! - [`infrastructure`]: Types, output buffer, error types
 //! - [`process`]: Process spawning, streaming, guard
-//! - [`state`]: Command history, output log, embedding search
+//! - [`state`]: Command history, output log
 //! - [`execute_command`], [`list_processes`], [`kill_process`],
-//!   [`search_history`], [`grep_history`], [`get_lines`]: Per-operation modules
+//!   [`grep_history`], [`get_lines`]: Per-operation modules
 
 pub mod execute_command;
 pub mod get_lines;
@@ -44,7 +43,6 @@ pub mod infrastructure;
 pub mod kill_process;
 pub mod list_processes;
 pub mod process;
-pub mod search_history;
 pub mod state;
 
 #[cfg(test)]
@@ -75,8 +73,6 @@ static EXECUTE_CMD: Lazy<execute_command::ExecuteCommand> =
 static LIST_PROCS: Lazy<list_processes::ListProcesses> =
     Lazy::new(list_processes::ListProcesses::default);
 static KILL_PROC: Lazy<kill_process::KillProcess> = Lazy::new(kill_process::KillProcess::default);
-static SEARCH_HIST: Lazy<search_history::SearchHistory> =
-    Lazy::new(search_history::SearchHistory::default);
 static GREP_HIST: Lazy<grep_history::GrepHistory> = Lazy::new(grep_history::GrepHistory::default);
 static GET_LNS: Lazy<get_lines::GetLines> = Lazy::new(get_lines::GetLines::default);
 
@@ -85,7 +81,6 @@ pub static SHELL_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
         &*EXECUTE_CMD as &dyn Operation,
         &*LIST_PROCS as &dyn Operation,
         &*KILL_PROC as &dyn Operation,
-        &*SEARCH_HIST as &dyn Operation,
         &*GREP_HIST as &dyn Operation,
         &*GET_LNS as &dyn Operation,
     ]
@@ -144,25 +139,6 @@ impl ShellExecuteTool {
     pub(crate) fn new_isolated() -> Self {
         let dir = std::env::temp_dir().join(format!(".shell-test-{}", ulid::Ulid::new()));
         let state = ShellState::with_dir(dir).expect("Failed to initialize isolated shell state");
-        Self {
-            state: Arc::new(Mutex::new(state)),
-            mcp_server: None,
-        }
-    }
-
-    /// Create an instance that routes every chunk through a caller-supplied
-    /// embedder instead of lazily loading the production default.
-    ///
-    /// Tests pass a `MockEmbedder` from `model-embedding`'s `test-support`
-    /// feature to avoid paying the multi-second cost of initializing the
-    /// real embedding model for every shell test.
-    ///
-    /// The shell state is rooted in an isolated temp directory so concurrent
-    /// tests do not interfere with each other.
-    pub fn with_embedder(embedder: Arc<dyn model_embedding::TextEmbedder>) -> Self {
-        let dir = std::env::temp_dir().join(format!(".shell-test-{}", ulid::Ulid::new()));
-        let state = ShellState::with_dir_and_embedder(dir, embedder)
-            .expect("Failed to initialize shell state with injected embedder");
         Self {
             state: Arc::new(Mutex::new(state)),
             mcp_server: None,
@@ -521,7 +497,7 @@ impl McpTool for ShellExecuteTool {
 
     fn schema(&self) -> serde_json::Value {
         let config = SchemaConfig::new(
-            "Virtual shell with history, process management, and semantic search. Execute commands, search output history, grep patterns, and manage running processes.",
+            "Virtual shell with history and process management. Execute commands, grep output history, and manage running processes.",
         );
         generate_mcp_schema(&SHELL_OPERATIONS, config)
     }
@@ -567,9 +543,6 @@ impl McpTool for ShellExecuteTool {
             "kill process" => {
                 kill_process::execute_kill_process(&args, self.state.clone()).await
             }
-            "search history" => {
-                search_history::execute_search_history(&args, self.state.clone()).await
-            }
             "grep history" => {
                 grep_history::execute_grep_history(&args, self.state.clone()).await
             }
@@ -578,7 +551,7 @@ impl McpTool for ShellExecuteTool {
             }
             other => Err(McpError::invalid_params(
                 format!(
-                    "Unknown operation '{}'. Valid operations: execute command, list processes, kill process, search history, grep history, get lines",
+                    "Unknown operation '{}'. Valid operations: execute command, list processes, kill process, grep history, get lines",
                     other
                 ),
                 None,
@@ -694,11 +667,10 @@ mod tests {
     async fn test_shell_tool_has_operations() {
         let tool = ShellExecuteTool::new_isolated();
         let ops = tool.operations();
-        assert_eq!(ops.len(), 6);
+        assert_eq!(ops.len(), 5);
         assert!(ops.iter().any(|o| o.op_string() == "execute command"));
         assert!(ops.iter().any(|o| o.op_string() == "list processes"));
         assert!(ops.iter().any(|o| o.op_string() == "kill process"));
-        assert!(ops.iter().any(|o| o.op_string() == "search history"));
         assert!(ops.iter().any(|o| o.op_string() == "grep history"));
         assert!(ops.iter().any(|o| o.op_string() == "get lines"));
     }
@@ -837,7 +809,6 @@ mod tests {
             "execute command",
             "list processes",
             "kill process",
-            "search history",
             "grep history",
             "get lines",
         ] {
@@ -1041,13 +1012,6 @@ mod tests {
             "Should return empty result: {}",
             text
         );
-    }
-
-    /// Test that execute() dispatches "search history" to handler (missing query = error)
-    #[tokio::test]
-    async fn test_dispatch_search_history_missing_query() {
-        let result = execute_op("search history", vec![]).await;
-        assert!(result.is_err(), "search history without query should fail");
     }
 
     // =====================================================================

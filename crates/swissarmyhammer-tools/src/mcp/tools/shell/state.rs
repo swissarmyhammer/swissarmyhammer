@@ -1,32 +1,20 @@
 //! Shell state management for the virtual shell
 //!
-//! Maintains command history, output log, process handles, and embedding storage
-//! for semantic search across command output.
+//! Maintains command history, output log, and process handles.
 
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::{DateTime, Local};
 use grep::regex::RegexMatcher;
 use grep::searcher::sinks::UTF8;
 use grep::searcher::{BinaryDetection, SearcherBuilder};
-use rusqlite::Connection;
-use tokio::sync::{mpsc, Mutex};
-use tokio::task::JoinHandle;
 
-use model_embedding::cosine_similarity;
 use swissarmyhammer_directory::{DirectoryConfig, ShellConfig};
-use swissarmyhammer_embedding::{Embedder, TextEmbedder};
-
-const CHUNK_SIZE: usize = 15; // lines per embedding chunk
-const BYTES_PER_F32: usize = 4;
-/// Bounded channel capacity for chunk processing pipeline.
-const CHUNK_CHANNEL_CAPACITY: usize = 256;
 
 /// Command execution status
 #[derive(Debug, Clone, PartialEq)]
@@ -71,38 +59,16 @@ impl CommandRecord {
     }
 }
 
-/// A work item for the background embedding worker.
-enum ChunkJob {
-    /// A chunk of output text to be inserted into DB and embedded.
-    Chunk {
-        session_id: String,
-        command_id: usize,
-        chunk_index: usize,
-        start_line: usize,
-        end_line: usize,
-        text: String,
-    },
-    /// Signals that a command is done sending chunks.
-    /// The worker sends back on the oneshot once all prior chunks have been processed.
-    Flush(tokio::sync::oneshot::Sender<()>),
-}
-
 /// The virtual shell state — singleton per server process
 pub struct ShellState {
     pub session_id: String,
     commands: Vec<CommandRecord>,
     processes: HashMap<usize, u32>, // cmd_id -> PID
     log_path: PathBuf,
-    db: Arc<Mutex<Connection>>,
-    chunk_tx: mpsc::Sender<ChunkJob>,
-    worker_handle: Option<JoinHandle<()>>,
-    line_buffer: HashMap<usize, Vec<String>>,
-    chunk_counts: HashMap<usize, usize>,
 }
 
 impl ShellState {
-    /// Create a new ShellState, initializing the .shell/ directory, log file, SQLite DB,
-    /// and background embedding worker.
+    /// Create a new ShellState, initializing the .shell/ directory and log file.
     ///
     /// Resolves `.shell/` to an absolute path at creation time so all stored
     /// paths remain valid even if the process CWD changes later.
@@ -119,28 +85,8 @@ impl ShellState {
         Self::with_dir(shell_dir)
     }
 
-    /// Create a new ShellState rooted at the given directory, using an
-    /// injected embedder rather than lazy-loading the production default.
-    ///
-    /// Tests pass a [`model_embedding::mock::MockEmbedder`] to avoid the
-    /// multi-second cost of loading `qwen-embedding` on every test that
-    /// exercises the shell tool.
-    pub fn with_dir_and_embedder(
-        shell_dir: PathBuf,
-        embedder: Arc<dyn TextEmbedder>,
-    ) -> anyhow::Result<Self> {
-        Self::build(shell_dir, Some(embedder))
-    }
-
     /// Create a new ShellState rooted at the given directory.
     pub fn with_dir(shell_dir: PathBuf) -> anyhow::Result<Self> {
-        Self::build(shell_dir, None)
-    }
-
-    fn build(
-        shell_dir: PathBuf,
-        injected_embedder: Option<Arc<dyn TextEmbedder>>,
-    ) -> anyhow::Result<Self> {
         let session_id = ulid::Ulid::new().to_string();
         fs::create_dir_all(&shell_dir)?;
 
@@ -157,41 +103,11 @@ impl ShellState {
             .append(true)
             .open(&log_path)?;
 
-        let conn = Connection::open_in_memory()?;
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS chunks (
-                session_id  TEXT    NOT NULL,
-                command_id  INTEGER NOT NULL,
-                chunk_index INTEGER NOT NULL,
-                start_line  INTEGER NOT NULL,
-                end_line    INTEGER NOT NULL,
-                text        TEXT    NOT NULL,
-                embedding   BLOB,
-                PRIMARY KEY (session_id, command_id, chunk_index)
-            );
-            CREATE INDEX IF NOT EXISTS idx_chunks_session ON chunks(session_id);
-            CREATE INDEX IF NOT EXISTS idx_chunks_command ON chunks(session_id, command_id);",
-        )?;
-
-        let db = Arc::new(Mutex::new(conn));
-        let (chunk_tx, chunk_rx) = mpsc::channel::<ChunkJob>(CHUNK_CHANNEL_CAPACITY);
-
-        // Spawn background embedding worker (handles both INSERT and embedding)
-        let db_clone = Arc::clone(&db);
-        let worker_handle = tokio::spawn(async move {
-            embedding_worker(chunk_rx, db_clone, injected_embedder).await;
-        });
-
         Ok(Self {
             session_id,
             commands: Vec::new(),
             processes: HashMap::new(),
             log_path,
-            db,
-            chunk_tx,
-            worker_handle: Some(worker_handle),
-            line_buffer: HashMap::new(),
-            chunk_counts: HashMap::new(),
         })
     }
 
@@ -210,8 +126,6 @@ impl ShellState {
             completed_at: None,
             completed_at_wall: None,
         });
-        self.line_buffer.insert(id, Vec::new());
-        self.chunk_counts.insert(id, 0);
         id
     }
 
@@ -220,7 +134,7 @@ impl ShellState {
         self.processes.insert(cmd_id, pid);
     }
 
-    /// Append output lines from a command to the log and buffer chunks for embedding.
+    /// Append output lines from a command to the log.
     ///
     /// Note: This performs blocking file I/O (log file append). This is acceptable because
     /// the shell tool is single-user and log writes are small and fast. The outer async mutex
@@ -234,9 +148,6 @@ impl ShellState {
 
         let mut log_file = OpenOptions::new().append(true).open(&self.log_path)?;
 
-        // Collect chunks to send after releasing the mutable borrow on commands
-        let mut pending_chunks: Vec<(usize, usize, usize, String)> = Vec::new();
-
         for line in lines {
             record.line_count += 1;
             let log_line = format!(
@@ -244,96 +155,13 @@ impl ShellState {
                 self.session_id, cmd_id, record.line_count, line
             );
             log_file.write_all(log_line.as_bytes())?;
-
-            // Buffer for chunking
-            if let Some(buf) = self.line_buffer.get_mut(&cmd_id) {
-                buf.push(line.clone());
-                if buf.len() >= CHUNK_SIZE {
-                    let chunk_text: String = std::mem::take(buf).join("\n");
-                    let chunk_index = self.chunk_counts.get(&cmd_id).copied().unwrap_or(0);
-                    self.chunk_counts.insert(cmd_id, chunk_index + 1);
-
-                    let start_line = record.line_count - CHUNK_SIZE + 1;
-                    let end_line = record.line_count;
-
-                    pending_chunks.push((chunk_index, start_line, end_line, chunk_text));
-                }
-            }
-        }
-
-        // Send chunks with async send — waits if channel is full, never drops
-        for (chunk_index, start_line, end_line, chunk_text) in pending_chunks {
-            self.send_chunk(cmd_id, chunk_index, start_line, end_line, chunk_text)
-                .await;
         }
 
         Ok(())
     }
 
-    /// Flush remaining buffered lines as a final chunk when a command completes.
-    async fn flush_line_buffer(&mut self, cmd_id: usize) {
-        if let Some(buf) = self.line_buffer.remove(&cmd_id) {
-            if !buf.is_empty() {
-                let record = self.commands.iter().find(|r| r.id == cmd_id);
-                if let Some(record) = record {
-                    let chunk_text = buf.join("\n");
-                    let chunk_index = self.chunk_counts.get(&cmd_id).copied().unwrap_or(0);
-                    self.chunk_counts.insert(cmd_id, chunk_index + 1);
-
-                    let end_line = record.line_count;
-                    let start_line = end_line.saturating_sub(buf.len()) + 1;
-
-                    self.send_chunk(cmd_id, chunk_index, start_line, end_line, chunk_text)
-                        .await;
-                }
-            }
-        }
-    }
-
-    /// Send a chunk to the background worker for DB insert and embedding.
-    /// Async send — waits if channel is full, never drops chunks.
-    async fn send_chunk(
-        &self,
-        cmd_id: usize,
-        chunk_index: usize,
-        start_line: usize,
-        end_line: usize,
-        text: String,
-    ) {
-        if let Err(e) = self
-            .chunk_tx
-            .send(ChunkJob::Chunk {
-                session_id: self.session_id.clone(),
-                command_id: cmd_id,
-                chunk_index,
-                start_line,
-                end_line,
-                text,
-            })
-            .await
-        {
-            tracing::warn!(
-                "Chunk channel closed (cmd {}, chunk {}): {}",
-                cmd_id,
-                chunk_index,
-                e
-            );
-        }
-    }
-
-    /// Wait until all chunks sent so far have been processed (DB insert + embedding).
-    /// Sends a flush sentinel through the channel and waits for the worker to acknowledge.
-    pub async fn flush_chunks(&self) {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        // Use blocking send for the flush sentinel — must not be dropped
-        if self.chunk_tx.send(ChunkJob::Flush(tx)).await.is_ok() {
-            let _ = rx.await;
-        }
-    }
-
     /// Mark a command as completed with exit code.
     pub async fn complete_command(&mut self, cmd_id: usize, exit_code: Option<i32>) {
-        self.flush_line_buffer(cmd_id).await;
         self.processes.remove(&cmd_id);
         if let Some(record) = self.commands.iter_mut().find(|r| r.id == cmd_id) {
             record.status = CommandStatus::Completed;
@@ -345,7 +173,6 @@ impl ShellState {
 
     /// Mark a command as timed out.
     pub async fn timeout_command(&mut self, cmd_id: usize) {
-        self.flush_line_buffer(cmd_id).await;
         self.processes.remove(&cmd_id);
         if let Some(record) = self.commands.iter_mut().find(|r| r.id == cmd_id) {
             record.status = CommandStatus::TimedOut;
@@ -376,7 +203,6 @@ impl ShellState {
                 .output();
         }
 
-        self.flush_line_buffer(cmd_id).await;
         self.processes.remove(&cmd_id);
 
         if let Some(record) = self.commands.iter_mut().find(|r| r.id == cmd_id) {
@@ -473,24 +299,6 @@ impl ShellState {
 
         Ok((results, total_matches))
     }
-
-    /// Get the data needed for a search operation without holding self borrowed.
-    /// Returns (session_id, db_handle) so the caller can release the outer lock
-    /// before performing the expensive async search.
-    pub fn search_handle(&self) -> (String, Arc<Mutex<Connection>>) {
-        (self.session_id.clone(), Arc::clone(&self.db))
-    }
-}
-
-impl Drop for ShellState {
-    fn drop(&mut self) {
-        // Drop chunk_tx first to close the channel, signaling the worker to exit
-        // (sender is dropped automatically as part of struct drop order, but we
-        // want to abort the worker explicitly for immediate cleanup)
-        if let Some(handle) = self.worker_handle.take() {
-            handle.abort();
-        }
-    }
 }
 
 /// Parse one `session_id:cmd_id:line_num:text` log entry into a [`GrepResult`].
@@ -519,344 +327,12 @@ fn parse_grep_log_line(
     })
 }
 
-/// Semantic search across command output using embeddings.
-/// This is a standalone function (not a &self method) so the outer SHELL_STATE
-/// lock can be released before calling it.
-/// Returns `(matching_results, total_match_count)`. Results are capped by `limit`
-/// (default 10) but `total_match_count` reflects all matching chunks.
-pub async fn search(
-    session_id: &str,
-    db: &Arc<Mutex<Connection>>,
-    query: &str,
-    command_id: Option<usize>,
-    limit: Option<usize>,
-) -> anyhow::Result<(Vec<SearchResult>, usize)> {
-    let limit = limit.unwrap_or(10);
-    let query_embedding = embed_query(query).await?;
-    let mut scored = score_session_chunks(db, session_id, command_id, &query_embedding).await?;
-
-    scored.sort_by(|a, b| {
-        b.similarity
-            .partial_cmp(&a.similarity)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    let total = scored.len();
-    scored.truncate(limit);
-    Ok((scored, total))
-}
-
-/// Build and load the production embedder, then embed `query` to produce the
-/// reference vector that similarity scores are computed against.
-async fn embed_query(query: &str) -> anyhow::Result<Vec<f32>> {
-    let model = Embedder::default()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to create embedding model: {}", e))?;
-    model
-        .load()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to load embedding model: {}", e))?;
-    let result = model
-        .embed_text(query)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to embed query: {}", e))?;
-    Ok(result.embedding().to_vec())
-}
-
-/// Load every embedded chunk for `session_id` from the DB and score each one
-/// by cosine similarity against `query_embedding`, honouring the optional
-/// `command_id` filter.
-async fn score_session_chunks(
-    db: &Arc<Mutex<Connection>>,
-    session_id: &str,
-    command_id: Option<usize>,
-    query_embedding: &[f32],
-) -> anyhow::Result<Vec<SearchResult>> {
-    let conn = db.lock().await;
-    let mut stmt = conn.prepare(
-        "SELECT command_id, chunk_index, start_line, end_line, text, embedding FROM chunks WHERE session_id = ?1 AND embedding IS NOT NULL",
-    )?;
-    let scored = stmt
-        .query_map(rusqlite::params![session_id], |row| {
-            let cmd_id: usize = row.get::<_, i64>(0)? as usize;
-            let _chunk_index: usize = row.get::<_, i64>(1)? as usize;
-            let start_line: usize = row.get::<_, i64>(2)? as usize;
-            let end_line: usize = row.get::<_, i64>(3)? as usize;
-            let text: String = row.get(4)?;
-            let embedding_blob: Vec<u8> = row.get(5)?;
-            Ok((cmd_id, start_line, end_line, text, embedding_blob))
-        })?
-        .filter_map(|r| r.ok())
-        .filter(|(cmd_id, _, _, _, _)| command_id.is_none() || command_id == Some(*cmd_id))
-        .map(|(cmd_id, start_line, end_line, text, blob)| {
-            let chunk_embedding = decode_embedding(&blob);
-            let similarity = cosine_similarity(query_embedding, &chunk_embedding);
-            SearchResult {
-                command_id: cmd_id,
-                start_line,
-                end_line,
-                text,
-                similarity,
-            }
-        })
-        .collect();
-    Ok(scored)
-}
-
 /// Result from grep operation
 #[derive(Debug, Clone)]
 pub struct GrepResult {
     pub command_id: usize,
     pub line_number: usize,
     pub text: String,
-}
-
-/// Result from semantic search operation
-#[derive(Debug, Clone)]
-pub struct SearchResult {
-    pub command_id: usize,
-    pub start_line: usize,
-    pub end_line: usize,
-    pub text: String,
-    pub similarity: f32,
-}
-
-/// A chunk job payload, unpacked into a flat struct so helper fns don't need
-/// to carry six positional arguments around.
-struct ChunkRow {
-    session_id: String,
-    command_id: usize,
-    chunk_index: usize,
-    start_line: usize,
-    end_line: usize,
-    text: String,
-}
-
-/// Background embedding worker — receives chunks via channel, inserts into DB,
-/// then computes and stores embeddings. Processes every chunk — never drops work.
-///
-/// When `injected` is `Some`, that embedder is used directly (tests pass a
-/// `MockEmbedder` to avoid paying real model-load cost). When `None`, the
-/// default production `Embedder` is lazy-built on the first chunk.
-async fn embedding_worker(
-    mut rx: mpsc::Receiver<ChunkJob>,
-    db: Arc<Mutex<Connection>>,
-    injected: Option<Arc<dyn TextEmbedder>>,
-) {
-    let mut model: Option<Arc<dyn TextEmbedder>> = None;
-
-    while let Some(job) = rx.recv().await {
-        let Some(chunk) = unpack_chunk_job(job) else {
-            // Flush signal — already acked inside unpack_chunk_job.
-            continue;
-        };
-        insert_chunk_row(&db, &chunk).await;
-        if !ensure_model_loaded(&mut model, &injected).await {
-            // Model failed to build or load — drain the remaining queue
-            // as INSERT-only and stop embedding further work.
-            drain_inserts_only(&mut rx, &db).await;
-            return;
-        }
-        let m = model
-            .as_ref()
-            .expect("model is Some once ensure_model_loaded returns true");
-        update_chunk_embedding(m.as_ref(), &db, &chunk).await;
-    }
-}
-
-/// Lazy-load `*model` from `injected` (or the production default) if not
-/// already populated. Returns `true` when `*model` is populated on exit.
-///
-/// A `false` return signals that the embedder could not be built or loaded;
-/// the caller should drain remaining work as INSERT-only and stop.
-async fn ensure_model_loaded(
-    model: &mut Option<Arc<dyn TextEmbedder>>,
-    injected: &Option<Arc<dyn TextEmbedder>>,
-) -> bool {
-    if model.is_some() {
-        return true;
-    }
-    match build_embedder(injected.clone()).await {
-        Ok(m) => {
-            *model = Some(m);
-            true
-        }
-        Err(()) => false,
-    }
-}
-
-/// Convert a [`ChunkJob`] into the flat row struct processed by the worker.
-///
-/// Flush signals are handled here (acked via their `oneshot`) and reported
-/// as `None` so the worker loop can simply `continue`.
-fn unpack_chunk_job(job: ChunkJob) -> Option<ChunkRow> {
-    match job {
-        ChunkJob::Flush(done) => {
-            // Channel is FIFO, so acking here means every earlier Chunk
-            // message has already been processed.
-            let _ = done.send(());
-            None
-        }
-        ChunkJob::Chunk {
-            session_id,
-            command_id,
-            chunk_index,
-            start_line,
-            end_line,
-            text,
-        } => Some(ChunkRow {
-            session_id,
-            command_id,
-            chunk_index,
-            start_line,
-            end_line,
-            text,
-        }),
-    }
-}
-
-/// INSERT the chunk text into the DB. The text is stored even when embedding
-/// later fails, so grep-style search over history still works.
-async fn insert_chunk_row(db: &Arc<Mutex<Connection>>, chunk: &ChunkRow) {
-    let conn = db.lock().await;
-    let result = conn.execute(
-        "INSERT OR REPLACE INTO chunks (session_id, command_id, chunk_index, start_line, end_line, text) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params![
-            chunk.session_id,
-            chunk.command_id as i64,
-            chunk.chunk_index as i64,
-            chunk.start_line as i64,
-            chunk.end_line as i64,
-            chunk.text,
-        ],
-    );
-    if let Err(e) = result {
-        tracing::warn!(
-            "Failed to insert chunk into DB (cmd {}, chunk {}): {}",
-            chunk.command_id,
-            chunk.chunk_index,
-            e,
-        );
-    }
-}
-
-/// Compute the embedding for `chunk.text` and UPDATE the row.
-///
-/// Embedding failures are logged at debug level — the chunk text remains in
-/// the DB so semantic search simply won't match it.
-async fn update_chunk_embedding(
-    model: &dyn TextEmbedder,
-    db: &Arc<Mutex<Connection>>,
-    chunk: &ChunkRow,
-) {
-    let mut result = match model.embed_text(&chunk.text).await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::debug!("Failed to embed chunk: {}", e);
-            return;
-        }
-    };
-    result.normalize();
-    let embedding_bytes = encode_embedding(result.embedding());
-    let conn = db.lock().await;
-    let update = conn.execute(
-        "UPDATE chunks SET embedding = ?1 WHERE session_id = ?2 AND command_id = ?3 AND chunk_index = ?4",
-        rusqlite::params![
-            embedding_bytes,
-            chunk.session_id,
-            chunk.command_id as i64,
-            chunk.chunk_index as i64,
-        ],
-    );
-    if let Err(e) = update {
-        tracing::warn!(
-            "Failed to store embedding in DB (cmd {}, chunk {}): {}",
-            chunk.command_id,
-            chunk.chunk_index,
-            e,
-        );
-    }
-}
-
-/// Resolve and load the embedder the worker will use.
-///
-/// If `injected` is `Some`, that embedder is loaded and returned directly.
-/// Otherwise the production default (`Embedder::default()`) is built and loaded.
-/// Returns `Err(())` when construction or load fails — the worker logs the
-/// cause and falls back to INSERT-only behavior.
-async fn build_embedder(
-    injected: Option<Arc<dyn TextEmbedder>>,
-) -> Result<Arc<dyn TextEmbedder>, ()> {
-    if let Some(m) = injected {
-        return load_or_warn(m, "injected embedder").await;
-    }
-    let default = Embedder::default().await.map_err(|e| {
-        tracing::warn!(
-            "Failed to create embedding model: {}. Embeddings disabled.",
-            e
-        );
-    })?;
-    load_or_warn(
-        Arc::new(default) as Arc<dyn TextEmbedder>,
-        "embedding model",
-    )
-    .await
-}
-
-/// Call `load()` on `m`, returning it on success or logging and returning
-/// `Err(())` on failure.
-async fn load_or_warn(m: Arc<dyn TextEmbedder>, label: &str) -> Result<Arc<dyn TextEmbedder>, ()> {
-    match m.load().await {
-        Ok(()) => Ok(m),
-        Err(e) => {
-            tracing::warn!("Failed to load {}: {}. Embeddings disabled.", label, e);
-            Err(())
-        }
-    }
-}
-
-/// Drain remaining jobs from the channel, performing INSERT-only (no embedding).
-/// Called when the embedding model fails to load.
-async fn drain_inserts_only(rx: &mut mpsc::Receiver<ChunkJob>, db: &Arc<Mutex<Connection>>) {
-    while let Some(job) = rx.recv().await {
-        match job {
-            ChunkJob::Flush(done) => {
-                let _ = done.send(());
-            }
-            ChunkJob::Chunk {
-                session_id,
-                command_id,
-                chunk_index,
-                start_line,
-                end_line,
-                text,
-            } => {
-                let conn = db.lock().await;
-                if let Err(e) = conn.execute(
-                    "INSERT OR REPLACE INTO chunks (session_id, command_id, chunk_index, start_line, end_line, text) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    rusqlite::params![session_id, command_id as i64, chunk_index as i64, start_line as i64, end_line as i64, text],
-                ) {
-                    tracing::warn!("Failed to insert chunk into DB (cmd {}, chunk {}): {}", command_id, chunk_index, e);
-                }
-            }
-        }
-    }
-}
-
-/// Encode f32 embedding vector as little-endian bytes for SQLite BLOB storage.
-fn encode_embedding(embedding: &[f32]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(embedding.len() * BYTES_PER_F32);
-    for val in embedding {
-        bytes.extend_from_slice(&val.to_le_bytes());
-    }
-    bytes
-}
-
-/// Decode little-endian bytes from SQLite BLOB back to f32 embedding vector.
-fn decode_embedding(bytes: &[u8]) -> Vec<f32> {
-    bytes
-        .chunks_exact(BYTES_PER_F32)
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-        .collect()
 }
 
 #[cfg(test)]
@@ -872,29 +348,6 @@ mod tests {
         let shell_dir = tmp.path().join(".shell");
         let state = ShellState::with_dir(shell_dir).expect("ShellState::with_dir");
         (state, tmp)
-    }
-
-    #[test]
-    fn test_encode_decode_roundtrip() {
-        let embedding = vec![1.0f32, -2.5, 0.75, 0.0, -0.001];
-        let encoded = encode_embedding(&embedding);
-        let decoded = decode_embedding(&encoded);
-        assert_eq!(embedding, decoded);
-    }
-
-    #[test]
-    fn test_cosine_similarity_identical() {
-        let a = vec![1.0, 2.0, 3.0];
-        let sim = cosine_similarity(&a, &a);
-        assert!((sim - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn test_cosine_similarity_orthogonal() {
-        let a = vec![1.0, 0.0];
-        let b = vec![0.0, 1.0];
-        let sim = cosine_similarity(&a, &b);
-        assert!(sim.abs() < 1e-6);
     }
 
     #[test]

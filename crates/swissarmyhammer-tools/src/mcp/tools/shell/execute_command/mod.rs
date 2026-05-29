@@ -200,8 +200,7 @@ async fn run_with_optional_timeout(
     }
 }
 
-/// Persist stdout/stderr into shell history and flush pending chunks so the
-/// embedding worker has finished by the time this returns.
+/// Persist stdout/stderr into shell history and mark the command complete.
 async fn store_command_output(
     state: &Arc<Mutex<ShellState>>,
     cmd_id: usize,
@@ -213,7 +212,6 @@ async fn store_command_output(
         append_stream(&mut guard, cmd_id, &output.stderr, "stderr").await;
     }
     guard.complete_command(cmd_id, Some(output.exit_code)).await;
-    guard.flush_chunks().await;
 }
 
 /// Split `text` into lines and append them to shell state for `cmd_id`.
@@ -230,18 +228,16 @@ async fn append_stream(state: &mut ShellState, cmd_id: usize, text: &str, stream
     }
 }
 
-/// Mark `cmd_id` as timed out in shell state and wait for pending chunks.
+/// Mark `cmd_id` as timed out in shell state.
 async fn mark_timed_out(state: &Arc<Mutex<ShellState>>, cmd_id: usize) {
     let mut guard = state.lock().await;
     guard.timeout_command(cmd_id).await;
-    guard.flush_chunks().await;
 }
 
-/// Mark `cmd_id` as completed with an error exit code and drain pending chunks.
+/// Mark `cmd_id` as completed with an error exit code.
 async fn mark_command_errored(state: &Arc<Mutex<ShellState>>, cmd_id: usize) {
     let mut guard = state.lock().await;
     guard.complete_command(cmd_id, Some(-1)).await;
-    guard.flush_chunks().await;
 }
 
 /// Validate shell request for security and correctness.
@@ -369,35 +365,6 @@ mod tests {
 
         let call_result = result.unwrap();
         assert_eq!(call_result.is_error, Some(false));
-    }
-
-    /// A `ShellExecuteTool` built with an injected `TextEmbedder` must route
-    /// chunk embeddings through that embedder instead of lazily constructing
-    /// the default production model. Tests rely on this to skip real ML loads.
-    #[tokio::test]
-    async fn test_execute_uses_injected_embedder() {
-        use model_embedding::mock::MockEmbedder;
-        use std::sync::Arc;
-
-        let mock = Arc::new(MockEmbedder::new(384));
-        let tool = ShellExecuteTool::with_embedder(mock.clone());
-        let context = create_test_context().await;
-
-        let mut args = serde_json::Map::new();
-        args.insert("command".to_string(), json!("echo hi"));
-
-        let result = <ShellExecuteTool as McpTool>::execute(&tool, args, &context).await;
-        assert!(
-            result.is_ok(),
-            "execute with injected embedder should succeed: {:?}",
-            result.err()
-        );
-
-        assert!(
-            mock.call_count() >= 1,
-            "injected MockEmbedder should receive at least one embed_text call, got {}",
-            mock.call_count()
-        );
     }
 
     #[tokio::test]

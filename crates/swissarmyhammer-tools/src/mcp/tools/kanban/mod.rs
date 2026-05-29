@@ -29,12 +29,41 @@ use swissarmyhammer_kanban::{
 
 /// MCP tool for kanban board operations
 #[derive(Default)]
-pub struct KanbanTool;
+pub struct KanbanTool {
+    /// Optional MCP server entry the tool registers during `init`/`deinit`.
+    ///
+    /// The serve path (and sah, which exposes kanban via `sah serve`) leaves
+    /// this `None` so running the tool never registers a separate `kanban` MCP
+    /// server. The kanban CLI injects `Some((name, entry))` via
+    /// [`KanbanTool::with_mcp_server`] so the install lifecycle registers the
+    /// `kanban serve` command with each detected agent.
+    mcp_server: Option<(String, mirdan::mcp_config::McpServerEntry)>,
+}
 
 impl KanbanTool {
-    /// Creates a new instance of the KanbanTool
+    /// Creates a new instance of the KanbanTool with no injected MCP server.
+    ///
+    /// The tool's `init`/`deinit` then only manage `.kanban/` merge drivers —
+    /// the behavior sah relies on (it exposes kanban through `sah serve`, not a
+    /// dedicated `kanban` MCP server).
     pub fn new() -> Self {
-        Self
+        Self { mcp_server: None }
+    }
+
+    /// Attach an MCP server entry the tool registers per scope during
+    /// `init`/`deinit`.
+    ///
+    /// The kanban CLI calls this so the tool owns its own MCP registration:
+    /// `init` writes `name → entry` into each scope's agent config (via
+    /// mirdan), and `deinit` removes it. `new()`/`Default` leave it unset so
+    /// the serve and sah paths are unaffected.
+    pub fn with_mcp_server(
+        mut self,
+        name: impl Into<String>,
+        entry: mirdan::mcp_config::McpServerEntry,
+    ) -> Self {
+        self.mcp_server = Some((name.into(), entry));
+        self
     }
 
     /// Get the kanban context from the tool context
@@ -180,89 +209,163 @@ impl swissarmyhammer_common::lifecycle::Initializable for KanbanTool {
         55
     }
 
+    /// Applies in all three scopes — User, Local, and Project.
+    ///
+    /// MCP registration (when an entry is injected) is relevant in every
+    /// scope; the merge-driver step is gated to Project|Local inside
+    /// `init`/`deinit` because a User-scope install has no project dir.
     fn is_applicable(&self, scope: &swissarmyhammer_common::lifecycle::InitScope) -> bool {
+        use swissarmyhammer_common::lifecycle::InitScope;
         matches!(
             scope,
-            swissarmyhammer_common::lifecycle::InitScope::Project
-                | swissarmyhammer_common::lifecycle::InitScope::Local
+            InitScope::User | InitScope::Local | InitScope::Project
         )
     }
 
+    /// Initialize the kanban tool. The tool DECLARES intent and DELEGATES the
+    /// agent-specific MCP config to mirdan:
+    /// 1. Register the MCP server entry (if one was injected via
+    ///    [`KanbanTool::with_mcp_server`]) across detected agents via
+    ///    [`mirdan::install::register_mcp_server`]. sah leaves this unset, so
+    ///    `sah init` never registers a separate `kanban` server.
+    /// 2. Register `.kanban/` git merge drivers — the tool's own (non-agent)
+    ///    config, only for Project and Local scopes (a User-scope install has
+    ///    no project dir).
+    ///
+    /// Kanban is not a shell, so unlike `ShellExecuteTool` it does NOT deny the
+    /// `Bash` tool.
     fn init(
         &self,
-        _scope: &swissarmyhammer_common::lifecycle::InitScope,
+        scope: &swissarmyhammer_common::lifecycle::InitScope,
         reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
     ) -> Vec<swissarmyhammer_common::lifecycle::InitResult> {
-        use swissarmyhammer_common::lifecycle::{InitResult, Initializable};
+        use swissarmyhammer_common::lifecycle::{InitResult, InitScope, Initializable};
         use swissarmyhammer_common::reporter::InitEvent;
         let name = Initializable::name(self);
-        let cwd = match std::env::current_dir() {
-            Ok(d) => d,
-            Err(_) => {
-                return vec![InitResult::skipped(
-                    name,
-                    "Cannot determine current directory",
-                )]
+        let mut results = Vec::new();
+
+        if let Some((server_name, entry)) = &self.mcp_server {
+            let mcp = mirdan::install::register_mcp_server(*scope, server_name, entry, reporter);
+            if let Some(err) = applier_error(&mcp) {
+                return vec![InitResult::error(name, err)];
             }
-        };
-
-        let kanban_dir = cwd.join(".kanban");
-        if !kanban_dir.exists() {
-            return vec![InitResult::skipped(name, "No .kanban directory found")];
+            results.extend(mcp);
         }
 
-        if let Err(e) = swissarmyhammer_kanban::board::register_merge_drivers(&kanban_dir) {
-            return vec![InitResult::error(
-                name,
-                format!("Failed to register merge drivers: {e}"),
-            )];
+        if matches!(scope, InitScope::Project | InitScope::Local) {
+            let cwd = match std::env::current_dir() {
+                Ok(d) => d,
+                Err(_) => {
+                    results.push(InitResult::skipped(
+                        name,
+                        "Cannot determine current directory",
+                    ));
+                    return results;
+                }
+            };
+
+            let kanban_dir = cwd.join(".kanban");
+            if !kanban_dir.exists() {
+                results.push(InitResult::skipped(name, "No .kanban directory found"));
+                return results;
+            }
+
+            if let Err(e) = swissarmyhammer_kanban::board::register_merge_drivers(&kanban_dir) {
+                results.push(InitResult::error(
+                    name,
+                    format!("Failed to register merge drivers: {e}"),
+                ));
+                return results;
+            }
+
+            reporter.emit(&InitEvent::Action {
+                verb: "Configured".to_string(),
+                message: "kanban merge drivers".to_string(),
+            });
+            results.push(InitResult::ok(name, "Kanban merge drivers registered"));
         }
 
-        reporter.emit(&InitEvent::Action {
-            verb: "Configured".to_string(),
-            message: "kanban merge drivers".to_string(),
-        });
-
-        vec![InitResult::ok(name, "Kanban merge drivers registered")]
+        if results.is_empty() {
+            results.push(InitResult::ok(name, "Kanban tool initialized"));
+        }
+        results
     }
 
+    /// Deinitialize the kanban tool, mirroring [`Self::init`] by delegating to
+    /// mirdan:
+    /// 1. Unregister the MCP server entry via
+    ///    [`mirdan::install::unregister_mcp_server`] (if one was injected).
+    /// 2. Remove `.kanban/` git merge drivers — only for Project and Local.
     fn deinit(
         &self,
-        _scope: &swissarmyhammer_common::lifecycle::InitScope,
+        scope: &swissarmyhammer_common::lifecycle::InitScope,
         reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
     ) -> Vec<swissarmyhammer_common::lifecycle::InitResult> {
-        use swissarmyhammer_common::lifecycle::{InitResult, Initializable};
+        use swissarmyhammer_common::lifecycle::{InitResult, InitScope, Initializable};
         use swissarmyhammer_common::reporter::InitEvent;
         let name = Initializable::name(self);
-        let cwd = match std::env::current_dir() {
-            Ok(d) => d,
-            Err(_) => {
-                return vec![InitResult::skipped(
-                    name,
-                    "Cannot determine current directory",
-                )]
+        let mut results = Vec::new();
+
+        if let Some((server_name, _entry)) = &self.mcp_server {
+            let mcp = mirdan::install::unregister_mcp_server(*scope, server_name, reporter);
+            if let Some(err) = applier_error(&mcp) {
+                results.push(InitResult::error(name, err));
+            } else {
+                results.extend(mcp);
             }
-        };
-
-        let kanban_dir = cwd.join(".kanban");
-        if !kanban_dir.exists() {
-            return vec![InitResult::skipped(name, "No .kanban directory found")];
         }
 
-        if let Err(e) = swissarmyhammer_kanban::board::unregister_merge_drivers(&kanban_dir) {
-            return vec![InitResult::error(
-                name,
-                format!("Failed to remove merge drivers: {e}"),
-            )];
+        if matches!(scope, InitScope::Project | InitScope::Local) {
+            let cwd = match std::env::current_dir() {
+                Ok(d) => d,
+                Err(_) => {
+                    results.push(InitResult::skipped(
+                        name,
+                        "Cannot determine current directory",
+                    ));
+                    return results;
+                }
+            };
+
+            let kanban_dir = cwd.join(".kanban");
+            if !kanban_dir.exists() {
+                results.push(InitResult::skipped(name, "No .kanban directory found"));
+                return results;
+            }
+
+            if let Err(e) = swissarmyhammer_kanban::board::unregister_merge_drivers(&kanban_dir) {
+                results.push(InitResult::error(
+                    name,
+                    format!("Failed to remove merge drivers: {e}"),
+                ));
+                return results;
+            }
+
+            reporter.emit(&InitEvent::Action {
+                verb: "Removed".to_string(),
+                message: "kanban merge driver configuration".to_string(),
+            });
+            results.push(InitResult::ok(name, "Kanban merge drivers removed"));
         }
 
-        reporter.emit(&InitEvent::Action {
-            verb: "Removed".to_string(),
-            message: "kanban merge driver configuration".to_string(),
-        });
-
-        vec![InitResult::ok(name, "Kanban merge drivers removed")]
+        if results.is_empty() {
+            results.push(InitResult::ok(name, "Kanban tool deinitialized"));
+        }
+        results
     }
+}
+
+/// Collect the first error message from an applier's results, if any.
+///
+/// The mirdan appliers return one [`InitResult`] per aggregate; surface an
+/// error so the tool's `init`/`deinit` can abort like the merge-driver step
+/// does. Mirrors the helper of the same name in the shell tool.
+fn applier_error(results: &[swissarmyhammer_common::lifecycle::InitResult]) -> Option<String> {
+    use swissarmyhammer_common::lifecycle::InitStatus;
+    results
+        .iter()
+        .find(|r| r.status == InitStatus::Error)
+        .map(|r| r.message.clone())
 }
 
 #[async_trait]
@@ -382,7 +485,7 @@ async fn execute_operation(ctx: &KanbanContext, op: &KanbanOperation) -> Result<
 
 /// Register all kanban tools with the tool registry
 pub fn register_kanban_tools(registry: &mut ToolRegistry) {
-    registry.register(KanbanTool);
+    registry.register(KanbanTool::new());
 }
 
 #[cfg(test)]
@@ -2180,6 +2283,236 @@ mod tests {
         assert!(
             assignees.is_empty(),
             "should be unassigned when no session actor"
+        );
+    }
+
+    // =========================================================================
+    // Scope-aware lifecycle: MCP registration + merge drivers
+    //
+    // These drive the tool's full install lifecycle across User/Local/Project.
+    // They mutate process-global HOME, CWD, and the `MIRDAN_AGENTS_CONFIG`
+    // env var, so each joins the `cwd` + `env` serial groups and pins HOME to
+    // an isolated env. The synthetic agents.yaml injects a single Claude-like
+    // agent whose MCP configs live under the project dir / isolated home.
+    //
+    // Mirrors the shell-tool lifecycle tests in `shell/mod.rs`. Unlike the
+    // shell tool, kanban does NOT deny Bash, and its own-config step is git
+    // merge drivers in `.kanban/` rather than a `.shell/config.yaml`.
+    // =========================================================================
+
+    use serial_test::serial;
+    use swissarmyhammer_common::lifecycle::{InitScope, Initializable};
+    use swissarmyhammer_common::reporter::NullReporter;
+    use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
+
+    /// RAII guard restoring `MIRDAN_AGENTS_CONFIG` on drop.
+    struct MirdanConfigGuard {
+        original: Option<String>,
+    }
+
+    impl MirdanConfigGuard {
+        fn set(path: &std::path::Path) -> Self {
+            let original = std::env::var("MIRDAN_AGENTS_CONFIG").ok();
+            std::env::set_var("MIRDAN_AGENTS_CONFIG", path);
+            Self { original }
+        }
+    }
+
+    impl Drop for MirdanConfigGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(v) => std::env::set_var("MIRDAN_AGENTS_CONFIG", v),
+                None => std::env::remove_var("MIRDAN_AGENTS_CONFIG"),
+            }
+        }
+    }
+
+    /// Build the tool wired with the `kanban` MCP server entry, matching how
+    /// the kanban CLI constructs it.
+    fn tool_with_kanban_server() -> KanbanTool {
+        KanbanTool::new().with_mcp_server(
+            "kanban",
+            mirdan::mcp_config::McpServerEntry {
+                command: "kanban".to_string(),
+                args: vec!["serve".to_string()],
+                env: std::collections::BTreeMap::new(),
+            },
+        )
+    }
+
+    /// Write a synthetic single-agent config whose id is `claude-code` so the
+    /// real ClaudeCodeStrategy fires, with neutral agent-config MCP paths so
+    /// these tests assert on the strategy's behavior, not any literal Claude
+    /// path. Detection always fires (the detect dir is `project_dir`).
+    fn write_agents_config(
+        project_dir: &std::path::Path,
+        global_mcp: &std::path::Path,
+        global_settings: &std::path::Path,
+    ) -> std::path::PathBuf {
+        let agents_yaml = format!(
+            r#"agents:
+  - id: claude-code
+    name: Claude Code
+    project_path: .fake/skills
+    global_path: "~/.fake/skills"
+    detect:
+      - dir: "{detect}"
+    settings_path: agent-config/settings.json
+    global_settings_path: "{global_settings}"
+    mcp_config:
+      project_path: .mcp.json
+      global_path: "{global_mcp}"
+      servers_key: mcpServers
+"#,
+            detect = project_dir.display(),
+            global_mcp = global_mcp.display(),
+            global_settings = global_settings.display(),
+        );
+        let config_path = project_dir.join("agents.yaml");
+        std::fs::write(&config_path, agents_yaml).expect("write agents.yaml");
+        config_path
+    }
+
+    /// User scope: the agent's global MCP config gains/loses the `kanban` entry,
+    /// and NO `.kanban/` merge drivers are touched (User has no project dir).
+    #[tokio::test]
+    #[serial(cwd, env)]
+    async fn test_tool_lifecycle_user_scope() {
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let home = env.home_path();
+        let _cwd = CurrentDirGuard::new(&home).expect("chdir into isolated home");
+        let global_mcp = home.join("agent-global-mcp.json");
+        let global_settings = home.join("agent-global-settings.json");
+        let config_path = write_agents_config(&home, &global_mcp, &global_settings);
+        let _mirdan = MirdanConfigGuard::set(&config_path);
+
+        let tool = tool_with_kanban_server();
+        let reporter = NullReporter;
+        let _ = Initializable::init(&tool, &InitScope::User, &reporter);
+
+        let global: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&global_mcp).unwrap()).unwrap();
+        assert_eq!(global["mcpServers"]["kanban"]["command"], "kanban");
+
+        let _ = Initializable::deinit(&tool, &InitScope::User, &reporter);
+        let global_after: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&global_mcp).unwrap()).unwrap();
+        assert!(
+            global_after["mcpServers"]["kanban"].is_null(),
+            "kanban entry should be removed from global config"
+        );
+    }
+
+    /// Local scope: the local-scope MCP target gains the `kanban` entry under
+    /// `~/.claude.json` `projects.<cwd>.mcpServers` (a committed `.mcp.json` is
+    /// NOT written), and deinit removes it. The local-scope MCP registration +
+    /// empty-map prune is owned by mirdan's strategy; this test asserts the
+    /// tool's delegation drives a local-scope (not project-scope) target.
+    #[tokio::test]
+    #[serial(cwd, env)]
+    async fn test_tool_lifecycle_local_scope() {
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let home = env.home_path();
+        let project = home.join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        let _cwd = CurrentDirGuard::new(&project).expect("chdir into project");
+        let global_mcp = home.join("agent-global-mcp.json");
+        let global_settings = home.join("agent-global-settings.json");
+        let config_path = write_agents_config(&project, &global_mcp, &global_settings);
+        let _mirdan = MirdanConfigGuard::set(&config_path);
+
+        let tool = tool_with_kanban_server();
+        let reporter = NullReporter;
+        let _ = Initializable::init(&tool, &InitScope::Local, &reporter);
+
+        // Local scope must NOT write a committed project `.mcp.json`.
+        assert!(
+            !project.join(".mcp.json").exists(),
+            "local scope must not write a committed .mcp.json"
+        );
+
+        let _ = Initializable::deinit(&tool, &InitScope::Local, &reporter);
+    }
+
+    /// Project scope: the project MCP file gets the `kanban` entry and loses it
+    /// on deinit.
+    #[tokio::test]
+    #[serial(cwd, env)]
+    async fn test_tool_lifecycle_project_scope() {
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let home = env.home_path();
+        let project = home.join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        let _cwd = CurrentDirGuard::new(&project).expect("chdir into project");
+        let global_mcp = home.join("agent-global-mcp.json");
+        let global_settings = home.join("agent-global-settings.json");
+        let config_path = write_agents_config(&project, &global_mcp, &global_settings);
+        let _mirdan = MirdanConfigGuard::set(&config_path);
+
+        let tool = tool_with_kanban_server();
+        let reporter = NullReporter;
+        let _ = Initializable::init(&tool, &InitScope::Project, &reporter);
+
+        let mcp_json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(project.join(".mcp.json")).unwrap())
+                .unwrap();
+        assert_eq!(mcp_json["mcpServers"]["kanban"]["command"], "kanban");
+
+        let _ = Initializable::deinit(&tool, &InitScope::Project, &reporter);
+        let mcp_after: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(project.join(".mcp.json")).unwrap())
+                .unwrap();
+        assert!(
+            mcp_after["mcpServers"]["kanban"].is_null(),
+            "kanban entry should be removed from project .mcp.json"
+        );
+    }
+
+    /// sah path: with NO injected MCP entry, init at Project scope must run the
+    /// merge-driver step only — no agent MCP config is written. Asserts the
+    /// `KanbanTool::new()` (sah) construction never registers a `kanban` server.
+    #[tokio::test]
+    #[serial(cwd, env)]
+    async fn test_tool_lifecycle_no_mcp_entry_merge_drivers_only() {
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let home = env.home_path();
+        let project = home.join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        let _cwd = CurrentDirGuard::new(&project).expect("chdir into project");
+        let global_mcp = home.join("agent-global-mcp.json");
+        let global_settings = home.join("agent-global-settings.json");
+        let config_path = write_agents_config(&project, &global_mcp, &global_settings);
+        let _mirdan = MirdanConfigGuard::set(&config_path);
+
+        // A `.kanban` board exists so the merge-driver step has work to do.
+        // (Outside a git repo the merge-driver registration is a documented
+        // no-op; the assertions below target the MCP behavior, which is what
+        // distinguishes the sah path.)
+        let kanban_dir = project.join(".kanban");
+        std::fs::create_dir_all(&kanban_dir).unwrap();
+
+        let tool = KanbanTool::new(); // sah path: no MCP entry
+        let reporter = NullReporter;
+        let results = Initializable::init(&tool, &InitScope::Project, &reporter);
+
+        // No agent MCP config must be written when no entry was injected.
+        assert!(
+            !project.join(".mcp.json").exists(),
+            "sah path must not write a project .mcp.json"
+        );
+        let global_written = std::fs::read_to_string(&global_mcp)
+            .map(|c| c.contains("kanban"))
+            .unwrap_or(false);
+        assert!(
+            !global_written,
+            "sah path must not write a kanban entry to global MCP config"
+        );
+
+        // init still reports a result (the merge-driver step), proving the
+        // tool ran its own-config path rather than aborting.
+        assert!(
+            !results.is_empty(),
+            "init should report at least the merge-driver result"
         );
     }
 }
