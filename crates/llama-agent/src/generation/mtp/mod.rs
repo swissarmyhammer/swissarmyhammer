@@ -10,5 +10,10 @@
 //!
 //! - [`helpers`] — pure, model-free decision rules (verbatim port of the fork's
 //!   reference helpers), unit-tested without a model.
+//! - [`session`] — [`MtpSession`], the draft→verify→accept loop driving a target
+//!   context plus an MTP draft context.
 
 pub mod helpers;
+pub mod session;
+
+pub use session::{MtpParams, MtpSession, VerifyOutcome};
