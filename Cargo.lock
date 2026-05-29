@@ -5043,6 +5043,7 @@ version = "0.13.5"
 dependencies = [
  "dirs",
  "hf-hub",
+ "libc",
  "llama-common",
  "regex",
  "serde",

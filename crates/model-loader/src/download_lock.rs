@@ -20,8 +20,8 @@ const POLL_INTERVAL_MS: u64 = 500;
 /// How old in seconds a lock file can be before we consider it stale (5 minutes)
 const STALE_LOCK_THRESHOLD_SECS: u64 = 300;
 
-/// Minimum age in seconds before checking if owning process is dead
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+/// Short grace period before a lock whose owning process is confirmed dead is
+/// treated as stale. Avoids racing a lock that was created moments ago.
 const STALE_CHECK_MIN_AGE_SECS: u64 = 10;
 
 /// Maximum time to wait for another process to complete a download
@@ -197,7 +197,11 @@ impl DownloadCoordinator {
         })
     }
 
-    /// Check if a lock file is stale (from a crashed process)
+    /// Check if a lock file is stale (left behind by a crashed/killed process).
+    ///
+    /// Resolves the owning process's liveness (a syscall) and the lock's age,
+    /// then defers the decision to the pure [`stale_decision`] so the policy is
+    /// deterministically unit-testable.
     fn is_stale_lock(&self, lock_path: &Path) -> Result<bool, ModelError> {
         let metadata = fs::metadata(lock_path)
             .map_err(|e| ModelError::Cache(format!("Failed to read lock metadata: {}", e)))?;
@@ -210,32 +214,10 @@ impl DownloadCoordinator {
             .duration_since(modified)
             .unwrap_or_default();
 
-        // Check the lock file content
-        if let Ok(content) = fs::read_to_string(lock_path) {
-            // Check if it says "completed" - not stale if completed
-            if content.contains("status=completed") {
-                return Ok(false);
-            }
+        let content = fs::read_to_string(lock_path).unwrap_or_default();
+        let owner_alive = parse_lock_pid(&content).map(process_is_alive);
 
-            // Check if the process is still alive (Linux only - uses /proc)
-            #[cfg(target_os = "linux")]
-            if let Some(pid_line) = content.lines().find(|l| l.starts_with("pid=")) {
-                if let Ok(pid) = pid_line.trim_start_matches("pid=").parse::<i32>() {
-                    // Check if process exists by looking at /proc
-                    let proc_path = format!("/proc/{}", pid);
-                    if !std::path::Path::new(&proc_path).exists()
-                        && age > Duration::from_secs(STALE_CHECK_MIN_AGE_SECS)
-                    {
-                        return Ok(true);
-                    }
-                }
-            }
-
-            // On macOS, we rely primarily on the age-based check
-            // since /proc doesn't exist
-        }
-
-        Ok(age > STALE_LOCK_THRESHOLD)
+        Ok(stale_decision(&content, age, owner_alive))
     }
 
     /// Read the completed file path from a lock file
@@ -260,6 +242,59 @@ impl DownloadCoordinator {
 impl Default for DownloadCoordinator {
     fn default() -> Self {
         Self::new().expect("Failed to create download coordinator")
+    }
+}
+
+/// Parse the owning `pid=` from a lock file's contents, if present and valid.
+fn parse_lock_pid(content: &str) -> Option<i32> {
+    content
+        .lines()
+        .find_map(|l| l.strip_prefix("pid=")?.trim().parse::<i32>().ok())
+}
+
+/// Whether `pid` refers to a currently-live process.
+///
+/// On unix this is `kill(pid, 0)`: `0` means alive; `EPERM` means the process
+/// exists but we lack permission to signal it (still alive); `ESRCH` means no
+/// such process (dead). On non-unix targets there is no portable, cheap probe,
+/// so we report "alive" and let the age-based fallback handle recovery.
+#[cfg(unix)]
+fn process_is_alive(pid: i32) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if ret == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(not(unix))]
+fn process_is_alive(_pid: i32) -> bool {
+    true
+}
+
+/// Pure staleness policy for a lock, given its file `content`, its `age`, and
+/// whether its owning process is alive (`None` when no parseable PID).
+///
+/// - A `completed` lock is never stale — it records a finished download.
+/// - If the owner is **alive**, the lock is never stale: that process is
+///   actively downloading (possibly a large file on a slow link). The overall
+///   wait is still bounded by `MAX_WAIT_DURATION` in the acquire loop, so even a
+///   genuinely stuck owner cannot wedge a waiter forever.
+/// - If the owner is **dead**, the lock is stale once past a short grace
+///   (`STALE_CHECK_MIN_AGE_SECS`) — reclaimed in seconds, not minutes.
+/// - If the owner is **unknown** (missing/garbled PID), fall back to the hard
+///   age threshold.
+fn stale_decision(content: &str, age: Duration, owner_alive: Option<bool>) -> bool {
+    if content.contains("status=completed") {
+        return false;
+    }
+    match owner_alive {
+        Some(true) => false,
+        Some(false) => age > Duration::from_secs(STALE_CHECK_MIN_AGE_SECS),
+        None => age > STALE_LOCK_THRESHOLD,
     }
 }
 
@@ -314,6 +349,184 @@ mod tests {
         let lock_dir = temp_dir.path().join("locks");
         fs::create_dir_all(&lock_dir).unwrap();
         DownloadCoordinator { lock_dir }
+    }
+
+    const DOWNLOADING: &str = "pid=12345\nstarted=100\nstatus=downloading\n";
+    const COMPLETED: &str = "pid=12345\nstarted=100\nstatus=completed\npath=/tmp/m.gguf\n";
+
+    // --- pure staleness policy ---------------------------------------------
+
+    #[test]
+    fn completed_lock_is_never_stale() {
+        // Even old, even if the owner is dead — a completed lock records a
+        // finished download and must be reused, not reclaimed.
+        assert!(!stale_decision(
+            COMPLETED,
+            Duration::from_secs(0),
+            Some(true)
+        ));
+        assert!(!stale_decision(
+            COMPLETED,
+            STALE_LOCK_THRESHOLD * 2,
+            Some(false)
+        ));
+        assert!(!stale_decision(COMPLETED, STALE_LOCK_THRESHOLD * 2, None));
+    }
+
+    #[test]
+    fn live_owner_is_never_stolen_regardless_of_age() {
+        // A live owner may be downloading a huge file on a slow link; never
+        // steal its lock. (The acquire loop's MAX_WAIT_DURATION is the backstop.)
+        assert!(!stale_decision(
+            DOWNLOADING,
+            Duration::from_secs(0),
+            Some(true)
+        ));
+        assert!(!stale_decision(
+            DOWNLOADING,
+            STALE_LOCK_THRESHOLD * 100,
+            Some(true)
+        ));
+    }
+
+    #[test]
+    fn dead_owner_is_stale_after_short_grace() {
+        // Just-created lock from a dead owner: within grace, not yet stale.
+        assert!(!stale_decision(
+            DOWNLOADING,
+            Duration::from_secs(1),
+            Some(false)
+        ));
+        // Past the short grace: stale — reclaimed in ~10s, not 5 minutes.
+        assert!(stale_decision(
+            DOWNLOADING,
+            Duration::from_secs(STALE_CHECK_MIN_AGE_SECS + 1),
+            Some(false)
+        ));
+    }
+
+    #[test]
+    fn unknown_owner_falls_back_to_age_threshold() {
+        assert!(!stale_decision(
+            DOWNLOADING,
+            STALE_LOCK_THRESHOLD - Duration::from_secs(1),
+            None
+        ));
+        assert!(stale_decision(
+            DOWNLOADING,
+            STALE_LOCK_THRESHOLD + Duration::from_secs(1),
+            None
+        ));
+    }
+
+    #[test]
+    fn parse_lock_pid_reads_the_pid() {
+        assert_eq!(parse_lock_pid(DOWNLOADING), Some(12345));
+        assert_eq!(parse_lock_pid("started=1\nstatus=downloading\n"), None);
+        assert_eq!(parse_lock_pid("pid=notanumber\n"), None);
+    }
+
+    // --- process liveness primitive ----------------------------------------
+
+    #[test]
+    fn process_is_alive_for_self() {
+        assert!(process_is_alive(std::process::id() as i32));
+    }
+
+    #[test]
+    fn process_is_alive_false_for_nonpositive_pid() {
+        assert!(!process_is_alive(0));
+        assert!(!process_is_alive(-1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_is_alive_false_for_reaped_child() {
+        // Spawn and reap a child; its PID is then dead.
+        let child = std::process::Command::new("true")
+            .spawn()
+            .expect("spawn `true`");
+        let pid = child.id() as i32;
+        let mut child = child;
+        let _ = child.wait().expect("wait child");
+        assert!(
+            !process_is_alive(pid),
+            "a reaped child PID must read as dead"
+        );
+    }
+
+    // --- end-to-end is_stale_lock (reads real mtime) -----------------------
+
+    /// Backdate a file's mtime by `secs` so age-based logic can be exercised
+    /// without sleeping.
+    #[cfg(unix)]
+    fn backdate(path: &Path, secs: u64) {
+        let when = SystemTime::now() - Duration::from_secs(secs);
+        let epoch = when
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as libc::time_t;
+        let tv = libc::timeval {
+            tv_sec: epoch,
+            tv_usec: 0,
+        };
+        let times = [tv, tv];
+        let c = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+        let rc = unsafe { libc::utimes(c.as_ptr(), times.as_ptr()) };
+        assert_eq!(rc, 0, "utimes must succeed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_stale_lock_reclaims_dead_owner_quickly() {
+        let temp_dir = TempDir::new().unwrap();
+        let coordinator = test_coordinator(&temp_dir);
+        let lock = coordinator.lock_dir.join("dead.lock");
+
+        // A `downloading` lock owned by a PID that is not alive. Use a reaped
+        // child's PID so liveness is deterministically dead.
+        let c = std::process::Command::new("true").spawn().unwrap();
+        let dead_pid = c.id();
+        let mut c = c;
+        c.wait().unwrap();
+        fs::write(
+            &lock,
+            format!("pid={dead_pid}\nstarted=1\nstatus=downloading\n"),
+        )
+        .unwrap();
+        // Older than the short grace but FAR younger than the 5-min hard
+        // threshold — pre-fix this would have waited ~5 minutes.
+        backdate(&lock, STALE_CHECK_MIN_AGE_SECS + 5);
+
+        assert!(
+            coordinator.is_stale_lock(&lock).unwrap(),
+            "a dead-owner downloading lock past the grace must be stale"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_stale_lock_keeps_live_owner_even_when_old() {
+        let temp_dir = TempDir::new().unwrap();
+        let coordinator = test_coordinator(&temp_dir);
+        let lock = coordinator.lock_dir.join("live.lock");
+
+        // Owned by THIS process (alive), and deliberately older than the hard
+        // age threshold: must NOT be treated as stale (it's actively working).
+        fs::write(
+            &lock,
+            format!(
+                "pid={}\nstarted=1\nstatus=downloading\n",
+                std::process::id()
+            ),
+        )
+        .unwrap();
+        backdate(&lock, STALE_LOCK_THRESHOLD_SECS + 60);
+
+        assert!(
+            !coordinator.is_stale_lock(&lock).unwrap(),
+            "a live-owner lock must never be reclaimed, even when old"
+        );
     }
 
     #[tokio::test]
