@@ -42,6 +42,7 @@
 pub mod budget;
 pub mod config;
 pub mod error;
+pub mod mtp;
 
 /// Weight-free [`TextGenerator`] test double for deterministic generation tests.
 #[cfg(any(test, feature = "test-utils"))]
