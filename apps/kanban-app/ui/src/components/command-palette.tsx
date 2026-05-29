@@ -101,7 +101,7 @@ export function CommandPalette({
   // Source commands from the metadata-driven Command registry rather than a
   // hardcoded list — re-fetched live on `commands/changed`. The palette only
   // renders in command mode, so the list is unused (but cheap) in search mode.
-  const { commands: registryCommands } = useCommandList(
+  const { commands: registryCommands, epoch: registryEpoch } = useCommandList(
     currentScope !== undefined ? { scope: currentScope } : {},
   );
 
@@ -234,6 +234,9 @@ export function CommandPalette({
     enabled: open && paletteMode === "command",
     ids: visibleIds,
     scopeChain,
+    // Invalidate cached verdicts when the registry changes (commands/changed),
+    // so an already-open palette re-evaluates instead of showing stale rows.
+    epoch: registryEpoch,
   });
 
   // Combined length for selection clamping

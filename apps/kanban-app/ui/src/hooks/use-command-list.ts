@@ -97,6 +97,14 @@ export interface UseCommandListResult {
   loading: boolean;
   /** Force an immediate re-fetch (bypasses the debounce). */
   refresh: () => void;
+  /**
+   * Monotonic registry version, incremented on every successful fetch
+   * (initial, filter change, or a `commands/changed` re-fetch). Feed it to
+   * {@link useCommandAvailability} as its `epoch` so a registry mutation
+   * invalidates cached availability verdicts — otherwise an already-open
+   * palette keeps showing stale grayed-out/enabled rows after the change.
+   */
+  epoch: number;
 }
 
 /** Build the `list command` filter payload, omitting absent filters. */
@@ -122,6 +130,9 @@ export function useCommandList(
 ): UseCommandListResult {
   const [commands, setCommands] = useState<CommandMetadata[]>([]);
   const [loading, setLoading] = useState(true);
+  // Monotonic version bumped on each successful fetch — drives availability
+  // cache invalidation (see UseCommandListResult.epoch).
+  const [epoch, setEpoch] = useState(0);
 
   // Snapshot the filters into a ref so the fetch callback stays reference
   // stable while still reading the latest filter values at call time. The
@@ -143,6 +154,7 @@ export function useCommandList(
       );
       if (myId !== fetchIdRef.current) return; // a newer fetch superseded us
       setCommands(result?.commands ?? []);
+      setEpoch((e) => e + 1);
     } catch (err) {
       if (myId !== fetchIdRef.current) return;
       console.error("[useCommandList] list command failed:", err);
@@ -184,5 +196,5 @@ export function useCommandList(
     };
   }, [fetchCommands]);
 
-  return { commands, loading, refresh: fetchCommands };
+  return { commands, loading, refresh: fetchCommands, epoch };
 }
