@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffcb80
 title: 'SessionStateCache: true LRU + byte-budget eviction'
 ---
 Follow-up from review of d4a69cbe8 (card 01KSSS5H82YC0TX0CM6SQV8CRP, warnings on queue.rs:192 and save_session_state). Pre-existing in the batch path, but the streaming change now exercises it on every ACP turn.
