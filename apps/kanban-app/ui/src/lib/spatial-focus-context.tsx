@@ -8,12 +8,20 @@
  * previously focused FQM's callback and `true` to the newly focused one's.
  *
  * Each Tauri window has its own React tree and therefore its own claim
- * registry, so a `focus-changed` event for another window's FQM is a
- * silent no-op here — the lookup misses and nothing fires. We do not
- * filter on `window_label` because Tauri's emit-to-all behavior is
- * symmetric: every window receives every event, but only the window that
- * actually mounted the matching `<FocusScope>` will have a callback to
- * dispatch to.
+ * registry. The kernel directs each `focus-changed` to a SINGLE window via
+ * `emit_to(event.window_label, ...)` (see `emit_focus_changed` in
+ * `kanban-app/src/commands.rs`), so a provider only ever receives events
+ * for its own window and matches them against its registry by FQM.
+ *
+ * This targeted emit is load-bearing, NOT an optimization: FQMs are **not**
+ * unique across windows. Every window's root layer is `/window` (composed
+ * from the `"window"` segment with no window-label qualifier), so a card is
+ * `/window/.../task:Z` in *every* window showing that board. If the kernel
+ * broadcast `focus-changed` to all webviews (the old `window.emit`
+ * behavior), focusing a scope in window A would match the identically-keyed
+ * scope in window B and light up the same card in every window ("jump
+ * highlights all windows"). Emitting only to `window_label` confines each
+ * focus move to its originating window.
  *
  * This file does **not** replace `entity-focus-context.tsx` — that
  * context still drives the entity scope registry and command-scope

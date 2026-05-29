@@ -553,6 +553,15 @@ export function installShadowNavigator(
 ): ShadowHarness {
   const registry = new Map<FullyQualifiedMoniker, ShadowEntry>();
   const currentFocus: { fq: FullyQualifiedMoniker | null } = { fq: null };
+  // Layers the React tree has pushed and not yet popped. Tracked so
+  // `spatial_focus` can mirror the real kernel's drop conditions instead
+  // of accepting every commit. Previously this harness ignored
+  // `spatial_push_layer` entirely and `spatial_focus` emitted
+  // unconditionally — which is exactly why a window-root focus drop
+  // (board / toolbar clicks committing against a `/window` layer the
+  // kernel can't resolve) passed this umbrella e2e green. See
+  // `state.rs::SpatialState::focus` for the production drop logic.
+  const pushedLayers = new Set<FullyQualifiedMoniker>();
 
   mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
     if (cmd === "spatial_register_scope") {
@@ -604,8 +613,28 @@ export function installShadowNavigator(
     if (cmd === "spatial_focus") {
       const a = (args ?? {}) as Record<string, unknown>;
       const nextFq = a.fq as FullyQualifiedMoniker;
+      // Mirror the real kernel's three silent-drop conditions
+      // (`swissarmyhammer-focus/src/state.rs::SpatialState::focus`): a
+      // commit produces NO `focus-changed` event when the snapshot is
+      // absent, names a layer the kernel never pushed, or omits the
+      // target fq. Without this the harness accepted every commit and
+      // hand-emitted focus-changed, masking window-layer focus drops.
+      const snapshot = a.snapshot as
+        | { layer_fq?: FullyQualifiedMoniker; scopes?: Array<{ fq?: FullyQualifiedMoniker }> }
+        | undefined
+        | null;
+      if (!snapshot) return undefined;
+      const snapshotLayerFq = snapshot.layer_fq;
+      if (!snapshotLayerFq || !pushedLayers.has(snapshotLayerFq)) {
+        return undefined;
+      }
+      const inSnapshot = (snapshot.scopes ?? []).some((s) => s.fq === nextFq);
+      if (!inSnapshot) return undefined;
       const entry = registry.get(nextFq);
       const prev = currentFocus.fq;
+      // Already focused → no event, mirroring the real kernel's
+      // "already focused" short-circuit in `SpatialState::focus`.
+      if (prev === nextFq) return undefined;
       currentFocus.fq = nextFq;
       // Emit focus-changed asynchronously so the kernel's emit-after-write
       // ordering is preserved. Listeners run synchronously inside `act()`
@@ -672,10 +701,17 @@ export function installShadowNavigator(
       const a = (args ?? {}) as Record<string, unknown>;
       return (a.focusedFq ?? "") as FullyQualifiedMoniker;
     }
-    if (cmd === "spatial_push_layer" || cmd === "spatial_pop_layer") {
-      // Layer push/pop are kernel bookkeeping operations — accept and
-      // record nothing; tests audit `spatial_push_layer` calls separately
-      // via `mockInvoke.mock.calls`.
+    if (cmd === "spatial_push_layer") {
+      // Track the pushed layer so `spatial_focus` can validate that a
+      // commit's `snapshot.layer_fq` references a live layer — mirroring
+      // the real kernel, which drops commits against unregistered layers.
+      const a = (args ?? {}) as Record<string, unknown>;
+      pushedLayers.add(a.fq as FullyQualifiedMoniker);
+      return undefined;
+    }
+    if (cmd === "spatial_pop_layer") {
+      const a = (args ?? {}) as Record<string, unknown>;
+      pushedLayers.delete(a.fq as FullyQualifiedMoniker);
       return undefined;
     }
     return defaultInvokeImpl(cmd, args);

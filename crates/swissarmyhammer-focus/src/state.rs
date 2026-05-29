@@ -224,7 +224,23 @@ impl SpatialState {
         snapshot: &NavSnapshot,
         fq: FullyQualifiedMoniker,
     ) -> Option<FocusChangedEvent> {
-        let layer = registry.layer(&snapshot.layer_fq)?;
+        let Some(layer) = registry.layer(&snapshot.layer_fq) else {
+            // The snapshot names a layer the kernel has never seen (or has
+            // already popped). This is the silent-drop path that made the
+            // window-root focus regression invisible: every board / toolbar
+            // click commits against `layer_fq = /window`, and if the window
+            // layer is not in the registry the commit vanishes with no event.
+            // Log it at `warn` so a layer/registry desync surfaces in
+            // `just logs` instead of presenting as "clicks do nothing".
+            tracing::warn!(
+                op = "focus",
+                focused_fq = %fq,
+                layer_fq = %snapshot.layer_fq,
+                "focus snapshot names an unregistered layer; dropping commit \
+                 (window-root layer not pushed, or popped out from under a live scope)"
+            );
+            return None;
+        };
         let window = layer.window_label.clone();
 
         let indexed = IndexedSnapshot::new(snapshot);

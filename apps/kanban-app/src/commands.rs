@@ -2156,17 +2156,22 @@ where
     f(&mut registry, &mut spatial_state)
 }
 
-/// Forward a kernel-produced [`FocusChangedEvent`] to the React side.
+/// Forward a kernel-produced [`FocusChangedEvent`] to the React side of
+/// the **one** window the focus change belongs to.
 ///
-/// Emits via the `tauri::Window` so the event reaches every webview the
-/// app has spawned. The frontend's `SpatialFocusProvider` filters its own
-/// claim registry by the `payload.next_key` lookup — windows that don't
-/// own the key receive the event silently and drop it, which matches the
-/// per-window claim-registry semantics described in the React module
-/// docs.
+/// Emits with `emit_to(event.window_label, …)` rather than the broadcast
+/// `window.emit(…)`. The distinction is load-bearing: `FullyQualifiedMoniker`s
+/// are NOT unique across windows — every window's root layer is `/window`,
+/// so a card is `/window/.../task:Z` in every window showing that board.
+/// A broadcast would reach every webview, and each window's claim registry
+/// would match the identically-keyed scope and light it up — the "jump
+/// highlights all windows" bug. The focus map (`SpatialState::focus_by_window`)
+/// is per-window, so `event.window_label` is the sole correct recipient;
+/// targeting it confines the highlight to the window that actually moved
+/// focus.
 fn emit_focus_changed(window: &Window, event: &FocusChangedEvent) -> Result<(), String> {
     window
-        .emit(FOCUS_CHANGED_EVENT, event)
+        .emit_to(event.window_label.as_str(), FOCUS_CHANGED_EVENT, event)
         .map_err(|e| format!("failed to emit {FOCUS_CHANGED_EVENT}: {e}"))
 }
 
