@@ -18,7 +18,6 @@ Built-in Bash and exec tools flood the context with every byte of stdout. A sing
 
 - **Run a command** — get a summary with exit code and line count
 - **Grep the output** — regex search across history for error codes, function names, patterns
-- **Semantic search** — find output by meaning ("authentication error" matches "403 forbidden")
 - **Get specific lines** — retrieve exactly the range you need for context
 - **Manage processes** — list running commands, kill hung processes
 
