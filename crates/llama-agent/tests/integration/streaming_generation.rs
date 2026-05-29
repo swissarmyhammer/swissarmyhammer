@@ -131,6 +131,52 @@ async fn add_user_message(
         .expect("add_message should succeed");
 }
 
+/// Add the assistant's own turn (its raw generated text) back to the session.
+/// This is what the ACP agentic loop does between turns; it keeps the rendered
+/// conversation append-only so the next turn's prompt EXTENDS the tokens already
+/// in the KV cache rather than diverging from them.
+async fn add_assistant_message(
+    agent: &AgentServer,
+    session_id: &llama_agent::types::SessionId,
+    body: &str,
+) {
+    let message = Message {
+        role: MessageRole::Assistant,
+        content: body.to_string(),
+        tool_call_id: None,
+        tool_name: None,
+        timestamp: SystemTime::now(),
+    };
+    agent
+        .add_message(session_id, message)
+        .await
+        .expect("add_message should succeed");
+}
+
+/// A `tracing` writer that appends everything to a shared byte buffer so a test
+/// can assert on log lines emitted by the queue worker (which runs on a
+/// different thread than the test — a thread-local/`with_test_writer` capture
+/// would miss it, so this installs a *global* subscriber).
+#[derive(Clone)]
+struct SharedLogBuffer(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for SharedLogBuffer {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedLogBuffer {
+    type Writer = SharedLogBuffer;
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
 /// Regression test for symptom 1 (0 tokens generated).
 ///
 /// Drives the streaming path with a `max_tokens` budget that mirrors what the
@@ -389,5 +435,115 @@ async fn test_second_streaming_prompt_after_turn_succeeds() {
         tokens2 > 0,
         "Second streaming prompt produced 0 tokens — worker may not have been \
          released after the first turn"
+    );
+}
+
+/// Production-path proof that the **streaming** path reuses the session KV cache
+/// across turns (prompt prefix caching), instead of re-prefilling the whole
+/// prompt every turn.
+///
+/// # Why this test exists
+///
+/// The ACP agentic loop and the in-app AI panel drive `generate_stream()`. That
+/// path used to pass `None` for the template offset and never restore/save the
+/// llama.cpp context state — so every turn re-tokenized and re-decoded the
+/// ENTIRE prompt (system prompt + all tool schemas + full history) from token 0.
+/// With a large tool set that prefill dominates wall-clock and is why local
+/// generation felt far slower than a hosted model that caches the prompt prefix.
+/// The batch path (`generate()`) cached correctly; only streaming did not, and
+/// no test covered it.
+///
+/// # What it asserts (deterministically, not via timing)
+///
+/// Two streaming turns on the same session, appended append-only (assistant turn
+/// + new user turn between them, exactly as the ACP loop does). It captures the
+/// queue worker's own logs and asserts:
+///   - turn 1 logged a cold start ("no cached KV state … processing full
+///     prompt") — the save side ran, populating the cache, and
+///   - turn 2 logged "streaming reusing N cached tokens" — the restore side ran
+///     and skipped the cached prefix.
+///
+/// That pair proves the save→restore lifecycle is wired on the streaming path.
+///
+/// The worker logs from a different thread, so this installs a global tracing
+/// subscriber. Under the project's runner (nextest, process-per-test) that
+/// always succeeds; if some other test already owns the global subscriber in a
+/// shared-process run, we skip rather than report a false failure (matching the
+/// rate-limit skip convention used throughout these tests).
+#[tokio::test]
+#[serial]
+async fn test_streaming_reuses_kv_cache_across_turns() {
+    let buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+    let installed = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_ansi(false)
+        .with_writer(SharedLogBuffer(buffer.clone()))
+        .try_init()
+        .is_ok();
+    if !installed {
+        warn!(
+            "Skipping KV-reuse test: a global tracing subscriber is already \
+             installed (run under nextest for per-process isolation)."
+        );
+        return;
+    }
+
+    let Some(agent) = try_init_agent().await else {
+        return;
+    };
+
+    let session = agent
+        .create_session()
+        .await
+        .expect("create_session should succeed");
+
+    // Turn 1 — cold start. No cached KV state yet, so the worker must process the
+    // full prompt and then save the resulting context state.
+    add_user_message(
+        &agent,
+        &session.id,
+        "Tell me one short fact about the moon.",
+    )
+    .await;
+    let (text1, tokens1) = drain_stream(
+        &agent,
+        GenerationRequest::new(session.id)
+            .with_max_tokens(64)
+            .with_temperature(0.0),
+    )
+    .await;
+    assert!(tokens1 > 0, "turn 1 must produce tokens, got 0: {text1:?}");
+
+    // Append the assistant's turn and a new user turn so turn 2's prompt is a
+    // strict EXTENSION of turn 1's (system + user1 + assistant1 + user2). This is
+    // the precondition for a valid cached prefix, and is exactly what the ACP
+    // loop now persists between turns.
+    add_assistant_message(&agent, &session.id, &text1).await;
+    add_user_message(&agent, &session.id, "Now one short fact about the sun.").await;
+
+    // Turn 2 — warm. The cached state from turn 1 must be restored and the
+    // already-processed prefix skipped.
+    let (text2, tokens2) = drain_stream(
+        &agent,
+        GenerationRequest::new(session.id)
+            .with_max_tokens(64)
+            .with_temperature(0.0),
+    )
+    .await;
+    assert!(tokens2 > 0, "turn 2 must produce tokens, got 0: {text2:?}");
+
+    let logs = String::from_utf8_lossy(&buffer.lock().unwrap()).into_owned();
+
+    assert!(
+        logs.contains("no cached KV state"),
+        "turn 1 should log a cold start (no cached KV state) — proving the cache \
+         began empty. Captured logs:\n{logs}"
+    );
+    assert!(
+        logs.contains("streaming reusing"),
+        "turn 2 should log 'streaming reusing N cached tokens' — proving the \
+         streaming path restored the prior turn's KV cache instead of \
+         re-prefilling the whole prompt. Without this fix the streaming path \
+         passed None and never restored/saved state. Captured logs:\n{logs}"
     );
 }

@@ -116,33 +116,6 @@ fn compute_template_token_count(worker_id: usize, kv_cache_position: i32) -> Opt
     Some(next_position)
 }
 
-/// Build the `(prompt, llama_ctx)` pair needed for a streaming generation. On
-/// either failure the error is pushed onto the stream and we return `None` so
-/// the caller can exit early.
-fn prepare_streaming_inference<'m>(
-    chat_template: &ChatTemplateEngine,
-    session: &Session,
-    model: &'m LlamaModel,
-    model_manager: &ModelManager,
-    stream_sender: &mpsc::Sender<Result<StreamChunk, QueueError>>,
-) -> Option<(String, LlamaContext<'m>)> {
-    let prompt = match render_streaming_prompt(chat_template, session, model, model_manager) {
-        Ok(p) => p,
-        Err(e) => {
-            report_stream_error(stream_sender, "Template rendering failed", &e);
-            return None;
-        }
-    };
-    let ctx = match create_streaming_context(model_manager, model, session) {
-        Ok(c) => c,
-        Err(e) => {
-            report_stream_error(stream_sender, "Session context creation failed", &e);
-            return None;
-        }
-    };
-    Some((prompt, ctx))
-}
-
 /// Render the session prompt for a streaming request. Matches the non-streaming
 /// path's behaviour; errors are wrapped in the caller's preferred channel.
 fn render_streaming_prompt(
@@ -509,6 +482,7 @@ impl QueueExecutor for ModelManagerExecutor {
                     stream_sender.clone(),
                     &queued_request.cancellation_token,
                     &self.chat_template,
+                    &self.session_state_cache,
                 )
             })
             .await;
@@ -1254,21 +1228,44 @@ impl RequestQueue {
         stream_sender: mpsc::Sender<Result<StreamChunk, QueueError>>,
         cancellation_token: &CancellationToken,
         chat_template: &ChatTemplateEngine,
+        session_state_cache: &SessionStateCache,
     ) -> Result<(), QueueError> {
         debug!(
             "Worker {} starting streaming inference for request {}",
             worker_id, request_id
         );
-        let Some((prompt, mut ctx)) = prepare_streaming_inference(
-            chat_template,
-            session,
-            model,
-            model_manager,
-            &stream_sender,
-        ) else {
-            return Ok(());
+
+        let prompt = match render_streaming_prompt(chat_template, session, model, model_manager) {
+            Ok(p) => p,
+            Err(e) => {
+                report_stream_error(&stream_sender, "Template rendering failed", &e);
+                return Ok(());
+            }
+        };
+        let mut ctx = match create_streaming_context(model_manager, model, session) {
+            Ok(c) => c,
+            Err(e) => {
+                report_stream_error(&stream_sender, "Session context creation failed", &e);
+                return Ok(());
+            }
         };
         trace!("Formatted prompt for streaming: {}", prompt);
+
+        // Reuse the prior turn's KV cache so generation only decodes the NEW
+        // tokens this turn. The ACP agentic loop runs entirely through this
+        // streaming entry point, so without this every turn re-prefills the full
+        // prompt (system prompt + all tool schemas + history) from scratch — the
+        // dominant cost that made local generation feel far slower than a hosted
+        // model that caches the prompt prefix. This mirrors the batch path's
+        // restore/save lifecycle.
+        let template_token_count = Self::prepare_streaming_kv_cache(
+            worker_id,
+            session,
+            &mut ctx,
+            &prompt,
+            model,
+            session_state_cache,
+        );
 
         let result = GenerationHelper::generate_stream_with_borrowed_model_and_template_offset(
             model,
@@ -1278,11 +1275,119 @@ impl RequestQueue {
             &stream_sender,
             cancellation_token,
             model_manager.get_batch_size(),
-            None, // No template offset - session state caching handles this
+            template_token_count,
         );
+
+        // Persist the updated KV cache (prompt + generated tokens) for the next
+        // turn. Only on success, so a failed or partial decode does not poison
+        // the cache for the following turn.
+        if result.is_ok() {
+            Self::save_session_state(
+                worker_id,
+                &request_id,
+                session,
+                &mut ctx,
+                session_state_cache,
+            );
+        }
+
         log_streaming_result(worker_id, &request_id, &stream_sender, result);
         Ok(())
     }
+
+    /// Restore the prior turn's KV cache into `ctx` and return the token offset
+    /// to resume generation from, so streaming only decodes the new tokens.
+    ///
+    /// Gated on the presence of cached state (not `cached_message_count`) so the
+    /// streaming/ACP path self-heals across turns without extra per-session
+    /// bookkeeping. Returns `None` — meaning "process the full prompt" — when
+    /// there is no cached state, when restoration fails, or when the cache is
+    /// not a valid prefix of the current prompt (e.g. auto-compaction shrank the
+    /// prompt below the cached length). In the stale case the leftover KV is
+    /// cleared so the subsequent full decode starts from a clean cache.
+    fn prepare_streaming_kv_cache(
+        worker_id: usize,
+        session: &Session,
+        ctx: &mut LlamaContext<'_>,
+        prompt: &str,
+        model: &LlamaModel,
+        session_state_cache: &SessionStateCache,
+    ) -> Option<usize> {
+        use llama_cpp_2::model::AddBos;
+
+        let has_cached_state = {
+            let cache = session_state_cache.lock().unwrap();
+            cache.contains_key(&session.id.to_string())
+        };
+        if !has_cached_state {
+            info!(
+                "Worker {} streaming: no cached KV state for session {}, processing full prompt",
+                worker_id, session.id
+            );
+            return None;
+        }
+
+        let kv_cache_position =
+            match Self::restore_session_kv_cache(worker_id, session, ctx, session_state_cache) {
+                Ok(pos) => pos,
+                Err(e) => {
+                    warn!(
+                        "Worker {} streaming KV restore failed ({}); processing full prompt",
+                        worker_id, e
+                    );
+                    ctx.clear_kv_cache();
+                    return None;
+                }
+            };
+
+        let total_prompt_tokens = model
+            .str_to_token(prompt, AddBos::Always)
+            .map(|t| t.len())
+            .unwrap_or(0);
+
+        match streaming_offset_decision(kv_cache_position, total_prompt_tokens) {
+            Some(offset) => {
+                info!(
+                    "Worker {} streaming reusing {} cached tokens, processing {} new tokens for session {}",
+                    worker_id,
+                    offset,
+                    total_prompt_tokens.saturating_sub(offset),
+                    session.id
+                );
+                Some(offset)
+            }
+            None => {
+                warn!(
+                    "Worker {} streaming KV cache (pos {}) is not a valid prefix of the current \
+                     prompt ({} tokens) — likely after compaction; clearing stale cache and \
+                     reprocessing the full prompt",
+                    worker_id, kv_cache_position, total_prompt_tokens
+                );
+                ctx.clear_kv_cache();
+                None
+            }
+        }
+    }
+}
+
+/// Decide the streaming resume offset from the restored KV-cache position and
+/// the current prompt length.
+///
+/// Returns `Some(offset)` when the cache is a strict prefix of the prompt
+/// (`0 < offset < total`), meaning generation can skip the first `offset` tokens
+/// because they are already in the KV cache. Returns `None` — "reprocess the
+/// full prompt" — when there is no usable cache (`kv_cache_position < 0`) or the
+/// cache is as long as / longer than the current prompt (no new tokens, or the
+/// prompt shrank after compaction so the cache is no longer a valid prefix).
+fn streaming_offset_decision(kv_cache_position: i32, total_prompt_tokens: usize) -> Option<usize> {
+    if kv_cache_position < 0 {
+        return None;
+    }
+    let offset = (kv_cache_position as usize) + 1;
+    if offset >= total_prompt_tokens {
+        return None;
+    }
+    Some(offset)
 }
 
 /// Log the outcome of a streaming generation and, on error, relay the failure
@@ -2965,6 +3070,50 @@ mod tests {
             assert_eq!(compute_template_token_count(0, -1), None);
             assert_eq!(compute_template_token_count(0, 0), Some(1));
             assert_eq!(compute_template_token_count(0, 41), Some(42));
+        }
+
+        #[test]
+        fn streaming_offset_none_for_fresh_context() {
+            // A negative position means there is no usable cache: reprocess the
+            // full prompt.
+            assert_eq!(streaming_offset_decision(-1, 100), None);
+        }
+
+        #[test]
+        fn streaming_offset_reuses_strict_prefix() {
+            // The common incremental case: the cache covers the first N tokens of
+            // a longer prompt, so generation resumes at the offset and only the
+            // new tokens are decoded.
+            // position 41 => 42 cached tokens; prompt is 100 tokens.
+            assert_eq!(streaming_offset_decision(41, 100), Some(42));
+            // position 0 => 1 cached token (the BOS) of a 2-token prompt.
+            assert_eq!(streaming_offset_decision(0, 2), Some(1));
+        }
+
+        #[test]
+        fn streaming_offset_none_when_cache_has_no_new_tokens() {
+            // Cache length == prompt length: nothing new to process. Returning
+            // None forces a full reprocess rather than the generation layer's
+            // "template offset exhausted -> empty response" path.
+            // position 99 => 100 cached tokens; prompt is exactly 100 tokens.
+            assert_eq!(streaming_offset_decision(99, 100), None);
+        }
+
+        #[test]
+        fn streaming_offset_none_when_cache_longer_than_prompt() {
+            // After auto-compaction the prompt can shrink below the cached
+            // length. The cache is then NOT a valid prefix, so we must discard it
+            // and reprocess in full rather than skip real tokens.
+            // position 199 => 200 cached tokens; prompt shrank to 50.
+            assert_eq!(streaming_offset_decision(199, 50), None);
+        }
+
+        #[test]
+        fn streaming_offset_none_for_empty_prompt() {
+            // Degenerate: an empty (0-token) prompt can never have a valid
+            // non-empty prefix in the cache.
+            assert_eq!(streaming_offset_decision(0, 0), None);
+            assert_eq!(streaming_offset_decision(5, 0), None);
         }
     }
 }

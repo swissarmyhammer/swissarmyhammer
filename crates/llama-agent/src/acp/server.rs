@@ -2141,6 +2141,33 @@ impl AcpServer {
                 tool_calls_count
             );
 
+            // Persist the assistant's own turn (the RAW generated text, including
+            // the `<tool_call>` markup) BEFORE its tool results. This mirrors the
+            // batch agentic loop (`AgentServer::generate`) and matters for two
+            // reasons:
+            //   1. Correctness — the rendered conversation stays well-formed
+            //      (user → assistant(tool_call) → tool(result)); without it the
+            //      model never sees the call it is about to receive results for.
+            //   2. KV-cache reuse — the next turn's prompt must EXTEND, not
+            //      diverge from, the tokens already cached from this turn. The
+            //      cached KV ends with these assistant tokens, so the re-rendered
+            //      prompt must contain them at the same positions for the cached
+            //      prefix to remain valid.
+            let assistant_message = crate::types::Message {
+                role: crate::types::MessageRole::Assistant,
+                content: generated_text.clone(),
+                tool_call_id: None,
+                tool_name: None,
+                timestamp: std::time::SystemTime::now(),
+            };
+            self.agent_server
+                .add_message(&acp_session.llama_session_id, assistant_message)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Failed to add assistant message to session: {}", e);
+                    Self::convert_error(e)
+                })?;
+
             // Execute each tool call
             for tool_call in tool_calls {
                 let tool_name = tool_call.name.clone();
