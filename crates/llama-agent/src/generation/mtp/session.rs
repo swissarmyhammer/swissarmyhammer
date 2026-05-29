@@ -25,8 +25,10 @@ const DRAFT_SEQ_ID: i32 = 0;
 ///
 /// Defaults mirror the reference: a small per-step draft budget, greedy drafting
 /// (`p_min = 0.0`, so the accepted stream matches plain greedy generation), and
-/// a top-k 10 draft sampler.
-#[derive(Debug, Clone, Copy)]
+/// a top-k 10 draft sampler. `#[serde(default)]` lets a model YAML supply a
+/// partial `mtp:` block (any omitted field falls back to these defaults).
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct MtpParams {
     /// Maximum draft tokens proposed per step.
     pub n_max: usize,
