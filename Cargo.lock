@@ -9534,6 +9534,7 @@ dependencies = [
  "swissarmyhammer-entity",
  "swissarmyhammer-entity-mcp",
  "swissarmyhammer-fields",
+ "swissarmyhammer-focus",
  "swissarmyhammer-git",
  "swissarmyhammer-kanban",
  "swissarmyhammer-operations",
