@@ -1279,9 +1279,22 @@ impl RequestQueue {
         );
 
         // Persist the updated KV cache (prompt + generated tokens) for the next
-        // turn. Only on success, so a failed or partial decode does not poison
-        // the cache for the following turn.
-        if result.is_ok() {
+        // turn — but ONLY on a clean, fully-generated turn. A consumer
+        // disconnect (`try_send` fails mid-stream) or a cancellation both return
+        // `Ok(())` from the generator, yet leave the KV cache ending at an
+        // arbitrary mid-generation token whose tokens were never persisted as a
+        // session message. Saving that would make the next turn's re-rendered
+        // prompt diverge from the cached prefix at the truncation point — and
+        // because the resume offset is a token COUNT, the model would decode
+        // against cached KV holding different tokens (silent corruption, not a
+        // clean miss). `is_closed()` detects a dropped receiver; `is_cancelled()`
+        // detects cancellation. Skipping the save in those cases simply forces a
+        // (correct) cold start next turn.
+        if should_persist_stream_state(
+            result.is_ok(),
+            cancellation_token.is_cancelled(),
+            stream_sender.is_closed(),
+        ) {
             Self::save_session_state(
                 worker_id,
                 &request_id,
@@ -1305,6 +1318,16 @@ impl RequestQueue {
     /// not a valid prefix of the current prompt (e.g. auto-compaction shrank the
     /// prompt below the cached length). In the stale case the leftover KV is
     /// cleared so the subsequent full decode starts from a clean cache.
+    ///
+    /// PREFIX ASSUMPTION: the staleness guard is a LENGTH check (`offset >=
+    /// total`), not a content check. It assumes the conversation only ever grows
+    /// append-only and that compaction only ever SHRINKS the prompt — never
+    /// rewrites an earlier span while keeping a similar token count. That holds
+    /// today (every turn appends user/assistant/tool messages; compaction
+    /// replaces history with a strictly shorter summary). If a future change can
+    /// rewrite a retained prefix without changing its length, this must become a
+    /// content fingerprint comparison (hash of the cached prefix tokens) — see
+    /// the review follow-up card.
     fn prepare_streaming_kv_cache(
         worker_id: usize,
         session: &Session,
@@ -1388,6 +1411,20 @@ fn streaming_offset_decision(kv_cache_position: i32, total_prompt_tokens: usize)
         return None;
     }
     Some(offset)
+}
+
+/// Whether a streaming turn's KV cache should be persisted for reuse next turn.
+///
+/// Only a clean, fully-generated turn may be saved. The streaming generator
+/// returns `Ok(())` for THREE distinct outcomes — natural completion, consumer
+/// disconnect (`try_send` failed), and cancellation — so `result_ok` alone is
+/// not enough. A disconnect or cancellation leaves the KV cache ending at an
+/// arbitrary mid-generation token that was never persisted as a message, so
+/// reusing it next turn would corrupt output (the resume offset is a token
+/// count, not a content-checked prefix). We therefore additionally require that
+/// the turn was not cancelled and the stream receiver is still attached.
+fn should_persist_stream_state(result_ok: bool, cancelled: bool, sender_closed: bool) -> bool {
+    result_ok && !cancelled && !sender_closed
 }
 
 /// Log the outcome of a streaming generation and, on error, relay the failure
@@ -3114,6 +3151,27 @@ mod tests {
             // non-empty prefix in the cache.
             assert_eq!(streaming_offset_decision(0, 0), None);
             assert_eq!(streaming_offset_decision(5, 0), None);
+        }
+
+        #[test]
+        fn persist_stream_state_only_on_clean_completion() {
+            // A clean, fully-generated turn with the receiver still attached is
+            // the only case we persist.
+            assert!(should_persist_stream_state(true, false, false));
+        }
+
+        #[test]
+        fn persist_stream_state_skips_disconnect_cancel_and_error() {
+            // Consumer disconnect (sender closed): the KV cache ends mid-
+            // generation at tokens never persisted as a message — must NOT save.
+            assert!(!should_persist_stream_state(true, false, true));
+            // Cancellation: same partial-state hazard — must NOT save.
+            assert!(!should_persist_stream_state(true, true, false));
+            // Hard error: nothing trustworthy to save.
+            assert!(!should_persist_stream_state(false, false, false));
+            // Any combination of abort signals also skips.
+            assert!(!should_persist_stream_state(true, true, true));
+            assert!(!should_persist_stream_state(false, true, true));
         }
     }
 }

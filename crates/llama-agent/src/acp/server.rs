@@ -2129,8 +2129,29 @@ impl AcpServer {
             }
 
             if tool_calls.is_empty() {
-                // No tool calls - agent is done
+                // No tool calls - agent is done. Persist this final assistant
+                // turn so (1) the conversation history is complete — the model's
+                // own last reply is available on the NEXT user prompt — and (2)
+                // the cached KV (which ends with exactly these tokens) stays a
+                // valid prefix of the next prompt, preserving cross-prompt cache
+                // reuse instead of forcing a cold full reprocess. Mirrors the
+                // per-turn assistant-message persistence below and the batch
+                // loop in `AgentServer::generate`.
                 tracing::info!("No tool calls detected, ending agentic loop");
+                let final_assistant_message = crate::types::Message {
+                    role: crate::types::MessageRole::Assistant,
+                    content: generated_text.clone(),
+                    tool_call_id: None,
+                    tool_name: None,
+                    timestamp: std::time::SystemTime::now(),
+                };
+                self.agent_server
+                    .add_message(&acp_session.llama_session_id, final_assistant_message)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Failed to add final assistant message to session: {}", e);
+                        Self::convert_error(e)
+                    })?;
                 break;
             }
 
