@@ -481,9 +481,20 @@ async fn test_streaming_reuses_kv_cache_across_turns() {
         .try_init()
         .is_ok();
     if !installed {
+        // The capture relies on installing the GLOBAL subscriber. Under the
+        // project's runner (nextest, process-per-test) that always succeeds, so a
+        // failure there means something is genuinely wrong — fail loudly rather
+        // than pass vacuously. Under shared-process `cargo test`, another test may
+        // already own the global subscriber; there we can't capture, so skip.
+        if std::env::var_os("NEXTEST").is_some() {
+            panic!(
+                "could not install the capturing tracing subscriber under nextest — \
+                 the KV-reuse assertions cannot run, refusing to pass vacuously"
+            );
+        }
         warn!(
             "Skipping KV-reuse test: a global tracing subscriber is already \
-             installed (run under nextest for per-process isolation)."
+             installed (shared-process cargo test). Run under nextest to assert."
         );
         return;
     }

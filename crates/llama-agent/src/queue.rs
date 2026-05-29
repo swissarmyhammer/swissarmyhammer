@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use llama_common::async_utils;
 use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::model::LlamaModel;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -21,12 +21,145 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 use ulid::Ulid;
 
-/// In-memory cache of session states for efficient multi-turn conversations
-/// Maps session_id -> (state_bytes, message_count)
+/// One cached session: the complete llama.cpp context state (including the KV
+/// cache) plus the tokenization of the PROMPT those bytes were produced from.
 ///
-/// The state_bytes contain the complete llama.cpp context state including KV cache,
-/// allowing us to restore a session without disk I/O.
-type SessionStateCache = Arc<Mutex<HashMap<String, Vec<u8>>>>;
+/// `prompt_tokens` is `Some` for the streaming path, which uses a
+/// longest-common-prefix check (see `prepare_streaming_kv_cache`) to verify the
+/// cache is still a valid prefix of the next turn's prompt before reusing it —
+/// rather than trusting a bare length comparison. The batch path stores `None`
+/// (it relies on its own append-only `cached_message_count` bookkeeping).
+struct CachedSession {
+    state_bytes: Vec<u8>,
+    prompt_tokens: Option<Vec<i32>>,
+}
+
+/// LRU, byte-bounded in-memory store of per-session llama.cpp context state for
+/// efficient multi-turn conversations (restore without disk I/O).
+///
+/// Replaces a bare `HashMap<session_id, Vec<u8>>`, which had two problems the
+/// streaming change made acute: (1) eviction iterated `HashMap` keys in
+/// arbitrary order and dropped the first N — it could evict the ACTIVE session
+/// and keep stale ones; (2) it bounded only entry COUNT, but each entry is a
+/// FULL context-state copy (hundreds of MB on large models), so memory was
+/// unbounded in bytes. This store evicts least-recently-used first and enforces
+/// both an entry-count and a total-byte budget.
+struct SessionStateStore {
+    entries: HashMap<String, CachedSession>,
+    /// Session ids ordered least-recently-used (front) to most-recently-used (back).
+    lru: VecDeque<String>,
+    max_entries: usize,
+    max_bytes: usize,
+    cur_bytes: usize,
+}
+
+impl SessionStateStore {
+    fn new(max_entries: usize, max_bytes: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            lru: VecDeque::new(),
+            max_entries: max_entries.max(1),
+            max_bytes,
+            cur_bytes: 0,
+        }
+    }
+
+    fn contains(&self, id: &str) -> bool {
+        self.entries.contains_key(id)
+    }
+
+    /// Move `id` to the most-recently-used end of the LRU order.
+    fn touch(&mut self, id: &str) {
+        if let Some(pos) = self.lru.iter().position(|k| k == id) {
+            if let Some(k) = self.lru.remove(pos) {
+                self.lru.push_back(k);
+            }
+        }
+    }
+
+    /// Clone out a session's state bytes + prompt fingerprint, marking it
+    /// most-recently-used. Bytes are cloned (not borrowed) so the caller can
+    /// drop the lock before the comparatively slow `set_state_data`.
+    fn get(&mut self, id: &str) -> Option<(Vec<u8>, Option<Vec<i32>>)> {
+        let out = self
+            .entries
+            .get(id)
+            .map(|c| (c.state_bytes.clone(), c.prompt_tokens.clone()));
+        if out.is_some() {
+            self.touch(id);
+        }
+        out
+    }
+
+    /// Insert/replace a session's cached state, then evict LRU entries until
+    /// within BOTH the entry-count and total-byte budgets.
+    fn insert(&mut self, id: String, state_bytes: Vec<u8>, prompt_tokens: Option<Vec<i32>>) {
+        let new_bytes = state_bytes.len();
+        if let Some(old) = self.entries.insert(
+            id.clone(),
+            CachedSession {
+                state_bytes,
+                prompt_tokens,
+            },
+        ) {
+            self.cur_bytes = self.cur_bytes.saturating_sub(old.state_bytes.len());
+        }
+        self.cur_bytes += new_bytes;
+        if self.lru.iter().any(|k| k == &id) {
+            self.touch(&id);
+        } else {
+            self.lru.push_back(id);
+        }
+        self.evict();
+    }
+
+    /// Drop least-recently-used entries until under both budgets, always keeping
+    /// at least the most-recently-used entry.
+    fn evict(&mut self) {
+        while self.lru.len() > 1
+            && (self.entries.len() > self.max_entries || self.cur_bytes > self.max_bytes)
+        {
+            let Some(victim) = self.lru.pop_front() else {
+                break;
+            };
+            if let Some(c) = self.entries.remove(&victim) {
+                self.cur_bytes = self.cur_bytes.saturating_sub(c.state_bytes.len());
+            }
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Drop all cached state (used on queue teardown).
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.lru.clear();
+        self.cur_bytes = 0;
+    }
+}
+
+type SessionStateCache = Arc<Mutex<SessionStateStore>>;
+
+/// Default entry ceiling for the session-state cache: cpu cores / 2 (min 1),
+/// preserving the previous count-based limit.
+fn default_max_cache_entries() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| (n.get() / 2).max(1))
+        .unwrap_or(4)
+}
+
+/// Total-byte ceiling for the session-state cache. Each entry is a full llama
+/// context-state copy, so this bounds worst-case memory regardless of entry
+/// count. 2 GiB is a generous ceiling for in-memory KV state on a workstation;
+/// tune via [`SessionStateStore::new`] if a deployment needs more or less.
+const MAX_SESSION_CACHE_BYTES: usize = 2 * 1024 * 1024 * 1024;
+
+/// Length of the longest common prefix of two token sequences.
+fn common_prefix_len(a: &[i32], b: &[i32]) -> usize {
+    a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count()
+}
 
 /// Check whether we have a cached KV-state for this session, and log the
 /// resume/fresh-start decision. Returns true if the cache is usable.
@@ -37,7 +170,7 @@ fn check_and_log_session_cache(
 ) -> bool {
     let has_cached_state = {
         let cache = session_state_cache.lock().unwrap();
-        cache.contains_key(&session.id.to_string())
+        cache.contains(&session.id.to_string())
     };
     let can_use_cache = has_cached_state && session.cached_message_count > 0;
 
@@ -184,36 +317,6 @@ fn reject_cancelled_request(
             "Request cancelled".to_string(),
         )));
     metrics.record_request_cancelled();
-}
-
-/// Drop the oldest entries from the in-memory session state cache until it is
-/// under the per-process limit (cpu_cores / 2, minimum 1). Callers must hold
-/// the cache lock.
-fn evict_oldest_session_states(worker_id: usize, cache: &mut HashMap<String, Vec<u8>>) {
-    let cache_limit = std::thread::available_parallelism()
-        .map(|n| (n.get() / 2).max(1))
-        .unwrap_or(4);
-
-    if cache.len() <= cache_limit {
-        return;
-    }
-
-    // Simple approach: remove entries until we're at limit.
-    // In production, would track access time for proper LRU.
-    let to_remove: Vec<String> = cache
-        .keys()
-        .take(cache.len() - cache_limit)
-        .cloned()
-        .collect();
-    for key in to_remove {
-        cache.remove(&key);
-    }
-    info!(
-        "Worker {} evicted old session states (limit: {}), now have {} cached",
-        worker_id,
-        cache_limit,
-        cache.len()
-    );
 }
 
 /// Lock-free counters describing the live state of a [`RequestQueue`].
@@ -553,7 +656,10 @@ impl RequestQueue {
         let model_identifier =
             crate::agent::model_identifier_for_strategy(model_manager.get_config());
         let chat_template = Arc::new(ChatTemplateEngine::with_model_strategy(&model_identifier));
-        let session_state_cache: SessionStateCache = Arc::new(Mutex::new(HashMap::new()));
+        let session_state_cache: SessionStateCache = Arc::new(Mutex::new(SessionStateStore::new(
+            default_max_cache_entries(),
+            MAX_SESSION_CACHE_BYTES,
+        )));
 
         let executor: Arc<dyn QueueExecutor> = Arc::new(ModelManagerExecutor::new(
             model_manager.clone(),
@@ -590,6 +696,21 @@ impl RequestQueue {
         executor: Arc<dyn QueueExecutor>,
     ) -> Self {
         let worker_handles = Self::spawn_workers(&config, &receiver, &metrics, &executor);
+
+        // KV-cache reuse (SessionStateStore restore→generate→save) is NOT guarded
+        // by a per-session lock: it is correct only when turns of a given session
+        // are serialized. The default single worker guarantees that. With more
+        // than one worker, two concurrent turns of the SAME session could
+        // interleave restore and save and corrupt the cached state, so warn.
+        if config.worker_threads > 1 {
+            warn!(
+                "RequestQueue configured with {} workers: per-session KV-cache reuse assumes \
+                 single-worker serialization and has no per-session lock. Concurrent turns of \
+                 the same session may corrupt cached context state. See follow-up card \
+                 01KSSSQ6EP42C2TCHJWNY2JFNH.",
+                config.worker_threads
+            );
+        }
 
         info!(
             "RequestQueue initialized with {} workers, max queue size: {}",
@@ -647,7 +768,10 @@ impl RequestQueue {
         let receiver = Arc::new(tokio::sync::Mutex::new(receiver));
         let metrics = Arc::new(QueueMetrics::new());
         let chat_template = Arc::new(ChatTemplateEngine::new());
-        let session_state_cache: SessionStateCache = Arc::new(Mutex::new(HashMap::new()));
+        let session_state_cache: SessionStateCache = Arc::new(Mutex::new(SessionStateStore::new(
+            default_max_cache_entries(),
+            MAX_SESSION_CACHE_BYTES,
+        )));
         let session_config = crate::types::SessionConfig::default();
 
         Self::assemble(
@@ -1026,7 +1150,17 @@ impl RequestQueue {
             generation_result.tokens_generated,
             final_finish_reason
         );
-        Self::save_session_state(worker_id, &request_id, session, ctx, session_state_cache);
+        // Batch path stores no prompt fingerprint — it gates reuse via
+        // `cached_message_count` and its append-only message bookkeeping, not the
+        // streaming path's longest-common-prefix check.
+        Self::save_session_state(
+            worker_id,
+            &request_id,
+            session,
+            ctx,
+            session_state_cache,
+            None,
+        );
         GenerationResponse {
             generated_text: generation_result.generated_text,
             tokens_generated: generation_result.tokens_generated,
@@ -1100,8 +1234,8 @@ impl RequestQueue {
         );
 
         let state_bytes = {
-            let cache = session_state_cache.lock().unwrap();
-            cache.get(&session.id.to_string()).cloned()
+            let mut cache = session_state_cache.lock().unwrap();
+            cache.get(&session.id.to_string()).map(|(bytes, _tokens)| bytes)
         };
 
         let Some(bytes) = state_bytes else {
@@ -1174,14 +1308,20 @@ impl RequestQueue {
     }
 
     /// Copy the llama.cpp context state into the session cache so the next
-    /// turn can resume without reprocessing prior messages. Applies a simple
-    /// size-based eviction.
+    /// turn can resume without reprocessing prior messages. The store evicts
+    /// LRU entries to stay within its entry-count and byte budgets.
+    ///
+    /// `prompt_tokens` is the tokenization of the prompt these state bytes were
+    /// produced from. The streaming path passes `Some(..)` so the next turn can
+    /// verify the cache is still a valid prefix (longest-common-prefix) before
+    /// reusing it; the batch path passes `None` (it gates reuse differently).
     fn save_session_state(
         worker_id: usize,
         request_id: &str,
         session: &Session,
         ctx: &mut LlamaContext<'_>,
         session_state_cache: &SessionStateCache,
+        prompt_tokens: Option<Vec<i32>>,
     ) {
         let state_size = ctx.get_state_size();
         info!(
@@ -1205,7 +1345,7 @@ impl RequestQueue {
         state_bytes.truncate(bytes_written);
 
         let mut cache = session_state_cache.lock().unwrap();
-        cache.insert(session.id.to_string(), state_bytes);
+        cache.insert(session.id.to_string(), state_bytes, prompt_tokens);
         info!(
             "Worker {} cached {} bytes of state for session {} ({} messages)",
             worker_id,
@@ -1213,8 +1353,6 @@ impl RequestQueue {
             session.id,
             session.messages.len()
         );
-
-        evict_oldest_session_states(worker_id, &mut cache);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1295,12 +1433,20 @@ impl RequestQueue {
             cancellation_token.is_cancelled(),
             stream_sender.is_closed(),
         ) {
+            // Store the prompt's tokenization alongside the state so the NEXT
+            // turn can verify the cache is still a valid prefix (longest common
+            // prefix) before reusing it — see `prepare_streaming_kv_cache`.
+            let prompt_tokens: Option<Vec<i32>> = model
+                .str_to_token(&prompt, llama_cpp_2::model::AddBos::Always)
+                .ok()
+                .map(|toks| toks.into_iter().map(|t| t.0).collect());
             Self::save_session_state(
                 worker_id,
                 &request_id,
                 session,
                 &mut ctx,
                 session_state_cache,
+                prompt_tokens,
             );
         }
 
@@ -1311,23 +1457,26 @@ impl RequestQueue {
     /// Restore the prior turn's KV cache into `ctx` and return the token offset
     /// to resume generation from, so streaming only decodes the new tokens.
     ///
-    /// Gated on the presence of cached state (not `cached_message_count`) so the
-    /// streaming/ACP path self-heals across turns without extra per-session
-    /// bookkeeping. Returns `None` — meaning "process the full prompt" — when
-    /// there is no cached state, when restoration fails, or when the cache is
-    /// not a valid prefix of the current prompt (e.g. auto-compaction shrank the
-    /// prompt below the cached length). In the stale case the leftover KV is
-    /// cleared so the subsequent full decode starts from a clean cache.
+    /// Robust prefix validation (no length-only guessing): we store the
+    /// tokenization of the prompt the cache was built from, and here compute the
+    /// longest common prefix (LCP) between that and the NEW prompt's
+    /// tokenization. We then TRIM the KV cache to exactly the LCP
+    /// (`clear_kv_cache_seq`) so the new tokens append cleanly onto a verified
+    /// prefix. This is correct under ANY prompt change:
+    ///   - append-only growth → LCP is the shared history, the new turn's
+    ///     messages append (the prior turn's generation-prompt suffix and
+    ///     generated tokens past the LCP are trimmed and re-decoded — cheap, it
+    ///     is only the last assistant turn);
+    ///   - compaction / history rewrite → divergence shortens the LCP, and only
+    ///     the still-valid prefix is reused;
+    ///   - a stale/partial save → the divergent suffix is trimmed, never decoded
+    ///     against.
     ///
-    /// PREFIX ASSUMPTION: the staleness guard is a LENGTH check (`offset >=
-    /// total`), not a content check. It assumes the conversation only ever grows
-    /// append-only and that compaction only ever SHRINKS the prompt — never
-    /// rewrites an earlier span while keeping a similar token count. That holds
-    /// today (every turn appends user/assistant/tool messages; compaction
-    /// replaces history with a strictly shorter summary). If a future change can
-    /// rewrite a retained prefix without changing its length, this must become a
-    /// content fingerprint comparison (hash of the cached prefix tokens) — see
-    /// the review follow-up card.
+    /// Returns `None` ("process the full prompt", after clearing the KV) when
+    /// there is no cached state, no stored fingerprint, tokenization fails, or
+    /// the LCP leaves nothing useful to reuse (`0` or the whole new prompt).
+    /// Gated on cache PRESENCE (not `cached_message_count`) so the streaming/ACP
+    /// path self-heals across turns without extra bookkeeping.
     fn prepare_streaming_kv_cache(
         worker_id: usize,
         session: &Session,
@@ -1338,53 +1487,74 @@ impl RequestQueue {
     ) -> Option<usize> {
         use llama_cpp_2::model::AddBos;
 
-        let has_cached_state = {
-            let cache = session_state_cache.lock().unwrap();
-            cache.contains_key(&session.id.to_string())
+        let cached = {
+            let mut cache = session_state_cache.lock().unwrap();
+            cache.get(&session.id.to_string())
         };
-        if !has_cached_state {
+        let Some((bytes, prompt_tokens)) = cached else {
             info!(
                 "Worker {} streaming: no cached KV state for session {}, processing full prompt",
                 worker_id, session.id
             );
             return None;
-        }
+        };
+        let Some(cached_tokens) = prompt_tokens else {
+            // State written without a fingerprint (e.g. by the batch path). We
+            // cannot verify the prefix, so reprocess in full rather than risk a
+            // bad reuse.
+            info!(
+                "Worker {} streaming: cached state for session {} has no prompt fingerprint, processing full prompt",
+                worker_id, session.id
+            );
+            return None;
+        };
 
-        let kv_cache_position =
-            match Self::restore_session_kv_cache(worker_id, session, ctx, session_state_cache) {
-                Ok(pos) => pos,
-                Err(e) => {
+        // Load the prior context state, then verify+trim against the new prompt.
+        let _bytes_read = unsafe { ctx.set_state_data(&bytes) };
+
+        let new_tokens: Vec<i32> = match model.str_to_token(prompt, AddBos::Always) {
+            Ok(toks) => toks.into_iter().map(|t| t.0).collect(),
+            Err(e) => {
+                warn!(
+                    "Worker {} streaming: failed to tokenize prompt for prefix check ({}); processing full prompt",
+                    worker_id, e
+                );
+                ctx.clear_kv_cache();
+                return None;
+            }
+        };
+
+        let lcp = common_prefix_len(&cached_tokens, &new_tokens);
+        match streaming_reuse_decision(lcp, new_tokens.len()) {
+            Some(offset) => {
+                // Trim the KV to exactly the verified common prefix so the new
+                // tokens append cleanly. This drops the prior turn's divergent
+                // tail (its generation-prompt suffix + generated tokens, and any
+                // rewritten span after compaction) — positions `[offset, ∞)`.
+                if let Err(e) = ctx.clear_kv_cache_seq(Some(0), Some(offset as u32), None) {
                     warn!(
-                        "Worker {} streaming KV restore failed ({}); processing full prompt",
+                        "Worker {} streaming: failed to trim KV to common prefix ({:?}); processing full prompt",
                         worker_id, e
                     );
                     ctx.clear_kv_cache();
                     return None;
                 }
-            };
-
-        let total_prompt_tokens = model
-            .str_to_token(prompt, AddBos::Always)
-            .map(|t| t.len())
-            .unwrap_or(0);
-
-        match streaming_offset_decision(kv_cache_position, total_prompt_tokens) {
-            Some(offset) => {
                 info!(
                     "Worker {} streaming reusing {} cached tokens, processing {} new tokens for session {}",
                     worker_id,
                     offset,
-                    total_prompt_tokens.saturating_sub(offset),
+                    new_tokens.len().saturating_sub(offset),
                     session.id
                 );
                 Some(offset)
             }
             None => {
-                warn!(
-                    "Worker {} streaming KV cache (pos {}) is not a valid prefix of the current \
-                     prompt ({} tokens) — likely after compaction; clearing stale cache and \
-                     reprocessing the full prompt",
-                    worker_id, kv_cache_position, total_prompt_tokens
+                info!(
+                    "Worker {} streaming: cached prefix for session {} no longer matches (common prefix {} of {} tokens); processing full prompt",
+                    worker_id,
+                    session.id,
+                    lcp,
+                    new_tokens.len()
                 );
                 ctx.clear_kv_cache();
                 None
@@ -1393,24 +1563,21 @@ impl RequestQueue {
     }
 }
 
-/// Decide the streaming resume offset from the restored KV-cache position and
-/// the current prompt length.
+/// Decide the streaming resume offset from the longest-common-prefix length
+/// between the cached prompt tokens and the new prompt tokens.
 ///
-/// Returns `Some(offset)` when the cache is a strict prefix of the prompt
-/// (`0 < offset < total`), meaning generation can skip the first `offset` tokens
-/// because they are already in the KV cache. Returns `None` — "reprocess the
-/// full prompt" — when there is no usable cache (`kv_cache_position < 0`) or the
-/// cache is as long as / longer than the current prompt (no new tokens, or the
-/// prompt shrank after compaction so the cache is no longer a valid prefix).
-fn streaming_offset_decision(kv_cache_position: i32, total_prompt_tokens: usize) -> Option<usize> {
-    if kv_cache_position < 0 {
+/// Returns `Some(lcp)` — resume decoding at position `lcp`, the verified shared
+/// prefix — when `0 < lcp < new_len`. Returns `None` ("reprocess the full
+/// prompt") when there is nothing reusable (`lcp == 0`) or the cache already
+/// covers the entire new prompt (`lcp >= new_len`, i.e. no new tokens to
+/// decode). Because the caller trims the KV to exactly `lcp` before decoding,
+/// any cached tokens beyond `lcp` are discarded — so this needs no separate
+/// staleness/length guard.
+fn streaming_reuse_decision(lcp: usize, new_len: usize) -> Option<usize> {
+    if lcp == 0 || lcp >= new_len {
         return None;
     }
-    let offset = (kv_cache_position as usize) + 1;
-    if offset >= total_prompt_tokens {
-        return None;
-    }
-    Some(offset)
+    Some(lcp)
 }
 
 /// Whether a streaming turn's KV cache should be persisted for reuse next turn.
@@ -3062,42 +3229,77 @@ mod tests {
     mod free_fn_unit_tests {
         use super::*;
 
-        /// The same limit the function computes internally, so the test can
-        /// insert one more than the limit and guarantee eviction fires.
-        fn cache_limit() -> usize {
-            std::thread::available_parallelism()
-                .map(|n| (n.get() / 2).max(1))
-                .unwrap_or(4)
+        fn state(byte: u8, len: usize) -> Vec<u8> {
+            vec![byte; len]
         }
 
         #[test]
-        fn evict_session_states_is_a_noop_under_limit() {
-            // At or below the limit nothing is evicted.
-            let mut cache: HashMap<String, Vec<u8>> = HashMap::new();
-            cache.insert("only".to_string(), vec![1, 2, 3]);
-            evict_oldest_session_states(0, &mut cache);
-            assert_eq!(cache.len(), 1, "a single entry is never evicted");
+        fn store_evicts_lru_first_keeping_the_active_session() {
+            // entry budget of 2; insert A, B, touch A (now MRU), insert C.
+            // The least-recently-used (B) must be evicted, NOT the active A.
+            let mut store = SessionStateStore::new(2, usize::MAX);
+            store.insert("A".into(), state(1, 10), None);
+            store.insert("B".into(), state(2, 10), None);
+            assert!(store.get("A").is_some(), "touch A → most-recently-used");
+            store.insert("C".into(), state(3, 10), None);
+
+            assert_eq!(store.len(), 2, "entry budget of 2 enforced");
+            assert!(store.contains("A"), "active (recently-used) session kept");
+            assert!(store.contains("C"), "newest session kept");
+            assert!(!store.contains("B"), "least-recently-used session evicted");
         }
 
         #[test]
-        fn evict_session_states_drops_down_to_limit() {
-            // Growing the cache past the limit evicts the overflow back down to
-            // exactly the limit — the eviction branch the worker only hits after
-            // many distinct sessions have been cached.
-            let limit = cache_limit();
-            let mut cache: HashMap<String, Vec<u8>> = HashMap::new();
-            for i in 0..(limit + 5) {
-                cache.insert(format!("session-{i}"), vec![i as u8]);
-            }
-            assert!(cache.len() > limit, "precondition: cache exceeds the limit");
+        fn store_evicts_to_stay_within_byte_budget() {
+            // Byte budget of 25 with 10-byte entries: only 2 fit; a 3rd evicts the
+            // LRU even though the entry count (3) would otherwise be allowed.
+            let mut store = SessionStateStore::new(100, 25);
+            store.insert("A".into(), state(1, 10), None);
+            store.insert("B".into(), state(2, 10), None);
+            store.insert("C".into(), state(3, 10), None);
 
-            evict_oldest_session_states(0, &mut cache);
+            assert_eq!(store.len(), 2, "byte budget caps total entries at 2");
+            assert!(store.cur_bytes <= 25, "total bytes stay within budget");
+            assert!(!store.contains("A"), "LRU evicted under byte pressure");
+            assert!(store.contains("B") && store.contains("C"));
+        }
 
-            assert_eq!(
-                cache.len(),
-                limit,
-                "eviction must bring the cache back down to exactly the limit"
-            );
+        #[test]
+        fn store_always_keeps_at_least_one_entry() {
+            // Even a single entry larger than the byte budget is retained — we
+            // never evict the only (most-recently-used) entry.
+            let mut store = SessionStateStore::new(4, 8);
+            store.insert("solo".into(), state(1, 100), None);
+            assert_eq!(store.len(), 1, "the only entry is never evicted");
+            assert!(store.contains("solo"));
+        }
+
+        #[test]
+        fn store_insert_replaces_and_tracks_bytes() {
+            let mut store = SessionStateStore::new(4, usize::MAX);
+            store.insert("A".into(), state(1, 10), None);
+            store.insert("A".into(), state(1, 30), None); // replace, larger
+            assert_eq!(store.len(), 1, "replacing an id does not add an entry");
+            assert_eq!(store.cur_bytes, 30, "byte accounting follows replacement");
+        }
+
+        #[test]
+        fn store_get_returns_bytes_and_fingerprint() {
+            let mut store = SessionStateStore::new(4, usize::MAX);
+            store.insert("A".into(), state(7, 3), Some(vec![10, 20, 30]));
+            let (bytes, toks) = store.get("A").expect("present");
+            assert_eq!(bytes, vec![7, 7, 7]);
+            assert_eq!(toks, Some(vec![10, 20, 30]));
+            assert_eq!(store.get("missing"), None);
+        }
+
+        #[test]
+        fn common_prefix_len_basic() {
+            assert_eq!(common_prefix_len(&[1, 2, 3], &[1, 2, 3, 4]), 3);
+            assert_eq!(common_prefix_len(&[1, 2, 3], &[1, 2, 9, 4]), 2);
+            assert_eq!(common_prefix_len(&[9, 1], &[1, 9]), 0);
+            assert_eq!(common_prefix_len(&[], &[1, 2]), 0);
+            assert_eq!(common_prefix_len(&[1, 2], &[]), 0);
         }
 
         #[test]
@@ -3110,47 +3312,27 @@ mod tests {
         }
 
         #[test]
-        fn streaming_offset_none_for_fresh_context() {
-            // A negative position means there is no usable cache: reprocess the
-            // full prompt.
-            assert_eq!(streaming_offset_decision(-1, 100), None);
+        fn streaming_reuse_decision_reuses_strict_prefix() {
+            // Common incremental case: cache shares the first `lcp` tokens of a
+            // longer new prompt, so resume decoding at `lcp`.
+            assert_eq!(streaming_reuse_decision(42, 100), Some(42));
+            assert_eq!(streaming_reuse_decision(1, 2), Some(1));
         }
 
         #[test]
-        fn streaming_offset_reuses_strict_prefix() {
-            // The common incremental case: the cache covers the first N tokens of
-            // a longer prompt, so generation resumes at the offset and only the
-            // new tokens are decoded.
-            // position 41 => 42 cached tokens; prompt is 100 tokens.
-            assert_eq!(streaming_offset_decision(41, 100), Some(42));
-            // position 0 => 1 cached token (the BOS) of a 2-token prompt.
-            assert_eq!(streaming_offset_decision(0, 2), Some(1));
+        fn streaming_reuse_decision_none_when_nothing_shared() {
+            // No common prefix → nothing to reuse, reprocess in full.
+            assert_eq!(streaming_reuse_decision(0, 100), None);
         }
 
         #[test]
-        fn streaming_offset_none_when_cache_has_no_new_tokens() {
-            // Cache length == prompt length: nothing new to process. Returning
-            // None forces a full reprocess rather than the generation layer's
-            // "template offset exhausted -> empty response" path.
-            // position 99 => 100 cached tokens; prompt is exactly 100 tokens.
-            assert_eq!(streaming_offset_decision(99, 100), None);
-        }
-
-        #[test]
-        fn streaming_offset_none_when_cache_longer_than_prompt() {
-            // After auto-compaction the prompt can shrink below the cached
-            // length. The cache is then NOT a valid prefix, so we must discard it
-            // and reprocess in full rather than skip real tokens.
-            // position 199 => 200 cached tokens; prompt shrank to 50.
-            assert_eq!(streaming_offset_decision(199, 50), None);
-        }
-
-        #[test]
-        fn streaming_offset_none_for_empty_prompt() {
-            // Degenerate: an empty (0-token) prompt can never have a valid
-            // non-empty prefix in the cache.
-            assert_eq!(streaming_offset_decision(0, 0), None);
-            assert_eq!(streaming_offset_decision(5, 0), None);
+        fn streaming_reuse_decision_none_when_no_new_tokens() {
+            // Cache already covers the entire new prompt: no new tokens to decode.
+            // (Also guards the divergence/shrink case — the new prompt's length
+            // bounds `lcp`, and the caller trims the KV to `lcp` before decoding.)
+            assert_eq!(streaming_reuse_decision(100, 100), None);
+            assert_eq!(streaming_reuse_decision(120, 100), None);
+            assert_eq!(streaming_reuse_decision(0, 0), None);
         }
 
         #[test]
