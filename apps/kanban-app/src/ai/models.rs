@@ -641,7 +641,7 @@ mod tests {
         );
 
         // The other qwen variants stay untagged and must not appear.
-        for excluded in ["qwen-coder", "qwen-moe", "qwen-0.6b-test", "qwen-embedding"] {
+        for excluded in ["qwen-coder", "qwen-0.6b-test", "qwen-embedding"] {
             assert!(
                 !models.iter().any(|m| m.id == excluded),
                 "untagged model `{excluded}` must not be listed, got {models:?}"

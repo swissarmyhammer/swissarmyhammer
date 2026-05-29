@@ -1,5 +1,5 @@
 ---
-description: "Qwen3.6"
+description: "Qwen3.6 35B-A3B MoE (MTP build)"
 tags: [kanban]
 ---
 quiet: false
@@ -8,5 +8,5 @@ executor:
   config:
     model:
       source: !HuggingFace
-        repo: "unsloth/Qwen3.6-27B-GGUF"
-        filename: "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        repo: "unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
+        filename: "Qwen3.6-35B-A3B-MXFP4_MOE.gguf"

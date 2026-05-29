@@ -2701,7 +2701,7 @@ executor:
 
         // The embedding model and the other untagged llama chat variants must
         // not carry the `kanban` tag — they should not surface in the panel.
-        for name in ["qwen-embedding", "qwen-coder", "qwen-moe", "qwen-0.6b-test"] {
+        for name in ["qwen-embedding", "qwen-coder", "qwen-0.6b-test"] {
             let model = models
                 .iter()
                 .find(|m| m.name == name)
