@@ -516,6 +516,7 @@ function SpatialFocusScopeBody({
         ref={setRef}
         data-moniker={fq}
         data-segment={segment}
+        data-focusable={showFocus || undefined}
         data-focused={effectiveFocused || undefined}
         onClick={handleClick}
         onContextMenu={handleContextMenu}

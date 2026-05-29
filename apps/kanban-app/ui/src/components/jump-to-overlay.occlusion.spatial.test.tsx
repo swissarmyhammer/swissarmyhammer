@@ -565,11 +565,23 @@ describe("Jump-To overlay — occlusion / viewport filtering", () => {
 
     readOpenPanelRect();
 
+    // Jump pills land only on top-tier focusables (cards) — structural zones
+    // (board well, columns: `data-focusable` absent) and nested focusables (a
+    // card's fields: they have a focusable ancestor) are excluded, mirroring
+    // the kernel's tier-locked nav. Restrict the expected set accordingly so
+    // this test stays an OCCLUSION test (visible-vs-hidden) over the
+    // jump-eligible scopes rather than re-asserting the old "pill on every
+    // scope" model.
+    const isTopTierFocusable = (h: HTMLElement): boolean =>
+      h.dataset.focusable !== undefined &&
+      !h.parentElement?.closest("[data-focusable]");
     const { visible } = partitionBoardScopes();
-    const expectedVisibleFqs = new Set(visible.map((h) => h.dataset.moniker!));
+    const expectedVisibleFqs = new Set(
+      visible.filter(isTopTierFocusable).map((h) => h.dataset.moniker!),
+    );
     expect(
       expectedVisibleFqs.size,
-      "at least one board scope must be visible",
+      "at least one focusable board card must be visible",
     ).toBeGreaterThan(0);
 
     const overlay = await openJumpTo(harness);
@@ -624,17 +636,26 @@ describe("Jump-To overlay — occlusion / viewport filtering", () => {
 
     readOpenPanelRect();
 
-    // The panel's own focus scopes that are visible on top of everything.
+    // The panel's own top-tier focusable scopes that are visible on top of
+    // everything. Jump pills land only on top-tier focusables, so restrict to
+    // panel scopes that are focusable (`data-focusable`) with no focusable
+    // ancestor — the panel's structural zones (`ui:ai-panel`, transcript
+    // wrapper) and any nested focusables are excluded, mirroring the overlay's
+    // tier filter.
+    const isTopTierFocusable = (h: HTMLElement): boolean =>
+      h.dataset.focusable !== undefined &&
+      !h.parentElement?.closest("[data-focusable]");
     const visiblePanelFqs = new Set(
       Array.from(document.querySelectorAll<HTMLElement>("[data-segment]"))
         .filter((h) => (h.dataset.segment ?? "").startsWith("ui:ai-panel"))
+        .filter(isTopTierFocusable)
         .filter((h) => hostAnchorVisible(h))
         .map((h) => h.dataset.moniker!),
     );
 
     expect(
       visiblePanelFqs.size,
-      "the open panel must register at least one visible scope",
+      "the open panel must register at least one visible top-tier focusable scope",
     ).toBeGreaterThan(0);
 
     const overlay = await openJumpTo(harness);

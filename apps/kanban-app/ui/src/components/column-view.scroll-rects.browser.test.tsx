@@ -333,7 +333,10 @@ function renderColumn(column: Entity, tasks: Entity[]) {
                           overflowX: "hidden",
                         }}
                       >
-                        <FocusScope moniker={asSegment("ui:board")}>
+                        {/* Non-focusable, matching production board-view.tsx:
+                            the board well is a structural zone so cards are
+                            top-tier and a click on a card focuses the card. */}
+                        <FocusScope moniker={asSegment("ui:board")} showFocus={false}>
                           <ColumnView column={column} tasks={tasks} />
                         </FocusScope>
                       </div>

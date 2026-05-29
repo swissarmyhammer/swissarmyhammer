@@ -228,7 +228,14 @@ export interface SpatialFocusActions {
    */
   enumerateScopesInLayer: (
     layerFq: FullyQualifiedMoniker,
-  ) => Array<{ fq: FullyQualifiedMoniker; rect: DOMRect }>;
+  ) => Array<{
+    fq: FullyQualifiedMoniker;
+    rect: DOMRect;
+    /** Enclosing scope FQM, for nearest-focusable-ancestor (tier) computation. */
+    parentZone: FullyQualifiedMoniker | null;
+    /** Whether this scope is a focus target (`showFocus`); zones are `false`. */
+    focusable: boolean;
+  }>;
   /**
    * Look up the layer FQM whose `LayerScopeRegistry` currently
    * contains `fq`. Returns `null` when no registry has the FQM (the
@@ -621,11 +628,21 @@ function buildSpatialFocusActions(
     (layerFq) => {
       const registry = layerRegistriesRef.current.get(layerFq);
       if (registry === undefined) return [];
-      const out: Array<{ fq: FullyQualifiedMoniker; rect: DOMRect }> = [];
+      const out: Array<{
+        fq: FullyQualifiedMoniker;
+        rect: DOMRect;
+        parentZone: FullyQualifiedMoniker | null;
+        focusable: boolean;
+      }> = [];
       for (const [fq, entry] of registry.entries()) {
         const node = entry.ref.current;
         if (node === null) continue;
-        out.push({ fq, rect: node.getBoundingClientRect() });
+        out.push({
+          fq,
+          rect: node.getBoundingClientRect(),
+          parentZone: entry.parentZone,
+          focusable: entry.showFocus ?? true,
+        });
       }
       return out;
     };

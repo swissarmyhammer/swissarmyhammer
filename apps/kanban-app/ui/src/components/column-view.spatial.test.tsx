@@ -250,7 +250,9 @@ function renderColumnInBoard(ui: React.ReactElement) {
             <EntityStoreProvider entities={{}}>
               <TooltipProvider>
                 <ActiveBoardPathProvider value="/test/board">
-                  <FocusScope moniker={asSegment("ui:board")}>{ui}</FocusScope>
+                  <FocusScope moniker={asSegment("ui:board")} showFocus={false}>
+                    {ui}
+                  </FocusScope>
                 </ActiveBoardPathProvider>
               </TooltipProvider>
             </EntityStoreProvider>
@@ -286,7 +288,10 @@ function renderColumnInAppShell(ui: React.ReactElement) {
                     <TooltipProvider>
                       <ActiveBoardPathProvider value="/test/board">
                         <AppShell>
-                          <FocusScope moniker={asSegment("ui:board")}>
+                          <FocusScope
+                            moniker={asSegment("ui:board")}
+                            showFocus={false}
+                          >
                             {ui}
                           </FocusScope>
                         </AppShell>
@@ -398,9 +403,16 @@ describe("ColumnView — browser spatial behaviour", () => {
   // Test #2 — Click on column body whitespace → focus
   // -------------------------------------------------------------------------
 
-  it("clicking column whitespace dispatches exactly one spatial_focus for the column key", async () => {
+  it("clicking column whitespace focuses the column zone but mounts no indicator (structural zone)", async () => {
+    // New navigation model (cards are the nav unit; no special cases): a
+    // column is a NON-FOCUSABLE structural zone (`showFocus={false}`).
+    // Clicking the column's own whitespace still claims focus for the column
+    // — `clickFocusFq` falls back to the scope itself when no focusable
+    // ancestor exists — so the data-focused attribute flips for e2e/debug
+    // tooling, but NO visible `<FocusIndicator>` mounts (it's a zone). The
+    // click must not bubble to the wrapping board zone.
     const column = makeColumn("01ABCDEFGHJKMNPQRSTVWXYZ02");
-    const { container, unmount } = renderColumnInBoard(
+    const { container, queryByTestId, unmount } = renderColumnInBoard(
       <ColumnView column={column} tasks={[]} />,
     );
     await flushSetup();
@@ -426,29 +438,24 @@ describe("ColumnView — browser spatial behaviour", () => {
     const focusCalls = spatialFocusCalls();
     expect(focusCalls).toHaveLength(1);
     expect(focusCalls[0].fq).toBe(columnZone.fq);
-    // The board zone key must NOT also receive a focus call — the column
-    // calls `e.stopPropagation()` so the click does not bubble to the
-    // wrapping board zone. This is the regression-test side of the bug
-    // the card was opened on (visible feedback was suppressed by
-    // `showFocus={false}`; the click itself was already correct, but
-    // pinning bubble-blocking here keeps the click contract intact).
+    // Did not bubble to the board zone.
     expect(focusCalls.find((c) => c.fq === boardZone.fq)).toBeUndefined();
+    // It's a structural zone — no visible focus bar.
+    expect(queryByTestId("focus-indicator")).toBeNull();
 
     unmount();
   });
 
   // -------------------------------------------------------------------------
-  // Test #3 — Focus claim → visible bar
+  // Test #3 — Column is a structural zone: no visible focus bar
   // -------------------------------------------------------------------------
 
-  it("focus claim mounts <FocusIndicator> inside the column (showFocus={true})", async () => {
-    // The visible-bar regression: the previous wrap had
-    // `showFocus={false}`, which suppressed `<FocusIndicator>` even
-    // when the kernel emitted a focus claim for the column. The fix
-    // (drop the `false` and rely on `<FocusScope>`'s default `true`)
-    // is what this test pins. If a future edit adds the suppression
-    // back, this assertion will fail because the indicator never
-    // mounts.
+  it("column is a structural zone — no <FocusIndicator> mounts on it (showFocus={false})", async () => {
+    // Under the cards-are-the-nav-unit model the column is a non-focusable
+    // structural zone, so it paints no focus bar. Even if a focus-changed
+    // event names the column key (it should not in normal use), the column's
+    // `showFocus={false}` suppresses the indicator. This is the inverse of
+    // the old regression test that pinned the column as a focus target.
     const column = makeColumn("01ABCDEFGHJKMNPQRSTVWXYZ03");
     const { container, queryByTestId, unmount } = renderColumnInBoard(
       <ColumnView column={column} tasks={[]} />,
@@ -458,23 +465,19 @@ describe("ColumnView — browser spatial behaviour", () => {
     const columnZone = registerScopeArgs().find(
       (a) => a.segment === column.moniker,
     )!;
+    // The column registers as a non-focusable scope.
+    expect(columnZone.focusable).toBe(false);
+
     const columnNode = container.querySelector(
       `[data-segment='${column.moniker}']`,
     ) as HTMLElement;
     expect(columnNode).not.toBeNull();
-    expect(columnNode.getAttribute("data-focused")).toBeNull();
-    // No indicator before the focus claim.
     expect(queryByTestId("focus-indicator")).toBeNull();
 
+    // Even a (degenerate) focus claim for the column key paints no bar.
     await fireFocusChanged({ next_fq: columnZone.fq as FullyQualifiedMoniker });
-
-    await waitFor(() => {
-      expect(columnNode.getAttribute("data-focused")).toBe("true");
-    });
-    // The visible bar mounted, AND it lives inside the column box.
-    const indicator = queryByTestId("focus-indicator");
-    expect(indicator).not.toBeNull();
-    expect(columnNode.contains(indicator!)).toBe(true);
+    await flushSetup();
+    expect(queryByTestId("focus-indicator")).toBeNull();
 
     unmount();
   });

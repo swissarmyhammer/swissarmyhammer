@@ -326,18 +326,19 @@ export const ColumnView = memo(function ColumnView(props: ColumnViewProps) {
   //
   // The column body is a zone (parent of cards), not a leaf — descendants
   // (`task:{id}` card scopes, the column-name `<Field>` zone in the header)
-  // register `parentZone = column-zone-key` via `FocusZoneContext`, so beam
+  // register `parentZone = column-zone-key` via `FocusScopeContext`, so beam
   // search treats the column's children as in-zone candidates.
   //
-  // `showFocus` defaults to `true`. The column is a sized, distinct entity
-  // — when the user clicks its body or drills out from a card with Escape,
-  // they need a visible indicator on the column itself. Container zones that
-  // are viewport-sized chrome (board, perspective, view, navbar) suppress the
-  // bar because a focus rectangle around the entire viewport would be visual
-  // noise; columns are bounded boxes inside the board, so they advertise
-  // their focus the same way cards and field rows do. The
-  // `<FocusIndicator>` renders along the left edge of the column box at full
-  // height — see `kanban-app/ui/src/components/focus-indicator.tsx`.
+  // `showFocus={false}` — the column is a NON-FOCUSABLE structural zone. This
+  // is what makes cards the navigation tier: a card's nearest *focusable*
+  // ancestor is `None` (its column and the board well are both zones), so all
+  // cards across all columns share one tier and arrow keys glide smoothly
+  // card→card, including across columns, without ever landing on a column or
+  // diving into a card's inner fields (those sit a tier deeper and are reached
+  // only by drill-in). Marking the column focusable would split each column
+  // into its own tier and block cross-column arrow nav. This matches the other
+  // structural containers (board, perspective, view, navbar), which are all
+  // non-focusable zones.
   // The column body wraps a real entity (`column:<id>` moniker), so
   // double-clicking the column whitespace should open the inspector
   // for that column. The `<Inspectable>` wrapper owns the
@@ -350,6 +351,7 @@ export const ColumnView = memo(function ColumnView(props: ColumnViewProps) {
     <Inspectable moniker={asSegment(columnMoniker)}>
       <FocusScope
         moniker={asSegment(columnMoniker)}
+        showFocus={false}
         className="flex flex-col flex-1 min-h-0 min-w-[24em] max-w-[48em] shrink-0"
       >
         <ColumnBody

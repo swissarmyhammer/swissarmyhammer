@@ -473,6 +473,14 @@ function countVisibleScopes(): number {
   );
   let count = 0;
   for (const h of hosts) {
+    // Jump pills land only on **top-tier focusables** — the navigation units
+    // (cards, buttons): focusable scopes (`data-focusable`) whose nearest
+    // focusable ancestor is none. Structural zones (`data-focusable` absent)
+    // and nested focusables (a card's fields, which have a focusable ancestor)
+    // are excluded — reached by drill-in, not jump — mirroring the kernel's
+    // tier-locked nav and the overlay's tier filter.
+    if (h.dataset.focusable === undefined) continue;
+    if (h.parentElement?.closest("[data-focusable]")) continue;
     const r = h.getBoundingClientRect();
     if (r.width <= 0 || r.height <= 0) continue;
     const hit = document.elementFromPoint(r.left + 4, r.top + 4);

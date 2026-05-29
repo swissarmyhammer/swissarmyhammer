@@ -226,12 +226,14 @@ export function rectFromWire(r: unknown): RectLike {
 //      (stay-put); a target FQM redirects when it resolves in-layer.
 //   2. Candidate gate: same layer, not the focused scope, **focusable**
 //      (structural zones with `focusable: false` — columns, board well,
-//      panel & view-area wrappers — are skipped), not an ancestor of the
-//      focused scope, then the strict half-plane + in-beam test
-//      (`scoreCandidate`).
-//   3. Lowest beam score wins; ties resolve by ancestry (the enclosing
-//      card beats its own inner control) else leaf-over-container — see
-//      `betterCandidate`.
+//      panel & view-area wrappers — are skipped), and in the **same
+//      navigation tier** (sharing the focused scope's nearest focusable
+//      ancestor — see `nearestFocusableAncestor`), then the strict
+//      half-plane + in-beam test (`scoreCandidate`). The tier gate is the
+//      general rule that keeps arrows gliding item→item and out of a card's
+//      inner fields; it subsumes the old ancestor-of-focused exclusion.
+//   3. Lowest beam score wins; an exact tie prefers leaf-over-container —
+//      see `betterCandidate`.
 //
 // Keeping this in lock-step with the Rust kernel is the whole point — the
 // authoritative coverage lives in `navigate.rs` unit tests; this port
@@ -270,11 +272,14 @@ export function navigateInShadow(
   }
 
   // Single geometric pass over the focused scope's layer, mirroring
-  // `geometric_pick` in navigate.rs: skip the focused scope, non-focusable
+  // `geometric_pick` in navigate.rs: skip the focused scope and non-focusable
   // structural zones (columns / board well / panel & view-area wrappers —
-  // never cardinal targets), and ancestors of the focused scope; require
-  // the strict half-plane + in-beam test. Lowest beam score wins, ties via
-  // `betterCandidate` (ancestor card beats its own inner control).
+  // never cardinal targets), and **tier-lock** to the focused scope's nearest
+  // focusable ancestor so arrow keys glide item→item without diving into a
+  // card's inner fields (a field's tier is its card; a card's tier is `None`).
+  // Require the strict half-plane + in-beam test. Lowest beam score wins, ties
+  // via `betterCandidate` (leaf over container).
+  const focusedTier = nearestFocusableAncestor(registry, from.fq);
   const parentFqs = new Set<FullyQualifiedMoniker>();
   for (const e of registry.values()) {
     if (e.parentZone !== null) parentFqs.add(e.parentZone);
@@ -288,7 +293,7 @@ export function navigateInShadow(
     if (e.layerFq !== from.layerFq) continue;
     if (e.fq === from.fq) continue;
     if (e.focusable === false) continue;
-    if (isAncestorOf(registry, e.fq, from.fq)) continue;
+    if (nearestFocusableAncestor(registry, e.fq) !== focusedTier) continue;
     const scored = scoreCandidate(from.rect, e.rect, direction);
     if (!scored) continue;
     const [inBeam, score] = scored;
@@ -298,47 +303,49 @@ export function navigateInShadow(
       score,
       hasChildren: parentFqs.has(e.fq),
     };
-    if (betterCandidate(registry, best, cand)) best = cand;
+    if (betterCandidate(best, cand)) best = cand;
   }
   if (!best) return null;
   return { nextFq: best.entry.fq, nextSegment: best.entry.segment };
 }
 
 /**
- * `true` when `ancestorFq` is in the `parentZone` chain of `fq` (excluding
- * `fq`). Cycle-guarded. Mirrors `is_ancestor_of` in navigate.rs.
+ * The nearest **focusable** ancestor of `fq` by walking its `parentZone`
+ * chain, or `null` when none is focusable (a top-tier unit). Mirrors
+ * `nearest_focusable_ancestor` in navigate.rs and defines a scope's
+ * navigation tier: cardinal nav is locked to scopes that share it.
+ * Cycle-guarded.
  */
-function isAncestorOf(
+function nearestFocusableAncestor(
   registry: Map<FullyQualifiedMoniker, ShadowEntry>,
-  ancestorFq: FullyQualifiedMoniker,
   fq: FullyQualifiedMoniker,
-): boolean {
+): FullyQualifiedMoniker | null {
   const seen = new Set<FullyQualifiedMoniker>();
   let current = registry.get(fq)?.parentZone ?? null;
   while (current !== null) {
-    if (current === ancestorFq) return true;
+    const entry = registry.get(current);
+    if (entry && entry.focusable !== false) return current;
     if (seen.has(current)) break;
     seen.add(current);
     current = registry.get(current)?.parentZone ?? null;
   }
-  return false;
+  return null;
 }
 
 /**
- * Mirror of `better_candidate` in navigate.rs. Lower beam score wins; on a
- * tie the **ancestor** (the enclosing card) wins over the focusable leaf
- * inside it, else the leaf wins over an unrelated container.
+ * Mirror of `better_candidate` in navigate.rs. Lower beam score wins; an
+ * exact tie prefers the leaf over a container. No ancestry tie-break is
+ * needed — candidates are tier-locked to the focused scope's nearest
+ * focusable ancestor, so two same-tier candidates can never be
+ * ancestor/descendant of each other.
  */
 function betterCandidate(
-  registry: Map<FullyQualifiedMoniker, ShadowEntry>,
   current: { entry: ShadowEntry; score: number; hasChildren: boolean } | null,
   cand: { entry: ShadowEntry; score: number; hasChildren: boolean },
 ): boolean {
   if (current === null) return true;
   if (cand.score < current.score) return true;
   if (cand.score > current.score) return false;
-  if (isAncestorOf(registry, cand.entry.fq, current.entry.fq)) return true;
-  if (isAncestorOf(registry, current.entry.fq, cand.entry.fq)) return false;
   return !cand.hasChildren && current.hasChildren;
 }
 

@@ -46,6 +46,16 @@ fn snap(fq_str: &str, parent_zone: Option<&str>, r: Rect) -> SnapshotScope {
     }
 }
 
+/// Like [`snap`] but a non-focusable structural zone (`focusable: false`),
+/// e.g. a board column. Cardinal nav skips it and it does not define a
+/// navigation tier, so its focusable children are top-tier.
+fn snap_zone(fq_str: &str, parent_zone: Option<&str>, r: Rect) -> SnapshotScope {
+    SnapshotScope {
+        focusable: false,
+        ..snap(fq_str, parent_zone, r)
+    }
+}
+
 /// Build a 3-column × 3-card snapshot under layer `/L`.
 ///
 /// Returns the snapshot, the column FQMs, and the flat card FQM list
@@ -60,7 +70,11 @@ fn build_three_column_snapshot() -> (
     let mut cards = Vec::new();
     for (col_idx, col_x) in [0.0_f64, 200.0, 400.0].iter().enumerate() {
         let col_fq = fq(&format!("/L/col:{col_idx}"));
-        scopes.push(snap(col_fq.as_ref(), None, rect(*col_x, 0.0, 180.0, 600.0)));
+        scopes.push(snap_zone(
+            col_fq.as_ref(),
+            None,
+            rect(*col_x, 0.0, 180.0, 600.0),
+        ));
         columns.push(col_fq.clone());
 
         for row in 0..3 {

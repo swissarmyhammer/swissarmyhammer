@@ -653,8 +653,30 @@ function useJumpTargets(
     // to `/window` defensively for the early-boot edge case where the
     // overlay opens before any layer has registered.
     const topLayerFq = spatial.topLayerFq() ?? fqRoot(asSegment("window"));
-    const enumerated = spatial
-      .enumerateScopesInLayer(topLayerFq)
+    const allScopes = spatial.enumerateScopesInLayer(topLayerFq);
+    // Tier filter: jump pills land on **top-tier focusables** only — the
+    // navigation units (cards, toolbar/navbar buttons), i.e. focusable scopes
+    // whose nearest focusable ancestor is none. Nested focusables (a card's
+    // title / badge / inspect fields) are reached by drill-in (Enter), not by
+    // jump, mirroring the kernel's tier-locked arrow nav so jump and arrows
+    // agree on what an "item" is. Built from the enumerated set so the walk
+    // sees the same scopes the overlay is laying out.
+    const byFq = new Map(allScopes.map((s) => [s.fq, s]));
+    const isTopTierFocusable = (s: (typeof allScopes)[number]): boolean => {
+      if (!s.focusable) return false;
+      const seen = new Set<FullyQualifiedMoniker>();
+      let cursor = s.parentZone;
+      while (cursor !== null) {
+        const parent = byFq.get(cursor);
+        if (parent && parent.focusable) return false; // has a focusable ancestor
+        if (seen.has(cursor)) break;
+        seen.add(cursor);
+        cursor = parent ? parent.parentZone : null;
+      }
+      return true;
+    };
+    const enumerated = allScopes
+      .filter(isTopTierFocusable)
       // First pass: drop collapsed (zero-area) scopes — they have no
       // meaningful anchor to hit-test.
       .filter((s) => s.rect.width > 0 && s.rect.height > 0)
