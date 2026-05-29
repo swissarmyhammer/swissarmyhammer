@@ -32,7 +32,7 @@ use std::os::unix::io::AsRawFd;
 
 use llama_agent::model::ModelManager;
 use llama_agent::test_models::{TEST_MODEL_FILE, TEST_MODEL_REPO};
-use llama_agent::types::{ModelConfig, ModelSource, RetryConfig};
+use llama_agent::types::{ModelConfig, ModelSource, RetryConfig, SessionId};
 use serial_test::serial;
 
 /// `debug = true` un-suppresses llama.cpp's native logging so the Metal/offload
@@ -91,6 +91,14 @@ impl StderrCapture {
 #[tokio::test]
 #[serial]
 async fn qwen_small_model_loads_on_metal_gpu() {
+    // Route any Rust-side logs (e.g. the skip warning) through tracing's test
+    // writer. This is separate from the C `stderr` fd we redirect below, so it
+    // does not pollute the captured llama.cpp logs.
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_test_writer()
+        .try_init();
+
     // `#[tokio::test]` is a current-thread runtime, so the synchronous
     // `load_from_file` (and the ggml/llama stderr writes it triggers) happen on
     // this thread with fd 2 redirected.
@@ -99,6 +107,19 @@ async fn qwen_small_model_loads_on_metal_gpu() {
 
     let capture = StderrCapture::begin();
     let load_result = manager.load_model().await;
+    // Flash attention + KV-cache type are applied when the CONTEXT is created,
+    // not at model load — so create one inside the capture window too.
+    let ctx_result = if load_result.is_ok() {
+        manager
+            .with_model(|model| {
+                manager
+                    .create_session_context(model, &SessionId::new())
+                    .map(|_ctx| ())
+            })
+            .await
+    } else {
+        Ok(Ok(()))
+    };
     let logs = capture.finish().to_lowercase();
 
     if let Err(e) = load_result {
@@ -109,10 +130,15 @@ async fn qwen_small_model_loads_on_metal_gpu() {
             || msg.contains("failed to load")
             || msg.contains("loadingfailed")
         {
-            eprintln!("skipping: model unavailable (download/rate-limit): {e}");
+            tracing::warn!("skipping: model unavailable (download/rate-limit): {e}");
             return;
         }
         panic!("model load failed for a reason other than availability: {e}\nlogs:\n{logs}");
+    }
+    match ctx_result {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => panic!("context creation failed: {e}\nlogs:\n{logs}"),
+        Err(e) => panic!("with_model failed: {e}\nlogs:\n{logs}"),
     }
 
     // Definitive per-load proof: llama.cpp reports how many layers it offloaded
@@ -144,6 +170,24 @@ async fn qwen_small_model_loads_on_metal_gpu() {
     assert!(
         logs.contains("metal"),
         "load logs must name the Metal backend. Captured stderr:\n{logs}"
+    );
+
+    // Best-performance context params: flash attention must be enabled. llama
+    // logs `llama_context: flash_attn = enabled` during context creation.
+    assert!(
+        logs.lines()
+            .any(|l| l.contains("flash_attn") && l.contains("enabled")),
+        "context must enable flash attention (expected a `flash_attn = enabled` line). \
+         Captured stderr:\n{logs}"
+    );
+
+    // KV cache must be quantized to Q8_0, not the F16 default. llama logs the KV
+    // cache element type per side, e.g.
+    // `llama_kv_cache: ... k (q8_0): ... mib, v (q8_0): ... mib`.
+    assert!(
+        logs.contains("k (q8_0)") && logs.contains("v (q8_0)"),
+        "KV cache K and V must both be quantized to q8_0 (not the f16 default). \
+         Captured stderr:\n{logs}"
     );
 }
 

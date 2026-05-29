@@ -13,6 +13,7 @@ agent-client-protocol-extras = { workspace = true }
 
 # Core inference
 llama-cpp-2 = { workspace = true }
+llama-cpp-sys-2 = { workspace = true }
 
 # MCP integration  
 rmcp = { workspace = true }

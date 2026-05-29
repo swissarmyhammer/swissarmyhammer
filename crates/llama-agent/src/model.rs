@@ -1,6 +1,9 @@
 use crate::types::{ModelConfig, ModelError, SessionId};
 use llama_cpp_2::{
-    context::{params::LlamaContextParams, LlamaContext},
+    context::{
+        params::{KvCacheType, LlamaContextParams},
+        LlamaContext,
+    },
     llama_backend::LlamaBackend,
     model::LlamaModel,
     send_logs_to_tracing, LogOptions,
@@ -128,7 +131,10 @@ impl ModelManager {
         Ok(())
     }
 
-    /// Creates default model parameters optimized for GPU offloading
+    /// Creates default model parameters optimized for GPU offloading.
+    ///
+    /// (Free-function resolvers for the context params live at module scope
+    /// below: [`resolve_kv_cache_type`] and [`resolve_flash_attention_policy`].)
     fn default_model_params() -> llama_cpp_2::model::params::LlamaModelParams {
         let gpu_layers: u32 = std::env::var("LLAMA_N_GPU_LAYERS")
             .ok()
@@ -361,16 +367,29 @@ impl ModelManager {
             );
         }
 
+        // Best-performance defaults for GPU (Metal) inference, applied to every
+        // llama model:
+        // - Flash attention ON. A large win on Apple Silicon and a prerequisite
+        //   for a quantized V cache.
+        // - Quantized KV cache (Q8_0): near-lossless and ~half the F16 KV-cache
+        //   memory, which is significant at large context windows.
+        // These are model-runtime settings, not user/env knobs.
+        let kv_type = KvCacheType::Q8_0;
+        let flash_attn = llama_cpp_sys_2::LLAMA_FLASH_ATTN_TYPE_ENABLED;
+
         let context_params = LlamaContextParams::default()
             .with_n_ctx(Some(std::num::NonZeroU32::new(n_ctx as u32).unwrap()))
             .with_n_batch(n_batch)
             .with_n_ubatch(n_ubatch)
             .with_n_threads(self.config.n_threads)
-            .with_n_threads_batch(self.config.n_threads_batch);
+            .with_n_threads_batch(self.config.n_threads_batch)
+            .with_flash_attention_policy(flash_attn)
+            .with_type_k(kv_type)
+            .with_type_v(kv_type);
 
         debug!(
-            "Creating context with n_ctx={}, n_batch={}, n_ubatch={}, n_seq_max={}, n_threads={}, n_threads_batch={}",
-            n_ctx, n_batch, n_ubatch, self.config.n_seq_max, self.config.n_threads, self.config.n_threads_batch
+            "Creating context with n_ctx={}, n_batch={}, n_ubatch={}, n_seq_max={}, n_threads={}, n_threads_batch={}, flash_attn={}, kv_cache_type={:?}",
+            n_ctx, n_batch, n_ubatch, self.config.n_seq_max, self.config.n_threads, self.config.n_threads_batch, flash_attn, kv_type
         );
 
         model

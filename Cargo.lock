@@ -4530,6 +4530,7 @@ dependencies = [
  "libc",
  "llama-common",
  "llama-cpp-2",
+ "llama-cpp-sys-2",
  "md5",
  "model-loader",
  "nix 0.29.0",
