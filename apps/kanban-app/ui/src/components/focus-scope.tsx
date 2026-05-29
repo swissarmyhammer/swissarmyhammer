@@ -406,12 +406,13 @@ function SpatialFocusScopeBody({
       parentZone,
       navOverride,
       segment,
+      showFocus,
       lastKnownRect: initialRect,
     });
     return () => {
       layerRegistry.delete(fq);
     };
-  }, [layerRegistry, fq, segment, parentZone, navOverride]);
+  }, [layerRegistry, fq, segment, parentZone, navOverride, showFocus]);
 
   // Capture `lastKnownRect` synchronously just before unmount. React
   // clears bound `ref` callbacks during the commit phase before

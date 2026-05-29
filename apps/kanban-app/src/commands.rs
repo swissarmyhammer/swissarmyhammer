@@ -2954,6 +2954,7 @@ mod spatial_command_tests {
                 rect,
                 parent_zone: None,
                 nav_override: HashMap::new(),
+                focusable: true,
             },
         )
     }
@@ -3086,12 +3087,14 @@ mod spatial_command_tests {
                     rect: rect_at(0.0, 0.0, 100.0, 100.0),
                     parent_zone: None,
                     nav_override: HashMap::new(),
+                    focusable: true,
                 },
                 SnapshotScope {
                     fq: leaf.clone(),
                     rect: rect_at(10.0, 10.0, 10.0, 10.0),
                     parent_zone: Some(zone.clone()),
                     nav_override: HashMap::new(),
+                    focusable: true,
                 },
             ],
         };

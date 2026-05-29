@@ -71,6 +71,26 @@ pub struct SnapshotScope {
     /// reads it at decision time so mid-life changes to the React-side
     /// `navOverride` prop take effect on the next nav.
     pub nav_override: FocusOverrides,
+    /// Whether this scope is a real focus *target* (mirrors the React
+    /// `<FocusScope showFocus>` prop). `false` marks a structural zone —
+    /// the board well, the perspective bar, a board-selector wrapper —
+    /// that groups children but should never itself receive a cardinal
+    /// focus move (it paints no focus indicator, so landing on it looks
+    /// like "focus vanished"). Cardinal pathfinding skips non-focusable
+    /// scopes as candidates and navigates straight to the focusable
+    /// child beneath them.
+    ///
+    /// Defaults to `true` on deserialize so a snapshot built before this
+    /// field existed (or any Rust test literal that omits it via the
+    /// helper) treats every scope as a target — the pre-field behavior.
+    #[serde(default = "default_focusable")]
+    pub focusable: bool,
+}
+
+/// Serde default for [`SnapshotScope::focusable`] — a scope is a focus
+/// target unless the React side explicitly marks it as a structural zone.
+fn default_focusable() -> bool {
+    true
 }
 
 /// A snapshot of every scope mounted under a single layer.
@@ -293,6 +313,7 @@ mod tests {
             rect: rect_zero(),
             parent_zone: parent_zone.map(FullyQualifiedMoniker::from_string),
             nav_override: HashMap::new(),
+            focusable: true,
         }
     }
 
@@ -426,6 +447,7 @@ mod tests {
                     },
                     parent_zone: None,
                     nav_override: HashMap::new(),
+                    focusable: true,
                 },
                 SnapshotScope {
                     fq: FullyQualifiedMoniker::from_string("/L/zone/leaf"),
@@ -437,6 +459,7 @@ mod tests {
                     },
                     parent_zone: Some(FullyQualifiedMoniker::from_string("/L/zone")),
                     nav_override: overrides,
+                    focusable: true,
                 },
             ],
         };

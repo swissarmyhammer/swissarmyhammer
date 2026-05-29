@@ -261,12 +261,14 @@ mod tests {
                     rect: rect_zero(),
                     parent_zone: None,
                     nav_override: HashMap::new(),
+                    focusable: true,
                 },
                 SnapshotScope {
                     fq: FullyQualifiedMoniker::from_string("/L/zone/leaf"),
                     rect: rect_zero(),
                     parent_zone: Some(FullyQualifiedMoniker::from_string("/L/zone")),
                     nav_override: HashMap::new(),
+                    focusable: true,
                 },
             ],
         };

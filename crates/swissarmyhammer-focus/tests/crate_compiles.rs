@@ -52,6 +52,7 @@ fn every_public_type_is_constructible_or_referenced() {
             rect,
             parent_zone: None,
             nav_override: HashMap::new(),
+            focusable: true,
         }],
     };
     let _indexed = IndexedSnapshot::new(&snapshot);

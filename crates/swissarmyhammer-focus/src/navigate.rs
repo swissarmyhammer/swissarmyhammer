@@ -42,6 +42,10 @@
 //!    on the cross axis (horizontal overlap for `Up`/`Down`, vertical
 //!    overlap for `Left`/`Right`).
 //! 3. Are not the focused entry itself.
+//! 3b. Are **focusable** — a `focusable: false` scope is a structural zone
+//!    (board well, perspective bar) that paints no focus indicator and is
+//!    never a cardinal target; pathfinding skips it and lands on the
+//!    focusable child beneath. See [`SnapshotScope::focusable`].
 //! 4. Are not an **ancestor** of the focused entry — navigating onto your
 //!    own enclosing card / column / board is drill-out's job, never a
 //!    cardinal move.
@@ -342,6 +346,14 @@ fn geometric_pick(
         if cand.fq == focused.fq {
             continue;
         }
+        // Non-focusable scopes are structural zones (board well, perspective
+        // bar, board-selector wrapper). They group children but are never a
+        // cardinal target — landing on one paints no focus indicator. Skip
+        // them as candidates so a move passes straight through to the
+        // focusable child beneath. (See `SnapshotScope::focusable`.)
+        if !cand.focusable {
+            continue;
+        }
         if is_ancestor_of(view, &cand.fq, &focused.fq) {
             continue;
         }
@@ -630,6 +642,16 @@ mod tests {
             rect: r,
             parent_zone: parent_zone.map(FullyQualifiedMoniker::from_string),
             nav_override: HashMap::new(),
+            focusable: true,
+        }
+    }
+
+    /// A non-focusable structural zone (e.g. the board well) — same as
+    /// [`scope`] but with `focusable: false`, so cardinal nav skips it.
+    fn zone(fq: &str, parent_zone: Option<&str>, r: Rect) -> SnapshotScope {
+        SnapshotScope {
+            focusable: false,
+            ..scope(fq, parent_zone, r)
         }
     }
 
@@ -1061,6 +1083,29 @@ mod tests {
             pick(&snap, "/L/colL/card", Direction::Right),
             FullyQualifiedMoniker::from_string("/L/colR/card"),
             "Right must cross to the next column's card, not dive into its title field",
+        );
+    }
+
+    /// Cardinal nav never lands on a non-focusable structural zone: from a
+    /// focusable top-level leaf (e.g. a nav-bar button), Down passes through
+    /// the `focusable: false` board well below it and lands on the focusable
+    /// card inside — not the invisible zone. Pins the fix for "Down from the
+    /// nav bar focuses the (indicator-less) board well instead of a card".
+    #[test]
+    fn down_skips_non_focusable_zone_and_lands_on_focusable_child() {
+        let snap = snapshot(vec![
+            // Focusable top-level leaf (nav-bar button), above the board.
+            scope("/L/navbtn", None, rect(0.0, 0.0, 40.0, 20.0)),
+            // The board well sits directly below and is the geometrically
+            // closest thing under the button — but it is a structural zone.
+            zone("/L/board", None, rect(0.0, 30.0, 400.0, 400.0)),
+            // A card inside the well, lower down.
+            scope("/L/board/card", Some("/L/board"), rect(0.0, 40.0, 200.0, 60.0)),
+        ]);
+        assert_eq!(
+            pick(&snap, "/L/navbtn", Direction::Down),
+            FullyQualifiedMoniker::from_string("/L/board/card"),
+            "Down must skip the non-focusable board well and land on the card inside it",
         );
     }
 

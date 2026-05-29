@@ -51,6 +51,7 @@ fn snap_scope(
         rect: r,
         parent_zone,
         nav_override: HashMap::new(),
+        focusable: true,
     }
 }
 

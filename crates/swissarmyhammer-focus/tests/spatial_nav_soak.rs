@@ -42,6 +42,7 @@ fn snap(fq_str: &str, parent_zone: Option<&str>, r: Rect) -> SnapshotScope {
         rect: r,
         parent_zone: parent_zone.map(fq),
         nav_override: HashMap::new(),
+        focusable: true,
     }
 }
 

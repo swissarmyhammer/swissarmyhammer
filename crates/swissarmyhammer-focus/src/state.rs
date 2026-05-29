@@ -531,6 +531,7 @@ mod tests {
                 rect: rect_zero(),
                 parent_zone: None,
                 nav_override: HashMap::new(),
+                focusable: true,
             }],
         }
     }
