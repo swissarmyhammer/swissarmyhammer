@@ -1,0 +1,1 @@
+{"id":"01KST62CXWH09EVB5CX3P4293M","timestamp":"2026-05-29T15:36:27.836046Z","op":"create","item_id":"01KST62CXVR83HQHEYMF8V0RB8","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: 0e8a16\n+tag_name: navigation\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: 0e8a16\n-tag_name: navigation\n","transaction_id":null}

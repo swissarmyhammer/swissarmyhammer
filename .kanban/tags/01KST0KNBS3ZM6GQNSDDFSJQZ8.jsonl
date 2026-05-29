@@ -1,0 +1,1 @@
+{"id":"01KST0KNBT2XWRH8CXQ8PRFF9R","timestamp":"2026-05-29T14:01:02.074894Z","op":"create","item_id":"01KST0KNBS3ZM6GQNSDDFSJQZ8","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: 0e8a16\n+tag_name: focus\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: 0e8a16\n-tag_name: focus\n","transaction_id":null}
