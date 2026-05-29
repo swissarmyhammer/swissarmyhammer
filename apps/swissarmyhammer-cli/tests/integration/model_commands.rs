@@ -104,7 +104,7 @@ executor:
           repo: "custom/qwen-model"
           filename: "custom.gguf"
 quiet: false"#;
-    fs::write(dir.join("qwen-coder.yaml"), project_qwen_content)?;
+    fs::write(dir.join("qwen.yaml"), project_qwen_content)?;
 
     // Create a unique project model
     let project_model_content = r#"---
@@ -139,8 +139,8 @@ async fn test_model_list_basic_functionality() -> Result<()> {
         "Should list claude-code model"
     );
     assert!(
-        stdout.contains("qwen-coder"),
-        "Should list qwen-coder model"
+        stdout.contains("qwen"),
+        "Should list qwen model"
     );
 
     // Should show summary information
@@ -199,8 +199,8 @@ async fn test_model_list_json_format() -> Result<()> {
         "Should include claude-code"
     );
     assert!(
-        model_names.contains(&"qwen-coder"),
-        "Should include qwen-coder"
+        model_names.contains(&"qwen"),
+        "Should include qwen"
     );
 
     Ok(())
@@ -476,8 +476,8 @@ async fn test_model_hierarchy_specific_models_from_each_source() -> Result<()> {
         "Should list claude-code (from user or builtin)"
     );
     assert!(
-        stdout.contains("qwen-coder"),
-        "Should list qwen-coder (from project or builtin)"
+        stdout.contains("qwen"),
+        "Should list qwen (from project or builtin)"
     );
     assert!(
         stdout.contains("project-dev-agent"),
@@ -729,19 +729,19 @@ async fn test_complete_model_workflow() -> Result<()> {
 
         // Step 4: Switch to different model
         let switch_output =
-            run_model_command_in_dir(&["model", "use", "qwen-coder"], project_root).await?;
+            run_model_command_in_dir(&["model", "use", "qwen"], project_root).await?;
 
         if switch_output.status.success() {
             let switch_stdout = String::from_utf8_lossy(&switch_output.stdout);
             assert!(
-                switch_stdout.contains("qwen-coder"),
+                switch_stdout.contains("qwen"),
                 "Should show new model"
             );
 
             // Step 5: Verify config was updated
             let config_content = fs::read_to_string(&config_path)?;
             assert!(
-                config_content.contains("qwen-coder") || config_content.contains("llama-agent"),
+                config_content.contains("qwen") || config_content.contains("llama-agent"),
                 "Config should reflect new model"
             );
         }
@@ -755,7 +755,7 @@ async fn test_all_builtin_models_usable() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let project_root = temp_dir.path();
 
-    let builtin_agents = ["claude-code", "qwen-coder"];
+    let builtin_agents = ["claude-code", "qwen"];
 
     for model_name in &builtin_agents {
         let output = run_model_command_in_dir(&["model", "use", model_name], project_root).await?;

@@ -860,12 +860,12 @@ mod tests {
     // from_model_name — LlamaAgent executor triggers NotAnEmbeddingModel
     // -------------------------------------------------------------------------
 
-    /// A `llama-agent` executor (like `qwen-coder`) is not an embedding model.
+    /// A `llama-agent` executor (like `qwen`) is not an embedding model.
     #[test]
     fn from_model_name_llama_agent_model_returns_error() {
         let rt = rt();
         rt.block_on(async {
-            let result = Embedder::from_model_name("qwen-coder").await;
+            let result = Embedder::from_model_name("qwen").await;
             assert!(
                 matches!(
                     result,

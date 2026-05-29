@@ -212,7 +212,7 @@ const MODELS: AiModel[] = [
     hint: "Claude Code CLI: /usr/local/bin/claude",
   },
   {
-    id: "qwen-coder",
+    id: "qwen",
     label: "Qwen Coder",
     kind: "local-llama",
     available: false,
@@ -775,7 +775,7 @@ describe("AiPanel: model selector", () => {
     });
 
     // The panel reports the choice so the container can persist it per board.
-    expect(onSelectModel).toHaveBeenCalledWith("qwen-coder");
+    expect(onSelectModel).toHaveBeenCalledWith("qwen");
 
     // The container persists and feeds the new id back as a prop.
     await act(async () => {
@@ -783,7 +783,7 @@ describe("AiPanel: model selector", () => {
         <AiPanel
           boardDir="/tmp/board"
           models={bothAvailable}
-          modelId="qwen-coder"
+          modelId="qwen"
           onSelectModel={onSelectModel}
           onCollapse={() => {}}
           createConnect={harness.createConnect}
@@ -801,7 +801,7 @@ describe("AiPanel: model selector", () => {
     });
 
     await waitFor(() => {
-      expect(harness.connectedModels()).toContain("qwen-coder");
+      expect(harness.connectedModels()).toContain("qwen");
     });
   });
 

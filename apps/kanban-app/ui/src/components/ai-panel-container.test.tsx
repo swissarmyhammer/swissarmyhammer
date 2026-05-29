@@ -949,7 +949,7 @@ describe("AiPanelContainer", () => {
     // the *second* model through the composer's footer select, asserting that
     // the user pick overrides the auto-selected default and is written back
     // to the board entity via `update.board` — and that a fresh mount, with
-    // the board entity now carrying `model: "qwen-coder"`, reapplies the
+    // the board entity now carrying `model: "qwen"`, reapplies the
     // user's choice (no `localStorage.modelId` involved).
     const TWO_MODELS: AiModel[] = [
       {
@@ -960,7 +960,7 @@ describe("AiPanelContainer", () => {
         hint: "Claude Code CLI: /usr/local/bin/claude",
       },
       {
-        id: "qwen-coder",
+        id: "qwen",
         label: "Qwen Coder",
         kind: "local-llama",
         available: true,
@@ -1007,7 +1007,7 @@ describe("AiPanelContainer", () => {
     // The Container dispatched `update.board` with the picked model id.
     await waitFor(() => {
       expect(mockDispatchUpdateBoard).toHaveBeenCalledWith({
-        args: { model: "qwen-coder" },
+        args: { model: "qwen" },
       });
     });
     // And nothing was written to `localStorage` under `modelId` — only the
@@ -1029,7 +1029,7 @@ describe("AiPanelContainer", () => {
   });
 
   it("selected model rehydrates from board.model on mount", async () => {
-    // A board whose entity already carries `model: "qwen-coder"` (e.g. set
+    // A board whose entity already carries `model: "qwen"` (e.g. set
     // by an MCP `kanban_update_board` from outside the app) must drive the
     // picker straight to that model on first mount — no auto-default,
     // no dispatch, no localStorage involvement.
@@ -1042,7 +1042,7 @@ describe("AiPanelContainer", () => {
         hint: "Claude Code CLI: /usr/local/bin/claude",
       },
       {
-        id: "qwen-coder",
+        id: "qwen",
         label: "Qwen Coder",
         kind: "local-llama",
         available: true,
@@ -1053,7 +1053,7 @@ describe("AiPanelContainer", () => {
       if (cmd === "ai_list_models") return TWO_MODELS;
       return undefined;
     });
-    setBoardModel(BOARD, "qwen-coder");
+    setBoardModel(BOARD, "qwen");
 
     await renderContainer();
     await screen.findByTestId("ai-panel-container");
@@ -1081,7 +1081,7 @@ describe("AiPanelContainer", () => {
         hint: "Claude Code CLI: /usr/local/bin/claude",
       },
       {
-        id: "qwen-coder",
+        id: "qwen",
         label: "Qwen Coder",
         kind: "local-llama",
         available: true,
@@ -1095,7 +1095,7 @@ describe("AiPanelContainer", () => {
 
     const BOARD_A = "/tmp/board-a";
     const BOARD_B = "/tmp/board-b";
-    setBoardModel(BOARD_A, "qwen-coder");
+    setBoardModel(BOARD_A, "qwen");
     setBoardModel(BOARD_B, "claude-code");
 
     const { rerender } = await renderInAct(
@@ -1144,7 +1144,7 @@ describe("AiPanelContainer", () => {
         hint: "Claude Code CLI: /usr/local/bin/claude",
       },
       {
-        id: "qwen-coder",
+        id: "qwen",
         label: "Qwen Coder",
         kind: "local-llama",
         available: true,
@@ -1234,7 +1234,7 @@ describe("AiPanelContainer", () => {
     // must not strand the panel: when the stored id is absent from the
     // current list, the Container falls back to a default just as if no
     // model were set.
-    setBoardModel(BOARD, "qwen-coder");
+    setBoardModel(BOARD, "qwen");
 
     const MODELS: AiModel[] = [
       {
@@ -1253,7 +1253,7 @@ describe("AiPanelContainer", () => {
     await renderContainer();
     await screen.findByTestId("ai-panel-container");
 
-    // The stale `qwen-coder` id is replaced by the only offered model via a
+    // The stale `qwen` id is replaced by the only offered model via a
     // fresh `update.board` dispatch.
     await waitFor(() => {
       expect(mockDispatchUpdateBoard).toHaveBeenCalledWith({
@@ -1267,7 +1267,7 @@ describe("AiPanelContainer", () => {
     // auto-select effect must be a no-op against it. Even if the model is
     // currently `available: false`, the user's choice wins; the Container
     // must not silently swap them onto the first available model.
-    setBoardModel(BOARD, "qwen-coder");
+    setBoardModel(BOARD, "qwen");
 
     const MIXED_MODELS: AiModel[] = [
       {
@@ -1278,7 +1278,7 @@ describe("AiPanelContainer", () => {
         hint: "Claude Code CLI: /usr/local/bin/claude",
       },
       {
-        id: "qwen-coder",
+        id: "qwen",
         label: "Qwen Coder",
         kind: "local-llama",
         available: false,
@@ -1303,7 +1303,7 @@ describe("AiPanelContainer", () => {
       await Promise.resolve();
     });
 
-    // The board's `qwen-coder` choice survives — the composer trigger shows
+    // The board's `qwen` choice survives — the composer trigger shows
     // its label, and no `update.board` dispatch happened.
     await waitFor(() => {
       const triggers = screen.getAllByRole("combobox", {
@@ -1328,7 +1328,7 @@ describe("AiPanelContainer", () => {
         hint: "Claude Code CLI: /usr/local/bin/claude",
       },
       {
-        id: "qwen-coder",
+        id: "qwen",
         label: "Qwen Coder",
         kind: "local-llama",
         available: true,
@@ -1363,7 +1363,7 @@ describe("AiPanelContainer", () => {
     // The dispatch fired …
     await waitFor(() => {
       expect(mockDispatchUpdateBoard).toHaveBeenCalledWith({
-        args: { model: "qwen-coder" },
+        args: { model: "qwen" },
       });
     });
 

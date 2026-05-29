@@ -843,12 +843,12 @@ settings alongside model configurations.
 
 Common model types:
 • claude-code    - Uses Claude Code CLI for AI execution
-• qwen-coder     - Uses local Qwen3-Coder model with in-process execution
+• qwen           - Uses the local Qwen3.6 MoE model with in-process execution
 • custom models  - User-defined configurations for specialized workflows
 
 Examples:
   sah model use claude-code                # Apply Claude Code model
-  sah model use qwen-coder                # Apply Qwen Coder model
+  sah model use qwen                       # Apply the Qwen model
   sah --debug model use claude-code        # Apply with debug output
 
 

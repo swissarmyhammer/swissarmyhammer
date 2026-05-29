@@ -380,15 +380,15 @@ fn test_project_agent_overrides_user() {
         ),
     );
 
-    env.create_project_agent("qwen-coder", &project_qwen_override);
+    env.create_project_agent("qwen", &project_qwen_override);
     env.activate();
 
     let agents = ModelManager::list_agents().expect("Should list all agents with precedence");
 
     // When cwd == git root, both Project and GitRoot scan the same models/ dir;
     // GitRoot runs after Project in the merge order and overwrites, so source is GitRoot.
-    assert_agent_has_source(&agents, "qwen-coder", ModelConfigSource::GitRoot);
-    assert_agent_description_contains(&agents, "qwen-coder", "Project override");
+    assert_agent_has_source(&agents, "qwen", ModelConfigSource::GitRoot);
+    assert_agent_description_contains(&agents, "qwen", "Project override");
 }
 
 #[serial_test::serial(cwd)]
@@ -647,7 +647,7 @@ model: claude-code
 
     helper.write_config(existing_config);
 
-    ModelManager::use_agent("qwen-coder", &ModelPaths::sah()).expect("Should update model");
+    ModelManager::use_agent("qwen", &ModelPaths::sah()).expect("Should update model");
 
     let updated_config = helper.read_config();
     assert!(
@@ -655,7 +655,7 @@ model: claude-code
         "Should preserve prompt section"
     );
     assert!(
-        updated_config.contains("model: qwen-coder"),
+        updated_config.contains("model: qwen"),
         "Should update model"
     );
 }
@@ -689,11 +689,11 @@ fn test_overwrite_existing_model() {
     let initial_agent = ModelManager::get_agent(&ModelPaths::sah()).expect("Should get model");
     assert_eq!(initial_agent, Some("claude-code".to_string()));
 
-    ModelManager::use_agent("qwen-coder", &ModelPaths::sah()).expect("Should overwrite model");
+    ModelManager::use_agent("qwen", &ModelPaths::sah()).expect("Should overwrite model");
 
     let updated_agent =
         ModelManager::get_agent(&ModelPaths::sah()).expect("Should get updated model");
-    assert_eq!(updated_agent, Some("qwen-coder".to_string()));
+    assert_eq!(updated_agent, Some("qwen".to_string()));
 }
 
 // =============================================================================
@@ -733,10 +733,10 @@ fn test_agent_manager_config_file_operations() {
     // Test updating existing config
     let original_size = helper.config_size();
 
-    ModelManager::use_agent("qwen-coder", &ModelPaths::sah()).expect("Should update to qwen-coder");
+    ModelManager::use_agent("qwen", &ModelPaths::sah()).expect("Should update to qwen");
 
     let updated_content = helper.read_config();
-    assert_config_contains_sections(&updated_content, &["model:", "qwen-coder"]);
+    assert_config_contains_sections(&updated_content, &["model:", "qwen"]);
 
     let updated_size = helper.config_size();
     assert_ne!(
@@ -1202,7 +1202,7 @@ fn test_global_agent_flag_override_concept() {
     //
     // This test verifies that we can load any agent's config for runtime override
     let override_agent_info =
-        ModelManager::find_agent_by_name("qwen-coder").expect("Should find override agent");
+        ModelManager::find_agent_by_name("qwen").expect("Should find override agent");
     let override_config = parse_model_config(&override_agent_info.content)
         .expect("Should parse override agent config");
 

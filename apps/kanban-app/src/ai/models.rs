@@ -641,7 +641,7 @@ mod tests {
         );
 
         // The other qwen variants stay untagged and must not appear.
-        for excluded in ["qwen-coder", "qwen-0.6b-test", "qwen-embedding"] {
+        for excluded in ["qwen-0.6b-test", "qwen-embedding"] {
             assert!(
                 !models.iter().any(|m| m.id == excluded),
                 "untagged model `{excluded}` must not be listed, got {models:?}"
@@ -716,9 +716,9 @@ mod tests {
 
     #[test]
     fn resolve_model_config_for_local_llama_model() {
-        // `qwen-coder` is a built-in `llama-agent` model. Resolving it must
+        // `qwen` is a built-in `llama-agent` model. Resolving it must
         // yield a runnable chat-agent config.
-        let config = resolve_model_config("qwen-coder")
+        let config = resolve_model_config("qwen")
             .expect("a built-in llama model must resolve to a config");
         assert_eq!(config.executor_type(), ModelExecutorType::LlamaAgent);
     }

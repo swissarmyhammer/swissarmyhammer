@@ -1508,7 +1508,7 @@ fn ai_model_command_carries_model_options_from_resolver() {
                 label: "Claude Code".into(),
             },
             AiModelInfo {
-                id: "qwen-coder".into(),
+                id: "qwen".into(),
                 label: "Qwen Coder".into(),
             },
         ],
@@ -1564,7 +1564,7 @@ fn ai_model_command_carries_model_options_from_resolver() {
     // handler applies. Enumeration order is preserved.
     assert_eq!(options[0].value, "claude-code");
     assert_eq!(options[0].label, "Claude Code");
-    assert_eq!(options[1].value, "qwen-coder");
+    assert_eq!(options[1].value, "qwen");
     assert_eq!(options[1].label, "Qwen Coder");
 }
 

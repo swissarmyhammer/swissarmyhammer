@@ -742,7 +742,7 @@ async fn test_rapid_sequential_operations() -> Result<()> {
     // Simulate rapid sequential operations like a user clicking quickly
     let agents = [
         "claude-code",
-        "qwen-coder",
+        "qwen",
         "claude-code",
         "qwen-next",
         "claude-code",
@@ -817,7 +817,7 @@ agent:
         let model = if i % 2 == 0 {
             "claude-code"
         } else {
-            "qwen-coder"
+            "qwen"
         };
 
         let use_output =
