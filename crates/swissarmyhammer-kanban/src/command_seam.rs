@@ -17,28 +17,96 @@
 //!
 //! [`CommandService`]: swissarmyhammer_command_service::CommandService
 
+use std::future::Future;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use swissarmyhammer_command_service::TransactionSeam;
 use swissarmyhammer_store::{StoreContext, UndoEntryId};
 
+tokio::task_local! {
+    /// Per-task active board [`StoreContext`] for production dispatch.
+    ///
+    /// The kanban app is multi-board: each [`crate::substrate`]-wired board
+    /// has its own [`StoreContext`], but the app installs a single
+    /// app-wide `CommandService` on the plugin host. The Tauri
+    /// `dispatch_command` handler resolves the target board from its
+    /// `board_path` argument and scopes this task-local around the
+    /// `execute` call (via [`scope_store_context`]); the task-local
+    /// variant of [`StoreTransactionSeam`] then reads back the correct
+    /// per-board context inside its `begin`/`end`.
+    ///
+    /// Outside a [`scope_store_context`] (e.g. in tests that drive the
+    /// seam directly), [`StoreTransactionSeam::task_local`]'s `begin`
+    /// returns `None` — the command falls back to a `txn: null`
+    /// execution with no undo grouping, matching the noop seam's
+    /// behavior.
+    pub static CURRENT_STORE_CTX: Arc<StoreContext>;
+}
+
+/// Scope [`CURRENT_STORE_CTX`] to `ctx` for the duration of `fut`.
+///
+/// The production seam ([`StoreTransactionSeam::task_local`]) reads
+/// [`CURRENT_STORE_CTX`] in its `begin`/`end`, so the `execute` callback
+/// inherits the same per-board context the dispatcher set. Because tokio
+/// task-locals are inherited on `.await` boundaries — and the command
+/// service's `execute` handler never `tokio::spawn`s between begin and end
+/// — every store write the callback makes on the same task sees the same
+/// context.
+pub async fn scope_store_context<F>(ctx: Arc<StoreContext>, fut: F) -> F::Output
+where
+    F: Future,
+{
+    CURRENT_STORE_CTX.scope(ctx, fut).await
+}
+
 /// [`TransactionSeam`] implementation backed by a kanban board's
 /// [`StoreContext`].
 ///
-/// The ambient transaction slot is per-tokio-task (see `StoreContext`'s
-/// `AmbientKey`), so the command service's `execute` handler must invoke
-/// [`TransactionSeam::begin`] and [`TransactionSeam::end`] on the same task
-/// it runs the callback on. The service handler enforces this by never
-/// `tokio::spawn`-ing between begin/end.
+/// Two constructors:
+///
+/// - [`Self::new`] holds an `Arc<StoreContext>` at construction — useful
+///   for unit tests and single-board callers.
+/// - [`Self::task_local`] resolves the context from the
+///   [`CURRENT_STORE_CTX`] task-local — the production constructor for the
+///   multi-board app, where the per-dispatch board is set by
+///   [`scope_store_context`].
+///
+/// The ambient transaction slot itself is per-tokio-task (see
+/// `StoreContext`'s `AmbientKey`), so the command service's `execute`
+/// handler must invoke [`TransactionSeam::begin`] and
+/// [`TransactionSeam::end`] on the same task it runs the callback on. The
+/// service handler enforces this by never `tokio::spawn`-ing between
+/// begin/end.
 pub struct StoreTransactionSeam {
-    ctx: Arc<StoreContext>,
+    /// Resolve the [`StoreContext`] to drive for the current `begin`/`end`
+    /// pair. Returns `None` when no context is available (e.g.
+    /// `task_local()` variant invoked outside a [`scope_store_context`]).
+    resolver: Box<dyn Fn() -> Option<Arc<StoreContext>> + Send + Sync>,
 }
 
 impl StoreTransactionSeam {
-    /// Wrap `ctx` as a [`TransactionSeam`].
+    /// Build a seam that always drives `ctx` — the constructor unit tests
+    /// and single-board callers use.
     pub fn new(ctx: Arc<StoreContext>) -> Self {
-        Self { ctx }
+        let ctx = Arc::clone(&ctx);
+        Self {
+            resolver: Box::new(move || Some(Arc::clone(&ctx))),
+        }
+    }
+
+    /// Build a seam that resolves the active context from the
+    /// [`CURRENT_STORE_CTX`] task-local — the production constructor.
+    ///
+    /// Outside a [`scope_store_context`] the resolver returns `None`, and
+    /// `begin` returns `None` to match — the command falls back to a
+    /// `txn: null` execution with no undo group, exactly like the noop
+    /// seam. So a dispatcher that forgets to scope the task-local degrades
+    /// gracefully rather than panicking.
+    pub fn task_local() -> Self {
+        Self {
+            resolver: Box::new(|| CURRENT_STORE_CTX.try_with(Arc::clone).ok()),
+        }
     }
 }
 
@@ -50,20 +118,25 @@ impl std::fmt::Debug for StoreTransactionSeam {
 
 impl TransactionSeam for StoreTransactionSeam {
     fn begin(&self, origin: &str) -> Option<String> {
-        let id = self
-            .ctx
-            .begin_transaction_with_origin(Some(origin.to_string()));
+        let ctx = (self.resolver)()?;
+        let id = ctx.begin_transaction_with_origin(Some(origin.to_string()));
         Some(id.to_string())
     }
 
     fn end(&self, txn: &str) {
+        let Some(ctx) = (self.resolver)() else {
+            // No context resolves on this task (e.g. task-local seam
+            // outside a `scope_store_context`). The matching `begin`
+            // returned `None`, so there is nothing to close.
+            return;
+        };
         // `end_transaction` is stale-id-safe: it only clears the slot when
         // the id matches. An unparseable id should never happen in
         // production — `begin` returns a stringified `UndoEntryId` and the
         // command service round-trips the same string back — so the warn
         // path is a defensive net, not an expected branch.
         match UndoEntryId::from_str(txn) {
-            Ok(id) => self.ctx.end_transaction(id),
+            Ok(id) => ctx.end_transaction(id),
             Err(e) => {
                 tracing::warn!(
                     txn = %txn,
@@ -155,5 +228,74 @@ mod tests {
         );
         seam.end(&txn);
         assert!(ctx.current_transaction().is_none());
+    }
+
+    /// Outside a [`scope_store_context`] the task-local seam's `begin`
+    /// returns `None` — the command falls back to a `txn: null` execution,
+    /// matching the noop seam.
+    #[tokio::test]
+    async fn task_local_seam_returns_none_outside_scope() {
+        let seam = StoreTransactionSeam::task_local();
+        assert!(seam.begin("user").is_none(), "no task-local set");
+        // `end` with anything is a safe no-op when the resolver returns None.
+        seam.end("anything");
+    }
+
+    /// Inside a [`scope_store_context`] the task-local seam drives the
+    /// scoped board's `StoreContext`: `begin` returns a real txn id, the
+    /// ambient slot is set, and `end` clears it.
+    #[tokio::test]
+    async fn task_local_seam_drives_scoped_context() {
+        let (_dir, ctx) = ctx();
+        let seam = StoreTransactionSeam::task_local();
+        let ctx_for_assert = Arc::clone(&ctx);
+        scope_store_context(ctx, async move {
+            let txn = seam.begin("user").expect("inside scope begin returns Some");
+            assert_eq!(
+                ctx_for_assert
+                    .current_transaction()
+                    .map(|id| id.to_string())
+                    .as_deref(),
+                Some(txn.as_str()),
+            );
+            seam.end(&txn);
+            assert!(ctx_for_assert.current_transaction().is_none());
+        })
+        .await;
+    }
+
+    /// Two concurrent scopes over distinct contexts get their own ambient
+    /// slots — the seam routes each task to its own board. Pins the
+    /// multi-board invariant the production dispatcher relies on.
+    #[tokio::test]
+    async fn task_local_seam_isolates_concurrent_scopes() {
+        let (_dir_a, ctx_a) = ctx();
+        let (_dir_b, ctx_b) = ctx();
+        let seam = Arc::new(StoreTransactionSeam::task_local());
+
+        let seam_a = Arc::clone(&seam);
+        let ctx_a_clone = Arc::clone(&ctx_a);
+        let a = tokio::spawn(scope_store_context(ctx_a_clone, async move {
+            let txn = seam_a.begin("user").unwrap();
+            // Hold the transaction briefly so the two tasks overlap.
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            seam_a.end(&txn);
+            txn
+        }));
+
+        let seam_b = Arc::clone(&seam);
+        let ctx_b_clone = Arc::clone(&ctx_b);
+        let b = tokio::spawn(scope_store_context(ctx_b_clone, async move {
+            let txn = seam_b.begin("user").unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            seam_b.end(&txn);
+            txn
+        }));
+
+        let (ta, tb) = (a.await.unwrap(), b.await.unwrap());
+        assert_ne!(ta, tb, "the two concurrent scopes must mint distinct txns");
+        // Both ambient slots cleared.
+        assert!(ctx_a.current_transaction().is_none());
+        assert!(ctx_b.current_transaction().is_none());
     }
 }
