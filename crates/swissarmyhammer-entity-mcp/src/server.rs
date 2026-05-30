@@ -45,52 +45,46 @@ use crate::operations::{
     Search, UnarchiveEntity, UpdateField,
 };
 
-/// The wiring the clipboard ops (`copy` / `cut` / `paste`) need beyond the
-/// bare kernel.
+/// The per-board services an [`EntityServer`] needs at tool-call time.
 ///
-/// The clipboard ops reuse the domain `kanban` command structs
-/// (`CopyEntityCmd`, `CutEntityCmd`, `PasteEntityCmd`), which run over a
-/// `CommandContext`. Those commands resolve their services from the
-/// context's extension map — a [`KanbanContext`] (whose `entity_context()`
-/// must be the *same* `Arc<EntityContext>` this server dispatches against,
-/// so a paste is visible through the generic face and undoable on the one
-/// shared `StoreContext`) and a [`ClipboardProviderExt`] (the clipboard
-/// seam — `InMemoryClipboard` in tests, the OS clipboard in production) —
-/// plus a [`UIState`] that copy/cut flag with the copied entity type.
-///
-/// Held in an `Option` on the server so the bare `EntityServer::new`
-/// constructor (used by the CRUD-only tests and the eventual minimal
-/// bootstrap) keeps working without forcing every caller to stand up a
-/// full board substrate. When absent, the clipboard ops return a clear
-/// "not configured" error rather than panicking.
-#[derive(Clone)]
-struct ClipboardWiring {
-    /// The full board context the paste handlers dispatch against. Its
-    /// `entity_context()` is the same `Arc<EntityContext>` the server holds.
-    kanban: Arc<KanbanContext>,
-    /// The clipboard provider, wrapped for storage as a context extension.
-    clipboard: Arc<ClipboardProviderExt>,
-    /// Shared UI state — copy/cut record the clipboard entity type here so
-    /// paste availability can be gated by type.
-    ui_state: Arc<UIState>,
+/// `entity_ctx` is always required; the `clipboard`-related fields are only
+/// populated when the server was constructed via
+/// [`EntityServer::with_clipboard_resolver`] / [`EntityServer::with_clipboard`]
+/// — without them, the clipboard ops surface as a structured error rather
+/// than panic.
+pub struct EntityBoardServices {
+    /// The board's entity context (required for every entity op).
+    pub entity_ctx: Arc<EntityContext>,
+    /// The board's kanban context — needed for clipboard ops only.
+    pub kanban: Option<Arc<KanbanContext>>,
+    /// The clipboard provider — needed for clipboard ops only.
+    pub clipboard: Option<Arc<dyn ClipboardProvider>>,
+    /// The UI-state used to track palette/paste affordances — clipboard
+    /// ops only.
+    pub ui_state: Option<Arc<UIState>>,
 }
+
+/// Resolves the [`EntityBoardServices`] to drive for the current task.
+///
+/// Production deployments back this with a `tokio::task_local!` scope set
+/// by the dispatcher (see `swissarmyhammer-kanban`'s `command_seam`).
+/// Returning `None` means no board is scoped on this task; tool handlers
+/// surface that as an `internal_error` rather than panicking.
+pub type EntityBoardResolver = Arc<dyn Fn() -> Option<EntityBoardServices> + Send + Sync>;
 
 /// In-process `rmcp::ServerHandler` for the `entity` operation tool.
 ///
-/// Holds an `Arc<EntityContext>` to the shared entity kernel so every verb
-/// dispatches against the same CRUD implementation, the same cache, and the
-/// same shared `StoreContext` the rest of the app reads from.
+/// Holds an [`EntityBoardResolver`] — consulted at the top of every tool
+/// handler — so a single `EntityServer` exposed app-wide on a plugin host
+/// can route per-call to whichever board's services are scoped on the
+/// current `tokio` task. The previous single-context constructors are
+/// preserved as thin wrappers that produce a resolver returning the same
+/// services every call.
 #[derive(Clone)]
 pub struct EntityServer {
-    /// The shared entity kernel. Held behind an `Arc` because the kernel
-    /// invariant requires that exactly one `EntityContext` exists per app
-    /// and is shared by `Arc::clone` — this server is just another holder
-    /// of the same arc.
-    ctx: Arc<EntityContext>,
-    /// Optional clipboard wiring. `Some` only when the server was built via
-    /// [`EntityServer::with_clipboard`]; the `copy` / `cut` / `paste` verbs
-    /// require it.
-    clipboard: Option<ClipboardWiring>,
+    /// Resolves the active board's services per call. See
+    /// [`EntityBoardResolver`].
+    resolver: EntityBoardResolver,
 }
 
 impl std::fmt::Debug for EntityServer {
@@ -105,14 +99,20 @@ impl EntityServer {
     /// The CRUD / archive / search verbs are fully functional; the
     /// clipboard verbs (`copy` / `cut` / `paste`) are not — they require
     /// the board substrate supplied by [`EntityServer::with_clipboard`].
+    /// Single-context callers (most tests) use this constructor.
     pub fn new(ctx: Arc<EntityContext>) -> Self {
-        Self {
-            ctx,
-            clipboard: None,
-        }
+        let ctx = Arc::clone(&ctx);
+        Self::with_resolver(Arc::new(move || {
+            Some(EntityBoardServices {
+                entity_ctx: Arc::clone(&ctx),
+                kanban: None,
+                clipboard: None,
+                ui_state: None,
+            })
+        }))
     }
 
-    /// Construct a server with the full clipboard wiring.
+    /// Construct a server with the full clipboard wiring for a single board.
     ///
     /// `kanban` is the board context the paste handlers dispatch against;
     /// its `entity_context()` is taken as the kernel the server holds, so
@@ -123,6 +123,9 @@ impl EntityServer {
     /// clipboard seam: tests pass an `InMemoryClipboard`, production passes
     /// the OS-backed provider.
     ///
+    /// Preserved as a constant-context wrapper around
+    /// [`EntityServer::with_resolver`].
+    ///
     /// # Errors
     ///
     /// Surfaces any error from `kanban.entity_context()` (store setup /
@@ -132,28 +135,60 @@ impl EntityServer {
         clipboard_provider: Arc<dyn ClipboardProvider>,
         ui_state: Arc<UIState>,
     ) -> Result<Self, McpError> {
-        let ctx = kanban.entity_context().await.map_err(|e| {
+        // Resolve the entity context up-front — the previous body did the
+        // same and we preserve that side-effect (store setup / cache
+        // preload) here, before building the resolver.
+        let entity_ctx = kanban.entity_context().await.map_err(|e| {
             McpError::internal_error(
                 format!("entity_context unavailable for clipboard wiring: {e}"),
                 None,
             )
         })?;
-        Ok(Self {
-            ctx,
-            clipboard: Some(ClipboardWiring {
-                kanban,
-                clipboard: Arc::new(ClipboardProviderExt(clipboard_provider)),
-                ui_state,
-            }),
+        let kanban = Arc::clone(&kanban);
+        let clipboard_provider = Arc::clone(&clipboard_provider);
+        let ui_state = Arc::clone(&ui_state);
+        let entity_ctx = Arc::clone(&entity_ctx);
+        Ok(Self::with_resolver(Arc::new(move || {
+            Some(EntityBoardServices {
+                entity_ctx: Arc::clone(&entity_ctx),
+                kanban: Some(Arc::clone(&kanban)),
+                clipboard: Some(Arc::clone(&clipboard_provider)),
+                ui_state: Some(Arc::clone(&ui_state)),
+            })
+        })))
+    }
+
+    /// Build a server that resolves the active board's services per call.
+    ///
+    /// Production constructor: pairs with a dispatcher-set
+    /// `tokio::task_local`. The resolver is consulted at the top of every
+    /// tool handler so a single `EntityServer` can serve every board on a
+    /// plugin host. Returning `None` from the resolver surfaces as a
+    /// tool-level `internal_error` rather than panicking.
+    pub fn with_resolver(resolver: EntityBoardResolver) -> Self {
+        Self { resolver }
+    }
+
+    /// Resolve the active board's services, or return a structured
+    /// `internal_error` describing the gap.
+    fn services(&self) -> Result<EntityBoardServices, McpError> {
+        (self.resolver)().ok_or_else(|| {
+            McpError::internal_error(
+                "no EntityBoardServices active on this tokio task; \
+                 the dispatcher must scope a board (see `scope_store_context` / \
+                 the entity-mcp equivalent) before invoking an `entity` tool",
+                None,
+            )
         })
     }
 
-    /// Return the shared `Arc<EntityContext>` the server dispatches to.
+    /// Return the active board's `Arc<EntityContext>`, when one is scoped.
     ///
-    /// Exposed for tests that need to verify the server holds the same
-    /// kernel the rest of the app reads from (`Arc::ptr_eq`).
-    pub fn context(&self) -> Arc<EntityContext> {
-        Arc::clone(&self.ctx)
+    /// Exposed for tests that need to verify the server resolves the same
+    /// kernel the rest of the app reads from (`Arc::ptr_eq`). Returns
+    /// `None` when no board is scoped on the current task.
+    pub fn context(&self) -> Option<Arc<EntityContext>> {
+        (self.resolver)().map(|s| s.entity_ctx)
     }
 
     /// Build the platform-facing `entity` tool definition.
@@ -173,8 +208,9 @@ impl EntityServer {
 
     /// Handle a `GetEntity` call — read one entity as JSON.
     async fn handle_get(&self, req: GetEntity) -> Result<Value, McpError> {
-        let entity = self
-            .ctx
+        let services = self.services()?;
+        let entity = services
+            .entity_ctx
             .read(&req.entity_type, &req.id)
             .await
             .map_err(entity_error_to_mcp)?;
@@ -186,8 +222,9 @@ impl EntityServer {
 
     /// Handle a `ListEntities` call — every live entity of a type as JSON.
     async fn handle_list(&self, req: ListEntities) -> Result<Value, McpError> {
-        let entities = self
-            .ctx
+        let services = self.services()?;
+        let entities = services
+            .entity_ctx
             .list(&req.entity_type)
             .await
             .map_err(entity_error_to_mcp)?;
@@ -201,6 +238,7 @@ impl EntityServer {
     /// Handle an `AddEntity` call — create / overwrite an entity from a
     /// field map. Mints a ULID id when none is supplied.
     async fn handle_add(&self, req: AddEntity) -> Result<Value, McpError> {
+        let services = self.services()?;
         let id = req
             .id
             .filter(|s| !s.is_empty())
@@ -210,7 +248,11 @@ impl EntityServer {
         for (field, value) in req.fields {
             entity.set(field, value);
         }
-        let entry_id = self.ctx.write(&entity).await.map_err(entity_error_to_mcp)?;
+        let entry_id = services
+            .entity_ctx
+            .write(&entity)
+            .await
+            .map_err(entity_error_to_mcp)?;
         Ok(serde_json::json!({
             "ok": true,
             "id": id.to_string(),
@@ -223,13 +265,18 @@ impl EntityServer {
     /// Reads the current entity through the kernel, replaces the field, and
     /// writes it back so the mutation is undoable and emits an event.
     async fn handle_update_field(&self, req: UpdateField) -> Result<Value, McpError> {
-        let mut entity = self
-            .ctx
+        let services = self.services()?;
+        let mut entity = services
+            .entity_ctx
             .read(&req.entity_type, &req.id)
             .await
             .map_err(entity_error_to_mcp)?;
         entity.set(req.field, req.value);
-        let entry_id = self.ctx.write(&entity).await.map_err(entity_error_to_mcp)?;
+        let entry_id = services
+            .entity_ctx
+            .write(&entity)
+            .await
+            .map_err(entity_error_to_mcp)?;
         Ok(serde_json::json!({
             "ok": true,
             "id": req.id,
@@ -239,8 +286,9 @@ impl EntityServer {
 
     /// Handle a `DeleteEntity` call — trash an entity.
     async fn handle_delete(&self, req: DeleteEntity) -> Result<Value, McpError> {
-        let entry_id = self
-            .ctx
+        let services = self.services()?;
+        let entry_id = services
+            .entity_ctx
             .delete(&req.entity_type, &req.id)
             .await
             .map_err(entity_error_to_mcp)?;
@@ -252,8 +300,9 @@ impl EntityServer {
 
     /// Handle an `ArchiveEntity` call — move an entity to `.archive/`.
     async fn handle_archive(&self, req: ArchiveEntity) -> Result<Value, McpError> {
-        let entry_id = self
-            .ctx
+        let services = self.services()?;
+        let entry_id = services
+            .entity_ctx
             .archive(&req.entity_type, &req.id)
             .await
             .map_err(entity_error_to_mcp)?;
@@ -265,8 +314,9 @@ impl EntityServer {
 
     /// Handle an `UnarchiveEntity` call — restore an archived entity.
     async fn handle_unarchive(&self, req: UnarchiveEntity) -> Result<Value, McpError> {
-        let entry_id = self
-            .ctx
+        let services = self.services()?;
+        let entry_id = services
+            .entity_ctx
             .unarchive(&req.entity_type, &req.id)
             .await
             .map_err(entity_error_to_mcp)?;
@@ -286,7 +336,9 @@ impl EntityServer {
     /// query runs `EntitySearchIndex::search` (fuzzy over entity fields), and
     /// each hit is resolved back to its full entity for the response.
     async fn handle_search(&self, req: Search) -> Result<Value, McpError> {
-        let entities = self.collect_searchable(req.entity_type.as_deref()).await?;
+        let services = self.services()?;
+        let entities =
+            Self::collect_searchable(&services.entity_ctx, req.entity_type.as_deref()).await?;
         let index = EntitySearchIndex::from_entities(entities);
         let hits = index.search(&req.query, SEARCH_LIMIT);
 
@@ -316,14 +368,13 @@ impl EntityServer {
     /// An unknown explicit type surfaces the kernel's structured error;
     /// types that simply have no entities yet contribute nothing.
     async fn collect_searchable(
-        &self,
+        entity_ctx: &Arc<EntityContext>,
         entity_type: Option<&str>,
     ) -> Result<Vec<Entity>, McpError> {
         match entity_type {
-            Some(ty) => self.ctx.list(ty).await.map_err(entity_error_to_mcp),
+            Some(ty) => entity_ctx.list(ty).await.map_err(entity_error_to_mcp),
             None => {
-                let types: Vec<String> = self
-                    .ctx
+                let types: Vec<String> = entity_ctx
                     .fields()
                     .all_entities()
                     .iter()
@@ -334,30 +385,13 @@ impl EntityServer {
                     // A type with no live entities lists empty; skip read
                     // errors for types that aren't backed by a store so one
                     // unbacked type can't sink the whole search.
-                    if let Ok(entities) = self.ctx.list(&ty).await {
+                    if let Ok(entities) = entity_ctx.list(&ty).await {
                         all.extend(entities);
                     }
                 }
                 Ok(all)
             }
         }
-    }
-
-    /// Borrow the clipboard wiring, mapping its absence onto a readable
-    /// rmcp error.
-    ///
-    /// The `copy` / `cut` / `paste` verbs are only reachable on a server
-    /// built with [`EntityServer::with_clipboard`]; a bare server returns
-    /// `invalid_request` so the caller learns the wiring is missing rather
-    /// than getting a confusing downstream failure.
-    fn clipboard_wiring(&self) -> Result<&ClipboardWiring, McpError> {
-        self.clipboard.as_ref().ok_or_else(|| {
-            McpError::invalid_request(
-                "clipboard ops require a server built with EntityServer::with_clipboard"
-                    .to_string(),
-                None,
-            )
-        })
     }
 
     /// Build a `CommandContext` carrying the clipboard wiring's extensions.
@@ -369,26 +403,55 @@ impl EntityServer {
     /// that copy/cut flag with the clipboard entity type. `scope` is the
     /// innermost-first moniker chain; `target` is the entity / destination
     /// moniker the command operates on.
-    fn command_context(
-        &self,
-        wiring: &ClipboardWiring,
+    ///
+    /// Returns a structured `internal_error` when the active board's
+    /// services lack the clipboard wiring (e.g. server constructed via
+    /// [`EntityServer::new`]).
+    fn build_clipboard_command_context(
+        services: &EntityBoardServices,
         command_id: &str,
         scope: Vec<String>,
         target: Option<String>,
-    ) -> CommandContext {
+    ) -> Result<CommandContext, McpError> {
+        let kanban = services.kanban.as_ref().ok_or_else(|| {
+            McpError::internal_error(
+                "this entity server was constructed without clipboard wiring \
+                 (EntityServer::new); use with_clipboard / with_resolver",
+                None,
+            )
+        })?;
+        let clipboard = services.clipboard.as_ref().ok_or_else(|| {
+            McpError::internal_error(
+                "this entity server was constructed without clipboard wiring \
+                 (EntityServer::new); use with_clipboard / with_resolver",
+                None,
+            )
+        })?;
+        let ui_state = services.ui_state.as_ref().ok_or_else(|| {
+            McpError::internal_error(
+                "this entity server was constructed without clipboard wiring \
+                 (EntityServer::new); use with_clipboard / with_resolver",
+                None,
+            )
+        })?;
         let mut ctx = CommandContext::new(command_id, scope, target, HashMap::new());
-        ctx.set_extension(Arc::clone(&wiring.kanban));
-        ctx.set_extension(Arc::clone(&wiring.clipboard));
-        ctx.ui_state = Some(Arc::clone(&wiring.ui_state));
-        ctx
+        ctx.set_extension(Arc::clone(kanban));
+        ctx.set_extension(Arc::new(ClipboardProviderExt(Arc::clone(clipboard))));
+        ctx.ui_state = Some(Arc::clone(ui_state));
+        Ok(ctx)
     }
 
     /// Handle a `Copy` call — snapshot the `type:id` entity to the
     /// clipboard via the shared [`CopyEntityCmd`].
     async fn handle_copy(&self, req: Copy) -> Result<Value, McpError> {
-        let wiring = self.clipboard_wiring()?;
+        let services = self.services()?;
         let target = format!("{}:{}", req.entity_type, req.id);
-        let ctx = self.command_context(wiring, "entity.copy", req.scope, Some(target));
+        let ctx = Self::build_clipboard_command_context(
+            &services,
+            "entity.copy",
+            req.scope,
+            Some(target),
+        )?;
         CopyEntityCmd
             .execute(&ctx)
             .await
@@ -399,9 +462,14 @@ impl EntityServer {
     /// shared [`CutEntityCmd`]. The destructive write flows through the
     /// kernel's `StoreContext`, so it is undoable and emits an event.
     async fn handle_cut(&self, req: Cut) -> Result<Value, McpError> {
-        let wiring = self.clipboard_wiring()?;
+        let services = self.services()?;
         let target = format!("{}:{}", req.entity_type, req.id);
-        let ctx = self.command_context(wiring, "entity.cut", req.scope, Some(target));
+        let ctx = Self::build_clipboard_command_context(
+            &services,
+            "entity.cut",
+            req.scope,
+            Some(target),
+        )?;
         CutEntityCmd.execute(&ctx).await.map_err(command_error_to_mcp)
     }
 
@@ -410,9 +478,13 @@ impl EntityServer {
     /// The matched handler writes through the kernel, so the paste is
     /// undoable and emits entity events.
     async fn handle_paste(&self, req: Paste) -> Result<Value, McpError> {
-        let wiring = self.clipboard_wiring()?;
-        let ctx =
-            self.command_context(wiring, "entity.paste", req.scope, Some(req.target));
+        let services = self.services()?;
+        let ctx = Self::build_clipboard_command_context(
+            &services,
+            "entity.paste",
+            req.scope,
+            Some(req.target),
+        )?;
         PasteEntityCmd::new()
             .execute(&ctx)
             .await
