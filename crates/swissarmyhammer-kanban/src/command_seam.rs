@@ -22,7 +22,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use swissarmyhammer_command_service::TransactionSeam;
-use swissarmyhammer_store::{StoreContext, UndoEntryId};
+use swissarmyhammer_store::{StoreContext, StoreContextResolver, UndoEntryId};
 
 tokio::task_local! {
     /// Per-task active board [`StoreContext`] for production dispatch.
@@ -58,6 +58,19 @@ where
     F: Future,
 {
     CURRENT_STORE_CTX.scope(ctx, fut).await
+}
+
+/// Build the production [`StoreContextResolver`] that reads
+/// [`CURRENT_STORE_CTX`].
+///
+/// Pair this with [`swissarmyhammer_store::StoreServer::with_resolver`]
+/// at app bootstrap; the dispatcher then scopes the per-board context
+/// around its call to the store tool handlers via
+/// [`scope_store_context`]. Outside a scope the resolver returns `None`
+/// and tool calls fail with a structured error — a dispatcher that
+/// forgets to scope degrades gracefully rather than panicking.
+pub fn task_local_store_resolver() -> StoreContextResolver {
+    Arc::new(|| CURRENT_STORE_CTX.try_with(Arc::clone).ok())
 }
 
 /// [`TransactionSeam`] implementation backed by a kanban board's
@@ -260,6 +273,39 @@ mod tests {
             );
             seam.end(&txn);
             assert!(ctx_for_assert.current_transaction().is_none());
+        })
+        .await;
+    }
+
+    /// The production [`task_local_store_resolver`] returns `None` outside
+    /// a [`scope_store_context`] — pairs with the seam's None-outside-scope
+    /// contract so `StoreServer::with_resolver(task_local_store_resolver())`
+    /// surfaces a structured error rather than panicking when the
+    /// dispatcher forgets to scope.
+    #[tokio::test]
+    async fn task_local_store_resolver_returns_none_outside_scope() {
+        let resolver = task_local_store_resolver();
+        assert!(resolver().is_none(), "no CURRENT_STORE_CTX scoped");
+    }
+
+    /// Inside a [`scope_store_context`] the resolver returns the scoped
+    /// `Arc<StoreContext>` (Arc identity preserved). Pins the round-trip
+    /// the production wiring depends on:
+    /// `StoreServer::with_resolver(task_local_store_resolver())` paired
+    /// with `scope_store_context(board.store_ctx, …)` must see THIS
+    /// board's context, not some other board's.
+    #[tokio::test]
+    async fn task_local_store_resolver_returns_scoped_context() {
+        let (_dir, ctx) = ctx();
+        let ctx_ptr = Arc::as_ptr(&ctx) as usize;
+        let resolver = task_local_store_resolver();
+        scope_store_context(ctx, async move {
+            let resolved = resolver().expect("inside scope returns Some");
+            assert_eq!(
+                Arc::as_ptr(&resolved) as usize,
+                ctx_ptr,
+                "the resolver must return the same Arc instance scoped",
+            );
         })
         .await;
     }

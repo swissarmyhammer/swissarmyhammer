@@ -49,9 +49,13 @@ use crate::operations::{
 ///
 /// `entity_ctx` is always required; the `clipboard`-related fields are only
 /// populated when the server was constructed via
-/// [`EntityServer::with_clipboard_resolver`] / [`EntityServer::with_clipboard`]
-/// — without them, the clipboard ops surface as a structured error rather
-/// than panic.
+/// [`EntityServer::with_resolver`] / [`EntityServer::with_clipboard`] — without
+/// them, the clipboard ops surface as a structured error rather than panic.
+///
+/// `Clone` so the value can be placed into a `tokio::task_local!` (see
+/// [`scope_entity_board_services`]) and resolved out cheaply per-call by
+/// the production resolver.
+#[derive(Clone)]
 pub struct EntityBoardServices {
     /// The board's entity context (required for every entity op).
     pub entity_ctx: Arc<EntityContext>,
@@ -67,10 +71,60 @@ pub struct EntityBoardServices {
 /// Resolves the [`EntityBoardServices`] to drive for the current task.
 ///
 /// Production deployments back this with a `tokio::task_local!` scope set
-/// by the dispatcher (see `swissarmyhammer-kanban`'s `command_seam`).
-/// Returning `None` means no board is scoped on this task; tool handlers
-/// surface that as an `internal_error` rather than panicking.
+/// by the dispatcher (see [`scope_entity_board_services`] /
+/// [`task_local_resolver`]). Returning `None` means no board is scoped on
+/// this task; tool handlers surface that as an `internal_error` rather
+/// than panicking.
 pub type EntityBoardResolver = Arc<dyn Fn() -> Option<EntityBoardServices> + Send + Sync>;
+
+tokio::task_local! {
+    /// Per-task active [`EntityBoardServices`] for production dispatch.
+    ///
+    /// The kanban app is multi-board: each board's services bundle is
+    /// scoped here by the dispatcher (alongside `swissarmyhammer-kanban`'s
+    /// `CURRENT_STORE_CTX`), and the production [`EntityServer`] resolver
+    /// — [`task_local_resolver`] — reads back the same bundle inside its
+    /// per-call `services()` lookup.
+    ///
+    /// Outside a [`scope_entity_board_services`] (e.g. in tests that
+    /// instantiate `EntityServer` with `new(ctx)` directly), this
+    /// task-local is unset and a resolver built from
+    /// [`task_local_resolver`] returns `None` — the entity tool handlers
+    /// then surface a structured "no board scoped" error rather than
+    /// panicking.
+    pub static CURRENT_ENTITY_BOARD_SERVICES: EntityBoardServices;
+}
+
+/// Scope [`CURRENT_ENTITY_BOARD_SERVICES`] to `services` for the duration
+/// of `fut`.
+///
+/// The production [`EntityServer`] resolver ([`task_local_resolver`])
+/// reads back the scoped bundle inside every tool call, so the in-process
+/// `entity` MCP surface routes per-call to whichever board's services the
+/// dispatcher scoped.
+pub async fn scope_entity_board_services<F>(services: EntityBoardServices, fut: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    CURRENT_ENTITY_BOARD_SERVICES.scope(services, fut).await
+}
+
+/// Build the production [`EntityBoardResolver`] that reads
+/// [`CURRENT_ENTITY_BOARD_SERVICES`].
+///
+/// Pair this with [`EntityServer::with_resolver`]; the app's dispatcher
+/// then scopes the per-board bundle around its call to
+/// [`crate::EntityServer`]'s tool handlers via
+/// [`scope_entity_board_services`]. Outside a scope the resolver returns
+/// `None` and tool calls fail with a structured error — a dispatcher that
+/// forgets to scope degrades gracefully rather than panicking.
+pub fn task_local_resolver() -> EntityBoardResolver {
+    Arc::new(|| {
+        CURRENT_ENTITY_BOARD_SERVICES
+            .try_with(|services| services.clone())
+            .ok()
+    })
+}
 
 /// In-process `rmcp::ServerHandler` for the `entity` operation tool.
 ///
@@ -655,5 +709,23 @@ impl ServerHandler for EntityServer {
         };
 
         Ok(CallToolResult::structured(response))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Outside a [`scope_entity_board_services`], the production resolver
+    /// returns `None` — every tool handler will surface that as a
+    /// structured "no board scoped" error rather than panicking. Pins
+    /// the graceful-degradation contract the dispatcher relies on.
+    #[tokio::test]
+    async fn task_local_resolver_returns_none_outside_scope() {
+        let resolver = task_local_resolver();
+        assert!(
+            resolver().is_none(),
+            "no CURRENT_ENTITY_BOARD_SERVICES is scoped on this task",
+        );
     }
 }

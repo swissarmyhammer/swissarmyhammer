@@ -55,6 +55,6 @@ pub use context::StackState;
 pub use handle::StoreHandle;
 pub use id::{StoredItemId, UndoEntryId};
 pub use provenance::EventProvenance;
-pub use server::StoreServer;
+pub use server::{StoreContextResolver, StoreServer};
 pub use stack::{UndoEntry, UndoStack};
 pub use store::TrackedStore;
