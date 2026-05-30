@@ -371,8 +371,7 @@ describe("EntityCard inspect button — Enter activates ui.inspect via Pressable
     // to the card zone's onClick handler. With e.stopPropagation
     // preserved on the inner button, it must not.
     const focusToCardCalls = mockInvoke.mock.calls.filter(
-      (c: unknown[]) =>
-        c[0] === "spatial_focus" &&
+      (c: unknown[]) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as Record<string, unknown>)?.tool === "focus" && (c[1] as Record<string, unknown>)?.op === "set focus")) &&
         (c[1] as { fq?: string })?.fq === cardZoneFq,
     );
     expect(

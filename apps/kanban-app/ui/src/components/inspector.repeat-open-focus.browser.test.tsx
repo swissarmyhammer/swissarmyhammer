@@ -441,7 +441,7 @@ describe("Inspector — auto-focus on every inspect (not only the first)", () =>
     // Helper: every spatial_focus dispatch in the order it fired.
     const focusCalls = () =>
       mockInvoke.mock.calls
-        .filter((c) => c[0] === "spatial_focus")
+        .filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))
         .map((c) => (c[1] as { fq?: string } | undefined)?.fq ?? "?");
 
     /** Simulate a card click: nav.focus(card_fq) then inspect open. */

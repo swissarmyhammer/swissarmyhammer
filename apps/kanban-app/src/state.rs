@@ -7,7 +7,6 @@ use std::sync::{Arc, Mutex};
 use swissarmyhammer_commands::{load_yaml_dir, Command, CommandsRegistry};
 use swissarmyhammer_entity::Entity;
 use swissarmyhammer_entity_search::EntitySearchIndex;
-use swissarmyhammer_focus::{SpatialRegistry, SpatialState};
 use swissarmyhammer_kanban::clipboard::ClipboardProvider;
 use swissarmyhammer_kanban::KanbanContext;
 use swissarmyhammer_tools::mcp::unified_server::{
@@ -462,20 +461,12 @@ pub(crate) struct AppState {
     /// resurrecting previous-session windows on top of the one the deep-link
     /// handler focused or created.
     pub(crate) deep_link_handled: AtomicBool,
-    /// Headless spatial-navigation registry — stores every layer and
-    /// the focus tracker's `last_focused_by_fq` map. Wrapped in a
-    /// `tokio::sync::Mutex` because spatial commands hold both this and
-    /// `spatial_state` together for the duration of a single
-    /// transaction; using the async mutex matches the pattern used by
-    /// the rest of `AppState`'s shared state.
-    pub(crate) spatial_registry: TokioMutex<SpatialRegistry>,
-    /// Per-window focused [`swissarmyhammer_focus::FullyQualifiedMoniker`] tracker.
-    /// Mutated by every spatial command that commits a focus transition
-    /// (`spatial_focus`, `spatial_navigate`, `spatial_focus_lost`,
-    /// `spatial_clear_focus`). Held under `tokio::sync::Mutex` because
-    /// spatial commands routinely take both `spatial_registry` and
-    /// `spatial_state` for the duration of a single transaction.
-    pub(crate) spatial_state: TokioMutex<SpatialState>,
+    // `spatial_registry` and `spatial_state` were REMOVED in Stage 3
+    // of the kanban cut-over. The spatial Tauri commands that mutated
+    // them are gone; the React side now reaches the focus kernel
+    // through the in-process `focus` MCP server, which owns its own
+    // `Arc<Mutex<SpatialRegistry>>` / `Arc<Mutex<SpatialState>>` (see
+    // `command_services.rs`).
     /// The embedded plugin platform — the [`swissarmyhammer_plugin::PluginHost`]
     /// loaded with the builtin and user-layer plugins, plus the hot-reload
     /// watcher. Joins `commands_registry`, `ui_state`, and `boards` as another
@@ -606,8 +597,6 @@ impl AppState {
             menu_items: Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
             deep_link_handled: AtomicBool::new(false),
-            spatial_registry: TokioMutex::new(SpatialRegistry::new()),
-            spatial_state: TokioMutex::new(SpatialState::new()),
             plugin_platform: TokioMutex::new(plugin_platform),
             running_agents: crate::ai::models::RunningAgents::new(),
         }

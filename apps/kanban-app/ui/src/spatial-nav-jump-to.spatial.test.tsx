@@ -620,7 +620,7 @@ describe("End-to-end spatial test for Jump-To overlay — full <App/>", () => {
     });
 
     const focusCalls = mockInvoke.mock.calls
-      .filter((c) => c[0] === "spatial_focus")
+      .filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))
       .map((c) => (c[1] as { fq: FullyQualifiedMoniker }).fq);
     expect(
       focusCalls,
@@ -672,7 +672,7 @@ describe("End-to-end spatial test for Jump-To overlay — full <App/>", () => {
     // restores prior focus, which fires `spatial_focus(priorFq)` —
     // that's expected and explicitly NOT a "new" focus change.)
     const focusCalls = mockInvoke.mock.calls
-      .filter((c) => c[0] === "spatial_focus")
+      .filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))
       .map((c) => (c[1] as { fq: FullyQualifiedMoniker }).fq);
     for (const fq of focusCalls) {
       // Prior-focus restore is permitted; pill targets are not.
@@ -745,7 +745,7 @@ describe("End-to-end spatial test for Jump-To overlay — full <App/>", () => {
     // No pill-target focus dispatch happened (prior-focus restore is
     // permitted as part of the dismiss path).
     const focusCalls = mockInvoke.mock.calls
-      .filter((c) => c[0] === "spatial_focus")
+      .filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))
       .map((c) => (c[1] as { fq: FullyQualifiedMoniker }).fq);
     for (const fq of focusCalls) {
       if (fq === priorFq) continue;
@@ -875,7 +875,7 @@ describe("End-to-end spatial test for Jump-To overlay — full <App/>", () => {
       "overlay must remain mounted after a single prefix letter",
     ).not.toBeNull();
     const firstLetterFocusCalls = mockInvoke.mock.calls.filter(
-      (c) => c[0] === "spatial_focus",
+      (c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")),
     );
     expect(
       firstLetterFocusCalls.length,
@@ -892,7 +892,7 @@ describe("End-to-end spatial test for Jump-To overlay — full <App/>", () => {
       await new Promise((r) => setTimeout(r, 10));
     });
     const focusCalls = mockInvoke.mock.calls
-      .filter((c) => c[0] === "spatial_focus")
+      .filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))
       .map((c) => (c[1] as { fq: FullyQualifiedMoniker }).fq);
     expect(
       focusCalls,
@@ -972,7 +972,7 @@ describe("End-to-end spatial test for Jump-To overlay — full <App/>", () => {
     // of which are part of the overlay's own bookkeeping — only a
     // landing on a non-overlay scope would constitute a leaked nav.
     const focusCalls = mockInvoke.mock.calls
-      .filter((c) => c[0] === "spatial_focus")
+      .filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))
       .map((c) => (c[1] as { fq: FullyQualifiedMoniker }).fq);
     for (const fq of focusCalls) {
       expect(

@@ -52,7 +52,7 @@ beforeEach(() => {
 /** Pull the (key, name, parent) record from the most recent push call. */
 function lastPushArgs() {
   const calls = mockInvoke.mock.calls.filter(
-    (c) => c[0] === "spatial_push_layer",
+    (c) => (c[0] === "spatial_push_layer" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "push layer")),
   );
   if (calls.length === 0) throw new Error("expected spatial_push_layer call");
   return calls[calls.length - 1][1] as {
@@ -94,7 +94,7 @@ describe("<FocusLayer>", () => {
     unmount();
 
     const popCalls = mockInvoke.mock.calls.filter(
-      (c) => c[0] === "spatial_pop_layer",
+      (c) => (c[0] === "spatial_pop_layer" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "pop layer")),
     );
     expect(popCalls).toHaveLength(1);
     expect(popCalls[0][1]).toEqual({ fq: pushed.fq });
@@ -122,7 +122,7 @@ describe("<FocusLayer>", () => {
     // React commits child effects before parent effects, so we look up
     // pushes by name rather than relying on call order.
     const pushes = mockInvoke.mock.calls
-      .filter((c) => c[0] === "spatial_push_layer")
+      .filter((c) => (c[0] === "spatial_push_layer" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "push layer")))
       .map(
         (c) =>
           c[1] as {
@@ -157,10 +157,12 @@ describe("<FocusLayer>", () => {
     await flushSetup();
 
     const pushes = mockInvoke.mock.calls
-      .filter((c) => c[0] === "spatial_push_layer")
-      .map(
-        (c) => c[1] as { name: string; parent: FullyQualifiedMoniker | null },
-      );
+      .filter((c) => (c[0] === "spatial_push_layer" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "push layer")))
+      .map((c) => {
+        const outer = c[1] as Record<string, unknown>;
+        const args = (outer?.params ?? outer) as { name: string; parent: FullyQualifiedMoniker | null };
+        return args;
+      });
     // The inner ("dialog") layer should ignore the ancestor context.
     const dialog = pushes.find((p) => p.name === "dialog")!;
     expect(dialog.parent).toBe(explicitParent);
@@ -181,10 +183,12 @@ describe("<FocusLayer>", () => {
     await flushSetup();
 
     const pushes = mockInvoke.mock.calls
-      .filter((c) => c[0] === "spatial_push_layer")
-      .map(
-        (c) => c[1] as { name: string; parent: FullyQualifiedMoniker | null },
-      );
+      .filter((c) => (c[0] === "spatial_push_layer" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "push layer")))
+      .map((c) => {
+        const outer = c[1] as Record<string, unknown>;
+        const args = (outer?.params ?? outer) as { name: string; parent: FullyQualifiedMoniker | null };
+        return args;
+      });
     const dialog = pushes.find((p) => p.name === "dialog")!;
     expect(dialog.parent).toBeNull();
 
@@ -243,7 +247,7 @@ describe("<FocusLayer>", () => {
     // Only one push call should have happened — the same layer instance
     // continues to live across the re-render.
     const pushes = mockInvoke.mock.calls.filter(
-      (c) => c[0] === "spatial_push_layer",
+      (c) => (c[0] === "spatial_push_layer" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "push layer")),
     );
     expect(pushes).toHaveLength(1);
     expect(pushes[0][1]).toEqual(firstPush);
@@ -276,7 +280,7 @@ describe("<FocusLayer> overlay scenarios", () => {
   /** Pull every `spatial_push_layer` push as a `{ fq, name, parent }` record. */
   function pushedLayers() {
     return mockInvoke.mock.calls
-      .filter((c) => c[0] === "spatial_push_layer")
+      .filter((c) => (c[0] === "spatial_push_layer" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "push layer")))
       .map(
         (c) =>
           c[1] as {
@@ -439,7 +443,7 @@ describe("<FocusLayer> overlay scenarios", () => {
     await flushSetup();
 
     const pops = mockInvoke.mock.calls.filter(
-      (c) => c[0] === "spatial_pop_layer",
+      (c) => (c[0] === "spatial_pop_layer" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "pop layer")),
     );
     expect(pops).toHaveLength(1);
     expect((pops[0][1] as { fq: FullyQualifiedMoniker }).fq).toBe(palette.fq);

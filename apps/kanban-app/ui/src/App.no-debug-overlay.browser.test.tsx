@@ -343,7 +343,7 @@ describe("<App/> — focus-debug overlays disabled in production", () => {
     // layer." The overlay assertion above then proves the layer
     // registered without a paired debug overlay.
     const layerPushes = mockInvoke.mock.calls.filter(
-      (c) => c[0] === "spatial_push_layer",
+      (c) => (c[0] === "spatial_push_layer" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "push layer")),
     );
     expect(
       layerPushes.length,

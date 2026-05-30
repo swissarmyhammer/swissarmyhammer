@@ -178,7 +178,7 @@ describe("EntityFocusProvider — kernel-projection invariant", () => {
       (c) => c[0] === "spatial_focus_by_moniker",
     );
     const focusByKeyCalls = mockInvoke.mock.calls.filter(
-      (c) => c[0] === "spatial_focus",
+      (c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")),
     );
     const totalFocusCalls = focusByMonikerCalls.length + focusByKeyCalls.length;
     expect(
@@ -356,8 +356,7 @@ describe("EntityFocusProvider — kernel-projection invariant", () => {
     // moniker-shaped clear (`spatial_focus_by_moniker` with a null
     // moniker) for resilience to the implementation choice.
     const clearCalls = mockInvoke.mock.calls.filter(
-      (c) =>
-        c[0] === "spatial_clear_focus" ||
+      (c) => (c[0] === "spatial_clear_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "clear focus")) ||
         (c[0] === "spatial_focus_by_moniker" &&
           (c[1] as { moniker?: unknown })?.moniker === null),
     );

@@ -444,8 +444,12 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 /** Collect every `spatial_focus` call's args, in order. */
 function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
+    .filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))
+    .map((c) => {
+      const outer = c[1] as Record<string, unknown>;
+      const args = (outer?.params ?? outer) as { fq: FullyQualifiedMoniker };
+      return args;
+    })
 }
 
 /** Collect every `spatial_unregister_scope` call's args, in order. */
@@ -682,7 +686,7 @@ describe("EntityCard — browser spatial behaviour", () => {
     await flushSetup();
 
     const navigateCalls = mockInvoke.mock.calls.filter(
-      (c) => c[0] === "spatial_navigate",
+      (c) => (c[0] === "spatial_navigate" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "navigate focus")),
     );
     expect(navigateCalls).toEqual([]);
 
@@ -713,7 +717,7 @@ describe("EntityCard — browser spatial behaviour", () => {
     // No card-owned drill-in — the global handler is what wires Enter,
     // and it is not mounted in this harness.
     const drillCalls = mockInvoke.mock.calls.filter(
-      (c) => c[0] === "spatial_drill_in",
+      (c) => (c[0] === "spatial_drill_in" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "drill_in layer")),
     );
     expect(drillCalls).toEqual([]);
 

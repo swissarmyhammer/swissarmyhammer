@@ -389,7 +389,7 @@ function spatialDrillInCalls(): Array<{
   snapshot?: NavSnapshot;
 }> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_drill_in")
+    .filter((c) => (c[0] === "spatial_drill_in" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "drill_in layer")))
     .map(
       (c) =>
         c[1] as {
@@ -407,7 +407,7 @@ function spatialDrillOutCalls(): Array<{
   snapshot?: NavSnapshot;
 }> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_drill_out")
+    .filter((c) => (c[0] === "spatial_drill_out" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "drill_out layer")))
     .map(
       (c) =>
         c[1] as {
@@ -635,7 +635,7 @@ describe("BoardView — Enter drills in, not inspect", () => {
     // focus store. Confirm that the `spatial_focus` fanout fires and
     // carries the resolved card moniker.
     const focusCall = mockInvoke.mock.calls.find(
-      (c) => c[0] === "spatial_focus",
+      (c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")),
     );
     expect(focusCall).toBeTruthy();
     const focusArgs = focusCall![1] as { fq?: string };
@@ -703,7 +703,7 @@ describe("BoardView — Enter drills in, not inspect", () => {
     expect(drillCalls[0].fq).toBe(columnKey);
 
     const focusCall = mockInvoke.mock.calls.find(
-      (c) => c[0] === "spatial_focus",
+      (c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")),
     );
     expect(focusCall).toBeTruthy();
     const focusArgs = focusCall![1] as { fq?: string };
@@ -842,7 +842,7 @@ describe("BoardView — Enter drills in, not inspect", () => {
     // would either be the card's own FQM or never fire — both visible
     // as the user-reported "Enter does nothing" symptom.
     const focusCall = mockInvoke.mock.calls.find(
-      (c) => c[0] === "spatial_focus",
+      (c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")),
     );
     expect(
       focusCall,
@@ -911,7 +911,7 @@ describe("BoardView — Enter drills in, not inspect", () => {
     ).toBe(1);
 
     const focusCall = mockInvoke.mock.calls.find(
-      (c) => c[0] === "spatial_focus",
+      (c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")),
     );
     expect(
       focusCall,

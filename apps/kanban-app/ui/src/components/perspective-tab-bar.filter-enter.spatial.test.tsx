@@ -386,7 +386,7 @@ describe("PerspectiveTabBar filter button — Enter claims focus on the filter e
     // isolate Enter's contribution from any startup focus traffic.
     const mockInvoke = invoke as unknown as ReturnType<typeof vi.fn>;
     const spatialFocusBefore = mockInvoke.mock.calls.filter(
-      (c: unknown[]) => c[0] === "spatial_focus",
+      (c: unknown[]) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as Record<string, unknown>)?.tool === "focus" && (c[1] as Record<string, unknown>)?.op === "set focus")),
     ).length;
 
     await act(async () => {
@@ -396,7 +396,7 @@ describe("PerspectiveTabBar filter button — Enter claims focus on the filter e
     });
 
     const spatialFocusAfter = mockInvoke.mock.calls.filter(
-      (c: unknown[]) => c[0] === "spatial_focus",
+      (c: unknown[]) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as Record<string, unknown>)?.tool === "focus" && (c[1] as Record<string, unknown>)?.op === "set focus")),
     );
     expect(
       spatialFocusAfter.length - spatialFocusBefore,

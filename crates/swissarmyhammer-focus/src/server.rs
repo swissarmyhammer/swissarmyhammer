@@ -41,12 +41,15 @@ use serde_json::Value;
 use swissarmyhammer_operations_macros::operation_tool;
 use tokio::sync::Mutex;
 
+use crate::observer::{FocusEventSink, NoopSink};
 use crate::operations::{
-    operations, ClearFocus, DrillIn, DrillOut, Focus, FocusLost, Navigate, PopLayer, PushLayer,
+    operations, ClearFocus, DrillIn, DrillOut, Focus, FocusLost, GenerateSneakCodes, Navigate,
+    PopLayer, PushLayer,
 };
+use crate::sneak::generate_sneak_codes;
 use crate::registry::SpatialRegistry;
 use crate::snapshot::IndexedSnapshot;
-use crate::state::SpatialState;
+use crate::state::{FocusChangedEvent, SpatialState};
 
 /// In-process `rmcp::ServerHandler` for the `focus` operation tool.
 ///
@@ -61,6 +64,11 @@ pub struct FocusServer {
     spatial_registry: Arc<Mutex<SpatialRegistry>>,
     /// Per-window focus tracker. Locked after `spatial_registry`.
     spatial_state: Arc<Mutex<SpatialState>>,
+    /// Optional observer that mirrors every produced `FocusChangedEvent`
+    /// onto an external transport (e.g. the Tauri app's
+    /// `app.emit_to("focus-changed", ...)` path). Defaults to [`NoopSink`]
+    /// so unit tests that only consume return-value events stay unaffected.
+    sink: Arc<dyn FocusEventSink>,
 }
 
 impl std::fmt::Debug for FocusServer {
@@ -81,6 +89,7 @@ impl FocusServer {
         Self {
             spatial_registry: Arc::new(Mutex::new(SpatialRegistry::new())),
             spatial_state: Arc::new(Mutex::new(SpatialState::new())),
+            sink: Arc::new(NoopSink),
         }
     }
 
@@ -95,7 +104,24 @@ impl FocusServer {
         Self {
             spatial_registry,
             spatial_state,
+            sink: Arc::new(NoopSink),
         }
+    }
+
+    /// Attach a [`FocusEventSink`] so every produced [`FocusChangedEvent`]
+    /// is mirrored onto an external transport.
+    ///
+    /// Production wiring (the kanban app) passes a sink that calls
+    /// `app.emit_to(event.window_label, "focus-changed", event)` so the
+    /// React `SpatialFocusProvider` keeps receiving the same Tauri event
+    /// it did when the legacy `spatial_*` Tauri commands emitted on the
+    /// host side. Tests and unwired callers default to [`NoopSink`].
+    ///
+    /// Returns `self` so this fits in the builder-style construction the
+    /// bootstrap uses.
+    pub fn with_sink(mut self, sink: Arc<dyn FocusEventSink>) -> Self {
+        self.sink = sink;
+        self
     }
 
     /// The shared registry arc, exposed for tests / bootstrap.
@@ -131,6 +157,18 @@ impl FocusServer {
         }
     }
 
+    /// Forward an optional focus-changed event onto the attached sink.
+    ///
+    /// Centralized so every focus-mutating handler emits via the same code
+    /// path — a no-op when the kernel returned `None` (idempotent commit,
+    /// already-focused, unknown FQM) or when the sink is the default
+    /// [`NoopSink`].
+    fn forward_event(&self, event: &Option<FocusChangedEvent>) {
+        if let Some(ev) = event.as_ref() {
+            self.sink.emit(ev);
+        }
+    }
+
     /// Handle a `set focus` call (`ui.setFocus` routing target).
     ///
     /// Ports `spatial_focus`: a `None` snapshot drops the commit silently.
@@ -146,6 +184,7 @@ impl FocusServer {
         let event = self
             .with_spatial(|registry, state| state.focus(registry, &snapshot, req.fq.clone(), None))
             .await;
+        self.forward_event(&event);
         Ok(serde_json::json!({ "ok": true, "event": event }))
     }
 
@@ -154,6 +193,7 @@ impl FocusServer {
         let event = self
             .with_spatial(|_registry, state| state.clear_focus(&req.window))
             .await;
+        self.forward_event(&event);
         Ok(serde_json::json!({ "ok": true, "event": event }))
     }
 
@@ -179,6 +219,7 @@ impl FocusServer {
                 )
             })
             .await;
+        self.forward_event(&event);
         Ok(serde_json::json!({ "ok": true, "event": event }))
     }
 
@@ -197,6 +238,7 @@ impl FocusServer {
                 )
             })
             .await;
+        self.forward_event(&event);
         Ok(serde_json::json!({ "ok": true, "event": event }))
     }
 
@@ -240,6 +282,21 @@ impl FocusServer {
             })
             .await;
         Ok(serde_json::json!({ "ok": true, "next_fq": next_fq }))
+    }
+
+    /// Handle a `generate sneak_codes` call. Ports `generate_jump_codes`.
+    ///
+    /// Pure compute over [`crate::generate_sneak_codes`]; no spatial state
+    /// is consulted. Surfaces the kernel's [`crate::SneakError`] as an
+    /// `invalid_params` error so an over-capacity request from the React
+    /// side fails with a structured, recoverable shape.
+    async fn handle_generate_sneak_codes(
+        &self,
+        req: GenerateSneakCodes,
+    ) -> Result<Value, McpError> {
+        let codes = generate_sneak_codes(req.count)
+            .map_err(|err| McpError::invalid_params(err.to_string(), None))?;
+        Ok(serde_json::json!({ "ok": true, "codes": codes }))
     }
 
     /// Handle a `drill_out layer` call. Ports `spatial_drill_out`.
@@ -339,6 +396,10 @@ impl ServerHandler for FocusServer {
             "drill_out layer" => {
                 let req: DrillOut = deserialize_op(arguments, &op)?;
                 self.handle_drill_out(req).await?
+            }
+            "generate sneak_codes" => {
+                let req: GenerateSneakCodes = deserialize_op(arguments, &op)?;
+                self.handle_generate_sneak_codes(req).await?
             }
             other => {
                 return Err(McpError::invalid_params(

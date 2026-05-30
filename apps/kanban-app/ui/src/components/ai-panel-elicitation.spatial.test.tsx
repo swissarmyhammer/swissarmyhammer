@@ -403,7 +403,7 @@ function findRegisterRecord(segment: string): Record<string, unknown> | null {
 /** Count the `spatial_focus` calls recorded so far (drill-out assertions
  * slice from this baseline to ignore earlier focus seeds). */
 function focusCallCount(): number {
-  return mockInvoke.mock.calls.filter((c) => c[0] === "spatial_focus").length;
+  return mockInvoke.mock.calls.filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus"))).length;
 }
 
 /**
@@ -787,7 +787,7 @@ describe("AiPanel — elicitation form spatial-nav focus scopes", () => {
     // Forget every focus call made up to here so the assertion below only sees
     // the drill-out's `spatial_focus`.
     const focusCallsBefore = mockInvoke.mock.calls.filter(
-      (c) => c[0] === "spatial_focus",
+      (c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")),
     ).length;
 
     // Drill OUT: Escape on the focused input. The field's `useFieldDrillOut`
@@ -807,7 +807,7 @@ describe("AiPanel — elicitation form spatial-nav focus scopes", () => {
 
     // (2) Spatial focus was claimed for the field leaf via `spatial_focus`.
     const drillOutFocus = mockInvoke.mock.calls
-      .filter((c) => c[0] === "spatial_focus")
+      .filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))
       .slice(focusCallsBefore);
     expect(
       drillOutFocus.some(
@@ -889,7 +889,7 @@ describe("AiPanel — elicitation form spatial-nav focus scopes", () => {
 
       // (2) Spatial focus was reclaimed for the field leaf via `spatial_focus`.
       const drillOutFocus = mockInvoke.mock.calls
-        .filter((c) => c[0] === "spatial_focus")
+        .filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))
         .slice(focusCallsBefore);
       expect(
         drillOutFocus.some(

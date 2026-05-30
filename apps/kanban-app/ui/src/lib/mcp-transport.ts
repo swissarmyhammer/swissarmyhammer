@@ -30,8 +30,36 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
+/** The host module id the Command service is exposed under. */
+export const COMMANDS_MODULE = "commands" as const;
+
 /** The MCP tool name for the Command service. */
 export const COMMAND_TOOL = "command" as const;
+
+/**
+ * Perform `tools/call("<tool>", { op, ...params })` against an arbitrary
+ * in-process MCP server module the host exposes.
+ *
+ * Use this for the non-`commands` modules (`entity`, `focus`, `store`,
+ * `ui_state`, `window`, `views`) where the module id and tool name match
+ * — `module` defaults to `tool` for that convention. Wrappers in
+ * `entity-mcp.ts` / `focus-mcp.ts` build on top of this so call sites
+ * never construct a `command_tool_call` payload themselves.
+ *
+ * The Tauri handler merges `op` into the params object before forwarding
+ * to the platform, so the receiving operation tool sees the same
+ * `{ op, ...params }` envelope an external MCP client would send.
+ *
+ * @returns The tool's structured result, typed by the caller.
+ */
+export async function callMcpTool<T = unknown>(
+  tool: string,
+  op: string,
+  params: Record<string, unknown> = {},
+  module: string = tool,
+): Promise<T> {
+  return invoke<T>("command_tool_call", { module, tool, op, params });
+}
 
 /** The Tauri event the host raises for a debounced `commands/changed`. */
 export const COMMANDS_CHANGED_EVENT = "notifications/commands/changed" as const;
@@ -93,7 +121,12 @@ export async function callCommandTool<T = unknown>(
   if (op === EXECUTE_COMMAND_OP) {
     return invoke<T>("dispatch_command", lowerExecuteCommand(params));
   }
-  return invoke<T>("command_tool_call", { tool: COMMAND_TOOL, op, params });
+  return invoke<T>("command_tool_call", {
+    module: COMMANDS_MODULE,
+    tool: COMMAND_TOOL,
+    op,
+    params,
+  });
 }
 
 /** Verb constant for `execute command` (kept here so callers stay declarative). */

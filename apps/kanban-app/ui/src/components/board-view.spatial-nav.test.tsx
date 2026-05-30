@@ -197,7 +197,7 @@ function pushedLayers(): Array<{
   parent: string | null;
 }> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_push_layer")
+    .filter((c) => (c[0] === "spatial_push_layer" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "push layer")))
     .map(
       (c) =>
         c[1] as {

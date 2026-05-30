@@ -574,7 +574,7 @@ describe("RowSelector — row-label focus leaf (spatial path)", () => {
     // `spatial_focus` and a sibling focus IPC to the click, this
     // assertion catches it.
     const spatialFocusCalls = mockInvoke.mock.calls.filter(
-      (c) => c[0] === "spatial_focus",
+      (c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")),
     );
     expect(spatialFocusCalls.length).toBe(1);
     expect((spatialFocusCalls[0][1] as { fq?: string }).fq).toBe(row0Fq);

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useUIState } from "@/lib/ui-state-context";
 import { useSchema } from "@/lib/schema-context";
 import { useDispatchCommand } from "@/lib/command-scope";
+import { getEntity } from "@/lib/entity-mcp";
 import { useEntitiesByType } from "@/components/rust-engine-container";
 import { EntityInspector } from "@/components/entity-inspector";
 import { SlidePanel } from "@/components/slide-panel";
@@ -374,10 +374,7 @@ function InspectorPanel({
     if (resolved || fetchedRef.current === fetchKey) return;
     fetchedRef.current = fetchKey;
     setFetchError(null);
-    invoke<Record<string, unknown>>("get_entity", {
-      entityType: entry.entityType,
-      id: entry.entityId,
-    })
+    getEntity(entry.entityType, entry.entityId)
       .then((bag) => {
         setFetchedEntity(entityFromBag(bag as EntityBag));
       })

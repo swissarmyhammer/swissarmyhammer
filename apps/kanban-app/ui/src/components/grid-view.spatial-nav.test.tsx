@@ -251,8 +251,12 @@ function unregisterScopeCalls(): Array<Record<string, unknown>> {
 /** Collect every `spatial_focus` call payload. */
 function spatialFocusCalls(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as Record<string, unknown>);
+    .filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))
+    .map((c) => {
+      const outer = c[1] as Record<string, unknown>;
+      const args = (outer?.params ?? outer) as Record<string, unknown>;
+      return args;
+    })
 }
 
 /**

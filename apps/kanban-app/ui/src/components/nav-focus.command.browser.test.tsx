@@ -104,8 +104,12 @@ async function flush() {
 /** Collect every `spatial_focus` invocation, in order. */
 function spatialFocusCalls() {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { fq: string });
+    .filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))
+    .map((c) => {
+      const outer = c[1] as Record<string, unknown>;
+      const args = (outer?.params ?? outer) as { fq: string };
+      return args;
+    })
 }
 
 /** Collect every `dispatch_command` invocation, in order. */

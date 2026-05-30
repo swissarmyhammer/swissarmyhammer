@@ -31,7 +31,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use swissarmyhammer_entity::Entity;
 use swissarmyhammer_kanban::task_helpers::{
-    enrich_all_task_entities, enrich_task_entity, retain_filtered_tasks, EntitySlugRegistry,
+    enrich_all_task_entities, retain_filtered_tasks, EntitySlugRegistry,
 };
 use swissarmyhammer_kanban::virtual_tags::default_virtual_tag_registry;
 use tauri::menu::{ContextMenu, MenuBuilder};
@@ -342,49 +342,6 @@ pub async fn list_entities(
         "entities": json_entities,
         "count": json_entities.len(),
     }))
-}
-
-/// Get a single entity by type and id, returning a raw entity bag.
-///
-/// For tasks, enriches with computed fields: `ready`, `blocked_by`, `blocks`,
-/// and `progress_fraction`. Other entity types are returned as-is.
-#[tauri::command]
-pub async fn get_entity(
-    state: State<'_, AppState>,
-    entity_type: String,
-    id: String,
-    board_path: Option<String>,
-) -> Result<Value, String> {
-    let handle = resolve_handle(&state, board_path).await?;
-    let ectx = handle
-        .ctx
-        .entity_context()
-        .await
-        .map_err(|e| format!("get_entity({}/{}): {}", entity_type, id, e))?;
-    let mut entity = ectx
-        .read(&entity_type, &id)
-        .await
-        .map_err(|e| format!("get_entity({}/{}): {}", entity_type, id, e))?;
-
-    if entity_type == "task" {
-        let all_tasks = ectx
-            .list("task")
-            .await
-            .map_err(|e| format!("get_entity({}/{}): {}", entity_type, id, e))?;
-        let mut columns = ectx
-            .list("column")
-            .await
-            .map_err(|e| format!("get_entity({}/{}): {}", entity_type, id, e))?;
-        columns.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
-        let terminal_id = columns
-            .last()
-            .map(|c| c.id.to_string())
-            .unwrap_or_else(|| "done".to_string());
-        let registry = default_virtual_tag_registry();
-        enrich_task_entity(&mut entity, &all_tasks, &terminal_id, registry);
-    }
-
-    Ok(entity.to_json())
 }
 
 /// Search entities by display field for mention autocomplete.
@@ -1004,19 +961,11 @@ pub async fn get_undo_state(
     }))
 }
 
-// ---------------------------------------------------------------------------
-// log_command — lightweight log entry for commands that execute in the frontend
-// ---------------------------------------------------------------------------
-
-/// Log a command that was executed locally in the frontend.
-///
-/// Commands with a local `execute` handler never reach `dispatch_command`,
-/// so the frontend calls this to ensure every command appears in the
-/// unified Rust log.
-#[tauri::command]
-pub async fn log_command(cmd: String, target: Option<String>) {
-    tracing::info!(cmd = %cmd, target = ?target, "command");
-}
+// `log_command` — REMOVED in Stage 3 of the kanban cut-over.
+// Frontend command-execution telemetry is now sourced from the Command
+// service's `notifications/commands/executed` notification plane, driven
+// by `swissarmyhammer-command-service`'s `ActionSink`. Subscribers listen
+// on the bridge event instead of a fire-and-forget Tauri command.
 
 // ---------------------------------------------------------------------------
 // save_dropped_file — write HTML5 drop bytes to a temp file
@@ -2268,71 +2217,28 @@ pub async fn show_context_menu(
 // ─────────────────────────────────────────────────────────────────────────────
 
 use swissarmyhammer_focus::{
-    Direction, FocusChangedEvent, FocusLayer, FullyQualifiedMoniker, LayerName, NavSnapshot, Rect,
-    SegmentMoniker, SpatialRegistry, SpatialState, WindowLabel,
+    FocusLayer, FullyQualifiedMoniker, LayerName, SegmentMoniker, SpatialRegistry, WindowLabel,
 };
 
-/// Tauri event name for spatial focus changes — mirrors the listener
-/// registered in `kanban-app/ui/src/lib/spatial-focus-context.tsx`.
-const FOCUS_CHANGED_EVENT: &str = "focus-changed";
+// `FOCUS_CHANGED_EVENT`, `window_label_from`, `with_spatial`, and
+// `emit_focus_changed` were REMOVED in Stage 3 of the kanban cut-over.
+// Focus event emission now flows through the `focus` MCP server's
+// `FocusEventSink` (see `TauriFocusEventSink` in `command_services.rs`),
+// which re-emits `focus-changed` onto the same Tauri event the React
+// `SpatialFocusProvider` always listened on.
 
-/// Derive a [`WindowLabel`] newtype from a Tauri window handle.
-///
-/// `tauri::Window::label()` returns the borrowed string the user-space
-/// constructor mints (`"main"`, `"board-<ulid>"`, `"quick-capture"`, …);
-/// the kernel speaks in newtypes, so we wrap it at the boundary. Every
-/// spatial command funnels through this helper so a stray `String` cannot
-/// leak into the kernel surface.
-fn window_label_from(window: &Window) -> WindowLabel {
-    WindowLabel::from_string(window.label())
-}
-
-/// Acquire both spatial locks in canonical order and run `f` with mutable
-/// access.
-///
-/// Order is `spatial_registry` then `spatial_state` for any command that
-/// holds both at once. Centralizing the order here means every adapter
-/// inherits it for free and cannot accidentally lock-invert.
-async fn with_spatial<R, F>(state: &State<'_, AppState>, f: F) -> R
-where
-    F: FnOnce(&mut SpatialRegistry, &mut SpatialState) -> R,
-{
-    let mut registry = state.spatial_registry.lock().await;
-    let mut spatial_state = state.spatial_state.lock().await;
-    f(&mut registry, &mut spatial_state)
-}
-
-/// Forward a kernel-produced [`FocusChangedEvent`] to the React side of
-/// the **one** window the focus change belongs to.
-///
-/// Emits with `emit_to(event.window_label, …)` rather than the broadcast
-/// `window.emit(…)`. The distinction is load-bearing: `FullyQualifiedMoniker`s
-/// are NOT unique across windows — every window's root layer is `/window`,
-/// so a card is `/window/.../task:Z` in every window showing that board.
-/// A broadcast would reach every webview, and each window's claim registry
-/// would match the identically-keyed scope and light it up — the "jump
-/// highlights all windows" bug. The focus map (`SpatialState::focus_by_window`)
-/// is per-window, so `event.window_label` is the sole correct recipient;
-/// targeting it confines the highlight to the window that actually moved
-/// focus.
-fn emit_focus_changed(window: &Window, event: &FocusChangedEvent) -> Result<(), String> {
-    window
-        .emit_to(event.window_label.as_str(), FOCUS_CHANGED_EVENT, event)
-        .map_err(|e| format!("failed to emit {FOCUS_CHANGED_EVENT}: {e}"))
-}
-
-// ── Pure inner logic, factored out of the Tauri commands so unit tests can
-// drive the same code paths against `&mut SpatialRegistry, &mut SpatialState`
-// without spinning up Tauri. The Tauri commands below are thin wrappers that
-// derive the [`WindowLabel`] from `tauri::Window`, lock the registry/state in
-// canonical order, dispatch to one of these helpers, and emit the resulting
-// `FocusChangedEvent` (when any) on the calling window.
+// ── Pure inner logic, kept here so unit tests can drive the same kernel
+// code path against `&mut SpatialRegistry` without spinning up Tauri.
+// (The Tauri command wrappers that drove it are gone; the helper is
+// retained because the in-file `#[test]` suite below still exercises
+// it.)
 
 /// Push a layer into the registry under the given owning window.
 ///
-/// `window_label` is derived from the calling `tauri::Window` in the
-/// command wrapper; the layer's owning window cannot be supplied by the
-/// React side because Tauri webviews are server-tracked, not client-known.
+/// Retained solely for the in-file `#[test]` fixtures that drove the
+/// removed `spatial_push_layer` Tauri command; the production path now
+/// goes through `swissarmyhammer_focus::FocusServer::handle_push_layer`.
+#[allow(dead_code)]
 fn spatial_push_layer_inner(
     registry: &mut SpatialRegistry,
     fq: FullyQualifiedMoniker,
@@ -2351,320 +2257,17 @@ fn spatial_push_layer_inner(
     });
 }
 
-/// Move focus to the scope at `fq`.
-///
-/// The kernel records ancestry from the snapshot's `parent_zone` chain —
-/// mid-life `navOverride` and `parent_zone` changes propagate without a
-/// re-register. The registry is consulted only for the focused entry's
-/// owning window, segment, and layer-ancestor chain.
-///
-/// `snapshot` is `None` only during the transient unmount window where
-/// the focused scope's React-side layer registry has already torn down;
-/// the kernel drops the commit silently in that case rather than guess
-/// at scope ancestry without a snapshot.
-///
-/// Delegates to [`SpatialState::focus`]. Returns
-/// `Some(FocusChangedEvent)` when focus actually moved and `None`
-/// otherwise (no snapshot, window unknown, already focused, or the FQM
-/// is missing from `snapshot.scopes`). We forward only actual
-/// transitions so claim listeners don't see redundant events.
-#[tauri::command]
-pub async fn spatial_focus(
-    window: Window,
-    state: State<'_, AppState>,
-    fq: FullyQualifiedMoniker,
-    snapshot: Option<NavSnapshot>,
-) -> Result<(), String> {
-    let Some(snapshot) = snapshot else {
-        tracing::debug!(
-            op = "spatial_focus",
-            focused_fq = %fq,
-            "snapshot=None — dropping focus commit (transient unmount race)"
-        );
-        return Ok(());
-    };
-    let label = window_label_from(&window);
-    let event = with_spatial(&state, |registry, spatial_state| {
-        spatial_state.focus(registry, &snapshot, fq.clone(), Some(label))
-    })
-    .await;
-
-    if let Some(event) = event {
-        emit_focus_changed(&window, &event)?;
-    }
-    Ok(())
-}
-
-/// Clear focus for the calling window.
-///
-/// Explicit-clear counterpart of [`spatial_focus`]. The React side calls this when the user
-/// (or a component-level handler) wants to drop focus altogether — for
-/// example `setFocus(null)` from `entity-focus-context.tsx`. Routing
-/// the clear through the kernel preserves the architectural invariant
-/// from card `01KQD0WK54G0FRD7SZVZASA9ST`: the React entity-focus
-/// store is a pure projection of `focus-changed` events. Without this
-/// command, `setFocus(null)` would have to mutate the React store
-/// synchronously to clear focus, which is exactly the kernel/React
-/// drift the card was filed to eliminate.
-///
-/// Delegates to [`SpatialState::clear_focus`], which removes the
-/// per-window focus slot and returns a `Some(prev) → None`
-/// [`FocusChangedEvent`] when focus was actually cleared. We forward
-/// the event so the React-side bridge writes the entity-focus store
-/// to `null` and dispatches `ui.setFocus` with an empty scope chain.
-/// When the window had no prior focus, the kernel returns `None` and
-/// no event is emitted (idempotent).
-#[tauri::command]
-pub async fn spatial_clear_focus(window: Window, state: State<'_, AppState>) -> Result<(), String> {
-    let label = window_label_from(&window);
-    let event = with_spatial(&state, |_registry, spatial_state| {
-        spatial_state.clear_focus(&label)
-    })
-    .await;
-
-    if let Some(event) = event {
-        emit_focus_changed(&window, &event)?;
-    }
-    Ok(())
-}
-
-/// Move focus relative to `focused_fq` in `direction`.
-///
-/// Pathfinding runs against the snapshot; the registry is consulted only
-/// for the focused entry's segment / window and the target's commit
-/// metadata. When `snapshot` is `None` (the transient unmount window),
-/// the call drops silently — the React-side layer registry has torn
-/// down and there is no live geometry to navigate over.
-///
-/// Returns `Ok(())` whether or not focus actually moved — under the
-/// no-silent-dropout contract, the kernel always returns a moniker; if
-/// it equals the focused moniker (semantic "stay put" or torn-state
-/// echo), the inner method short-circuits via the
-/// "already focused → no event" check in `SpatialState::focus` and
-/// nothing is emitted. Same outcome when the resolved moniker doesn't
-/// own any registered scope.
-#[tauri::command]
-pub async fn spatial_navigate(
-    window: Window,
-    state: State<'_, AppState>,
-    focused_fq: FullyQualifiedMoniker,
-    direction: Direction,
-    snapshot: Option<NavSnapshot>,
-) -> Result<(), String> {
-    let Some(snapshot) = snapshot else {
-        tracing::debug!(
-            op = "spatial_navigate",
-            focused_fq = %focused_fq,
-            direction = ?direction,
-            "snapshot=None — dropping navigation (transient unmount race)"
-        );
-        return Ok(());
-    };
-    let label = window_label_from(&window);
-    let event = with_spatial(&state, |registry, spatial_state| {
-        spatial_state.navigate(
-            registry,
-            &snapshot,
-            focused_fq.clone(),
-            direction,
-            Some(label),
-        )
-    })
-    .await;
-
-    if let Some(event) = event {
-        emit_focus_changed(&window, &event)?;
-    }
-    Ok(())
-}
-
-/// React to the focused scope unmounting on the React side.
-///
-/// Called from the React-side layer registry's deletion path when the
-/// scope being unmounted is the currently focused FQM in this window.
-/// React supplies the lost FQM, its `parent_zone`, owning layer FQM, and
-/// last-known bounding rect alongside a snapshot whose `scopes` set has
-/// already had the lost FQM removed — the kernel's fallback walk reads
-/// from the snapshot only, so no registry mutation around the lost
-/// entry's metadata is required.
-#[tauri::command]
-pub async fn spatial_focus_lost(
-    window: Window,
-    state: State<'_, AppState>,
-    focused_fq: FullyQualifiedMoniker,
-    lost_parent_zone: Option<FullyQualifiedMoniker>,
-    lost_layer_fq: FullyQualifiedMoniker,
-    lost_rect: Rect,
-    snapshot: NavSnapshot,
-) -> Result<(), String> {
-    let label = window_label_from(&window);
-    let event = with_spatial(&state, |registry, spatial_state| {
-        spatial_state.focus_lost(
-            registry,
-            &snapshot,
-            &focused_fq,
-            lost_parent_zone.as_ref(),
-            &lost_layer_fq,
-            lost_rect,
-            Some(label),
-        )
-    })
-    .await;
-
-    if let Some(event) = event {
-        emit_focus_changed(&window, &event)?;
-    }
-    Ok(())
-}
-
-/// Push a new layer onto the registry.
-///
-/// Layers form a per-window forest: the window root has `parent = None`;
-/// inspector / dialog / palette overlays are stacked under their parent.
-/// `key` is the stable mount identifier; `name` is the layer role
-/// (`"window"`, `"inspector"`, `"dialog"`, `"palette"`); `parent` ties
-/// the layer to its stacking parent (`None` for a window root).
-///
-/// The owning window is taken from the calling `tauri::Window` — every
-/// layer in a forest path back to a root shares the same window label,
-/// and the registry uses that to bound spatial nav and fallback
-/// resolution to a single window.
-#[tauri::command]
-pub async fn spatial_push_layer(
-    window: Window,
-    state: State<'_, AppState>,
-    fq: FullyQualifiedMoniker,
-    segment: SegmentMoniker,
-    name: LayerName,
-    parent: Option<FullyQualifiedMoniker>,
-) -> Result<(), String> {
-    let window_label = window_label_from(&window);
-    with_spatial(&state, |registry, _spatial_state| {
-        spatial_push_layer_inner(registry, fq, segment, name, parent, window_label);
-    })
-    .await;
-    Ok(())
-}
-
-/// Pop a previously-pushed layer and return the focus-restoration target.
-///
-/// Reads the popped layer's `last_focused` slot before removal and
-/// returns it so the caller can issue a follow-up `spatial_focus` to
-/// commit the restoration through the snapshot path. The kernel does
-/// not mutate `focus_by_window` or emit a `focus-changed` event from
-/// this command — focus restoration is a two-step round-trip that
-/// keeps every commit on the snapshot-driven path.
-///
-/// Returns `None` when the layer is unknown or has no recorded
-/// `last_focused`. The React side treats `None` as "leave focus
-/// as-is".
-///
-/// The registry side is a single `remove_layer` call; descendant scope
-/// entries are dropped by the React side beforehand, so no GC pass is
-/// needed here.
-#[tauri::command]
-pub async fn spatial_pop_layer(
-    state: State<'_, AppState>,
-    fq: FullyQualifiedMoniker,
-) -> Result<Option<FullyQualifiedMoniker>, String> {
-    let next_fq = with_spatial(&state, |registry, _spatial_state| {
-        let next_fq = registry.layer(&fq).and_then(|l| l.last_focused.clone());
-        registry.remove_layer(&fq);
-        next_fq
-    })
-    .await;
-    Ok(next_fq)
-}
-
-/// Compute the FQM to focus when the user drills *into* the scope at
-/// `fq`.
-///
-/// Returns the result of [`swissarmyhammer_focus::drill_in`]: the
-/// scope's recorded `last_focused_by_fq` target if it is still in
-/// `snapshot`, else the topmost-then-leftmost child by rect, else
-/// `focused_fq` (semantic no-op).
-///
-/// Pure query — does not mutate focus state and does not emit a
-/// `focus-changed` event; the React side calls `setFocus(moniker)` on
-/// the result. Returns `Ok(focused_fq)` when `snapshot` is `None`
-/// (transient unmount window; the React side has nothing live to drill
-/// into).
-#[tauri::command]
-pub async fn spatial_drill_in(
-    _window: Window,
-    state: State<'_, AppState>,
-    fq: FullyQualifiedMoniker,
-    focused_fq: FullyQualifiedMoniker,
-    snapshot: Option<NavSnapshot>,
-) -> Result<FullyQualifiedMoniker, String> {
-    let Some(snapshot) = snapshot else {
-        tracing::debug!(
-            op = "spatial_drill_in",
-            focused_fq = %focused_fq,
-            target_fq = %fq,
-            "snapshot=None — returning focused_fq (transient unmount race)"
-        );
-        return Ok(focused_fq);
-    };
-    let next_fq = with_spatial(&state, |registry, _spatial_state| {
-        let view = swissarmyhammer_focus::IndexedSnapshot::new(&snapshot);
-        swissarmyhammer_focus::drill_in(&view, registry, fq, &focused_fq)
-    })
-    .await;
-    Ok(next_fq)
-}
-
-/// Compute the FQM to focus when the user drills *out of* the scope at
-/// `fq`.
-///
-/// Returns the result of [`swissarmyhammer_focus::drill_out`]: the
-/// scope's `parent_zone` if it is still in `snapshot`, else
-/// `focused_fq` (the React side compares against `focused_fq` to fall
-/// through to `app.dismiss`).
-#[tauri::command]
-pub async fn spatial_drill_out(
-    _window: Window,
-    state: State<'_, AppState>,
-    fq: FullyQualifiedMoniker,
-    focused_fq: FullyQualifiedMoniker,
-    snapshot: Option<NavSnapshot>,
-) -> Result<FullyQualifiedMoniker, String> {
-    let Some(snapshot) = snapshot else {
-        tracing::debug!(
-            op = "spatial_drill_out",
-            focused_fq = %focused_fq,
-            target_fq = %fq,
-            "snapshot=None — returning focused_fq (transient unmount race)"
-        );
-        return Ok(focused_fq);
-    };
-    let next_fq = with_spatial(&state, |_registry, _spatial_state| {
-        let view = swissarmyhammer_focus::IndexedSnapshot::new(&snapshot);
-        swissarmyhammer_focus::drill_out(&view, fq, &focused_fq)
-    })
-    .await;
-    Ok(next_fq)
-}
-
-/// Generate `count` distinct, prefix-free key codes for the Jump-To
-/// overlay (vim-sneak / AceJump-style labels).
-///
-/// Pure pass-through to
-/// [`swissarmyhammer_focus::generate_sneak_codes`] — no state mutation,
-/// no I/O. The frontend calls this once when the overlay opens and uses
-/// the resulting codes to label visible scopes.
-///
-/// # Errors
-///
-/// Returns the stringified
-/// [`swissarmyhammer_focus::SneakError`] when `count` exceeds
-/// the maximum capacity of the alphabet (currently 529 — `23²`). In
-/// practice this means an upstream bug, since the overlay never shows
-/// hundreds of targets.
-#[tauri::command]
-pub fn generate_jump_codes(count: usize) -> Result<Vec<String>, String> {
-    swissarmyhammer_focus::generate_sneak_codes(count).map_err(|e| e.to_string())
-}
+// `spatial_focus`, `spatial_clear_focus`, `spatial_navigate`,
+// `spatial_focus_lost`, `spatial_push_layer`, `spatial_pop_layer`,
+// `spatial_drill_in`, `spatial_drill_out`, and `generate_jump_codes`
+// were REMOVED in Stage 3 of the kanban cut-over. The React side now
+// reaches the focus kernel through the in-process `focus` MCP server
+// (`swissarmyhammer_focus::FocusServer`) routed via the generic
+// `command_tool_call` Tauri bridge. The kernel's `FocusChangedEvent`
+// stream is re-emitted onto the `focus-changed` Tauri event by the
+// `TauriFocusEventSink` installed in `command_services.rs`, so the
+// React `SpatialFocusProvider` keeps receiving the same Tauri event
+// it always did.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Generic MCP transport: `command_tool_call` + `mcp_subscribe`.
@@ -2686,21 +2289,28 @@ pub fn generate_jump_codes(count: usize) -> Result<Vec<String>, String> {
 static MCP_SUBSCRIBE_STARTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-/// Generic MCP `tools/call` from the webview onto the host's `commands` module.
+/// Generic MCP `tools/call` from the webview onto a host-exposed module.
 ///
 /// The frontend's `callCommandTool(op, params)` lowers to
-/// `invoke("command_tool_call", { tool: "command", op, params })`. We route it
-/// as `host.call(HostInternal, "commands", tool, { op, ...params })`: the
-/// `commands` MCP module (installed by `install_app_command_services`) hosts a
-/// single operation tool named `"command"` that dispatches on the `op` verb
-/// (`"list command"`, `"available command"`, etc.). The tool's structured
-/// result is returned verbatim to the webview.
+/// `invoke("command_tool_call", { module, tool, op, params })`. We route it as
+/// `host.call(HostInternal, module, tool, { op, ...params })`: each MCP module
+/// (`commands` hosts the `command` tool, `entity` hosts the `entity` tool,
+/// `focus` hosts the `focus` tool, etc.) dispatches on the `op` verb
+/// (`"list command"`, `"get entity"`, `"set focus"`, …). The tool's
+/// structured result is returned verbatim to the webview.
+///
+/// `module` defaults to `tool` when omitted, which matches every server we
+/// expose under a module id identical to its tool name (`entity`, `focus`,
+/// `store`, `ui_state`, `window`, `views`). Only the `commands` module
+/// breaks the convention — its tool is named `command` — so existing
+/// `commands`-bound callers must pass `module: "commands"` explicitly.
 ///
 /// Errors from the platform / tool are stringified per this file's convention
-/// (see `dispatch_command`, `get_entity`, …).
+/// (see `dispatch_command`, …).
 #[tauri::command]
 pub async fn command_tool_call(
     state: State<'_, AppState>,
+    module: Option<String>,
     tool: String,
     op: String,
     params: Option<Value>,
@@ -2718,12 +2328,14 @@ pub async fn command_tool_call(
     };
     input.insert("op".to_string(), Value::String(op));
 
+    let module = module.unwrap_or_else(|| tool.clone());
+
     let platform = state.plugin_platform.lock().await;
     platform
         .host()
         .call(
             swissarmyhammer_plugin::CallerId::HostInternal,
-            swissarmyhammer_command_service::bootstrap::COMMANDS_MODULE_ID,
+            &module,
             &tool,
             Value::Object(input),
         )

@@ -20,19 +20,77 @@
 //! `ui_state` / `window` / `focus` modules are app-wide and take their
 //! single shared context at construction.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use swissarmyhammer_command_service::bootstrap::install_commands_module_with;
 use swissarmyhammer_command_service::CommandService;
 use swissarmyhammer_entity_mcp::server::{
     task_local_resolver as entity_task_local_resolver, EntityServer,
 };
-use swissarmyhammer_focus::FocusServer;
+use swissarmyhammer_focus::{FocusChangedEvent, FocusEventSink, FocusServer};
+use tauri::{AppHandle, Emitter};
 use swissarmyhammer_kanban::command_seam::{task_local_store_resolver, StoreTransactionSeam};
 use swissarmyhammer_plugin::{InProcessServer, McpServer, PluginHost};
 use swissarmyhammer_store::StoreServer;
 use swissarmyhammer_ui_state::{UIState, UiStateServer};
 use swissarmyhammer_window_service::{WindowService, WindowShell};
+
+/// Deferred [`AppHandle`] cell used by the focus event sink.
+///
+/// The `FocusServer` is wired during [`PluginPlatform::wire_command_services`]
+/// — which runs from `AppState::new`, before the Tauri `AppHandle` exists.
+/// The sink is installed at the same time so it shares the server's
+/// lifetime; it reads its `AppHandle` out of this cell, which is filled
+/// later from the `setup_app` Tauri hook via [`install_focus_event_app_handle`].
+///
+/// Events that arrive before the cell is filled (the brief window
+/// between platform wiring and `setup_app`) are dropped, matching the
+/// legacy behavior — the spatial Tauri commands could not emit events
+/// either before a window existed.
+static FOCUS_EVENT_APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
+
+/// Install the [`AppHandle`] the focus event sink uses to emit
+/// `focus-changed` Tauri events.
+///
+/// Idempotent — only the first call wins. Call from `setup_app` once the
+/// AppHandle is available.
+pub fn install_focus_event_app_handle(app_handle: AppHandle) {
+    let _ = FOCUS_EVENT_APP_HANDLE.set(app_handle);
+}
+
+/// [`FocusEventSink`] that mirrors every [`FocusChangedEvent`] onto the
+/// Tauri `focus-changed` event, targeting the originating window.
+///
+/// Ports the side-effecting `emit` the legacy `spatial_*` Tauri commands
+/// did (`apps/kanban-app/src/commands.rs::emit_focus_changed`). The
+/// kernel directs each event to a single window via `emit_to` —
+/// load-bearing because FQMs are not unique across windows (every
+/// window's root layer is `/window`), so a broadcast would light up the
+/// same scope in every window showing the same board.
+struct TauriFocusEventSink;
+
+impl FocusEventSink for TauriFocusEventSink {
+    fn emit(&self, event: &FocusChangedEvent) {
+        // The cell may not be filled yet during the brief platform-wiring
+        // → setup_app window. Drop the event in that case — matches the
+        // legacy behavior (Tauri commands couldn't emit before a window
+        // existed either).
+        let Some(app_handle) = FOCUS_EVENT_APP_HANDLE.get() else {
+            return;
+        };
+        if let Err(e) = app_handle.emit_to(
+            event.window_label.as_str(),
+            "focus-changed",
+            event,
+        ) {
+            tracing::warn!(
+                window = %event.window_label,
+                error = %e,
+                "TauriFocusEventSink: failed to emit focus-changed"
+            );
+        }
+    }
+}
 
 /// Install every in-process MCP module the builtin command plugins
 /// activate, then install the `commands` module with the production
@@ -115,11 +173,18 @@ pub async fn install_app_command_services(
             .map_err(|e| format!("expose window module: {e}"))?;
     }
 
-    // focus — app-wide, no-arg form (empty registry + state).
+    // focus — app-wide. Attach a Tauri-event sink so every produced
+    // `FocusChangedEvent` is mirrored onto the `focus-changed` Tauri
+    // event the React `SpatialFocusProvider` listens on — restoring the
+    // side-effecting `emit` the legacy `spatial_*` Tauri commands did.
+    // The sink reads its AppHandle from a deferred cell that
+    // `setup_app` fills via [`install_focus_event_app_handle`].
     let focus_server: Arc<dyn McpServer> = Arc::new(
-        InProcessServer::from_arc(Arc::new(FocusServer::new()))
-            .await
-            .map_err(|e| format!("wrap focus as InProcessServer: {e}"))?,
+        InProcessServer::from_arc(Arc::new(
+            FocusServer::new().with_sink(Arc::new(TauriFocusEventSink)),
+        ))
+        .await
+        .map_err(|e| format!("wrap focus as InProcessServer: {e}"))?,
     );
     host.expose_rust_module("focus", focus_server)
         .await

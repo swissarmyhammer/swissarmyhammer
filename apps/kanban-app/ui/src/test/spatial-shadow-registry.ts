@@ -520,7 +520,119 @@ export function installShadowNavigator(
   // `state.rs::SpatialState::focus` for the production drop logic.
   const pushedLayers = new Set<FullyQualifiedMoniker>();
 
-  mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
+  /**
+   * Translate the post-Stage-3 MCP transport shape
+   * (`invoke("command_tool_call", { tool, op, params, ... })`) back to
+   * the legacy `(cmd, args)` the rest of this dispatcher matches on, so
+   * existing tests keep asserting against `mockInvoke.mock.calls` of
+   * the old shape without per-test rewrites.
+   *
+   * Recognised translations:
+   *   - `tool: "focus"` — maps every op verb to its old `spatial_*`
+   *     command name (e.g. `"set focus"` → `"spatial_focus"`,
+   *     `"navigate focus"` → `"spatial_navigate"`,
+   *     `"drill_in layer"` → `"spatial_drill_in"`).
+   *   - `tool: "entity"` with `op: "get entity"` — maps to the old
+   *     `get_entity` command name. Today no in-test shadow handler
+   *     consumes it, but the fallback `defaultInvokeImpl` can.
+   *
+   * Any unrecognised `{ tool, op }` pair falls through to the bare
+   * `command_tool_call` cmd so the default handler can intercept it.
+   */
+  const FOCUS_OP_TO_LEGACY_CMD: Record<string, string> = {
+    "set focus": "spatial_focus",
+    "clear focus": "spatial_clear_focus",
+    "navigate focus": "spatial_navigate",
+    "lose focus": "spatial_focus_lost",
+    "push layer": "spatial_push_layer",
+    "pop layer": "spatial_pop_layer",
+    "drill_in layer": "spatial_drill_in",
+    "drill_out layer": "spatial_drill_out",
+    "generate sneak_codes": "generate_jump_codes",
+  };
+  const translateMcpCall = (
+    bag: Record<string, unknown> | undefined,
+  ): { cmd: string; args: unknown } | null => {
+    if (!bag) return null;
+    const tool = bag.tool as string | undefined;
+    const op = bag.op as string | undefined;
+    const params = (bag.params ?? {}) as Record<string, unknown>;
+    if (tool === "focus" && op && FOCUS_OP_TO_LEGACY_CMD[op]) {
+      // The kernel wire renames `focusedFq` → `focused_fq` for the focus
+      // server. Map it back so the legacy handlers below find the field
+      // under its original name.
+      const remapped: Record<string, unknown> = { ...params };
+      if ("focused_fq" in remapped && !("focusedFq" in remapped)) {
+        remapped.focusedFq = remapped.focused_fq;
+      }
+      return { cmd: FOCUS_OP_TO_LEGACY_CMD[op], args: remapped };
+    }
+    if (tool === "entity" && op === "get entity") {
+      return {
+        cmd: "get_entity",
+        args: {
+          entityType: (params as Record<string, unknown>).type,
+          id: (params as Record<string, unknown>).id,
+        },
+      };
+    }
+    return null;
+  };
+
+  const dispatch = async (cmd: string, args?: unknown): Promise<unknown> => {
+    // Post-Stage-3 frontend reaches the focus / entity kernels through
+    // the generic MCP transport. Translate the wrapping shape back to
+    // the legacy `(cmd, args)` pair so the rest of this dispatcher
+    // matches without changes. The translated call recurses through the
+    // same dispatch function so every shadow handler below sees the
+    // legacy argument shape it was written for.
+    if (cmd === "command_tool_call") {
+      const translated = translateMcpCall(
+        args as Record<string, unknown> | undefined,
+      );
+      if (translated) {
+        // Surface the translated legacy call shape in `mockInvoke.mock.calls`
+        // so existing assertions of the form
+        // `mockInvoke.mock.calls.filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))`
+        // keep working without per-test rewrites. The MCP envelope call
+        // is ALSO recorded by Vitest (we are inside its mockImplementation),
+        // so both shapes appear in the call log; existing tests filter by
+        // the legacy name and naturally ignore the wrapper entry.
+        mockInvoke.mock.calls.push([translated.cmd, translated.args]);
+        const result = await dispatch(translated.cmd, translated.args);
+        // The focus server wraps its result in `{ ok, event, ... }`;
+        // the legacy commands returned the raw value (or `undefined`).
+        // Re-wrap so the production `focus-mcp.ts` / `entity-mcp.ts`
+        // wrappers can unwrap the envelope into the legacy return
+        // shape their callers depend on.
+        const tool = (args as Record<string, unknown>).tool;
+        const op = (args as Record<string, unknown>).op;
+        if (tool === "focus") {
+          if (
+            op === "pop layer" ||
+            op === "drill_in layer" ||
+            op === "drill_out layer"
+          ) {
+            return { ok: true, next_fq: result ?? null };
+          }
+          if (op === "generate sneak_codes") {
+            return { ok: true, codes: result ?? [] };
+          }
+          return { ok: true, event: null };
+        }
+        if (tool === "entity" && op === "get entity") {
+          return { ok: true, entity: result ?? {} };
+        }
+        return result;
+      }
+    }
+    return innerDispatch(cmd, args);
+  };
+
+  const innerDispatch = async (
+    cmd: string,
+    args?: unknown,
+  ): Promise<unknown> => {
     if (cmd === "spatial_register_scope") {
       const a = (args ?? {}) as Record<string, unknown>;
       const entry: ShadowEntry = {
@@ -674,7 +786,9 @@ export function installShadowNavigator(
       return undefined;
     }
     return defaultInvokeImpl(cmd, args);
-  });
+  };
+
+  mockInvoke.mockImplementation(dispatch);
 
   return {
     registry,

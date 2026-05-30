@@ -320,7 +320,7 @@ describe("perspective-tab-bar — Filter command migration", () => {
     // Expect at least one `spatial_focus` IPC call whose `fq` ends with
     // the filter editor's segment for the active perspective.
     const spatialFocusCalls = mockInvoke.mock.calls.filter(
-      (c) => c[0] === "spatial_focus",
+      (c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")),
     );
     expect(
       spatialFocusCalls.length,
@@ -379,7 +379,7 @@ describe("perspective-tab-bar — Filter command migration", () => {
     });
 
     const spatialFocusCalls = mockInvoke.mock.calls.filter(
-      (c) => c[0] === "spatial_focus",
+      (c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")),
     );
     expect(spatialFocusCalls.length).toBeGreaterThan(0);
     const lastCall = spatialFocusCalls[spatialFocusCalls.length - 1];

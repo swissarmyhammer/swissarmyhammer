@@ -647,7 +647,7 @@ describe("AppShell", () => {
     });
 
     const drillCall = mockInvoke.mock.calls.find(
-      (c: unknown[]) => c[0] === "spatial_drill_in",
+      (c: unknown[]) => (c[0] === "spatial_drill_in" || (c[0] === "command_tool_call" && (c[1] as Record<string, unknown>)?.tool === "focus" && (c[1] as Record<string, unknown>)?.op === "drill_in layer")),
     );
     expect(drillCall).toBeTruthy();
     expect((drillCall![1] as Record<string, unknown>).fq).toBe(asFq("k:zone"));
@@ -743,7 +743,7 @@ describe("AppShell", () => {
     });
 
     const drillCall = mockInvoke.mock.calls.find(
-      (c: unknown[]) => c[0] === "spatial_drill_out",
+      (c: unknown[]) => (c[0] === "spatial_drill_out" || (c[0] === "command_tool_call" && (c[1] as Record<string, unknown>)?.tool === "focus" && (c[1] as Record<string, unknown>)?.op === "drill_out layer")),
     );
     expect(drillCall).toBeTruthy();
     expect((drillCall![1] as Record<string, unknown>).fq).toBe(asFq("k:leaf"));
@@ -789,7 +789,7 @@ describe("AppShell", () => {
     // Drill-out happened and echoed the focused moniker. Closure
     // detects equality and dispatches app.dismiss as the fall-through.
     const drillCall = mockInvoke.mock.calls.find(
-      (c: unknown[]) => c[0] === "spatial_drill_out",
+      (c: unknown[]) => (c[0] === "spatial_drill_out" || (c[0] === "command_tool_call" && (c[1] as Record<string, unknown>)?.tool === "focus" && (c[1] as Record<string, unknown>)?.op === "drill_out layer")),
     );
     expect(drillCall).toBeTruthy();
 
@@ -819,7 +819,7 @@ describe("AppShell", () => {
     // No focused key → no spatial_drill_out call, but app.dismiss
     // still fires via the closure's early-return fall-through.
     const drillCall = mockInvoke.mock.calls.find(
-      (c: unknown[]) => c[0] === "spatial_drill_out",
+      (c: unknown[]) => (c[0] === "spatial_drill_out" || (c[0] === "command_tool_call" && (c[1] as Record<string, unknown>)?.tool === "focus" && (c[1] as Record<string, unknown>)?.op === "drill_out layer")),
     );
     expect(drillCall).toBeUndefined();
     const dismissCall = mockInvoke.mock.calls.find(

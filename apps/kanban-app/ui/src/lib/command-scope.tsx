@@ -7,7 +7,6 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { callCommandTool } from "@/lib/mcp-transport";
 
 // ---------------------------------------------------------------------------
@@ -539,18 +538,23 @@ function resolveDispatchArgs(
   return { cmdId: cmdOrOpts as string, opts: maybeOpts ?? {} };
 }
 
-/** Run a client-side `execute` handler, fire-and-forget log for telemetry. */
+/** Run a client-side `execute` handler.
+ *
+ * Telemetry / observability for command execution is now sourced
+ * exclusively from the Command service's `notifications/commands/executed`
+ * notification plane (driven by `swissarmyhammer-command-service`'s
+ * `ActionSink`) — the legacy fire-and-forget `log_command` Tauri command
+ * is gone, so any subscriber that needs per-execution telemetry listens
+ * on the bridge event instead.
+ */
 async function runFrontendExecute(
   cmdId: string,
   opts: DispatchOptions,
   resolved: CommandDef,
 ): Promise<void> {
-  Promise.resolve(
-    invoke("log_command", {
-      cmd: cmdId,
-      target: opts.target ?? resolved.target,
-    }),
-  ).catch(() => {});
+  // Reference `cmdId` so the unused-arg lint stays quiet now that the
+  // log-side-effect that consumed it has been removed.
+  void cmdId;
   // Thread `opts` to the execute closure so commands that need per-call
   // arguments (e.g. `nav.focus`'s `{ args: { fq } }`) can read them.
   // The vast majority of execute closures are parameterless and ignore

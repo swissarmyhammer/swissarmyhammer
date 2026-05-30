@@ -49,7 +49,44 @@ import {
   type ReactNode,
 } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
+/**
+ * Lazy `getCurrentWindow().label` accessor.
+ *
+ * `@tauri-apps/api/window` transitively re-exports from
+ * `@tauri-apps/api/core` and several other modules; tests that mock
+ * `core` minimally (just `invoke`) break with
+ * `SyntaxError: ... does not provide an export named 'SERIALIZE_TO_IPC_FN'`
+ * if `window` lands in the static import graph of files those tests
+ * pull in. Resolving `getCurrentWindow` through a `require`-style
+ * dynamic lookup at call time keeps the static import graph minimal so
+ * those tests still load.
+ *
+ * Falls back to `"main"` when the window API is unavailable (the test
+ * harness mocks `@tauri-apps/api/window` to `{ getCurrentWindow: () => ({ label: "main" }) }`
+ * in every test that drives spatial nav; this branch is purely a
+ * defensive fallback).
+ */
+function currentWindowLabel(): string {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require("@tauri-apps/api/window") as {
+      getCurrentWindow: () => { label: string };
+    };
+    return mod.getCurrentWindow().label;
+  } catch {
+    return "main";
+  }
+}
+import {
+  clearFocus as mcpClearFocus,
+  drillIn as mcpDrillIn,
+  drillOut as mcpDrillOut,
+  loseFocus as mcpLoseFocus,
+  navigateFocus as mcpNavigateFocus,
+  popLayer as mcpPopLayer,
+  pushLayer as mcpPushLayer,
+  setFocus as mcpSetFocus,
+} from "@/lib/focus-mcp";
 import type {
   Direction,
   FocusChangedPayload,
@@ -487,11 +524,14 @@ function buildSpatialFocusActions(
 
   const focus: SpatialFocusActions["focus"] = async (fq) => {
     const snapshot = buildSnapshotForFocused(layerRegistriesRef, fq);
-    await invoke("spatial_focus", { fq, snapshot });
+    await mcpSetFocus(fq, snapshot);
   };
 
   const clearFocus: SpatialFocusActions["clearFocus"] = async () => {
-    await invoke("spatial_clear_focus");
+    // MCP wire has no ambient `tauri::Window` — pass this window's
+    // label explicitly (the legacy `spatial_clear_focus` Tauri command
+    // derived it from the `Window` param on the host side).
+    await mcpClearFocus(currentWindowLabel());
   };
 
   const navigate: SpatialFocusActions["navigate"] = async (
@@ -499,7 +539,7 @@ function buildSpatialFocusActions(
     direction,
   ) => {
     const snapshot = buildSnapshotForFocused(layerRegistriesRef, focusedFq);
-    await invoke("spatial_navigate", { focusedFq, direction, snapshot });
+    await mcpNavigateFocus(focusedFq, direction, snapshot);
   };
 
   const registerLayerRegistry: SpatialFocusActions["registerLayerRegistry"] = (
@@ -531,7 +571,7 @@ function buildSpatialFocusActions(
       // until something else moves it.
       if (lostRect === null) return;
       const snapshot = registry.buildSnapshot(layerFq);
-      invoke("spatial_focus_lost", {
+      mcpLoseFocus({
         focusedFq: fq,
         lostParentZone: entry.parentZone,
         lostLayerFq: layerFq,
@@ -568,7 +608,16 @@ function buildSpatialFocusActions(
     const existing = stack.indexOf(fq);
     if (existing !== -1) stack.splice(existing, 1);
     stack.push(fq);
-    await invoke("spatial_push_layer", { fq, segment, name, parent });
+    // MCP wire has no ambient `tauri::Window` — pass this window's
+    // label explicitly (the legacy `spatial_push_layer` Tauri command
+    // derived it from the `Window` param on the host side).
+    await mcpPushLayer({
+      fq,
+      segment,
+      name,
+      parent,
+      window: currentWindowLabel(),
+    });
   };
 
   const popLayer: SpatialFocusActions["popLayer"] = async (fq) => {
@@ -579,13 +628,10 @@ function buildSpatialFocusActions(
     const stack = layerStackRef.current;
     const idx = stack.indexOf(fq);
     if (idx !== -1) stack.splice(idx, 1);
-    const nextFq = await invoke<FullyQualifiedMoniker | null>(
-      "spatial_pop_layer",
-      { fq },
-    );
+    const nextFq = await mcpPopLayer(fq);
     if (nextFq !== null && nextFq !== undefined) {
       const snapshot = buildSnapshotForFocused(layerRegistriesRef, nextFq);
-      await invoke("spatial_focus", { fq: nextFq, snapshot });
+      await mcpSetFocus(nextFq, snapshot);
     }
   };
 
@@ -596,20 +642,12 @@ function buildSpatialFocusActions(
 
   const drillIn: SpatialFocusActions["drillIn"] = async (fq, focusedFq) => {
     const snapshot = buildSnapshotForFocused(layerRegistriesRef, focusedFq);
-    return await invoke<FullyQualifiedMoniker>("spatial_drill_in", {
-      fq,
-      focusedFq,
-      snapshot,
-    });
+    return await mcpDrillIn(fq, focusedFq, snapshot);
   };
 
   const drillOut: SpatialFocusActions["drillOut"] = async (fq, focusedFq) => {
     const snapshot = buildSnapshotForFocused(layerRegistriesRef, focusedFq);
-    return await invoke<FullyQualifiedMoniker>("spatial_drill_out", {
-      fq,
-      focusedFq,
-      snapshot,
-    });
+    return await mcpDrillOut(fq, focusedFq, snapshot);
   };
 
   const focusedFq: SpatialFocusActions["focusedFq"] = () =>

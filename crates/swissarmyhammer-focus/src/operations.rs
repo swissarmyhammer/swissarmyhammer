@@ -231,6 +231,27 @@ pub struct DrillOut {
     pub snapshot: Option<NavSnapshot>,
 }
 
+/// Generate prefix-free Jump-To sneak codes from the kernel's
+/// ergonomic 23-letter alphabet.
+///
+/// Ports the `generate_jump_codes` Tauri command. Pure compute — wraps
+/// [`crate::generate_sneak_codes`] verbatim. Surfaced on the `focus`
+/// MCP tool so the React `useJumpTargets` hook can reach it through the
+/// generic MCP transport instead of a dedicated Tauri command.
+///
+/// Returns `{ ok: true, codes: [String] }` on success; the kernel's
+/// `SneakError` is surfaced as an `invalid_params` MCP error.
+#[operation(
+    verb = "generate",
+    noun = "sneak_codes",
+    description = "Generate prefix-free Jump-To codes from the ergonomic alphabet"
+)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GenerateSneakCodes {
+    /// Number of distinct codes to generate. Must be `<= 529` (23²).
+    pub count: usize,
+}
+
 /// All focus operations — the canonical list used for schema generation.
 ///
 /// Both the wire-schema generator (`generate_mcp_schema`) and the
@@ -252,6 +273,7 @@ static FOCUS_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(|
         Box::leak(Box::new(proto_pop_layer())) as &dyn Operation,
         Box::leak(Box::new(proto_drill_in())) as &dyn Operation,
         Box::leak(Box::new(proto_drill_out())) as &dyn Operation,
+        Box::leak(Box::new(proto_generate_sneak_codes())) as &dyn Operation,
     ]
 });
 
@@ -332,6 +354,10 @@ fn proto_drill_out() -> DrillOut {
         focused_fq: empty_fq(),
         snapshot: None,
     }
+}
+
+fn proto_generate_sneak_codes() -> GenerateSneakCodes {
+    GenerateSneakCodes { count: 0 }
 }
 
 /// Get the canonical slice of all focus operations.

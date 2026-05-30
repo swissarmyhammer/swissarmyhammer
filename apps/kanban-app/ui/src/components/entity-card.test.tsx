@@ -759,7 +759,7 @@ describe("EntityCard", () => {
       fireEvent.click(card);
       // The primitive's click handler routes through `spatial_focus`.
       const focusCall = mockInvoke.mock.calls.find(
-        (c) => c[0] === "spatial_focus",
+        (c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")),
       );
       expect(focusCall).toBeTruthy();
       // Inspect is now a separate Space-bound command at app level —

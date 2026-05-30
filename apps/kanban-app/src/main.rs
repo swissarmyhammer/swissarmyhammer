@@ -61,7 +61,6 @@ fn run_app(app_state: AppState) {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
-            commands::log_command,
             commands::dispatch_command,
             commands::list_commands_for_scope,
             commands::show_context_menu,
@@ -70,7 +69,6 @@ fn run_app(app_state: AppState) {
             commands::get_entity_schema,
             commands::list_entity_types,
             commands::list_entities,
-            commands::get_entity,
             commands::search_mentions,
             commands::search_entities,
             commands::get_board_data,
@@ -81,15 +79,6 @@ fn run_app(app_state: AppState) {
             commands::get_undo_state,
             commands::create_window,
             commands::save_dropped_file,
-            commands::spatial_focus,
-            commands::spatial_focus_lost,
-            commands::spatial_clear_focus,
-            commands::spatial_navigate,
-            commands::spatial_push_layer,
-            commands::spatial_pop_layer,
-            commands::spatial_drill_in,
-            commands::spatial_drill_out,
-            commands::generate_jump_codes,
             commands::command_tool_call,
             commands::mcp_subscribe,
             ai::models::ai_list_models,
@@ -119,6 +108,13 @@ fn init_gui_tracing() {
 }
 
 fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    // Hand the AppHandle to the focus MCP server's event sink so every
+    // produced `FocusChangedEvent` is mirrored onto the `focus-changed`
+    // Tauri event the React `SpatialFocusProvider` listens on — restores
+    // the side-effecting `emit` the legacy `spatial_*` Tauri commands
+    // did before Stage 3 of the kanban cut-over removed them.
+    command_services::install_focus_event_app_handle(app.handle().clone());
+
     build_initial_menu(app);
     // Must run before auto_open_board / restore_session_windows. Cold-start
     // URL delivery is synchronous — when this returns, the board is open and

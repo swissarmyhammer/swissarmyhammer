@@ -206,7 +206,7 @@ async function flushSetup() {
 /** Pull every `spatial_push_layer` push as a `{ fq, name, parent }` record. */
 function pushedLayers() {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_push_layer")
+    .filter((c) => (c[0] === "spatial_push_layer" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "push layer")))
     .map(
       (c) =>
         c[1] as {
@@ -220,8 +220,12 @@ function pushedLayers() {
 /** Pull every `spatial_pop_layer` pop as a `{ key }` record. */
 function poppedLayers() {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_pop_layer")
-    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
+    .filter((c) => (c[0] === "spatial_pop_layer" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "pop layer")))
+    .map((c) => {
+      const outer = c[1] as Record<string, unknown>;
+      const args = (outer?.params ?? outer) as { fq: FullyQualifiedMoniker };
+      return args;
+    })
 }
 
 /** Pull every `spatial_register_scope` registration. */

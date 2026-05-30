@@ -218,7 +218,7 @@ describe("spatial_focus_lost IPC", () => {
 
     // The IPC must NOT have been called for the unfocused scope.
     const focusLostCalls = mockInvoke.mock.calls.filter(
-      (call) => call[0] === "spatial_focus_lost",
+      (call) => (call[0] === "spatial_focus_lost" || (call[0] === "command_tool_call" && (call[1] as any)?.tool === "focus" && (call[1] as any)?.op === "lose focus")),
     );
     expect(focusLostCalls).toHaveLength(0);
   });
@@ -253,7 +253,7 @@ describe("spatial_focus_lost IPC", () => {
     registry.delete(focusedFq);
 
     const focusLostCall = mockInvoke.mock.calls.find(
-      (call) => call[0] === "spatial_focus_lost",
+      (call) => (call[0] === "spatial_focus_lost" || (call[0] === "command_tool_call" && (call[1] as any)?.tool === "focus" && (call[1] as any)?.op === "lose focus")),
     );
     expect(focusLostCall).toBeDefined();
     const args = focusLostCall![1] as {
@@ -428,7 +428,7 @@ describe("spatial_focus_lost real unmount lifecycle", () => {
       });
 
       const focusLostCall = mockInvoke.mock.calls.find(
-        (call) => call[0] === "spatial_focus_lost",
+        (call) => (call[0] === "spatial_focus_lost" || (call[0] === "command_tool_call" && (call[1] as any)?.tool === "focus" && (call[1] as any)?.op === "lose focus")),
       );
       expect(focusLostCall).toBeDefined();
       const args = focusLostCall![1] as {
