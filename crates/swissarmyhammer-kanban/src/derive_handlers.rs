@@ -226,7 +226,7 @@ mod tests {
 
         let body = fields["body"].as_str().unwrap();
         let tags = tag_parser::parse_tags(body);
-        assert_eq!(tags, vec!["Bug_Fix"]);
+        assert_eq!(tags, vec!["Bug-Fix"]);
     }
 
     #[test]

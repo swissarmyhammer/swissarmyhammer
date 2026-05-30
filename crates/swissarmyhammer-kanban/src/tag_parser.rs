@@ -262,12 +262,39 @@ pub fn rename_tag(text: &str, old_slug: &str, new_slug: &str) -> String {
     result
 }
 
-/// Normalize a tag slug: replace spaces with underscores, strip `#` and null bytes.
+/// Normalize a tag name into a slug that round-trips through [`parse_tags`].
+///
+/// The slug charset is `[A-Za-z0-9-]` (case-preserving), matching the parser
+/// contract documented at the top of this module. Each maximal run of
+/// characters outside that charset — spaces, punctuation, `#`, null bytes, and
+/// non-ASCII characters — collapses into a single `-`, and leading/trailing
+/// `-` are trimmed. This guarantees that `#{normalize_slug(name)}` written into
+/// a body is read back as the same slug, so tagging and parsing stay in sync.
+///
+/// # Parameters
+///
+/// - `raw` — the user-supplied tag name (e.g. `"Bug Fix"`, `"v2.0"`).
+///
+/// # Returns
+///
+/// The normalized `[A-Za-z0-9-]` slug. Returns the empty string for input with
+/// no slug characters.
 pub fn normalize_slug(raw: &str) -> String {
-    raw.chars()
-        .map(|c| if c == ' ' { '_' } else { c })
-        .filter(|&c| c != '#' && c != '\0')
-        .collect::<String>()
+    let mut out = String::with_capacity(raw.len());
+    let mut last_was_hyphen = true; // synthetic leading boundary suppresses a leading hyphen
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            last_was_hyphen = false;
+        } else if !last_was_hyphen {
+            out.push('-');
+            last_was_hyphen = true;
+        }
+    }
+    if out.ends_with('-') {
+        out.pop();
+    }
+    out
 }
 
 #[cfg(test)]
@@ -461,12 +488,26 @@ mod tests {
 
     #[test]
     fn test_normalize_slug() {
-        assert_eq!(normalize_slug("Bug Fix"), "Bug_Fix");
-        assert_eq!(normalize_slug("high_priority"), "high_priority");
+        // Spaces and out-of-charset runs collapse to a single hyphen, so the
+        // result round-trips through parse_tags ([A-Za-z0-9-], case-preserving).
+        assert_eq!(normalize_slug("Bug Fix"), "Bug-Fix");
+        assert_eq!(normalize_slug("high_priority"), "high-priority");
         assert_eq!(normalize_slug("UPPERCASE"), "UPPERCASE");
-        assert_eq!(normalize_slug("--trim--"), "--trim--");
+        assert_eq!(normalize_slug("--trim--"), "trim");
         assert_eq!(normalize_slug("keep-123"), "keep-123");
         assert_eq!(normalize_slug("#hashtag"), "hashtag");
-        assert_eq!(normalize_slug("émojis 🎉"), "émojis_🎉");
+        assert_eq!(normalize_slug("émojis 🎉"), "mojis");
+    }
+
+    #[test]
+    fn test_normalize_slug_round_trips_through_parse() {
+        for raw in ["Bug Fix", "v2.0", "#hashtag", "keep-123", "UPPERCASE"] {
+            let slug = normalize_slug(raw);
+            let body = append_tag("", &slug);
+            assert!(
+                parse_tags(&body).contains(&slug),
+                "slug {slug:?} from {raw:?} did not round-trip through parse_tags"
+            );
+        }
     }
 }
