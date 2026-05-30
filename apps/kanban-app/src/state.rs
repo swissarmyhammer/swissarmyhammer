@@ -510,8 +510,28 @@ impl AppState {
     /// (resolved via [`swissarmyhammer_directory::KanbanConfig`]); the builtin
     /// layer is the bundle tree compiled into the binary.
     pub async fn new() -> Self {
-        let ui_state = swissarmyhammer_kanban::default_ui_state(CONFIG_APP_SUBDIR);
-        let platform = build_plugin_platform().await;
+        let ui_state = Arc::new(swissarmyhammer_kanban::default_ui_state(CONFIG_APP_SUBDIR));
+        let mut platform = build_plugin_platform().await;
+
+        // Production wiring: expose the command-service-side MCP modules on
+        // the host (deferring `window` to the Tauri setup hook where the
+        // AppHandle exists), then run plugin discovery so any builtin or
+        // user-layer plugin that activates `{ rust: "commands" }` (or one
+        // of its siblings) finds the module already exposed. A failure to
+        // wire degrades to running with the old YAML command path: the
+        // command service modules just aren't there.
+        if let Err(e) = platform
+            .wire_command_services(Arc::clone(&ui_state), None)
+            .await
+        {
+            tracing::warn!(error = %e, "failed to wire command-service modules; \
+                                        new dispatch path will not be available");
+        }
+        if let Err(e) = platform.discover_plugins().await {
+            tracing::warn!(error = %e, "plugin discovery failed; \
+                                        builtin and user-layer plugins are not loaded");
+        }
+
         Self::with_ui_state(ui_state, platform)
     }
 
@@ -528,7 +548,10 @@ impl AppState {
     #[cfg(test)]
     pub fn new_for_test() -> Self {
         let path = std::env::temp_dir().join(format!("kanban-test-{}.yaml", ulid::Ulid::new()));
-        Self::with_ui_state(UIState::load(path), PluginPlatform::for_tests_empty())
+        Self::with_ui_state(
+            Arc::new(UIState::load(path)),
+            PluginPlatform::for_tests_empty(),
+        )
     }
 
     /// Create AppState whose plugin platform is built over caller-supplied
@@ -551,7 +574,10 @@ impl AppState {
     ) -> Result<Self, String> {
         let path = std::env::temp_dir().join(format!("kanban-test-{}.yaml", ulid::Ulid::new()));
         let platform = PluginPlatform::build(user_root, builtin_cache, tool_working_dir).await?;
-        Ok(Self::with_ui_state(UIState::load(path), platform))
+        // `build` no longer auto-discovers — tests using this constructor
+        // exercise plugin discovery, so do it here.
+        platform.discover_plugins().await?;
+        Ok(Self::with_ui_state(Arc::new(UIState::load(path)), platform))
     }
 
     /// Internal constructor that takes an already-loaded [`UIState`] and a
@@ -567,10 +593,10 @@ impl AppState {
     /// layer on top later via [`Self::reload_command_overrides`]. The plugin
     /// platform is built by the caller because its construction is async,
     /// while this funnel stays synchronous.
-    fn with_ui_state(ui_state: UIState, plugin_platform: PluginPlatform) -> Self {
+    fn with_ui_state(ui_state: Arc<UIState>, plugin_platform: PluginPlatform) -> Self {
         Self {
             boards: RwLock::new(HashMap::new()),
-            ui_state: Arc::new(ui_state),
+            ui_state,
             commands_registry: RwLock::new(swissarmyhammer_commands::compose_registry![
                 swissarmyhammer_commands,
                 swissarmyhammer_focus,

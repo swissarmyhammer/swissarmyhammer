@@ -50,6 +50,8 @@ use swissarmyhammer_window_service::{WindowService, WindowShell};
 /// - `"entity"` — multi-board, reads `CURRENT_ENTITY_BOARD_SERVICES`.
 /// - `"ui_state"` — app-wide, captures `ui_state` at construction.
 /// - `"window"` — app-wide, captures `window_shell` at construction.
+///   Conditional: only exposed when `window_shell` is supplied —
+///   deferred to the Tauri setup hook in the current bootstrap.
 /// - `"focus"` — app-wide, no captured state in the no-arg form.
 /// - `"commands"` — production seam = `StoreTransactionSeam::task_local()`.
 ///
@@ -62,7 +64,7 @@ use swissarmyhammer_window_service::{WindowService, WindowShell};
 pub async fn install_app_command_services(
     host: &PluginHost,
     ui_state: Arc<UIState>,
-    window_shell: Arc<dyn WindowShell>,
+    window_shell: Option<Arc<dyn WindowShell>>,
 ) -> Result<Arc<CommandService>, String> {
     // store — multi-board via task-local resolver.
     let store_server: Arc<dyn McpServer> = Arc::new(
@@ -98,15 +100,20 @@ pub async fn install_app_command_services(
         .await
         .map_err(|e| format!("expose ui_state module: {e}"))?;
 
-    // window — app-wide, captures the shared WindowShell arc.
-    let window_server: Arc<dyn McpServer> = Arc::new(
-        InProcessServer::from_arc(Arc::new(WindowService::new(window_shell)))
+    // window — app-wide, captures the shared WindowShell arc. Conditional:
+    // the kanban app's `AppState::new` calls this helper with `None` because
+    // the Tauri `AppHandle` (needed to build the `WindowShell`) only exists
+    // from the `setup_app` hook; the window module is wired later from there.
+    if let Some(ws) = window_shell {
+        let window_server: Arc<dyn McpServer> = Arc::new(
+            InProcessServer::from_arc(Arc::new(WindowService::new(ws)))
+                .await
+                .map_err(|e| format!("wrap window as InProcessServer: {e}"))?,
+        );
+        host.expose_rust_module("window", window_server)
             .await
-            .map_err(|e| format!("wrap window as InProcessServer: {e}"))?,
-    );
-    host.expose_rust_module("window", window_server)
-        .await
-        .map_err(|e| format!("expose window module: {e}"))?;
+            .map_err(|e| format!("expose window module: {e}"))?;
+    }
 
     // focus — app-wide, no-arg form (empty registry + state).
     let focus_server: Arc<dyn McpServer> = Arc::new(

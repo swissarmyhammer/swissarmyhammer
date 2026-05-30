@@ -32,6 +32,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use include_dir::{include_dir, Dir};
+use swissarmyhammer_command_service::CommandService;
 use swissarmyhammer_config::ModelConfig;
 use swissarmyhammer_directory::KanbanConfig;
 use swissarmyhammer_git::GitOperations;
@@ -91,22 +92,30 @@ pub(crate) struct PluginPlatform {
     /// The hot-reload watcher; kept alive so the host reacts to plugin files
     /// changing on disk. `None` until [`start_watcher`](Self::start_watcher).
     watcher: Option<PluginWatcher>,
+
+    /// The wired command service, populated by
+    /// [`wire_command_services`](Self::wire_command_services). `None` until
+    /// production wiring runs (test fixtures and the degraded empty platform
+    /// leave it `None`).
+    command_service: Option<std::sync::Arc<CommandService>>,
 }
 
 impl PluginPlatform {
     /// Builds the plugin platform: a host with the `kanban` tool exposed and
-    /// every builtin and user-layer plugin loaded.
+    /// ready for additional module wiring + plugin discovery.
     ///
     /// The bundled builtin plugins are first extracted to `builtin_cache`, and
     /// that cache directory is handed to [`PluginHost::new`] as the host's
     /// read-only **builtin layer root** — the lowest-precedence discovery
     /// layer. The in-process `kanban` tool is exposed *before* any plugin is
     /// loaded, so a plugin that activates `{ rust: "kanban" }` always finds the
-    /// module already exposed. Only then is `discover_and_load_all` run: it
-    /// scans the builtin layer and the user layer in one pass, so the builtin
-    /// bundles are discovered as first-class builtin-layer plugins rather than
-    /// loaded one bundle at a time. There is **no project layer** — the kanban
+    /// module already exposed. There is **no project layer** — the kanban
     /// app has only the builtin and user layers.
+    ///
+    /// Plugins are NOT discovered here — call
+    /// [`discover_plugins`](Self::discover_plugins) after any additional
+    /// modules are exposed (production wires the command-service modules in
+    /// between via [`wire_command_services`](Self::wire_command_services)).
     ///
     /// # Parameters
     ///
@@ -119,8 +128,7 @@ impl PluginPlatform {
     /// # Errors
     ///
     /// Returns the platform error string when the builtin plugins cannot be
-    /// extracted, the `kanban` module cannot be exposed, or discovery of the
-    /// builtin or user-layer plugins fails.
+    /// extracted or the `kanban` module cannot be exposed.
     pub(crate) async fn build(
         user_root: PathBuf,
         builtin_cache: PathBuf,
@@ -145,17 +153,69 @@ impl PluginPlatform {
         // module.
         expose_kanban_module(&host, tool_working_dir).await?;
 
-        // One discovery pass covers both layers: builtin bundles from the
-        // extracted cache and user-layer bundles from `<user_root>/plugins/`.
-        host.discover_and_load_all::<KanbanConfig>()
-            .await
-            .map_err(|e| format!("failed to discover builtin and user-layer plugins: {e}"))?;
-
         Ok(Self {
             host,
             user_root,
             watcher: None,
+            command_service: None,
         })
+    }
+
+    /// Discover and load every plugin from the builtin and user layers.
+    ///
+    /// Split out from [`build`] so a production caller can expose additional
+    /// in-process MCP modules (the `commands` service and its sibling
+    /// modules — see [`Self::wire_command_services`]) between
+    /// `expose_kanban_module` and discovery. A plugin that activates one of
+    /// those new modules (`{ rust: "commands" }`, …) at `load()` time
+    /// would race a missing module if discovery ran first.
+    ///
+    /// Tests that don't exercise the command service call this directly
+    /// after [`build`] without going through [`wire_command_services`].
+    pub(crate) async fn discover_plugins(&self) -> Result<(), String> {
+        self.host
+            .discover_and_load_all::<KanbanConfig>()
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("failed to discover builtin and user-layer plugins: {e}"))
+    }
+
+    /// Expose the production in-process MCP modules (`store`, `entity`,
+    /// `ui_state`, `focus`, and `commands` with the store-backed
+    /// transaction seam) on this platform's host and stash the returned
+    /// `CommandService`.
+    ///
+    /// Call after [`build`] and before [`discover_plugins`]. The `window`
+    /// module is conditional on `window_shell` (`None` skips it — the
+    /// kanban app supplies `None` from `AppState::new` because the Tauri
+    /// `AppHandle` only exists from the `setup_app` hook).
+    ///
+    /// Returns the wired `Arc<CommandService>` for the caller to thread
+    /// onto `AppState` if desired; the platform also stores a clone
+    /// internally (see [`Self::command_service`]).
+    pub(crate) async fn wire_command_services(
+        &mut self,
+        ui_state: std::sync::Arc<swissarmyhammer_ui_state::UIState>,
+        window_shell: Option<std::sync::Arc<dyn swissarmyhammer_window_service::WindowShell>>,
+    ) -> Result<std::sync::Arc<CommandService>, String> {
+        let service = crate::command_services::install_app_command_services(
+            &self.host,
+            ui_state,
+            window_shell,
+        )
+        .await?;
+        self.command_service = Some(std::sync::Arc::clone(&service));
+        Ok(service)
+    }
+
+    /// The wired `Arc<CommandService>`, or `None` when
+    /// [`wire_command_services`] has not been called (test fixtures and the
+    /// degraded empty platform).
+    #[allow(dead_code)]
+    pub(crate) fn command_service(
+        &self,
+    ) -> Option<std::sync::Arc<CommandService>> {
+        self.command_service.clone()
     }
 
     /// Builds an empty plugin platform rooted at `user_root`, loading nothing.
@@ -171,6 +231,7 @@ impl PluginPlatform {
             host,
             user_root,
             watcher: None,
+            command_service: None,
         }
     }
 
