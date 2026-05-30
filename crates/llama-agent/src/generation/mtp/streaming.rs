@@ -130,15 +130,52 @@ pub fn generate_stream_mtp(
     let mut id_last = argmax_at(target, last_batch_idx)?;
     let mut n_past = i32::try_from(total_token_count).expect("n_past fits into i32");
 
-    // If the very first token would be EOG, end immediately (matching the
-    // non-MTP path's "stop before emitting EOG" behavior).
-    if model.is_eog_token(id_last) {
-        return finish(stream_sender, "EndOfSequence");
-    }
-
     let max_tokens = budget::generation_budget(request.max_tokens);
     let context_size = target.n_ctx() as usize;
     let mut tokens_generated: usize = 0;
+    // Acceptance telemetry — counted by phase so we can tell whether MTP is
+    // actually winning: ideal is `accepted_total > 0` and `target_passes <
+    // tokens_generated` (a real speedup). Logged once per turn at the end of
+    // the loop alongside the elapsed time.
+    let mut accepted_total: usize = 0;
+    let mut target_passes: usize = 0;
+    let mut empty_drafts: usize = 0;
+    let turn_start = std::time::Instant::now();
+
+    let log_stats = |reason: &str,
+                     tokens: usize,
+                     passes: usize,
+                     accepted: usize,
+                     empty: usize| {
+        let elapsed = turn_start.elapsed();
+        let tps = if elapsed.as_secs_f64() > 0.0 {
+            (tokens as f64) / elapsed.as_secs_f64()
+        } else {
+            0.0
+        };
+        let acc_rate = if passes > 0 {
+            (accepted as f64) / (passes as f64)
+        } else {
+            0.0
+        };
+        let speedup = if passes > 0 {
+            (tokens as f64) / (passes as f64)
+        } else {
+            0.0
+        };
+        tracing::info!(
+            "MTP turn done: reason={reason} tokens={tokens} target_passes={passes} \
+             accepted_total={accepted} empty_drafts={empty} acc_per_pass={acc_rate:.2} \
+             tokens_per_pass={speedup:.2} elapsed={elapsed:.2?} throughput={tps:.1}tok/s"
+        );
+    };
+
+    // If the very first token would be EOG, end immediately (matching the
+    // non-MTP path's "stop before emitting EOG" behavior).
+    if model.is_eog_token(id_last) {
+        log_stats("EndOfSequence(first)", 0, 0, 0, 0);
+        return finish(stream_sender, "EndOfSequence");
+    }
 
     // Emit the first generated token (sampled from prefill) before the
     // speculative loop; subsequent iterations emit n_accepted + 1 tokens each.
@@ -150,19 +187,24 @@ pub fn generate_stream_mtp(
 
     loop {
         if check_cancelled(cancellation_token, stream_sender) {
+            log_stats("Cancelled", tokens_generated, target_passes, accepted_total, empty_drafts);
             return Ok(());
         }
         if tokens_generated >= max_tokens {
+            log_stats("MaxTokens", tokens_generated, target_passes, accepted_total, empty_drafts);
             return finish(stream_sender, "MaxTokens");
         }
         if budget::reached_context_limit(total_token_count, tokens_generated, context_size) {
+            log_stats("ContextWindowFull", tokens_generated, target_passes, accepted_total, empty_drafts);
             return finish(stream_sender, "ContextWindowFull");
         }
 
         // Propose drafts via the MTP head.
         let drafts = session.draft(draft, id_last, n_past);
 
+        target_passes += 1;
         let (accepted, next_token, n_accepted) = if drafts.is_empty() {
+            empty_drafts += 1;
             // Non-speculative fallback: decode id_last alone on the target,
             // sample next, and mirror id_last onto the draft. Keeps the loop
             // making progress when the draft has nothing confident to propose.
@@ -195,6 +237,7 @@ pub fn generate_stream_mtp(
                 .collect();
             session.sync_capture(target, draft, &mirror_tokens, &mirror_positions, SEQ_ID);
 
+            accepted_total += outcome.n_accepted;
             (outcome.accepted, outcome.next_token, outcome.n_accepted)
         };
 
@@ -202,16 +245,20 @@ pub fn generate_stream_mtp(
         // max_tokens.
         for token in accepted.iter().chain(std::iter::once(&next_token)) {
             if check_cancelled(cancellation_token, stream_sender) {
+                log_stats("Cancelled", tokens_generated, target_passes, accepted_total, empty_drafts);
                 return Ok(());
             }
             if model.is_eog_token(*token) {
+                log_stats("EndOfSequence", tokens_generated, target_passes, accepted_total, empty_drafts);
                 return finish(stream_sender, "EndOfSequence");
             }
             if let Some(()) = emit_token(model, *token, stream_sender)? {
+                log_stats("Disconnected", tokens_generated, target_passes, accepted_total, empty_drafts);
                 return Ok(());
             }
             tokens_generated += 1;
             if tokens_generated >= max_tokens {
+                log_stats("MaxTokens", tokens_generated, target_passes, accepted_total, empty_drafts);
                 return finish(stream_sender, "MaxTokens");
             }
         }
