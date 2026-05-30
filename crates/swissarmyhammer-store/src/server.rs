@@ -43,6 +43,14 @@ use crate::operations::{
     Redo, Undo, UndoDepth,
 };
 
+/// Resolves the [`StoreContext`] to use for the current `tokio` task.
+///
+/// Production deployments back this with a [`tokio::task_local!`] scope
+/// (see `swissarmyhammer-kanban`'s `command_seam` module). Returning
+/// `None` means no context is active on this task — every tool handler
+/// surfaces this as an `internal_error` rather than panicking.
+pub type StoreContextResolver = Arc<dyn Fn() -> Option<Arc<StoreContext>> + Send + Sync>;
+
 /// In-process `rmcp::ServerHandler` for the `store` operation tool.
 ///
 /// Holds an `Arc<StoreContext>` to the shared substrate so every verb
@@ -50,11 +58,9 @@ use crate::operations::{
 /// registered stores the rest of the app reads from.
 #[derive(Clone)]
 pub struct StoreServer {
-    /// The shared substrate. Held behind an `Arc` because the
-    /// substrate invariant requires that exactly one `StoreContext`
-    /// exists per app and is shared by `Arc::clone` — this server is
-    /// just another holder of the same arc.
-    ctx: Arc<StoreContext>,
+    /// Resolves the active [`StoreContext`] per call. See
+    /// [`StoreContextResolver`].
+    resolver: StoreContextResolver,
 }
 
 impl std::fmt::Debug for StoreServer {
@@ -64,17 +70,44 @@ impl std::fmt::Debug for StoreServer {
 }
 
 impl StoreServer {
-    /// Construct a fresh server wired to the given shared substrate.
+    /// Build a server that always serves `ctx` — single-context callers
+    /// (most tests, single-board hosts) use this constructor.
     pub fn new(ctx: Arc<StoreContext>) -> Self {
-        Self { ctx }
+        let ctx = Arc::clone(&ctx);
+        Self::with_resolver(Arc::new(move || Some(Arc::clone(&ctx))))
     }
 
-    /// Return the shared `Arc<StoreContext>` the server dispatches to.
+    /// Build a server that resolves the active context per call.
     ///
-    /// Exposed for tests that need to verify the server holds the same
-    /// substrate the rest of the app reads from (`Arc::ptr_eq`).
-    pub fn context(&self) -> Arc<StoreContext> {
-        Arc::clone(&self.ctx)
+    /// The resolver is consulted at the top of every tool handler, so a
+    /// single `StoreServer` exposed app-wide on a plugin host can route
+    /// per-call to whichever board's [`StoreContext`] is scoped on the
+    /// current `tokio` task. Returning `None` from the resolver surfaces
+    /// as a tool-level `internal_error` (the tool call fails with a
+    /// descriptive message rather than panicking).
+    pub fn with_resolver(resolver: StoreContextResolver) -> Self {
+        Self { resolver }
+    }
+
+    /// Resolve the [`StoreContext`] for the current task, or return an
+    /// `internal_error` McpError describing the gap.
+    fn ctx(&self) -> Result<Arc<StoreContext>, McpError> {
+        (self.resolver)().ok_or_else(|| {
+            McpError::internal_error(
+                "no StoreContext is active on this tokio task; \
+                 the dispatcher must scope one (see `scope_store_context`) \
+                 before invoking a `store` tool",
+                None,
+            )
+        })
+    }
+
+    /// The active [`StoreContext`] — returns `None` when no context is
+    /// scoped. Public for callers that need a context-or-nothing read
+    /// (parity with the original `context()` accessor's intent without
+    /// the panic on missing).
+    pub fn context(&self) -> Option<Arc<StoreContext>> {
+        (self.resolver)()
     }
 
     /// Build the platform-facing `store` tool definition.
@@ -94,7 +127,8 @@ impl StoreServer {
 
     /// Handle a stack-wide `undo` call.
     async fn handle_undo(&self, _req: Undo) -> Result<Value, McpError> {
-        let outcome = self.ctx.undo().await.map_err(store_error_to_mcp)?;
+        let ctx = self.ctx()?;
+        let outcome = ctx.undo().await.map_err(store_error_to_mcp)?;
         Ok(serde_json::json!({
             "ok": true,
             "store_name": outcome.store_name,
@@ -109,7 +143,8 @@ impl StoreServer {
 
     /// Handle a stack-wide `redo` call.
     async fn handle_redo(&self, _req: Redo) -> Result<Value, McpError> {
-        let outcome = self.ctx.redo().await.map_err(store_error_to_mcp)?;
+        let ctx = self.ctx()?;
+        let outcome = ctx.redo().await.map_err(store_error_to_mcp)?;
         Ok(serde_json::json!({
             "ok": true,
             "store_name": outcome.store_name,
@@ -124,32 +159,36 @@ impl StoreServer {
 
     /// Handle a stack-wide `can_undo` probe.
     async fn handle_can_undo(&self, _req: CanUndo) -> Result<Value, McpError> {
+        let ctx = self.ctx()?;
         Ok(serde_json::json!({
             "ok": true,
-            "can_undo": self.ctx.can_undo().await,
+            "can_undo": ctx.can_undo().await,
         }))
     }
 
     /// Handle a stack-wide `can_redo` probe.
     async fn handle_can_redo(&self, _req: CanRedo) -> Result<Value, McpError> {
+        let ctx = self.ctx()?;
         Ok(serde_json::json!({
             "ok": true,
-            "can_redo": self.ctx.can_redo().await,
+            "can_redo": ctx.can_redo().await,
         }))
     }
 
     /// Handle a stack-wide `depth` probe.
     async fn handle_depth(&self, _req: UndoDepth) -> Result<Value, McpError> {
+        let ctx = self.ctx()?;
         Ok(serde_json::json!({
             "ok": true,
-            "depth": self.ctx.undo_depth().await,
+            "depth": ctx.undo_depth().await,
         }))
     }
 
     /// Handle a `BeginTransaction` call — allocate or return the
     /// existing ambient transaction id for the current task.
     fn handle_begin_transaction(&self, _req: BeginTransaction) -> Result<Value, McpError> {
-        let id = self.ctx.begin_transaction();
+        let ctx = self.ctx()?;
+        let id = ctx.begin_transaction();
         Ok(serde_json::json!({
             "ok": true,
             "id": id.to_string(),
@@ -159,18 +198,19 @@ impl StoreServer {
     /// Handle an `EndTransaction` call — clear the current task's
     /// ambient slot iff the supplied id matches.
     fn handle_end_transaction(&self, req: EndTransaction) -> Result<Value, McpError> {
+        let ctx = self.ctx()?;
         let id = UndoEntryId::from_str(&req.id).map_err(|e| {
             McpError::invalid_params(format!("invalid transaction id {:?}: {e}", req.id), None)
         })?;
-        self.ctx.end_transaction(id);
+        ctx.end_transaction(id);
         Ok(serde_json::json!({ "ok": true }))
     }
 
     /// Handle a `History` call — per-item changelog over one store.
     async fn handle_history(&self, req: History) -> Result<Value, McpError> {
+        let ctx = self.ctx()?;
         let item_id = StoredItemId::from(req.item_id.clone());
-        let entries = self
-            .ctx
+        let entries = ctx
             .read_changelog(&req.store, &item_id)
             .await
             .map_err(|e| store_error_to_mcp_with_store(e, &req.store))?;
@@ -182,9 +222,9 @@ impl StoreServer {
 
     /// Handle a `GetItem` call — current bytes for one item.
     async fn handle_get_item(&self, req: GetItem) -> Result<Value, McpError> {
+        let ctx = self.ctx()?;
         let item_id = StoredItemId::from(req.item_id.clone());
-        let bytes = self
-            .ctx
+        let bytes = ctx
             .get_item_bytes(&req.store, &item_id)
             .await
             .map_err(|e| store_error_to_mcp_with_store(e, &req.store))?;
@@ -196,7 +236,8 @@ impl StoreServer {
 
     /// Handle a `ListStores` call — registered store names.
     async fn handle_list_stores(&self, _req: ListStores) -> Result<Value, McpError> {
-        let names = self.ctx.store_names().await;
+        let ctx = self.ctx()?;
+        let names = ctx.store_names().await;
         Ok(serde_json::json!({
             "ok": true,
             "stores": names,
