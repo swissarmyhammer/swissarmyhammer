@@ -90,6 +90,8 @@ fn run_app(app_state: AppState) {
             commands::spatial_drill_in,
             commands::spatial_drill_out,
             commands::generate_jump_codes,
+            commands::command_tool_call,
+            commands::mcp_subscribe,
             ai::models::ai_list_models,
             ai::models::ai_start_agent,
             ai::models::ai_set_streaming,

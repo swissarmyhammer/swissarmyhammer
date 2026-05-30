@@ -2520,6 +2520,134 @@ pub fn generate_jump_codes(count: usize) -> Result<Vec<String>, String> {
     swissarmyhammer_focus::generate_sneak_codes(count).map_err(|e| e.to_string())
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Generic MCP transport: `command_tool_call` + `mcp_subscribe`.
+//
+// The frontend has no in-process JS MCP client — the host runs the MCP server
+// in Rust. These two handlers are the seam: `command_tool_call` is the request
+// path the webview uses to reach the `command` operation tool exposed on the
+// host's `commands` MCP module, and `mcp_subscribe` is the bootstrap that
+// pumps the host's `NotificationBridge` into Tauri events the frontend
+// `listen(...)`s on (one event per MCP `notifications/*` method name).
+//
+// See `apps/kanban-app/ui/src/lib/mcp-transport.ts` and
+// `apps/kanban-app/ui/src/lib/mcp-notifications.ts` for the frontend ends.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Tracks whether the `mcp_subscribe` bridge→Tauri-event pump has been
+/// spawned, so a second `mcp_subscribe` call is a no-op (the bridge is one
+/// shared broadcast channel; one forwarder fans out to every Tauri listener).
+static MCP_SUBSCRIBE_STARTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Generic MCP `tools/call` from the webview onto the host's `commands` module.
+///
+/// The frontend's `callCommandTool(op, params)` lowers to
+/// `invoke("command_tool_call", { tool: "command", op, params })`. We route it
+/// as `host.call(HostInternal, "commands", tool, { op, ...params })`: the
+/// `commands` MCP module (installed by `install_app_command_services`) hosts a
+/// single operation tool named `"command"` that dispatches on the `op` verb
+/// (`"list command"`, `"available command"`, etc.). The tool's structured
+/// result is returned verbatim to the webview.
+///
+/// Errors from the platform / tool are stringified per this file's convention
+/// (see `dispatch_command`, `get_entity`, …).
+#[tauri::command]
+pub async fn command_tool_call(
+    state: State<'_, AppState>,
+    tool: String,
+    op: String,
+    params: Option<Value>,
+) -> Result<Value, String> {
+    // Merge `op` into the params object so the operation tool sees the same
+    // `{ op, ...params }` shape an external MCP client would send.
+    let mut input = match params {
+        Some(Value::Object(map)) => map,
+        Some(other) => {
+            return Err(format!(
+                "command_tool_call: `params` must be a JSON object, got {other:?}",
+            ));
+        }
+        None => serde_json::Map::new(),
+    };
+    input.insert("op".to_string(), Value::String(op));
+
+    let platform = state.plugin_platform.lock().await;
+    platform
+        .host()
+        .call(
+            swissarmyhammer_plugin::CallerId::HostInternal,
+            swissarmyhammer_command_service::bootstrap::COMMANDS_MODULE_ID,
+            &tool,
+            Value::Object(input),
+        )
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Start the `NotificationBridge` → Tauri-event forwarder once.
+///
+/// Idempotent: a second call is a no-op so the frontend can invoke this on
+/// every webview mount without double-spawning the pump. The bridge is one
+/// shared `broadcast` channel — one in-process subscriber fans out via
+/// `app.emit(method, params)` to every Tauri `listen(method, ...)` in the
+/// webview. The event name is the MCP notification `method` verbatim
+/// (e.g. `"notifications/store/changed"`,
+/// `"notifications/commands/changed"`), matching the constants in
+/// `mcp-notifications.ts` / `mcp-transport.ts`.
+///
+/// The forwarder task lives for the app's lifetime; the frontend does not
+/// unsubscribe.
+#[tauri::command]
+pub async fn mcp_subscribe(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+    if MCP_SUBSCRIBE_STARTED.swap(true, Ordering::SeqCst) {
+        // Pump already running — every Tauri `listen(...)` already receives.
+        return Ok(());
+    }
+
+    let bridge = state.plugin_platform.lock().await.host().notification_bridge();
+    let mut subscription = bridge.subscribe();
+
+    tauri::async_runtime::spawn(async move {
+        loop {
+            match subscription.recv().await {
+                Ok(notification) => {
+                    // Emit under the MCP notification `method` so the
+                    // frontend's `listen("notifications/store/changed", …)`
+                    // (and siblings) wire up unchanged. The payload is the
+                    // notification's `params` object — what every
+                    // `subscribe*` helper in `mcp-notifications.ts` types as
+                    // its `event.payload`.
+                    if let Err(e) = app.emit(&notification.method, &notification.params) {
+                        tracing::warn!(
+                            method = %notification.method,
+                            error = %e,
+                            "mcp_subscribe: failed to emit MCP notification as Tauri event"
+                        );
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    tracing::warn!(
+                        skipped,
+                        "mcp_subscribe: notification forwarder lagged; \
+                         webview may need to resync"
+                    );
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    // Bridge dropped — only happens at app teardown.
+                    return;
+                }
+            }
+        }
+    });
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::generate_jump_codes;

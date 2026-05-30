@@ -271,10 +271,12 @@ impl PluginPlatform {
 
     /// The application's plugin host.
     ///
-    /// Currently consumed only by the plugin integration tests, which drive
-    /// the host directly; production code reaches plugins through the host the
-    /// platform already wired during [`build`](Self::build).
-    #[cfg(test)]
+    /// Used by the generic MCP transport handlers in `commands.rs`
+    /// (`command_tool_call`, `mcp_subscribe`) to route `tools/call` requests
+    /// and subscribe to the `NotificationBridge`, and by the plugin
+    /// integration tests, which drive the host directly. Most production
+    /// code reaches plugins through the host the platform already wired
+    /// during [`build`](Self::build).
     pub(crate) fn host(&self) -> &PluginHost {
         &self.host
     }
