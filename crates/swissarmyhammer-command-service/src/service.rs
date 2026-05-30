@@ -815,6 +815,33 @@ impl CommandService {
         let guard = self.registry.lock().expect("registry mutex poisoned");
         f(&guard)
     }
+
+    /// Dispatch one `execute` request directly from Rust, returning the
+    /// callback's result value.
+    ///
+    /// This is the production entrypoint for the kanban app's Tauri
+    /// `dispatch_command` handler: with an `Arc<CommandService>` in hand,
+    /// the handler scopes its per-board task-locals (see
+    /// `swissarmyhammer-kanban`'s `scope_store_context`) and calls
+    /// `service.dispatch(caller, req).await` — bypassing the
+    /// `call_tool` → rmcp dispatch hop that external MCP clients take.
+    ///
+    /// Wraps the internal `handle_execute` verbatim: the same
+    /// [`TransactionSeam::begin`] / [`TransactionSeam::end`] bracketing,
+    /// the same callback invocation through the registered dispatcher,
+    /// the same `commands/executed` action-event emission on success.
+    /// No behavior difference — just a public surface so in-process
+    /// callers don't have to go through the MCP call-tool plumbing.
+    ///
+    /// [`TransactionSeam::begin`]: crate::TransactionSeam::begin
+    /// [`TransactionSeam::end`]: crate::TransactionSeam::end
+    pub async fn dispatch(
+        &self,
+        caller: CallerId,
+        req: ExecuteCommand,
+    ) -> Result<Value, McpError> {
+        self.handle_execute(caller, req).await
+    }
 }
 
 /// Map a JSON value into one of the six operation structs, returning a

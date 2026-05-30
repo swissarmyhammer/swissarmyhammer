@@ -25,7 +25,8 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use swissarmyhammer_command_service::{
-    CallbackDispatcher, CallbackHandle, CallbackInvokeError, CommandService, TransactionSeam,
+    CallbackDispatcher, CallbackHandle, CallbackInvokeError, CommandContext, CommandService,
+    ExecuteCommand, TransactionSeam,
 };
 use swissarmyhammer_entity::test_utils::test_fields_context;
 use swissarmyhammer_entity::{Entity, EntityContext, EntityTypeStore};
@@ -183,5 +184,86 @@ async fn two_writes_share_one_txn_and_undo_reverts_them_as_one_group() {
     assert!(
         store.current_transaction().is_none(),
         "execute must close the transaction it opened"
+    );
+}
+
+/// Pins that the public `CommandService::dispatch` wrapper drives the
+/// SAME code path as the internal `handle_execute`: the in-process
+/// `dispatch_command` Tauri handler that the kanban app uses must produce
+/// identical transaction bracketing and undo grouping as the MCP
+/// `call_tool` path tested above. If `dispatch` ever stops being a
+/// verbatim wrapper over `handle_execute`, this test catches it.
+#[tokio::test]
+async fn dispatch_method_drives_same_path_as_handle_execute() {
+    let (_dir, store, entity) = boot().await;
+
+    let dispatcher = Arc::new(TwoWriteDispatcher {
+        entity: Arc::clone(&entity),
+    });
+    let transaction = Arc::new(StoreTransactionSeam {
+        store: Arc::clone(&store),
+    });
+
+    let service = CommandService::new()
+        .with_dispatcher(dispatcher)
+        .with_transaction(transaction);
+
+    // Register a command via the existing call_command helper — the same
+    // path the other tests use to register.
+    call_command(
+        &service,
+        CallerId::HostInternal,
+        register_args("tag.makeTwo", "Make Two Tags", "cb_two"),
+    )
+    .await;
+
+    // Precondition: nothing on the undo stack yet.
+    assert_eq!(store.undo_depth().await, 0, "no writes before dispatch");
+
+    // Invoke the command via the NEW public `dispatch` method directly.
+    let req = ExecuteCommand {
+        id: "tag.makeTwo".to_string(),
+        ctx: CommandContext::default(),
+        force: None,
+    };
+    let response = service
+        .dispatch(CallerId::HostInternal, req)
+        .await
+        .expect("dispatch should succeed");
+
+    // The response envelope shape matches handle_execute's verbatim.
+    assert_eq!(
+        response.get("ok").and_then(Value::as_bool),
+        Some(true),
+        "dispatch should return {{ ok: true, .. }}"
+    );
+
+    // Both entities are on disk.
+    assert!(entity.read("tag", "alpha").await.is_ok());
+    assert!(entity.read("tag", "bravo").await.is_ok());
+
+    // The two writes are ONE undo group: a single `undo()` reverts both —
+    // proving dispatch drove the same TransactionSeam begin/end bracketing
+    // as handle_execute does on the call_tool path.
+    assert!(
+        store.can_undo().await,
+        "the dispatched command produced an undo group"
+    );
+    store.undo().await.expect("undo reverts the group");
+
+    assert!(
+        entity.read("tag", "alpha").await.is_err() && entity.read("tag", "bravo").await.is_err(),
+        "one undo must revert BOTH writes the dispatched command made — \
+         dispatch must share the same one-txn/one-group seam as handle_execute"
+    );
+    assert!(
+        !store.can_undo().await,
+        "after reverting the single command group nothing remains to undo"
+    );
+
+    // The transaction was closed: no ambient txn leaks onto the task.
+    assert!(
+        store.current_transaction().is_none(),
+        "dispatch must close the transaction it opened"
     );
 }
