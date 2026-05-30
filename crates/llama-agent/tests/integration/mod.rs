@@ -14,6 +14,7 @@ mod incremental_processing;
 mod long_conversation;
 mod long_conversation_unit;
 mod metal_gpu;
+mod mtp_streaming;
 mod read_file_mcp_server;
 mod session_state_preservation;
 mod streaming_generation;
