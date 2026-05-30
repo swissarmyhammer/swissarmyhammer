@@ -86,43 +86,47 @@ pub fn generate_stream_mtp(
     }
 
     // Prefill the new prompt tokens on the target, requesting logits/pre-norm
-    // for every position (the verify hook needs the row, and the last position
-    // supplies the first id_last).
+    // for every position. We MUST `sync_capture` onto the draft *per chunk*
+    // (not after the whole prefill): `get_embeddings_pre_norm_ith` only holds
+    // rows for the most recent decode batch, so a single end-of-prefill mirror
+    // would read garbage for everything before the last chunk. Per-chunk
+    // mirroring also keeps `argmax_at` reading from the LAST batch's index
+    // space (`0..last_chunk_len`), not the cumulative prompt length — that
+    // off-by-batch bug emits 0 tokens silently on prompts wider than
+    // `batch_size`.
     let mut batch = LlamaBatch::new(batch_size, 1);
-    let new_tokens: Vec<LlamaToken> = prompt_tokens[template_offset..].to_vec();
-    let new_positions: Vec<i32> = (template_offset..total_token_count)
-        .map(|p| i32::try_from(p).expect("prompt position fits into i32"))
-        .collect();
+    let new_tokens: &[LlamaToken] = &prompt_tokens[template_offset..];
     let mut absolute_position = template_offset;
+    let mut last_chunk_len: usize = 0;
     for chunk in new_tokens.chunks(batch_size) {
         if check_cancelled(cancellation_token, stream_sender) {
             return Ok(());
         }
         batch.clear();
+        let chunk_positions: Vec<i32> = (0..chunk.len())
+            .map(|i| {
+                i32::try_from(absolute_position + i).expect("prefill position fits into i32")
+            })
+            .collect();
         for (i, token) in chunk.iter().enumerate() {
-            let pos = absolute_position + i;
             batch
-                .add(
-                    *token,
-                    i32::try_from(pos).expect("prefill position fits into i32"),
-                    &[SEQ_ID],
-                    true, // logits on every position so we can sample id_last and capture rows
-                )
+                .add(*token, chunk_positions[i], &[SEQ_ID], true)
                 .map_err(GenerationError::batch)?;
         }
         target
             .decode(&mut batch)
             .map_err(GenerationError::decoding)?;
+        // Mirror just-decoded chunk onto the draft: target's pre-norm buffer
+        // still holds these rows; the next decode overwrites them.
+        session.sync_capture(target, draft, chunk, &chunk_positions, SEQ_ID);
         absolute_position += chunk.len();
+        last_chunk_len = chunk.len();
     }
 
-    // Mirror the just-prefilled tokens onto the draft so its recurrent state
-    // tracks the canonical accepted sequence (only the NEW range here — the
-    // KV-reused prefix is not re-decoded on the target either).
-    session.sync_capture(target, draft, &new_tokens, &new_positions, SEQ_ID);
-
-    // Sample the first id_last from the last prefilled position's logits.
-    let last_batch_idx = i32::try_from(new_tokens.len() - 1).expect("fits i32");
+    // Sample the first id_last from the last prefilled position's logits —
+    // indexed within the LAST batch (size = last_chunk_len), not the full
+    // prompt length.
+    let last_batch_idx = i32::try_from(last_chunk_len - 1).expect("last chunk len fits into i32");
     let mut id_last = argmax_at(target, last_batch_idx)?;
     let mut n_past = i32::try_from(total_token_count).expect("n_past fits into i32");
 

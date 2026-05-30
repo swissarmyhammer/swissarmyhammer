@@ -131,6 +131,10 @@ rstest = { workspace = true }
 criterion = { workspace = true }
 
 [[example]]
+name = "mtp_smoke"
+path = "examples/mtp_smoke.rs"
+
+[[example]]
 name = "streaming"
 path = "examples/streaming.rs"
 
