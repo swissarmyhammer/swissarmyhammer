@@ -1291,7 +1291,8 @@ pub(crate) async fn dispatch_command_internal(
         rw.board_path,
     )
     .await;
-    let result = execute_registered_command(state, &effective_cmd, &ctx).await?;
+    let result = dispatch_via_service_or_fallback(state, app, &effective_cmd, &ctx, active_handle.as_ref())
+        .await?;
     tracing::info!(cmd = %effective_cmd, undoable, result = %result, "command completed");
 
     // Undo stack push is handled automatically inside EntityContext::write()/delete()
@@ -1308,6 +1309,151 @@ pub(crate) async fn dispatch_command_internal(
     menu::update_menu_enabled_state(state);
 
     Ok(json!({ "result": result, "undoable": undoable }))
+}
+
+/// Hybrid dispatch: try the new `CommandService` first; fall back to the
+/// legacy `command_impls` path on "unknown command".
+///
+/// The new path scopes `CURRENT_STORE_CTX` and `CURRENT_ENTITY_BOARD_SERVICES`
+/// around `CommandService::dispatch`, so the in-process `store`/`entity` MCP
+/// surfaces route per-call to the active board's substrate. Errors that are
+/// NOT "no registration for this id" propagate as the dispatcher's error; the
+/// fallback only fires when the command isn't registered in the service yet.
+///
+/// During the hybrid window (sub-stage 2e) `command_impls` is the source of
+/// truth for ~all commands — only the 7 builtin command-plugin ids that the
+/// new path already registers will land on the new branch. Once Stage 4
+/// retires `command_impls`, this helper collapses to just the new path.
+async fn dispatch_via_service_or_fallback(
+    state: &AppState,
+    app: &AppHandle,
+    effective_cmd: &str,
+    ctx: &swissarmyhammer_commands::CommandContext,
+    active_handle: Option<&Arc<BoardHandle>>,
+) -> Result<Value, String> {
+    let new_result =
+        try_dispatch_via_command_service(state, app, effective_cmd, ctx, active_handle).await;
+    match new_result {
+        Some(Ok(value)) => Ok(value),
+        Some(Err(err)) if is_unknown_command_error(&err) => {
+            tracing::debug!(
+                cmd = %effective_cmd,
+                "command not registered in CommandService — falling back to command_impls"
+            );
+            execute_registered_command(state, effective_cmd, ctx).await
+        }
+        Some(Err(err)) => Err(format!("Command failed: {err}")),
+        None => execute_registered_command(state, effective_cmd, ctx).await,
+    }
+}
+
+/// Attempt the new path. Returns `None` when no `CommandService` is wired
+/// (test fixtures / failed bootstrap); the caller falls back unconditionally
+/// in that case.
+async fn try_dispatch_via_command_service(
+    state: &AppState,
+    app: &AppHandle,
+    effective_cmd: &str,
+    ctx: &swissarmyhammer_commands::CommandContext,
+    active_handle: Option<&Arc<BoardHandle>>,
+) -> Option<Result<Value, rmcp::ErrorData>> {
+    let service = state.plugin_platform.lock().await.command_service()?;
+
+    let req = swissarmyhammer_command_service::ExecuteCommand {
+        id: effective_cmd.to_string(),
+        ctx: swissarmyhammer_command_service::CommandContext {
+            scope_chain: ctx.scope_chain.clone(),
+            target: ctx.target.clone(),
+            args: ctx.args.clone(),
+        },
+        force: None,
+    };
+
+    // Build the per-board entity-services bundle. When no board is active
+    // (e.g. command fired before a board is open), drop the entity_ctx-bound
+    // services entirely — the entity tool surface will then return its
+    // "no board scoped" structured error rather than panic.
+    let entity_services = match active_handle {
+        Some(handle) => {
+            let entity_ctx = match handle.ctx.entity_context().await {
+                Ok(ectx) => ectx,
+                Err(e) => {
+                    tracing::warn!(
+                        cmd = %effective_cmd,
+                        error = %e,
+                        "failed to resolve entity_context for new-path dispatch"
+                    );
+                    return Some(Err(rmcp::ErrorData::internal_error(
+                        format!("entity_context unavailable: {e}"),
+                        None,
+                    )));
+                }
+            };
+            Some(swissarmyhammer_entity_mcp::server::EntityBoardServices {
+                entity_ctx,
+                kanban: Some(Arc::clone(&handle.ctx)),
+                // Wire the same TauriClipboardProvider the legacy build_dispatch_context
+                // installs as a ClipboardProviderExt — the entity MCP clipboard ops
+                // (cut/copy/paste) read it via the resolver.
+                clipboard: Some(Arc::new(crate::state::TauriClipboardProvider::new(
+                    app.clone(),
+                ))),
+                ui_state: Some(Arc::clone(&state.ui_state)),
+            })
+        }
+        None => None,
+    };
+
+    let store_ctx = active_handle.map(|h| Arc::clone(&h.store_context));
+
+    // Capture `service` by move into the dispatch future so the lock guard
+    // above doesn't need to outlive the await.
+    let dispatched = async move {
+        service
+            .dispatch(swissarmyhammer_plugin::CallerId::HostInternal, req)
+            .await
+    };
+
+    // Scope both task-locals around the dispatch when we have them; otherwise
+    // run dispatch bare and let the resolvers return their structured
+    // "not scoped" errors for ops that need them.
+    let raw = match (store_ctx, entity_services) {
+        (Some(sctx), Some(esvc)) => {
+            swissarmyhammer_kanban::command_seam::scope_store_context(
+                sctx,
+                swissarmyhammer_entity_mcp::server::scope_entity_board_services(esvc, dispatched),
+            )
+            .await
+        }
+        (Some(sctx), None) => {
+            swissarmyhammer_kanban::command_seam::scope_store_context(sctx, dispatched).await
+        }
+        (None, Some(esvc)) => {
+            swissarmyhammer_entity_mcp::server::scope_entity_board_services(esvc, dispatched).await
+        }
+        (None, None) => dispatched.await,
+    };
+
+    // The service wraps successful results as `{ "ok": true, "result": <value> }`.
+    // Unwrap to match the legacy `execute_registered_command` contract
+    // (which returns just the inner result value).
+    Some(raw.map(|v| {
+        v.get("result").cloned().unwrap_or(v)
+    }))
+}
+
+/// True iff `err` is the `CommandService`'s `UnknownCommand` error.
+///
+/// `command_error_to_mcp` in `swissarmyhammer-command-service` projects every
+/// `CommandError` variant into `err.data` as `{ "kind": "<VariantName>", ... }`
+/// — see `command_error_data` in service.rs. So the structured discriminant
+/// is reliable and we don't have to grep the human-readable `message`.
+fn is_unknown_command_error(err: &rmcp::ErrorData) -> bool {
+    err.data
+        .as_ref()
+        .and_then(|d| d.get("kind"))
+        .and_then(|k| k.as_str())
+        == Some("UnknownCommand")
 }
 
 /// Look up `effective_cmd`'s implementation, check availability, and execute
