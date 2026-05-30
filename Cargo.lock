@@ -9836,6 +9836,7 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "serial_test",
+ "swissarmyhammer-command-service",
  "swissarmyhammer-commands",
  "swissarmyhammer-common",
  "swissarmyhammer-directory",
