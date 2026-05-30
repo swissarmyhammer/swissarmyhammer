@@ -1,7 +1,7 @@
 use crate::types::{ModelConfig, ModelError, SessionId};
 use llama_cpp_2::{
     context::{
-        params::{KvCacheType, LlamaContextParams},
+        params::{KvCacheType, LlamaContextParams, LlamaContextType},
         LlamaContext,
     },
     llama_backend::LlamaBackend,
@@ -274,12 +274,31 @@ impl ModelManager {
         session_id: &SessionId,
     ) -> Result<LlamaContext<'a>, ModelError> {
         debug!("Creating context for session {}", session_id);
-        self.create_context(model)
+        self.create_context_with_type(model, LlamaContextType::Default)
+    }
+
+    /// Create an MTP draft context for a session — runs the model's NextN/MTP
+    /// head, for `draft-mtp` speculative decoding. Requires `model.has_mtp()`.
+    pub fn create_draft_session_context<'a>(
+        &self,
+        model: &'a LlamaModel,
+        session_id: &SessionId,
+    ) -> Result<LlamaContext<'a>, ModelError> {
+        debug!("Creating MTP draft context for session {}", session_id);
+        self.create_context_with_type(model, LlamaContextType::Mtp)
     }
 
     pub fn create_context<'a>(
         &self,
         model: &'a LlamaModel,
+    ) -> Result<LlamaContext<'a>, ModelError> {
+        self.create_context_with_type(model, LlamaContextType::Default)
+    }
+
+    fn create_context_with_type<'a>(
+        &self,
+        model: &'a LlamaModel,
+        ctx_type: LlamaContextType,
     ) -> Result<LlamaContext<'a>, ModelError> {
         // Search for any metadata key ending with .context_length or containing max_position_embeddings
         let model_native_ctx = {
@@ -385,7 +404,8 @@ impl ModelManager {
             .with_n_threads_batch(self.config.n_threads_batch)
             .with_flash_attention_policy(flash_attn)
             .with_type_k(kv_type)
-            .with_type_v(kv_type);
+            .with_type_v(kv_type)
+            .with_ctx_type(ctx_type);
 
         debug!(
             "Creating context with n_ctx={}, n_batch={}, n_ubatch={}, n_seq_max={}, n_threads={}, n_threads_batch={}, flash_attn={}, kv_cache_type={:?}",

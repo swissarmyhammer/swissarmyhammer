@@ -15,5 +15,7 @@
 
 pub mod helpers;
 pub mod session;
+pub mod streaming;
 
 pub use session::{MtpParams, MtpSession, VerifyOutcome};
+pub use streaming::generate_stream_mtp;

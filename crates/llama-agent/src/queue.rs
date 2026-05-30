@@ -1405,16 +1405,70 @@ impl RequestQueue {
             session_state_cache,
         );
 
-        let result = GenerationHelper::generate_stream_with_borrowed_model_and_template_offset(
-            model,
-            &mut ctx,
-            &prompt,
-            request,
-            &stream_sender,
-            cancellation_token,
-            model_manager.get_batch_size(),
-            template_token_count,
-        );
+        // Auto-detect MTP: when the loaded model carries the NextN/MTP head,
+        // run the draft-mtp speculative loop with a second MTP-context on the
+        // same model (target=this ctx + draft=ctx_type::Mtp). Same KV-reuse on
+        // the target; the draft is ephemeral per request. Else: standard path.
+        let use_mtp = model.has_mtp();
+        let result = if use_mtp {
+            match model_manager.create_draft_session_context(model, &session.id) {
+                Ok(mut draft_ctx) => {
+                    info!(
+                        "Worker {} streaming with MTP speculative decoding (nextn_predict_layers={})",
+                        worker_id,
+                        model.nextn_predict_layers()
+                    );
+                    crate::generation::mtp::generate_stream_mtp(
+                        model,
+                        &mut ctx,
+                        &mut draft_ctx,
+                        &prompt,
+                        request,
+                        &stream_sender,
+                        cancellation_token,
+                        model_manager.get_batch_size(),
+                        template_token_count,
+                        crate::generation::mtp::MtpParams::default(),
+                    )
+                    .map_err(|e| crate::types::QueueError::WorkerError(format!(
+                        "MTP generation failed: {e}"
+                    )))
+                }
+                Err(e) => {
+                    warn!(
+                        "Worker {} failed to create MTP draft context ({}); falling back to standard streaming",
+                        worker_id, e
+                    );
+                    GenerationHelper::generate_stream_with_borrowed_model_and_template_offset(
+                        model,
+                        &mut ctx,
+                        &prompt,
+                        request,
+                        &stream_sender,
+                        cancellation_token,
+                        model_manager.get_batch_size(),
+                        template_token_count,
+                    )
+                    .map_err(|e| crate::types::QueueError::WorkerError(format!(
+                        "Generation failed: {e}"
+                    )))
+                }
+            }
+        } else {
+            GenerationHelper::generate_stream_with_borrowed_model_and_template_offset(
+                model,
+                &mut ctx,
+                &prompt,
+                request,
+                &stream_sender,
+                cancellation_token,
+                model_manager.get_batch_size(),
+                template_token_count,
+            )
+            .map_err(|e| crate::types::QueueError::WorkerError(format!(
+                "Generation failed: {e}"
+            )))
+        };
 
         // Persist the updated KV cache (prompt + generated tokens) for the next
         // turn — but ONLY on a clean, fully-generated turn. A consumer
