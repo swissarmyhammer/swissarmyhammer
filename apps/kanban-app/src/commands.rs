@@ -1240,7 +1240,7 @@ pub(crate) async fn dispatch_command_internal(
         rw.board_path,
     )
     .await;
-    let result = dispatch_via_service_or_fallback(state, app, &effective_cmd, &ctx, active_handle.as_ref())
+    let result = dispatch_via_service(state, app, &effective_cmd, &ctx, active_handle.as_ref())
         .await?;
     tracing::info!(cmd = %effective_cmd, undoable, result = %result, "command completed");
 
@@ -1260,39 +1260,32 @@ pub(crate) async fn dispatch_command_internal(
     Ok(json!({ "result": result, "undoable": undoable }))
 }
 
-/// Hybrid dispatch: try the new `CommandService` first; fall back to the
-/// legacy `command_impls` path on "unknown command".
+/// Sole dispatch path: route the command through the `CommandService`.
 ///
-/// The new path scopes `CURRENT_STORE_CTX` and `CURRENT_ENTITY_BOARD_SERVICES`
-/// around `CommandService::dispatch`, so the in-process `store`/`entity` MCP
-/// surfaces route per-call to the active board's substrate. Errors that are
-/// NOT "no registration for this id" propagate as the dispatcher's error; the
-/// fallback only fires when the command isn't registered in the service yet.
+/// The Stage 4 cut-over retired the legacy `command_impls` fallback —
+/// `CommandService` (fed by the 7 builtin command plugins at app
+/// startup) is now the sole source of command dispatch. The path scopes
+/// `CURRENT_STORE_CTX` and `CURRENT_ENTITY_BOARD_SERVICES` around
+/// `CommandService::dispatch` so the in-process `store`/`entity` MCP
+/// surfaces route per-call to the active board's substrate.
 ///
-/// During the hybrid window (sub-stage 2e) `command_impls` is the source of
-/// truth for ~all commands — only the 7 builtin command-plugin ids that the
-/// new path already registers will land on the new branch. Once Stage 4
-/// retires `command_impls`, this helper collapses to just the new path.
-async fn dispatch_via_service_or_fallback(
+/// Returns a stringified error when no `CommandService` is wired (an
+/// app-bootstrap failure that should never occur in production), when
+/// the command isn't registered, or when the command itself fails. The
+/// previous "fall back to `state.command_impls`" branch is gone.
+async fn dispatch_via_service(
     state: &AppState,
     app: &AppHandle,
     effective_cmd: &str,
-    ctx: &swissarmyhammer_commands::CommandContext,
+    ctx: &swissarmyhammer_kanban::commands_core::CommandContext,
     active_handle: Option<&Arc<BoardHandle>>,
 ) -> Result<Value, String> {
-    let new_result =
-        try_dispatch_via_command_service(state, app, effective_cmd, ctx, active_handle).await;
-    match new_result {
+    match try_dispatch_via_command_service(state, app, effective_cmd, ctx, active_handle).await {
         Some(Ok(value)) => Ok(value),
-        Some(Err(err)) if is_unknown_command_error(&err) => {
-            tracing::debug!(
-                cmd = %effective_cmd,
-                "command not registered in CommandService — falling back to command_impls"
-            );
-            execute_registered_command(state, effective_cmd, ctx).await
-        }
         Some(Err(err)) => Err(format!("Command failed: {err}")),
-        None => execute_registered_command(state, effective_cmd, ctx).await,
+        None => Err(format!(
+            "CommandService unavailable; command `{effective_cmd}` cannot be dispatched"
+        )),
     }
 }
 
@@ -1303,7 +1296,7 @@ async fn try_dispatch_via_command_service(
     state: &AppState,
     app: &AppHandle,
     effective_cmd: &str,
-    ctx: &swissarmyhammer_commands::CommandContext,
+    ctx: &swissarmyhammer_kanban::commands_core::CommandContext,
     active_handle: Option<&Arc<BoardHandle>>,
 ) -> Option<Result<Value, rmcp::ErrorData>> {
     let service = state.plugin_platform.lock().await.command_service()?;
@@ -1391,43 +1384,6 @@ async fn try_dispatch_via_command_service(
     }))
 }
 
-/// True iff `err` is the `CommandService`'s `UnknownCommand` error.
-///
-/// `command_error_to_mcp` in `swissarmyhammer-command-service` projects every
-/// `CommandError` variant into `err.data` as `{ "kind": "<VariantName>", ... }`
-/// — see `command_error_data` in service.rs. So the structured discriminant
-/// is reliable and we don't have to grep the human-readable `message`.
-fn is_unknown_command_error(err: &rmcp::ErrorData) -> bool {
-    err.data
-        .as_ref()
-        .and_then(|d| d.get("kind"))
-        .and_then(|k| k.as_str())
-        == Some("UnknownCommand")
-}
-
-/// Look up `effective_cmd`'s implementation, check availability, and execute
-/// it. Errors unify the "no impl", "not available", and "execute failed"
-/// paths into the `String` return type so the caller can `?` them.
-async fn execute_registered_command(
-    state: &AppState,
-    effective_cmd: &str,
-    ctx: &swissarmyhammer_commands::CommandContext,
-) -> Result<Value, String> {
-    let cmd_impl = state
-        .command_impls
-        .get(effective_cmd)
-        .ok_or_else(|| format!("No implementation for command: {}", effective_cmd))?;
-    if !cmd_impl.available(ctx) {
-        tracing::warn!(cmd = %effective_cmd, "command not available in current context");
-        return Err(format!("Command not available: {}", effective_cmd));
-    }
-    tracing::debug!(cmd = %effective_cmd, "executing command");
-    cmd_impl.execute(ctx).await.map_err(|e| {
-        tracing::error!(cmd = %effective_cmd, error = %e, "command execution failed");
-        format!("Command failed: {e}")
-    })
-}
-
 /// Run every post-execute side-effect — board management, drag events,
 /// UI-state snapshot emit, menu rebuild, and flush/undo-redo sync — in the
 /// fixed order the dispatcher relied on before this was extracted.
@@ -1477,7 +1433,7 @@ async fn build_dispatch_context(
     target: Option<String>,
     effective_board_path: Option<String>,
 ) -> (
-    swissarmyhammer_commands::CommandContext,
+    swissarmyhammer_kanban::commands_core::CommandContext,
     Option<Arc<BoardHandle>>,
 ) {
     let args_map: HashMap<String, Value> = match effective_args {
@@ -1485,7 +1441,7 @@ async fn build_dispatch_context(
         _ => HashMap::new(),
     };
     let mut ctx =
-        swissarmyhammer_commands::CommandContext::new(effective_cmd, scope, target, args_map);
+        swissarmyhammer_kanban::commands_core::CommandContext::new(effective_cmd, scope, target, args_map);
     ctx = ctx.with_ui_state(Arc::clone(&state.ui_state));
 
     let resolved_board_path =
@@ -2113,10 +2069,17 @@ pub async fn list_commands_for_scope(
     // enrichment pass and left every picker (Group By, View, Sort, etc.)
     // with `options: None` — the empty-popover bug tracked in kanban task
     // 01KRGW1DYD0T05PSTEDPT5D076 (iteration 4).
+    // The legacy `state.command_impls` table was retired in Stage 4 — pass an
+    // empty trait-impl map. `commands_for_scope_with_context` falls back to
+    // "available" when no impl is registered for an id, which is the right
+    // behavior now that CommandService owns the availability gate at
+    // dispatch time.
+    let empty_impls: HashMap<String, Arc<dyn swissarmyhammer_kanban::commands_core::Command>> =
+        HashMap::new();
     let result = swissarmyhammer_kanban::scope_commands::commands_for_scope_with_context(
         &scope_chain,
         &registry,
-        &state.command_impls,
+        &empty_impls,
         active_handle.as_ref().map(|h| h.ctx.as_ref()),
         &state.ui_state,
         context_menu == Some(true),
@@ -2408,32 +2371,13 @@ pub async fn mcp_subscribe(
 
 #[cfg(test)]
 mod tests {
-    use super::generate_jump_codes;
-
-    /// `generate_jump_codes` round-trips through the same code path the
-    /// Tauri runtime invokes — identical output to the underlying Rust
-    /// impl, errors flattened to `String`.
-    #[test]
-    fn generate_jump_codes_matches_rust_impl_for_known_count() {
-        let count = 30usize;
-        let via_command = generate_jump_codes(count).expect("count=30 must succeed");
-        let via_rust = swissarmyhammer_focus::generate_sneak_codes(count)
-            .expect("count=30 must succeed via direct call");
-        assert_eq!(via_command, via_rust);
-        assert_eq!(via_command.len(), count);
-    }
-
-    /// `generate_jump_codes` flattens [`SneakError`] to a `String`
-    /// preserving the canonical error message.
-    #[test]
-    fn generate_jump_codes_flattens_too_many_targets_error() {
-        let over = swissarmyhammer_focus::MAX_SNEAK_CODES + 1;
-        let err = generate_jump_codes(over).expect_err("over-capacity must fail");
-        assert!(
-            err.contains("too many jump targets"),
-            "unexpected error message: {err:?}",
-        );
-    }
+    // `generate_jump_codes` Tauri command was REMOVED in Stage 3 of the
+    // kanban cut-over (the React side now reaches the focus kernel
+    // through the in-process `focus` MCP server), so the two tests that
+    // round-tripped it via the Tauri command shell were removed here in
+    // Stage 4 as a follow-up clean-up. The underlying generator lives in
+    // `swissarmyhammer_focus::generate_sneak_codes` and is exercised by
+    // its own unit tests in the focus crate.
 
     /// Verifies that store_name and id are correctly extracted from ChangeEvent
     /// payloads, and that events with missing fields are identified.
@@ -2789,221 +2733,3 @@ mod tests {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Spatial-navigation command tests.
-//
-// These exercise the inner functions extracted from each `#[tauri::command]`
-// shell. We can't construct a `tauri::Window` or `State<'_, AppState>` in a
-// unit test without a Tauri runtime — so the inner helpers operate directly
-// on `&mut SpatialRegistry, &mut SpatialState`, which is exactly the
-// signature these tests want.
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[cfg(test)]
-mod spatial_command_tests {
-    use super::*;
-    use std::collections::HashMap;
-    use swissarmyhammer_focus::{Pixels, SnapshotScope};
-
-    fn rect_at(x: f64, y: f64, w: f64, h: f64) -> Rect {
-        Rect {
-            x: Pixels::new(x),
-            y: Pixels::new(y),
-            width: Pixels::new(w),
-            height: Pixels::new(h),
-        }
-    }
-
-    /// Push a window-root layer into `registry`, returning the layer FQM
-    /// for use as `snapshot.layer_fq`.
-    fn push_root_layer(
-        registry: &mut SpatialRegistry,
-        window: &str,
-        layer_segment: &str,
-    ) -> FullyQualifiedMoniker {
-        let segment = SegmentMoniker::from_string(layer_segment);
-        let fq = FullyQualifiedMoniker::root(&segment);
-        spatial_push_layer_inner(
-            registry,
-            fq.clone(),
-            segment,
-            LayerName::from_string("window"),
-            None,
-            WindowLabel::from_string(window),
-        );
-        fq
-    }
-
-    /// Build a snapshot scope at the composed FQM `<layer_fq>/<segment>`
-    /// with the given rect.
-    fn snapshot_leaf(
-        layer_fq: &FullyQualifiedMoniker,
-        segment_str: &str,
-        rect: Rect,
-    ) -> (FullyQualifiedMoniker, SnapshotScope) {
-        let segment = SegmentMoniker::from_string(segment_str);
-        let fq = FullyQualifiedMoniker::compose(layer_fq, &segment);
-        (
-            fq.clone(),
-            SnapshotScope {
-                fq,
-                rect,
-                parent_zone: None,
-                nav_override: HashMap::new(),
-                focusable: true,
-            },
-        )
-    }
-
-    /// `spatial_focus` invokes the snapshot-driven focus path and the
-    /// kernel returns a `FocusChangedEvent` carrying the focused window,
-    /// FQM, and segment.
-    #[test]
-    fn spatial_focus_emits_focus_changed_event() {
-        let mut registry = SpatialRegistry::new();
-        let mut state = SpatialState::new();
-        let layer = push_root_layer(&mut registry, "main", "L");
-        let (fq, scope) = snapshot_leaf(&layer, "task:01", rect_at(0.0, 0.0, 10.0, 10.0));
-        let snapshot = NavSnapshot {
-            layer_fq: layer,
-            scopes: vec![scope],
-        };
-
-        let event = state
-            .focus(&mut registry, &snapshot, fq.clone())
-            .expect("focus emits an event for a snapshot scope");
-
-        assert_eq!(event.window_label, WindowLabel::from_string("main"));
-        assert_eq!(event.prev_fq, None);
-        assert_eq!(event.next_fq, Some(fq));
-        assert_eq!(
-            event.next_segment,
-            Some(SegmentMoniker::from_string("task:01"))
-        );
-    }
-
-    /// `spatial_navigate` lands on the snapshot-determined target and
-    /// emits the matching `FocusChangedEvent`.
-    #[test]
-    fn spatial_navigate_with_snapshot_resolves_target() {
-        let mut registry = SpatialRegistry::new();
-        let mut state = SpatialState::new();
-        let layer = push_root_layer(&mut registry, "main", "L");
-
-        let (top, top_scope) = snapshot_leaf(&layer, "task:top", rect_at(0.0, 0.0, 10.0, 10.0));
-        let (bottom, bottom_scope) =
-            snapshot_leaf(&layer, "task:bottom", rect_at(0.0, 20.0, 10.0, 10.0));
-
-        let snapshot = NavSnapshot {
-            layer_fq: layer,
-            scopes: vec![top_scope, bottom_scope],
-        };
-
-        state
-            .focus(&mut registry, &snapshot, top.clone())
-            .expect("focus top");
-
-        let event = state
-            .navigate(&mut registry, &snapshot, top, Direction::Down)
-            .expect("Down resolves to bottom");
-
-        assert_eq!(event.next_fq, Some(bottom));
-    }
-
-    /// `spatial_push_layer_inner` derives `window_label` from the calling
-    /// command and stores the layer under that label so `root_for_window`
-    /// can find it.
-    #[test]
-    fn spatial_push_layer_associates_window_label() {
-        let mut registry = SpatialRegistry::new();
-        let segment = SegmentMoniker::from_string("L1");
-        let fq = FullyQualifiedMoniker::root(&segment);
-        spatial_push_layer_inner(
-            &mut registry,
-            fq.clone(),
-            segment,
-            LayerName::from_string("window"),
-            None,
-            WindowLabel::from_string("board-abc"),
-        );
-
-        let root = registry
-            .root_for_window(&WindowLabel::from_string("board-abc"))
-            .expect("root layer registered for the window");
-        assert_eq!(root.fq, fq);
-        assert_eq!(root.window_label, WindowLabel::from_string("board-abc"));
-    }
-
-    /// `spatial_pop_layer` removes the layer from the registry.
-    #[test]
-    fn spatial_pop_layer_removes_layer() {
-        let mut registry = SpatialRegistry::new();
-        let layer = push_root_layer(&mut registry, "main", "L");
-        assert!(registry.layer(&layer).is_some());
-
-        registry.remove_layer(&layer);
-        assert!(registry.layer(&layer).is_none());
-    }
-
-    /// When `fq` is missing from `snapshot.scopes`, `focus` drops the
-    /// commit and returns `None`.
-    #[test]
-    fn focus_drops_when_fq_missing_from_snapshot() {
-        let mut registry = SpatialRegistry::new();
-        let layer = push_root_layer(&mut registry, "main", "L");
-        let leaf = FullyQualifiedMoniker::compose(&layer, &SegmentMoniker::from_string("leaf:01"));
-
-        let empty_snapshot = NavSnapshot {
-            layer_fq: layer,
-            scopes: vec![],
-        };
-
-        let mut state = SpatialState::new();
-        let event = state.focus(&mut registry, &empty_snapshot, leaf);
-        assert!(
-            event.is_none(),
-            "focus must drop when target is absent from snapshot"
-        );
-    }
-
-    /// `focus` populates `last_focused_by_fq` for every ancestor in the
-    /// snapshot's `parent_zone` chain.
-    #[test]
-    fn focus_records_last_focused_for_ancestor_zones() {
-        let mut registry = SpatialRegistry::new();
-        let layer = push_root_layer(&mut registry, "main", "L");
-        let zone = FullyQualifiedMoniker::compose(&layer, &SegmentMoniker::from_string("zone:01"));
-        let leaf = FullyQualifiedMoniker::compose(&zone, &SegmentMoniker::from_string("leaf:01"));
-
-        let snapshot = NavSnapshot {
-            layer_fq: layer,
-            scopes: vec![
-                SnapshotScope {
-                    fq: zone.clone(),
-                    rect: rect_at(0.0, 0.0, 100.0, 100.0),
-                    parent_zone: None,
-                    nav_override: HashMap::new(),
-                    focusable: true,
-                },
-                SnapshotScope {
-                    fq: leaf.clone(),
-                    rect: rect_at(10.0, 10.0, 10.0, 10.0),
-                    parent_zone: Some(zone.clone()),
-                    nav_override: HashMap::new(),
-                    focusable: true,
-                },
-            ],
-        };
-
-        let mut state = SpatialState::new();
-        state
-            .focus(&mut registry, &snapshot, leaf.clone())
-            .expect("focus emits");
-
-        assert_eq!(
-            registry.last_focused_by_fq.get(&zone),
-            Some(&leaf),
-            "ancestor zone records the focused descendant",
-        );
-    }
-}

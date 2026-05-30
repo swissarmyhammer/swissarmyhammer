@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use serde_json::Value;
-use swissarmyhammer_commands::{Command, CommandContext, CommandError};
+use crate::commands_core::{Command, CommandContext, CommandError};
 
 /// Open the inspector for a target entity.
 ///
@@ -16,7 +16,7 @@ const INSPECTABLE_TYPES: &[&str] = &["task", "tag", "column", "board", "actor"];
 /// Find the first inspectable moniker in the scope chain.
 fn first_inspectable(scope_chain: &[String]) -> Option<&str> {
     scope_chain.iter().find_map(|m| {
-        let (entity_type, _) = swissarmyhammer_commands::parse_moniker(m)?;
+        let (entity_type, _) = crate::commands_core::parse_moniker(m)?;
         if INSPECTABLE_TYPES.contains(&entity_type) {
             Some(m.as_str())
         } else {
@@ -31,7 +31,7 @@ impl Command for InspectCmd {
         ctx.target.is_some() || first_inspectable(&ctx.scope_chain).is_some()
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
@@ -60,7 +60,7 @@ impl Command for InspectorCloseCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
@@ -83,7 +83,7 @@ impl Command for InspectorCloseAllCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
@@ -125,7 +125,7 @@ impl Command for InspectorSetWidthCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
@@ -175,7 +175,7 @@ impl Command for PaletteOpenCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
@@ -198,7 +198,7 @@ impl Command for PaletteCloseCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
@@ -223,7 +223,7 @@ impl Command for SetFocusCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
@@ -251,7 +251,7 @@ impl Command for SetAppModeCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
@@ -288,7 +288,7 @@ impl Command for StartRenamePerspectiveCmd {
         !ui.active_perspective_id(window_label).is_empty()
     }
 
-    async fn execute(&self, _ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, _ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         // Intentional no-op — the frontend intercepts this command before it
         // reaches the backend.  Return null so the caller sees success.
         Ok(Value::Null)
@@ -306,7 +306,7 @@ impl Command for SetActiveViewCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
@@ -355,7 +355,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use swissarmyhammer_commands::{CommandContext};
+    use crate::commands_core::{CommandContext};
     use swissarmyhammer_ui_state::{UIState};
 
     /// Helper to build a CommandContext with UIState and a window scope chain.

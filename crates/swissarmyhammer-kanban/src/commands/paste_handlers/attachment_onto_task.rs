@@ -29,7 +29,7 @@ use crate::context::KanbanContext;
 use async_trait::async_trait;
 use serde_json::Value;
 use std::path::PathBuf;
-use swissarmyhammer_commands::{parse_moniker, CommandContext, CommandError, Result};
+use crate::commands_core::{parse_moniker, CommandContext, CommandError, Result};
 
 /// RAII guard for the friendly-name staging directory used when
 /// pasting an attachment whose source path's basename disagrees with

@@ -6,7 +6,7 @@
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use swissarmyhammer_commands::{parse_moniker, Command, CommandContext, CommandError};
+use crate::commands_core::{parse_moniker, Command, CommandContext, CommandError};
 use swissarmyhammer_ui_state::{DragSession, DragSource};
 
 use crate::clipboard::{ClipboardData, ClipboardPayload};
@@ -42,7 +42,7 @@ impl Command for DragStartCmd {
     ///
     /// Reads session parameters from `ctx.args`, cancels any existing session,
     /// stores the new session, and returns a `DragStart` result payload.
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
@@ -208,7 +208,7 @@ fn drag_source_to_wire(source: &DragSource) -> Value {
 /// returned. Canonicalisation is *not* performed against the filesystem
 /// here — the path may legitimately not exist yet at start time, and the
 /// downstream attachment handler `stat`s the file at write time.
-fn validate_drag_file_path(raw: &str) -> swissarmyhammer_commands::Result<String> {
+fn validate_drag_file_path(raw: &str) -> crate::commands_core::Result<String> {
     if raw.contains('\0') {
         return Err(CommandError::ExecutionFailed(
             "drag.start: filePath must not contain NUL bytes".into(),
@@ -235,7 +235,7 @@ fn validate_drag_file_path(raw: &str) -> swissarmyhammer_commands::Result<String
 ///
 /// Unknown values surface as a clear error so a typo in the frontend
 /// doesn't silently fall back to the legacy task path.
-fn read_source_kind(ctx: &CommandContext) -> swissarmyhammer_commands::Result<DragSourceKind> {
+fn read_source_kind(ctx: &CommandContext) -> crate::commands_core::Result<DragSourceKind> {
     match ctx.args.get("sourceKind").and_then(|v| v.as_str()) {
         None | Some("focus_chain") | Some("focusChain") | Some("task") => {
             Ok(DragSourceKind::FocusChain)
@@ -262,7 +262,7 @@ struct SourceKindFields {
 /// path (scope chain or `boardPath` arg), optional `taskFields` snapshot.
 fn read_focus_chain_fields(
     ctx: &CommandContext,
-) -> swissarmyhammer_commands::Result<SourceKindFields> {
+) -> crate::commands_core::Result<SourceKindFields> {
     let task_id = ctx
         .args
         .get("taskId")
@@ -294,7 +294,7 @@ fn read_focus_chain_fields(
 
 /// Extract file drag fields: required `filePath`, validated as an absolute
 /// path.
-fn read_file_fields(ctx: &CommandContext) -> swissarmyhammer_commands::Result<SourceKindFields> {
+fn read_file_fields(ctx: &CommandContext) -> crate::commands_core::Result<SourceKindFields> {
     let raw = ctx
         .args
         .get("filePath")
@@ -318,7 +318,7 @@ fn read_file_fields(ctx: &CommandContext) -> swissarmyhammer_commands::Result<So
 /// - `file`: `filePath`. No board path or task id required.
 fn resolve_drag_start_params(
     ctx: &CommandContext,
-) -> swissarmyhammer_commands::Result<DragStartParams> {
+) -> crate::commands_core::Result<DragStartParams> {
     let kind = read_source_kind(ctx)?;
 
     let source_window_label = ctx
@@ -418,7 +418,7 @@ impl Command for DragCompleteCmd {
     ///   [`resolve_drag_complete_params`] which requires `targetColumn`
     ///   and either decides on same-board `task.move` or packages the
     ///   cross-board transfer payload.
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let session = take_active_drag_session(ctx)?;
         match &session.from {
             DragSource::File { path } => {
@@ -476,7 +476,7 @@ struct DragCompleteParams {
 fn resolve_drag_complete_params_with_session(
     ctx: &CommandContext,
     session: DragSession,
-) -> swissarmyhammer_commands::Result<DragCompleteParams> {
+) -> crate::commands_core::Result<DragCompleteParams> {
     let target_board_path = resolve_target_board_path(ctx)?;
     let target_column = ctx
         .args
@@ -504,7 +504,7 @@ fn resolve_drag_complete_params_with_session(
 ///
 /// Errors when `UIState` is not attached to the command context (e.g. a
 /// non-Tauri caller) or when no session is currently pending.
-fn take_active_drag_session(ctx: &CommandContext) -> swissarmyhammer_commands::Result<DragSession> {
+fn take_active_drag_session(ctx: &CommandContext) -> crate::commands_core::Result<DragSession> {
     let ui = ctx
         .ui_state
         .as_ref()
@@ -516,7 +516,7 @@ fn take_active_drag_session(ctx: &CommandContext) -> swissarmyhammer_commands::R
 /// Resolve the target board path from the scope chain's `store:{path}`
 /// moniker, falling back to the explicit `targetBoardPath` arg for
 /// backwards compatibility.
-fn resolve_target_board_path(ctx: &CommandContext) -> swissarmyhammer_commands::Result<String> {
+fn resolve_target_board_path(ctx: &CommandContext) -> crate::commands_core::Result<String> {
     ctx.resolve_store_path()
         .map(|s| s.to_string())
         .or_else(|| {
@@ -572,7 +572,7 @@ fn read_drop_target_args(
 async fn complete_same_board(
     ctx: &CommandContext,
     params: DragCompleteParams,
-) -> swissarmyhammer_commands::Result<Value> {
+) -> crate::commands_core::Result<Value> {
     let kanban = ctx.require_extension::<crate::context::KanbanContext>()?;
 
     let task_id = params.session.entity_id().ok_or_else(|| {
@@ -628,7 +628,7 @@ async fn resolve_ordinal_from_drop_index(
     moving_task_id: &str,
     target_column: &str,
     drop_index: usize,
-) -> swissarmyhammer_commands::Result<crate::types::Ordinal> {
+) -> crate::commands_core::Result<crate::types::Ordinal> {
     use crate::types::Ordinal;
     let all_tasks = kanban
         .list_entities_generic("task")
@@ -715,7 +715,7 @@ async fn complete_file_source(
     ctx: &CommandContext,
     session_id: String,
     path: String,
-) -> swissarmyhammer_commands::Result<Value> {
+) -> crate::commands_core::Result<Value> {
     let target = ctx
         .target
         .as_deref()
@@ -791,7 +791,7 @@ impl Command for DragCancelCmd {
     /// Takes the active drag session from UIState.  If a session was active,
     /// returns a `DragCancel` result payload so the Tauri layer can emit
     /// `drag-session-cancelled`.  Returns `null` when no session is active.
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
@@ -813,7 +813,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use swissarmyhammer_commands::{CommandContext};
+    use crate::commands_core::{CommandContext};
     use swissarmyhammer_ui_state::{UIState};
     use swissarmyhammer_operations::Execute;
 

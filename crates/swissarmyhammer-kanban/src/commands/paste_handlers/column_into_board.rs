@@ -45,7 +45,7 @@ use crate::error::Result as KanbanResult;
 use async_trait::async_trait;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
-use swissarmyhammer_commands::{CommandContext, CommandError, Result};
+use crate::commands_core::{CommandContext, CommandError, Result};
 use swissarmyhammer_entity::EntityContext;
 
 /// Snapshot keys that must NOT be forwarded onto the new column.

@@ -18,7 +18,7 @@ use crate::context::KanbanContext;
 use crate::task::AssignTask;
 use async_trait::async_trait;
 use serde_json::Value;
-use swissarmyhammer_commands::{parse_moniker, CommandContext, CommandError, Result};
+use crate::commands_core::{parse_moniker, CommandContext, CommandError, Result};
 
 /// Paste handler that assigns the clipboard's actor to the target task.
 ///

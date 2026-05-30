@@ -4700,7 +4700,6 @@ dependencies = [
  "serde_json",
  "swissarmyhammer-agent",
  "swissarmyhammer-command-service",
- "swissarmyhammer-commands",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-directory",
@@ -9539,7 +9538,6 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "swissarmyhammer-app-service",
- "swissarmyhammer-commands",
  "swissarmyhammer-config",
  "swissarmyhammer-directory",
  "swissarmyhammer-entity",
@@ -9561,23 +9559,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "tracing",
-]
-
-[[package]]
-name = "swissarmyhammer-commands"
-version = "0.13.6"
-dependencies = [
- "async-trait",
- "include_dir",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "swissarmyhammer-command-options",
- "swissarmyhammer-ui-state",
- "tempfile",
- "thiserror 2.0.18",
- "tokio-test",
  "tracing",
 ]
 
@@ -9714,7 +9695,6 @@ dependencies = [
  "rmcp",
  "serde",
  "serde_json",
- "swissarmyhammer-commands",
  "swissarmyhammer-entity",
  "swissarmyhammer-entity-search",
  "swissarmyhammer-kanban",
@@ -9839,8 +9819,8 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "serial_test",
+ "swissarmyhammer-command-options",
  "swissarmyhammer-command-service",
- "swissarmyhammer-commands",
  "swissarmyhammer-common",
  "swissarmyhammer-directory",
  "swissarmyhammer-entity",

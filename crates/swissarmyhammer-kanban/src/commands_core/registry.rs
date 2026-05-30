@@ -1,18 +1,15 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use include_dir::{include_dir, Dir};
+use crate::commands_core::context::parse_moniker;
+use crate::commands_core::types::CommandDef;
 
-use crate::context::parse_moniker;
-use crate::types::CommandDef;
-
-/// Builtin command YAML files, embedded at compile time.
-///
-/// Each file in `builtin/commands/` is picked up automatically — adding a new
-/// YAML file requires no Rust changes. The source name is the file stem
-/// (e.g. `app.yaml` → `"app"`), matching the convention used by
-/// `load_yaml_dir` for on-disk overrides.
-static BUILTIN_COMMANDS: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin/commands");
+// The Stage 4 cut-over deleted every embedded `builtin/commands/*.yaml`
+// source. `CommandService` (registered from the 7 builtin command plugins
+// at app startup) is now the sole source of command metadata; the
+// YAML-driven `CommandsRegistry` only survives as a snapshot the app
+// populates from `CommandService::list_command` for use by menu / scope
+// resolution code that still wants a synchronous registry shape.
 
 /// Registry of command definitions loaded from YAML sources.
 ///
@@ -186,27 +183,14 @@ fn scope_matches(scope: Option<&str>, scope_chain: &[String]) -> bool {
 
 /// Returns the builtin command YAML sources embedded at compile time.
 ///
-/// Enumerates every `*.yaml` file directly under `builtin/commands/` via
-/// `include_dir!` — adding a new builtin command file requires no Rust
-/// changes. The source name is the file stem (e.g. `app.yaml` → `"app"`).
-///
-/// The loader enforces a flat layout: only files whose parent path is the
-/// root of the embedded directory are returned. `include_dir!` walks
-/// recursively, but keys here are basenames only, so a nested
-/// `commands/sub/foo.yaml` would silently shadow `commands/foo.yaml` on
-/// `HashMap` insert downstream. Filtering to the root prevents that
-/// class of bug at the loader.
+/// Always empty as of the Stage 4 cut-over: the embedded `builtin/commands/`
+/// directory was deleted because `CommandService` (the new sole dispatch
+/// path) is the source of every command's metadata. The function is
+/// retained so legacy callers — and the `compose_yaml_sources!` macro —
+/// continue to compile while the `CommandsRegistry` is repopulated from
+/// the `list command` MCP op at app startup.
 pub fn builtin_yaml_sources() -> Vec<(&'static str, &'static str)> {
-    BUILTIN_COMMANDS
-        .files()
-        .filter(|file| file.path().extension().and_then(|e| e.to_str()) == Some("yaml"))
-        .filter(|file| file.path().parent() == Some(Path::new("")))
-        .filter_map(|file| {
-            let name = file.path().file_stem()?.to_str()?;
-            let content = file.contents_utf8()?;
-            Some((name, content))
-        })
-        .collect()
+    Vec::new()
 }
 
 /// Load YAML files from a directory as `(name, content)` pairs.
@@ -420,69 +404,13 @@ mod tests {
     }
 
     #[test]
-    fn builtin_yaml_files_parse() {
-        let sources = builtin_yaml_sources();
-        let sources_ref: Vec<(&str, &str)> = sources.iter().map(|(n, c)| (*n, *c)).collect();
-        let registry = CommandsRegistry::from_yaml_sources(&sources_ref);
-
-        // This crate is consumer-agnostic — it ships only generic command
-        // YAML. Domain-specific commands (task, column, tag, attachment,
-        // perspective, file) are contributed by their owning crates and
-        // composed at app startup. See
-        // `swissarmyhammer_kanban::builtin_yaml_sources` and
-        // `swissarmyhammer-kanban/tests/builtin_commands.rs` for the kanban
-        // side, which together reach the app-composed total.
-        //
-        // Per-file breakdown of the generic YAMLs that remain here:
-        //   app:      about, help, quit, command, palette, search, dismiss,
-        //             undo, redo = 9
-        //   entity:   entity.add, entity.update_field, entity.delete,
-        //             entity.archive, entity.unarchive, entity.copy,
-        //             entity.cut, entity.paste = 8
-        //             (task.add and project.add were retired in favor of the
-        //             dynamic entity.add:{type} pipeline — see commit
-        //             8973cf694.)
-        //   ui:       inspect, inspector.close, inspector.close_all,
-        //             inspector.set_width, palette.open, palette.close,
-        //             entity.startRename, setFocus, window.new,
-        //             mode.set = 10
-        //             (`ui.view.set` and `ui.perspective.set` were relocated
-        //             to the kanban crate in 01KPY02X405QTP5ACH67THHSN8 —
-        //             "view" and "perspective" are kanban concepts, not
-        //             generic UI primitives. `ui.inspector.set_width` was
-        //             added in 01KQSE8TT79XC3KJGEHX6DW99G for the
-        //             resizable inspector.)
-        //   settings: keymap.vim, keymap.cua, keymap.emacs = 3
-        //   drag:     start, cancel, complete = 3
-        assert_eq!(registry.all_commands().len(), 33);
-
-        // Spot checks — only generic commands remain.
-        assert!(registry.get("app.quit").is_some());
-        assert!(registry.get("entity.add").is_some());
-        assert!(registry.get("ui.palette.open").is_some());
-        assert!(registry.get("settings.keymap.vim").is_some());
-        assert!(registry.get("entity.add").unwrap().undoable);
-        assert!(!registry.get("app.undo").unwrap().undoable);
-        assert!(registry.get("drag.start").is_some());
-        // Kanban-specific commands must NOT be present — they live in
-        // `swissarmyhammer-kanban/builtin/commands/`.
-        assert!(registry.get("task.untag").is_none());
-        assert!(registry.get("task.move").is_none());
-        assert!(registry.get("task.doThisNext").is_none());
-        assert!(registry.get("column.reorder").is_none());
-        assert!(registry.get("tag.update").is_none());
-        assert!(registry.get("attachment.open").is_none());
-        assert!(registry.get("attachment.reveal").is_none());
-        assert!(registry.get("file.switchBoard").is_none());
-        assert!(registry.get("file.closeBoard").is_none());
-        assert!(registry.get("file.newBoard").is_none());
-        assert!(registry.get("file.openBoard").is_none());
-        assert!(registry.get("perspective.load").is_none());
-        assert!(registry.get("perspective.goto").is_none());
-        // task.add and project.add must NOT be registered — they were
-        // replaced by the dynamic entity.add:{type} pipeline.
-        assert!(registry.get("task.add").is_none());
-        assert!(registry.get("project.add").is_none());
+    fn builtin_yaml_sources_is_empty_after_cutover() {
+        // Stage 4 of the kanban cut-over deleted the embedded
+        // `builtin/commands/` YAMLs in favor of the `CommandService` as the
+        // sole source of command metadata. This test pins that decision so
+        // a future regression cannot silently re-embed YAML sources here
+        // and reintroduce the two-source confusion.
+        assert!(builtin_yaml_sources().is_empty());
     }
 
     #[test]
@@ -578,141 +506,6 @@ mod tests {
         let over = vec![("over", "- id: foo.add\n  name: Add Foo Updated\n")];
         reg.merge_yaml_sources(&over);
         assert_eq!(reg.get("foo.add").unwrap().name, "Add Foo Updated");
-    }
-
-    #[test]
-    fn keymap_commands_are_visible_in_palette() {
-        let settings = include_str!("../builtin/commands/settings.yaml");
-        let registry = CommandsRegistry::from_yaml_sources(&[("settings", settings)]);
-
-        for cmd_id in &[
-            "settings.keymap.vim",
-            "settings.keymap.cua",
-            "settings.keymap.emacs",
-        ] {
-            let cmd = registry
-                .get(cmd_id)
-                .unwrap_or_else(|| panic!("{cmd_id} missing"));
-            assert!(
-                cmd.visible,
-                "{cmd_id} should be visible in the command palette"
-            );
-        }
-    }
-
-    #[test]
-    fn ui_yaml_arg_only_commands_are_hidden_from_palette() {
-        // Hygiene test: any `ui.*` command whose params come `from: args`
-        // cannot be invoked from the command palette (the palette has no UI
-        // for collecting arbitrary args), so it must be marked
-        // `visible: false` in ui.yaml. User-facing palette entries for those
-        // operations are synthesized elsewhere — e.g. the kanban crate's
-        // `scope_commands::emit_view_switch` emits one `view.set` row per
-        // known view with `view_id` pre-filled in `args`, dispatched as-is
-        // (no suffix rewriting after 01KPZMXXEXKVE3RNPA4XJP0105). `view.set`
-        // lives in `swissarmyhammer-kanban/builtin/commands/view.yaml`
-        // because "view" is a kanban concept, not a generic UI primitive.
-        //
-        // See task 01KPTHX6J2K28GMMV6YQVJWYCE. `ui.view.set` and
-        // `ui.perspective.set` were relocated to the kanban crate in
-        // 01KPY02X405QTP5ACH67THHSN8 and are covered by the kanban-side
-        // `view_set_and_perspective_set_registered_hidden` integration test.
-        let ui = include_str!("../builtin/commands/ui.yaml");
-        let registry = CommandsRegistry::from_yaml_sources(&[("ui", ui)]);
-
-        // Commands that must be hidden from the palette.
-        let hidden = ["ui.mode.set", "ui.palette.close", "ui.setFocus"];
-        for cmd_id in &hidden {
-            let cmd = registry
-                .get(cmd_id)
-                .unwrap_or_else(|| panic!("{cmd_id} missing from ui.yaml"));
-            assert!(
-                !cmd.visible,
-                "{cmd_id} requires args the palette cannot provide — \
-                 the command must be `visible: false`. See ui.yaml."
-            );
-        }
-
-        // Commands that are user-facing and must remain visible.
-        let visible = [
-            "ui.inspect",
-            "ui.inspector.close",
-            "ui.inspector.close_all",
-            "ui.palette.open",
-            "ui.entity.startRename",
-        ];
-        for cmd_id in &visible {
-            let cmd = registry
-                .get(cmd_id)
-                .unwrap_or_else(|| panic!("{cmd_id} missing from ui.yaml"));
-            assert!(
-                cmd.visible,
-                "{cmd_id} is a user-facing palette entry and must remain \
-                 visible. See ui.yaml."
-            );
-        }
-    }
-
-    #[test]
-    fn ui_entity_start_rename_carries_perspective_scope_and_enter_keys() {
-        // `ui.entity.startRename` is the canonical "begin inline rename"
-        // command. The user-facing entry points are:
-        //
-        //   1. The command palette (`Rename Perspective` row).
-        //   2. Mouse double-click on a perspective tab (calls `startRename`
-        //      directly, not the registry).
-        //   3. Keyboard Enter while a perspective tab is the spatial focus —
-        //      added in 01KQ7GE3KY91X2YR6BX5AY40VK to fix the "Enter on
-        //      focused perspective tab does nothing" bug.
-        //
-        // Entry point #3 needs the YAML to advertise:
-        //
-        //   - `keys.cua = "Enter"`, `keys.vim = "Enter"`, `keys.emacs = "Enter"`
-        //     so the React `extractScopeBindings` walk at the perspective tab's
-        //     CommandScopeProvider picks Enter up out of the merged scope chain.
-        //   - `scope: "entity:perspective"` so the command is filtered out of
-        //     non-perspective focus contexts (board / column / card), where
-        //     the global `nav.drillIn: Enter` should keep firing.
-        //
-        // The React mirror in
-        // `kanban-app/ui/src/components/perspective-tab-bar.tsx` carries the
-        // same `keys` block on the `<CommandScopeProvider>` it wraps each
-        // perspective tab in; the source-level guard in
-        // `kanban-app/ui/src/lib/keybindings.test.ts` pins the React side. This
-        // test pins the YAML side so the two cannot drift.
-        let ui = include_str!("../builtin/commands/ui.yaml");
-        let registry = CommandsRegistry::from_yaml_sources(&[("ui", ui)]);
-
-        let cmd = registry
-            .get("ui.entity.startRename")
-            .expect("ui.entity.startRename must be registered by ui.yaml");
-
-        assert_eq!(
-            cmd.scope.as_deref(),
-            Some("entity:perspective"),
-            "ui.entity.startRename must carry `scope: \"entity:perspective\"` \
-             so the binding is filtered out of non-perspective focus contexts"
-        );
-
-        let keys = cmd
-            .keys
-            .as_ref()
-            .expect("ui.entity.startRename must declare a `keys` block");
-        assert_eq!(
-            keys.cua.as_deref(),
-            Some("Enter"),
-            "ui.entity.startRename.keys.cua must be `Enter`"
-        );
-        assert_eq!(
-            keys.vim.as_deref(),
-            Some("Enter"),
-            "ui.entity.startRename.keys.vim must be `Enter`"
-        );
-        assert_eq!(
-            keys.emacs.as_deref(),
-            Some("Enter"),
-            "ui.entity.startRename.keys.emacs must be `Enter`"
-        );
     }
 
     #[test]

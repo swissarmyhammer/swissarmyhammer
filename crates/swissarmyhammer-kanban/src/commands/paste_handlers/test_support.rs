@@ -40,7 +40,7 @@ use crate::context::KanbanContext;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
-use swissarmyhammer_commands::{CommandContext};
+use crate::commands_core::{CommandContext};
 use swissarmyhammer_ui_state::{UIState};
 use swissarmyhammer_entity::Entity;
 use swissarmyhammer_operations::Execute;

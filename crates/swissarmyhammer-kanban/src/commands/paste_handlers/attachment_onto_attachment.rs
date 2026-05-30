@@ -23,7 +23,7 @@ use super::PasteHandler;
 use crate::clipboard::ClipboardPayload;
 use async_trait::async_trait;
 use serde_json::Value;
-use swissarmyhammer_commands::{CommandContext, CommandError, Result};
+use crate::commands_core::{CommandContext, CommandError, Result};
 
 /// Dispatch shim that forwards `(attachment, attachment)` paste
 /// invocations to the parent task via [`AttachmentOntoTaskHandler`].
@@ -79,7 +79,7 @@ mod tests {
     use crate::Execute;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use swissarmyhammer_commands::{CommandContext};
+    use crate::commands_core::{CommandContext};
     use swissarmyhammer_ui_state::{UIState};
 
     /// Build a `CommandContext` whose scope chain looks like the real

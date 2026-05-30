@@ -29,7 +29,7 @@ swissarmyhammer-entity = { workspace = true }
 swissarmyhammer-views = { workspace = true }
 swissarmyhammer-perspectives = { workspace = true }
 swissarmyhammer-operations = { workspace = true }
-swissarmyhammer-commands = { workspace = true }
+swissarmyhammer-command-options = { workspace = true }
 swissarmyhammer-command-service = { workspace = true }
 swissarmyhammer-ui-state = { workspace = true }
 swissarmyhammer-store = { workspace = true }

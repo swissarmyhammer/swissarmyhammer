@@ -12,7 +12,7 @@ use crate::types::{ActorId, ColumnId, TagId, TaskId};
 use fs2::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
-use swissarmyhammer_commands::OptionsRegistry;
+use crate::commands_core::OptionsRegistry;
 use swissarmyhammer_entity::changelog::ChangeEntry;
 use swissarmyhammer_entity::{Entity, EntityCache, EntityContext, EntityWatcher};
 use swissarmyhammer_fields::{load_yaml_dir, DeriveRegistry, FieldsContext, ValidationEngine};

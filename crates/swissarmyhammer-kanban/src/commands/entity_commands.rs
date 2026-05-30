@@ -8,7 +8,7 @@ use crate::types::{ColumnId, TaskId};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
-use swissarmyhammer_commands::{parse_moniker, Command, CommandContext, CommandError};
+use crate::commands_core::{parse_moniker, Command, CommandContext, CommandError};
 
 /// Create a new entity of any type using field-default values.
 ///
@@ -31,7 +31,7 @@ impl Command for AddEntityCmd {
             .is_some_and(|s| !s.is_empty())
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
         let entity_type = ctx.require_arg_str("entity_type")?.to_string();
@@ -93,7 +93,7 @@ async fn resolve_column_from_scope(
     kanban: &KanbanContext,
     entity_type: &str,
     scope_chain: &[String],
-) -> swissarmyhammer_commands::Result<Option<ColumnId>> {
+) -> crate::commands_core::Result<Option<ColumnId>> {
     // Short-circuit: if the chain has no column/task monikers at all, skip
     // the entity-context read entirely. Keeps the dispatch path cheap for
     // scopes like `[window:main]` (the "nothing focused" case).
@@ -166,7 +166,7 @@ impl Command for UpdateEntityFieldCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
         let entity_type = ctx.require_arg_str("entity_type")?;
@@ -226,7 +226,7 @@ impl Command for DeleteEntityCmd {
             && !target_matches_entity_type(ctx.target.as_deref(), DELETE_OPT_OUT_TYPES)
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
         let moniker = ctx
@@ -287,7 +287,7 @@ impl Command for ArchiveEntityCmd {
             && !target_matches_entity_type(ctx.target.as_deref(), ARCHIVE_OPT_OUT_TYPES)
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
         let moniker = ctx
@@ -331,7 +331,7 @@ impl Command for UnarchiveEntityCmd {
             .is_some_and(|t| t.ends_with(":archive"))
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
         let raw_moniker = ctx
@@ -375,7 +375,7 @@ impl Command for TagUpdateCmd {
         ctx.has_in_scope("tag")
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
         let tag_id = ctx
@@ -410,7 +410,7 @@ impl Command for AttachmentOpenCmd {
         ctx.resolve_entity_id("attachment").is_some()
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let path = ctx
             .resolve_entity_id("attachment")
             .ok_or_else(|| CommandError::MissingArg("attachment in scope chain".into()))?
@@ -477,7 +477,7 @@ impl Command for AttachmentRevealCmd {
         ctx.resolve_entity_id("attachment").is_some()
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let path = ctx
             .resolve_entity_id("attachment")
             .ok_or_else(|| CommandError::MissingArg("attachment in scope chain".into()))?
@@ -503,7 +503,7 @@ mod tests {
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use swissarmyhammer_commands::CommandContext;
+    use crate::commands_core::CommandContext;
     use swissarmyhammer_operations::Execute;
     use tempfile::TempDir;
 

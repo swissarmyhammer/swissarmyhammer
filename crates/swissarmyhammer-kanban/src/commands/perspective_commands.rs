@@ -13,7 +13,7 @@ use crate::task_helpers::{enrich_all_task_entities, filter_task_ids, EntitySlugR
 use crate::virtual_tags::default_virtual_tag_registry;
 use async_trait::async_trait;
 use serde_json::Value;
-use swissarmyhammer_commands::{Command, CommandContext, CommandError};
+use crate::commands_core::{Command, CommandContext, CommandError};
 use swissarmyhammer_filter_expr;
 
 /// Decide whether a perspective belongs to the currently active view.
@@ -107,7 +107,7 @@ enum ResolvedFrom {
 async fn resolve_perspective_id(
     ctx: &CommandContext,
     kanban: &KanbanContext,
-) -> swissarmyhammer_commands::Result<(String, ResolvedFrom)> {
+) -> crate::commands_core::Result<(String, ResolvedFrom)> {
     let resolved = resolve_perspective_id_inner(ctx, kanban).await?;
     tracing::debug!(
         command_id = %ctx.command_id,
@@ -128,7 +128,7 @@ async fn resolve_perspective_id(
 async fn resolve_perspective_id_inner(
     ctx: &CommandContext,
     kanban: &KanbanContext,
-) -> swissarmyhammer_commands::Result<(String, ResolvedFrom)> {
+) -> crate::commands_core::Result<(String, ResolvedFrom)> {
     if let Some(id) = ctx.arg("perspective_id").and_then(|v| v.as_str()) {
         return Ok((id.to_string(), ResolvedFrom::Arg));
     }
@@ -193,7 +193,7 @@ fn persist_resolved_perspective_id(
 async fn resolve_and_persist_perspective_id(
     ctx: &CommandContext,
     kanban: &KanbanContext,
-) -> swissarmyhammer_commands::Result<String> {
+) -> crate::commands_core::Result<String> {
     let (id, resolved_from) = resolve_perspective_id(ctx, kanban).await?;
     persist_resolved_perspective_id(ctx, &id, resolved_from);
     Ok(id)
@@ -210,7 +210,7 @@ impl Command for LoadPerspectiveCmd {
         ctx.arg("name").and_then(|v| v.as_str()).is_some()
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
         let name = ctx
@@ -254,7 +254,7 @@ impl Command for SavePerspectiveCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
         // Empty / missing `name` falls back to a generated "Untitled" /
@@ -325,7 +325,7 @@ async fn generate_untitled_name(
     kanban: &KanbanContext,
     view: &str,
     view_id: Option<&str>,
-) -> swissarmyhammer_commands::Result<String> {
+) -> crate::commands_core::Result<String> {
     let pctx = kanban
         .perspective_context()
         .await
@@ -361,7 +361,7 @@ impl Command for DeletePerspectiveCmd {
         ctx.arg("name").and_then(|v| v.as_str()).is_some() || ctx.has_in_scope("perspective")
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
         // Try explicit name arg first, then fall back to scope chain moniker.
@@ -403,7 +403,7 @@ impl Command for RenamePerspectiveCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
         let id = ctx.require_arg_str("id")?;
         let new_name = ctx.require_arg_str("new_name")?;
@@ -426,7 +426,7 @@ impl Command for SetFilterCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
         let perspective_id = resolve_and_persist_perspective_id(ctx, &kanban).await?;
@@ -456,7 +456,7 @@ impl Command for ClearFilterCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
         let perspective_id = resolve_and_persist_perspective_id(ctx, &kanban).await?;
@@ -479,7 +479,7 @@ impl Command for SetGroupCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
         let perspective_id = resolve_and_persist_perspective_id(ctx, &kanban).await?;
@@ -507,7 +507,7 @@ impl Command for ClearGroupCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
         let perspective_id = resolve_and_persist_perspective_id(ctx, &kanban).await?;
@@ -534,7 +534,7 @@ impl Command for SetSortCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
         let perspective_id = resolve_and_persist_perspective_id(ctx, &kanban).await?;
@@ -600,7 +600,7 @@ impl Command for ClearSortCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
         let perspective_id = resolve_and_persist_perspective_id(ctx, &kanban).await?;
         let op = UpdatePerspective::new(&perspective_id).with_sort(Vec::new());
@@ -624,7 +624,7 @@ impl Command for ToggleSortCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
         let perspective_id = resolve_and_persist_perspective_id(ctx, &kanban).await?;
@@ -689,7 +689,7 @@ impl Command for NextPerspectiveCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         cycle_perspective(ctx, CycleDirection::Next).await
     }
 }
@@ -708,7 +708,7 @@ impl Command for PrevPerspectiveCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         cycle_perspective(ctx, CycleDirection::Prev).await
     }
 }
@@ -784,7 +784,7 @@ enum CycleDirection {
 async fn cycle_perspective(
     ctx: &CommandContext,
     direction: CycleDirection,
-) -> swissarmyhammer_commands::Result<Value> {
+) -> crate::commands_core::Result<Value> {
     let kanban = ctx.require_extension::<KanbanContext>()?;
     let ui = ctx
         .ui_state
@@ -843,7 +843,7 @@ impl Command for GotoPerspectiveCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
         let ui = ctx
             .ui_state
@@ -920,7 +920,7 @@ impl Command for SwitchPerspectiveCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
         let ui = ctx
             .ui_state
@@ -967,7 +967,7 @@ impl Command for SwitchPerspectiveCmd {
 pub async fn evaluate_perspective_filter(
     kanban: &KanbanContext,
     filter: &str,
-) -> swissarmyhammer_commands::Result<Vec<String>> {
+) -> crate::commands_core::Result<Vec<String>> {
     let ectx = kanban
         .entity_context()
         .await
@@ -1015,7 +1015,7 @@ impl Command for ListPerspectivesCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
         let op = ListPerspectives::new();
         run_op(&op, &kanban).await
@@ -1055,7 +1055,7 @@ impl Command for FocusFilterCmd {
         true
     }
 
-    async fn execute(&self, _ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, _ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         // UI-only command — focus claims flow through frontend
         // `nav.focus` (see this struct's doc comment). Returning `null`
         // signals "nothing for the dispatcher to do".

@@ -23,14 +23,14 @@ use crate::KanbanOperationProcessor;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use swissarmyhammer_commands::{Command, CommandError};
+use crate::commands_core::{Command, CommandError};
 use swissarmyhammer_operations::{Execute, OperationProcessor};
 
 /// Run a kanban operation through the processor, mapping errors to `CommandError`.
 pub(crate) async fn run_op<T>(
     op: &T,
     kanban: &KanbanContext,
-) -> swissarmyhammer_commands::Result<Value>
+) -> crate::commands_core::Result<Value>
 where
     T: Execute<KanbanContext, KanbanError> + Send + Sync,
 {
@@ -353,7 +353,7 @@ mod tests {
     use super::*;
     use serde_json::Value;
     use std::sync::Arc;
-    use swissarmyhammer_commands::{CommandContext};
+    use crate::commands_core::{CommandContext};
     use swissarmyhammer_ui_state::{UIState};
 
     /// Build a CommandContext with the given scope chain, target, and optional UIState.
@@ -1378,11 +1378,11 @@ mod tests {
     /// Mirrors the stacking order in `kanban-app/src/state.rs` so this test
     /// sees exactly the set the running app resolves.
     fn all_yaml_ids() -> Vec<String> {
-        swissarmyhammer_commands::builtin_yaml_sources()
+        crate::commands_core::builtin_yaml_sources()
             .into_iter()
             .chain(crate::builtin_yaml_sources())
             .flat_map(|(_name, yaml_content)| {
-                serde_yaml_ng::from_str::<Vec<swissarmyhammer_commands::CommandDef>>(yaml_content)
+                serde_yaml_ng::from_str::<Vec<crate::commands_core::CommandDef>>(yaml_content)
                     .unwrap_or_default()
             })
             .map(|def| def.id)

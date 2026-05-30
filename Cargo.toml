@@ -65,7 +65,6 @@ members = [
     "crates/swissarmyhammer-filter-expr",
     "crates/swissarmyhammer-merge",
     "crates/swissarmyhammer-store",
-    "crates/swissarmyhammer-commands",
     "benches/embedding_benchmark",
     "crates/swissarmyhammer-sem",
     "crates/heb",
@@ -275,7 +274,6 @@ swissarmyhammer-cli-completions = { path = "crates/swissarmyhammer-cli-completio
 swissarmyhammer-code-context = { path = "crates/swissarmyhammer-code-context" }
 swissarmyhammer-command-options = { path = "crates/swissarmyhammer-command-options" }
 swissarmyhammer-command-service = { path = "crates/swissarmyhammer-command-service" }
-swissarmyhammer-commands = { path = "crates/swissarmyhammer-commands" }
 swissarmyhammer-common = { path = "crates/swissarmyhammer-common" }
 swissarmyhammer-config = { path = "crates/swissarmyhammer-config" }
 swissarmyhammer-directory = { path = "crates/swissarmyhammer-directory" }

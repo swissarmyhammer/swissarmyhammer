@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
-use swissarmyhammer_commands::{load_yaml_dir, Command, CommandsRegistry};
+use swissarmyhammer_kanban::commands_core::{load_yaml_dir, CommandsRegistry};
 use swissarmyhammer_entity::Entity;
 use swissarmyhammer_entity_search::EntitySearchIndex;
 use swissarmyhammer_kanban::clipboard::ClipboardProvider;
@@ -444,8 +444,6 @@ pub(crate) struct AppState {
     /// YAML-loaded command definitions. Behind RwLock because user overrides
     /// are merged when switching boards.
     pub(crate) commands_registry: RwLock<CommandsRegistry>,
-    /// Trait object map from `register_commands()`.
-    pub(crate) command_impls: HashMap<String, Arc<dyn Command>>,
     /// Cached menu item handles keyed by command ID. Populated when the menu
     /// is built from the command registry, used by `update_menu_enabled_state`
     /// to toggle enabled/disabled without a full menu rebuild.
@@ -490,7 +488,7 @@ impl AppState {
     /// [`swissarmyhammer_kanban::default_ui_state`] (which resolves the
     /// XDG config path and reads the YAML, or seeds defaults). The
     /// builtin command stack is composed at this app layer via
-    /// [`swissarmyhammer_commands::compose_registry!`] over the
+    /// [`swissarmyhammer_kanban::compose_registry!`] over the
     /// contributor crates the app pulls in. This struct does not know
     /// the config file format or the default path — it just wires the
     /// pieces together.
@@ -577,7 +575,7 @@ impl AppState {
     /// Every other constructor funnels through here so the wiring (MRU,
     /// window bookkeeping, command registry, plugin platform) sits in exactly
     /// one place. The command registry is composed via
-    /// [`swissarmyhammer_commands::compose_registry!`] over the
+    /// [`swissarmyhammer_kanban::compose_registry!`] over the
     /// contributor crates this app pulls in (generic UI commands from
     /// `swissarmyhammer_commands`, then domain commands from
     /// `swissarmyhammer_kanban`). User overrides from `.kanban/commands/`
@@ -588,12 +586,16 @@ impl AppState {
         Self {
             boards: RwLock::new(HashMap::new()),
             ui_state,
-            commands_registry: RwLock::new(swissarmyhammer_commands::compose_registry![
-                swissarmyhammer_commands,
+            // Stage 4 cut-over: the YAML-driven registry is now empty by
+            // construction — every `builtin_yaml_sources()` returns `Vec::new()`
+            // because `CommandService` (fed by the 7 builtin command plugins
+            // at app startup) is the sole source of command metadata. The
+            // registry is retained as a synchronous façade for legacy menu /
+            // scope-resolution callers while they migrate to the MCP path.
+            commands_registry: RwLock::new(swissarmyhammer_kanban::compose_registry![
                 swissarmyhammer_focus,
                 swissarmyhammer_kanban,
             ]),
-            command_impls: swissarmyhammer_kanban::commands::register_commands(),
             menu_items: Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
             deep_link_handled: AtomicBool::new(false),
@@ -838,7 +840,7 @@ impl AppState {
     /// active board's `.kanban/commands/` directory.
     ///
     /// Composes the builtin stack via
-    /// [`swissarmyhammer_commands::compose_yaml_sources!`] (same crate
+    /// [`swissarmyhammer_kanban::compose_yaml_sources!`] (same crate
     /// list and order as [`Self::with_ui_state`]) and appends the user
     /// overrides last so they take precedence by command id.
     async fn reload_command_overrides(&self, kanban_path: &Path) {
@@ -850,8 +852,7 @@ impl AppState {
 
         let count = user_sources.len();
 
-        let mut sources = swissarmyhammer_commands::compose_yaml_sources![
-            swissarmyhammer_commands,
+        let mut sources = swissarmyhammer_kanban::compose_yaml_sources![
             swissarmyhammer_focus,
             swissarmyhammer_kanban,
         ];
@@ -861,7 +862,7 @@ impl AppState {
             .map(|(n, c)| (n.as_str(), c.as_str()))
             .collect();
         sources.extend(user_refs);
-        let registry = swissarmyhammer_commands::CommandsRegistry::from_yaml_sources(&sources);
+        let registry = swissarmyhammer_kanban::commands_core::CommandsRegistry::from_yaml_sources(&sources);
 
         *self.commands_registry.write().await = registry;
         tracing::info!(

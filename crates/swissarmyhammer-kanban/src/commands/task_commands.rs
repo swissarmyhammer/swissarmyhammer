@@ -9,7 +9,7 @@ use crate::context::KanbanContext;
 use crate::types::Ordinal;
 use async_trait::async_trait;
 use serde_json::Value;
-use swissarmyhammer_commands::{Command, CommandContext, CommandError};
+use crate::commands_core::{Command, CommandContext, CommandError};
 use swissarmyhammer_entity::Entity;
 
 /// Move a task to a different column/position.
@@ -35,7 +35,7 @@ impl Command for MoveTaskCmd {
         ctx.has_in_scope("task") || ctx.arg("id").and_then(|v| v.as_str()).is_some()
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
         let (task_id, column) = resolve_move_task_args(ctx)?;
 
@@ -147,7 +147,7 @@ impl Command for UntagTaskCmd {
         ctx.has_in_scope("tag") && ctx.has_in_scope("task")
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
         let task_id = ctx
@@ -235,7 +235,7 @@ impl Command for DoThisNextCmd {
         ctx.has_in_scope("task")
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
         let task_id = ctx
             .resolve_entity_id("task")
@@ -259,7 +259,7 @@ mod tests {
     use crate::task::AddTask;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use swissarmyhammer_commands::CommandContext;
+    use crate::commands_core::CommandContext;
     use swissarmyhammer_operations::Execute;
     use tempfile::TempDir;
 

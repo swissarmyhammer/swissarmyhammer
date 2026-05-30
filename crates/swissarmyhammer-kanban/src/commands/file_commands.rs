@@ -7,7 +7,7 @@
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use swissarmyhammer_commands::{Command, CommandContext, CommandError};
+use crate::commands_core::{Command, CommandContext, CommandError};
 
 /// Switch the current window to a different board.
 ///
@@ -25,7 +25,7 @@ impl Command for SwitchBoardCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
@@ -71,7 +71,7 @@ impl Command for NewBoardCmd {
         true
     }
 
-    async fn execute(&self, _ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, _ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         Ok(json!({ "NewBoardDialog": true }))
     }
 }
@@ -88,7 +88,7 @@ impl Command for OpenBoardCmd {
         true
     }
 
-    async fn execute(&self, _ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, _ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         Ok(json!({ "OpenBoardDialog": true }))
     }
 }
@@ -105,7 +105,7 @@ impl Command for NewWindowCmd {
         true
     }
 
-    async fn execute(&self, _ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, _ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         Ok(json!({ "CreateWindow": true }))
     }
 }
@@ -124,7 +124,7 @@ impl Command for CloseBoardCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
@@ -163,7 +163,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use swissarmyhammer_commands::{CommandContext};
+    use crate::commands_core::{CommandContext};
     use swissarmyhammer_ui_state::{UIState};
 
     /// Build a minimal CommandContext with the given UIState, scope, and args.

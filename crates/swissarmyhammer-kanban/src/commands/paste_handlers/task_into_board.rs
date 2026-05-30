@@ -24,7 +24,7 @@ use crate::task::DeleteTask;
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
-use swissarmyhammer_commands::{CommandContext, CommandError, Result};
+use crate::commands_core::{CommandContext, CommandError, Result};
 use swissarmyhammer_entity::EntityContext;
 
 /// Reserved positional override keys that must be re-derived per paste.

@@ -1,4 +1,4 @@
-use crate::error::{CommandError, Result};
+use crate::commands_core::error::{CommandError, Result};
 use serde_json::Value;
 use swissarmyhammer_ui_state::UIState;
 use std::any::{Any, TypeId};

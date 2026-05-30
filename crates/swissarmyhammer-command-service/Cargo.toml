@@ -65,7 +65,6 @@ swissarmyhammer-focus = { workspace = true }
 # ported app-shell commands route through the same servers the kanban app uses.
 # Dev-only edge, same shape as the other reverse dev edges in this section.
 swissarmyhammer-app-service = { workspace = true }
-swissarmyhammer-commands = { workspace = true }
 
 # Used by the `builtin_task_commands_e2e` integration test to expose the REAL
 # in-process `kanban` operation tool to a `PluginHost` exactly as the kanban

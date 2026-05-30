@@ -3,7 +3,7 @@
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use swissarmyhammer_commands::{Command, CommandContext, CommandError};
+use crate::commands_core::{Command, CommandContext, CommandError};
 use swissarmyhammer_entity::EntityContext;
 use swissarmyhammer_perspectives::{PerspectiveContext, PERSPECTIVE_STORE_NAME};
 use swissarmyhammer_store::{EventProvenance, StoreContext, StoreError, UndoEntryId, UndoOutcome};
@@ -24,7 +24,7 @@ impl Command for SetKeymapModeCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
@@ -48,7 +48,7 @@ impl Command for QuitCmd {
         true
     }
 
-    async fn execute(&self, _ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, _ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         Ok(json!({ "quit": true }))
     }
 }
@@ -64,7 +64,7 @@ impl Command for AboutCmd {
         true
     }
 
-    async fn execute(&self, _ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, _ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         Ok(json!({ "about": true }))
     }
 }
@@ -80,7 +80,7 @@ impl Command for HelpCmd {
         true
     }
 
-    async fn execute(&self, _ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, _ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         Ok(json!({ "help": true }))
     }
 }
@@ -96,7 +96,7 @@ impl Command for CommandPaletteCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
@@ -120,7 +120,7 @@ impl Command for SearchPaletteCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
@@ -145,7 +145,7 @@ impl Command for DismissCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
@@ -210,7 +210,7 @@ impl Command for KanbanUndoCmd {
         ctx.ui_state.as_ref().map(|ui| ui.can_undo()).unwrap_or(false)
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let store_ctx = ctx.require_extension::<StoreContext>()?;
 
         match store_ctx.undo().await {
@@ -240,7 +240,7 @@ impl Command for KanbanRedoCmd {
         ctx.ui_state.as_ref().map(|ui| ui.can_redo()).unwrap_or(false)
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let store_ctx = ctx.require_extension::<StoreContext>()?;
 
         match store_ctx.redo().await {

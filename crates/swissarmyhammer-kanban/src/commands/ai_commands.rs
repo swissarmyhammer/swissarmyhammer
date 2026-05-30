@@ -28,7 +28,7 @@
 
 use async_trait::async_trait;
 use serde_json::Value;
-use swissarmyhammer_commands::{Command, CommandContext};
+use crate::commands_core::{Command, CommandContext};
 
 /// Show or hide the AI panel.
 ///
@@ -42,7 +42,7 @@ impl Command for AiToggleCmd {
         true
     }
 
-    async fn execute(&self, _ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, _ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         Ok(Value::Null)
     }
 }
@@ -59,7 +59,7 @@ impl Command for AiFocusCmd {
         true
     }
 
-    async fn execute(&self, _ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, _ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         Ok(Value::Null)
     }
 }
@@ -77,7 +77,7 @@ impl Command for AiNewChatCmd {
         true
     }
 
-    async fn execute(&self, _ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, _ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         Ok(Value::Null)
     }
 }
@@ -95,7 +95,7 @@ impl Command for AiModelCmd {
         true
     }
 
-    async fn execute(&self, _ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, _ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         Ok(Value::Null)
     }
 }
@@ -117,7 +117,7 @@ impl Command for AiCancelCmd {
         ctx.ui_state.as_ref().is_some_and(|ui| ui.ai_streaming())
     }
 
-    async fn execute(&self, _ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, _ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         Ok(Value::Null)
     }
 }

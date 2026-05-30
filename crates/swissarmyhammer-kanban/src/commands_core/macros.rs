@@ -48,7 +48,7 @@ macro_rules! compose_registry {
     ($($($crate_path:ident)::+),+ $(,)?) => {{
         let sources: ::std::vec::Vec<(&'static str, &'static str)> =
             $crate::compose_yaml_sources![$($($crate_path)::+),+];
-        $crate::CommandsRegistry::from_yaml_sources(&sources)
+        $crate::commands_core::CommandsRegistry::from_yaml_sources(&sources)
     }};
 }
 

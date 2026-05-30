@@ -1,14 +1,11 @@
-//! Command trait, registry types, and dispatch context for SwissArmyHammer.
+//! Command trait, registry types, and dispatch context.
 //!
-//! This crate defines the `Command` trait (available + execute), the
-//! `CommandContext` for scope chain resolution and argument access, and
-//! the `CommandDef` / `CommandInvocation` wire types for YAML-loaded
-//! command metadata.
-//!
-//! It is consumer-agnostic -- it knows nothing about kanban, tasks, or
-//! specific entity types. Consumers implement `Command` for their domain
-//! operations and register them with a `CommandsRegistry` (defined in a
-//! later card).
+//! Inlined into `swissarmyhammer-kanban` during the Stage 4 cut-over after the
+//! standalone `swissarmyhammer-commands` crate was deleted. The module is
+//! consumer-agnostic — it knows nothing about kanban-specific entities — and
+//! is re-exported by every consumer that used to depend on the standalone
+//! crate (`apps/kanban-app`, `swissarmyhammer-entity-mcp`, and the kanban
+//! crate's own `commands` submodule).
 
 pub mod command;
 pub mod context;

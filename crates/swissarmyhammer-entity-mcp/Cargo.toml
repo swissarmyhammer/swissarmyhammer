@@ -22,8 +22,6 @@ swissarmyhammer-plugin = { workspace = true }
 # Clipboard ops (cut/copy/paste) reuse the kanban paste machinery directly.
 # Acyclic: entity-mcp -> kanban -> entity (nothing depends back on entity-mcp).
 swissarmyhammer-kanban = { workspace = true }
-# Paste handlers execute over a CommandContext from the commands framework.
-swissarmyhammer-commands = { workspace = true }
 # Copy/cut flag the clipboard entity type on the shared UI state.
 swissarmyhammer-ui-state = { workspace = true }
 

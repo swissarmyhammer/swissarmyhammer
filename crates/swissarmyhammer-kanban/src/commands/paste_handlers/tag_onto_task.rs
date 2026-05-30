@@ -14,7 +14,7 @@ use crate::context::KanbanContext;
 use crate::task::TagTask;
 use async_trait::async_trait;
 use serde_json::Value;
-use swissarmyhammer_commands::{parse_moniker, CommandContext, CommandError, Result};
+use crate::commands_core::{parse_moniker, CommandContext, CommandError, Result};
 
 /// Handler for pasting a tag entity onto a task entity.
 ///

@@ -30,7 +30,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use swissarmyhammer_operations_macros::operation_tool;
 
-use swissarmyhammer_commands::{Command, CommandContext};
+use swissarmyhammer_kanban::commands_core::{Command, CommandContext};
 use swissarmyhammer_entity::{Entity, EntityContext, EntityError, EntityId};
 use swissarmyhammer_entity_search::EntitySearchIndex;
 use swissarmyhammer_kanban::clipboard::{ClipboardProvider, ClipboardProviderExt};
@@ -589,8 +589,8 @@ fn entity_error_to_mcp(err: EntityError) -> McpError {
 /// missing source / invalid destination) map to `invalid_params` so a
 /// client can branch on them; the catch-all `ExecutionFailed` and the I/O
 /// error variants map to `internal_error`.
-fn command_error_to_mcp(err: swissarmyhammer_commands::CommandError) -> McpError {
-    use swissarmyhammer_commands::CommandError as CE;
+fn command_error_to_mcp(err: swissarmyhammer_kanban::commands_core::CommandError) -> McpError {
+    use swissarmyhammer_kanban::commands_core::CommandError as CE;
     let message = err.to_string();
     match err {
         CE::NotFound(_)
