@@ -109,39 +109,71 @@ async fn main() -> anyhow::Result<()> {
         )
         .await?;
 
-    eprintln!("\n=== streaming ===");
-    let t_gen = Instant::now();
-    let mut stream = agent
-        .generate_stream(
-            GenerationRequest::new(session_id)
-                .with_max_tokens(64)
-                .with_temperature(0.0),
-        )
-        .await?;
+    for turn in 1..=2 {
+        eprintln!("\n=== streaming (turn {turn}) ===");
+        if turn == 2 {
+            // Add a second user message to simulate the agentic loop's
+            // continuation (post-tool-result style): same session, KV reuse
+            // restores turn 1's cached tokens, prefill only the new tail.
+            agent
+                .add_message(
+                    &session_id,
+                    Message {
+                        role: MessageRole::Assistant,
+                        content: "[turn 1 reply elided]".into(),
+                        tool_call_id: None,
+                        tool_name: None,
+                        timestamp: SystemTime::now(),
+                    },
+                )
+                .await?;
+            agent
+                .add_message(
+                    &session_id,
+                    Message {
+                        role: MessageRole::User,
+                        content: "And again, just: ok.".into(),
+                        tool_call_id: None,
+                        tool_name: None,
+                        timestamp: SystemTime::now(),
+                    },
+                )
+                .await?;
+        }
 
-    let mut text = String::new();
-    let mut chunks = 0usize;
-    let mut tokens = 0usize;
-    let mut finish: Option<FinishReason> = None;
-    while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result?;
-        chunks += 1;
-        tokens += chunk.token_count;
-        if !chunk.text.is_empty() {
-            print!("{}", chunk.text);
-            use std::io::Write;
-            let _ = std::io::stdout().flush();
+        let t_gen = Instant::now();
+        let mut stream = agent
+            .generate_stream(
+                GenerationRequest::new(session_id)
+                    .with_max_tokens(32)
+                    .with_temperature(0.0),
+            )
+            .await?;
+
+        let mut text = String::new();
+        let mut chunks = 0usize;
+        let mut tokens = 0usize;
+        let mut finish: Option<FinishReason> = None;
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result?;
+            chunks += 1;
+            tokens += chunk.token_count;
+            if !chunk.text.is_empty() {
+                print!("{}", chunk.text);
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+            }
+            text.push_str(&chunk.text);
+            if chunk.is_complete {
+                finish = chunk.finish_reason.clone();
+            }
         }
-        text.push_str(&chunk.text);
-        if chunk.is_complete {
-            finish = chunk.finish_reason.clone();
-        }
+        println!();
+        eprintln!(
+            "\n=== turn {turn} done in {:?} ===\nchunks: {chunks}\ntokens: {tokens}\nfinish: {finish:?}",
+            t_gen.elapsed(),
+        );
     }
-    println!(); // newline after streamed text
-    eprintln!(
-        "\n=== done in {:?} ===\nchunks: {chunks}\ntokens: {tokens}\nfinish: {finish:?}\ntext:   {text:?}",
-        t_gen.elapsed(),
-    );
 
     Ok(())
 }

@@ -1585,13 +1585,35 @@ impl RequestQueue {
                 // tokens append cleanly. This drops the prior turn's divergent
                 // tail (its generation-prompt suffix + generated tokens, and any
                 // rewritten span after compaction) — positions `[offset, ∞)`.
-                if let Err(e) = ctx.clear_kv_cache_seq(Some(0), Some(offset as u32), None) {
-                    warn!(
-                        "Worker {} streaming: failed to trim KV to common prefix ({:?}); processing full prompt",
-                        worker_id, e
-                    );
-                    ctx.clear_kv_cache();
-                    return None;
+                //
+                // On hybrid attention + recurrent contexts `seq_rm` can return
+                // `Ok(false)` *silently* when the rollback distance exceeds the
+                // context's `n_rs_seq` snapshot ring. The KV's `max_pos`
+                // doesn't drop in that case, and the next decode trips
+                // M-RoPE's position-monotonicity check. We have to surface that
+                // and fall back to a cold full reprocess.
+                let trim_result =
+                    ctx.clear_kv_cache_seq(Some(0), Some(offset as u32), None);
+                match trim_result {
+                    Ok(true) => { /* trimmed cleanly */ }
+                    Ok(false) => {
+                        warn!(
+                            "Worker {} streaming: KV trim to common prefix returned false \
+                             (rollback distance likely exceeded the recurrent-state snapshot \
+                             window) — invalidating cache and processing full prompt",
+                            worker_id
+                        );
+                        ctx.clear_kv_cache();
+                        return None;
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Worker {} streaming: failed to trim KV to common prefix ({:?}); processing full prompt",
+                            worker_id, e
+                        );
+                        ctx.clear_kv_cache();
+                        return None;
+                    }
                 }
                 info!(
                     "Worker {} streaming reusing {} cached tokens, processing {} new tokens for session {}",

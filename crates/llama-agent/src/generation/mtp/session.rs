@@ -71,17 +71,6 @@ pub struct VerifyOutcome {
 /// `pending_h` is the pre-norm hidden row that pairs with the *next* token fed
 /// to the MTP head; `verify_h`/`n_rows` hold the target pre-norm rows captured
 /// during the most recent verification decode.
-///
-/// `draft_snapshot` is a serialized snapshot of the draft context's per-seq
-/// state, taken after each successful mirror in [`Self::sync_capture`] and
-/// restored at the start of each [`Self::draft`]. The reference port claims
-/// "re-mirroring overwrites the draft's redundant auto-regressive
-/// pre-advancement," but on contexts whose memory is partially-recurrent (the
-/// MTP/NextN head is gated-delta-net recurrent) `llama_memory_seq_rm` for a
-/// partial range silently fails — KV `max_pos` does not drop — and the next
-/// mirror decode then trips M-RoPE's `KV.max_pos < batch.start_pos` invariant.
-/// Snapshot/restore rolls the draft's recurrent state cleanly, which the
-/// partial KV clear cannot.
 #[derive(Debug)]
 pub struct MtpSession {
     n_embd: usize,
@@ -89,7 +78,6 @@ pub struct MtpSession {
     verify_h: Vec<f32>,
     n_rows: usize,
     params: MtpParams,
-    draft_snapshot: Option<Vec<u8>>,
 }
 
 impl MtpSession {
@@ -102,7 +90,6 @@ impl MtpSession {
             verify_h: Vec::new(),
             n_rows: 0,
             params,
-            draft_snapshot: None,
         }
     }
 
@@ -155,34 +142,26 @@ impl MtpSession {
 
         // Step 2: mirror onto the draft with the right-shift h-pairing.
         //
-        // FIRST roll the draft's per-seq state back to the snapshot taken at
-        // the end of the previous successful mirror (if any). The preceding
-        // `draft()` advances the draft auto-regressively, so its KV/recurrent
-        // state is now ahead of the canonical accepted frontier. A naive
-        // partial `llama_memory_seq_rm` would suffice on a pure-attention
-        // memory, but the MTP/NextN head is partially recurrent and partial
-        // removals silently fail on the recurrent memory module — `max_pos`
-        // does not drop, and the next mirror decode trips M-RoPE's
-        // `KV.max_pos < batch.start_pos` invariant. State save/restore rolls
-        // the recurrent state cleanly. With a fresh draft (no snapshot yet),
-        // this is a no-op.
-        if let Some(snapshot) = self.draft_snapshot.as_ref() {
-            // Fully clear the draft seq first: `llama_state_seq_set_data`
-            // doesn't reset existing state before writing, and on the
-            // partially-recurrent MTP memory the prior `draft()` AR-pre-
-            // advancement otherwise remains, so `max_pos` stays high and the
-            // mirror still trips M-RoPE. Full-range `seq_rm` (`p0=None,
-            // p1=None`) is documented to always succeed, so this is the
-            // robust prelude to the restore.
-            if let Ok(seq) = u32::try_from(seq_id) {
-                if let Err(err) = draft.clear_kv_cache_seq(Some(seq), None, None) {
+        // FIRST drop any draft KV at positions >= batch_positions[0]. The
+        // preceding `draft()` advances the draft auto-regressively (seed +
+        // proposed drafts), so its KV ends ahead of the canonical accepted
+        // frontier. Without this clear the mirror's decode at those same
+        // positions trips M-RoPE's `KV.max_pos < batch.start_pos` invariant.
+        // Partial `seq_rm` works once `with_n_rs_seq(>0)` is set on the
+        // context (see `LlamaModelManager::create_context_with_type`); for
+        // the chunked-prefill case batch_positions[0] equals the previous
+        // chunk's max + 1 so this is a no-op there. (An earlier port held a
+        // snapshot+restore here for hybrid-recurrent draft contexts; with
+        // n_rs_seq enabled it is no longer needed and was wrong for chunked
+        // prefill — repeated restores between chunks dropped every chunk but
+        // the last.)
+        if let (Some(&start_pos), Ok(seq)) = (batch_positions.first(), u32::try_from(seq_id)) {
+            if let Ok(pos) = u32::try_from(start_pos) {
+                if let Err(err) = draft.clear_kv_cache_seq(Some(seq), Some(pos), None) {
                     tracing::warn!(
-                        "mtp sync_capture: failed to clear draft seq before restore: {err:?}"
+                        "mtp sync_capture: failed to clear draft KV at >= {pos}: {err:?}"
                     );
                 }
-            }
-            if let Err(err) = draft.state_seq_set_data(snapshot, seq_id) {
-                tracing::warn!("mtp sync_capture: failed to restore draft snapshot: {err:?}");
             }
         }
 
@@ -198,14 +177,7 @@ impl MtpSession {
         }
         if let Err(err) = draft.decode_mtp(&mut mirror) {
             tracing::warn!("mtp sync_capture: draft mirror decode failed: {err}");
-            return;
         }
-
-        // Snapshot the draft's per-seq state at the canonical accepted
-        // frontier. The next `draft()` will restore this before its AR loop, so
-        // any subsequent mirror sees a draft state that matches the just-
-        // captured tokens rather than the prior round's AR pre-advancement.
-        self.draft_snapshot = Some(draft.state_seq_get_data(seq_id));
     }
 
     /// Produce up to `params.n_max` draft tokens on the draft context (reference

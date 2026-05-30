@@ -396,16 +396,32 @@ impl ModelManager {
         let kv_type = KvCacheType::Q8_0;
         let flash_attn = llama_cpp_sys_2::LLAMA_FLASH_ATTN_TYPE_ENABLED;
 
-        // Recurrent-state rollback window for partial `seq_rm`. Needed by
-        // draft-mtp speculative decoding on hybrid attention + recurrent models
-        // (Qwen3.5/3.6 with gated delta net): without it, `accept`'s partial
-        // KV clear silently no-ops on the recurrent half and the next round's
-        // batch trips M-RoPE's position-monotonicity check. llama.cpp clamps
-        // this to 0 on non-recurrent archs, so it costs nothing where it isn't
-        // needed; recurrent state is tiny vs attention KV, so a window of 8 is
-        // cheap even where it IS used (covers the default MtpParams.n_max=4
-        // with headroom for the verify's draft + the next round).
-        const N_RS_SEQ: u32 = 8;
+        // Recurrent-state rollback window for partial `seq_rm`. Needed for two
+        // distinct rollback paths on hybrid attention + recurrent models
+        // (Qwen3.5/3.6 with gated delta net):
+        //   1. The MTP `accept`'s partial clear of the verify's rejected
+        //      drafts (bounded by `MtpParams::n_max` per round).
+        //   2. The streaming KV-reuse trim-to-LCP in
+        //      `prepare_streaming_kv_cache`, whose rollback distance is the
+        //      number of tokens the cached state ran past the new prompt's
+        //      LCP — i.e. the previous turn's generation length, which can
+        //      easily be hundreds of tokens in an agentic loop.
+        // If the rollback distance exceeds this window, `seq_rm` silently
+        // returns `Ok(false)`, `max_pos` stays high, and the next decode
+        // batch trips M-RoPE's `KV.max_pos < batch.start_pos` invariant. The
+        // callers handle that silent-failure case (fall back to cold start),
+        // but a comfortable window avoids that fallback for typical turns.
+        //
+        // llama.cpp clamps this to 0 on non-recurrent arches automatically,
+        // so it costs nothing where it isn't needed. The compute graph
+        // scales linearly with this value (each snapshot is a tensor view),
+        // so a value of 1024 blew up the ggml object pool at graph reserve
+        // on Qwen3.5/3.6. 64 is the sweet spot: covers typical per-turn
+        // generation lengths (and the MTP per-step rollback within them)
+        // without inflating the compute graph. Longer turns fall back to a
+        // cold full-reprocess (see the `Ok(false)` handler in
+        // `prepare_streaming_kv_cache`) — slow but correct.
+        const N_RS_SEQ: u32 = 64;
 
         let context_params = LlamaContextParams::default()
             .with_n_ctx(Some(std::num::NonZeroU32::new(n_ctx as u32).unwrap()))
