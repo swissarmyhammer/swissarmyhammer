@@ -4,6 +4,7 @@
 mod ai;
 mod cli;
 mod cli_install;
+mod command_services;
 mod commands;
 mod deeplink;
 mod menu;
