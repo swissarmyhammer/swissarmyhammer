@@ -396,6 +396,17 @@ impl ModelManager {
         let kv_type = KvCacheType::Q8_0;
         let flash_attn = llama_cpp_sys_2::LLAMA_FLASH_ATTN_TYPE_ENABLED;
 
+        // Recurrent-state rollback window for partial `seq_rm`. Needed by
+        // draft-mtp speculative decoding on hybrid attention + recurrent models
+        // (Qwen3.5/3.6 with gated delta net): without it, `accept`'s partial
+        // KV clear silently no-ops on the recurrent half and the next round's
+        // batch trips M-RoPE's position-monotonicity check. llama.cpp clamps
+        // this to 0 on non-recurrent archs, so it costs nothing where it isn't
+        // needed; recurrent state is tiny vs attention KV, so a window of 8 is
+        // cheap even where it IS used (covers the default MtpParams.n_max=4
+        // with headroom for the verify's draft + the next round).
+        const N_RS_SEQ: u32 = 8;
+
         let context_params = LlamaContextParams::default()
             .with_n_ctx(Some(std::num::NonZeroU32::new(n_ctx as u32).unwrap()))
             .with_n_batch(n_batch)
@@ -405,7 +416,8 @@ impl ModelManager {
             .with_flash_attention_policy(flash_attn)
             .with_type_k(kv_type)
             .with_type_v(kv_type)
-            .with_ctx_type(ctx_type);
+            .with_ctx_type(ctx_type)
+            .with_n_rs_seq(N_RS_SEQ);
 
         debug!(
             "Creating context with n_ctx={}, n_batch={}, n_ubatch={}, n_seq_max={}, n_threads={}, n_threads_batch={}, flash_attn={}, kv_cache_type={:?}",
