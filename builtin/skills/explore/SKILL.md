@@ -21,11 +21,7 @@ Understand code well enough to explain how it works and what a change would touc
 > {{arguments}}
 {% endif %}
 
-## Why This Exists
-
-The gap between "I don't understand this" and "I know what to do" is where bad decisions happen. Default behavior — read a couple files top to bottom, grep, act — misses how code actually connects.
-
-This skill enforces a structured path. It uses `code_context` to find the *right* code fast, trace connections, and measure blast radius — not linear reading.
+Use `code_context` to find the *right* code fast, trace connections, and measure blast radius — not linear reading.
 
 ## Done Means
 

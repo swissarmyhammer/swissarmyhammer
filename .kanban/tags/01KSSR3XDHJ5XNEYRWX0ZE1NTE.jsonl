@@ -1,0 +1,1 @@
+{"id":"01KSSR3XDKVMDDDDC30Z9JM73Q","timestamp":"2026-05-29T11:32:37.427718Z","op":"create","item_id":"01KSSR3XDHJ5XNEYRWX0ZE1NTE","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: 0e8a16\n+tag_name: shelltool\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: 0e8a16\n-tag_name: shelltool\n","transaction_id":null}
