@@ -116,6 +116,66 @@ impl SessionStateStore {
         out
     }
 
+    /// Find the cached session whose stored prompt tokens have the longest
+    /// common prefix with `new_tokens`, prioritising the caller's own session
+    /// when its LCP ties.
+    ///
+    /// This is the local-side version of a service prompt-prefix cache (e.g.
+    /// Anthropic's `cache_control` blocks): two ACP sessions that share the
+    /// same system + tools header — which is the common case for the kanban
+    /// app with multiple windows on the same agent — should not each pay the
+    /// 28k-token cold prefill cost. The same `common_prefix_len` /
+    /// `streaming_reuse_decision` machinery that handles within-session
+    /// continuations handles cross-session sharing once the scan picks the
+    /// right donor.
+    ///
+    /// Returns `None` when no cached entry shares any prefix with the new
+    /// prompt (no usable cache) or when no entry carries a prompt fingerprint
+    /// (e.g. the batch path's snapshots, which we cannot safely match
+    /// against).
+    fn find_best_prefix_match(
+        &mut self,
+        target_session_id: &str,
+        new_tokens: &[i32],
+    ) -> Option<PrefixMatch> {
+        // Pass 1: scan immutably to identify the best (id, lcp). Two-pass so
+        // we can `touch(id)` after, which mutably borrows.
+        let mut best: Option<(String, usize)> = None;
+        for (id, entry) in &self.entries {
+            let Some(cached_tokens) = entry.prompt_tokens.as_ref() else {
+                continue;
+            };
+            let lcp = common_prefix_len(cached_tokens, new_tokens);
+            if lcp == 0 {
+                continue;
+            }
+            let is_current = id == target_session_id;
+            let take = match &best {
+                None => true,
+                Some((_, best_lcp)) if lcp > *best_lcp => true,
+                // Tie-breaker: prefer the caller's own session id. Reusing
+                // own state avoids a foreign-state set_state_data copy on
+                // the typical warm-continuation case where the caller's
+                // prior turn IS the longest-matching prefix.
+                Some((best_id, best_lcp)) if lcp == *best_lcp && is_current && best_id != target_session_id => true,
+                _ => false,
+            };
+            if take {
+                best = Some((id.clone(), lcp));
+            }
+        }
+
+        let (source_id, lcp) = best?;
+        self.touch(&source_id);
+        let entry = self.entries.get(&source_id).expect("just-touched id exists");
+        Some(PrefixMatch {
+            source_session_id: source_id.clone(),
+            state_bytes: entry.state_bytes.clone(),
+            draft_state_bytes: entry.draft_state_bytes.clone(),
+            lcp,
+        })
+    }
+
     /// Insert/replace a session's cached state, then evict LRU entries until
     /// within BOTH the entry-count and total-byte budgets.
     fn insert(
@@ -174,6 +234,23 @@ impl SessionStateStore {
 }
 
 type SessionStateCache = Arc<Mutex<SessionStateStore>>;
+
+/// Result of [`SessionStateStore::find_best_prefix_match`].
+///
+/// Carries the donor session's id (purely informational, for logging which
+/// cached state was reused) plus the bytes the caller restores into its
+/// fresh context.
+struct PrefixMatch {
+    /// The session id whose cached state was selected — may differ from the
+    /// caller's session id when we share a prefix across sessions.
+    source_session_id: String,
+    /// Full target-context state bytes for `set_state_data`.
+    state_bytes: Vec<u8>,
+    /// Per-seq draft KV bytes for MTP, when the donor turn used MTP.
+    draft_state_bytes: Option<Vec<u8>>,
+    /// Number of leading tokens that matched the new prompt.
+    lcp: usize,
+}
 
 /// Default entry ceiling for the session-state cache: cpu cores / 2 (min 1),
 /// preserving the previous count-based limit.
@@ -1685,31 +1762,10 @@ impl RequestQueue {
     ) -> StreamingKvPrep {
         use llama_cpp_2::model::AddBos;
 
-        let cached = {
-            let mut cache = session_state_cache.lock().unwrap();
-            cache.get(&session.id.to_string())
-        };
-        let Some((bytes, prompt_tokens, draft_state_bytes)) = cached else {
-            info!(
-                "Worker {} streaming: no cached KV state for session {}, processing full prompt",
-                worker_id, session.id
-            );
-            return StreamingKvPrep::default();
-        };
-        let Some(cached_tokens) = prompt_tokens else {
-            // State written without a fingerprint (e.g. by the batch path). We
-            // cannot verify the prefix, so reprocess in full rather than risk a
-            // bad reuse.
-            info!(
-                "Worker {} streaming: cached state for session {} has no prompt fingerprint, processing full prompt",
-                worker_id, session.id
-            );
-            return StreamingKvPrep::default();
-        };
-
-        // Load the prior context state, then verify+trim against the new prompt.
-        let _bytes_read = unsafe { ctx.set_state_data(&bytes) };
-
+        // Tokenize the new prompt FIRST so the cache scan can compute an LCP
+        // against every candidate donor's stored prompt tokens. Tokenization
+        // is microseconds for 28k tokens — fast relative to the prefill it
+        // potentially saves.
         let new_tokens: Vec<i32> = match model.str_to_token(prompt, AddBos::Always) {
             Ok(toks) => toks.into_iter().map(|t| t.0).collect(),
             Err(e) => {
@@ -1717,12 +1773,96 @@ impl RequestQueue {
                     "Worker {} streaming: failed to tokenize prompt for prefix check ({}); processing full prompt",
                     worker_id, e
                 );
-                ctx.clear_kv_cache();
                 return StreamingKvPrep::default();
             }
         };
 
-        let lcp = common_prefix_len(&cached_tokens, &new_tokens);
+        // Cross-session prefix matching: scan ALL cached states for the best
+        // LCP match, not just this session's. This is the local equivalent
+        // of a hosted prompt-prefix cache — two windows on the same agent
+        // share the 27k-token system+tools header, and a fresh session
+        // should NOT pay a cold 28k prefill when another session already
+        // has those tokens warm in KV.
+        let match_result = {
+            let mut cache = session_state_cache.lock().unwrap();
+            cache.find_best_prefix_match(&session.id.to_string(), &new_tokens)
+        };
+        let Some(prefix_match) = match_result else {
+            info!(
+                "Worker {} streaming: no usable cached prefix for session {} across {} cached donors, processing full prompt",
+                worker_id,
+                session.id,
+                // Re-lock briefly only for the count; cheap.
+                session_state_cache.lock().unwrap().len()
+            );
+            return StreamingKvPrep::default();
+        };
+
+        let PrefixMatch {
+            source_session_id,
+            state_bytes: bytes,
+            draft_state_bytes,
+            lcp,
+        } = prefix_match;
+
+        let is_cross_session = source_session_id != session.id.to_string();
+        if is_cross_session {
+            info!(
+                "Worker {} streaming: reusing cached state from session {} as prefix donor for session {} (lcp={} of {} new tokens)",
+                worker_id,
+                source_session_id,
+                session.id,
+                lcp,
+                new_tokens.len()
+            );
+        }
+
+        // Diagnostic: when the LCP is surprisingly short (the kanban perf
+        // pain is two windows on the same agent diverging at byte 47 out of
+        // 27k+ that should be byte-identical), dump the slice around the
+        // divergence point. Decoding 32 tokens on either side of the split
+        // shows exactly what session-specific bytes are leaking into the
+        // rendered prompt — e.g. a session ULID, the cwd, a timestamp, or
+        // non-deterministic tool ordering from HashMap-backed MCP discovery.
+        //
+        // The bar of `lcp < new_tokens.len() / 2` matches "you expected to
+        // reuse most of the prompt but barely reused anything" — exactly
+        // the case worth investigating; full continuations and exact-match
+        // reuses don't trip it.
+        if is_cross_session && lcp < new_tokens.len() / 2 {
+            // Decode the slice just before and after the divergence point
+            // on each side, falling back to raw token ids if detokenization
+            // fails for any reason (e.g. partial UTF-8). Bounded to keep
+            // the log line readable.
+            const DIAG_WIN: usize = 32;
+            let _maybe_cached = session_state_cache.lock().unwrap();
+            // We don't have the donor's `prompt_tokens` here — only their
+            // bytes and lcp. Decode what we DO have: the new prompt's
+            // boundary slice. If the donor is misaligned, the recipient's
+            // boundary alone is enough to identify the variable region.
+            let start = lcp.saturating_sub(DIAG_WIN);
+            let end = (lcp + DIAG_WIN).min(new_tokens.len());
+            let new_slice: Vec<llama_cpp_2::token::LlamaToken> = new_tokens[start..end]
+                .iter()
+                .map(|&t| llama_cpp_2::token::LlamaToken(t))
+                .collect();
+            let decoded = model
+                .tokens_to_str(&new_slice, llama_cpp_2::model::Special::Tokenize)
+                .unwrap_or_else(|_| format!("{:?}", &new_tokens[start..end]));
+            warn!(
+                "Worker {} streaming: cross-session LCP is only {} of {} tokens — investigate session-specific content in the rendered prompt. New prompt around divergence (tokens {}..{}): {:?}",
+                worker_id,
+                lcp,
+                new_tokens.len(),
+                start,
+                end,
+                decoded
+            );
+        }
+
+        // Load the donor state, then verify+trim against the new prompt.
+        let _bytes_read = unsafe { ctx.set_state_data(&bytes) };
+
         match streaming_reuse_decision(lcp, new_tokens.len()) {
             Some(offset) => {
                 // Trim the KV to exactly the verified common prefix so the new
@@ -3624,6 +3764,94 @@ mod tests {
             assert_eq!(toks, Some(vec![10, 20, 30]));
             assert_eq!(draft, Some(vec![8, 8, 8, 8]));
             assert_eq!(store.get("missing"), None);
+        }
+
+        /// The cross-session prefix cache: when session B has nothing of its
+        /// own cached but session A has a long shared prefix, the scan picks
+        /// A as the donor. This is the local-side equivalent of Claude's
+        /// hosted prompt-prefix cache — without it, two kanban windows on
+        /// the same agent each pay a full cold 28k-token prefill.
+        #[test]
+        fn find_best_prefix_match_returns_cross_session_donor() {
+            let mut store = SessionStateStore::new(8, usize::MAX);
+            // Session A has a long cached prefix.
+            store.insert(
+                "A".into(),
+                state(1, 4),
+                Some(vec![10, 20, 30, 40, 50]),
+                None,
+            );
+            // Session B has nothing cached. Asking for B with a prompt that
+            // shares the first three tokens with A's prompt must yield A as
+            // the donor, with lcp=3.
+            let m = store
+                .find_best_prefix_match("B", &[10, 20, 30, 99, 100])
+                .expect("must return a donor when a cross-session LCP exists");
+            assert_eq!(m.source_session_id, "A");
+            assert_eq!(m.lcp, 3);
+        }
+
+        /// Tie-break: when both the caller's own session AND another session
+        /// share the same lcp, pick the caller's own — avoids an unnecessary
+        /// foreign-state copy on the typical warm-continuation case where
+        /// the session's own prior turn IS the longest match.
+        #[test]
+        fn find_best_prefix_match_prefers_current_session_on_tie() {
+            let mut store = SessionStateStore::new(8, usize::MAX);
+            store.insert("A".into(), state(1, 4), Some(vec![10, 20, 30]), None);
+            store.insert("B".into(), state(2, 4), Some(vec![10, 20, 30]), None);
+            let m = store
+                .find_best_prefix_match("B", &[10, 20, 30, 40])
+                .expect("must return a donor");
+            assert_eq!(m.source_session_id, "B", "current session wins on lcp tie");
+        }
+
+        /// A longer cross-session match still wins over the caller's own
+        /// shorter match — we always pick the deepest prefix to maximize
+        /// the prefill we can skip.
+        #[test]
+        fn find_best_prefix_match_picks_deepest_lcp_across_sessions() {
+            let mut store = SessionStateStore::new(8, usize::MAX);
+            // Session A: full 5-token prefix.
+            store.insert(
+                "A".into(),
+                state(1, 4),
+                Some(vec![10, 20, 30, 40, 50]),
+                None,
+            );
+            // Session B (the caller): only 2 leading tokens match the new prompt.
+            store.insert("B".into(), state(2, 4), Some(vec![10, 20, 99]), None);
+            // New prompt for B: matches A by 5, matches B by 2.
+            let m = store
+                .find_best_prefix_match("B", &[10, 20, 30, 40, 50, 60])
+                .expect("must return a donor");
+            assert_eq!(
+                m.source_session_id, "A",
+                "deeper foreign LCP must win over shallower own-session LCP"
+            );
+            assert_eq!(m.lcp, 5);
+        }
+
+        /// No cached entry shares ANY prefix → no donor.
+        #[test]
+        fn find_best_prefix_match_returns_none_without_overlap() {
+            let mut store = SessionStateStore::new(8, usize::MAX);
+            store.insert("A".into(), state(1, 4), Some(vec![10, 20]), None);
+            assert!(store
+                .find_best_prefix_match("B", &[99, 100, 101])
+                .is_none());
+        }
+
+        /// Entries written without a prompt fingerprint (the batch path's
+        /// snapshots — `prompt_tokens = None`) are NEVER candidates, since
+        /// we cannot verify their prefix.
+        #[test]
+        fn find_best_prefix_match_skips_unfingerprinted_entries() {
+            let mut store = SessionStateStore::new(8, usize::MAX);
+            store.insert("batch-only".into(), state(1, 4), None, None);
+            assert!(store
+                .find_best_prefix_match("B", &[10, 20, 30])
+                .is_none());
         }
 
         #[test]

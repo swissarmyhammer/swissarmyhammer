@@ -421,6 +421,12 @@ impl ModelManager {
         // without inflating the compute graph. Longer turns fall back to a
         // cold full-reprocess (see the `Ok(false)` handler in
         // `prepare_streaming_kv_cache`) — slow but correct.
+        //
+        // 2026-06-01: tried bumping to 256 on the assumption that the
+        // updated llama-cpp-rs had a larger graph pool; the kanban app
+        // crashed on the next context creation. Reverted. Future attempts
+        // need a real context-creation test against the 35B model BEFORE
+        // claiming the bump is safe — there is no headroom to guess at.
         const N_RS_SEQ: u32 = 64;
 
         let context_params = LlamaContextParams::default()
