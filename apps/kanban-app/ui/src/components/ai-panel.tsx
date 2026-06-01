@@ -759,13 +759,25 @@ function MessagePartView({ part }: MessagePartViewProps): ReactNode {
   switch (part.type) {
     case "text":
       return <MessageResponse>{part.text}</MessageResponse>;
-    case "reasoning":
+    case "reasoning": {
+      // Qwen-style reasoning models often emit an empty `<think>\n\n</think>`
+      // span for short / easy prompts where they don't need to deliberate.
+      // The captured `part.text` is then just whitespace and the bubble
+      // expands to literally nothing. Render only when there's substantive
+      // content (or while still streaming, where the shimmer is the
+      // user-visible signal that thinking is in progress).
+      const hasContent = part.text.trim().length > 0;
+      const isStreaming = part.state === "streaming";
+      if (!hasContent && !isStreaming) {
+        return null;
+      }
       return (
-        <Reasoning isStreaming={part.state === "streaming"}>
+        <Reasoning isStreaming={isStreaming}>
           <ReasoningTrigger />
           <ReasoningContent>{part.text}</ReasoningContent>
         </Reasoning>
       );
+    }
     case "dynamic-tool":
       return <ToolCallView part={part} />;
     default:

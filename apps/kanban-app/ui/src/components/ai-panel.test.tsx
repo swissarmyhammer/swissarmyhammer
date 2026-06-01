@@ -348,6 +348,56 @@ describe("AiPanel: conversation rendering", () => {
     ]);
   });
 
+  /// Qwen3-class reasoning models often emit `<think>\n\n</think>` —
+  /// empty think — for short / easy prompts. The captured reasoning text
+  /// is then whitespace-only and the AI Elements bubble would expand to
+  /// literally nothing. The renderer hides reasoning parts whose
+  /// finalized text has no non-whitespace content so the UI doesn't
+  /// surface a useless "Thought for 0 seconds" header.
+  it("hides a reasoning block whose finalized text is whitespace-only", async () => {
+    const harness = mockHarness({
+      updates: [
+        {
+          sessionUpdate: "agent_thought_chunk",
+          content: textBlock("\n\n"),
+        },
+        {
+          sessionUpdate: "agent_message_chunk",
+          content: textBlock("Here is the answer."),
+        },
+      ],
+    });
+
+    await renderInAct(
+      <AiPanel
+        boardDir="/tmp/board"
+        models={MODELS}
+        modelId="claude-code"
+        onSelectModel={() => {}}
+        onCollapse={() => {}}
+        createConnect={harness.createConnect}
+      />,
+    );
+
+    const textarea = screen.getByRole("textbox");
+    await act(async () => {
+      await userEvent.type(textarea, "ping");
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /submit/i }));
+    });
+
+    // The visible reply renders.
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("Here is the answer.");
+    });
+
+    // The empty reasoning header MUST NOT appear: it has no expandable
+    // content and would just confuse the reader.
+    expect(document.body.textContent).not.toContain("Thought for");
+    expect(document.body.textContent).not.toContain("Thinking");
+  });
+
   it("renders an assistant tool-call card at the full assistant message width", async () => {
     // Layout regression guard: assistant block content (tool folds) must span
     // the assistant message region, not shrink to the tool card's intrinsic
