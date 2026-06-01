@@ -40,13 +40,19 @@ const SEQ_ID: i32 = 0;
 ///   the target's KV (from the streaming KV-reuse path); only the suffix is
 ///   prefilled here.
 /// - The function enables pre-norm output on both contexts itself.
+/// - `on_prefill_complete` fires exactly once, right after the prompt is
+///   fully prefilled into BOTH the target and the draft (via the per-chunk
+///   `sync_capture`), but BEFORE the first generation pass. The worker uses
+///   this hook to snapshot target + draft state at the prompt boundary so
+///   the next turn's LCP trim has zero rollback distance on the common
+///   path — see the matching note on the standard streaming generator.
 /// - Termination: EOG token, `max_tokens` budget, context window, cancellation,
 ///   or disconnected receiver. A terminal chunk (`is_complete = true`,
 ///   `token_count = 0`, `finish_reason = Some(..)`) is emitted on every normal
 ///   exit; cancellation/disconnect short-circuit without a terminal chunk
 ///   (matching the non-MTP path).
 #[allow(clippy::too_many_arguments)]
-pub fn generate_stream_mtp(
+pub fn generate_stream_mtp<F>(
     model: &LlamaModel,
     target: &mut LlamaContext,
     draft: &mut LlamaContext,
@@ -57,7 +63,11 @@ pub fn generate_stream_mtp(
     batch_size: usize,
     template_token_count: Option<usize>,
     mtp_params: MtpParams,
-) -> Result<(), GenerationError> {
+    on_prefill_complete: F,
+) -> Result<(), GenerationError>
+where
+    F: FnOnce(&LlamaContext, &LlamaContext),
+{
     // Pre-norm output is required: the target rows feed the draft mirror;
     // the draft rows seed the AR draft step. Reference uses masked=false on the
     // target (emit rows for every position) and masked=true on the draft (only
@@ -124,6 +134,12 @@ pub fn generate_stream_mtp(
         absolute_position += chunk.len();
         last_chunk_len = chunk.len();
     }
+
+    // Post-prefill checkpoint: target and draft KVs both end exactly at the
+    // prompt boundary. Fire the worker's snapshot hook now so the next turn
+    // restores a clean prompt-boundary state and the n_rs_seq window never
+    // has to roll back over the upcoming MTP-accepted generated tokens.
+    on_prefill_complete(target, draft);
 
     // Sample the first id_last from the last prefilled position's logits —
     // indexed within the LAST batch (size = last_chunk_len), not the full

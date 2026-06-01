@@ -342,10 +342,19 @@ impl GenerationHelper {
 
     /// Generate text with streaming output using borrowed model and context references.
     ///
+    /// `on_prefill_complete` fires exactly once, right after the prompt is
+    /// fully prefilled into the context's KV cache but BEFORE any generation
+    /// token is sampled. The worker uses this hook to snapshot the
+    /// context state at the prompt boundary, so the next turn's longest-
+    /// common-prefix trim has zero rollback distance on the common path —
+    /// the saved state ends exactly where the prompt ends, never inside
+    /// the generated tail. This is what kept the `n_rs_seq` window from
+    /// being whacked every time a turn generated more than 64 tokens.
+    ///
     /// This consolidates the streaming generation logic from queue.rs while working
     /// within the existing ModelManager architecture.
     #[allow(clippy::too_many_arguments)]
-    pub fn generate_stream_with_borrowed_model(
+    pub fn generate_stream_with_borrowed_model<F>(
         model: &llama_cpp_2::model::LlamaModel,
         context: &mut llama_cpp_2::context::LlamaContext,
         prompt: &str,
@@ -353,7 +362,11 @@ impl GenerationHelper {
         stream_sender: &mpsc::Sender<Result<StreamChunk, crate::types::QueueError>>,
         cancellation_token: &CancellationToken,
         batch_size: usize,
-    ) -> Result<(), GenerationError> {
+        on_prefill_complete: F,
+    ) -> Result<(), GenerationError>
+    where
+        F: FnOnce(&llama_cpp_2::context::LlamaContext),
+    {
         use crate::types::{QueueError, StreamChunk};
         use llama_cpp_2::{
             llama_batch::LlamaBatch,
@@ -409,6 +422,13 @@ impl GenerationHelper {
         }
 
         debug!("Initial prompt processed for streaming, starting generation");
+
+        // Post-prefill checkpoint: the context's KV now ends EXACTLY at the
+        // prompt boundary. Hand control to the worker so it can snapshot the
+        // state here — saving now means the next turn's LCP rollback distance
+        // is 0 on the common path, and the n_rs_seq window never has to roll
+        // back over the upcoming generated tokens.
+        on_prefill_complete(context);
 
         // Create sampler for token generation
         let mut sampler = LlamaSampler::chain_simple([
@@ -897,7 +917,7 @@ impl GenerationHelper {
     /// - Stream channel send fails
     /// - Request is cancelled
     #[allow(clippy::too_many_arguments)]
-    pub fn generate_stream_with_borrowed_model_and_template_offset(
+    pub fn generate_stream_with_borrowed_model_and_template_offset<F>(
         model: &llama_cpp_2::model::LlamaModel,
         context: &mut llama_cpp_2::context::LlamaContext,
         prompt: &str,
@@ -906,7 +926,11 @@ impl GenerationHelper {
         cancellation_token: &CancellationToken,
         batch_size: usize,
         template_token_count: Option<usize>,
-    ) -> Result<(), GenerationError> {
+        on_prefill_complete: F,
+    ) -> Result<(), GenerationError>
+    where
+        F: FnOnce(&llama_cpp_2::context::LlamaContext),
+    {
         // If no template offset, use the regular method
         if template_token_count.is_none() {
             return Self::generate_stream_with_borrowed_model(
@@ -917,6 +941,7 @@ impl GenerationHelper {
                 stream_sender,
                 cancellation_token,
                 batch_size,
+                on_prefill_complete,
             );
         }
 
@@ -1016,6 +1041,10 @@ impl GenerationHelper {
         }
 
         debug!("Prompt processed with template offset for streaming, starting generation");
+
+        // Post-prefill checkpoint — see the matching call in
+        // generate_stream_with_borrowed_model for why this fires here.
+        on_prefill_complete(context);
 
         // Create sampler for token generation
         let mut sampler = LlamaSampler::chain_simple([

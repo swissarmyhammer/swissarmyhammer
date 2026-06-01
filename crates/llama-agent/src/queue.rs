@@ -1448,6 +1448,79 @@ impl RequestQueue {
         }
     }
 
+    /// Snapshot the target context's state at the prompt boundary into the
+    /// session cache.
+    ///
+    /// Called from the streaming generators' `on_prefill_complete` hook,
+    /// immediately after the full prompt has been prefilled and BEFORE any
+    /// generation token is sampled. The saved state therefore always ends
+    /// at exactly `prompt_tokens.len()` positions, so the next turn's LCP
+    /// trim has a rollback distance of 0 on the common path (next prompt
+    /// extends this one) and at worst a small distance when the prompt
+    /// diverges before reaching the saved end. Either way, the `n_rs_seq`
+    /// recurrent-state snapshot window never has to roll back over the
+    /// upcoming generated tokens — which is the failure mode the old
+    /// post-generation save kept hitting whenever a turn generated more
+    /// tokens than the window covered.
+    ///
+    /// Empty `prompt_tokens` (a tokenization failure upstream) skips the
+    /// save: without a fingerprint the cache entry is unusable.
+    #[allow(clippy::too_many_arguments)]
+    fn save_prompt_boundary_state(
+        worker_id: usize,
+        request_id: &str,
+        session: &Session,
+        ctx: &LlamaContext<'_>,
+        draft_ctx: Option<&LlamaContext<'_>>,
+        session_state_cache: &SessionStateCache,
+        prompt_tokens: &[i32],
+    ) {
+        if prompt_tokens.is_empty() {
+            warn!(
+                "Worker {} skipping prompt-boundary save for request {}: empty prompt fingerprint",
+                worker_id, request_id
+            );
+            return;
+        }
+
+        let state_size = ctx.get_state_size();
+        let mut state_bytes = vec![0u8; state_size];
+        let bytes_written = unsafe { ctx.copy_state_data(state_bytes.as_mut_ptr()) };
+
+        if bytes_written == 0 {
+            warn!(
+                "Worker {} failed to snapshot prompt-boundary state (wrote 0 bytes) for request {}",
+                worker_id, request_id
+            );
+            return;
+        }
+        state_bytes.truncate(bytes_written);
+
+        // Snapshot the MTP draft's per-seq KV when this turn ran with MTP.
+        // The draft mirrors the target up to the prompt boundary at this
+        // point — saving its per-seq state lets the next turn restore both
+        // halves and keep speculative decoding warm.
+        let draft_state_bytes: Option<Vec<u8>> = draft_ctx.map(|d| d.state_seq_get_data(0));
+        let draft_bytes_len = draft_state_bytes.as_ref().map_or(0, |b| b.len());
+
+        let mut cache = session_state_cache.lock().unwrap();
+        cache.insert(
+            session.id.to_string(),
+            state_bytes,
+            Some(prompt_tokens.to_vec()),
+            draft_state_bytes,
+        );
+        info!(
+            "Worker {} cached {} bytes of target + {} bytes of draft state at prompt boundary for session {} ({} messages, {} prompt tokens)",
+            worker_id,
+            bytes_written,
+            draft_bytes_len,
+            session.id,
+            session.messages.len(),
+            prompt_tokens.len()
+        );
+    }
+
     /// Copy the llama.cpp context state into the session cache so the next
     /// turn can resume without reprocessing prior messages. The store evicts
     /// LRU entries to stay within its entry-count and byte budgets.
@@ -1562,6 +1635,17 @@ impl RequestQueue {
         let template_token_count = prep.template_offset;
         let cached_draft_bytes = prep.draft_state_bytes;
 
+        // Tokenize the full prompt ONCE up front so the post-prefill hook can
+        // store the fingerprint without re-tokenizing inside the closure
+        // (and without duplicating the tokenization between the standard and
+        // MTP paths). Empty on tokenization error falls back to "no save"
+        // inside `save_prompt_boundary_state` via an empty prompt_tokens guard.
+        let prompt_tokens_for_save: Vec<i32> = model
+            .str_to_token(&prompt, llama_cpp_2::model::AddBos::Always)
+            .ok()
+            .map(|toks| toks.into_iter().map(|t| t.0).collect())
+            .unwrap_or_default();
+
         // Auto-detect MTP: when the loaded model carries the NextN/MTP head,
         // run the draft-mtp speculative loop with a second MTP-context on the
         // same model (target=this ctx + draft=ctx_type::Mtp). Same KV-reuse on
@@ -1578,10 +1662,6 @@ impl RequestQueue {
         // whether to snapshot the draft below — we only save when MTP truly
         // executed, otherwise a future restore would expect an aligned draft
         // that doesn't exist.
-        let mut used_mtp = false;
-        // Hold the draft context across the generation call so we can snapshot
-        // its state for the cache after a successful turn.
-        let mut draft_ctx_opt: Option<LlamaContext<'_>> = None;
         let result = if use_mtp {
             match model_manager.create_draft_session_context(model, &session.id) {
                 Ok(mut draft_ctx) => {
@@ -1598,8 +1678,7 @@ impl RequestQueue {
                             worker_id,
                             nextn_layers.unwrap_or(0)
                         );
-                        used_mtp = true;
-                        let mtp_result = crate::generation::mtp::generate_stream_mtp(
+                        crate::generation::mtp::generate_stream_mtp(
                             model,
                             &mut ctx,
                             &mut draft_ctx,
@@ -1610,12 +1689,28 @@ impl RequestQueue {
                             model_manager.get_batch_size(),
                             template_token_count,
                             crate::generation::mtp::MtpParams::default(),
+                            // Snapshot target + draft at the prompt boundary,
+                            // BEFORE generation begins. See the rationale on
+                            // `save_prompt_boundary_state` — saving here is
+                            // what makes the next turn's LCP trim rollback
+                            // distance ~0 on the common path, so n_rs_seq=64
+                            // never has to absorb a multi-hundred-token
+                            // generation tail.
+                            |target_at_boundary, draft_at_boundary| {
+                                Self::save_prompt_boundary_state(
+                                    worker_id,
+                                    &request_id,
+                                    session,
+                                    target_at_boundary,
+                                    Some(draft_at_boundary),
+                                    session_state_cache,
+                                    &prompt_tokens_for_save,
+                                );
+                            },
                         )
                         .map_err(|e| crate::types::QueueError::WorkerError(format!(
                             "MTP generation failed: {e}"
-                        )));
-                        draft_ctx_opt = Some(draft_ctx);
-                        mtp_result
+                        )))
                     } else {
                         // Draft restore/trim failed — fall back to standard
                         // streaming for this turn. Drops the stale draft_ctx
@@ -1629,6 +1724,17 @@ impl RequestQueue {
                             cancellation_token,
                             model_manager.get_batch_size(),
                             template_token_count,
+                            |target_at_boundary| {
+                                Self::save_prompt_boundary_state(
+                                    worker_id,
+                                    &request_id,
+                                    session,
+                                    target_at_boundary,
+                                    None,
+                                    session_state_cache,
+                                    &prompt_tokens_for_save,
+                                );
+                            },
                         )
                         .map_err(|e| crate::types::QueueError::WorkerError(format!(
                             "Generation failed: {e}"
@@ -1649,6 +1755,17 @@ impl RequestQueue {
                         cancellation_token,
                         model_manager.get_batch_size(),
                         template_token_count,
+                        |target_at_boundary| {
+                            Self::save_prompt_boundary_state(
+                                worker_id,
+                                &request_id,
+                                session,
+                                target_at_boundary,
+                                None,
+                                session_state_cache,
+                                &prompt_tokens_for_save,
+                            );
+                        },
                     )
                     .map_err(|e| crate::types::QueueError::WorkerError(format!(
                         "Generation failed: {e}"
@@ -1665,59 +1782,33 @@ impl RequestQueue {
                 cancellation_token,
                 model_manager.get_batch_size(),
                 template_token_count,
+                |target_at_boundary| {
+                    Self::save_prompt_boundary_state(
+                        worker_id,
+                        &request_id,
+                        session,
+                        target_at_boundary,
+                        None,
+                        session_state_cache,
+                        &prompt_tokens_for_save,
+                    );
+                },
             )
             .map_err(|e| crate::types::QueueError::WorkerError(format!(
                 "Generation failed: {e}"
             )))
         };
 
-        // Persist the updated KV cache (prompt + generated tokens) for the next
-        // turn — but ONLY on a clean, fully-generated turn. A consumer
-        // disconnect (`try_send` fails mid-stream) or a cancellation both return
-        // `Ok(())` from the generator, yet leave the KV cache ending at an
-        // arbitrary mid-generation token whose tokens were never persisted as a
-        // session message. Saving that would make the next turn's re-rendered
-        // prompt diverge from the cached prefix at the truncation point — and
-        // because the resume offset is a token COUNT, the model would decode
-        // against cached KV holding different tokens (silent corruption, not a
-        // clean miss). `is_closed()` detects a dropped receiver; `is_cancelled()`
-        // detects cancellation. Skipping the save in those cases simply forces a
-        // (correct) cold start next turn.
-        if should_persist_stream_state(
-            result.is_ok(),
-            cancellation_token.is_cancelled(),
-            stream_sender.is_closed(),
-        ) {
-            // Store the prompt's tokenization alongside the state so the NEXT
-            // turn can verify the cache is still a valid prefix (longest common
-            // prefix) before reusing it — see `prepare_streaming_kv_cache`.
-            let prompt_tokens: Option<Vec<i32>> = model
-                .str_to_token(&prompt, llama_cpp_2::model::AddBos::Always)
-                .ok()
-                .map(|toks| toks.into_iter().map(|t| t.0).collect());
-            // Snapshot the draft per-seq KV state if MTP actually ran this
-            // turn. Without this, turn N+1 would restore the target alone and
-            // skip MTP (see `apply_draft_kv_state`). State is per-seq (not the
-            // full ctx state) — the draft's RNG/logits/embedding buffers don't
-            // need to survive across turns, only the KV for seq 0.
-            let draft_state_bytes: Option<Vec<u8>> = if used_mtp {
-                draft_ctx_opt
-                    .as_ref()
-                    .map(|d| d.state_seq_get_data(0))
-            } else {
-                None
-            };
-            Self::save_session_state(
-                worker_id,
-                &request_id,
-                session,
-                &mut ctx,
-                session_state_cache,
-                prompt_tokens,
-                draft_state_bytes,
-            );
-        }
-        drop(draft_ctx_opt);
+        // No post-generation save: the prompt-boundary hook above already
+        // snapshotted state right after prefill, before any token was
+        // generated. The cached state therefore always ends at the exact
+        // prompt boundary, so the next turn's LCP rollback is 0 on the
+        // common path — n_rs_seq never has to absorb a multi-hundred-token
+        // generation tail (the bug that surfaced as "n_rs_seq window
+        // exceeded → cold full reprocess" every few turns). Disconnect /
+        // cancellation are also no longer save-skip cases: the saved state
+        // is the prompt state, which is valid whether or not generation
+        // completed.
 
         log_streaming_result(worker_id, &request_id, &stream_sender, result);
         Ok(())
@@ -2045,20 +2136,6 @@ fn streaming_reuse_decision(lcp: usize, new_len: usize) -> Option<usize> {
         return None;
     }
     Some(lcp)
-}
-
-/// Whether a streaming turn's KV cache should be persisted for reuse next turn.
-///
-/// Only a clean, fully-generated turn may be saved. The streaming generator
-/// returns `Ok(())` for THREE distinct outcomes — natural completion, consumer
-/// disconnect (`try_send` failed), and cancellation — so `result_ok` alone is
-/// not enough. A disconnect or cancellation leaves the KV cache ending at an
-/// arbitrary mid-generation token that was never persisted as a message, so
-/// reusing it next turn would corrupt output (the resume offset is a token
-/// count, not a content-checked prefix). We therefore additionally require that
-/// the turn was not cancelled and the stream receiver is still attached.
-fn should_persist_stream_state(result_ok: bool, cancelled: bool, sender_closed: bool) -> bool {
-    result_ok && !cancelled && !sender_closed
 }
 
 /// Log the outcome of a streaming generation and, on error, relay the failure
@@ -3910,25 +3987,10 @@ mod tests {
             assert_eq!(streaming_reuse_decision(0, 0), None);
         }
 
-        #[test]
-        fn persist_stream_state_only_on_clean_completion() {
-            // A clean, fully-generated turn with the receiver still attached is
-            // the only case we persist.
-            assert!(should_persist_stream_state(true, false, false));
-        }
-
-        #[test]
-        fn persist_stream_state_skips_disconnect_cancel_and_error() {
-            // Consumer disconnect (sender closed): the KV cache ends mid-
-            // generation at tokens never persisted as a message — must NOT save.
-            assert!(!should_persist_stream_state(true, false, true));
-            // Cancellation: same partial-state hazard — must NOT save.
-            assert!(!should_persist_stream_state(true, true, false));
-            // Hard error: nothing trustworthy to save.
-            assert!(!should_persist_stream_state(false, false, false));
-            // Any combination of abort signals also skips.
-            assert!(!should_persist_stream_state(true, true, true));
-            assert!(!should_persist_stream_state(false, true, true));
-        }
+        // The `should_persist_stream_state` predicate and its tests were
+        // removed: state is now saved at the prompt boundary BEFORE
+        // generation begins, so cancellation or disconnect mid-generation
+        // never affects the cache (the saved state is the prompt state,
+        // which is valid regardless of whether generation completed).
     }
 }
