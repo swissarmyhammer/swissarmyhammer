@@ -12,6 +12,19 @@ use serde::Deserialize;
 use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
+/// Default number of tasks returned per page when the caller does not
+/// specify `page_size`. Picked to keep AI-driven `list tasks` calls cheap
+/// — at ~200 prompt tokens per enriched task, 10 tasks is well under 2k
+/// tokens and avoids the multi-tens-of-thousands-of-tokens tool result
+/// that an unpaginated list of a busy board produces.
+pub const DEFAULT_PAGE_SIZE: usize = 10;
+
+/// Upper bound on a single `list tasks` response. A caller asking for an
+/// unreasonably large page is clamped down rather than silently surprised
+/// by a partial result — and the bound keeps prompt-eating tool results
+/// bounded regardless of caller behaviour.
+pub const MAX_PAGE_SIZE: usize = 100;
+
 /// List tasks with optional column and DSL filter.
 #[operation(
     verb = "list",
@@ -24,6 +37,12 @@ pub struct ListTasks {
     pub column: Option<ColumnId>,
     /// Filter DSL expression (e.g. `#bug && @alice`).
     pub filter: Option<String>,
+    /// 1-indexed page number. Defaults to 1 when unset; values < 1 are
+    /// treated as 1.
+    pub page: Option<usize>,
+    /// Tasks per page. Defaults to [`DEFAULT_PAGE_SIZE`] (10) when unset;
+    /// clamped to `1..=MAX_PAGE_SIZE` otherwise.
+    pub page_size: Option<usize>,
 }
 
 impl ListTasks {
@@ -41,6 +60,18 @@ impl ListTasks {
     /// Set a filter DSL expression.
     pub fn with_filter(mut self, filter: impl Into<String>) -> Self {
         self.filter = Some(filter.into());
+        self
+    }
+
+    /// Request a specific page (1-indexed).
+    pub fn with_page(mut self, page: usize) -> Self {
+        self.page = Some(page);
+        self
+    }
+
+    /// Override the page size (clamped to `1..=MAX_PAGE_SIZE`).
+    pub fn with_page_size(mut self, page_size: usize) -> Self {
+        self.page_size = Some(page_size);
         self
     }
 }
@@ -91,7 +122,35 @@ impl Execute<KanbanContext, KanbanError> for ListTasks {
                 .map(task_entity_to_rich_json)
                 .collect();
 
-            Ok(serde_json::json!({ "tasks": filtered, "count": filtered.len() }))
+            // Pagination — applied AFTER filtering so the page metadata
+            // reflects the filtered set, not the raw board. Without this
+            // the kanban MCP `list tasks` op returned the entire board on
+            // every call: a busy board's enriched JSON could blow past
+            // 25k prompt tokens per response, eating the AI's context
+            // budget on a single tool call.
+            let total = filtered.len();
+            let page = self.page.unwrap_or(1).max(1);
+            let page_size = self
+                .page_size
+                .unwrap_or(DEFAULT_PAGE_SIZE)
+                .clamp(1, MAX_PAGE_SIZE);
+            let total_pages = total.div_ceil(page_size).max(1);
+            let start = (page - 1).saturating_mul(page_size);
+            let paginated: Vec<Value> =
+                filtered.into_iter().skip(start).take(page_size).collect();
+
+            Ok(serde_json::json!({
+                "tasks": paginated,
+                // `count` continues to mean "number of items in the returned
+                // `tasks` array" — the most common consumer of the field —
+                // and matches `paginated.len()` exactly. Callers wanting
+                // the unpaginated total use `total`.
+                "count": paginated.len(),
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": total_pages,
+            }))
         }
         .await
         {
@@ -600,6 +659,177 @@ mod tests {
             .unwrap();
         assert_eq!(result["count"], 1);
         assert_eq!(result["tasks"][0]["title"], "Bug by Alice");
+    }
+
+    // --- Pagination ---------------------------------------------------------
+
+    /// Default page size of 10 must be applied even when the caller passes
+    /// neither `page` nor `page_size`. This is the behaviour that keeps the
+    /// AI tool result bounded on a busy board.
+    #[tokio::test]
+    async fn test_list_tasks_default_page_size_is_10() {
+        let (_temp, ctx) = setup().await;
+        for i in 0..15 {
+            AddTask::new(format!("Task {i}"))
+                .execute(&ctx)
+                .await
+                .into_result()
+                .unwrap();
+        }
+
+        let result = ListTasks::new().execute(&ctx).await.into_result().unwrap();
+        assert_eq!(result["count"], 10, "default page returns 10 tasks");
+        assert_eq!(result["total"], 15, "total reports unpaginated size");
+        assert_eq!(result["page"], 1);
+        assert_eq!(result["page_size"], 10);
+        assert_eq!(result["total_pages"], 2);
+        assert_eq!(result["tasks"].as_array().unwrap().len(), 10);
+    }
+
+    /// `page=2` returns the second slice with the correct metadata; a partial
+    /// final page is shorter than `page_size` but is still page=2.
+    #[tokio::test]
+    async fn test_list_tasks_second_page() {
+        let (_temp, ctx) = setup().await;
+        for i in 0..15 {
+            AddTask::new(format!("Task {i:02}"))
+                .execute(&ctx)
+                .await
+                .into_result()
+                .unwrap();
+        }
+
+        let result = ListTasks::new()
+            .with_page(2)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(result["count"], 5, "remainder on the second page");
+        assert_eq!(result["total"], 15);
+        assert_eq!(result["page"], 2);
+        assert_eq!(result["total_pages"], 2);
+        assert_eq!(result["tasks"].as_array().unwrap().len(), 5);
+    }
+
+    /// Explicit `page_size` overrides the default and is honoured by both the
+    /// slice math and the metadata.
+    #[tokio::test]
+    async fn test_list_tasks_explicit_page_size() {
+        let (_temp, ctx) = setup().await;
+        for i in 0..7 {
+            AddTask::new(format!("Task {i}"))
+                .execute(&ctx)
+                .await
+                .into_result()
+                .unwrap();
+        }
+
+        let result = ListTasks::new()
+            .with_page_size(3)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(result["count"], 3);
+        assert_eq!(result["page_size"], 3);
+        assert_eq!(result["total_pages"], 3, "7 items / 3 per page = 3 pages");
+
+        let last_page = ListTasks::new()
+            .with_page(3)
+            .with_page_size(3)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(last_page["count"], 1, "final partial page has 1 task");
+        assert_eq!(last_page["page"], 3);
+    }
+
+    /// A page past the last page returns an empty `tasks` array but still
+    /// reports accurate metadata — callers can safely paginate forward
+    /// without a pre-emptive total fetch.
+    #[tokio::test]
+    async fn test_list_tasks_page_beyond_range_is_empty() {
+        let (_temp, ctx) = setup().await;
+        AddTask::new("Only task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let result = ListTasks::new()
+            .with_page(5)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(result["count"], 0);
+        assert_eq!(result["total"], 1);
+        assert_eq!(result["page"], 5);
+        assert_eq!(result["total_pages"], 1);
+        assert!(result["tasks"].as_array().unwrap().is_empty());
+    }
+
+    /// An empty board returns `total_pages: 1` (not 0) so callers can
+    /// branch on `total === 0` rather than special-casing zero-page math.
+    #[tokio::test]
+    async fn test_list_tasks_empty_pagination_metadata() {
+        let (_temp, ctx) = setup().await;
+        let result = ListTasks::new().execute(&ctx).await.into_result().unwrap();
+        assert_eq!(result["count"], 0);
+        assert_eq!(result["total"], 0);
+        assert_eq!(result["page"], 1);
+        assert_eq!(result["page_size"], 10);
+        assert_eq!(result["total_pages"], 1);
+    }
+
+    /// `page_size` over `MAX_PAGE_SIZE` is clamped so a caller cannot
+    /// blow up the response by passing an absurd value.
+    #[tokio::test]
+    async fn test_list_tasks_page_size_clamped_to_max() {
+        let (_temp, ctx) = setup().await;
+        AddTask::new("Only")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let result = ListTasks::new()
+            .with_page_size(MAX_PAGE_SIZE * 10)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            result["page_size"].as_u64().unwrap() as usize,
+            MAX_PAGE_SIZE
+        );
+    }
+
+    /// Filter is applied BEFORE pagination, so `total` reflects only the
+    /// matched set.
+    #[tokio::test]
+    async fn test_list_tasks_filter_then_paginate() {
+        let (_temp, ctx) = setup().await;
+        for i in 0..12 {
+            AddTask::new(format!("Task {i}"))
+                .with_description(if i % 2 == 0 { "#bug" } else { "" })
+                .execute(&ctx)
+                .await
+                .into_result()
+                .unwrap();
+        }
+
+        let result = ListTasks::new()
+            .with_filter("#bug")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(result["total"], 6, "6 of 12 tasks have #bug");
+        assert_eq!(result["count"], 6, "fits on default page");
+        assert_eq!(result["total_pages"], 1);
     }
 
     #[tokio::test]

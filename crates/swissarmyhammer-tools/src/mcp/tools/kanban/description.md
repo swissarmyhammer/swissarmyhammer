@@ -116,8 +116,10 @@ The tool accepts `op` as a "verb noun" string (e.g., "add task", "move task").
   - Optional: `tag`, `assignee`
 
 - `list tasks` - List tasks with optional filters (excludes done tasks by default)
-  - Optional: `column`, `tag`, `assignee`, `ready`
-  - **Important**: Never call with no parameters — always provide at least one filter. Done tasks are automatically excluded unless you explicitly pass `column: "done"`. Prefer `next task` to get one actionable card at a time.
+  - Optional: `column`, `filter` (DSL e.g. `#bug && @alice`), `page`, `page_size`
+  - **Paginated**: defaults to `page_size: 10` and `page: 1` when unset. `page_size` is clamped to `1..=100`.
+  - Response: `tasks` (page slice), `count` (= `tasks.length`), `total` (unpaginated count), `page`, `page_size`, `total_pages`.
+  - **Important**: Never call with no filter on a board with many tasks — pass `column`, a `filter` DSL, or both. Done tasks are automatically excluded unless you explicitly pass `column: "done"`. Prefer `next task` to get one actionable card at a time.
 
 ### Tag Operations
 
