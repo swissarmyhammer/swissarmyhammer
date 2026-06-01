@@ -1287,7 +1287,6 @@ dependencies = [
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-kanban",
- "swissarmyhammer-modes",
  "swissarmyhammer-prompts",
  "tempfile",
  "thiserror 2.0.18",
@@ -4487,7 +4486,6 @@ dependencies = [
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-kanban",
- "swissarmyhammer-modes",
  "swissarmyhammer-prompts",
  "swissarmyhammer-skills",
  "swissarmyhammer-tools",
@@ -8551,26 +8549,6 @@ dependencies = [
  "serde_yaml_ng",
  "tempfile",
  "thiserror 2.0.18",
-]
-
-[[package]]
-name = "swissarmyhammer-modes"
-version = "0.13.6"
-dependencies = [
- "anyhow",
- "dirs",
- "include_dir",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "swissarmyhammer-common",
- "swissarmyhammer-config",
- "swissarmyhammer-prompts",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "walkdir",
 ]
 
 [[package]]

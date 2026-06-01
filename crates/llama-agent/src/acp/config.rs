@@ -99,10 +99,21 @@ impl Default for AcpConfig {
 }
 
 impl AcpConfig {
-    /// Load available modes from ModeRegistry
+    /// Populate the available modes and their resolved system prompts directly
+    /// from the agent library.
     ///
-    /// Loads all modes from the ModeRegistry (builtin → user → local) and converts
-    /// them to ACP SessionMode format.
+    /// `builtin/modes/` was deleted because the Mode layer added no
+    /// information: every mode either redirected to a same-named agent
+    /// (committer, default, implementer, planner, reviewer, tester) or
+    /// carried duplicated body content of an existing agent (Explore,
+    /// general-purpose, Plan). Modes are now synthesized one-per-agent:
+    /// the agent's name + description become the SessionMode's display
+    /// fields, and the agent's Liquid-rendered instructions (plus any
+    /// preloaded skills) become the mode's system prompt. Each agent IS a
+    /// mode.
+    ///
+    /// The kept-but-renamed method name preserves call sites in tests
+    /// and external configs.
     ///
     /// # Example
     ///
@@ -113,63 +124,46 @@ impl AcpConfig {
     /// config.load_modes_from_registry();
     /// ```
     pub fn load_modes_from_registry(&mut self) {
-        let mut registry = swissarmyhammer_modes::ModeRegistry::new();
-
-        // Load agent library for resolving mode → agent references
         let mut agent_library = swissarmyhammer_agents::AgentLibrary::new();
         agent_library.load_defaults();
 
-        // Prompt library + template context for Liquid rendering of agent instructions
+        // Prompt library + template context for Liquid rendering of agent
+        // instructions; skill library for resolving any preloaded skills.
         let prompt_library = swissarmyhammer_prompts::PromptLibrary::default();
         let template_context = swissarmyhammer_config::TemplateContext::new();
-
-        // Skill library for resolving agent preloaded skills
         let mut skill_library = swissarmyhammer_skills::SkillLibrary::new();
         skill_library.load_defaults();
 
-        match registry.load_all() {
-            Ok(modes) => {
-                let mut system_prompts = HashMap::new();
-
-                self.available_modes = modes
-                    .into_iter()
-                    .map(|mode| {
-                        let id = mode.id().to_string();
-
-                        // If mode references an agent, use agent's metadata and instructions
-                        let (name, desc, system_prompt) = resolve_mode_from_agent(
-                            &mode,
-                            &agent_library,
-                            &prompt_library,
-                            &skill_library,
-                            &template_context,
-                        );
-
-                        system_prompts.insert(id.clone(), system_prompt);
-
-                        let mode_id = agent_client_protocol::schema::SessionModeId::new(id);
-                        agent_client_protocol::schema::SessionMode::new(mode_id, name)
-                            .description(desc)
-                    })
-                    .collect();
-
-                self.mode_system_prompts = system_prompts;
-
-                tracing::info!(
-                    "Loaded {} modes from registry (with {} system prompts): {:?}",
-                    self.available_modes.len(),
-                    self.mode_system_prompts.len(),
-                    self.available_modes
-                        .iter()
-                        .map(|m| m.id.0.as_ref())
-                        .collect::<Vec<_>>()
+        let mut system_prompts = HashMap::new();
+        self.available_modes = agent_library
+            .list()
+            .into_iter()
+            .map(|agent| {
+                let id = agent.name.as_str().to_string();
+                let system_prompt = resolve_agent_system_prompt(
+                    agent,
+                    &prompt_library,
+                    &skill_library,
+                    &template_context,
                 );
-            }
-            Err(e) => {
-                tracing::warn!("Failed to load modes from registry: {}", e);
-                // Keep default empty modes
-            }
-        }
+                system_prompts.insert(id.clone(), system_prompt);
+
+                let mode_id = agent_client_protocol::schema::SessionModeId::new(id.clone());
+                agent_client_protocol::schema::SessionMode::new(mode_id, id)
+                    .description(agent.description.clone())
+            })
+            .collect();
+        self.mode_system_prompts = system_prompts;
+
+        tracing::info!(
+            "Loaded {} modes from agent library (with {} system prompts): {:?}",
+            self.available_modes.len(),
+            self.mode_system_prompts.len(),
+            self.available_modes
+                .iter()
+                .map(|m| m.id.0.as_ref())
+                .collect::<Vec<_>>()
+        );
     }
 
     /// Create a new config with modes loaded from registry
@@ -414,71 +408,55 @@ impl Default for TerminalSettings {
 /// the agent's name, description, and Liquid-rendered instructions. When the agent declares
 /// preloaded skills, each skill's rendered instructions are appended to the system prompt.
 /// Falls back to the mode's own embedded metadata if the agent is not found.
-fn resolve_mode_from_agent(
-    mode: &swissarmyhammer_modes::Mode,
-    agent_library: &swissarmyhammer_agents::AgentLibrary,
+/// Render an agent's instructions (and any preloaded skill instructions) into
+/// the system prompt the ACP server injects on session creation.
+///
+/// The agent's `instructions` are Liquid-rendered against the supplied
+/// template context, then any `skills:` referenced in the agent frontmatter
+/// have their own (also Liquid-rendered) instructions appended in declared
+/// order. Skill lookups that miss are logged at WARN and skipped — a missing
+/// skill is a config problem, not a fatal one.
+fn resolve_agent_system_prompt(
+    agent: &swissarmyhammer_agents::Agent,
     prompt_library: &swissarmyhammer_prompts::PromptLibrary,
     skill_library: &swissarmyhammer_skills::SkillLibrary,
     template_context: &swissarmyhammer_config::TemplateContext,
-) -> (String, String, String) {
-    // 1. Try agent reference
-    if let Some(agent_name) = mode.agent() {
-        if let Some(agent) = agent_library.get(agent_name) {
-            let rendered = prompt_library
-                .render_text(&agent.instructions, template_context)
+) -> String {
+    let rendered = prompt_library
+        .render_text(&agent.instructions, template_context)
+        .unwrap_or_else(|e| {
+            tracing::warn!(
+                "Failed to render agent '{}' instructions: {}",
+                agent.name.as_str(),
+                e
+            );
+            agent.instructions.clone()
+        });
+
+    let mut system_prompt = rendered;
+    for skill_name in &agent.skills {
+        if let Some(skill) = skill_library.get(skill_name) {
+            let skill_rendered = prompt_library
+                .render_text(&skill.instructions, template_context)
                 .unwrap_or_else(|e| {
                     tracing::warn!(
-                        "Failed to render agent '{}' instructions: {}",
-                        agent_name,
+                        "Failed to render skill '{}' instructions: {}",
+                        skill_name,
                         e
                     );
-                    agent.instructions.clone()
+                    skill.instructions.clone()
                 });
-
-            // Append preloaded skill instructions
-            let mut system_prompt = rendered;
-            for skill_name in &agent.skills {
-                if let Some(skill) = skill_library.get(skill_name) {
-                    let skill_rendered = prompt_library
-                        .render_text(&skill.instructions, template_context)
-                        .unwrap_or_else(|e| {
-                            tracing::warn!(
-                                "Failed to render skill '{}' instructions: {}",
-                                skill_name,
-                                e
-                            );
-                            skill.instructions.clone()
-                        });
-                    system_prompt.push_str("\n\n");
-                    system_prompt.push_str(&skill_rendered);
-                } else {
-                    tracing::warn!(
-                        "Agent '{}' references skill '{}' but it was not found",
-                        agent_name,
-                        skill_name
-                    );
-                }
-            }
-
-            return (
-                agent.name.to_string(),
-                agent.description.clone(),
-                system_prompt,
+            system_prompt.push_str("\n\n");
+            system_prompt.push_str(&skill_rendered);
+        } else {
+            tracing::warn!(
+                "Agent '{}' references skill '{}' but it was not found",
+                agent.name.as_str(),
+                skill_name
             );
         }
-        tracing::warn!(
-            "Mode '{}' references agent '{}' but it was not found, falling back to embedded",
-            mode.id(),
-            agent_name
-        );
     }
-
-    // 2. Fallback to mode's own metadata
-    (
-        mode.name().to_string(),
-        mode.description().to_string(),
-        mode.system_prompt().to_string(),
-    )
+    system_prompt
 }
 
 #[cfg(test)]
@@ -792,7 +770,12 @@ capabilities:
         assert_eq!(loaded_config.terminal.output_buffer_bytes, 2048576);
     }
 
-    // --- resolve_mode_from_agent tests ---
+    // --- resolve_agent_system_prompt tests ---
+    //
+    // The mode → agent resolution path was removed: every mode in
+    // `available_modes` is now synthesized one-per-agent from the agent
+    // library, so the test surface that remains is the agent → system
+    // prompt rendering (and skill appending).
 
     /// Helper: create agent library with builtins for resolution tests
     fn test_agent_library() -> swissarmyhammer_agents::AgentLibrary {
@@ -809,128 +792,39 @@ capabilities:
     }
 
     #[test]
-    fn test_resolve_mode_from_agent_uses_agent_metadata() {
+    fn resolve_agent_system_prompt_renders_instructions() {
         let agent_library = test_agent_library();
         let prompt_library = swissarmyhammer_prompts::PromptLibrary::default();
         let skill_library = test_skill_library();
         let template_context = swissarmyhammer_config::TemplateContext::new();
 
-        // Create a mode that references the builtin "planner" agent
-        let mode = swissarmyhammer_modes::Mode::with_agent(
-            "test-mode",
-            "Mode Name",
-            "Mode Desc",
-            "planner",
-        );
+        let agent = agent_library.get("planner").expect("planner agent exists");
+        let system_prompt =
+            resolve_agent_system_prompt(agent, &prompt_library, &skill_library, &template_context);
 
-        let (name, desc, system_prompt) = resolve_mode_from_agent(
-            &mode,
-            &agent_library,
-            &prompt_library,
-            &skill_library,
-            &template_context,
-        );
-
-        // Name and description should come from the agent, NOT the mode
-        assert_ne!(name, "Mode Name", "name should come from agent, not mode");
-        assert_ne!(desc, "Mode Desc", "desc should come from agent, not mode");
         assert!(
             !system_prompt.is_empty(),
-            "system prompt should not be empty"
+            "rendered system prompt must not be empty"
         );
     }
 
     #[test]
-    fn test_resolve_mode_from_agent_fallback_when_agent_missing() {
-        let agent_library = swissarmyhammer_agents::AgentLibrary::new(); // empty
-        let prompt_library = swissarmyhammer_prompts::PromptLibrary::default();
-        let skill_library = test_skill_library();
-        let template_context = swissarmyhammer_config::TemplateContext::new();
-
-        // References a nonexistent agent
-        let mode = swissarmyhammer_modes::Mode::with_agent(
-            "test-mode",
-            "Fallback Name",
-            "Fallback Desc",
-            "nonexistent-agent",
-        );
-
-        let (name, desc, _system_prompt) = resolve_mode_from_agent(
-            &mode,
-            &agent_library,
-            &prompt_library,
-            &skill_library,
-            &template_context,
-        );
-
-        // Should fall back to mode's own metadata
-        assert_eq!(name, "Fallback Name");
-        assert_eq!(desc, "Fallback Desc");
-    }
-
-    #[test]
-    fn test_resolve_mode_from_agent_no_agent_ref() {
+    fn resolve_agent_system_prompt_appends_skill_instructions() {
         let agent_library = test_agent_library();
         let prompt_library = swissarmyhammer_prompts::PromptLibrary::default();
         let skill_library = test_skill_library();
         let template_context = swissarmyhammer_config::TemplateContext::new();
 
-        // Mode with no agent reference (embedded system prompt)
-        let mode = swissarmyhammer_modes::Mode::new(
-            "embedded-mode",
-            "Embedded Name",
-            "Embedded Desc",
-            "You are a test agent.",
-        );
-
-        let (name, desc, system_prompt) = resolve_mode_from_agent(
-            &mode,
-            &agent_library,
-            &prompt_library,
-            &skill_library,
-            &template_context,
-        );
-
-        assert_eq!(name, "Embedded Name");
-        assert_eq!(desc, "Embedded Desc");
-        assert_eq!(system_prompt, "You are a test agent.");
-    }
-
-    #[test]
-    fn test_resolve_mode_from_agent_appends_skill_instructions() {
-        let agent_library = test_agent_library();
-        let prompt_library = swissarmyhammer_prompts::PromptLibrary::default();
-        let skill_library = test_skill_library();
-        let template_context = swissarmyhammer_config::TemplateContext::new();
-
-        // The "tester" agent has skills: [test] in its frontmatter
-        let mode = swissarmyhammer_modes::Mode::with_agent(
-            "test-mode",
-            "Mode Name",
-            "Mode Desc",
-            "tester",
-        );
-
-        let (_name, _desc, system_prompt) = resolve_mode_from_agent(
-            &mode,
-            &agent_library,
-            &prompt_library,
-            &skill_library,
-            &template_context,
-        );
-
-        // The tester agent's instructions should be present
-        assert!(
-            !system_prompt.is_empty(),
-            "system prompt should not be empty"
-        );
+        // The "tester" agent has skills: [test] in its frontmatter.
+        let agent = agent_library.get("tester").expect("tester agent exists");
+        let system_prompt =
+            resolve_agent_system_prompt(agent, &prompt_library, &skill_library, &template_context);
 
         // The "test" skill's instructions should be appended. We compare
         // against a snippet of the *rendered* skill text (not the raw
-        // template) because `resolve_mode_from_agent` renders Liquid
-        // partials (`{% include %}`) before concatenating, so the raw
-        // skill body's leading characters do not appear verbatim in the
-        // final system prompt.
+        // template) because Liquid partials (`{% include %}`) are
+        // expanded before concatenation, so the raw skill body's leading
+        // characters do not appear verbatim in the final system prompt.
         let test_skill = skill_library.get("test").expect("test skill should exist");
         let rendered_skill = prompt_library
             .render_text(&test_skill.instructions, &template_context)

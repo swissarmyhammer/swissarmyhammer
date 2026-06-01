@@ -15,7 +15,6 @@ members = [
     "crates/swissarmyhammer-shell",
     "crates/swissarmyhammer-templating",
     "crates/swissarmyhammer-prompts",
-    "crates/swissarmyhammer-modes",
 
     "crates/swissarmyhammer-agent",
     "crates/swissarmyhammer-mcp-proxy",
@@ -289,7 +288,6 @@ swissarmyhammer-js = { path = "crates/swissarmyhammer-js" }
 swissarmyhammer-kanban = { path = "crates/swissarmyhammer-kanban" }
 swissarmyhammer-mcp-proxy = { path = "crates/swissarmyhammer-mcp-proxy" }
 swissarmyhammer-merge = { path = "crates/swissarmyhammer-merge" }
-swissarmyhammer-modes = { path = "crates/swissarmyhammer-modes" }
 swissarmyhammer-perspectives = { path = "crates/swissarmyhammer-perspectives" }
 swissarmyhammer-project-detection = { path = "crates/swissarmyhammer-project-detection" }
 swissarmyhammer-prompts = { path = "crates/swissarmyhammer-prompts" }

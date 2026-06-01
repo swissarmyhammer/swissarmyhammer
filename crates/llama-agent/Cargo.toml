@@ -80,10 +80,8 @@ agent-client-protocol-schema = { workspace = true }
 swissarmyhammer-common = { workspace = true }
 swissarmyhammer-kanban = { workspace = true }
 
-# Modes system for ACP session modes
-swissarmyhammer-modes = { workspace = true }
-
-# Agents (subagents) for mode system prompt resolution
+# Agents (subagents) — one per ACP session mode. The agent library is the
+# single source of truth; modes are synthesized from agents.
 swissarmyhammer-agents = { workspace = true }
 
 # Prompt library for Liquid template rendering

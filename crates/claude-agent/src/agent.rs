@@ -479,122 +479,69 @@ impl ClaudeAgent {
         *available_agents = Some(agents);
     }
 
-    /// Load SwissArmyHammer modes from ModeRegistry.
+    /// Build the list of SwissArmyHammer "modes" directly from the agent
+    /// library.
     ///
-    /// Returns a list of agent tuples (id, name, description) for each loaded mode.
-    /// Also stores the resolved system prompts in self.sah_modes.
+    /// `builtin/modes/` was deleted as redundant — every mode either
+    /// redirected to a same-named agent or duplicated an existing agent's
+    /// content. Modes are now synthesized one-per-agent: the agent's name +
+    /// description become the SessionMode's display fields, and the
+    /// Liquid-rendered agent instructions become the mode's system prompt.
+    ///
+    /// Returns a list of agent tuples (id, name, description) for each
+    /// loaded agent. Also stores the resolved system prompts in
+    /// self.sah_modes so `get_sah_mode_system_prompt` can serve them on
+    /// session creation.
     async fn load_sah_modes(&self) -> Vec<(String, String, Option<String>)> {
-        let mut registry = swissarmyhammer_modes::ModeRegistry::new();
-        let sah_mode_list = match registry.load_all() {
-            Ok(modes) => modes,
-            Err(e) => {
-                tracing::warn!("Failed to load SwissArmyHammer modes from registry: {}", e);
-                return Vec::new();
-            }
-        };
-
-        // Load the agent library for modes that reference agents
         let mut agent_library = swissarmyhammer_agents::AgentLibrary::new();
         agent_library.load_defaults();
 
         let prompt_library = swissarmyhammer_prompts::PromptLibrary::new();
         let mut template_context = swissarmyhammer_config::TemplateContext::new();
         template_context.set("version".to_string(), serde_json::json!(crate::VERSION));
+
         let mut agents = Vec::new();
         let mut sah_modes = self.sah_modes.write().await;
 
-        for mode in sah_mode_list {
-            let system_prompt = Self::resolve_mode_system_prompt(
-                &mode,
-                &agent_library,
-                &prompt_library,
-                &template_context,
-            );
-            sah_modes.insert(mode.id().to_string(), system_prompt);
-            agents.push((
-                mode.id().to_string(),
-                mode.name().to_string(),
-                Some(mode.description().to_string()),
-            ));
+        for agent in agent_library.list() {
+            let system_prompt =
+                Self::resolve_agent_system_prompt(agent, &prompt_library, &template_context);
+            let id = agent.name.as_str().to_string();
+            sah_modes.insert(id.clone(), system_prompt);
+            agents.push((id.clone(), id, Some(agent.description.clone())));
         }
 
-        tracing::info!(
-            "Loaded {} SwissArmyHammer modes from ModeRegistry",
-            sah_modes.len()
-        );
+        tracing::info!("Loaded {} agents as SwissArmyHammer modes", sah_modes.len());
         agents
     }
 
-    /// Resolve the system prompt for a mode.
-    ///
-    /// Resolution order:
-    /// 1. If mode has `agent:` field — look up agent instructions and render via Liquid
-    /// 2. If mode has `prompt:` field — render the referenced prompt
-    /// 3. Otherwise — use the embedded system prompt content
-    fn resolve_mode_system_prompt(
-        mode: &swissarmyhammer_modes::Mode,
-        agent_library: &swissarmyhammer_agents::AgentLibrary,
+    /// Render an agent's instructions through Liquid into the system prompt
+    /// the ACP server hands back on `get_sah_mode_system_prompt`. On render
+    /// failure we fall back to the raw instructions so a templating glitch
+    /// degrades to "literal text" rather than dropping the mode entirely.
+    fn resolve_agent_system_prompt(
+        agent: &swissarmyhammer_agents::Agent,
         prompt_library: &swissarmyhammer_prompts::PromptLibrary,
         template_context: &swissarmyhammer_config::TemplateContext,
     ) -> String {
-        // 1. Agent reference takes precedence
-        if let Some(agent_name) = mode.agent() {
-            if let Some(agent) = agent_library.get(agent_name) {
-                // Render agent instructions through Liquid template engine
-                match prompt_library.render_text(&agent.instructions, template_context) {
-                    Ok(rendered) => {
-                        tracing::debug!(
-                            "Resolved mode '{}' via agent '{}' ({} chars)",
-                            mode.id(),
-                            agent_name,
-                            rendered.len()
-                        );
-                        return rendered;
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to render agent '{}' instructions for mode '{}': {}",
-                            agent_name,
-                            mode.id(),
-                            e
-                        );
-                        return agent.instructions.clone();
-                    }
-                }
-            } else {
-                tracing::warn!(
-                    "Agent '{}' not found for mode '{}', falling back",
-                    agent_name,
-                    mode.id()
+        match prompt_library.render_text(&agent.instructions, template_context) {
+            Ok(rendered) => {
+                tracing::debug!(
+                    "Resolved agent '{}' instructions ({} chars)",
+                    agent.name.as_str(),
+                    rendered.len()
                 );
+                rendered
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to render agent '{}' instructions: {}",
+                    agent.name.as_str(),
+                    e
+                );
+                agent.instructions.clone()
             }
         }
-
-        // 2. Prompt reference
-        if let Some(prompt_path) = mode.prompt() {
-            match prompt_library.render(prompt_path, template_context) {
-                Ok(rendered) => {
-                    tracing::debug!(
-                        "Rendered prompt '{}' for mode '{}' ({} chars)",
-                        prompt_path,
-                        mode.id(),
-                        rendered.len()
-                    );
-                    return rendered;
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to render prompt '{}' for mode '{}': {}",
-                        prompt_path,
-                        mode.id(),
-                        e
-                    );
-                }
-            }
-        }
-
-        // 3. Embedded content
-        mode.system_prompt().to_string()
     }
 
     /// Get the system prompt for a SwissArmyHammer mode
