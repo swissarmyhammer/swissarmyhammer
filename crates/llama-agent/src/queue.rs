@@ -29,9 +29,30 @@ use ulid::Ulid;
 /// cache is still a valid prefix of the next turn's prompt before reusing it —
 /// rather than trusting a bare length comparison. The batch path stores `None`
 /// (it relies on its own append-only `cached_message_count` bookkeeping).
+///
+/// `draft_state_bytes` is the per-seq snapshot of the MTP **draft** context's
+/// KV cache (via `state_seq_get_data(seq=0)`), saved on streaming turns where
+/// MTP was actually used. Without it, turn 2+ of an MTP-enabled session would
+/// start with an empty draft context — its recurrent state has never seen the
+/// prefix, so drafts collapse to noise, the target rejects them all, and we
+/// pay double-prefill cost for zero speedup. Some draft contexts are large
+/// (Q8 KV at full ctx) so this is bounded by the same byte budget as the
+/// target state.
 struct CachedSession {
     state_bytes: Vec<u8>,
     prompt_tokens: Option<Vec<i32>>,
+    draft_state_bytes: Option<Vec<u8>>,
+}
+
+impl CachedSession {
+    /// Combined byte footprint used by the LRU byte budget.
+    fn byte_size(&self) -> usize {
+        self.state_bytes.len()
+            + self
+                .draft_state_bytes
+                .as_ref()
+                .map_or(0, |b| b.len())
+    }
 }
 
 /// LRU, byte-bounded in-memory store of per-session llama.cpp context state for
@@ -77,14 +98,18 @@ impl SessionStateStore {
         }
     }
 
-    /// Clone out a session's state bytes + prompt fingerprint, marking it
-    /// most-recently-used. Bytes are cloned (not borrowed) so the caller can
-    /// drop the lock before the comparatively slow `set_state_data`.
-    fn get(&mut self, id: &str) -> Option<(Vec<u8>, Option<Vec<i32>>)> {
-        let out = self
-            .entries
-            .get(id)
-            .map(|c| (c.state_bytes.clone(), c.prompt_tokens.clone()));
+    /// Clone out a session's target state bytes + prompt fingerprint + draft
+    /// state bytes, marking it most-recently-used. Bytes are cloned (not
+    /// borrowed) so the caller can drop the lock before the comparatively slow
+    /// `set_state_data`/`state_seq_set_data`.
+    fn get(&mut self, id: &str) -> Option<(Vec<u8>, Option<Vec<i32>>, Option<Vec<u8>>)> {
+        let out = self.entries.get(id).map(|c| {
+            (
+                c.state_bytes.clone(),
+                c.prompt_tokens.clone(),
+                c.draft_state_bytes.clone(),
+            )
+        });
         if out.is_some() {
             self.touch(id);
         }
@@ -93,16 +118,24 @@ impl SessionStateStore {
 
     /// Insert/replace a session's cached state, then evict LRU entries until
     /// within BOTH the entry-count and total-byte budgets.
-    fn insert(&mut self, id: String, state_bytes: Vec<u8>, prompt_tokens: Option<Vec<i32>>) {
-        let new_bytes = state_bytes.len();
+    fn insert(
+        &mut self,
+        id: String,
+        state_bytes: Vec<u8>,
+        prompt_tokens: Option<Vec<i32>>,
+        draft_state_bytes: Option<Vec<u8>>,
+    ) {
+        let new_bytes = state_bytes.len()
+            + draft_state_bytes.as_ref().map_or(0, |b| b.len());
         if let Some(old) = self.entries.insert(
             id.clone(),
             CachedSession {
                 state_bytes,
                 prompt_tokens,
+                draft_state_bytes,
             },
         ) {
-            self.cur_bytes = self.cur_bytes.saturating_sub(old.state_bytes.len());
+            self.cur_bytes = self.cur_bytes.saturating_sub(old.byte_size());
         }
         self.cur_bytes += new_bytes;
         if self.lru.iter().any(|k| k == &id) {
@@ -123,7 +156,7 @@ impl SessionStateStore {
                 break;
             };
             if let Some(c) = self.entries.remove(&victim) {
-                self.cur_bytes = self.cur_bytes.saturating_sub(c.state_bytes.len());
+                self.cur_bytes = self.cur_bytes.saturating_sub(c.byte_size());
             }
         }
     }
@@ -155,6 +188,33 @@ fn default_max_cache_entries() -> usize {
 /// count. 2 GiB is a generous ceiling for in-memory KV state on a workstation;
 /// tune via [`SessionStateStore::new`] if a deployment needs more or less.
 const MAX_SESSION_CACHE_BYTES: usize = 2 * 1024 * 1024 * 1024;
+
+/// Detect whether a loaded model has an MTP / NextN head by sniffing the
+/// GGUF metadata for an `*.nextn_predict_layers` entry.
+///
+/// The new llama-cpp-rs fork no longer exposes `LlamaModel::has_mtp()` or a
+/// `nextn_predict_layers()` accessor; the hparam still lives in the model
+/// file though, under a key like `qwen3.nextn_predict_layers`. Returns the
+/// parsed count when present and positive (signals MTP is available), `None`
+/// otherwise.
+fn detect_nextn_predict_layers(model: &LlamaModel) -> Option<u32> {
+    let meta_count = model.meta_count();
+    for i in 0..meta_count {
+        let key = match model.meta_key_by_index(i) {
+            Ok(k) => k,
+            Err(_) => continue,
+        };
+        if !key.ends_with(".nextn_predict_layers") {
+            continue;
+        }
+        let value = match model.meta_val_str_by_index(i) {
+            Ok(v) => v,
+            Err(_) => return None,
+        };
+        return value.parse::<u32>().ok().filter(|n| *n > 0);
+    }
+    None
+}
 
 /// Length of the longest common prefix of two token sequences.
 fn common_prefix_len(a: &[i32], b: &[i32]) -> usize {
@@ -1152,13 +1212,15 @@ impl RequestQueue {
         );
         // Batch path stores no prompt fingerprint — it gates reuse via
         // `cached_message_count` and its append-only message bookkeeping, not the
-        // streaming path's longest-common-prefix check.
+        // streaming path's longest-common-prefix check. Batch also doesn't run
+        // MTP, so no draft-context state to snapshot.
         Self::save_session_state(
             worker_id,
             &request_id,
             session,
             ctx,
             session_state_cache,
+            None,
             None,
         );
         GenerationResponse {
@@ -1235,7 +1297,9 @@ impl RequestQueue {
 
         let state_bytes = {
             let mut cache = session_state_cache.lock().unwrap();
-            cache.get(&session.id.to_string()).map(|(bytes, _tokens)| bytes)
+            cache
+                .get(&session.id.to_string())
+                .map(|(bytes, _tokens, _draft)| bytes)
         };
 
         let Some(bytes) = state_bytes else {
@@ -1315,6 +1379,12 @@ impl RequestQueue {
     /// produced from. The streaming path passes `Some(..)` so the next turn can
     /// verify the cache is still a valid prefix (longest-common-prefix) before
     /// reusing it; the batch path passes `None` (it gates reuse differently).
+    ///
+    /// `draft_state_bytes` is the MTP draft context's per-seq KV snapshot (via
+    /// `state_seq_get_data(0)`). Passed `Some(..)` by the streaming MTP path
+    /// only — the next turn restores both target and draft together so the
+    /// speculative head keeps its prefix context across turns. `None` everywhere
+    /// else (batch turns and streaming turns that didn't use MTP).
     fn save_session_state(
         worker_id: usize,
         request_id: &str,
@@ -1322,6 +1392,7 @@ impl RequestQueue {
         ctx: &mut LlamaContext<'_>,
         session_state_cache: &SessionStateCache,
         prompt_tokens: Option<Vec<i32>>,
+        draft_state_bytes: Option<Vec<u8>>,
     ) {
         let state_size = ctx.get_state_size();
         info!(
@@ -1344,12 +1415,19 @@ impl RequestQueue {
 
         state_bytes.truncate(bytes_written);
 
+        let draft_bytes_len = draft_state_bytes.as_ref().map_or(0, |b| b.len());
         let mut cache = session_state_cache.lock().unwrap();
-        cache.insert(session.id.to_string(), state_bytes, prompt_tokens);
+        cache.insert(
+            session.id.to_string(),
+            state_bytes,
+            prompt_tokens,
+            draft_state_bytes,
+        );
         info!(
-            "Worker {} cached {} bytes of state for session {} ({} messages)",
+            "Worker {} cached {} bytes of target + {} bytes of draft state for session {} ({} messages)",
             worker_id,
             bytes_written,
+            draft_bytes_len,
             session.id,
             session.messages.len()
         );
@@ -1396,7 +1474,7 @@ impl RequestQueue {
         // dominant cost that made local generation feel far slower than a hosted
         // model that caches the prompt prefix. This mirrors the batch path's
         // restore/save lifecycle.
-        let template_token_count = Self::prepare_streaming_kv_cache(
+        let prep = Self::prepare_streaming_kv_cache(
             worker_id,
             session,
             &mut ctx,
@@ -1404,35 +1482,81 @@ impl RequestQueue {
             model,
             session_state_cache,
         );
+        let template_token_count = prep.template_offset;
+        let cached_draft_bytes = prep.draft_state_bytes;
 
         // Auto-detect MTP: when the loaded model carries the NextN/MTP head,
         // run the draft-mtp speculative loop with a second MTP-context on the
         // same model (target=this ctx + draft=ctx_type::Mtp). Same KV-reuse on
-        // the target; the draft is ephemeral per request. Else: standard path.
-        let use_mtp = model.has_mtp();
+        // the target; the draft is ALSO reused across turns via `apply_draft_kv_state`
+        // so its recurrent state has seen the prefix. Else: standard path.
+        //
+        // The new llama-cpp-rs fork no longer exposes `LlamaModel::has_mtp()`
+        // or `nextn_predict_layers()` directly, so we sniff the GGUF metadata
+        // for the `*.nextn_predict_layers` key — every MTP-capable architecture
+        // writes that hparam (e.g. `qwen3.nextn_predict_layers = 1`).
+        let nextn_layers = detect_nextn_predict_layers(model);
+        let use_mtp = nextn_layers.unwrap_or(0) > 0;
+        // `used_mtp` is what actually ran (vs. what we wanted). Determines
+        // whether to snapshot the draft below — we only save when MTP truly
+        // executed, otherwise a future restore would expect an aligned draft
+        // that doesn't exist.
+        let mut used_mtp = false;
+        // Hold the draft context across the generation call so we can snapshot
+        // its state for the cache after a successful turn.
+        let mut draft_ctx_opt: Option<LlamaContext<'_>> = None;
         let result = if use_mtp {
             match model_manager.create_draft_session_context(model, &session.id) {
                 Ok(mut draft_ctx) => {
-                    info!(
-                        "Worker {} streaming with MTP speculative decoding (nextn_predict_layers={})",
+                    let draft_ready = Self::apply_draft_kv_state(
                         worker_id,
-                        model.nextn_predict_layers()
-                    );
-                    crate::generation::mtp::generate_stream_mtp(
-                        model,
-                        &mut ctx,
+                        session,
                         &mut draft_ctx,
-                        &prompt,
-                        request,
-                        &stream_sender,
-                        cancellation_token,
-                        model_manager.get_batch_size(),
+                        cached_draft_bytes,
                         template_token_count,
-                        crate::generation::mtp::MtpParams::default(),
-                    )
-                    .map_err(|e| crate::types::QueueError::WorkerError(format!(
-                        "MTP generation failed: {e}"
-                    )))
+                    );
+                    if draft_ready {
+                        info!(
+                            "Worker {} streaming with MTP speculative decoding (nextn_predict_layers={})",
+                            worker_id,
+                            nextn_layers.unwrap_or(0)
+                        );
+                        used_mtp = true;
+                        let mtp_result = crate::generation::mtp::generate_stream_mtp(
+                            model,
+                            &mut ctx,
+                            &mut draft_ctx,
+                            &prompt,
+                            request,
+                            &stream_sender,
+                            cancellation_token,
+                            model_manager.get_batch_size(),
+                            template_token_count,
+                            crate::generation::mtp::MtpParams::default(),
+                        )
+                        .map_err(|e| crate::types::QueueError::WorkerError(format!(
+                            "MTP generation failed: {e}"
+                        )));
+                        draft_ctx_opt = Some(draft_ctx);
+                        mtp_result
+                    } else {
+                        // Draft restore/trim failed — fall back to standard
+                        // streaming for this turn. Drops the stale draft_ctx
+                        // (and its now-cleared KV) so next turn starts fresh.
+                        GenerationHelper::generate_stream_with_borrowed_model_and_template_offset(
+                            model,
+                            &mut ctx,
+                            &prompt,
+                            request,
+                            &stream_sender,
+                            cancellation_token,
+                            model_manager.get_batch_size(),
+                            template_token_count,
+                        )
+                        .map_err(|e| crate::types::QueueError::WorkerError(format!(
+                            "Generation failed: {e}"
+                        )))
+                    }
                 }
                 Err(e) => {
                     warn!(
@@ -1494,6 +1618,18 @@ impl RequestQueue {
                 .str_to_token(&prompt, llama_cpp_2::model::AddBos::Always)
                 .ok()
                 .map(|toks| toks.into_iter().map(|t| t.0).collect());
+            // Snapshot the draft per-seq KV state if MTP actually ran this
+            // turn. Without this, turn N+1 would restore the target alone and
+            // skip MTP (see `apply_draft_kv_state`). State is per-seq (not the
+            // full ctx state) — the draft's RNG/logits/embedding buffers don't
+            // need to survive across turns, only the KV for seq 0.
+            let draft_state_bytes: Option<Vec<u8>> = if used_mtp {
+                draft_ctx_opt
+                    .as_ref()
+                    .map(|d| d.state_seq_get_data(0))
+            } else {
+                None
+            };
             Self::save_session_state(
                 worker_id,
                 &request_id,
@@ -1501,8 +1637,10 @@ impl RequestQueue {
                 &mut ctx,
                 session_state_cache,
                 prompt_tokens,
+                draft_state_bytes,
             );
         }
+        drop(draft_ctx_opt);
 
         log_streaming_result(worker_id, &request_id, &stream_sender, result);
         Ok(())
@@ -1531,6 +1669,12 @@ impl RequestQueue {
     /// the LCP leaves nothing useful to reuse (`0` or the whole new prompt).
     /// Gated on cache PRESENCE (not `cached_message_count`) so the streaming/ACP
     /// path self-heals across turns without extra bookkeeping.
+    ///
+    /// Returns the resume token offset (`StreamingKvPrep::template_offset`) AND
+    /// any cached draft-context bytes the MTP path should restore after creating
+    /// its draft context. We extract the draft bytes here (rather than in a
+    /// second cache lookup) so the LRU touch is single-shot and the bytes are
+    /// available even on paths that don't re-enter the cache.
     fn prepare_streaming_kv_cache(
         worker_id: usize,
         session: &Session,
@@ -1538,19 +1682,19 @@ impl RequestQueue {
         prompt: &str,
         model: &LlamaModel,
         session_state_cache: &SessionStateCache,
-    ) -> Option<usize> {
+    ) -> StreamingKvPrep {
         use llama_cpp_2::model::AddBos;
 
         let cached = {
             let mut cache = session_state_cache.lock().unwrap();
             cache.get(&session.id.to_string())
         };
-        let Some((bytes, prompt_tokens)) = cached else {
+        let Some((bytes, prompt_tokens, draft_state_bytes)) = cached else {
             info!(
                 "Worker {} streaming: no cached KV state for session {}, processing full prompt",
                 worker_id, session.id
             );
-            return None;
+            return StreamingKvPrep::default();
         };
         let Some(cached_tokens) = prompt_tokens else {
             // State written without a fingerprint (e.g. by the batch path). We
@@ -1560,7 +1704,7 @@ impl RequestQueue {
                 "Worker {} streaming: cached state for session {} has no prompt fingerprint, processing full prompt",
                 worker_id, session.id
             );
-            return None;
+            return StreamingKvPrep::default();
         };
 
         // Load the prior context state, then verify+trim against the new prompt.
@@ -1574,7 +1718,7 @@ impl RequestQueue {
                     worker_id, e
                 );
                 ctx.clear_kv_cache();
-                return None;
+                return StreamingKvPrep::default();
             }
         };
 
@@ -1604,7 +1748,7 @@ impl RequestQueue {
                             worker_id
                         );
                         ctx.clear_kv_cache();
-                        return None;
+                        return StreamingKvPrep::default();
                     }
                     Err(e) => {
                         warn!(
@@ -1612,7 +1756,7 @@ impl RequestQueue {
                             worker_id, e
                         );
                         ctx.clear_kv_cache();
-                        return None;
+                        return StreamingKvPrep::default();
                     }
                 }
                 info!(
@@ -1622,7 +1766,14 @@ impl RequestQueue {
                     new_tokens.len().saturating_sub(offset),
                     session.id
                 );
-                Some(offset)
+                // Pass the cached draft bytes through to the caller. If MTP is
+                // active this turn, `apply_draft_kv_state` restores them into
+                // the freshly-created draft context and trims it to the same
+                // offset, so the speculative head keeps its prefix.
+                StreamingKvPrep {
+                    template_offset: Some(offset),
+                    draft_state_bytes,
+                }
             }
             None => {
                 info!(
@@ -1633,10 +1784,110 @@ impl RequestQueue {
                     new_tokens.len()
                 );
                 ctx.clear_kv_cache();
-                None
+                // No target reuse → no draft reuse either. The draft context is
+                // brand new and would need a separate prefill to be useful, which
+                // turn-1 cold-start already handles in the MTP streaming loop.
+                StreamingKvPrep::default()
             }
         }
     }
+
+    /// Restore a cached draft-context KV snapshot into a freshly-created draft
+    /// context and trim it to `template_offset` so the speculative head's
+    /// prefix lines up exactly with the target's. Returns `true` when the draft
+    /// is ready to be used in MTP; `false` when the caller should skip MTP for
+    /// this turn (fall back to standard streaming).
+    ///
+    /// Without this, turn 2+ of an MTP session runs with an empty draft
+    /// context: the recurrent state never saw [0..offset), so drafts at high
+    /// positions are uninformed, acceptance collapses to zero, and we pay
+    /// double-prefill cost (per-chunk `sync_capture` on the draft) for no
+    /// speedup. With it, only the [offset..total] suffix is mirrored on the
+    /// draft — which is the entire point of the target-side KV reuse.
+    fn apply_draft_kv_state(
+        worker_id: usize,
+        session: &Session,
+        draft_ctx: &mut LlamaContext<'_>,
+        cached_bytes: Option<Vec<u8>>,
+        template_offset: Option<usize>,
+    ) -> bool {
+        // No target reuse this turn → caller will cold-prefill the draft on
+        // every new token via `sync_capture`. That's correct (turn 1 path).
+        let Some(offset) = template_offset else {
+            return true;
+        };
+        let Some(bytes) = cached_bytes else {
+            // We reused the target's state but never saved the draft (e.g.
+            // turn 1 was processed without MTP, or save was skipped). The
+            // draft starts empty — its recurrent state for [0..offset) is
+            // missing, so drafts will be poor. Skip MTP for this turn so we
+            // don't pay double-prefill cost for no speedup; next clean turn
+            // will save draft state and resume MTP cleanly.
+            info!(
+                "Worker {} MTP: target KV reused at offset {} but no cached draft state for session {} — skipping MTP this turn",
+                worker_id, offset, session.id
+            );
+            return false;
+        };
+
+        match draft_ctx.state_seq_set_data(&bytes, 0) {
+            Ok(read) => {
+                info!(
+                    "Worker {} MTP: restored {} bytes of draft KV state for session {}",
+                    worker_id, read, session.id
+                );
+            }
+            Err(e) => {
+                warn!(
+                    "Worker {} MTP: failed to restore draft KV state ({:?}); skipping MTP this turn",
+                    worker_id, e
+                );
+                draft_ctx.clear_kv_cache();
+                return false;
+            }
+        }
+
+        // Align draft KV to the same offset the target was trimmed to. The
+        // saved draft state ran past the new LCP (it ended at the prior
+        // turn's end-of-generation); the rollback distance is the prior
+        // turn's generation length. Same `Ok(false)` silent-failure path as
+        // the target trim — fall back to skipping MTP rather than running
+        // with stale KV positions tripping M-RoPE's invariant.
+        let trim_result =
+            draft_ctx.clear_kv_cache_seq(Some(0), Some(offset as u32), None);
+        match trim_result {
+            Ok(true) => true,
+            Ok(false) => {
+                warn!(
+                    "Worker {} MTP: draft KV trim to offset {} returned false (rollback exceeded recurrent-state window) — skipping MTP this turn",
+                    worker_id, offset
+                );
+                draft_ctx.clear_kv_cache();
+                false
+            }
+            Err(e) => {
+                warn!(
+                    "Worker {} MTP: failed to trim draft KV to offset {} ({:?}); skipping MTP this turn",
+                    worker_id, offset, e
+                );
+                draft_ctx.clear_kv_cache();
+                false
+            }
+        }
+    }
+}
+
+/// What `prepare_streaming_kv_cache` decided about reusing the prior turn's KV
+/// state. Carries both the target-side resume offset and any cached draft-side
+/// bytes so the streaming MTP path can keep its draft context aligned with the
+/// target across turns.
+#[derive(Default)]
+struct StreamingKvPrep {
+    /// Token offset to resume target generation from (`None` = full reprocess).
+    template_offset: Option<usize>,
+    /// Per-seq draft-context bytes from the prior turn, when MTP was used.
+    /// `None` when the prior turn didn't use MTP or no state was cached.
+    draft_state_bytes: Option<Vec<u8>>,
 }
 
 /// Decide the streaming resume offset from the longest-common-prefix length
@@ -3314,10 +3565,10 @@ mod tests {
             // entry budget of 2; insert A, B, touch A (now MRU), insert C.
             // The least-recently-used (B) must be evicted, NOT the active A.
             let mut store = SessionStateStore::new(2, usize::MAX);
-            store.insert("A".into(), state(1, 10), None);
-            store.insert("B".into(), state(2, 10), None);
+            store.insert("A".into(), state(1, 10), None, None);
+            store.insert("B".into(), state(2, 10), None, None);
             assert!(store.get("A").is_some(), "touch A → most-recently-used");
-            store.insert("C".into(), state(3, 10), None);
+            store.insert("C".into(), state(3, 10), None, None);
 
             assert_eq!(store.len(), 2, "entry budget of 2 enforced");
             assert!(store.contains("A"), "active (recently-used) session kept");
@@ -3330,9 +3581,9 @@ mod tests {
             // Byte budget of 25 with 10-byte entries: only 2 fit; a 3rd evicts the
             // LRU even though the entry count (3) would otherwise be allowed.
             let mut store = SessionStateStore::new(100, 25);
-            store.insert("A".into(), state(1, 10), None);
-            store.insert("B".into(), state(2, 10), None);
-            store.insert("C".into(), state(3, 10), None);
+            store.insert("A".into(), state(1, 10), None, None);
+            store.insert("B".into(), state(2, 10), None, None);
+            store.insert("C".into(), state(3, 10), None, None);
 
             assert_eq!(store.len(), 2, "byte budget caps total entries at 2");
             assert!(store.cur_bytes <= 25, "total bytes stay within budget");
@@ -3345,7 +3596,7 @@ mod tests {
             // Even a single entry larger than the byte budget is retained — we
             // never evict the only (most-recently-used) entry.
             let mut store = SessionStateStore::new(4, 8);
-            store.insert("solo".into(), state(1, 100), None);
+            store.insert("solo".into(), state(1, 100), None, None);
             assert_eq!(store.len(), 1, "the only entry is never evicted");
             assert!(store.contains("solo"));
         }
@@ -3353,8 +3604,8 @@ mod tests {
         #[test]
         fn store_insert_replaces_and_tracks_bytes() {
             let mut store = SessionStateStore::new(4, usize::MAX);
-            store.insert("A".into(), state(1, 10), None);
-            store.insert("A".into(), state(1, 30), None); // replace, larger
+            store.insert("A".into(), state(1, 10), None, None);
+            store.insert("A".into(), state(1, 30), None, None); // replace, larger
             assert_eq!(store.len(), 1, "replacing an id does not add an entry");
             assert_eq!(store.cur_bytes, 30, "byte accounting follows replacement");
         }
@@ -3362,11 +3613,31 @@ mod tests {
         #[test]
         fn store_get_returns_bytes_and_fingerprint() {
             let mut store = SessionStateStore::new(4, usize::MAX);
-            store.insert("A".into(), state(7, 3), Some(vec![10, 20, 30]));
-            let (bytes, toks) = store.get("A").expect("present");
+            store.insert(
+                "A".into(),
+                state(7, 3),
+                Some(vec![10, 20, 30]),
+                Some(state(8, 4)),
+            );
+            let (bytes, toks, draft) = store.get("A").expect("present");
             assert_eq!(bytes, vec![7, 7, 7]);
             assert_eq!(toks, Some(vec![10, 20, 30]));
+            assert_eq!(draft, Some(vec![8, 8, 8, 8]));
             assert_eq!(store.get("missing"), None);
+        }
+
+        #[test]
+        fn store_byte_budget_includes_draft_bytes() {
+            // Both target and draft bytes count against the byte budget so a
+            // large pair of (target, draft) snapshots is correctly accounted
+            // for under LRU pressure.
+            let mut store = SessionStateStore::new(100, 30);
+            store.insert("A".into(), state(1, 10), None, Some(state(2, 10))); // 20
+            store.insert("B".into(), state(3, 10), None, Some(state(4, 10))); // 40 total
+            // budget 30 < 40 → LRU 'A' evicted, only 'B' remains
+            assert_eq!(store.len(), 1, "draft bytes count toward budget");
+            assert!(store.contains("B"));
+            assert!(!store.contains("A"));
         }
 
         #[test]

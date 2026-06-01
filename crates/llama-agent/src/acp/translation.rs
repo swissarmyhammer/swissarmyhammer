@@ -612,6 +612,28 @@ pub fn agent_message_notification(
     SessionNotification::new(session_id, update)
 }
 
+/// Build an `AgentThoughtChunk` `SessionNotification` carrying `text`.
+///
+/// Used by the streaming turn loop to broadcast reasoning content extracted
+/// from `<think>…</think>` spans by [`crate::acp::visible_text`]. The UI can
+/// render thought chunks distinctly from assistant message text so the user
+/// can see the model's reasoning without it being mistaken for the final
+/// answer — and so a truncated-mid-think turn still surfaces something useful
+/// instead of going silent.
+pub fn agent_thought_notification(
+    session_id: agent_client_protocol::schema::SessionId,
+    text: String,
+) -> agent_client_protocol::schema::SessionNotification {
+    use agent_client_protocol::schema::{
+        ContentBlock, ContentChunk, SessionNotification, SessionUpdate,
+    };
+
+    let content_block = ContentBlock::from(text);
+    let content_chunk = ContentChunk::new(content_block);
+    let update = SessionUpdate::AgentThoughtChunk(content_chunk);
+    SessionNotification::new(session_id, update)
+}
+
 /// Convert llama-agent ToolDefinition to ACP-compatible format
 ///
 /// Translates MCP tool definitions to a format suitable for ACP protocol.

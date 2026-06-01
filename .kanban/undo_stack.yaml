@@ -1,8 +1,4 @@
 entries:
-- id: 01KRE1VRTKVDG9SED4S787YM3F
-  label: update task 01KQ20MX70NFN2ZVM2YN0A4KQ0
-  item_id: 01KQ20MX70NFN2ZVM2YN0A4KQ0
-  group_id: null
 - id: 01KRE1VRV45PEZP35KK36KWM80
   label: update task 01KQ9X7F7YNG4NE4AGBNZJMSWG
   item_id: 01KQ9X7F7YNG4NE4AGBNZJMSWG
@@ -396,6 +392,10 @@ entries:
   item_id: board
   group_id: null
 - id: 01KSSQ6ZBN7Z3TANM2WWYJDGR4
+  label: update board board
+  item_id: board
+  group_id: null
+- id: 01KSWK5E7924GWCSFNAFPE1V3P
   label: update board board
   item_id: board
   group_id: null

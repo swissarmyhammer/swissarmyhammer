@@ -21,6 +21,8 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
+use crate::generation::send_with_backpressure;
+
 use super::session::{MtpParams, MtpSession};
 use crate::generation::budget;
 use crate::generation::error::GenerationError;
@@ -284,9 +286,10 @@ fn argmax_at(ctx: &LlamaContext, i_batch: i32) -> Result<LlamaToken, GenerationE
 }
 
 /// Emit a single non-EOG token as a `StreamChunk`. Returns `Ok(None)` on
-/// success and `Ok(Some(()))` when the receiver has disconnected (caller should
-/// stop). Tokens that fail to decode to a string are silently dropped (matching
-/// the non-MTP streaming generator's behaviour for partial UTF-8 sequences).
+/// success and `Ok(Some(()))` when the receiver has truly disconnected (caller
+/// should stop). Tokens that fail to decode to a string are silently dropped
+/// (matching the non-MTP streaming generator's behaviour for partial UTF-8
+/// sequences).
 fn emit_token(
     model: &LlamaModel,
     token: LlamaToken,
@@ -301,7 +304,7 @@ fn emit_token(
                 token_count: 1,
                 finish_reason: None,
             };
-            if stream_sender.try_send(Ok(chunk)).is_err() {
+            if send_with_backpressure(stream_sender, Ok(chunk)).is_err() {
                 debug!("MTP streaming: receiver disconnected");
                 return Ok(Some(()));
             }
@@ -327,9 +330,10 @@ fn finish(
         token_count: 0,
         finish_reason: Some(FinishReason::Stopped(reason.to_string())),
     };
-    let _ = stream_sender.try_send(Ok(final_chunk));
+    let _ = send_with_backpressure(stream_sender, Ok(final_chunk));
     Ok(())
 }
+
 
 /// Check the cancellation token; on cancellation, push the standard queue
 /// "Request cancelled" error and return `true` so the caller can short-circuit.
@@ -338,9 +342,10 @@ fn check_cancelled(
     stream_sender: &mpsc::Sender<Result<StreamChunk, QueueError>>,
 ) -> bool {
     if cancellation_token.is_cancelled() {
-        let _ = stream_sender.try_send(Err(QueueError::WorkerError(
-            "Request cancelled".to_string(),
-        )));
+        let _ = send_with_backpressure(
+            stream_sender,
+            Err(QueueError::WorkerError("Request cancelled".to_string())),
+        );
         true
     } else {
         false

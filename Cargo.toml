@@ -229,11 +229,15 @@ hyper = "1.9"
 markdowndown = { path = "crates/markdowndown" }
 
 # Llama-agent dependencies
-llama-cpp-2 = { git = "https://github.com/swissarmyhammer/llama-cpp-rs", features = ["metal", "sampler"] }
-# Low-level sys crate, pinned to the same git source as llama-cpp-2 so Cargo
-# unifies it to one build. Needed to name the `llama_flash_attn_type` enum
-# constants when setting the flash-attention policy on the context.
-llama-cpp-sys-2 = { git = "https://github.com/swissarmyhammer/llama-cpp-rs" }
+# LOCAL DEV: pointed at the sibling ../llama-cpp-rs working copy so in-progress
+# binding changes (e.g. MTP) are testable without pushing to the git remote.
+# Revert both to the git source (https://github.com/swissarmyhammer/llama-cpp-rs)
+# before merge/CI — these path deps do not exist on other machines.
+llama-cpp-2 = { path = "../llama-cpp-rs/llama-cpp-2", features = ["metal", "sampler"] }
+# Low-level sys crate, kept on the same source as llama-cpp-2 so Cargo unifies it
+# to one build. Needed to name the `llama_flash_attn_type` enum constants when
+# setting the flash-attention policy on the context.
+llama-cpp-sys-2 = { path = "../llama-cpp-rs/llama-cpp-sys-2" }
 llama-agent = { path = "crates/llama-agent" }
 llama-common = { path = "crates/llama-common" }
 llama-embedding = { path = "crates/llama-embedding" }

@@ -62,7 +62,39 @@ use tracing::warn;
 use crate::types::{GenerationRequest, GenerationResponse, StreamChunk};
 // Note: Not using async_trait due to Send requirements with LlamaContext raw pointers
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio_util::sync::CancellationToken;
+
+/// Send a chunk onto the stream, backpressuring on a *full* channel and only
+/// bailing on a truly-closed channel.
+///
+/// `try_send` returns `Err(_)` for both `Full` (buffer at capacity) and
+/// `Closed` (receiver dropped). Treating both as "disconnected" caused both
+/// streaming paths (standard and MTP) to stop cleanly at exactly the channel
+/// buffer size (100 tokens) whenever the ACP consumer fell briefly behind the
+/// model — surfacing in the kanban app as the model "cutting itself off" with
+/// `max_tokens` still nowhere near hit.
+///
+/// On `Full` we briefly sleep the producer thread (microseconds) and retry
+/// until the consumer drains a slot. The model decode loop is on a dedicated
+/// blocking thread; brief sleeps are harmless. Only `Closed` means the
+/// receiver is really gone — the only condition that should end generation
+/// early.
+pub(crate) fn send_with_backpressure(
+    stream_sender: &mpsc::Sender<Result<StreamChunk, crate::types::QueueError>>,
+    mut payload: Result<StreamChunk, crate::types::QueueError>,
+) -> Result<(), ()> {
+    loop {
+        match stream_sender.try_send(payload) {
+            Ok(()) => return Ok(()),
+            Err(TrySendError::Full(returned)) => {
+                payload = returned;
+                std::thread::sleep(std::time::Duration::from_micros(200));
+            }
+            Err(TrySendError::Closed(_)) => return Err(()),
+        }
+    }
+}
 
 // Default constants for generation parameters
 const DEFAULT_GENERATION_SEED: u32 = 1234;
@@ -472,7 +504,7 @@ impl GenerationHelper {
                     finish_reason: None,
                 };
 
-                if stream_sender.try_send(Ok(chunk)).is_err() {
+                if send_with_backpressure(stream_sender, Ok(chunk)).is_err() {
                     warn!("Stream receiver disconnected, stopping generation");
                     return Ok(());
                 }
@@ -498,18 +530,24 @@ impl GenerationHelper {
             // Always update batch and decode to advance model state
             batch.clear();
             batch.add(token, n_cur as i32, &[0], true).map_err(|e| {
-                let _ = stream_sender.try_send(Err(QueueError::WorkerError(format!(
-                    "Failed to add continuation token: {}",
-                    e
-                ))));
+                let _ = send_with_backpressure(
+                    stream_sender,
+                    Err(QueueError::WorkerError(format!(
+                        "Failed to add continuation token: {}",
+                        e
+                    ))),
+                );
                 GenerationError::batch(e)
             })?;
 
             context.decode(&mut batch).map_err(|e| {
-                let _ = stream_sender.try_send(Err(QueueError::WorkerError(format!(
-                    "Failed to decode continuation batch: {}",
-                    e
-                ))));
+                let _ = send_with_backpressure(
+                    stream_sender,
+                    Err(QueueError::WorkerError(format!(
+                        "Failed to decode continuation batch: {}",
+                        e
+                    ))),
+                );
                 GenerationError::decoding(e)
             })?;
 
@@ -546,7 +584,7 @@ impl GenerationHelper {
             token_count: 0,
             finish_reason: Some(crate::types::FinishReason::Stopped(reason.to_string())),
         };
-        let _ = stream_sender.try_send(Ok(final_chunk));
+        let _ = send_with_backpressure(stream_sender, Ok(final_chunk));
 
         let generation_time = start_time.elapsed();
         debug!(
@@ -925,7 +963,7 @@ impl GenerationHelper {
                     "No new tokens to process".to_string(),
                 )),
             };
-            let _ = stream_sender.try_send(Ok(final_chunk));
+            let _ = send_with_backpressure(stream_sender, Ok(final_chunk));
             return Ok(());
         }
 
@@ -1063,7 +1101,7 @@ impl GenerationHelper {
                     finish_reason: None,
                 };
 
-                if stream_sender.try_send(Ok(chunk)).is_err() {
+                if send_with_backpressure(stream_sender, Ok(chunk)).is_err() {
                     warn!("Stream receiver disconnected, stopping generation");
                     return Ok(());
                 }
@@ -1089,18 +1127,24 @@ impl GenerationHelper {
             // Always update batch and decode to advance model state
             batch.clear();
             batch.add(token, n_cur as i32, &[0], true).map_err(|e| {
-                let _ = stream_sender.try_send(Err(QueueError::WorkerError(format!(
-                    "Failed to add continuation token: {}",
-                    e
-                ))));
+                let _ = send_with_backpressure(
+                    stream_sender,
+                    Err(QueueError::WorkerError(format!(
+                        "Failed to add continuation token: {}",
+                        e
+                    ))),
+                );
                 GenerationError::batch(e)
             })?;
 
             context.decode(&mut batch).map_err(|e| {
-                let _ = stream_sender.try_send(Err(QueueError::WorkerError(format!(
-                    "Failed to decode continuation batch: {}",
-                    e
-                ))));
+                let _ = send_with_backpressure(
+                    stream_sender,
+                    Err(QueueError::WorkerError(format!(
+                        "Failed to decode continuation batch: {}",
+                        e
+                    ))),
+                );
                 GenerationError::decoding(e)
             })?;
 
