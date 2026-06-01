@@ -228,15 +228,22 @@ hyper = "1.9"
 markdowndown = { path = "crates/markdowndown" }
 
 # Llama-agent dependencies
-# LOCAL DEV: pointed at the sibling ../llama-cpp-rs working copy so in-progress
-# binding changes (e.g. MTP) are testable without pushing to the git remote.
-# Revert both to the git source (https://github.com/swissarmyhammer/llama-cpp-rs)
-# before merge/CI — these path deps do not exist on other machines.
-llama-cpp-2 = { path = "../llama-cpp-rs/llama-cpp-2", features = ["metal", "sampler"] }
-# Low-level sys crate, kept on the same source as llama-cpp-2 so Cargo unifies it
-# to one build. Needed to name the `llama_flash_attn_type` enum constants when
-# setting the flash-attention policy on the context.
-llama-cpp-sys-2 = { path = "../llama-cpp-rs/llama-cpp-sys-2" }
+#
+# Pinned to a specific revision on the fork rather than a branch tip so the
+# whole workspace builds reproducibly — the fork's main moves with MTP /
+# bindings work, and we want this checkout to be unaffected until we
+# deliberately bump the rev.
+#
+# To bump: push the fork, then update both `rev =` entries to the new
+# upstream `origin/main` SHA. To resume in-process dev on the fork, switch
+# back to `path = "../llama-cpp-rs/llama-cpp-{2,sys-2}"` locally (NEVER
+# commit the path form — other machines and CI do not have the sibling
+# checkout).
+llama-cpp-2 = { git = "https://github.com/swissarmyhammer/llama-cpp-rs", rev = "65ff02f641bfd43c21585ec6bc55bd060bbe5a4b", features = ["metal", "sampler"] }
+# Low-level sys crate, pinned to the same git source + rev so Cargo unifies
+# it to one build. Needed to name the `llama_flash_attn_type` enum constants
+# when setting the flash-attention policy on the context.
+llama-cpp-sys-2 = { git = "https://github.com/swissarmyhammer/llama-cpp-rs", rev = "65ff02f641bfd43c21585ec6bc55bd060bbe5a4b" }
 llama-agent = { path = "crates/llama-agent" }
 llama-common = { path = "crates/llama-common" }
 llama-embedding = { path = "crates/llama-embedding" }
