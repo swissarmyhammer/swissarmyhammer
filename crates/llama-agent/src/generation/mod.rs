@@ -62,38 +62,33 @@ use tracing::warn;
 use crate::types::{GenerationRequest, GenerationResponse, StreamChunk};
 // Note: Not using async_trait due to Send requirements with LlamaContext raw pointers
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::TrySendError;
 use tokio_util::sync::CancellationToken;
 
-/// Send a chunk onto the stream, backpressuring on a *full* channel and only
-/// bailing on a truly-closed channel.
+/// Send a chunk onto the stream. The stream channel is unbounded so this
+/// never blocks; the only failure mode is a closed receiver (the consumer
+/// dropped its end of the channel), which is the one condition that
+/// genuinely should end generation early.
 ///
-/// `try_send` returns `Err(_)` for both `Full` (buffer at capacity) and
-/// `Closed` (receiver dropped). Treating both as "disconnected" caused both
-/// streaming paths (standard and MTP) to stop cleanly at exactly the channel
-/// buffer size (100 tokens) whenever the ACP consumer fell briefly behind the
-/// model — surfacing in the kanban app as the model "cutting itself off" with
-/// `max_tokens` still nowhere near hit.
+/// We previously used a bounded(100) channel with a `try_send` retry loop —
+/// that produced two distinct hangs in production:
+///   - When the consumer fell behind by 100 chunks, the producer hit Full
+///     and ended up sleeping in a tight retry loop on a tokio worker
+///     thread, blocking the runtime.
+///   - When a consumer task was suspended mid-stream (e.g., blocked on a
+///     dependent broadcast / disk-write subscriber), the channel filled
+///     and the producer spun forever — the live `sample`d MTP hang.
 ///
-/// On `Full` we briefly sleep the producer thread (microseconds) and retry
-/// until the consumer drains a slot. The model decode loop is on a dedicated
-/// blocking thread; brief sleeps are harmless. Only `Closed` means the
-/// receiver is really gone — the only condition that should end generation
-/// early.
+/// Switching to `unbounded_channel` removes both failure modes. Each
+/// `StreamChunk` is a few hundred bytes; even on a slow consumer the queue
+/// stays in single-digit MBs, and the producer is rate-limited by the
+/// model decode (~30 tok/s) anyway. The cost vs. the alternative (a much
+/// larger bounded channel) is the same on the happy path and bounded on
+/// the worst case, with no risk of producer wedging.
 pub(crate) fn send_with_backpressure(
-    stream_sender: &mpsc::Sender<Result<StreamChunk, crate::types::QueueError>>,
-    mut payload: Result<StreamChunk, crate::types::QueueError>,
+    stream_sender: &mpsc::UnboundedSender<Result<StreamChunk, crate::types::QueueError>>,
+    payload: Result<StreamChunk, crate::types::QueueError>,
 ) -> Result<(), ()> {
-    loop {
-        match stream_sender.try_send(payload) {
-            Ok(()) => return Ok(()),
-            Err(TrySendError::Full(returned)) => {
-                payload = returned;
-                std::thread::sleep(std::time::Duration::from_micros(200));
-            }
-            Err(TrySendError::Closed(_)) => return Err(()),
-        }
-    }
+    stream_sender.send(payload).map_err(|_| ())
 }
 
 // Default constants for generation parameters
@@ -359,7 +354,7 @@ impl GenerationHelper {
         context: &mut llama_cpp_2::context::LlamaContext,
         prompt: &str,
         request: &GenerationRequest,
-        stream_sender: &mpsc::Sender<Result<StreamChunk, crate::types::QueueError>>,
+        stream_sender: &mpsc::UnboundedSender<Result<StreamChunk, crate::types::QueueError>>,
         cancellation_token: &CancellationToken,
         batch_size: usize,
         on_prefill_complete: F,
@@ -402,7 +397,7 @@ impl GenerationHelper {
                 batch
                     .add(*token, current_pos as i32, &[0], is_last_in_entire_sequence)
                     .map_err(|e| {
-                        let _ = stream_sender.try_send(Err(QueueError::WorkerError(format!(
+                        let _ = stream_sender.send(Err(QueueError::WorkerError(format!(
                             "Batch token add failed: {}",
                             e
                         ))));
@@ -411,7 +406,7 @@ impl GenerationHelper {
             }
 
             context.decode(&mut batch).map_err(|e| {
-                let _ = stream_sender.try_send(Err(QueueError::WorkerError(format!(
+                let _ = stream_sender.send(Err(QueueError::WorkerError(format!(
                     "Batch decode failed: {}",
                     e
                 ))));
@@ -472,7 +467,7 @@ impl GenerationHelper {
             }
 
             if cancellation_token.is_cancelled() {
-                let _ = stream_sender.try_send(Err(QueueError::WorkerError(
+                let _ = stream_sender.send(Err(QueueError::WorkerError(
                     "Request cancelled".to_string(),
                 )));
                 return Ok(());
@@ -588,7 +583,7 @@ impl GenerationHelper {
         _generated_text: &str,
         tokens_generated: usize,
         start_time: std::time::Instant,
-        stream_sender: &mpsc::Sender<Result<StreamChunk, crate::types::QueueError>>,
+        stream_sender: &mpsc::UnboundedSender<Result<StreamChunk, crate::types::QueueError>>,
         reason: &str,
     ) -> Result<(), GenerationError> {
         use crate::types::StreamChunk;
@@ -922,7 +917,7 @@ impl GenerationHelper {
         context: &mut llama_cpp_2::context::LlamaContext,
         prompt: &str,
         request: &GenerationRequest,
-        stream_sender: &mpsc::Sender<Result<StreamChunk, crate::types::QueueError>>,
+        stream_sender: &mpsc::UnboundedSender<Result<StreamChunk, crate::types::QueueError>>,
         cancellation_token: &CancellationToken,
         batch_size: usize,
         template_token_count: Option<usize>,
@@ -1007,7 +1002,7 @@ impl GenerationHelper {
 
         for chunk in tokens_to_process.chunks(batch_size) {
             if cancellation_token.is_cancelled() {
-                let _ = stream_sender.try_send(Err(QueueError::WorkerError(
+                let _ = stream_sender.send(Err(QueueError::WorkerError(
                     "Request cancelled".to_string(),
                 )));
                 return Ok(());
@@ -1021,7 +1016,7 @@ impl GenerationHelper {
                 batch
                     .add(*token, current_pos as i32, &[0], is_last_in_entire_sequence)
                     .map_err(|e| {
-                        let _ = stream_sender.try_send(Err(QueueError::WorkerError(format!(
+                        let _ = stream_sender.send(Err(QueueError::WorkerError(format!(
                             "Batch token add failed: {}",
                             e
                         ))));
@@ -1030,7 +1025,7 @@ impl GenerationHelper {
             }
 
             context.decode(&mut batch).map_err(|e| {
-                let _ = stream_sender.try_send(Err(QueueError::WorkerError(format!(
+                let _ = stream_sender.send(Err(QueueError::WorkerError(format!(
                     "Batch decode failed: {}",
                     e
                 ))));
@@ -1088,7 +1083,7 @@ impl GenerationHelper {
             }
 
             if cancellation_token.is_cancelled() {
-                let _ = stream_sender.try_send(Err(QueueError::WorkerError(
+                let _ = stream_sender.send(Err(QueueError::WorkerError(
                     "Request cancelled".to_string(),
                 )));
                 return Ok(());

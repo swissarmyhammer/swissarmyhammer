@@ -58,7 +58,7 @@ pub fn generate_stream_mtp<F>(
     draft: &mut LlamaContext,
     prompt: &str,
     request: &GenerationRequest,
-    stream_sender: &mpsc::Sender<Result<StreamChunk, QueueError>>,
+    stream_sender: &mpsc::UnboundedSender<Result<StreamChunk, QueueError>>,
     cancellation_token: &CancellationToken,
     batch_size: usize,
     template_token_count: Option<usize>,
@@ -309,7 +309,7 @@ fn argmax_at(ctx: &LlamaContext, i_batch: i32) -> Result<LlamaToken, GenerationE
 fn emit_token(
     model: &LlamaModel,
     token: LlamaToken,
-    stream_sender: &mpsc::Sender<Result<StreamChunk, QueueError>>,
+    stream_sender: &mpsc::UnboundedSender<Result<StreamChunk, QueueError>>,
 ) -> Result<Option<()>, GenerationError> {
     match model.token_to_bytes(token, Special::Tokenize) {
         Ok(bytes) => {
@@ -337,7 +337,7 @@ fn emit_token(
 /// Send the terminal completion chunk (`is_complete=true`, `token_count=0`,
 /// `finish_reason=Some(Stopped(reason))`).
 fn finish(
-    stream_sender: &mpsc::Sender<Result<StreamChunk, QueueError>>,
+    stream_sender: &mpsc::UnboundedSender<Result<StreamChunk, QueueError>>,
     reason: &str,
 ) -> Result<(), GenerationError> {
     let final_chunk = StreamChunk {
@@ -355,7 +355,7 @@ fn finish(
 /// "Request cancelled" error and return `true` so the caller can short-circuit.
 fn check_cancelled(
     cancellation_token: &CancellationToken,
-    stream_sender: &mpsc::Sender<Result<StreamChunk, QueueError>>,
+    stream_sender: &mpsc::UnboundedSender<Result<StreamChunk, QueueError>>,
 ) -> bool {
     if cancellation_token.is_cancelled() {
         let _ = send_with_backpressure(

@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
-use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, error, info, trace, warn};
 
 /// Default context window size in tokens used as fallback when model metadata is unavailable.
@@ -1196,7 +1196,8 @@ impl AgentAPI for AgentServer {
             .map_err(AgentError::Queue)?;
 
         // Convert the receiver to a stream and map QueueError to AgentError
-        let stream = ReceiverStream::new(receiver).map(|result| result.map_err(AgentError::Queue));
+        let stream =
+            UnboundedReceiverStream::new(receiver).map(|result| result.map_err(AgentError::Queue));
 
         Ok(Box::pin(stream))
     }
@@ -1770,7 +1771,7 @@ impl AgentServer {
         &self,
         request: GenerationRequest,
     ) -> Result<
-        tokio::sync::mpsc::Receiver<Result<StreamChunk, crate::types::QueueError>>,
+        tokio::sync::mpsc::UnboundedReceiver<Result<StreamChunk, crate::types::QueueError>>,
         AgentError,
     > {
         // Try auto-compaction before generation

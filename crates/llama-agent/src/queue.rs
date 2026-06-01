@@ -409,12 +409,12 @@ fn create_streaming_context<'m>(
 
 /// Push a worker-side error onto the streaming channel without ever blocking.
 fn report_stream_error<E: std::fmt::Display>(
-    stream_sender: &mpsc::Sender<Result<StreamChunk, QueueError>>,
+    stream_sender: &mpsc::UnboundedSender<Result<StreamChunk, QueueError>>,
     context: &str,
     error: &E,
 ) {
     error!("Streaming error: {}: {}", context, error);
-    let _ = stream_sender.try_send(Err(QueueError::WorkerError(format!(
+    let _ = stream_sender.send(Err(QueueError::WorkerError(format!(
         "{}: {}",
         context, error
     ))));
@@ -628,7 +628,7 @@ pub(crate) trait QueueExecutor: Send + Sync {
         &self,
         worker_id: usize,
         queued_request: &QueuedRequest,
-        stream_sender: mpsc::Sender<Result<StreamChunk, QueueError>>,
+        stream_sender: mpsc::UnboundedSender<Result<StreamChunk, QueueError>>,
     ) -> Result<(), QueueError>;
 }
 
@@ -703,7 +703,7 @@ impl QueueExecutor for ModelManagerExecutor {
         &self,
         worker_id: usize,
         queued_request: &QueuedRequest,
-        stream_sender: mpsc::Sender<Result<StreamChunk, QueueError>>,
+        stream_sender: mpsc::UnboundedSender<Result<StreamChunk, QueueError>>,
     ) -> Result<(), QueueError> {
         if !self.model_manager.is_loaded().await {
             return Err(QueueError::WorkerError("Model not loaded".to_string()));
@@ -749,7 +749,7 @@ pub struct QueuedRequest {
     pub response_sender: oneshot::Sender<Result<GenerationResponse, QueueError>>,
     /// Optional streaming channel. When set, the request is dispatched via the
     /// streaming code path instead of the batch path.
-    pub stream_sender: Option<mpsc::Sender<Result<StreamChunk, QueueError>>>,
+    pub stream_sender: Option<mpsc::UnboundedSender<Result<StreamChunk, QueueError>>>,
     /// When the request was enqueued (used for queue-time metrics).
     pub submitted_at: Instant,
     /// Token used by callers to cancel this specific request.
@@ -1014,9 +1014,15 @@ impl RequestQueue {
         &self,
         request: GenerationRequest,
         session: &Session,
-    ) -> Result<mpsc::Receiver<Result<StreamChunk, QueueError>>, QueueError> {
+    ) -> Result<mpsc::UnboundedReceiver<Result<StreamChunk, QueueError>>, QueueError> {
         let (response_sender, _) = oneshot::channel();
-        let (stream_sender, stream_receiver) = mpsc::channel(100);
+        // Unbounded by design: see the long-form rationale on
+        // `send_with_backpressure` in generation/mod.rs. A bounded(100)
+        // stream channel had two distinct producer-wedge failure modes
+        // (consumer briefly behind → producer spins on Full;
+        // consumer task suspended → producer spins forever). StreamChunks
+        // are too small for memory pressure to matter at the decode rate.
+        let (stream_sender, stream_receiver) = mpsc::unbounded_channel();
 
         let cancellation_token = CancellationToken::new();
 
@@ -1180,7 +1186,8 @@ impl RequestQueue {
                 metrics.record_request_completed(start_time.elapsed(), 0);
             }
             Err(queue_error) => {
-                let _ = stream_sender.send(Err(queue_error)).await;
+                // UnboundedSender::send is synchronous (no .await).
+                let _ = stream_sender.send(Err(queue_error));
                 metrics.record_request_failed();
             }
         }
@@ -1591,7 +1598,7 @@ impl RequestQueue {
         session: &Session,
         model: &LlamaModel,
         model_manager: &ModelManager,
-        stream_sender: mpsc::Sender<Result<StreamChunk, QueueError>>,
+        stream_sender: mpsc::UnboundedSender<Result<StreamChunk, QueueError>>,
         cancellation_token: &CancellationToken,
         chat_template: &ChatTemplateEngine,
         session_state_cache: &SessionStateCache,
@@ -2143,7 +2150,7 @@ fn streaming_reuse_decision(lcp: usize, new_len: usize) -> Option<usize> {
 fn log_streaming_result(
     worker_id: usize,
     request_id: &str,
-    stream_sender: &mpsc::Sender<Result<StreamChunk, QueueError>>,
+    stream_sender: &mpsc::UnboundedSender<Result<StreamChunk, QueueError>>,
     result: Result<(), impl std::fmt::Display + std::fmt::Debug>,
 ) {
     match result {
@@ -2592,7 +2599,7 @@ mod tests {
     /// Assert that the first chunk is a `Model not loaded` worker error and
     /// that no further chunks are produced.
     async fn assert_model_not_loaded_stream(
-        receiver: &mut mpsc::Receiver<Result<StreamChunk, QueueError>>,
+        receiver: &mut mpsc::UnboundedReceiver<Result<StreamChunk, QueueError>>,
     ) {
         let chunk_result = receiver
             .recv()
@@ -3094,7 +3101,7 @@ mod tests {
                 &self,
                 _worker_id: usize,
                 queued_request: &QueuedRequest,
-                stream_sender: mpsc::Sender<Result<StreamChunk, QueueError>>,
+                stream_sender: mpsc::UnboundedSender<Result<StreamChunk, QueueError>>,
             ) -> Result<(), QueueError> {
                 self.turns_run.fetch_add(1, AtomicOrdering::SeqCst);
                 if let TurnOutcome::Error(msg) = &self.outcome {
@@ -3118,7 +3125,9 @@ mod tests {
                     queued_request.cancellation_token.clone(),
                 );
                 while let Ok(chunk) = rx.try_recv() {
-                    if stream_sender.send(chunk).await.is_err() {
+                    // UnboundedSender::send is synchronous; only Closed
+                    // (receiver dropped) returns an error.
+                    if stream_sender.send(chunk).is_err() {
                         break;
                     }
                 }
@@ -3404,7 +3413,7 @@ mod tests {
                 &self,
                 _worker_id: usize,
                 _queued_request: &QueuedRequest,
-                _stream_sender: mpsc::Sender<Result<StreamChunk, QueueError>>,
+                _stream_sender: mpsc::UnboundedSender<Result<StreamChunk, QueueError>>,
             ) -> Result<(), QueueError> {
                 self.entered.fetch_add(1, AtomicOrdering::SeqCst);
                 self.gate.notified().await;
@@ -3507,7 +3516,7 @@ mod tests {
                     &self,
                     _worker_id: usize,
                     _queued_request: &QueuedRequest,
-                    _stream_sender: mpsc::Sender<Result<StreamChunk, QueueError>>,
+                    _stream_sender: mpsc::UnboundedSender<Result<StreamChunk, QueueError>>,
                 ) -> Result<(), QueueError> {
                     Ok(())
                 }
@@ -3582,7 +3591,7 @@ mod tests {
                     &self,
                     _worker_id: usize,
                     _queued_request: &QueuedRequest,
-                    _stream_sender: mpsc::Sender<Result<StreamChunk, QueueError>>,
+                    _stream_sender: mpsc::UnboundedSender<Result<StreamChunk, QueueError>>,
                 ) -> Result<(), QueueError> {
                     Ok(())
                 }

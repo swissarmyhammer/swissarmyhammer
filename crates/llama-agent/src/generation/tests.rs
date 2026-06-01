@@ -5,27 +5,23 @@
 
 use super::*;
 
-/// Tests for [`super::send_with_backpressure`], which fixed the cutoff
-/// at exactly the stream channel's buffer size (100 tokens) seen in the
-/// kanban app.
-///
-/// The prior implementation used `try_send().is_err()` everywhere, treating
-/// both `Full` (consumer briefly behind) and `Closed` (receiver dropped) as
-/// "disconnected" — so any time the ACP consumer fell behind by 100 chunks
-/// the generator quit. These tests pin the two-outcome split: full must
-/// retry until drain; closed must exit.
+/// Tests for [`super::send_with_backpressure`]. The stream channel is
+/// **unbounded** by design (see the long-form rationale on the helper):
+/// the prior bounded(100) + retry-on-Full implementation produced two
+/// distinct producer-wedge hangs in production. The contract is now
+/// trivial — send always succeeds unless the receiver was dropped —
+/// but it's pinned here so a future bounded-channel revert doesn't slip
+/// in unnoticed.
 #[cfg(test)]
 mod backpressure_tests {
     use super::super::send_with_backpressure;
     use crate::types::{FinishReason, QueueError, StreamChunk};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
     use std::thread;
     use std::time::{Duration, Instant};
     use tokio::sync::mpsc;
 
     /// Build a stream chunk carrying `text`; values are irrelevant to the
-    /// backpressure logic, only the slot occupancy matters.
+    /// send logic, only success/failure of the send matters.
     fn make_chunk(text: &str) -> Result<StreamChunk, QueueError> {
         Ok(StreamChunk {
             text: text.to_string(),
@@ -35,78 +31,36 @@ mod backpressure_tests {
         })
     }
 
-    /// A full channel must *not* surface as a disconnect: the producer
-    /// retries until the consumer drains and the send completes. This is the
-    /// exact race that cut kanban-app generations off at 100 tokens.
+    /// Many chunks in a row succeed instantly with no consumer activity —
+    /// this is the property that distinguishes the unbounded design from
+    /// the prior bounded(100) one. A bounded channel would have stalled at
+    /// chunk 100 with the consumer still asleep; here, send returns
+    /// synchronously every time.
     #[test]
-    fn full_channel_backpressures_until_consumer_drains() {
-        // Use a tokio runtime so the channel works, but drive the producer
-        // off the runtime (mimicking the sync model-decode thread).
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .unwrap();
-
-        let (tx, mut rx) = rt.block_on(async { mpsc::channel(2) });
-        // Fill the channel to capacity ahead of time.
-        rt.block_on(async {
-            tx.send(make_chunk("a")).await.unwrap();
-            tx.send(make_chunk("b")).await.unwrap();
-        });
-
-        let sent_at = Arc::new(AtomicUsize::new(0));
-        let sent_at_writer = sent_at.clone();
-        let producer = thread::spawn(move || {
-            // This will block until at least one slot frees up.
-            let start = Instant::now();
-            let r = send_with_backpressure(&tx, make_chunk("c"));
-            sent_at_writer.store(start.elapsed().as_millis() as usize, Ordering::SeqCst);
-            r
-        });
-
-        // Brief pause to prove the producer is blocked, then drain.
-        thread::sleep(Duration::from_millis(50));
-        assert_eq!(
-            sent_at.load(Ordering::SeqCst),
-            0,
-            "producer should still be blocked on the full channel"
-        );
-
-        // Drain one slot. The producer must unblock and complete.
-        let drained = rt.block_on(rx.recv()).expect("first chunk drains cleanly");
-        assert_eq!(drained.unwrap().text, "a");
-
-        let result = producer.join().expect("producer thread joined");
-        assert!(result.is_ok(), "send must succeed after the consumer drains");
-        let elapsed_ms = sent_at.load(Ordering::SeqCst);
+    fn unbounded_sender_never_blocks_with_idle_consumer() {
+        let (tx, _rx) = mpsc::unbounded_channel::<Result<StreamChunk, QueueError>>();
+        let start = Instant::now();
+        for i in 0..10_000u32 {
+            send_with_backpressure(&tx, make_chunk(&format!("t{i}")))
+                .expect("send must succeed with the receiver alive");
+        }
+        let elapsed = start.elapsed();
+        // 10k sends should be sub-second even on the slowest CI machine
+        // when nothing blocks. The point of this assertion is not the
+        // exact threshold — it's that we observed no blocking.
         assert!(
-            elapsed_ms >= 40,
-            "producer should have spent ~50ms backpressured, was {}ms",
-            elapsed_ms
+            elapsed < Duration::from_secs(2),
+            "10k unbounded sends must not block (took {:?})",
+            elapsed
         );
-
-        // The retry then lands.
-        rt.block_on(async {
-            let b = rx.recv().await.unwrap().unwrap();
-            assert_eq!(b.text, "b");
-            let c = rx.recv().await.unwrap().unwrap();
-            assert_eq!(c.text, "c");
-        });
     }
 
-    /// A *closed* channel (receiver dropped) must surface as an error
-    /// immediately — that is the only condition that should end generation
-    /// early. Without this distinction, the producer would either spin
-    /// forever or bail on a full channel.
+    /// A closed channel (receiver dropped) is the ONE failure path the
+    /// helper still has to signal — that's how generation knows to stop
+    /// streaming when nobody is listening anymore.
     #[test]
     fn closed_channel_returns_error_quickly() {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .build()
-            .unwrap();
-        let (tx, rx) = rt.block_on(async { mpsc::channel(1) });
+        let (tx, rx) = mpsc::unbounded_channel::<Result<StreamChunk, QueueError>>();
         drop(rx);
 
         let start = Instant::now();
@@ -121,18 +75,19 @@ mod backpressure_tests {
         );
     }
 
-    /// The bug scenario: a slow consumer falls 100 chunks behind, then
-    /// catches up. With the old `try_send().is_err()` code the producer
-    /// would have bailed on chunk 3 (capacity 2); with backpressure it
-    /// completes all 5 and the consumer receives them in order.
+    /// Producer running on a non-runtime thread, consumer draining on a
+    /// runtime task with deliberate latency. Every chunk arrives in order;
+    /// none are dropped; the producer never blocks. Mirrors the production
+    /// shape: model decode is sync code, ACP consumer is an async task.
     #[test]
-    fn producer_emits_more_chunks_than_channel_capacity() {
+    fn producer_off_runtime_with_slow_consumer_still_completes() {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
             .build()
             .unwrap();
-        let (tx, mut rx) = rt.block_on(async { mpsc::channel(2) });
+        let (tx, mut rx) =
+            mpsc::unbounded_channel::<Result<StreamChunk, QueueError>>();
 
         let producer = thread::spawn(move || -> Result<(), u32> {
             for i in 0..5u32 {
@@ -146,7 +101,6 @@ mod backpressure_tests {
                     return Err(i);
                 }
             }
-            // Final completion chunk.
             let done = Ok(StreamChunk {
                 text: String::new(),
                 is_complete: true,
@@ -157,8 +111,6 @@ mod backpressure_tests {
             Ok(())
         });
 
-        // Slow consumer: 25ms between drains. Channel of 2 will saturate
-        // quickly and exercise the backpressure path repeatedly.
         let mut collected: Vec<String> = Vec::new();
         let mut saw_complete = false;
         rt.block_on(async {
@@ -176,7 +128,7 @@ mod backpressure_tests {
         let producer_result = producer.join().expect("producer joined");
         assert!(
             producer_result.is_ok(),
-            "producer must complete all 5 chunks despite capacity 2, got: {:?}",
+            "producer must complete all 5 chunks, got: {:?}",
             producer_result
         );
         assert_eq!(
