@@ -37,5 +37,6 @@ pub mod search;
 pub mod settings;
 pub mod status;
 pub mod store;
+pub mod strategy;
 pub mod sync;
 pub mod table;

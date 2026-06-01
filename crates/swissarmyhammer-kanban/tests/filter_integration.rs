@@ -514,10 +514,12 @@ async fn s17_tag_names_with_special_chars() {
     .await;
     dispatch(&ctx, json!({"op": "add task", "title": "Plain"})).await;
 
-    let result = dispatch(&ctx, json!({"op": "list tasks", "filter": "#v2.0"})).await;
+    // A tag slug is [A-Za-z0-9-]; "#v2.0" trims at the dot, yielding the tag "v2".
+    let result = dispatch(&ctx, json!({"op": "list tasks", "filter": "#v2"})).await;
     assert_eq!(result["count"], 1);
     assert_eq!(titles(&result), vec!["Version task"]);
 
+    // Hyphens are valid slug characters, so "#bug-fix" is a single tag.
     let result = dispatch(&ctx, json!({"op": "list tasks", "filter": "#bug-fix"})).await;
     assert_eq!(result["count"], 1);
     assert_eq!(titles(&result), vec!["Bugfix task"]);

@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "acp-conformance"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-extras",
@@ -83,7 +83,7 @@ dependencies = [
 
 [[package]]
 name = "agent-client-protocol-extras"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-schema",
@@ -206,7 +206,7 @@ dependencies = [
 
 [[package]]
 name = "ane-embedding"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "async-trait",
  "block2",
@@ -534,7 +534,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "avp-cli"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "avp-common",
  "clap",
@@ -558,7 +558,7 @@ dependencies = [
 
 [[package]]
 name = "avp-common"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-extras",
@@ -1261,7 +1261,7 @@ dependencies = [
 
 [[package]]
 name = "claude-agent"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-extras",
@@ -1323,7 +1323,7 @@ dependencies = [
 
 [[package]]
 name = "code-context-cli"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2216,7 +2216,7 @@ checksum = "4ef6b89e5b37196644d8796de5268852ff179b44e96276cf4290264843743bb7"
 
 [[package]]
 name = "embedding-benchmark"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "ane-embedding",
  "criterion",
@@ -3300,7 +3300,7 @@ dependencies = [
 
 [[package]]
 name = "heb"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "chrono",
  "dirs",
@@ -4129,7 +4129,7 @@ dependencies = [
 
 [[package]]
 name = "kanban-app"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "agent-client-protocol",
  "base64 0.22.1",
@@ -4179,7 +4179,7 @@ dependencies = [
 
 [[package]]
 name = "kanban-cli"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "clap",
  "clap-markdown",
@@ -4202,6 +4202,7 @@ dependencies = [
  "swissarmyhammer-operations",
  "swissarmyhammer-skills",
  "swissarmyhammer-templating",
+ "swissarmyhammer-tools",
  "tempfile",
  "tokio",
  "tracing",
@@ -4449,7 +4450,7 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "llama-agent"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-extras",
@@ -4503,7 +4504,7 @@ dependencies = [
 
 [[package]]
 name = "llama-common"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "async-trait",
  "serde",
@@ -4543,7 +4544,7 @@ dependencies = [
 
 [[package]]
 name = "llama-embedding"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "async-trait",
  "llama-common",
@@ -4632,7 +4633,7 @@ checksum = "670fdfda89751bc4a84ac13eaa63e205cf0fd22b4c9a5fbfa085b63c1f1d3a30"
 
 [[package]]
 name = "markdowndown"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4808,7 +4809,7 @@ dependencies = [
 
 [[package]]
 name = "mirdan"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -4851,7 +4852,7 @@ dependencies = [
 
 [[package]]
 name = "mirdan-app"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -4872,7 +4873,7 @@ dependencies = [
 
 [[package]]
 name = "mirdan-cli"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "clap",
  "clap-markdown",
@@ -4912,7 +4913,7 @@ dependencies = [
 
 [[package]]
 name = "model-context-protocol-extras"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "async-trait",
  "axum",
@@ -4930,7 +4931,7 @@ dependencies = [
 
 [[package]]
 name = "model-embedding"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "async-trait",
  "md5",
@@ -4945,7 +4946,7 @@ dependencies = [
 
 [[package]]
 name = "model-loader"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "dirs",
  "hf-hub",
@@ -7652,7 +7653,7 @@ checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 
 [[package]]
 name = "shelltool-cli"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "clap",
  "clap-markdown",
@@ -8008,7 +8009,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8074,7 +8075,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-agent"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-extras",
@@ -8095,7 +8096,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-agents"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "async-trait",
  "once_cell",
@@ -8114,11 +8115,11 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-build"
-version = "0.13.5"
+version = "0.13.6"
 
 [[package]]
 name = "swissarmyhammer-cli"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "anyhow",
  "arboard",
@@ -8185,7 +8186,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-cli-completions"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "clap",
  "clap_complete",
@@ -8194,7 +8195,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-code-context"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "fuzzy-matcher",
  "ignore",
@@ -8221,7 +8222,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-commands"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "async-trait",
  "include_dir",
@@ -8236,7 +8237,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-common"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "anyhow",
  "colored 2.2.0",
@@ -8266,7 +8267,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-config"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "anyhow",
  "dirs",
@@ -8290,7 +8291,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-directory"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "dirs",
  "serde",
@@ -8305,7 +8306,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-doctor"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "comfy-table",
  "crossterm",
@@ -8316,7 +8317,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-embedding"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "ane-embedding",
  "async-trait",
@@ -8331,7 +8332,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-entity"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "async-trait",
  "chrono",
@@ -8359,7 +8360,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-entity-search"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "fuzzy-matcher",
  "model-embedding",
@@ -8372,7 +8373,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-fields"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "async-trait",
  "serde",
@@ -8390,7 +8391,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-filter-expr"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "chumsky",
  "thiserror 2.0.18",
@@ -8398,7 +8399,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-focus"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "include_dir",
  "serde",
@@ -8414,7 +8415,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-git"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8430,7 +8431,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-js"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8449,7 +8450,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-kanban"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "async-trait",
  "chrono",
@@ -8486,7 +8487,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-leader-election"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "fs2",
  "md5",
@@ -8499,7 +8500,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-lsp"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "lsp-types",
  "once_cell",
@@ -8519,7 +8520,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-mcp-proxy"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8545,7 +8546,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-merge"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "diffy",
  "serde_json",
@@ -8556,7 +8557,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-modes"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "anyhow",
  "dirs",
@@ -8576,7 +8577,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-operations"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "async-trait",
  "chrono",
@@ -8589,7 +8590,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-operations-macros"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -8598,7 +8599,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-perspectives"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "serde",
  "serde_json",
@@ -8616,7 +8617,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-project-detection"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "serde",
  "serde_json",
@@ -8626,7 +8627,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-prompts"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "anyhow",
  "chrono",
@@ -8659,7 +8660,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-sem"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "rayon",
  "regex",
@@ -8690,7 +8691,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-shell"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "regex",
  "serde",
@@ -8708,7 +8709,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-skills"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "async-trait",
  "dirs",
@@ -8729,7 +8730,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-statusline"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "dirs",
  "git2",
@@ -8748,7 +8749,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-store"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "async-trait",
  "chrono",
@@ -8765,7 +8766,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-templating"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "anyhow",
  "liquid",
@@ -8785,7 +8786,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-tools"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8859,7 +8860,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-treesitter"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "anyhow",
  "async-watcher",
@@ -8916,7 +8917,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-views"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "chrono",
  "serde",
@@ -8934,7 +8935,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-web"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "async-trait",
  "dashmap",
@@ -8960,7 +8961,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-workspace-init"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "serde",
  "serde_json",
@@ -10167,9 +10168,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-bash"
-version = "0.23.3"
+version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "329a4d48623ac337d42b1df84e81a1c9dbb2946907c102ca72db158c1964a52e"
+checksum = "9e5ec769279cc91b561d3df0d8a5deb26b0ad40d183127f409494d6d8fc53062"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -10177,9 +10178,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-c"
-version = "0.23.4"
+version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "afd2b1bf1585dc2ef6d69e87d01db8adb059006649dd5f96f31aa789ee6e9c71"
+checksum = "a9b2eb57a55fed6b00812912e730b7a275cf4fe98bfd6a5d76263d4438371728"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -10207,9 +10208,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-css"
-version = "0.23.2"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ad6489794d41350d12a7fbe520e5199f688618f43aace5443980d1ddcf1b29e"
+checksum = "a5cbc5e18f29a2c6d6435891f42569525cf95435a3e01c2f1947abcde178686f"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -10217,12 +10218,12 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-dart"
-version = "0.0.4"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19f1f70b80ce41343e14aafcef67b5ba2e9de89587535b4aabbabb8036f4e38a"
+checksum = "325dd1e24ee9ee21111e9c43680ae7d6010aaa9f282b048a99b9c7163c1cf553"
 dependencies = [
  "cc",
- "tree-sitter",
+ "tree-sitter-language",
 ]
 
 [[package]]
@@ -10237,9 +10238,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-fortran"
-version = "0.5.1"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce58ab374a2cc3a2ff8a5dab2e5230530dbfcb439475afa75233f59d1d115b40"
+checksum = "ea5fea41363a9b59666001dc26c4b356d4e164da27c6ce31145e00aba6bf9b16"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -10247,9 +10248,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-go"
-version = "0.23.4"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b13d476345220dbe600147dd444165c5791bf85ef53e28acbedd46112ee18431"
+checksum = "c8560a4d2f835cc0d4d2c2e03cbd0dde2f6114b43bc491164238d333e28b16ea"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -10287,9 +10288,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-javascript"
-version = "0.23.1"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf40bf599e0416c16c125c3cec10ee5ddc7d1bb8b0c60fa5c4de249ad34dc1b1"
+checksum = "68204f2abc0627a90bdf06e605f5c470aa26fdcb2081ea553a04bdad756693f5"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -10323,9 +10324,9 @@ checksum = "009994f150cc0cd50ff54917d5bc8bffe8cad10ca10d81c34da2ec421ae61782"
 
 [[package]]
 name = "tree-sitter-lua"
-version = "0.2.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5cdb9adf0965fec58e7660cbb3a059dbb12ebeec9459e6dcbae3db004739641e"
+checksum = "8daaf5f4235188a58603c39760d5fa5d4b920d36a299c934adddae757f32a10c"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -10343,9 +10344,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-ocaml"
-version = "0.23.2"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93c104a23d175906dd0cf1f872745d2b4ec10f29a75194a3556501b2f66ce377"
+checksum = "0b943275476bac8f73e08bc4050e21d89d61ff68e1751b789ba74917b9147a85"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -10353,9 +10354,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-php"
-version = "0.23.11"
+version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f066e94e9272cfe4f1dcb07a1c50c66097eca648f2d7233d299c8ae9ed8c130c"
+checksum = "0d8c17c3ab69052c5eeaa7ff5cd972dd1bc25d1b97ee779fec391ad3b5df5592"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -10363,9 +10364,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-python"
-version = "0.23.6"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d065aaa27f3aaceaf60c1f0e0ac09e1cb9eb8ed28e7bcdaa52129cffc7f4b04"
+checksum = "6bf85fd39652e740bf60f46f4cda9492c3a9ad75880575bf14960f775cb74a1c"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -10383,9 +10384,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-rust"
-version = "0.23.3"
+version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca8ccb3e3a3495c8a943f6c3fd24c3804c471fd7f4f16087623c7fa4c0068e8a"
+checksum = "439e577dbe07423ec2582ac62c7531120dbfccfa6e5f92406f93dd271a120e45"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -10393,9 +10394,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-scala"
-version = "0.23.4"
+version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "efde5e68b4736e9eac17bfa296c6f104a26bffab363b365eb898c40a63c15d2f"
+checksum = "de5a4a7ff23a55474ce6a741d52aaeca7a82fe9421bb982b86e98c6ac8629397"
 dependencies = [
  "cc",
  "tree-sitter-language",

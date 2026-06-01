@@ -21,176 +21,150 @@ Understand code well enough to explain how it works and what a change would touc
 > {{arguments}}
 {% endif %}
 
-## Why This Skill Exists
+Use `code_context` to find the *right* code fast, trace connections, and measure blast radius — not linear reading.
 
-The gap between "I don't understand this code" and "I know what to do" is where most bad decisions happen. Claude's default behavior is to read a couple of files top to bottom, grep around, and jump straight to acting. That misses how the code actually connects — and what a change would ripple into.
+## Done Means
 
-This skill enforces a structured path through that gap. It uses `code_context` as the primary tool so you find the *right* code fast, trace how it connects, and measure the blast radius — instead of reading files linearly and hoping you saw the important parts.
-
-## What "Done" Means
-
-Exploration is complete when you can explain, concretely:
+Exploration is complete when you can explain:
 
 ```
-1. HOW IT WORKS    — the mechanism: what calls what, what data flows where
-2. WHERE IT LIVES  — the specific files and symbols that participate
-3. WHAT IT TOUCHES — the blast radius: what a change here would affect
+1. HOW IT WORKS    — what calls what, what data flows where
+2. WHERE IT LIVES  — specific files and symbols
+3. WHAT IT TOUCHES — blast radius: what a change would affect
 ```
 
-If you can't state all three, you're not done exploring. If you're guessing at any of them, go back to the tool — don't fill the gap with assumptions.
+Can't state all three? Not done. Guessing at any? Back to the tool — don't fill the gap with assumptions.
 
 ## Process
 
-### 1. Orient — check available layers
-
-Always start here. `code_context` returns results from multiple layers (tree-sitter index, live LSP, or both). Exploration works immediately with whatever layers are available.
+### 1. Orient — check layers
 
 ```json
 {"op": "get status"}
 ```
 
-Note which layers are active. If tree-sitter indexing is still in progress, live LSP ops (`get definition`, `get hover`, `search workspace_symbol`) work immediately — don't wait. If LSP is unavailable for a language, results come from tree-sitter only. Check `lsp status` if you need to know which languages have LSP support.
+Note which layers are active. Live LSP ops (`get definition`, `get hover`, `search workspace_symbol`) work immediately — don't wait for indexing. If LSP unavailable, results come from tree-sitter. Check `lsp status` to see per-language coverage.
 
-If an `ARCHITECTURE.md` exists at the project root, read it now — per the **Architecture Awareness** guidance above, it gives you the system map before you start tracing individual symbols, so you can place what you find inside the documented structure.
+If `ARCHITECTURE.md` exists at the project root, read it now (per the Architecture Awareness guidance) — it gives the system map before tracing individual symbols.
 
 ### 2. Survey — find the territory
 
-Start broad. Use domain keywords from the user's question to find relevant symbols.
+Broad first. Use domain keywords:
 
 ```json
 {"op": "search symbol", "query": "<domain keyword>", "max_results": 15}
 ```
 
-If the index is still building and `search symbol` returns sparse results, use the live alternative:
+If the index is building and `search symbol` is sparse, use the live alternative:
 
 ```json
 {"op": "search workspace_symbol", "query": "<domain keyword>"}
-```
-
-```json
 {"op": "list symbols", "file_path": "<key file>"}
 ```
 
-**What you're looking for**: the nouns and verbs of the problem. Structs, traits, functions that participate in the behavior you're investigating.
+**Looking for**: the nouns and verbs of the problem — structs, traits, functions that participate.
 
-### 3. Trace — follow the execution
-
-Once you've found the key symbols, trace how they connect.
+### 3. Trace — follow execution
 
 ```json
 {"op": "get symbol", "query": "<specific symbol>"}
 ```
 
-Jump to definitions and inspect types without reading entire files:
+Jump to definitions and types without reading whole files:
 
 ```json
 {"op": "get definition", "file_path": "<file>", "line": <line>, "character": <col>}
-```
-
-```json
 {"op": "get hover", "file_path": "<file>", "line": <line>, "character": <col>}
 ```
 
-Trace call relationships in both directions:
+Call relationships both directions:
 
 ```json
 {"op": "get callgraph", "symbol": "<symbol>", "direction": "both", "max_depth": 2}
-```
-
-```json
 {"op": "get inbound_calls", "file_path": "<file>", "line": <line>, "character": <col>}
 ```
 
-Find every usage of a symbol across the codebase:
+All usages:
 
 ```json
 {"op": "get references", "file_path": "<file>", "line": <line>, "character": <col>}
 ```
 
-**What you're looking for**: the path data takes through the system. Who calls what, what depends on what, where the boundaries are. `get inbound_calls` gives you live LSP precision for "who calls this function?", while `get callgraph` uses the indexed call edges for broader traversal.
+**Looking for**: the path data takes through the system. `get inbound_calls` is live LSP precision for "who calls this"; `get callgraph` uses indexed edges for broader traversal.
 
 ### 4. Scope — measure the blast radius
 
-Before forming a conclusion about how a change would land, understand what it would touch.
+```json
+{"op": "get blastradius", "file_path": "<target>", "max_hops": 3}
+```
+
+Supplement with `get references` — blast radius follows call edges, but references also catch type usage, field access, and trait impls.
+
+**Looking for**: how far a change propagates. If the radius surprises you, you don't understand the code yet — back to step 3.
+
+### 5. Check tests
+
+Tests are the clearest executable spec — they confirm understanding and show project patterns.
 
 ```json
-{"op": "get blastradius", "file_path": "<target file>", "max_hops": 3}
+{"op": "grep code", "pattern": "<symbol or behavior>", "file_pattern": "test"}
 ```
 
-Supplement blast radius with reference search — blast radius follows call edges, but `get references` also catches type usage, field access, and trait implementations:
+Also use Glob/Grep for test files near the code:
+- Same dir with `_test` suffix
+- `tests/` at project/crate root
+- Inline test modules (`#[cfg(test)]`, `describe(`, `#[test]`)
 
-```json
-{"op": "get references", "file_path": "<file>", "line": <line>, "character": <col>}
-```
+**Looking for**: intended behavior, the project's test patterns, behavior with no coverage.
 
-**What you're looking for**: how far a change propagates. If the blast radius surprises you, you don't understand the code well enough yet — go back to step 3.
+### 6. Conclude — explain
 
-### 5. Check how it's tested
-
-Find how the code is already exercised. Tests are the clearest executable description of intended behavior — reading them confirms (or corrects) your understanding, and shows you the patterns and conventions the project relies on.
-
-```json
-{"op": "grep code", "pattern": "<symbol or behavior under investigation>", "file_pattern": "test"}
-```
-
-Also use Glob/Grep to find test files near the code you're exploring:
-- Same directory with a `_test` suffix
-- `tests/` directory at project or crate root
-- Test modules inside source files (`#[cfg(test)]`, `describe(`, `#[test]`)
-
-**What you're looking for**: confirmation of how the code is *meant* to behave, the test patterns the project follows, and any behavior that has no coverage.
-
-### 6. Conclude — explain what you found
-
-This is the exit gate. State your finding as a concrete explanation:
+Exit gate. State concretely:
 
 ```
-HOW IT WORKS: <the mechanism, in plain terms — what calls what, what flows where>
-KEY CODE:     <the files and symbols that matter — file paths>
-BLAST RADIUS: <what a change here would touch, or "n/a — investigation only">
+HOW IT WORKS: <mechanism in plain terms — what calls what, what flows where>
+KEY CODE:     <files and symbols — paths>
+BLAST RADIUS: <what a change touches, or "n/a — investigation only">
 ```
 
-Then point at the next step — but don't take it yourself. Exploration produces understanding; acting on it is a separate move:
+Then point at the next step — but don't take it. Exploration produces understanding; acting is separate:
 
-- **To make a change** — hand off to `/tdd` (write the failing test first) or `/implement`.
-- **Change too large for one step** — hand off to `/plan` to break it into tasks.
-- **Found a bug** — describe it and the behavior that should hold, and suggest `/task` to track it.
-- **An architectural question** — present what you found and ask the user; don't guess.
+- **Make a change** → `/tdd` (failing test first) or `/implement`
+- **Too large for one step** → `/plan`
+- **Found a bug** → describe it + expected behavior, suggest `/task`
+- **Architectural question** → present findings, ask the user — don't guess
 
-## Using code-context — layered resolution
+## Layered Resolution
 
-**code-context is the primary exploration tool.** It provides both **indexed ops** (tree-sitter symbols, call graphs, blast radius) and **live LSP ops** (definitions, hover, references, inbound calls, workspace symbol search). Live ops work immediately — even before the index is fully built.
+`code-context` is primary. Indexed ops (tree-sitter symbols, callgraphs, blast radius) plus **live LSP ops** (definitions, hover, references, inbound calls, workspace symbol search). Live ops work before the index is fully built.
 
-Results include a `source_layer` field indicating where the data came from:
-- **lsp** — full language server precision (types, generics, trait impls)
+Results include `source_layer`:
+- **lsp** — full language-server precision (types, generics, trait impls)
 - **treesitter** — structural parsing from the index (fast, always available after indexing)
-- **treesitter+lsp** — combined results from both layers
+- **treesitter+lsp** — combined
 
-When you see results from tree-sitter only for a language that should have LSP support, suggest `/lsp` to check whether the language server is installed.
+Tree-sitter-only for a language that should have LSP? Suggest `/lsp`.
 
-Use raw file reads (Read, Grep, Glob) only for:
-- String literals, config values, error messages not in the symbol index
-- Files that aren't code (TOML, YAML, JSON, Markdown)
-- Confirming exact syntax once code-context has given you the location
+Use raw Read/Grep/Glob only for:
+- String literals, config, error messages not in the symbol index
+- Non-code files (TOML, YAML, JSON, Markdown)
+- Confirming exact syntax after code-context gave you the location
 
-**Do not** start exploration by reading files top to bottom. Start with `search symbol` (or `search workspace_symbol` if the index is building) and `get callgraph` to find the right code, then use `get definition` and `get hover` to inspect specifics without reading entire files.
+**Don't** start by reading files top to bottom. Start with `search symbol` (or `search workspace_symbol` while indexing) and `get callgraph`; use `get definition`/`get hover` to inspect specifics.
 
-## When to recurse
+## When to Recurse
 
-If the blast radius reveals unexpected dependencies, or the call graph leads to unfamiliar territory, loop back to step 2 with new keywords. Exploration is iterative — but each loop should narrow the focus, not widen it.
+If blast radius reveals surprises or the callgraph leads to new territory, loop back to step 2 with new keywords. Each loop should *narrow* focus, not widen it.
 
 ## Examples
 
-### Example 1: understanding how a feature works
+**Understanding a feature:** User says "explore how the kanban watcher decides which files to re-index".
 
-User says: "explore how the kanban watcher decides which files to re-index"
-
-Actions:
-1. Orient with `{"op": "get status"}` — note which layers are active.
-2. Survey with `{"op": "search symbol", "query": "watcher", "max_results": 15}` and `{"op": "search symbol", "query": "invalidate"}` — locate `KanbanWatcher::on_event` and `invalidate_file`.
-3. Trace with `{"op": "get symbol", "query": "KanbanWatcher::on_event"}` to read the actual source, then `{"op": "get callgraph", "symbol": "invalidate_file", "direction": "inbound", "max_depth": 2}` to see who triggers invalidation.
-4. Scope with `{"op": "get blastradius", "file_path": "src/watcher.rs", "max_hops": 3}` — confirms only the indexer and the MCP layer are affected.
-5. Check tests via `{"op": "grep code", "pattern": "on_event", "file_pattern": "test"}` — one smoke test covers file creation; nothing covers deletion.
+1. Orient with `get status` — note active layers.
+2. Survey: `search symbol "watcher"`, `search symbol "invalidate"` → `KanbanWatcher::on_event`, `invalidate_file`.
+3. Trace: `get symbol "KanbanWatcher::on_event"`, then `get callgraph "invalidate_file"` inbound, depth 2.
+4. Scope: `get blastradius "src/watcher.rs" max_hops 3` → indexer + MCP layer only.
+5. Tests: `grep code "on_event"` in `test` → smoke test covers creation; nothing covers deletion.
 6. Conclude:
 
    ```
@@ -202,23 +176,14 @@ Actions:
                  handled — invalidate_file is never called for deleted files.
    ```
 
-Result: Exploration is complete. The user now understands the mechanism and the gap. If they want the deletion gap fixed, that hands off to `/tdd` or `/task` — exploration itself wrote no code.
+Exploration complete. Deletion gap → `/tdd` or `/task`.
 
-### Example 2: exploration that reveals work too large for one step
-
-User says: `/explore what it would take to add SSO to the web app`
-
-Actions:
-1. Orient, survey auth-related symbols, trace the current login flow.
-2. Blast radius on `src/auth/login.rs` shows 40+ call sites across handlers, the session store, and middleware.
-3. Recognize this crosses the "single change" threshold and stop exploring.
-
-Result: Escalate to `/plan` rather than forcing a conclusion — exploration correctly identifies that planning, not implementation, is the next step.
+**Exploration reveals work too large:** `/explore what it would take to add SSO`. Orient, survey auth symbols, trace login flow. Blast radius on `src/auth/login.rs` shows 40+ call sites. Stop — escalate to `/plan` rather than force a conclusion.
 
 ## Constraints
 
-- **Don't write code during exploration.** Exploration produces understanding. Acting on that understanding is a separate, deliberate step — hand it off.
-- **Don't skip the blast radius.** Jumping from "search symbol" to "I know what to do" skips the step most likely to reveal surprises.
-- **Don't read files top to bottom.** That's the default behavior this skill exists to replace. Use `code_context` to find the right code, then inspect only what matters.
-- **Don't explore forever.** If you've done 3 loops of steps 2–4 without converging, stop and tell the user what's unclear. Ask for direction.
-- **Don't use exploration to avoid acting.** Once you can explain how it works, where it lives, and what it touches, exploration is done — move to planning or implementation.
+- **Don't write code during exploration.** Hand off.
+- **Don't skip blast radius.** It's where surprises surface.
+- **Don't read files top to bottom.** Use `code_context` to find the right code, inspect what matters.
+- **Don't explore forever.** 3 loops without convergence → stop, say what's unclear, ask the user.
+- **Don't use exploration to avoid acting.** Once you can explain how/where/what-it-touches, move to planning or implementation.

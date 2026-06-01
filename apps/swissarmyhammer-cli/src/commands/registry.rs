@@ -22,9 +22,8 @@ use swissarmyhammer_common::lifecycle::InitRegistry;
 ///
 /// | Priority | Component (display name)                       | User | Notes                                                |
 /// |---------:|-----------------------------------------------|:----:|------------------------------------------------------|
-/// | 10       | McpRegistration ("Register MCP server")       |  y   | Targets global agent configs in User scope           |
-/// | 11       | ClaudeLocalScope ("Register MCP (Claude…)")   |  -   | Project-only (writes `.claude/settings.local.json`)  |
-/// | 20       | DenyBash ("Permissions")                      |  y   | Edits each agent's per-scope settings file           |
+/// | 10       | McpRegistration ("Register MCP server")       |  y   | Delegates to mirdan appliers (per-agent strategies)  |
+/// | 20       | DenyBash ("Permissions")                      |  y   | Delegates to mirdan appliers (per-agent strategies)  |
 /// | 30       | Statusline ("Statusline")                     |  y   | Edits each agent's per-scope settings file           |
 /// | 40       | ProjectStructure ("Project workspace")        |  -   | Project-only — skipped in User scope (see below)     |
 /// | 50       | ClaudeMd ("Preamble")                         |  y   | Targets each agent's per-scope preamble file         |
@@ -82,9 +81,10 @@ mod tests {
     fn test_register_all_populates_registry() {
         let mut registry = InitRegistry::new();
         register_all(&mut registry, false);
-        // 9 components from components::register_all (the 8 installable components
-        // + KanbanTool) + 1 SkillDeployment (from commands::skill) = 10
-        assert_eq!(registry.len(), 10);
+        // 8 components from components::register_all (the 7 installable components
+        // + KanbanTool) + 1 SkillDeployment (from commands::skill) = 9.
+        // (ClaudeLocalScope was folded into McpRegistration's mirdan applier.)
+        assert_eq!(registry.len(), 9);
     }
 
     #[test]
@@ -92,7 +92,7 @@ mod tests {
         let mut registry = InitRegistry::new();
         register_all(&mut registry, true);
         // Same component count regardless of remove_directory flag
-        assert_eq!(registry.len(), 10);
+        assert_eq!(registry.len(), 9);
     }
 
     #[test]

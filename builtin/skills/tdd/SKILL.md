@@ -7,26 +7,17 @@ metadata:
   version: "{{version}}"
 ---
 
-
 # Test-Driven Development (TDD)
-
-## Overview
 
 Write the test first. Watch it fail. Write correct, well-designed code to pass.
 
-**Core principle:** If you didn't watch the test fail, you don't know if it tests the right thing.
+**Core principle:** if you didn't watch the test fail, you don't know if it tests the right thing.
 
-**Take your time and do your best work.** There is no reward for speed. There is every reward for correctness.
-
-**Violating the letter of the rules is violating the spirit of the rules.**
+**Optimize for correctness, not speed.** Violating the letter of the rules violates the spirit.
 
 ## When to Use
 
-**Always:** 
-- All code changes, no exceptions
-- If it is worth coding, it is worth testing
-
-Thinking "skip TDD just this once"? Stop. That's rationalization.
+All code changes, no exceptions. If it's worth coding, it's worth testing. Thinking "skip just this once"? That's rationalization.
 
 ## The Iron Law
 
@@ -34,177 +25,132 @@ Thinking "skip TDD just this once"? Stop. That's rationalization.
 NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST
 ```
 
-Did you write code before the test? Delete it. Start over. 
-
-**No exceptions:**
-- Don't keep it as "reference"
-- Don't "adapt" it while writing tests
-- Don't look at it
-- Delete means delete
-
+Wrote code before the test? **Delete it.** Don't keep as "reference", don't "adapt", don't look at it. Delete means delete.
 
 ## Red-Green-Refactor
 
-### RED — Write Failing Test
+### RED — write the failing test
 
-Write one minimal test showing what should happen.
-
-**Requirements:**
-- One behavior per test
-- Clear descriptive name — "and" in name? Split it
+One minimal test showing intended behavior:
+- One behavior per test ("and" in the name? split it)
+- Clear, descriptive name
 - Real code, not mocks (unless unavoidable)
-- Shows intended API usage
+- Demonstrates intended API
 
-### Verify RED — Watch It Fail
+### Verify RED — watch it fail (mandatory)
 
-**MANDATORY. Never skip.**
-
-Run the test. Confirm:
-- Test **fails** (not errors, not compilation failures)
+Run it. Confirm:
+- It **fails** (not errors, not compile-fails)
 - Failure message matches expectation
 - Fails because the feature is missing, not because of typos
 
-**Test passes immediately?** You're testing existing behavior. Fix the test.
+**Passes immediately?** You're testing existing behavior — fix the test.
+**Errors?** Fix the error, re-run until it fails correctly.
 
-**Test errors?** Fix the error, re-run until it fails correctly.
+### GREEN — correct code
 
-### GREEN — Correct Code
+Write correct, well-designed code that passes and follows the codebase's patterns.
+- No features beyond what the test requires
+- No unrelated refactors here — that's REFACTOR
+- Match existing style, idioms, conventions
 
-Write correct, well-designed code that passes the test and follows the codebase's prevailing patterns.
+### Verify GREEN — watch it pass (mandatory)
 
-- Don't add features beyond what the test requires
-- Don't refactor unrelated code in this step — that's what REFACTOR is for
-- Match the style, idioms, and conventions already established in the codebase
-
-### Verify GREEN — Watch It Pass
-
-**MANDATORY.**
-
-Run the test. Confirm:
+Run it. Confirm:
 - New test passes
-- All other tests still pass
+- Other tests still pass
 - Output is pristine — no errors, no warnings
 
 **New test fails?** Fix the code, not the test.
-
 **Other tests broke?** Fix them now.
 
-### REFACTOR — Clean Up
+### REFACTOR — clean up
 
-Only after green — this is where you make the code excellent:
+Only after green:
 - Remove duplication
 - Improve names and clarity
-- Extract helpers that follow existing patterns
-- Ensure the solution is robust, idiomatic, and the best version of itself
+- Extract helpers following existing patterns
+- Make the solution robust and idiomatic
 
-Keep tests green throughout. Don't add new behavior, but do make the existing behavior bulletproof.
+Keep tests green throughout. No new behavior; harden existing.
 
 ### Repeat
 
 Next failing test for the next behavior.
 
-## Common Rationalizations
+## Rationalizations vs Reality
 
 | Excuse | Reality |
 |--------|---------|
-| "Too simple to test" | Simple code breaks. Test takes 30 seconds. |
-| "I'll test after" | Tests passing immediately prove nothing. |
-| "Tests after achieve same goals" | Tests-after = "what does this do?" Tests-first = "what should this do?" |
-| "Already manually tested" | Ad-hoc ≠ systematic. No record, can't re-run. |
-| "Deleting X hours is wasteful" | Sunk cost fallacy. Keeping unverified code is technical debt. |
-| "Keep as reference, write tests first" | You'll adapt it. That's testing after. Delete means delete. |
-| "Need to explore first" | Fine. Throw away exploration, start with TDD. |
+| "Too simple to test" | Simple code breaks. Tests take 30s. |
+| "I'll test after" | Tests-after prove nothing — they pass immediately. |
+| "Tests-after same goal" | After = "what does this do?"; first = "what should this do?" |
+| "Already manually tested" | Ad-hoc ≠ systematic; can't re-run. |
+| "Deleting X hours is waste" | Sunk cost. Unverified code is tech debt. |
+| "Keep as reference, write tests" | You'll adapt it — that's testing after. Delete. |
+| "Need to explore first" | Fine — throw away the exploration, start TDD. |
 | "Test hard = design unclear" | Listen to the test. Hard to test = hard to use. |
-| "TDD will slow me down" | TDD is faster than debugging. Pragmatic = test-first. |
-| "Manual test faster" | Manual doesn't prove edge cases. You'll re-test every change. |
-| "Existing code has no tests" | You're improving it. Add tests for the code you touch. |
+| "TDD slows me down" | TDD is faster than debugging. |
+| "Manual is faster" | Manual misses edge cases; you re-test every change. |
+| "Existing code has no tests" | Add tests for what you touch. |
 
 ## Red Flags — STOP and Start Over
 
 - Code written before test
-- Test written after implementation
-- Test passes immediately on first run
+- Test added after implementation
+- Test passes on first run
 - Can't explain why the test failed
-- Tests added "later"
-- Rationalizing "just this once"
-- "I already manually tested it"
-- "Tests after achieve the same purpose"
-- "It's about spirit not ritual"
-- "Keep as reference" or "adapt existing code"
-- "Already spent X hours, deleting is wasteful"
-- "TDD is dogmatic, I'm being pragmatic"
-- "This is different because..."
+- Tests "added later"
+- "Just this once" / "already manually tested" / "spirit not ritual"
+- "Keep as reference" / "adapt existing"
+- "Sunk hours, deletion wasteful"
+- "Dogmatic vs pragmatic" / "this is different because..."
 
-**All of these mean: Delete the code. Start over with TDD.**
+All of these = delete the code, start over with TDD.
 
 ## Why Order Matters
 
-**"I'll write tests after to verify it works"**
+**Tests written after code pass immediately.** Passing immediately proves nothing — might test the wrong thing, might test implementation not behavior, might miss edge cases, you never saw it catch a bug. Test-first forces you to see the test fail, proving it tests something.
 
-Tests written after code pass immediately. Passing immediately proves nothing:
-- Might test the wrong thing
-- Might test implementation, not behavior
-- Might miss edge cases you forgot
-- You never saw it catch the bug
+**Sunk cost is the wrong frame.** Time is gone either way. Choice: delete + TDD (more hours, high confidence) or keep + tests after (30 min, low confidence, likely bugs). The waste is keeping untrusted code.
 
-Test-first forces you to see the test fail, proving it actually tests something.
-
-**"Deleting X hours of work is wasteful"**
-
-Sunk cost fallacy. The time is already gone. Your choice now:
-- Delete and rewrite with TDD (more hours, high confidence)
-- Keep it and add tests after (30 min, low confidence, likely bugs)
-
-The "waste" is keeping code you can't trust.
-
-**"TDD is dogmatic, being pragmatic means adapting"**
-
-TDD IS pragmatic:
-- Finds bugs before commit (faster than debugging after)
-- Prevents regressions (tests catch breaks immediately)
-- Documents behavior (tests show how to use code)
-- Enables refactoring (change freely, tests catch breaks)
-
-"Pragmatic" shortcuts = debugging in production = slower.
+**TDD is pragmatic.** Finds bugs before commit, prevents regressions, documents behavior, enables refactoring. "Pragmatic" shortcuts = production debugging = slower.
 
 ## Good Tests
 
 | Quality | Good | Bad |
 |---------|------|-----|
-| **Minimal** | One thing. "and" in name? Split it. | `test('validates email and domain and whitespace')` |
-| **Clear** | Name describes behavior | `test('test1')` |
-| **Shows intent** | Demonstrates desired API | Obscures what code should do |
-| **Real code** | Tests actual behavior | Tests mock behavior |
+| Minimal | One thing | `test('validates email and domain and whitespace')` |
+| Clear | Name describes behavior | `test('test1')` |
+| Shows intent | Demonstrates the desired API | Obscures what the code should do |
+| Real code | Tests actual behavior | Tests mock behavior |
 
 ## When Stuck
 
 | Problem | Solution |
 |---------|----------|
-| Don't know how to test | Write the wished-for API. Write the assertion first. Ask the user. |
-| Test too complicated | Design too complicated. Simplify the interface. |
-| Must mock everything | Code too coupled. Use dependency injection. |
-| Test setup huge | Extract helpers. Still complex? Simplify design. |
+| Don't know how to test | Write the wished-for API; write the assertion first; ask the user. |
+| Test too complicated | Design too complicated — simplify the interface. |
+| Must mock everything | Code too coupled — use DI. |
+| Test setup huge | Extract helpers; still complex → simplify design. |
 
-## Debugging Integration
+## Bug Fixes
 
-Bug found? Write a failing test that reproduces it. Follow the TDD cycle. The test proves the fix and prevents regression.
-
-Never fix bugs without a test.
+Write a failing test that reproduces the bug, then follow the cycle. The test proves the fix and prevents regression. **Never fix bugs without a test.**
 
 ## Verification Checklist
 
-Before marking work complete:
-
+Before marking complete:
 - [ ] Every new function/method has a test
 - [ ] Watched each test fail before implementing
-- [ ] Each test failed for the expected reason (feature missing, not typo)
-- [ ] Wrote correct, well-designed code to pass each test
+- [ ] Each failed for the expected reason (feature missing, not typo)
+- [ ] Wrote correct, well-designed code to pass
 - [ ] All tests pass
 - [ ] Output pristine (no errors, no warnings)
-- [ ] Tests use real code (mocks only if unavoidable)
+- [ ] Real code (mocks only if unavoidable)
 - [ ] Edge cases and errors covered
 
-Can't check all boxes? You skipped TDD. Start over.
+Can't check all? You skipped TDD. Start over.
 
 ## Final Rule
 
@@ -213,4 +159,4 @@ Production code → test exists and failed first
 Otherwise → not TDD
 ```
 
-No exceptions without the user's explicit permission.
+No exceptions without explicit user permission.

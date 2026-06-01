@@ -89,9 +89,9 @@ impl Initializable for ShelltoolSkillDeployment {
         "skills"
     }
 
-    /// Priority 30 — runs after ShelltoolMcpRegistration (priority 10) and
-    /// ShellExecuteTool (priority 0, the default) so that config and Bash
-    /// denial are in place before the skill is deployed.
+    /// Priority 30 — runs after ShellExecuteTool (priority 0, the default,
+    /// which owns MCP registration + config + Bash denial) so that all of
+    /// those are in place before the skill is deployed.
     fn priority(&self) -> i32 {
         30
     }

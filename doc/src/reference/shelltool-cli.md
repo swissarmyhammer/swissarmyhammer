@@ -21,7 +21,7 @@ brew install swissarmyhammer/tap/shelltool-cli
 
 shelltool - A shell that saves tokens
 
-Replaces Bash and exec CLI tools with a persistent, searchable shell. Instead of flooding the context window with raw command output, shelltool stores everything in history — the agent runs commands, then greps or semantic-searches the results, retrieving only the lines that matter.
+Replaces Bash and exec CLI tools with a persistent, searchable shell. Instead of flooding the context window with raw command output, shelltool stores everything in history — the agent runs commands, then greps the results, retrieving only the lines that matter.
 
 **Usage:** `shelltool [OPTIONS] <COMMAND>`
 

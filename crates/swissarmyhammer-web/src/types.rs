@@ -328,10 +328,6 @@ pub struct ContentMetadata {
 
     /// Reading time estimate in minutes
     pub reading_time_minutes: Option<u32>,
-
-    /// Tags or topics identified in the content
-    #[serde(default)]
-    pub tags: Vec<String>,
 }
 
 /// Statistics for content fetching operations

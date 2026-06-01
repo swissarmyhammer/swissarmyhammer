@@ -13,13 +13,6 @@ use swissarmyhammer_prompts::PromptLibrary;
 use mirdan::settings as mirdan_settings;
 use serde_json::json;
 
-/// JSON pointer for Claude Code's permissions.deny array.
-const PERMISSIONS_DENY_POINTER: &str = "/permissions/deny";
-
-/// Value pushed into Claude Code's permissions.deny array to forbid the
-/// built-in Bash tool (callers are expected to use the `shell` MCP tool).
-const BASH_DENY_VALUE: &str = "Bash";
-
 /// Top-level key for Claude Code's statusline configuration.
 const STATUSLINE_KEY: &str = "statusLine";
 
@@ -55,7 +48,6 @@ fn sah_mcp_server_entry() -> mirdan::mcp_config::McpServerEntry {
 /// * `remove_directory` - Whether `ProjectStructure::deinit` should delete directories.
 pub fn register_all(registry: &mut InitRegistry, remove_directory: bool) {
     registry.register(McpRegistration);
-    registry.register(ClaudeLocalScope);
     registry.register(DenyBash);
     registry.register(Statusline);
     registry.register(ProjectStructure::new(remove_directory));
@@ -66,16 +58,21 @@ pub fn register_all(registry: &mut InitRegistry, remove_directory: bool) {
     // Register tools that have lifecycle operations.
     // Each tool implements Initializable — tools with no-op init/deinit
     // are harmless to include (they'll be skipped automatically).
-    registry.register(swissarmyhammer_tools::mcp::tools::kanban::KanbanTool);
+    // sah exposes kanban through `sah serve`, NOT a separate `kanban` MCP
+    // server — so it constructs the tool WITHOUT an injected MCP entry. The
+    // tool's init/deinit then only manage `.kanban/` merge drivers.
+    registry.register(swissarmyhammer_tools::mcp::tools::kanban::KanbanTool::new());
 }
 
 // ── McpRegistration (priority 10) ────────────────────────────────────
 
-/// Registers/unregisters sah as an MCP server in all detected agent configs.
+/// Registers/unregisters sah as an MCP server across all detected agents.
 ///
-/// Derives global-vs-project behavior from the `InitScope` parameter passed
-/// to `init`/`deinit` — `InitScope::User` targets global agent configs,
-/// all other scopes target project-level configs.
+/// Delegates entirely to [`mirdan::install::register_mcp_server`] /
+/// [`mirdan::install::unregister_mcp_server`], which iterate detected agents
+/// and dispatch to each agent's `mirdan::strategy` (so Claude Code's local
+/// scope, generic JSON agents, and per-scope MCP targets are all handled in
+/// one place). The component just declares the `sah serve` entry.
 pub struct McpRegistration;
 
 impl Initializable for McpRegistration {
@@ -99,357 +96,25 @@ impl Initializable for McpRegistration {
         10
     }
 
-    /// Install sah MCP server to all detected agents using mirdan's mcp_config.
-    ///
-    /// Iterates every detected agent that declares an `mcp_config` block in
-    /// `agents_default.yaml` and writes the sah server entry to that agent's
-    /// MCP config file. If none of the detected agents declares an MCP config,
-    /// returns a Warning result with a fix hint instead of writing a non-
-    /// agent-bound `.mcp.json` — the legacy behavior wrote a file that no
-    /// detected agent would read anyway.
+    /// Register the sah MCP server across detected agents for `scope`.
     fn init(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        let global = matches!(scope, InitScope::User);
-
-        let config = match mirdan::agents::load_agents_config() {
-            Ok(c) => c,
-            Err(e) => {
-                return vec![InitResult::error(
-                    self.name(),
-                    format!("Failed to load agents config: {}", e),
-                )];
-            }
-        };
-        let agents = mirdan::agents::get_detected_agents(&config);
-
-        let entry = mirdan::mcp_config::McpServerEntry {
-            command: "sah".to_string(),
-            args: vec!["serve".to_string()],
-            env: std::collections::BTreeMap::new(),
-        };
-
-        let mut installed_count = 0;
-        for agent in &agents {
-            if register_agent_mcp(&agent.def, &entry, global, reporter) {
-                installed_count += 1;
-            }
-        }
-
-        if installed_count == 0 {
-            return vec![InitResult::warning(
-                self.name(),
-                "No detected agent declares an MCP config; skipped MCP registration. \
-                 Install a supported agent (e.g. Claude Code) or add an `mcp_config` entry \
-                 to agents_default.yaml for your agent.",
-            )];
-        }
-
-        vec![InitResult::ok(
-            self.name(),
-            format!("MCP server registered for {} agents", installed_count),
-        )]
+        mirdan::install::register_mcp_server(*scope, "sah", &sah_mcp_server_entry(), reporter)
     }
 
-    /// Remove sah MCP server from all detected agents using mirdan's mcp_config.
-    ///
-    /// Iterates every detected agent that declares an `mcp_config` block and
-    /// removes the sah entry from that agent's MCP config file. If none of the
-    /// detected agents declares an MCP config, returns a Warning result — the
-    /// legacy fallback that touched a project-level `.mcp.json` is gone since
-    /// no detected agent would have consumed it.
+    /// Unregister the sah MCP server across detected agents for `scope`.
     fn deinit(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        let global = matches!(scope, InitScope::User);
-        let config = match mirdan::agents::load_agents_config() {
-            Ok(c) => c,
-            Err(e) => {
-                return vec![InitResult::error(
-                    self.name(),
-                    format!("Failed to load agents config: {}", e),
-                )];
-            }
-        };
-        let agents = mirdan::agents::get_detected_agents(&config);
-
-        let mut removed_count = 0;
-        for agent in &agents {
-            if unregister_agent_mcp(&agent.def, global, reporter) {
-                removed_count += 1;
-            }
-        }
-
-        if removed_count == 0 {
-            return vec![InitResult::warning(
-                self.name(),
-                "No detected agent declares an MCP config; nothing to remove. \
-                 Install a supported agent (e.g. Claude Code) or add an `mcp_config` entry \
-                 to agents_default.yaml for your agent.",
-            )];
-        }
-
-        vec![InitResult::ok(
-            self.name(),
-            format!("MCP server unregistered from {} agents", removed_count),
-        )]
+        mirdan::install::unregister_mcp_server(*scope, "sah", reporter)
     }
-}
-
-/// Register the sah MCP server for a single agent. Returns true if installed.
-fn register_agent_mcp(
-    def: &mirdan::agents::AgentDef,
-    entry: &mirdan::mcp_config::McpServerEntry,
-    global: bool,
-    reporter: &dyn InitReporter,
-) -> bool {
-    let mcp_def = match &def.mcp_config {
-        Some(m) => m,
-        None => return false,
-    };
-    let config_path = if global {
-        mirdan::agents::agent_global_mcp_config(def)
-    } else {
-        mirdan::agents::agent_project_mcp_config(def)
-    };
-    let config_path = match config_path {
-        Some(p) => p,
-        None => return false,
-    };
-
-    match mirdan::mcp_config::register_mcp_server(
-        &config_path,
-        &mcp_def.servers_key,
-        "sah",
-        entry,
-        &mcp_def.entry_extras,
-    ) {
-        Ok(()) => {
-            reporter.emit(&InitEvent::Action {
-                verb: "Installed".to_string(),
-                message: format!("MCP server for {} ({})", def.name, config_path.display()),
-            });
-            true
-        }
-        Err(e) => {
-            reporter.emit(&InitEvent::Warning {
-                message: format!("failed to install MCP for {}: {}", def.name, e),
-            });
-            false
-        }
-    }
-}
-
-/// Unregister the sah MCP server from a single agent. Returns true if removed.
-fn unregister_agent_mcp(
-    def: &mirdan::agents::AgentDef,
-    global: bool,
-    reporter: &dyn InitReporter,
-) -> bool {
-    let mcp_def = match &def.mcp_config {
-        Some(m) => m,
-        None => return false,
-    };
-    let config_path = if global {
-        mirdan::agents::agent_global_mcp_config(def)
-    } else {
-        mirdan::agents::agent_project_mcp_config(def)
-    };
-    let config_path = match config_path {
-        Some(p) => p,
-        None => return false,
-    };
-
-    match mirdan::mcp_config::unregister_mcp_server(&config_path, &mcp_def.servers_key, "sah") {
-        Ok(true) => {
-            reporter.emit(&InitEvent::Action {
-                verb: "Removed".to_string(),
-                message: format!("MCP server from {} ({})", def.name, config_path.display()),
-            });
-            true
-        }
-        Ok(false) => false,
-        Err(e) => {
-            reporter.emit(&InitEvent::Warning {
-                message: format!("failed to remove MCP from {}: {}", def.name, e),
-            });
-            false
-        }
-    }
-}
-
-// ── ClaudeLocalScope (priority 11) ───────────────────────────────────
-
-/// Manages Claude Code local-scope config in `~/.claude.json`.
-pub struct ClaudeLocalScope;
-
-impl Initializable for ClaudeLocalScope {
-    /// The component name for Claude Code local scope configuration.
-    fn name(&self) -> &str {
-        "claude-local-scope"
-    }
-
-    /// Human-readable label for this component.
-    fn display_name(&self) -> &str {
-        "Register MCP (Claude local scope)"
-    }
-
-    /// Component category: configuration tasks.
-    fn category(&self) -> &str {
-        "configuration"
-    }
-
-    /// Component priority: 11 (sub-step of MCP registration; runs immediately after [`McpRegistration`]).
-    fn priority(&self) -> i32 {
-        11
-    }
-
-    /// Only applicable to local scope installations.
-    fn is_applicable(&self, scope: &InitScope) -> bool {
-        matches!(scope, InitScope::Local)
-    }
-
-    /// Install to local scope: `~/.claude.json` under `projects.<project-path>.mcpServers`.
-    fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        let path = mirdan::mcp_config::claude_json_path();
-        let key = match mirdan::mcp_config::project_key() {
-            Ok(k) => k,
-            Err(e) => return vec![InitResult::error(self.name(), e.to_string())],
-        };
-
-        let mut root = match mirdan_settings::read_json(&path) {
-            Ok(r) => r,
-            Err(e) => return vec![InitResult::error(self.name(), e.to_string())],
-        };
-        let entry_value = mirdan::mcp_config::ensure_project_entry(&mut root, &key);
-        let changed = match mirdan::mcp_config::set_mcp_server_entry(
-            entry_value,
-            "mcpServers",
-            "sah",
-            &sah_mcp_server_entry(),
-            &std::collections::BTreeMap::new(),
-        ) {
-            Ok(c) => c,
-            Err(e) => return vec![InitResult::error(self.name(), e.to_string())],
-        };
-        if let Err(e) = mirdan_settings::write_json(&path, &root) {
-            return vec![InitResult::error(self.name(), e.to_string())];
-        }
-
-        if changed {
-            reporter.emit(&InitEvent::Action {
-                verb: "Installed".to_string(),
-                message: format!(
-                    "MCP server to {} (local scope, project: {})",
-                    path.display(),
-                    key
-                ),
-            });
-        } else {
-            reporter.emit(&InitEvent::Skipped {
-                component: "MCP".to_string(),
-                reason: format!(
-                    "MCP server already configured in {} (local scope, project: {})",
-                    path.display(),
-                    key
-                ),
-            });
-        }
-        vec![InitResult::ok(self.name(), "Claude local scope configured")]
-    }
-
-    /// Uninstall from local scope: `~/.claude.json` under `projects.<project-path>.mcpServers`.
-    fn deinit(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        let path = mirdan::mcp_config::claude_json_path();
-        let key = match mirdan::mcp_config::project_key() {
-            Ok(k) => k,
-            Err(e) => return vec![InitResult::error(self.name(), e.to_string())],
-        };
-
-        if !path.exists() {
-            reporter.emit(&InitEvent::Skipped {
-                component: self.name().to_string(),
-                reason: format!("No {} file found, nothing to uninstall", path.display()),
-            });
-            return vec![InitResult::ok(self.name(), "Nothing to uninstall")];
-        }
-
-        let mut root = match mirdan_settings::read_json(&path) {
-            Ok(r) => r,
-            Err(e) => return vec![InitResult::error(self.name(), e.to_string())],
-        };
-
-        let changed = remove_mcp_from_project_entry(&mut root, &key);
-
-        if changed {
-            if let Err(e) = mirdan_settings::write_json(&path, &root) {
-                return vec![InitResult::error(self.name(), e.to_string())];
-            }
-            reporter.emit(&InitEvent::Action {
-                verb: "Removed".to_string(),
-                message: format!(
-                    "MCP server from {} (local scope, project: {})",
-                    path.display(),
-                    key
-                ),
-            });
-        } else {
-            reporter.emit(&InitEvent::Skipped {
-                component: self.name().to_string(),
-                reason: format!(
-                    "MCP server was not configured in {} (local scope, project: {})",
-                    path.display(),
-                    key
-                ),
-            });
-        }
-
-        vec![InitResult::ok(
-            self.name(),
-            "Claude local scope unconfigured",
-        )]
-    }
-}
-
-/// Remove the sah MCP server from a specific project entry in
-/// `~/.claude.json`, and prune the now-empty `mcpServers` object.
-///
-/// The empty-object cleanup is local-scope specific: project entries in
-/// `~/.claude.json` may carry other fields (`allowedTools`, etc.), so we
-/// only delete the `mcpServers` key when it has no remaining servers,
-/// preserving the rest of the project entry.
-///
-/// Returns `true` if the sah entry was found and removed.
-fn remove_mcp_from_project_entry(root: &mut serde_json::Value, key: &str) -> bool {
-    let entry = match root.get_mut("projects").and_then(|p| p.get_mut(key)) {
-        Some(e) => e,
-        None => return false,
-    };
-
-    let changed = mirdan::mcp_config::remove_mcp_server_entry(entry, "mcpServers", "sah");
-
-    // Clean up the now-empty mcpServers object so we don't leave a dangling
-    // empty map in the project entry.
-    let should_remove = entry
-        .get("mcpServers")
-        .and_then(|m| m.as_object())
-        .map(|m| m.is_empty())
-        .unwrap_or(false);
-    if should_remove {
-        if let Some(obj) = entry.as_object_mut() {
-            obj.remove("mcpServers");
-        }
-    }
-
-    changed
 }
 
 // ── DenyBash (priority 20) ───────────────────────────────────────────
 
-/// Manages the "Bash" deny rule in each detected agent's settings file.
+/// Denies/allows the built-in "Bash" tool across all detected agents.
 ///
-/// Iterates every detected agent and, for the requested scope, resolves the
-/// agent's settings file from `AgentDef` (project-relative `settings_path` or
-/// absolute `global_settings_path`). Agents without a settings path for the
-/// scope are skipped — today only Claude Code has them, so the natural
-/// outcome is `<git-root>/.claude/settings.json` for project/local and
-/// `~/.claude/settings.json` for user.
+/// Delegates to [`mirdan::install::deny_tool`] / [`mirdan::install::allow_tool`],
+/// which dispatch to each agent's `mirdan::strategy`. Agents with no permission
+/// mechanism (everything but Claude Code today) are silently skipped by the
+/// strategy. The component just declares the tool name and scope.
 pub struct DenyBash;
 
 impl Initializable for DenyBash {
@@ -474,10 +139,6 @@ impl Initializable for DenyBash {
     }
 
     /// Applicable to project, local, and user scope installations.
-    ///
-    /// User scope targets each agent's global settings file (e.g.
-    /// `~/.claude/settings.json`); project/local target the agent's
-    /// project settings file resolved against the git root.
     fn is_applicable(&self, scope: &InitScope) -> bool {
         matches!(
             scope,
@@ -485,94 +146,15 @@ impl Initializable for DenyBash {
         )
     }
 
-    /// Add "Bash" to permissions.deny in each detected agent's settings file.
+    /// Deny the built-in Bash tool across detected agents for `scope`.
     fn init(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        for_each_detected_agent_settings_file(
-            self.name(),
-            scope,
-            reporter,
-            install_deny_bash_for_agent,
-        )
+        mirdan::install::deny_tool(*scope, "Bash", reporter)
     }
 
-    /// Remove "Bash" from permissions.deny in each detected agent's settings file.
+    /// Allow the built-in Bash tool again across detected agents for `scope`.
     fn deinit(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        for_each_detected_agent_settings_file(
-            self.name(),
-            scope,
-            reporter,
-            uninstall_deny_bash_for_agent,
-        )
+        mirdan::install::allow_tool(*scope, "Bash", reporter)
     }
-}
-
-/// Add the Bash deny rule to a single agent's settings file.
-///
-/// Uses mirdan's generic JSON primitives: pushes `"Bash"` into the
-/// `permissions.deny` array, creating any missing parents.
-fn install_deny_bash_for_agent(
-    component_name: &str,
-    def: &mirdan::agents::AgentDef,
-    path: &std::path::Path,
-    reporter: &dyn InitReporter,
-) -> InitResult {
-    let mut claude_settings = match mirdan_settings::read_json(path) {
-        Ok(s) => s,
-        Err(e) => return InitResult::error(component_name, e.to_string()),
-    };
-    let changed = mirdan_settings::ensure_array_contains(
-        &mut claude_settings,
-        PERMISSIONS_DENY_POINTER,
-        &json!(BASH_DENY_VALUE),
-    );
-    if let Err(e) = mirdan_settings::write_json(path, &claude_settings) {
-        return InitResult::error(component_name, e.to_string());
-    }
-    if changed {
-        reporter.emit(&InitEvent::Action {
-            verb: "Configured".to_string(),
-            message: format!(
-                "Bash tool denied for {} ({}) — use shell tool instead",
-                def.name,
-                path.display()
-            ),
-        });
-    }
-    InitResult::ok(component_name, "Bash deny rule configured")
-}
-
-/// Remove the Bash deny rule from a single agent's settings file.
-///
-/// Uses mirdan's generic JSON primitives: removes `"Bash"` from the
-/// `permissions.deny` array if it is present.
-fn uninstall_deny_bash_for_agent(
-    component_name: &str,
-    def: &mirdan::agents::AgentDef,
-    path: &std::path::Path,
-    reporter: &dyn InitReporter,
-) -> InitResult {
-    if !path.exists() {
-        return InitResult::ok(component_name, "Settings file not found");
-    }
-    let mut claude_settings = match mirdan_settings::read_json(path) {
-        Ok(s) => s,
-        Err(e) => return InitResult::error(component_name, e.to_string()),
-    };
-    let changed = mirdan_settings::remove_from_array(
-        &mut claude_settings,
-        PERMISSIONS_DENY_POINTER,
-        &json!(BASH_DENY_VALUE),
-    );
-    if changed {
-        if let Err(e) = mirdan_settings::write_json(path, &claude_settings) {
-            return InitResult::error(component_name, e.to_string());
-        }
-        reporter.emit(&InitEvent::Action {
-            verb: "Removed".to_string(),
-            message: format!("Bash tool deny rule for {} ({})", def.name, path.display()),
-        });
-    }
-    InitResult::ok(component_name, "Bash deny rule removed")
 }
 
 // ── Statusline (priority 30) ─────────────────────────────────────────
@@ -1627,7 +1209,8 @@ mod tests {
     /// empty. Centralising this means adding a new field to `AgentDef` only
     /// breaks `AgentDef` itself, not every test that happens to need a
     /// synthetic agent.
-    fn synthetic_agent_def(global_settings: &std::path::Path) -> mirdan::agents::AgentDef {
+    fn synthetic_agent_def(settings: &std::path::Path) -> mirdan::agents::AgentDef {
+        let s = settings.to_string_lossy().to_string();
         mirdan::agents::AgentDef {
             id: "claude-code".to_string(),
             name: "Claude Code".to_string(),
@@ -1642,10 +1225,25 @@ mod tests {
             global_agent_path: None,
             instructions_path: None,
             global_instructions_path: None,
-            settings_path: Some("settings.json".to_string()),
-            global_settings_path: Some(global_settings.to_string_lossy().to_string()),
+            // Both scopes point at the same absolute file so callers can drive
+            // either Project or User deny against a known temp path.
+            settings_path: Some(s.clone()),
+            global_settings_path: Some(s),
             doctor: false,
         }
+    }
+
+    /// Like [`synthetic_agent_def`] but with an `mcp_config` whose project path
+    /// is the given absolute file, for exercising the strategy's `register_mcp`.
+    fn synthetic_agent_with_mcp(mcp_json: &std::path::Path) -> mirdan::agents::AgentDef {
+        let mut def = synthetic_agent_def(mcp_json);
+        def.mcp_config = Some(mirdan::agents::McpConfigDef {
+            project_path: mcp_json.to_string_lossy().to_string(),
+            global_path: Some(mcp_json.to_string_lossy().to_string()),
+            servers_key: "mcpServers".to_string(),
+            entry_extras: std::collections::BTreeMap::new(),
+        });
+        def
     }
 
     // ── Shared-detector agreement tests ─────────────────────────────────
@@ -1684,11 +1282,12 @@ mod tests {
         );
     }
 
-    /// `install_deny_bash_for_agent` writes a settings file that
+    /// The Claude strategy's `deny_tool` (the writer the install layer calls
+    /// via [`DenyBash`]) writes a settings file that
     /// `mirdan::status::permissions_present` recognizes as installed.
     #[test]
     fn test_install_deny_bash_agrees_with_status_detector() {
-        use swissarmyhammer_common::reporter::NullReporter;
+        use mirdan::strategy::{AgentConfigStrategy, ClaudeCodeStrategy};
 
         let temp = tempfile::TempDir::new().unwrap();
         let settings = temp.path().join("settings.json");
@@ -1696,75 +1295,65 @@ mod tests {
         // Detector reports missing before any install.
         assert!(!mirdan::status::permissions_present(&settings));
 
-        // Install via the production per-agent path. The AgentDef is only used
-        // for the reporter message, so a synthetic one is fine.
+        // Deny via the same strategy the DenyBash component drives, pointing the
+        // agent's project settings file at the temp path.
         let def = synthetic_agent_def(&settings);
-        let reporter = NullReporter;
-        let result = install_deny_bash_for_agent("deny-bash", &def, &settings, &reporter);
-        assert_eq!(
-            result.status,
-            swissarmyhammer_common::lifecycle::InitStatus::Ok
-        );
+        let changed = ClaudeCodeStrategy
+            .deny_tool(&def, InitScope::Project, "Bash")
+            .expect("deny_tool should succeed");
+        assert!(changed);
 
         // Detector now reports installed.
         assert!(
             mirdan::status::permissions_present(&settings),
-            "permissions_present must agree with what install_deny_bash_for_agent wrote"
+            "permissions_present must agree with what the Claude strategy wrote"
         );
     }
 
-    /// `mirdan::mcp_config::register_mcp_server` (the writer the install layer
-    /// calls via `register_agent_mcp`) writes a config file that
+    /// The Claude strategy's `register_mcp` (the writer the install layer calls
+    /// via [`McpRegistration`]) writes a config file that
     /// `mirdan::status::mcp_server_installed` recognizes as installed.
     #[test]
     fn test_install_mcp_agrees_with_status_detector() {
+        use mirdan::strategy::{AgentConfigStrategy, ClaudeCodeStrategy};
+
         let temp = tempfile::TempDir::new().unwrap();
         let mcp_json = temp.path().join("mcp.json");
 
         // Detector reports missing before any install.
         assert!(!mirdan::status::mcp_server_installed(&mcp_json, None));
 
-        // Install via the same `mirdan::mcp_config` entry point the install
-        // layer calls in `register_agent_mcp`.
-        mirdan::mcp_config::register_mcp_server(
-            &mcp_json,
-            "mcpServers",
-            "sah",
-            &sah_mcp_server_entry(),
-            &std::collections::BTreeMap::new(),
-        )
-        .expect("register_mcp_server should succeed");
+        // Register via the Claude strategy with the agent's project MCP config
+        // pointed at the temp path.
+        let def = synthetic_agent_with_mcp(&mcp_json);
+        ClaudeCodeStrategy
+            .register_mcp(&def, InitScope::Project, "sah", &sah_mcp_server_entry())
+            .expect("register_mcp should succeed");
 
         // Detector now reports installed.
         assert!(
             mirdan::status::mcp_server_installed(&mcp_json, None),
-            "mcp_server_installed must agree with what register_mcp_server wrote"
+            "mcp_server_installed must agree with what the Claude strategy wrote"
         );
     }
 
     // ── McpRegistration component tests ─────────────────────────────────
 
-    /// When no detected agent declares an `mcp_config` block, `McpRegistration::init`
-    /// must return a Warning result with a fix hint rather than writing a
+    /// When no detected agent declares an `mcp_config` block, the
+    /// `McpRegistration` applier completes without error and writes no
     /// non-agent-bound `.mcp.json` (the deleted legacy fallback behavior).
     #[test]
     #[serial_test::serial(home_env, cwd)]
-    fn test_mcp_registration_init_warns_when_no_agent_has_mcp_config() {
+    fn test_mcp_registration_init_skips_agent_without_mcp_config() {
         use swissarmyhammer_common::lifecycle::InitStatus;
         use swissarmyhammer_common::reporter::NullReporter;
         use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
 
         let env = IsolatedTestEnvironment::new().unwrap();
-        // Pin cwd to the isolated tempdir so `McpRegistration::init` does not
-        // write `.mcp.json` (or any sibling agent-dir parents) into the host
-        // crate directory. The test already inspects results + the (now
-        // tempdir-rooted) `.mcp.json` path, so this only changes *where* the
-        // would-be writes land — not what the test asserts.
         let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
 
-        // Write a custom agents config where the only agent has no mcp_config
-        // and is "detected" because its detect dir exists under the isolated home.
-        // Using project_path under HOME so the directory tree is auto-created.
+        // A single detected agent with no mcp_config (so the generic strategy
+        // has nothing to register).
         std::fs::create_dir_all(env.home_path().join(".no-mcp-agent")).unwrap();
         let custom_config = env.home_path().join("agents.yaml");
         std::fs::write(
@@ -1781,11 +1370,6 @@ agents:
         )
         .unwrap();
 
-        // Point mirdan at the custom config and ensure no project-level
-        // `.mcp.json` is written into the isolated cwd. Use an RAII guard so
-        // the env var is cleared even if an assertion below panics — a bare
-        // `set_var` / `remove_var` pair would leak the value into subsequent
-        // in-process tests that read `MIRDAN_AGENTS_CONFIG`.
         let _env_guard = EnvGuard::set("MIRDAN_AGENTS_CONFIG", &custom_config);
         let cwd_mcp_json = std::env::current_dir().unwrap().join(".mcp.json");
         let pre_existed = cwd_mcp_json.exists();
@@ -1793,30 +1377,19 @@ agents:
         let reporter = NullReporter;
         let results = McpRegistration.init(&InitScope::Project, &reporter);
 
-        assert_eq!(
-            results.len(),
-            1,
-            "expected exactly one InitResult, got: {:?}",
-            results
-        );
-        assert_eq!(
-            results[0].status,
-            InitStatus::Warning,
-            "expected Warning status when no agent has mcp_config, got: {:?}",
-            results
-        );
+        // The applier always returns a single aggregate result, never an error
+        // when an agent simply has no MCP config to write.
         assert!(
-            results[0].message.contains("mcp_config") || results[0].message.contains("MCP config"),
-            "warning message should mention mcp_config: {:?}",
-            results[0].message
+            results.iter().all(|r| r.status != InitStatus::Error),
+            "applier must not error for an agent without mcp_config: {results:?}"
         );
 
-        // The legacy fallback would have written `.mcp.json` in the cwd; the
-        // new behavior must not touch it.
+        // The deleted legacy fallback would have written a project `.mcp.json`;
+        // the strategy-driven path must not touch it.
         if !pre_existed {
             assert!(
                 !cwd_mcp_json.exists(),
-                "deleted legacy fallback must not write a project-level .mcp.json"
+                "no agent-bound .mcp.json should be written for an agent without mcp_config"
             );
         }
     }

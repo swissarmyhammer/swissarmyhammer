@@ -89,8 +89,10 @@ impl Initializable for KanbanSkillDeployment {
         "skills"
     }
 
-    /// Priority 20 — runs after `KanbanMcpRegistration` (priority 10) so that
-    /// MCP config is in place before the skill is deployed.
+    /// Priority 20 — the skill-deployment step. MCP registration is owned by
+    /// `KanbanTool` (priority 55), so it actually runs *after* this; the two
+    /// are independent — deploying the `kanban` skill writes SKILL.md to agent
+    /// `.skills/` dirs and does not depend on the MCP entry being present.
     fn priority(&self) -> i32 {
         20
     }

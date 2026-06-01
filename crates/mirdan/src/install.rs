@@ -1605,6 +1605,258 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), RegistryError> {
     Ok(())
 }
 
+// ── Scope-aware appliers (the single per-agent iteration + reporting site) ──
+//
+// Tools and CLIs call these to apply a declarative change — register me as an
+// MCP server, deny a tool — across every detected agent. Each applier loads
+// the detected agents, dispatches to the right [`strategy::AgentConfigStrategy`]
+// via [`strategy::strategy_for`], applies the change, and emits reporter
+// events. They take a `swissarmyhammer_common` [`InitScope`] + [`InitReporter`]
+// so the same implementation serves the shell tool, `sah`, and `shelltool`.
+
+use swissarmyhammer_common::lifecycle::{InitResult, InitScope};
+use swissarmyhammer_common::reporter::{InitEvent, InitReporter};
+
+use crate::agents::AgentDef;
+use crate::mcp_config::McpServerEntry;
+use crate::strategy::{self, AgentConfigStrategy};
+
+/// Component name used in the `InitResult`s the appliers return.
+const APPLIER_COMPONENT: &str = "agent-config";
+
+/// Load detected agents, or return a single error `InitResult` describing the
+/// failure (so callers can short-circuit without a panic).
+fn detected_agents_or_error() -> Result<Vec<crate::agents::DetectedAgent>, Vec<InitResult>> {
+    match agents::load_agents_config() {
+        Ok(config) => Ok(agents::get_detected_agents(&config)),
+        Err(e) => Err(vec![InitResult::error(
+            APPLIER_COMPONENT,
+            format!("Failed to load agents config: {e}"),
+        )]),
+    }
+}
+
+/// Apply `action` to every detected agent's strategy, emitting an Action event
+/// (with `verb`) for each agent that changed and a Warning for each error, then
+/// aggregate into a single `InitResult`.
+///
+/// `changed_message` / `noop_message` build the human-readable detail for the
+/// `InitResult` describing how many agents were affected.
+fn for_each_agent_strategy(
+    scope: InitScope,
+    reporter: &dyn InitReporter,
+    verb: &str,
+    action: impl Fn(&dyn AgentConfigStrategy, &AgentDef) -> Result<bool, RegistryError>,
+    action_message: impl Fn(&AgentDef) -> String,
+) -> Vec<InitResult> {
+    let agents = match detected_agents_or_error() {
+        Ok(a) => a,
+        Err(results) => return results,
+    };
+
+    let mut changed = 0usize;
+    for agent in &agents {
+        let strategy = strategy::strategy_for(&agent.def);
+        match action(strategy.as_ref(), &agent.def) {
+            Ok(true) => {
+                reporter.emit(&InitEvent::Action {
+                    verb: verb.to_string(),
+                    message: action_message(&agent.def),
+                });
+                changed += 1;
+            }
+            Ok(false) => {}
+            Err(e) => reporter.emit(&InitEvent::Warning {
+                message: format!("{} ({}): {e}", agent.def.name, scope_label(scope)),
+            }),
+        }
+    }
+
+    vec![InitResult::ok(
+        APPLIER_COMPONENT,
+        format!("{verb} applied to {changed} agent(s)"),
+    )]
+}
+
+/// Short scope label for reporter/warning messages.
+fn scope_label(scope: InitScope) -> &'static str {
+    match scope {
+        InitScope::Project => "project",
+        InitScope::Local => "local",
+        InitScope::User => "user",
+    }
+}
+
+/// Register `server_name` → `entry` as an MCP server across every detected
+/// agent at `scope`, dispatching to each agent's strategy.
+pub fn register_mcp_server(
+    scope: InitScope,
+    server_name: &str,
+    entry: &McpServerEntry,
+    reporter: &dyn InitReporter,
+) -> Vec<InitResult> {
+    for_each_agent_strategy(
+        scope,
+        reporter,
+        "Registered",
+        |strategy, agent| strategy.register_mcp(agent, scope, server_name, entry),
+        |agent| format!("{server_name} MCP server for {}", agent.name),
+    )
+}
+
+/// Unregister `server_name` as an MCP server across every detected agent at
+/// `scope`, dispatching to each agent's strategy.
+pub fn unregister_mcp_server(
+    scope: InitScope,
+    server_name: &str,
+    reporter: &dyn InitReporter,
+) -> Vec<InitResult> {
+    for_each_agent_strategy(
+        scope,
+        reporter,
+        "Removed",
+        |strategy, agent| strategy.unregister_mcp(agent, scope, server_name),
+        |agent| format!("{server_name} MCP server from {}", agent.name),
+    )
+}
+
+/// Deny `tool` across every detected agent at `scope`, dispatching to each
+/// agent's strategy. Agents with no permission mechanism are silently skipped.
+pub fn deny_tool(scope: InitScope, tool: &str, reporter: &dyn InitReporter) -> Vec<InitResult> {
+    for_each_agent_strategy(
+        scope,
+        reporter,
+        "Configured",
+        |strategy, agent| strategy.deny_tool(agent, scope, tool),
+        |agent| {
+            format!(
+                "{tool} tool denied for {} — use the shell tool instead",
+                agent.name
+            )
+        },
+    )
+}
+
+/// Allow `tool` (remove a prior deny) across every detected agent at `scope`,
+/// dispatching to each agent's strategy.
+pub fn allow_tool(scope: InitScope, tool: &str, reporter: &dyn InitReporter) -> Vec<InitResult> {
+    for_each_agent_strategy(
+        scope,
+        reporter,
+        "Removed",
+        |strategy, agent| strategy.allow_tool(agent, scope, tool),
+        |agent| format!("{tool} deny rule for {}", agent.name),
+    )
+}
+
+#[cfg(test)]
+mod applier_tests {
+    use super::*;
+    use serial_test::serial;
+    use swissarmyhammer_common::reporter::NullReporter;
+
+    /// RAII guard restoring `MIRDAN_AGENTS_CONFIG` on drop.
+    struct MirdanConfigGuard {
+        original: Option<String>,
+    }
+
+    impl MirdanConfigGuard {
+        fn set(path: &Path) -> Self {
+            let original = std::env::var("MIRDAN_AGENTS_CONFIG").ok();
+            std::env::set_var("MIRDAN_AGENTS_CONFIG", path);
+            Self { original }
+        }
+    }
+
+    impl Drop for MirdanConfigGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(v) => std::env::set_var("MIRDAN_AGENTS_CONFIG", v),
+                None => std::env::remove_var("MIRDAN_AGENTS_CONFIG"),
+            }
+        }
+    }
+
+    /// Write a synthetic single-agent (generic) config whose detect dir is the
+    /// project dir (so detection always fires) and whose MCP config is a
+    /// relative `.mcp.json`.
+    fn write_generic_agents_config(project_dir: &Path) -> PathBuf {
+        let agents_yaml = format!(
+            r#"agents:
+  - id: fake-agent
+    name: Fake Agent
+    project_path: .fake/skills
+    global_path: "~/.fake/skills"
+    detect:
+      - dir: "{detect}"
+    mcp_config:
+      project_path: .mcp.json
+      servers_key: mcpServers
+"#,
+            detect = project_dir.display(),
+        );
+        let config_path = project_dir.join("agents.yaml");
+        std::fs::write(&config_path, agents_yaml).unwrap();
+        config_path
+    }
+
+    fn entry() -> McpServerEntry {
+        McpServerEntry {
+            command: "sah".to_string(),
+            args: vec!["serve".to_string()],
+            env: std::collections::BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    #[serial(cwd, env)]
+    fn register_mcp_server_iterates_detected_agent_and_dispatches() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().canonicalize().unwrap();
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(&project).unwrap();
+        let config_path = write_generic_agents_config(&project);
+        let _mirdan = MirdanConfigGuard::set(&config_path);
+
+        let reporter = NullReporter;
+        let results = register_mcp_server(InitScope::Project, "sah", &entry(), &reporter);
+        assert!(results
+            .iter()
+            .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error));
+
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(project.join(".mcp.json")).unwrap())
+                .unwrap();
+        assert_eq!(json["mcpServers"]["sah"]["command"], "sah");
+
+        let results = unregister_mcp_server(InitScope::Project, "sah", &reporter);
+        assert!(results
+            .iter()
+            .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error));
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(project.join(".mcp.json")).unwrap())
+                .unwrap();
+        assert!(json["mcpServers"]["sah"].is_null());
+    }
+
+    #[test]
+    #[serial(cwd, env)]
+    fn deny_tool_noop_for_agent_without_permission_mechanism() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().canonicalize().unwrap();
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(&project).unwrap();
+        let config_path = write_generic_agents_config(&project);
+        let _mirdan = MirdanConfigGuard::set(&config_path);
+
+        let reporter = NullReporter;
+        // The generic strategy has no deny mechanism: nothing is written and
+        // the applier still returns Ok.
+        let results = deny_tool(InitScope::Project, "Bash", &reporter);
+        assert!(results
+            .iter()
+            .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

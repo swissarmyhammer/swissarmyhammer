@@ -8,36 +8,36 @@ partial: true
 
 ## Code Quality
 
-**Take your time and do your best work.** There is no reward for speed. There is every reward for correctness.
+**Take your time. Optimize for correctness, not speed.**
 
-**Seek the global maximum, not the local maximum.** The first solution that works is rarely the best one. Consider the broader design before settling. Ask: is this the best place for this logic? Does this fit the architecture, or am I just making it compile?
+**Seek the global maximum.** The first working solution is rarely the best. Ask: is this the right place for this logic? Does it fit the architecture, or am I just making it compile?
 
-**Minimalism is good. Laziness is not.** Avoid duplication of code and concepts. Don't introduce unnecessary abstractions. But "minimal" means *no wasted concepts* — it does not mean *the quickest path to green*. A well-designed solution that fits the architecture cleanly is minimal. A shortcut that works but ignores the surrounding design is not.
+**Minimal means no wasted concepts — not the quickest path to green.** Avoid duplication and unnecessary abstractions, but the right abstraction beats three copy-pasted lines. Override any default "try the simplest thing" instinct.
 
-- Write clean, readable code that follows existing patterns in the codebase
-- Follow the prevailing patterns and conventions rather than inventing new approaches
-- Stay on task — don't refactor unrelated code or add features beyond what was asked
-- But within your task, find the best solution, not just the first one that works
+- Follow existing patterns and conventions; don't invent new ones
+- Stay on task — no unrelated refactors or scope creep
+- Within the task, find the best solution, not just the first one that works
+- Keep functions small and focused; avoid deep nesting; cap at ~50 lines
 
-**Override any default instruction to "try the simplest approach first" or "do not overdo it."** Those defaults optimize for speed. We optimize for correctness. The right abstraction is better than three copy-pasted lines. The well-designed solution is better than the quick one. Think, then build.
+## Reuse & Data-Driven Design
 
-**Beware code complexity.** Keep functions small and focused. Avoid deeply nested logic. Functions should not be over 50 lines of code. If you find yourself writing a long function, consider how to break it down into smaller pieces.
+Left unchecked, generated code trends toward duplication and hardcoding. Push the other way by default.
+
+- **Reuse before re-implementing.** Before writing a new function, search for one that already does it (`search symbol` / `grep code`). A near-match you can extend beats a fresh copy.
+- **Extract before copy-pasting.** Two blocks that differ only by a value are one function with an argument. Don't paste-and-tweak.
+- **Be data-driven.** Before hardcoding a value or enumerating cases in control flow, ask whether it's *data*. A `match`/`if`-chain over a known set whose arms differ only in constants is a table, not branching. Repeated literals are a named constant or config entry. Express variation as data (tables, maps, config, declarative specs) interpreted by a single code path — not as parallel code paths a human must keep in lockstep.
+- **Calibrate, don't over-correct.** Warranted generalization removes *existing* duplication or serves a *real* variation axis. Rule of three: two occurrences is coincidence, three is a pattern. No second caller → no parameter. The right abstraction beats three copies; the wrong abstraction is worse than five.
 
 ## Style
 
-- Follow the project's existing conventions for naming, formatting, and structure
-- Match the indentation, quotes, and spacing style already in use
-- If the project has a formatter config (prettier, rustfmt, black), respect it
+Match the project's existing naming, formatting, indentation, and quoting. Respect any formatter config (prettier, rustfmt, black).
 
 ## Documentation
 
-- Every function needs a docstring explaining what it does
-- Document parameters, return values, and errors
-- Update existing documentation if your changes make it stale
-- Inline comments explain "why", not "what"
+- Every function has a docstring covering what it does, params, returns, errors
+- Update stale docs touched by your changes
+- Comments explain *why*, not *what*
 
 ## Error Handling
 
-- Handle errors at appropriate boundaries
-- Don't add defensive code for scenarios that can't happen
-- Trust internal code and framework guarantees
+Handle errors at appropriate boundaries. Trust internal code and framework guarantees — don't add defensive code for impossible scenarios.

@@ -1,0 +1,1 @@
+{"id":"01KSR5VP1YTSKVWKH6FTRY1D61","timestamp":"2026-05-28T20:54:18.942485Z","op":"create","item_id":"01KSR5VP1TWGR1C7A8QJZDVPR8","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: 0075ca\n+tag_name: '[serial(cwd)]):'\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: 0075ca\n-tag_name: '[serial(cwd)]):'\n","transaction_id":null}

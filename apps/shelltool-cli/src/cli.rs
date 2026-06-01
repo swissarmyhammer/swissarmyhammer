@@ -31,8 +31,8 @@ impl std::fmt::Display for InstallTarget {
 ///
 /// Replaces Bash and exec CLI tools with a persistent, searchable shell.
 /// Instead of flooding the context window with raw command output, shelltool
-/// stores everything in history — the agent runs commands, then greps or
-/// semantic-searches the results, retrieving only the lines that matter.
+/// stores everything in history — the agent runs commands, then greps the
+/// results, retrieving only the lines that matter.
 #[derive(Parser, Debug)]
 #[command(name = "shelltool")]
 #[command(version)]

@@ -6,46 +6,25 @@ partial: true
 
 ### Makefile Project Guidelines
 
-**Common Commands:**
-- Build default target: `make`
+**Common commands:**
+- Build default: `make`
 - Clean: `make clean`
 - Install: `make install`
-- **Run ALL tests:** `make test` or `make check` (standard test targets)
-- **Try multiple targets:** If `make test` fails, try `make check`, `make tests`, or `make test-all`
-- List targets: `make help` (if defined) or `grep '^[^#[:space:]].*:' Makefile`
-- Parallel build: `make -j$(nproc)` or `make -j4`
-- Verbose output: `make V=1` or `make VERBOSE=1`
+- Parallel: `make -j$(nproc)`
+- Verbose: `make V=1` or `make VERBOSE=1`
 
-**IMPORTANT:** Do NOT glob for test files. Makefiles define test targets. Use `make test` or `make check` to run all tests as configured.
-
-**Formatting:**
-- Check for a `make format` or `make fmt` target
-- **clang-format:** if C/C++ source, check for `.clang-format` config
-- Look at Makefile for custom format targets before committing
-- ALWAYS run the project's formatter before committing if one exists
-
-**Best Practices:**
-- Always run `make clean` before full rebuilds
-- Check `Makefile` or run `make help` to see available targets
-- Use parallel builds (`-j`) for faster compilation
-- Look for `config.mk` or similar for configuration options
+**Testing — do NOT glob; targets are defined in the Makefile:**
+- Try `make test`, then `make check`, `make tests`, `make test-all`
 
 **Discovery:**
-- List targets: `grep '^[^#[:space:]].*:' Makefile` (shows all targets)
+- List targets: `make help` if defined, else `grep '^[^#[:space:]].*:' Makefile`
 - Common targets: `all`, `build`, `clean`, `install`, `test`, `check`, `distclean`
-- Check for `configure` script that generates the Makefile
+
+**Formatting:** look for `make format`/`make fmt`. For C/C++ check for `.clang-format`.
 
 **Configuration:**
-- If `configure` exists: `./configure && make`
-- Custom configuration: `./configure --prefix=/custom/path`
-- Autotools project: `./autogen.sh && ./configure && make`
+- If `configure` exists: `./configure && make` (custom prefix: `./configure --prefix=/path`)
+- Autotools: `./autogen.sh && ./configure && make`
+- Variable overrides: `make CC=clang CFLAGS="-O2 -Wall"` (common: `CC`, `CXX`, `CFLAGS`, `CXXFLAGS`, `LDFLAGS`)
 
-**File Locations:**
-- Configuration: `Makefile` (main) and possibly `*.mk` includes
-- Source code: Project-specific (check `Makefile` for `SRC` variables)
-- Build output: Often in-source, check for `build/` or `out/`
-- Object files: `*.o` files (usually git-ignored)
-
-**Variables:**
-- Override at build time: `make CC=clang` or `make CFLAGS="-O2 -Wall"`
-- Check common variables: `CC`, `CXX`, `CFLAGS`, `CXXFLAGS`, `LDFLAGS`
+**File locations:** `Makefile` (+ optional `*.mk`); sources are project-specific (check `SRC` variables); output often in-source, sometimes `build/` or `out/`.

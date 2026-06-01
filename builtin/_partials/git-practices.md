@@ -6,19 +6,14 @@ partial: true
 
 ## Branching
 
-- Work on the current branch unless instructed otherwise
-- Don't create new branches without explicit request
+Work on the current branch. Don't create new branches without an explicit request.
 
 ## Commits
 
-- Use conventional commit format: `type(scope): description`
-- Types: feat, fix, refactor, test, docs, chore, style
-- Write clear, concise commit messages explaining the "why"
-- Don't commit scratch files, temporary outputs, or generated artifacts
-- Ensure all relevant files are staged before committing
+- Conventional format: `type(scope): description` (feat, fix, refactor, test, docs, chore, style)
+- Messages explain the *why*
+- Check `git status` before committing; never commit scratch, temp, or generated files
 
 ## Safety
 
-- Never force push to main/master
-- Don't amend commits that have been pushed
-- Check git status before committing to avoid missing files
+Never force-push to main/master. Don't amend pushed commits.

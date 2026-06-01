@@ -13,7 +13,7 @@ metadata:
 
 # Task
 
-Create a single, well-researched kanban task from an idea, request, or bug report.
+Create one well-researched kanban task from an idea, request, or bug report.
 
 {% if arguments %}
 ## User Request
@@ -23,41 +23,38 @@ Create a single, well-researched kanban task from an idea, request, or bug repor
 
 ## Process
 
-### 1. Understand the idea
+### 1. Understand
 
-{% if arguments %}Start from the user request above.{% endif %} If anything is ambiguous or underspecified, use the `question` tool to ask clarifying questions before proceeding. A great task requires clear understanding — don't guess.
+{% if arguments %}Start from the request above.{% endif %} If ambiguous or underspecified, use the `question` tool to clarify before proceeding. Don't guess.
 
-### 2. Research the codebase
+### 2. Research
 
-Use `code_context` as the primary research tool:
+Use `code_context` as the primary tool:
 
-- **Find symbols** — `op: "search symbol"` with domain keywords, `op: "get symbol"` for implementations
-- **Map blast radius** — `op: "get blastradius"` on files you expect the work to touch. This reveals callers, downstream consumers, tests, and transitive dependencies.
-- **Trace call chains** — `op: "get callgraph"` with `direction: "inbound"` and `"outbound"` to understand execution flow
-- **Fall back to text search** — Glob, Grep, Read for string literals, config files, or patterns not in the index
+- **Symbols** — `search symbol` with domain keywords; `get symbol` for implementations
+- **Blast radius** — `get blastradius` on expected target files to reveal callers, downstream consumers, tests, transitive deps
+- **Call chains** — `get callgraph` with `direction: "inbound"` / `"outbound"`
+- **Fallback** — Glob/Grep/Read for string literals, config files, patterns not in the index
 
-Thorough research is always required. The tools you use may differ — a bug fix may focus on blast radius while a feature requires broader symbol exploration — but never skip research because something appears simple.
+Thorough research is always required. The mix varies (bugs focus on blast radius; features need broader exploration) but never skip because something looks simple.
 
-### 3. Create the task
+### 3. Create
 
-Create the task on the kanban board using `kanban` with `op: "add task"`. The task must meet the task standards included above — What, Acceptance Criteria, and Tests sections are mandatory.
+`kanban` `op: "add task"`. Must meet the task standards above — What, Acceptance Criteria, Tests are mandatory.
 
-If the research reveals the work is too large for a single task (exceeds sizing limits), tell the user and suggest they use `/plan` instead.
+If research shows the work is too large for one task (exceeds sizing limits), tell the user and suggest `/plan`.
 
-### 4. Present the result
+### 4. Present
 
-Show the user the task you created — title, description, and any tags applied.
+Show the user the task — title, description, tags.
 
 ## Examples
 
-### Example 1: tracking a bug report as a single well-formed task
+**Bug report as a task:** User says "track this bug — parser panics on empty input".
 
-User says: "track this bug — parser panics on empty input"
-
-Actions:
-1. Research with `{"op": "search symbol", "query": "parse"}` to locate `Parser::parse_input` in `src/parser.rs`, then `{"op": "get symbol", "query": "Parser::parse_input"}` to confirm the panic path (an `unwrap()` on an empty slice).
-2. Map `{"op": "get blastradius", "file_path": "src/parser.rs", "max_hops": 2}` to find tests (`tests/parser.rs`) and callers (three handlers) that may need updating.
-3. Create the task via `kanban` `op: "add task"` with What / Acceptance Criteria / Tests:
+1. `{"op": "search symbol", "query": "parse"}` → `Parser::parse_input` in `src/parser.rs`. `get symbol` confirms an `unwrap()` on an empty slice.
+2. `{"op": "get blastradius", "file_path": "src/parser.rs", "max_hops": 2}` → `tests/parser.rs` + three callers.
+3. Create the task:
 
    ```json
    {
@@ -67,24 +64,14 @@ Actions:
    }
    ```
 
-4. Present the created task id, title, and description to the user.
+4. Present the task id, title, description.
 
-Result: One well-researched task on the board with concrete file paths, acceptance criteria, and a runnable test command.
-
-### Example 2: ambiguous request — ask before writing
-
-User says: "add a task for the login thing we discussed"
-
-Actions:
-1. The request is too vague — use `{"op": "ask question", "question": "Which login concern should I track? The JWT-refresh retry logic, the password reset form, or the rate limiter on POST /api/login?"}` before proceeding.
-2. After the user clarifies ("the rate limiter"), research the relevant code, then create a single well-formed task.
-
-Result: A task the implementer can act on without needing to re-derive the intent — the clarification happens at task creation, not at implementation time.
+**Ambiguous request — ask first:** User says "add a task for the login thing we discussed". Use `{"op": "ask question", "question": "Which login concern — JWT-refresh retry, password reset form, or rate limiter on POST /api/login?"}` before proceeding. After the answer, research and create.
 
 ## Constraints
 
-- **One task per invocation.** If the user describes multiple pieces of work, create one task for the most important item and suggest `/plan` for the rest.
-- **Research before writing.** Don't guess at file paths, function names, or test locations. Look them up.
-- **Ask, don't assume.** If the user's request is vague or could be interpreted multiple ways, use the `question` tool to clarify before creating the task.
-- **Task quality is non-negotiable.** Every task must have What, Acceptance Criteria, and Tests. A task without these is not valid.
-- **Use the kanban board.** Do NOT use TodoWrite, TaskCreate, or any other task tracking. The kanban board is the single source of truth.
+- **One task per invocation.** Multiple items → pick the most important, suggest `/plan` for the rest.
+- **Research before writing.** No guessing at paths, names, test locations.
+- **Ask, don't assume.** Vague requests get the `question` tool.
+- **Task quality is non-negotiable** — What + Acceptance Criteria + Tests.
+- **Kanban only** — no TodoWrite/TaskCreate.

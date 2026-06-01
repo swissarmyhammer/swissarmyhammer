@@ -10,10 +10,10 @@ metadata:
 
 # Project Detection
 
-To discover project types, build commands, and language-specific guidelines for this workspace, call the code_context tool:
+Discover project types, build commands, and language guidelines for this workspace:
 
 ```json
 {"op": "detect projects"}
 ```
 
-**Call this early in your session** to understand the project structure before making changes. The guidelines returned are authoritative — follow them for test commands, build commands, and formatting.
+**Call early in your session**, before changes. The returned guidelines are authoritative for test, build, and formatting commands.
