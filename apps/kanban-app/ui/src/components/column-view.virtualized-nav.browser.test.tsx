@@ -244,7 +244,7 @@ function spatialNavigateCalls(): Array<{
   direction: string;
 }> {
   return mockInvoke.mock.calls
-    .filter((c) => (c[0] === "spatial_navigate" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "navigate focus")))
+    .filter((c) => c[0] === "spatial_navigate")
     .map(
       (c) =>
         c[1] as {
@@ -667,7 +667,29 @@ describe("<ColumnView> — scroll-on-edge fall-through for virtualized nav", () 
     });
     const originalImpl = mockInvoke.getMockImplementation();
     mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
+      // Post-Stage-3 production sends `navigate focus` through the MCP
+      // envelope `invoke("command_tool_call", { tool: "focus", op: "navigate focus", params: {...} })`.
+      // Intercept both the legacy direct cmd and the wrapping envelope.
       if (cmd === "spatial_navigate") return navHandler(cmd, args);
+      if (cmd === "command_tool_call") {
+        const a = args as
+          | {
+              tool?: string;
+              op?: string;
+              params?: Record<string, unknown>;
+            }
+          | undefined;
+        if (a?.tool === "focus" && a?.op === "navigate focus") {
+          // Remap `focused_fq` (kernel wire) back to `focusedFq` (test
+          // wire) so the navHandler sees the field name it expects.
+          const params = { ...(a.params ?? {}) };
+          if ("focused_fq" in params && !("focusedFq" in params)) {
+            params.focusedFq = params.focused_fq;
+          }
+          await navHandler("spatial_navigate", params);
+          return { ok: true, event: null };
+        }
+      }
       return originalImpl ? originalImpl(cmd, args) : undefined;
     });
 

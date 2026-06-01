@@ -263,6 +263,20 @@ describe("PerspectiveProvider", () => {
     await act(async () => {});
     expect(result.current.perspectives).toHaveLength(2);
 
+    // `subscribeStoreChanged` does a lazy `import("@tauri-apps/api/event")`
+    // followed by a `.then(listen)`. Under the full-suite scheduler this
+    // chain can need multiple microtask + setTimeout hops to resolve, so
+    // wait until the listener has actually been registered before firing
+    // the event — otherwise the optional-chain on the callback silently
+    // swallows the dispatch and the refetch never happens.
+    await act(async () => {
+      for (let i = 0; i < 50; i++) {
+        if (listenCallbacks["notifications/store/changed"]) break;
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    });
+    expect(listenCallbacks["notifications/store/changed"]).toBeDefined();
+
     // Next `perspective.list` call returns p1 with an updated name —
     // simulating a field edit that was just written to disk.
     const updated = [

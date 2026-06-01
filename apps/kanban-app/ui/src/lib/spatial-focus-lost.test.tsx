@@ -169,17 +169,21 @@ describe("spatial_focus_lost IPC", () => {
     registry.delete(fq);
 
     expect(mockInvoke).toHaveBeenCalledWith(
-      "spatial_focus_lost",
+      "command_tool_call",
       expect.objectContaining({
-        focusedFq: fq,
-        lostParentZone: layerFq,
-        lostLayerFq: layerFq,
-        lostRect: expect.objectContaining({
-          x: asPixels(0),
-          y: asPixels(0),
-        }),
-        snapshot: expect.objectContaining({
-          layer_fq: layerFq,
+        tool: "focus",
+        op: "lose focus",
+        params: expect.objectContaining({
+          focusedFq: fq,
+          lostParentZone: layerFq,
+          lostLayerFq: layerFq,
+          lostRect: expect.objectContaining({
+            x: asPixels(0),
+            y: asPixels(0),
+          }),
+          snapshot: expect.objectContaining({
+            layer_fq: layerFq,
+          }),
         }),
       }),
     );
@@ -256,9 +260,10 @@ describe("spatial_focus_lost IPC", () => {
       (call) => (call[0] === "spatial_focus_lost" || (call[0] === "command_tool_call" && (call[1] as any)?.tool === "focus" && (call[1] as any)?.op === "lose focus")),
     );
     expect(focusLostCall).toBeDefined();
-    const args = focusLostCall![1] as {
+    const outer = focusLostCall![1] as Record<string, unknown>;
+    const args = ((outer?.params ?? outer) as {
       snapshot: { scopes: { fq: FullyQualifiedMoniker }[] };
-    };
+    });
     const snapshotFqs = args.snapshot.scopes.map((s) => s.fq);
     expect(snapshotFqs).not.toContain(focusedFq);
     expect(snapshotFqs).toContain(sibFq);
@@ -289,10 +294,17 @@ describe("spatial_focus_lost IPC", () => {
     // Make ONLY the spatial_focus_lost IPC reject so the catch handler
     // runs. Other commands (spatial_push_layer, etc.) must continue to
     // resolve so the layer mount machinery doesn't trip a different
-    // error path.
-    mockInvoke.mockImplementation((command: unknown) => {
+    // error path. Post-Stage-3 the focus-lost call routes through
+    // `command_tool_call { tool: "focus", op: "lose focus", ... }`.
+    mockInvoke.mockImplementation((command: unknown, args: unknown) => {
       if (command === "spatial_focus_lost") {
         return Promise.reject(new Error("ipc boom"));
+      }
+      if (command === "command_tool_call") {
+        const env = args as { tool?: string; op?: string } | undefined;
+        if (env?.tool === "focus" && env?.op === "lose focus") {
+          return Promise.reject(new Error("ipc boom"));
+        }
       }
       return Promise.resolve();
     });
@@ -431,11 +443,12 @@ describe("spatial_focus_lost real unmount lifecycle", () => {
         (call) => (call[0] === "spatial_focus_lost" || (call[0] === "command_tool_call" && (call[1] as any)?.tool === "focus" && (call[1] as any)?.op === "lose focus")),
       );
       expect(focusLostCall).toBeDefined();
-      const args = focusLostCall![1] as {
+      const outer = focusLostCall![1] as Record<string, unknown>;
+      const args = ((outer?.params ?? outer) as {
         focusedFq: FullyQualifiedMoniker;
         lostLayerFq: FullyQualifiedMoniker;
         lostRect: Rect;
-      };
+      });
       expect(args.focusedFq).toBe(fq);
       expect(args.lostLayerFq).toBe(layerFq);
       expect(args.lostRect).toEqual({

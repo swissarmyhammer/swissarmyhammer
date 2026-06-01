@@ -111,6 +111,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 import "@/components/fields/registrations";
 import { EntityInspector } from "./entity-inspector";
 import { AppShell } from "./app-shell";
+import { wrapMcpDispatch } from "@/test/mcp-invoke-translator";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -372,7 +373,7 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
  */
 function spatialFocusCalls(): Array<{ fq?: string }> {
   return mockInvoke.mock.calls
-    .filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))
+    .filter((c) => c[0] === "spatial_focus")
     .map((c) => {
       const outer = c[1] as Record<string, unknown>;
       const args = (outer?.params ?? outer) as { fq?: string };
@@ -391,7 +392,7 @@ function inspectDispatches(): Array<Record<string, unknown>> {
 /** Filter `spatial_drill_in` calls. */
 function drillInCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
-    .filter((c) => (c[0] === "spatial_drill_in" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "drill_in layer")))
+    .filter((c) => c[0] === "spatial_drill_in")
     .map((c) => {
       const outer = c[1] as Record<string, unknown>;
       const args = (outer?.params ?? outer) as { fq: FullyQualifiedMoniker };
@@ -475,7 +476,12 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     listeners.clear();
     monikerToKey.clear();
     currentFocusKey.key = null;
-    mockInvoke.mockImplementation(defaultInvokeImpl);
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, defaultInvokeImpl) as (
+        cmd: string,
+        args?: unknown,
+      ) => Promise<unknown>,
+    );
   });
 
   afterEach(() => {
@@ -517,7 +523,12 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     await flushSetup();
 
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation(defaultInvokeImpl);
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, defaultInvokeImpl) as (
+        cmd: string,
+        args?: unknown,
+      ) => Promise<unknown>,
+    );
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
@@ -603,7 +614,12 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     await flushSetup();
 
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation(defaultInvokeImpl);
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, defaultInvokeImpl) as (
+        cmd: string,
+        args?: unknown,
+      ) => Promise<unknown>,
+    );
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "ArrowRight", code: "ArrowRight" });
@@ -614,7 +630,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     // The global `nav.right` command's closure dispatched
     // `spatial_navigate(focusedKey, "right")` for the bug pill's key.
     const navCalls = mockInvoke.mock.calls
-      .filter((c) => (c[0] === "spatial_navigate" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "navigate focus")))
+      .filter((c) => c[0] === "spatial_navigate")
       .map((c) => {
         const outer = c[1] as Record<string, unknown>;
         const args = (outer?.params ?? outer) as { focusedFq: FullyQualifiedMoniker; direction: string };
@@ -676,10 +692,12 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     // Stub the kernel: drill-out on the bug pill returns the field
     // zone's moniker.
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
-      if (cmd === "spatial_drill_out") return "field:task:T1.tags";
-      return defaultInvokeImpl(cmd, args);
-    });
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, async (cmd: string, args?: unknown) => {
+        if (cmd === "spatial_drill_out") return "field:task:T1.tags";
+        return defaultInvokeImpl(cmd, args);
+      }) as (cmd: string, args?: unknown) => Promise<unknown>,
+    );
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
@@ -690,7 +708,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     // The drill-out closure dispatched `spatial_drill_out` for the
     // pill's key.
     const drillOutCalls = mockInvoke.mock.calls
-      .filter((c) => (c[0] === "spatial_drill_out" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "drill_out layer")))
+      .filter((c) => c[0] === "spatial_drill_out")
       .map((c) => {
         const outer = c[1] as Record<string, unknown>;
         const args = (outer?.params ?? outer) as { fq: FullyQualifiedMoniker };
@@ -810,7 +828,12 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     await flushSetup();
 
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation(defaultInvokeImpl);
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, defaultInvokeImpl) as (
+        cmd: string,
+        args?: unknown,
+      ) => Promise<unknown>,
+    );
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "Enter", code: "Enter" });

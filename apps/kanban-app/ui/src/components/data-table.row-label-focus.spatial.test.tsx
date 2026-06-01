@@ -98,6 +98,7 @@ vi.mock("@/components/perspective-container", () => ({
 import { GridView } from "./grid-view";
 import { DataTable, type DataTableColumn } from "./data-table";
 import { SchemaProvider } from "@/lib/schema-context";
+import { wrapMcpDispatch } from "@/test/mcp-invoke-translator";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
@@ -325,7 +326,12 @@ describe("RowSelector — row-label focus leaf (spatial path)", () => {
     for (const key of Object.keys(listenHandlers)) {
       delete listenHandlers[key];
     }
-    mockInvoke.mockImplementation(defaultInvokeImpl);
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, defaultInvokeImpl) as (
+        cmd: string,
+        args?: unknown,
+      ) => Promise<unknown>,
+    );
   });
 
   afterEach(() => {
@@ -574,7 +580,7 @@ describe("RowSelector — row-label focus leaf (spatial path)", () => {
     // `spatial_focus` and a sibling focus IPC to the click, this
     // assertion catches it.
     const spatialFocusCalls = mockInvoke.mock.calls.filter(
-      (c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")),
+      (c) => c[0] === "spatial_focus",
     );
     expect(spatialFocusCalls.length).toBe(1);
     expect((spatialFocusCalls[0][1] as { fq?: string }).fq).toBe(row0Fq);

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen, fireEvent, act } from "@testing-library/react";
 import { renderInAct } from "@/test/act-render";
+import { wrapMcpDispatch } from "@/test/mcp-invoke-translator";
 
 /**
  * Shared default `invoke` stub for tests in this file.
@@ -35,6 +36,23 @@ const currentFocusKey: { key: string | null } = { key: null };
 const listenCallbacks: Record<string, (event: unknown) => void> = {};
 
 function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
+  // Post-Stage-3 focus / entity ops route through `command_tool_call`.
+  // Translate the envelope back to the legacy `(cmd, args)` shape so the
+  // rest of this dispatcher (and the test assertions keyed off legacy
+  // names) keep working without changes.
+  if (cmd === "command_tool_call") {
+    const env = args as
+      | { tool?: string; op?: string; params?: Record<string, unknown> }
+      | undefined;
+    if (env?.tool === "focus" || env?.tool === "entity") {
+      const wrapped = wrapMcpDispatch(
+        { mock: { calls: [] } },
+        (legacyCmd: string, legacyArgs?: unknown) =>
+          defaultInvoke(legacyCmd, legacyArgs),
+      );
+      return wrapped(cmd, args) as Promise<unknown>;
+    }
+  }
   if (cmd === "get_ui_state")
     return Promise.resolve({
       palette_open: false,
@@ -636,18 +654,20 @@ describe("AppShell", () => {
     // module-scope mock returns a populated UIState payload there);
     // overriding the entire mockImplementation would null it out and
     // break `useAppShellUIState`'s `uiState.windows?.[label]` read.
-    mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
-      if (cmd === "spatial_drill_in")
-        return Promise.resolve(asSegment("task:child"));
-      return defaultInvoke(cmd, args);
-    });
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, (cmd: string, args?: unknown) => {
+        if (cmd === "spatial_drill_in")
+          return Promise.resolve(asSegment("task:child"));
+        return defaultInvoke(cmd, args);
+      }) as (cmd: string, args?: unknown) => Promise<unknown>,
+    );
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
     });
 
     const drillCall = mockInvoke.mock.calls.find(
-      (c: unknown[]) => (c[0] === "spatial_drill_in" || (c[0] === "command_tool_call" && (c[1] as Record<string, unknown>)?.tool === "focus" && (c[1] as Record<string, unknown>)?.op === "drill_in layer")),
+      (c: unknown[]) => c[0] === "spatial_drill_in",
     );
     expect(drillCall).toBeTruthy();
     expect((drillCall![1] as Record<string, unknown>).fq).toBe(asFq("k:zone"));
@@ -662,11 +682,13 @@ describe("AppShell", () => {
     });
 
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
-      if (cmd === "spatial_drill_in")
-        return Promise.resolve(asSegment("task:child"));
-      return defaultInvoke(cmd, args);
-    });
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, (cmd: string, args?: unknown) => {
+        if (cmd === "spatial_drill_in")
+          return Promise.resolve(asSegment("task:child"));
+        return defaultInvoke(cmd, args);
+      }) as (cmd: string, args?: unknown) => Promise<unknown>,
+    );
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
@@ -700,12 +722,14 @@ describe("AppShell", () => {
     });
 
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
-      // Kernel echoes the focused moniker — semantic "stay put".
-      if (cmd === "spatial_drill_in")
-        return Promise.resolve(asSegment("ui:leaf"));
-      return defaultInvoke(cmd, args);
-    });
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, (cmd: string, args?: unknown) => {
+        // Kernel echoes the focused moniker — semantic "stay put".
+        if (cmd === "spatial_drill_in")
+          return Promise.resolve(asSegment("ui:leaf"));
+        return defaultInvoke(cmd, args);
+      }) as (cmd: string, args?: unknown) => Promise<unknown>,
+    );
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
@@ -732,18 +756,20 @@ describe("AppShell", () => {
     });
 
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
-      if (cmd === "spatial_drill_out")
-        return Promise.resolve(asSegment("ui:zone"));
-      return defaultInvoke(cmd, args);
-    });
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, (cmd: string, args?: unknown) => {
+        if (cmd === "spatial_drill_out")
+          return Promise.resolve(asSegment("ui:zone"));
+        return defaultInvoke(cmd, args);
+      }) as (cmd: string, args?: unknown) => Promise<unknown>,
+    );
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
     });
 
     const drillCall = mockInvoke.mock.calls.find(
-      (c: unknown[]) => (c[0] === "spatial_drill_out" || (c[0] === "command_tool_call" && (c[1] as Record<string, unknown>)?.tool === "focus" && (c[1] as Record<string, unknown>)?.op === "drill_out layer")),
+      (c: unknown[]) => c[0] === "spatial_drill_out",
     );
     expect(drillCall).toBeTruthy();
     expect((drillCall![1] as Record<string, unknown>).fq).toBe(asFq("k:leaf"));
@@ -772,15 +798,17 @@ describe("AppShell", () => {
     });
 
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
-      // Kernel echoes the focused FQM — layer-root edge. The closure
-      // compares against the focused FQM ("k:rootLeaf") for equality,
-      // so the mock must return the same FQM string the focus state
-      // already holds.
-      if (cmd === "spatial_drill_out")
-        return Promise.resolve(asFq("k:rootLeaf"));
-      return defaultInvoke(cmd, args);
-    });
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, (cmd: string, args?: unknown) => {
+        // Kernel echoes the focused FQM — layer-root edge. The closure
+        // compares against the focused FQM ("k:rootLeaf") for equality,
+        // so the mock must return the same FQM string the focus state
+        // already holds.
+        if (cmd === "spatial_drill_out")
+          return Promise.resolve(asFq("k:rootLeaf"));
+        return defaultInvoke(cmd, args);
+      }) as (cmd: string, args?: unknown) => Promise<unknown>,
+    );
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
@@ -789,7 +817,7 @@ describe("AppShell", () => {
     // Drill-out happened and echoed the focused moniker. Closure
     // detects equality and dispatches app.dismiss as the fall-through.
     const drillCall = mockInvoke.mock.calls.find(
-      (c: unknown[]) => (c[0] === "spatial_drill_out" || (c[0] === "command_tool_call" && (c[1] as Record<string, unknown>)?.tool === "focus" && (c[1] as Record<string, unknown>)?.op === "drill_out layer")),
+      (c: unknown[]) => c[0] === "spatial_drill_out",
     );
     expect(drillCall).toBeTruthy();
 
@@ -819,7 +847,7 @@ describe("AppShell", () => {
     // No focused key → no spatial_drill_out call, but app.dismiss
     // still fires via the closure's early-return fall-through.
     const drillCall = mockInvoke.mock.calls.find(
-      (c: unknown[]) => (c[0] === "spatial_drill_out" || (c[0] === "command_tool_call" && (c[1] as Record<string, unknown>)?.tool === "focus" && (c[1] as Record<string, unknown>)?.op === "drill_out layer")),
+      (c: unknown[]) => c[0] === "spatial_drill_out",
     );
     expect(drillCall).toBeUndefined();
     const dismissCall = mockInvoke.mock.calls.find(

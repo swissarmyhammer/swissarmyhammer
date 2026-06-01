@@ -93,6 +93,7 @@ vi.mock("@/components/perspective-container", () => ({
 import { BoardView } from "./board-view";
 import { AppShell } from "./app-shell";
 import { commandToolCall } from "@/test/mock-command-list";
+import { wrapMcpDispatch } from "@/test/mcp-invoke-translator";
 import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -195,7 +196,31 @@ async function defaultInvokeImpl(
   cmd: string,
   args?: unknown,
 ): Promise<unknown> {
-  if (cmd === "command_tool_call") return commandToolCall(args);
+  // Post-Stage-3, focus / entity operations route through the MCP
+  // envelope `invoke("command_tool_call", { tool, op, params })`. Detect
+  // a focus-tool envelope and re-enter `defaultInvokeImpl` with the
+  // legacy `(cmd, args)` shape so the rest of this dispatcher (which
+  // pre-dates the migration) matches without changes. The
+  // `mock-command-list` `commandToolCall` is reserved for the
+  // commands-tool ops (`list command`, `available command`).
+  if (cmd === "command_tool_call") {
+    const env = args as
+      | { tool?: string; op?: string; params?: Record<string, unknown> }
+      | undefined;
+    if (env?.tool === "focus" || env?.tool === "entity") {
+      const wrapped = wrapMcpDispatch(
+        // Stub a `mock.calls` array so the translator's call-replacement
+        // logic has a sink — we don't surface translated entries here
+        // because this codepath is invoked from a custom dispatcher,
+        // not the spy's own `mockImplementation`.
+        { mock: { calls: [] } },
+        (legacyCmd: string, legacyArgs?: unknown) =>
+          defaultInvokeImpl(legacyCmd, legacyArgs),
+      );
+      return wrapped(cmd, args);
+    }
+    return commandToolCall(args);
+  }
   if (cmd === "list_entity_types") return ["task", "column"];
   if (cmd === "get_entity_schema") {
     return {
@@ -389,15 +414,28 @@ function spatialDrillInCalls(): Array<{
   snapshot?: NavSnapshot;
 }> {
   return mockInvoke.mock.calls
-    .filter((c) => (c[0] === "spatial_drill_in" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "drill_in layer")))
-    .map(
+    .filter(
       (c) =>
-        c[1] as {
-          fq: FullyQualifiedMoniker;
-          focusedFq?: FullyQualifiedMoniker;
-          snapshot?: NavSnapshot;
-        },
-    );
+        c[0] === "command_tool_call" &&
+        (c[1] as any)?.tool === "focus" &&
+        (c[1] as any)?.op === "drill_in layer",
+    )
+    .map((c) => {
+      // Unwrap the MCP envelope so callers see the legacy `(fq, focusedFq,
+      // snapshot)` arg bag regardless of which wire the call came through.
+      const raw = c[1] as Record<string, unknown>;
+      const bag = (raw?.params ?? raw) as Record<string, unknown>;
+      // The kernel wire renames `focusedFq` → `focused_fq` for the focus
+      // server. Map it back so the legacy assertions find the field.
+      if ("focused_fq" in bag && !("focusedFq" in bag)) {
+        (bag as Record<string, unknown>).focusedFq = bag.focused_fq;
+      }
+      return bag as {
+        fq: FullyQualifiedMoniker;
+        focusedFq?: FullyQualifiedMoniker;
+        snapshot?: NavSnapshot;
+      };
+    });
 }
 
 /** Pull every `spatial_drill_out` call's args, in order. */
@@ -407,15 +445,24 @@ function spatialDrillOutCalls(): Array<{
   snapshot?: NavSnapshot;
 }> {
   return mockInvoke.mock.calls
-    .filter((c) => (c[0] === "spatial_drill_out" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "drill_out layer")))
-    .map(
+    .filter(
       (c) =>
-        c[1] as {
-          fq: FullyQualifiedMoniker;
-          focusedFq?: FullyQualifiedMoniker;
-          snapshot?: NavSnapshot;
-        },
-    );
+        c[0] === "command_tool_call" &&
+        (c[1] as any)?.tool === "focus" &&
+        (c[1] as any)?.op === "drill_out layer",
+    )
+    .map((c) => {
+      const raw = c[1] as Record<string, unknown>;
+      const bag = (raw?.params ?? raw) as Record<string, unknown>;
+      if ("focused_fq" in bag && !("focusedFq" in bag)) {
+        (bag as Record<string, unknown>).focusedFq = bag.focused_fq;
+      }
+      return bag as {
+        fq: FullyQualifiedMoniker;
+        focusedFq?: FullyQualifiedMoniker;
+        snapshot?: NavSnapshot;
+      };
+    });
 }
 
 /** Filter `dispatch_command` calls down to those for `ui.inspect`. */
@@ -606,12 +653,14 @@ describe("BoardView — Enter drills in, not inspect", () => {
     // Have the kernel resolve drill-in for the column to the first
     // card moniker. The drill closure dispatches `setFocus(moniker)`,
     // which fans out to a `dispatch_command(ui.setFocus, …)` IPC.
-    mockInvoke.mockImplementation(async (cmd, args) => {
-      if (cmd === "spatial_drill_in") {
-        return "task:t1";
-      }
-      return defaultInvokeImpl(cmd, args);
-    });
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, async (cmd, args) => {
+        if (cmd === "spatial_drill_in") {
+          return "task:t1";
+        }
+        return defaultInvokeImpl(cmd, args);
+      }) as (cmd: string, args?: unknown) => Promise<unknown>,
+    );
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
@@ -635,10 +684,14 @@ describe("BoardView — Enter drills in, not inspect", () => {
     // focus store. Confirm that the `spatial_focus` fanout fires and
     // carries the resolved card moniker.
     const focusCall = mockInvoke.mock.calls.find(
-      (c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")),
+      (c) =>
+        c[0] === "command_tool_call" &&
+        (c[1] as any)?.tool === "focus" &&
+        (c[1] as any)?.op === "set focus",
     );
     expect(focusCall).toBeTruthy();
-    const focusArgs = focusCall![1] as { fq?: string };
+    const focusOuter = focusCall![1] as Record<string, unknown>;
+    const focusArgs = ((focusOuter?.params ?? focusOuter) as { fq?: string });
     expect(
       focusArgs.fq,
       "drill-in's setFocus must invoke spatial_focus with the resolved child moniker",
@@ -685,12 +738,14 @@ describe("BoardView — Enter drills in, not inspect", () => {
 
     // Pretend the kernel previously remembered task:t2 as the
     // column's last focused descendant.
-    mockInvoke.mockImplementation(async (cmd, args) => {
-      if (cmd === "spatial_drill_in") {
-        return "task:t2";
-      }
-      return defaultInvokeImpl(cmd, args);
-    });
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, async (cmd, args) => {
+        if (cmd === "spatial_drill_in") {
+          return "task:t2";
+        }
+        return defaultInvokeImpl(cmd, args);
+      }) as (cmd: string, args?: unknown) => Promise<unknown>,
+    );
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
@@ -703,10 +758,14 @@ describe("BoardView — Enter drills in, not inspect", () => {
     expect(drillCalls[0].fq).toBe(columnKey);
 
     const focusCall = mockInvoke.mock.calls.find(
-      (c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")),
+      (c) =>
+        c[0] === "command_tool_call" &&
+        (c[1] as any)?.tool === "focus" &&
+        (c[1] as any)?.op === "set focus",
     );
     expect(focusCall).toBeTruthy();
-    const focusArgs = focusCall![1] as { fq?: string };
+    const focusOuter = focusCall![1] as Record<string, unknown>;
+    const focusArgs = ((focusOuter?.params ?? focusOuter) as { fq?: string });
     expect(
       focusArgs.fq,
       "drill-in must follow the kernel-returned remembered moniker",
@@ -814,12 +873,14 @@ describe("BoardView — Enter drills in, not inspect", () => {
     // question of whether EntityCard registers its fields as children
     // in the snapshot.
     const fieldKey = `${cardKey}/field:title` as FullyQualifiedMoniker;
-    mockInvoke.mockImplementation(async (cmd, args) => {
-      if (cmd === "spatial_drill_in") {
-        return fieldKey;
-      }
-      return defaultInvokeImpl(cmd, args);
-    });
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, async (cmd, args) => {
+        if (cmd === "spatial_drill_in") {
+          return fieldKey;
+        }
+        return defaultInvokeImpl(cmd, args);
+      }) as (cmd: string, args?: unknown) => Promise<unknown>,
+    );
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
@@ -842,13 +903,17 @@ describe("BoardView — Enter drills in, not inspect", () => {
     // would either be the card's own FQM or never fire — both visible
     // as the user-reported "Enter does nothing" symptom.
     const focusCall = mockInvoke.mock.calls.find(
-      (c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")),
+      (c) =>
+        c[0] === "command_tool_call" &&
+        (c[1] as any)?.tool === "focus" &&
+        (c[1] as any)?.op === "set focus",
     );
     expect(
       focusCall,
       "drill-in must invoke spatial_focus on the kernel-resolved target",
     ).toBeTruthy();
-    const focusArgs = focusCall![1] as { fq?: string };
+    const focusOuter = focusCall![1] as Record<string, unknown>;
+    const focusArgs = ((focusOuter?.params ?? focusOuter) as { fq?: string });
     expect(
       focusArgs.fq,
       "drill-in's setFocus must invoke spatial_focus with the resolved field FQM, not the card's own FQM",
@@ -893,10 +958,12 @@ describe("BoardView — Enter drills in, not inspect", () => {
     await flushSetup();
 
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation(async (cmd, args) => {
-      if (cmd === "spatial_drill_out") return cardKey;
-      return defaultInvokeImpl(cmd, args);
-    });
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, async (cmd, args) => {
+        if (cmd === "spatial_drill_out") return cardKey;
+        return defaultInvokeImpl(cmd, args);
+      }) as (cmd: string, args?: unknown) => Promise<unknown>,
+    );
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
@@ -911,13 +978,17 @@ describe("BoardView — Enter drills in, not inspect", () => {
     ).toBe(1);
 
     const focusCall = mockInvoke.mock.calls.find(
-      (c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")),
+      (c) =>
+        c[0] === "command_tool_call" &&
+        (c[1] as any)?.tool === "focus" &&
+        (c[1] as any)?.op === "set focus",
     );
     expect(
       focusCall,
       "drill-out must invoke spatial_focus on the kernel-resolved parent",
     ).toBeTruthy();
-    const focusArgs = focusCall![1] as { fq?: string };
+    const focusOuter = focusCall![1] as Record<string, unknown>;
+    const focusArgs = ((focusOuter?.params ?? focusOuter) as { fq?: string });
     expect(
       focusArgs.fq,
       "drill-out's setFocus must invoke spatial_focus with the parent card's FQM",
@@ -949,10 +1020,12 @@ describe("BoardView — Enter drills in, not inspect", () => {
     await flushSetup();
 
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation(async (cmd, args) => {
-      if (cmd === "spatial_drill_out") return cardKey;
-      return defaultInvokeImpl(cmd, args);
-    });
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, async (cmd, args) => {
+        if (cmd === "spatial_drill_out") return cardKey;
+        return defaultInvokeImpl(cmd, args);
+      }) as (cmd: string, args?: unknown) => Promise<unknown>,
+    );
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
