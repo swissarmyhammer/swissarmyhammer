@@ -1,5 +1,7 @@
 ---
 name: kanban
+profiles:
+  - kanban
 description: Execute the next task from the kanban board. Use when the user says "kanban", "/kanban", "next task", "what's the next task", or "pick up work". Picks up the next ready task from the board and drives it through doing to review.
 license: MIT OR Apache-2.0
 compatibility: Requires the `kanban` MCP tool for all board, column, and task operations. 

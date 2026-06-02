@@ -17,6 +17,12 @@ struct SkillFrontmatter {
     metadata: HashMap<String, String>,
     #[serde(default, rename = "allowed-tools")]
     allowed_tools_str: Option<String>,
+    /// Init profiles this skill belongs to, as a proper YAML list.
+    ///
+    /// `#[serde(default)]` ⇒ skills with no `profiles:` key parse to an empty
+    /// vec, so existing skills are unaffected.
+    #[serde(default)]
+    profiles: Vec<String>,
 }
 
 /// Parse a SKILL.md file content into a Skill
@@ -55,6 +61,7 @@ pub fn parse_skill_md_with_path(
         compatibility: fm.compatibility,
         metadata: fm.metadata,
         allowed_tools,
+        profiles: fm.profiles,
         instructions: body.trim().to_string(),
         source_path: source_path.map(|p| p.to_path_buf()),
         source,
@@ -213,6 +220,44 @@ Use the flow tool.
         assert_eq!(skill.allowed_tools[0], "mcp__sah__flow");
         assert!(skill.instructions.contains("# Plan"));
         assert_eq!(skill.metadata.get("author").unwrap(), "swissarmyhammer");
+    }
+
+    #[test]
+    fn test_parse_skill_md_parses_profiles_list() {
+        let content = r#"---
+name: kanban
+description: Kanban workflow skill
+profiles:
+  - kanban
+  - workflow
+---
+
+# Kanban
+
+Body.
+"#;
+
+        let skill = parse_skill_md(content, SkillSource::Builtin).unwrap();
+        assert_eq!(skill.profiles, vec!["kanban", "workflow"]);
+    }
+
+    #[test]
+    fn test_parse_skill_md_profiles_default_empty_when_absent() {
+        let content = r#"---
+name: plain
+description: A skill with no profiles key
+---
+
+# Plain
+
+Body.
+"#;
+
+        let skill = parse_skill_md(content, SkillSource::Builtin).unwrap();
+        assert!(
+            skill.profiles.is_empty(),
+            "skills without a `profiles:` key should default to an empty vec"
+        );
     }
 
     #[test]

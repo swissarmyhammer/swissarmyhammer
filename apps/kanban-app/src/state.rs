@@ -1028,23 +1028,39 @@ pub fn resolve_kanban_path(path: &Path) -> Result<PathBuf, std::io::Error> {
     Ok(child)
 }
 
-/// Make the board folder a SwissArmyHammer workspace via in-process init.
+/// The init profile whose tagged builtin skills the kanban app deploys into a
+/// board's `.sah/` workspace.
+///
+/// Only the `kanban`-profile cluster (the workflow skills plus the two
+/// exploration skills) is deployed — not all ~22 builtin skills — keeping board
+/// open fast.
+const KANBAN_PROFILE: &str = "kanban";
+
+/// Make the board folder a SwissArmyHammer workspace via in-process init,
+/// **off the board-open critical path**.
 ///
 /// Runs the root-explicit [`swissarmyhammer_workspace_init`] components rooted
 /// at the board folder (the parent of the `.kanban` directory), at project
-/// scope, so the in-process agent has the same `.sah/` workspace and builtin
-/// skills that `sah init` would produce. This never shells out to `sah` and
-/// never mutates the process working directory — the components are rooted at
-/// the explicit board path, which is essential in a multi-board desktop
-/// process.
+/// scope, so the in-process agent has the same `.sah/` workspace and the
+/// `kanban`-profile builtin skills. This never shells out to `sah` and never
+/// mutates the process working directory — the components are rooted at the
+/// explicit board path, which is essential in a multi-board desktop process.
 ///
-/// The operation is idempotent, so it is safe to call on every board open.
-/// Failures are logged and swallowed: a board must still open even if skill
-/// deployment hits a filesystem problem.
+/// Two startup-perf properties matter here:
+///
+/// 1. **Profile-filtered.** Only the `kanban`-profile skills are deployed, not
+///    every builtin skill. This is what the previous deploy-everything path
+///    cost (~19s × number of restored boards on cold start).
+/// 2. **Backgrounded.** Skill rendering + writing runs on a blocking task so
+///    the board window appears immediately. The deploy is idempotent and
+///    failure-tolerant, so nothing downstream waits on it: an agent that asks
+///    for a skill a few hundred ms after open simply reads it once written.
+///
+/// The operation is idempotent (skills already current on disk are not
+/// rewritten), so it is safe to call on every board open. Failures are logged
+/// and swallowed: a board must still open even if skill deployment hits a
+/// filesystem problem.
 fn ensure_sah_workspace(kanban_path: &Path) {
-    use swissarmyhammer_common::lifecycle::{InitScope, InitStatus};
-    use swissarmyhammer_common::reporter::NullReporter;
-
     // The board folder is the parent of the `.kanban` directory; `.sah/` is
     // created as its sibling.
     let Some(board_dir) = kanban_path.parent() else {
@@ -1054,9 +1070,29 @@ fn ensure_sah_workspace(kanban_path: &Path) {
         );
         return;
     };
+    let board_dir = board_dir.to_path_buf();
 
-    let results = swissarmyhammer_workspace_init::run_workspace_init(
+    // Render-and-write is the slow part — move it off the board-open path so
+    // the window shows immediately. `spawn_blocking` because the deploy is
+    // synchronous filesystem + template work.
+    tokio::task::spawn_blocking(move || {
+        deploy_kanban_workspace(&board_dir);
+    });
+}
+
+/// Synchronously deploy the `kanban`-profile workspace into `board_dir`.
+///
+/// Runs [`swissarmyhammer_workspace_init::run_workspace_init_for_profile`] and
+/// logs any component failures. Separated from [`ensure_sah_workspace`] so the
+/// blocking work is a plain function the integration tests can await
+/// deterministically.
+fn deploy_kanban_workspace(board_dir: &Path) {
+    use swissarmyhammer_common::lifecycle::{InitScope, InitStatus};
+    use swissarmyhammer_common::reporter::NullReporter;
+
+    let results = swissarmyhammer_workspace_init::run_workspace_init_for_profile(
         board_dir,
+        KANBAN_PROFILE,
         &InitScope::Project,
         &NullReporter,
     );
@@ -1428,12 +1464,27 @@ mod tests {
         assert!(boards.contains_key(&canonical));
     }
 
+    /// Poll for `path` to become a file, up to ~5s. The kanban workspace deploy
+    /// runs on a background `spawn_blocking` task (so the board window appears
+    /// immediately), so a board-open test must wait for the deployed skill
+    /// rather than assert it synchronously.
+    async fn wait_for_file(path: &Path) -> bool {
+        for _ in 0..250 {
+            if path.is_file() {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        path.is_file()
+    }
+
     #[tokio::test]
     async fn test_open_board_creates_sah_workspace_at_board_folder() {
         // Drives the real production entry point — `AppState::open_board`
         // delegates to `BoardHandle::open`, which calls `ensure_sah_workspace`
         // with the resolved `.kanban` path and roots the workspace init at
-        // `kanban_path.parent()` (the board folder).
+        // `kanban_path.parent()` (the board folder). Skill deployment is
+        // backgrounded, so this test waits for the deployed skill to appear.
         //
         // This test fails if either piece of the production wiring regresses:
         //   - if `ensure_sah_workspace` is removed from `BoardHandle::open`,
@@ -1449,21 +1500,35 @@ mod tests {
         assert!(result.is_ok(), "open_board failed: {:?}", result.err());
 
         // The board folder is the parent of `.kanban/`; the SAH workspace must
-        // land there, beside `.kanban/`, not inside it.
+        // land there, beside `.kanban/`, not inside it. `plan` is one of the
+        // `kanban`-profile skills, so it must be deployed by the production
+        // open_board path.
         let board_dir = tmp.path().canonicalize().unwrap();
-        assert!(
-            board_dir.join(".sah").is_dir(),
-            ".sah/ must be created at the board folder by BoardHandle::open"
-        );
         let plan_skill = board_dir
             .join(".sah")
             .join("skills")
             .join("plan")
             .join("SKILL.md");
         assert!(
-            plan_skill.is_file(),
+            wait_for_file(&plan_skill).await,
             "builtin `plan` skill must be deployed at {} via the open_board production path",
             plan_skill.display()
+        );
+        assert!(
+            board_dir.join(".sah").is_dir(),
+            ".sah/ must be created at the board folder by BoardHandle::open"
+        );
+
+        // Only the `kanban`-profile skills are deployed — an untagged builtin
+        // (`commit`) must NOT land in the board workspace. This is the
+        // startup-perf fix: deploy the profile subset, not all ~22 skills.
+        assert!(
+            !board_dir
+                .join(".sah")
+                .join("skills")
+                .join("commit")
+                .exists(),
+            "untagged `commit` skill must not be deployed — kanban app deploys only the kanban profile"
         );
 
         // `.sah/` must be a sibling of `.kanban/`, never nested inside it —

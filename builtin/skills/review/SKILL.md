@@ -1,5 +1,7 @@
 ---
 name: review
+profiles:
+  - kanban
 description: Code review workflow. Use this skill whenever the user says "review", "code review", "review this PR", "review my changes", or otherwise wants a code review. Reviews produce verbose output — automatically delegates to a reviewer subagent.
 context: fork
 agent: reviewer

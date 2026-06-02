@@ -267,6 +267,7 @@ mod tests {
             compatibility: None,
             metadata,
             allowed_tools: vec![],
+            profiles: vec![],
             instructions: "body with {{version}}".to_string(),
             source_path: None,
             source: swissarmyhammer_skills::SkillSource::Builtin,

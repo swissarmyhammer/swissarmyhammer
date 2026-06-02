@@ -19,8 +19,8 @@ use swissarmyhammer_common::lifecycle::{InitResult, InitScope, Initializable};
 use swissarmyhammer_common::reporter::{InitEvent, InitReporter};
 use swissarmyhammer_skills::deploy;
 
-/// The builtin skill name deployed by kanban.
-const SKILL_NAME: &str = "kanban";
+/// The init profile whose tagged builtin skills kanban deploys.
+const KANBAN_PROFILE: &str = "kanban";
 
 /// Render template variables (e.g. `{{version}}`) in skill instructions and metadata.
 ///
@@ -59,23 +59,41 @@ fn render_skill(skill: &swissarmyhammer_skills::Skill) -> (String, HashMap<Strin
     (instructions, metadata)
 }
 
-/// Resolve, render, and deploy the kanban builtin skill.
+/// Resolve, render, and deploy every builtin skill tagged with the `kanban`
+/// init profile.
 ///
-/// Returns the list of agent directories the skill was deployed to,
-/// or an error description.
-pub fn deploy_kanban_skill() -> Result<Vec<String>, String> {
-    let skill = deploy::resolve_skill(SKILL_NAME)?;
-    let (instructions, metadata) = render_skill(&skill);
-    let content = deploy::format_skill_md(&skill, &instructions, &metadata);
-    deploy::write_and_deploy(SKILL_NAME, &content)
+/// Returns the deduplicated list of agent directories the skills were deployed
+/// to, or an error description on the first deployment failure.
+pub fn deploy_kanban_skills() -> Result<Vec<String>, String> {
+    let skills = deploy::resolve_profile_skills(KANBAN_PROFILE);
+    if skills.is_empty() {
+        return Err(format!(
+            "no builtin skills are tagged with the '{KANBAN_PROFILE}' profile"
+        ));
+    }
+
+    let mut targets: Vec<String> = Vec::new();
+    for skill in &skills {
+        let name = skill.name.as_str();
+        let (instructions, metadata) = render_skill(skill);
+        let content = deploy::format_skill_md(skill, &instructions, &metadata);
+        for target in deploy::write_and_deploy(name, &content)? {
+            if !targets.contains(&target) {
+                targets.push(target);
+            }
+        }
+    }
+    Ok(targets)
 }
 
 // ── KanbanSkillDeployment (Initializable) ────────────────────────────────────
 
-/// Deploys/removes the `kanban` skill as part of `kanban init` / `kanban deinit`.
+/// Deploys/removes the `kanban`-profile skills as part of `kanban init` /
+/// `kanban deinit`.
 ///
-/// Resolves the builtin `kanban` skill, renders template variables, formats
-/// the SKILL.md, and deploys it to all detected agent `.skills/` directories.
+/// Resolves every builtin skill tagged with the `kanban` init profile, renders
+/// template variables, formats the SKILL.md, and deploys each to all detected
+/// agent `.skills/` directories.
 pub struct KanbanSkillDeployment;
 
 impl Initializable for KanbanSkillDeployment {
@@ -91,8 +109,9 @@ impl Initializable for KanbanSkillDeployment {
 
     /// Priority 20 — the skill-deployment step. MCP registration is owned by
     /// `KanbanTool` (priority 55), so it actually runs *after* this; the two
-    /// are independent — deploying the `kanban` skill writes SKILL.md to agent
-    /// `.skills/` dirs and does not depend on the MCP entry being present.
+    /// are independent — deploying the `kanban`-profile skills writes SKILL.md
+    /// to agent `.skills/` dirs and does not depend on the MCP entry being
+    /// present.
     fn priority(&self) -> i32 {
         20
     }
@@ -102,39 +121,42 @@ impl Initializable for KanbanSkillDeployment {
         matches!(scope, InitScope::Project | InitScope::Local)
     }
 
-    /// Deploy the kanban skill to all detected agent `.skills/` directories.
+    /// Deploy the kanban-profile skills to all detected agent `.skills/` directories.
     fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        match deploy_kanban_skill() {
+        match deploy_kanban_skills() {
             Ok(targets) => {
                 reporter.emit(&InitEvent::Action {
                     verb: "Deployed".to_string(),
-                    message: format!("kanban skill to {}", targets.join(", ")),
+                    message: format!("kanban skills to {}", targets.join(", ")),
                 });
                 vec![InitResult::ok(
                     self.name(),
-                    format!("Kanban skill deployed to {}", targets.join(", ")),
+                    format!("Kanban skills deployed to {}", targets.join(", ")),
                 )]
             }
             Err(e) => {
                 vec![InitResult::error(
                     self.name(),
-                    format!("Failed to deploy kanban skill: {e}"),
+                    format!("Failed to deploy kanban skills: {e}"),
                 )]
             }
         }
     }
 
-    /// Remove the kanban skill from all detected agents.
+    /// Remove the kanban-profile skills from all detected agents.
     fn deinit(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        if let Err(e) = mirdan::install::uninstall_skill(SKILL_NAME, None, false) {
-            reporter.emit(&InitEvent::Warning {
-                message: format!("Failed to uninstall kanban skill: {e}"),
-            });
-        } else {
-            reporter.emit(&InitEvent::Action {
-                verb: "Removed".to_string(),
-                message: "kanban skill from agents".to_string(),
-            });
+        for skill in deploy::resolve_profile_skills(KANBAN_PROFILE) {
+            let name = skill.name.as_str();
+            if let Err(e) = mirdan::install::uninstall_skill(name, None, false) {
+                reporter.emit(&InitEvent::Warning {
+                    message: format!("Failed to uninstall {name} skill: {e}"),
+                });
+            } else {
+                reporter.emit(&InitEvent::Action {
+                    verb: "Removed".to_string(),
+                    message: format!("{name} skill from agents"),
+                });
+            }
         }
 
         vec![InitResult::ok(
@@ -225,10 +247,73 @@ mod tests {
         assert!(result.unwrap_err().contains("not found"));
     }
 
+    /// The locked `kanban`-profile membership — the workflow cluster plus the
+    /// two exploration skills llama needs to scope a real task. The filter must
+    /// select exactly this subset and nothing else.
+    const EXPECTED_KANBAN_PROFILE_SKILLS: &[&str] = &[
+        "kanban",
+        "plan",
+        "task",
+        "finish",
+        "implement",
+        "review",
+        "explore",
+        "code-context",
+    ];
+
+    #[test]
+    fn test_resolve_profile_skills_selects_exact_subset() {
+        let mut got: Vec<String> = deploy::resolve_profile_skills("kanban")
+            .into_iter()
+            .map(|s| s.name.as_str().to_string())
+            .collect();
+        got.sort();
+
+        let mut expected: Vec<String> = EXPECTED_KANBAN_PROFILE_SKILLS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        expected.sort();
+
+        assert_eq!(
+            got, expected,
+            "kanban profile filter must select exactly the tagged subset"
+        );
+    }
+
+    #[test]
+    fn test_resolve_profile_skills_unknown_profile_is_empty() {
+        assert!(
+            deploy::resolve_profile_skills("no-such-profile").is_empty(),
+            "an unknown profile should match no skills"
+        );
+    }
+
+    #[test]
+    fn test_kanban_profile_excludes_untagged_skill() {
+        // `commit` is a builtin skill that is NOT in the kanban profile, so the
+        // filter must not pick it up.
+        let resolver = swissarmyhammer_skills::SkillResolver::new();
+        let builtins = resolver.resolve_builtins();
+        assert!(
+            builtins.contains_key("commit"),
+            "builtin 'commit' skill should exist (sanity check)"
+        );
+
+        let selected: Vec<String> = deploy::resolve_profile_skills("kanban")
+            .into_iter()
+            .map(|s| s.name.as_str().to_string())
+            .collect();
+        assert!(
+            !selected.contains(&"commit".to_string()),
+            "untagged 'commit' skill must not be selected by the kanban profile"
+        );
+    }
+
     #[test]
     #[serial_test::serial(cwd)]
-    fn test_deploy_kanban_skill_returns_valid_result() {
-        // deploy_kanban_skill() may fail if there are no agent directories detected,
+    fn test_deploy_kanban_skills_returns_valid_result() {
+        // deploy_kanban_skills() may fail if there are no agent directories detected,
         // but it should never panic. Run it inside an isolated temp dir so the
         // deployed `.skills/`, `.claude/skills`, etc. land there, not in the
         // real crate source tree.
@@ -239,7 +324,7 @@ mod tests {
         // mutates process-global CWD via `CurrentDirGuard`, so it must not run
         // concurrently with any other test that reads or mutates CWD.
         let (_guard, _temp) = isolated_deploy_dir();
-        let _result = deploy_kanban_skill();
+        let _result = deploy_kanban_skills();
     }
 
     #[test]
@@ -300,6 +385,7 @@ mod tests {
             compatibility: None,
             metadata,
             allowed_tools: vec![],
+            profiles: vec![],
             instructions: "body with {{version}}".to_string(),
             source_path: None,
             source: swissarmyhammer_skills::SkillSource::Builtin,

@@ -124,19 +124,49 @@ impl Initializable for ProjectStructure {
 pub struct SkillDeployment {
     /// The workspace root; skills are written under `<root>/.sah/skills/`.
     root: PathBuf,
+    /// Optional init-profile filter. `None` deploys every builtin skill (full
+    /// workspace, as `sah init` does); `Some(p)` deploys only the skills whose
+    /// `profiles` frontmatter list contains `p`.
+    profile: Option<String>,
 }
 
 impl SkillDeployment {
-    /// Create a `SkillDeployment` component rooted at `root`.
+    /// Create a `SkillDeployment` component rooted at `root` that deploys
+    /// **every** builtin skill.
     ///
     /// `root` is the workspace directory that should *contain* `.sah/`.
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self {
+            root,
+            profile: None,
+        }
+    }
+
+    /// Create a `SkillDeployment` component rooted at `root` that deploys only
+    /// the builtin skills tagged with the given init `profile`.
+    ///
+    /// A skill belongs to a profile when its `profiles` frontmatter list
+    /// contains `profile`. This is the kanban-app fast path: deploying just the
+    /// `kanban`-profile cluster instead of all ~22 builtin skills.
+    pub fn for_profile(root: PathBuf, profile: impl Into<String>) -> Self {
+        Self {
+            root,
+            profile: Some(profile.into()),
+        }
     }
 
     /// The directory that holds deployed skills: `<root>/.sah/skills/`.
     fn skills_dir(&self) -> PathBuf {
         self.root.join(".sah").join("skills")
+    }
+
+    /// True when `skill` should be deployed under this component's profile
+    /// filter. With no filter every skill is deployed.
+    fn matches_profile(&self, skill: &Skill) -> bool {
+        match &self.profile {
+            None => true,
+            Some(profile) => skill.profiles.iter().any(|p| p == profile),
+        }
     }
 }
 
@@ -161,13 +191,14 @@ impl Initializable for SkillDeployment {
         matches!(scope, InitScope::Project | InitScope::Local)
     }
 
-    /// Render and write every builtin skill under `<root>/.sah/skills/`.
+    /// Render and write the profile-matched builtin skills under
+    /// `<root>/.sah/skills/`.
     ///
-    /// Idempotent: each skill directory is recreated from scratch on every run,
-    /// so repeated calls converge to the same on-disk state without
-    /// duplication.
+    /// Idempotent: a skill is only re-rendered and rewritten when its on-disk
+    /// `SKILL.md` differs from the freshly rendered content, so repeated calls
+    /// on an already-current workspace do no filesystem work.
     fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        match deploy_builtin_skills(&self.skills_dir(), reporter) {
+        match self.deploy_skills(reporter) {
             Ok(count) => {
                 reporter.emit(&InitEvent::Action {
                     verb: "Deployed".to_string(),
@@ -187,34 +218,42 @@ impl Initializable for SkillDeployment {
     }
 }
 
-/// Resolve, render, and write all builtin skills into `skills_dir`.
-///
-/// Returns the number of skills deployed, or an error message describing the
-/// first filesystem failure encountered.
-fn deploy_builtin_skills(skills_dir: &Path, reporter: &dyn InitReporter) -> Result<usize, String> {
-    let resolver = SkillResolver::new();
-    let skills = resolver.resolve_builtins();
+impl SkillDeployment {
+    /// Resolve, render, and write the profile-matched builtin skills into
+    /// `<root>/.sah/skills/`.
+    ///
+    /// Returns the number of skills deployed, or an error message describing the
+    /// first filesystem failure encountered. Skills already current on disk are
+    /// still counted (they are "deployed"), but no rewrite occurs.
+    fn deploy_skills(&self, reporter: &dyn InitReporter) -> Result<usize, String> {
+        let skills_dir = self.skills_dir();
+        let resolver = SkillResolver::new();
+        let skills = resolver.resolve_builtins();
 
-    let prompt_library = PromptLibrary::default();
-    let template_context = version_template_context();
+        let prompt_library = PromptLibrary::default();
+        let template_context = version_template_context();
 
-    fs::create_dir_all(skills_dir)
-        .map_err(|e| format!("Failed to create skills directory: {}", e))?;
+        fs::create_dir_all(&skills_dir)
+            .map_err(|e| format!("Failed to create skills directory: {}", e))?;
 
-    let mut count = 0;
-    for (name, skill) in &skills {
-        if !is_safe_skill_name(name) {
-            reporter.emit(&InitEvent::Warning {
-                message: format!("skipping unsafe skill name: {:?}", name),
-            });
-            continue;
+        let mut count = 0;
+        for (name, skill) in &skills {
+            if !self.matches_profile(skill) {
+                continue;
+            }
+            if !is_safe_skill_name(name) {
+                reporter.emit(&InitEvent::Warning {
+                    message: format!("skipping unsafe skill name: {:?}", name),
+                });
+                continue;
+            }
+            let rendered = render_skill(skill, &prompt_library, &template_context, reporter);
+            write_skill(&skills_dir, name, &rendered)?;
+            count += 1;
         }
-        let rendered = render_skill(skill, &prompt_library, &template_context, reporter);
-        write_skill(skills_dir, name, &rendered)?;
-        count += 1;
-    }
 
-    Ok(count)
+        Ok(count)
+    }
 }
 
 /// Build a [`TemplateContext`] that exposes the crate version as `{{version}}`.
@@ -265,11 +304,28 @@ fn render_skill(
 
 /// Write a rendered skill into `<skills_dir>/<name>/`.
 ///
-/// The skill directory is removed first so a re-run never leaves stale files
-/// behind — this is what makes [`SkillDeployment`] idempotent. Bundled resource
-/// files are written preserving their relative subdirectory structure.
+/// Idempotent and fast on the common case: when the on-disk `SKILL.md` already
+/// matches the freshly rendered content, the skill is left untouched and no
+/// filesystem work is done. This is the startup-perf fix — re-opening a board
+/// whose skills are already current avoids the expensive remove-and-rewrite.
+///
+/// When a rewrite is needed the skill directory is removed first so stale files
+/// never linger. Bundled resource files are written preserving their relative
+/// subdirectory structure.
 fn write_skill(skills_dir: &Path, name: &str, skill: &Skill) -> Result<(), String> {
     let skill_dir = skills_dir.join(name);
+    let skill_md = skill_dir.join("SKILL.md");
+    let rendered_md = format_skill_md(skill);
+
+    // Skip the rewrite when the deployed copy is already current. Content
+    // equality of SKILL.md (which embeds the version in its metadata) is the
+    // currency check the card calls for.
+    if let Ok(existing) = fs::read_to_string(&skill_md) {
+        if existing == rendered_md {
+            return Ok(());
+        }
+    }
+
     if skill_dir.exists() {
         fs::remove_dir_all(&skill_dir)
             .map_err(|e| format!("Failed to clear {}: {}", skill_dir.display(), e))?;
@@ -277,8 +333,7 @@ fn write_skill(skills_dir: &Path, name: &str, skill: &Skill) -> Result<(), Strin
     fs::create_dir_all(&skill_dir)
         .map_err(|e| format!("Failed to create {}: {}", skill_dir.display(), e))?;
 
-    let skill_md = skill_dir.join("SKILL.md");
-    fs::write(&skill_md, format_skill_md(skill))
+    fs::write(&skill_md, rendered_md)
         .map_err(|e| format!("Failed to write {}: {}", skill_md.display(), e))?;
 
     for (resource_path, content) in &skill.resources.files {
@@ -439,6 +494,80 @@ mod tests {
                 .count(),
             1,
             "idempotent deploy must not duplicate frontmatter"
+        );
+    }
+
+    #[test]
+    fn test_skill_deployment_for_profile_deploys_only_tagged_subset() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let component = SkillDeployment::for_profile(temp.path().to_path_buf(), "kanban");
+        let results = component.init(&InitScope::Project, &NullReporter);
+        assert_eq!(results[0].status, InitStatus::Ok);
+
+        let skills_dir = temp.path().join(".sah").join("skills");
+        // A kanban-profile skill is deployed.
+        assert!(
+            skills_dir.join("kanban").join("SKILL.md").is_file(),
+            "kanban-profile skill must be deployed"
+        );
+        assert!(
+            skills_dir.join("plan").join("SKILL.md").is_file(),
+            "kanban-profile skill `plan` must be deployed"
+        );
+        // An untagged builtin skill (`commit`) must NOT be deployed.
+        assert!(
+            !skills_dir.join("commit").exists(),
+            "untagged `commit` skill must not be deployed under the kanban profile"
+        );
+    }
+
+    #[test]
+    fn test_skill_deployment_default_deploys_all_skills() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let component = SkillDeployment::new(temp.path().to_path_buf());
+        component.init(&InitScope::Project, &NullReporter);
+
+        let skills_dir = temp.path().join(".sah").join("skills");
+        // The unfiltered component deploys every builtin, including untagged ones.
+        assert!(
+            skills_dir.join("commit").join("SKILL.md").is_file(),
+            "default (no-profile) deploy must include untagged skills like `commit`"
+        );
+    }
+
+    #[test]
+    fn test_write_skill_is_idempotent_skips_when_current() {
+        use std::collections::HashMap;
+        use swissarmyhammer_skills::{SkillName, SkillResources, SkillSource};
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let skills_dir = temp.path().to_path_buf();
+        let skill = Skill {
+            name: SkillName::new("idem").unwrap(),
+            description: "idempotent skill".to_string(),
+            license: None,
+            compatibility: None,
+            metadata: HashMap::new(),
+            allowed_tools: vec![],
+            profiles: vec![],
+            instructions: "body".to_string(),
+            source_path: None,
+            source: SkillSource::Builtin,
+            resources: SkillResources::default(),
+        };
+
+        write_skill(&skills_dir, "idem", &skill).unwrap();
+        let skill_md = skills_dir.join("idem").join("SKILL.md");
+        let first_mtime = fs::metadata(&skill_md).unwrap().modified().unwrap();
+
+        // Sleep briefly so a rewrite would produce a distinct mtime.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        write_skill(&skills_dir, "idem", &skill).unwrap();
+        let second_mtime = fs::metadata(&skill_md).unwrap().modified().unwrap();
+
+        assert_eq!(
+            first_mtime, second_mtime,
+            "re-deploying a current skill must not rewrite SKILL.md"
         );
     }
 

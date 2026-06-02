@@ -11,6 +11,7 @@ use swissarmyhammer_common::lifecycle::{InitRegistry, InitResult, InitScope};
 use swissarmyhammer_common::reporter::InitReporter;
 
 use crate::components::{ProjectStructure, SkillDeployment};
+// `for_profile` is the kanban-app fast path; see `run_workspace_init_for_profile`.
 
 /// Register the root-explicit workspace-init components into `registry`.
 ///
@@ -43,6 +44,32 @@ pub fn run_workspace_init(
 ) -> Vec<InitResult> {
     let mut registry = InitRegistry::new();
     register_workspace_init(&mut registry, root);
+    registry.run_all_init(scope, reporter)
+}
+
+/// Run workspace init against an explicit `root`, deploying only the builtin
+/// skills tagged with the given init `profile`.
+///
+/// Identical to [`run_workspace_init`] except the [`SkillDeployment`] component
+/// is profile-filtered: only skills whose `profiles` frontmatter list contains
+/// `profile` are written under `<root>/.sah/skills/`. The [`ProjectStructure`]
+/// component (the `.sah/` + `.prompts/` layout) is unaffected.
+///
+/// This is the kanban-app fast path — it deploys just the `kanban`-profile
+/// cluster instead of all ~22 builtin skills. The operation is idempotent:
+/// skills already current on disk are not rewritten.
+///
+/// [`ProjectStructure`]: crate::ProjectStructure
+/// [`SkillDeployment`]: crate::SkillDeployment
+pub fn run_workspace_init_for_profile(
+    root: &Path,
+    profile: &str,
+    scope: &InitScope,
+    reporter: &dyn InitReporter,
+) -> Vec<InitResult> {
+    let mut registry = InitRegistry::new();
+    registry.register(ProjectStructure::new(root.to_path_buf()));
+    registry.register(SkillDeployment::for_profile(root.to_path_buf(), profile));
     registry.run_all_init(scope, reporter)
 }
 

@@ -83,6 +83,11 @@ pub struct Skill {
     pub metadata: HashMap<String, String>,
     /// Allowed MCP tools for this skill
     pub allowed_tools: Vec<String>,
+    /// Init profiles this skill belongs to (e.g. `kanban`).
+    ///
+    /// A tool's init deploys only the skills tagged with its profile. Empty
+    /// means the skill belongs to no specific profile (full-workspace only).
+    pub profiles: Vec<String>,
     /// The full SKILL.md body (instructions)
     pub instructions: String,
     /// Source path on disk (None for builtin)

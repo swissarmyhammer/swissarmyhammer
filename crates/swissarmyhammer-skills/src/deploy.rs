@@ -50,6 +50,20 @@ pub fn resolve_skill(name: &str) -> Result<Skill, String> {
         .ok_or_else(|| format!("builtin '{name}' skill not found"))
 }
 
+/// Resolve all builtin skills tagged with the given init `profile`.
+///
+/// A skill belongs to a profile when its `profiles` frontmatter list contains
+/// `profile`. Returns the matching skills in arbitrary order. Skills without a
+/// `profiles` key (the default empty list) never match any profile.
+pub fn resolve_profile_skills(profile: &str) -> Vec<Skill> {
+    let resolver = SkillResolver::new();
+    resolver
+        .resolve_builtins()
+        .into_values()
+        .filter(|skill| skill.profiles.iter().any(|p| p == profile))
+        .collect()
+}
+
 /// Format a skill as a complete SKILL.md file with YAML frontmatter.
 ///
 /// Combines the skill's frontmatter fields (`name`, `description`,
@@ -170,6 +184,7 @@ mod tests {
             compatibility: None,
             metadata: HashMap::new(),
             allowed_tools: vec!["tool-a".to_string(), "tool-b".to_string()],
+            profiles: vec![],
             instructions: "body".to_string(),
             source_path: None,
             source: SkillSource::Builtin,
@@ -202,6 +217,7 @@ mod tests {
             compatibility: None,
             metadata: HashMap::new(),
             allowed_tools: vec![],
+            profiles: vec![],
             instructions: "body".to_string(),
             source_path: None,
             source: SkillSource::Builtin,
@@ -234,6 +250,7 @@ mod tests {
             compatibility: None,
             metadata: metadata.clone(),
             allowed_tools: vec![],
+            profiles: vec![],
             instructions: "body".to_string(),
             source_path: None,
             source: SkillSource::Builtin,
@@ -276,6 +293,7 @@ mod tests {
             compatibility: None,
             metadata: HashMap::new(),
             allowed_tools: vec![],
+            profiles: vec![],
             instructions: "body".to_string(),
             source_path: None,
             source: SkillSource::Builtin,
@@ -312,6 +330,7 @@ mod tests {
             compatibility: Some(compatibility.to_string()),
             metadata: HashMap::new(),
             allowed_tools: vec![],
+            profiles: vec![],
             instructions: "body".to_string(),
             source_path: None,
             source: SkillSource::Builtin,
