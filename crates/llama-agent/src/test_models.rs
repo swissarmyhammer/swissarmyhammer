@@ -49,6 +49,17 @@ pub const TEST_MODEL_REPO: &str = "unsloth/Qwen3-0.6B-GGUF";
 /// This model supports tool calling which is required for MCP notification testing.
 pub const TEST_MODEL_FILE: &str = "Qwen3-0.6B-IQ4_NL.gguf";
 
+/// Small MTP test model repository for draft-mtp speculative-decoding tests.
+///
+/// **Model**: Qwen3.5-0.8B-MTP (0.8B params, MTP/NextN head included)
+/// **Quantization**: IQ4_NL (4-bit)
+/// **Purpose**: small enough for fast integration tests, carries an MTP head so
+/// `LlamaModel::has_mtp()` returns true and the streaming MTP path runs.
+pub const MTP_TEST_MODEL_REPO: &str = "unsloth/Qwen3.5-0.8B-MTP-GGUF";
+
+/// Small MTP test model filename — paired with [`MTP_TEST_MODEL_REPO`].
+pub const MTP_TEST_MODEL_FILE: &str = "Qwen3.5-0.8B-IQ4_NL.gguf";
+
 /// Standard test model repository for embedding tasks
 ///
 /// **Model**: Qwen3-Embedding-0.6B (0.6 billion parameters)

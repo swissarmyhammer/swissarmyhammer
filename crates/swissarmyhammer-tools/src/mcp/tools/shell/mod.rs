@@ -135,10 +135,12 @@ impl ShellExecuteTool {
     ///
     /// Use this in tests to avoid depending on the process CWD, which can
     /// become invalid when concurrent tests delete their temp directories.
+    /// `ShellState` no longer owns an embedder, so this is the only seam
+    /// tests need.
     #[cfg(test)]
     pub(crate) fn new_isolated() -> Self {
         let dir = std::env::temp_dir().join(format!(".shell-test-{}", ulid::Ulid::new()));
-        let state = ShellState::with_dir(dir).expect("Failed to initialize isolated shell state");
+        let state = ShellState::with_dir(dir).expect("Failed to initialize shell state");
         Self {
             state: Arc::new(Mutex::new(state)),
             mcp_server: None,

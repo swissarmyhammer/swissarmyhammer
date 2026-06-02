@@ -42,7 +42,7 @@ const MODELS: AiModel[] = [
     hint: "Claude Code CLI: /usr/local/bin/claude",
   },
   {
-    id: "qwen-coder",
+    id: "qwen",
     label: "Qwen Coder",
     kind: "local-llama",
     available: false,
@@ -659,7 +659,7 @@ describe("AiPromptComposer — footer model select", () => {
       );
     });
 
-    expect(onSelectModel).toHaveBeenCalledWith("qwen-coder");
+    expect(onSelectModel).toHaveBeenCalledWith("qwen");
   });
 });
 

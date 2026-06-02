@@ -9,7 +9,7 @@ fn test_builtin_models_generation() {
 
     // Should contain all expected agents
     assert!(names.contains(&"claude-code"));
-    assert!(names.contains(&"qwen-coder"));
+    assert!(names.contains(&"qwen"));
     assert!(names.contains(&"qwen-embedding"));
 
     // Verify each agent has valid YAML content with executor(s) key
@@ -35,14 +35,12 @@ fn test_builtin_models_specific_content() {
         .expect("claude-code agent should exist");
     assert!(claude_content.contains("type: claude-code"));
 
-    // Test qwen-coder agent
-    let qwen_content = agents_map
-        .get("qwen-coder")
-        .expect("qwen-coder agent should exist");
+    // Test qwen agent
+    let qwen_content = agents_map.get("qwen").expect("qwen agent should exist");
     assert!(qwen_content.contains("type: llama-agent"));
     assert!(
         qwen_content.contains("unsloth/Qwen3"),
-        "Expected Qwen3 model in qwen-coder"
+        "Expected Qwen3 model in qwen"
     );
 
     // Test qwen-embedding has multi-executor format with ANE + llama fallback

@@ -1,0 +1,12 @@
+---
+description: "0.8B (MTP): small MTP/NextN-head model for draft-mtp tests"
+---
+quiet: false
+executors:
+  - executor:
+      type: llama-agent
+      config:
+        model:
+          source: !HuggingFace
+            repo: "unsloth/Qwen3.5-0.8B-MTP-GGUF"
+            filename: "Qwen3.5-0.8B-IQ4_NL.gguf"

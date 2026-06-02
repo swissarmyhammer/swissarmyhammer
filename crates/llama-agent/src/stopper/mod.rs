@@ -196,3 +196,106 @@ pub trait Stopper {
     /// ```
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::stopper::{EosStopper, MaxTokensStopper};
+
+    /// Select the winning finish reason from an ordered list of per-stopper
+    /// decisions, mirroring the production dispatch.
+    ///
+    /// The live generation loop (`generation/generator.rs`) iterates its
+    /// `Vec<Box<dyn Stopper>>` in order and breaks on the first stopper that
+    /// returns `Some(FinishReason)`. This helper pins that precedence rule —
+    /// "first to fire wins" — over the same `Option<FinishReason>` values the
+    /// stoppers produce, without requiring a `LlamaContext` (which cannot be
+    /// constructed without loading a model).
+    ///
+    /// # Arguments
+    ///
+    /// * `decisions` - Per-stopper decisions in dispatch order.
+    ///
+    /// # Returns
+    ///
+    /// The first `Some(FinishReason)` in order, or `None` if every stopper
+    /// declined to stop.
+    fn first_to_fire<I>(decisions: I) -> Option<FinishReason>
+    where
+        I: IntoIterator<Item = Option<FinishReason>>,
+    {
+        decisions.into_iter().flatten().next()
+    }
+
+    #[test]
+    fn no_stopper_fires_continues_generation() {
+        // When every stopper declines, dispatch yields no finish reason.
+        let decisions = [None, None];
+        assert!(first_to_fire(decisions).is_none());
+    }
+
+    #[test]
+    fn first_firing_stopper_wins() {
+        // The earlier stopper's reason is selected even though a later stopper
+        // would also have fired.
+        let decisions = [
+            Some(FinishReason::Stopped("first".to_string())),
+            Some(FinishReason::Stopped("second".to_string())),
+        ];
+        assert_eq!(
+            first_to_fire(decisions),
+            Some(FinishReason::Stopped("first".to_string()))
+        );
+    }
+
+    #[test]
+    fn later_stopper_wins_when_earlier_declines() {
+        // A leading non-firing stopper does not mask a later one.
+        let decisions = [None, Some(FinishReason::Stopped("second".to_string()))];
+        assert_eq!(
+            first_to_fire(decisions),
+            Some(FinishReason::Stopped("second".to_string()))
+        );
+    }
+
+    #[test]
+    fn precedence_uses_real_stopper_cores() {
+        // Reproduce the production ordering: MaxTokensStopper precedes
+        // EosStopper. Drive both stoppers' model-independent cores (the exact
+        // values their `should_stop` returns) and confirm the max-tokens reason
+        // wins when it fires while EOS — which never fires on its own — declines.
+        let mut max_tokens = MaxTokensStopper::new(3);
+        let eos = EosStopper::new(2);
+
+        // First decode step: 2 tokens, neither stopper fires yet.
+        let max_decision = max_tokens_record(&mut max_tokens, 2);
+        assert!(first_to_fire([max_decision, eos.eval()]).is_none());
+
+        // Second decode step: 2 more tokens reaches the limit (total 4 > 3);
+        // the max-tokens reason must be the selected outcome.
+        let max_decision = max_tokens_record(&mut max_tokens, 2);
+        let winner = first_to_fire([max_decision, eos.eval()]);
+        assert_eq!(
+            winner,
+            Some(FinishReason::Stopped(
+                "Maximum tokens exceeded (4 > 3)".to_string()
+            ))
+        );
+    }
+
+    /// Test shim: invoke `MaxTokensStopper`'s model-independent decision core.
+    fn max_tokens_record(stopper: &mut MaxTokensStopper, tokens: usize) -> Option<FinishReason> {
+        stopper.record_tokens_for_test(tokens)
+    }
+
+    /// Test extension exposing the EOS stopper's model-independent decision.
+    trait EosEvalForTest {
+        fn eval(&self) -> Option<FinishReason>;
+    }
+
+    impl EosEvalForTest for EosStopper {
+        fn eval(&self) -> Option<FinishReason> {
+            self.evaluate_for_test()
+        }
+    }
+}

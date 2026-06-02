@@ -796,6 +796,31 @@ impl AcpServer {
         }
     }
 
+    /// Broadcast one [`super::visible_text::FilterSegment`] as its matching
+    /// ACP notification kind. Centralised here so the prompt loop just
+    /// iterates a segment list in source order without re-implementing the
+    /// segment → notification mapping.
+    fn broadcast_segment(
+        &self,
+        session_id: &agent_client_protocol::schema::SessionId,
+        segment: super::visible_text::FilterSegment,
+    ) {
+        match segment {
+            super::visible_text::FilterSegment::Visible(text) => {
+                self.broadcast_notification(super::translation::agent_message_notification(
+                    session_id.clone(),
+                    text,
+                ));
+            }
+            super::visible_text::FilterSegment::Thought(text) => {
+                self.broadcast_notification(super::translation::agent_thought_notification(
+                    session_id.clone(),
+                    text,
+                ));
+            }
+        }
+    }
+
     fn broadcast_notification(&self, notification: SessionNotification) {
         tracing::trace!(
             "Broadcasting notification: {}",
@@ -2053,10 +2078,25 @@ impl AcpServer {
                     Self::convert_error(e)
                 })?;
 
-            // Stream chunks and convert each to ACP notification
+            // Stream chunks and convert each to ACP notification.
+            //
+            // `generated_text` accumulates the FULL raw output (needed by
+            // `extract_tool_calls` below and the response meta), but the text
+            // streams to the client through `VisibleTextFilter`, which
+            // partitions it into two ACP channels:
+            //
+            // - `visible` text → `AgentMessageChunk`s (assistant reply).
+            // - `<think>` content → `AgentThoughtChunk`s (reasoning the UI
+            //   renders distinctly; per card 01KSXAVM5Y2B0PMXQ4BR656NDR a
+            //   truncated-mid-think turn now surfaces here instead of going
+            //   silent).
+            //
+            // `<tool_call>` content is dropped from both — the structured
+            // `ToolCall` notification is the only representation a client sees.
             let mut generated_text = String::new();
             let mut llama_finish_reason: Option<crate::types::FinishReason> = None;
             let mut turn_tokens = 0;
+            let mut visible = super::visible_text::VisibleTextFilter::default();
             while let Some(chunk_result) = stream.next().await {
                 match chunk_result {
                     Ok(chunk) => {
@@ -2068,20 +2108,31 @@ impl AcpServer {
                             llama_finish_reason = chunk.finish_reason.clone();
                         }
 
-                        // Convert chunk to ACP notification
-                        let notification = super::translation::llama_chunk_to_acp_notification(
-                            request.session_id.clone(),
-                            chunk,
-                        );
-
-                        // Broadcast the notification
-                        self.broadcast_notification(notification);
+                        // Segments come back IN SOURCE ORDER — visible runs
+                        // and thought runs interleaved as the model wrote
+                        // them. Broadcasting them in order is what makes the
+                        // UI render `<think>` ahead of the visible text that
+                        // followed it (and ahead of any tool call extracted
+                        // from this turn). Aggregating into two flat fields
+                        // per push lost that ordering and surfaced thinking
+                        // after the surrounding text.
+                        for segment in visible.push(&chunk.text) {
+                            self.broadcast_segment(&request.session_id, segment);
+                        }
                     }
                     Err(e) => {
                         tracing::error!("Stream chunk error: {}", e);
                         return Err(Self::convert_error(e));
                     }
                 }
+            }
+
+            // Flush any text held back at the stream's end. Outside-a-span
+            // tail goes to visible; an unterminated `<think>` tail goes to
+            // thought (so a turn that ran out of budget mid-reasoning still
+            // shows the user what the model was thinking about).
+            for segment in visible.finish() {
+                self.broadcast_segment(&request.session_id, segment);
             }
 
             total_tokens += turn_tokens;
@@ -2109,8 +2160,29 @@ impl AcpServer {
             }
 
             if tool_calls.is_empty() {
-                // No tool calls - agent is done
+                // No tool calls - agent is done. Persist this final assistant
+                // turn so (1) the conversation history is complete — the model's
+                // own last reply is available on the NEXT user prompt — and (2)
+                // the cached KV (which ends with exactly these tokens) stays a
+                // valid prefix of the next prompt, preserving cross-prompt cache
+                // reuse instead of forcing a cold full reprocess. Mirrors the
+                // per-turn assistant-message persistence below and the batch
+                // loop in `AgentServer::generate`.
                 tracing::info!("No tool calls detected, ending agentic loop");
+                let final_assistant_message = crate::types::Message {
+                    role: crate::types::MessageRole::Assistant,
+                    content: generated_text.clone(),
+                    tool_call_id: None,
+                    tool_name: None,
+                    timestamp: std::time::SystemTime::now(),
+                };
+                self.agent_server
+                    .add_message(&acp_session.llama_session_id, final_assistant_message)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Failed to add final assistant message to session: {}", e);
+                        Self::convert_error(e)
+                    })?;
                 break;
             }
 
@@ -2120,6 +2192,33 @@ impl AcpServer {
                 "Detected {} tool calls in generated text, executing them",
                 tool_calls_count
             );
+
+            // Persist the assistant's own turn (the RAW generated text, including
+            // the `<tool_call>` markup) BEFORE its tool results. This mirrors the
+            // batch agentic loop (`AgentServer::generate`) and matters for two
+            // reasons:
+            //   1. Correctness — the rendered conversation stays well-formed
+            //      (user → assistant(tool_call) → tool(result)); without it the
+            //      model never sees the call it is about to receive results for.
+            //   2. KV-cache reuse — the next turn's prompt must EXTEND, not
+            //      diverge from, the tokens already cached from this turn. The
+            //      cached KV ends with these assistant tokens, so the re-rendered
+            //      prompt must contain them at the same positions for the cached
+            //      prefix to remain valid.
+            let assistant_message = crate::types::Message {
+                role: crate::types::MessageRole::Assistant,
+                content: generated_text.clone(),
+                tool_call_id: None,
+                tool_name: None,
+                timestamp: std::time::SystemTime::now(),
+            };
+            self.agent_server
+                .add_message(&acp_session.llama_session_id, assistant_message)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Failed to add assistant message to session: {}", e);
+                    Self::convert_error(e)
+                })?;
 
             // Execute each tool call
             for tool_call in tool_calls {

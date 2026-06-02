@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Standalone CLI for SwissArmyHammer Kanban board"
+description = "kanban — a git-native task board for humans and AI coding agents; CLI + MCP server over versionable .kanban/ files"
 
 [package.metadata.dist]
 formula = "kanban"

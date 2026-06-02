@@ -347,8 +347,15 @@ describe("applySessionUpdate — streaming chunk coalescing", () => {
     );
 
     const message = onlyMessage(state);
+    // When the text chunk lands, the prior reasoning part transitions to
+    // "done" — only the actively-growing part stays "streaming". See the
+    // dedicated "close prior streaming parts" block below for the
+    // motivation: AI Elements' Reasoning component animates the spinner
+    // (and locks the toggle-to-read) while state === "streaming", so a
+    // closed `<think>` block must surface as done immediately, not at
+    // turn-ended.
     expect(message.parts).toEqual([
-      { type: "reasoning", text: "thinking", state: "streaming" },
+      { type: "reasoning", text: "thinking", state: "done" },
       { type: "text", text: "answer", state: "streaming" },
     ]);
   });
@@ -626,5 +633,109 @@ describe("conversationReducer — turn-status transitions", () => {
 
     expect(state.status).toBe("streaming");
     expect(state.conversation.currentModeId).toBe("ask");
+  });
+});
+
+/**
+ * The "thinking…" spinner used to animate forever after `</think>` closed:
+ * the prior reasoning part stayed in state:"streaming" until the entire
+ * agentic loop ended (`turn-ended` → `finalizeStreamingParts`). The AI
+ * Elements Reasoning component renders the spinner while
+ * state === "streaming" and gates the toggle-to-read-think-text on
+ * state === "done", so a stuck "streaming" state both kept the shimmer
+ * and locked the toggle.
+ *
+ * The fix: every time a new chunk lands, finalize any prior streaming
+ * REASONING part of the same message. Text parts are deliberately not
+ * touched — they carry no visible streaming indicator and finalizing
+ * them would falsely settle the message (see `isFinalized`) and block
+ * subsequent chunks from coalescing.
+ */
+describe("applySessionUpdate — close prior streaming reasoning when a new chunk lands", () => {
+  it("agent_message_chunk after agent_thought_chunk finalizes the reasoning part", () => {
+    const state = fold(
+      { sessionUpdate: "agent_thought_chunk", content: textBlock("plan") },
+      { sessionUpdate: "agent_message_chunk", content: textBlock("answer") },
+    );
+
+    const message = onlyMessage(state);
+    expect(message.parts).toEqual([
+      { type: "reasoning", text: "plan", state: "done" },
+      { type: "text", text: "answer", state: "streaming" },
+    ]);
+  });
+
+  it("agent_thought_chunk after agent_message_chunk leaves the text part streaming", () => {
+    // Text has no spinner, so finalizing it gains nothing user-visible AND
+    // would falsely settle the message (`isFinalized` requires every
+    // text/reasoning to be done). Keep it streaming.
+    const state = fold(
+      { sessionUpdate: "agent_message_chunk", content: textBlock("preface") },
+      { sessionUpdate: "agent_thought_chunk", content: textBlock("more thinking") },
+    );
+
+    const message = onlyMessage(state);
+    expect(message.parts).toEqual([
+      { type: "text", text: "preface", state: "streaming" },
+      { type: "reasoning", text: "more thinking", state: "streaming" },
+    ]);
+  });
+
+  it("two consecutive agent_thought_chunks grow the same reasoning part (still streaming)", () => {
+    const state = fold(
+      { sessionUpdate: "agent_thought_chunk", content: textBlock("step 1") },
+      { sessionUpdate: "agent_thought_chunk", content: textBlock(", step 2") },
+    );
+
+    const message = onlyMessage(state);
+    expect(message.parts).toEqual([
+      { type: "reasoning", text: "step 1, step 2", state: "streaming" },
+    ]);
+  });
+
+  it("tool_call finalizes any prior streaming reasoning", () => {
+    const state = fold(
+      { sessionUpdate: "agent_thought_chunk", content: textBlock("decide") },
+      { sessionUpdate: "agent_message_chunk", content: textBlock("calling tool") },
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "call-1",
+        title: "kanban",
+        rawInput: { op: "list tasks" },
+      },
+    );
+
+    const message = onlyMessage(state);
+    // Reasoning is closed (spinner stops, toggle unlocks); the text part
+    // stays streaming so it can keep coalescing more chunks if the model
+    // resumes prose after the tool. The tool part is appended last.
+    expect(message.parts[0]).toMatchObject({
+      type: "reasoning",
+      text: "decide",
+      state: "done",
+    });
+    expect(message.parts[1]).toMatchObject({
+      type: "text",
+      text: "calling tool",
+      state: "streaming",
+    });
+    expect(message.parts[2]).toMatchObject({ type: "dynamic-tool" });
+  });
+
+  it("interleaved think/visible/think/visible closes earlier reasoning, keeps text streaming", () => {
+    const state = fold(
+      { sessionUpdate: "agent_thought_chunk", content: textBlock("a") },
+      { sessionUpdate: "agent_message_chunk", content: textBlock("X") },
+      { sessionUpdate: "agent_thought_chunk", content: textBlock("b") },
+      { sessionUpdate: "agent_message_chunk", content: textBlock("Y") },
+    );
+
+    const message = onlyMessage(state);
+    expect(message.parts).toEqual([
+      { type: "reasoning", text: "a", state: "done" },
+      { type: "text", text: "X", state: "streaming" },
+      { type: "reasoning", text: "b", state: "done" },
+      { type: "text", text: "Y", state: "streaming" },
+    ]);
   });
 });

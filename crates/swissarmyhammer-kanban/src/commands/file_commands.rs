@@ -313,6 +313,92 @@ mod tests {
         );
     }
 
+    /// Regression: `SwitchBoardCmd::execute` must clear the per-window
+    /// `active_perspective_id` and `filtered_task_ids` when the new board
+    /// path differs from the previous one.
+    ///
+    /// Without this reset the new board renders against a stale filter
+    /// (perspective IDs and task IDs from the previous board), so every
+    /// column looks empty until the user toggles a perspective tab. The
+    /// reset lives in `UIState::set_window_board` (the natural seam — same
+    /// write lock, single `try_save()`); this test pins the cross-crate
+    /// behaviour through the command boundary.
+    #[tokio::test]
+    async fn switch_board_cmd_clears_stale_perspective_state() {
+        let ui = Arc::new(UIState::new());
+        // Seed: window "main" is on the previous board with a perspective
+        // selected and a non-empty filtered list.
+        ui.set_window_board("main", "/boards/previous/.kanban");
+        ui.switch_perspective("main", "p-prev", vec!["t1".to_string(), "t2".to_string()]);
+        assert_eq!(ui.active_perspective_id("main"), "p-prev");
+        assert_eq!(ui.filtered_task_ids("main"), vec!["t1", "t2"]);
+
+        // Drive SwitchBoardCmd to a different board.
+        let mut args = HashMap::new();
+        args.insert("path".into(), json!("/boards/new/.kanban"));
+        let ctx = make_ctx(Arc::clone(&ui), vec![], args);
+        SwitchBoardCmd.execute(&ctx).await.unwrap();
+
+        // Board path moved forward.
+        assert_eq!(
+            ui.window_board("main").as_deref(),
+            Some("/boards/new/.kanban"),
+        );
+
+        // Perspective state is cleared so the frontend auto-select repair
+        // path picks the new board's default perspective.
+        assert_eq!(
+            ui.active_perspective_id("main"),
+            "",
+            "active_perspective_id must be cleared after board switch",
+        );
+
+        // `filtered_task_ids` must be reset to None (not Some(empty)) so
+        // the frontend reads it as 'never switched → show all tasks'
+        // until auto-select fires `perspective.switch` for the new board.
+        // The public accessor flattens None/Some(empty) to vec![]; use the
+        // wire snapshot (to_json) which OMITS the key when the slot is
+        // None to distinguish the two states.
+        let json = ui.to_json();
+        let main_win = &json["windows"]["main"];
+        assert!(
+            main_win.get("filtered_task_ids").is_none(),
+            "filtered_task_ids must be reset to None after board switch \
+             so the frontend reads the absent key as 'never switched'; \
+             got: {main_win:?}",
+        );
+    }
+
+    /// Re-issuing the same path through `SwitchBoardCmd` (idempotent call)
+    /// must not clobber the window's perspective state. This guards the
+    /// Tauri adapter's `handle_board_switch_result` path, which re-writes
+    /// the canonical path after the command already wrote it — that
+    /// second write must be a no-op for perspective state so the
+    /// auto-select repair path is never raced.
+    #[tokio::test]
+    async fn switch_board_cmd_same_path_preserves_perspective_state() {
+        let ui = Arc::new(UIState::new());
+        let path = "/boards/same/.kanban";
+        ui.set_window_board("main", path);
+        ui.switch_perspective("main", "p-keep", vec!["t1".to_string()]);
+
+        let mut args = HashMap::new();
+        args.insert("path".into(), json!(path));
+        let ctx = make_ctx(Arc::clone(&ui), vec![], args);
+        SwitchBoardCmd.execute(&ctx).await.unwrap();
+
+        assert_eq!(
+            ui.active_perspective_id("main"),
+            "p-keep",
+            "same-path switch must leave active_perspective_id intact",
+        );
+        assert_eq!(
+            ui.filtered_task_ids("main"),
+            vec!["t1"],
+            "same-path switch must leave filtered_task_ids intact",
+        );
+    }
+
     // =========================================================================
     // CloseBoardCmd
     // =========================================================================

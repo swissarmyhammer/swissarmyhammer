@@ -1,6 +1,9 @@
 use crate::types::{ModelConfig, ModelError, SessionId};
 use llama_cpp_2::{
-    context::{params::LlamaContextParams, LlamaContext},
+    context::{
+        params::{KvCacheType, LlamaContextParams, LlamaContextType},
+        LlamaContext,
+    },
     llama_backend::LlamaBackend,
     model::LlamaModel,
     send_logs_to_tracing, LogOptions,
@@ -128,7 +131,10 @@ impl ModelManager {
         Ok(())
     }
 
-    /// Creates default model parameters optimized for GPU offloading
+    /// Creates default model parameters optimized for GPU offloading.
+    ///
+    /// (Free-function resolvers for the context params live at module scope
+    /// below: [`resolve_kv_cache_type`] and [`resolve_flash_attention_policy`].)
     fn default_model_params() -> llama_cpp_2::model::params::LlamaModelParams {
         let gpu_layers: u32 = std::env::var("LLAMA_N_GPU_LAYERS")
             .ok()
@@ -268,12 +274,31 @@ impl ModelManager {
         session_id: &SessionId,
     ) -> Result<LlamaContext<'a>, ModelError> {
         debug!("Creating context for session {}", session_id);
-        self.create_context(model)
+        self.create_context_with_type(model, LlamaContextType::Default)
+    }
+
+    /// Create an MTP draft context for a session — runs the model's NextN/MTP
+    /// head, for `draft-mtp` speculative decoding. Requires `model.has_mtp()`.
+    pub fn create_draft_session_context<'a>(
+        &self,
+        model: &'a LlamaModel,
+        session_id: &SessionId,
+    ) -> Result<LlamaContext<'a>, ModelError> {
+        debug!("Creating MTP draft context for session {}", session_id);
+        self.create_context_with_type(model, LlamaContextType::Mtp)
     }
 
     pub fn create_context<'a>(
         &self,
         model: &'a LlamaModel,
+    ) -> Result<LlamaContext<'a>, ModelError> {
+        self.create_context_with_type(model, LlamaContextType::Default)
+    }
+
+    fn create_context_with_type<'a>(
+        &self,
+        model: &'a LlamaModel,
+        ctx_type: LlamaContextType,
     ) -> Result<LlamaContext<'a>, ModelError> {
         // Search for any metadata key ending with .context_length or containing max_position_embeddings
         let model_native_ctx = {
@@ -361,16 +386,64 @@ impl ModelManager {
             );
         }
 
+        // Best-performance defaults for GPU (Metal) inference, applied to every
+        // llama model:
+        // - Flash attention ON. A large win on Apple Silicon and a prerequisite
+        //   for a quantized V cache.
+        // - Quantized KV cache (Q8_0): near-lossless and ~half the F16 KV-cache
+        //   memory, which is significant at large context windows.
+        // These are model-runtime settings, not user/env knobs.
+        let kv_type = KvCacheType::Q8_0;
+        let flash_attn = llama_cpp_sys_2::LLAMA_FLASH_ATTN_TYPE_ENABLED;
+
+        // Recurrent-state rollback window for partial `seq_rm`. Needed for two
+        // distinct rollback paths on hybrid attention + recurrent models
+        // (Qwen3.5/3.6 with gated delta net):
+        //   1. The MTP `accept`'s partial clear of the verify's rejected
+        //      drafts (bounded by `MtpParams::n_max` per round).
+        //   2. The streaming KV-reuse trim-to-LCP in
+        //      `prepare_streaming_kv_cache`, whose rollback distance is the
+        //      number of tokens the cached state ran past the new prompt's
+        //      LCP — i.e. the previous turn's generation length, which can
+        //      easily be hundreds of tokens in an agentic loop.
+        // If the rollback distance exceeds this window, `seq_rm` silently
+        // returns `Ok(false)`, `max_pos` stays high, and the next decode
+        // batch trips M-RoPE's `KV.max_pos < batch.start_pos` invariant. The
+        // callers handle that silent-failure case (fall back to cold start),
+        // but a comfortable window avoids that fallback for typical turns.
+        //
+        // llama.cpp clamps this to 0 on non-recurrent arches automatically,
+        // so it costs nothing where it isn't needed. The compute graph
+        // scales linearly with this value (each snapshot is a tensor view),
+        // so a value of 1024 blew up the ggml object pool at graph reserve
+        // on Qwen3.5/3.6. 64 is the sweet spot: covers typical per-turn
+        // generation lengths (and the MTP per-step rollback within them)
+        // without inflating the compute graph. Longer turns fall back to a
+        // cold full-reprocess (see the `Ok(false)` handler in
+        // `prepare_streaming_kv_cache`) — slow but correct.
+        //
+        // 2026-06-01: tried bumping to 256 on the assumption that the
+        // updated llama-cpp-rs had a larger graph pool; the kanban app
+        // crashed on the next context creation. Reverted. Future attempts
+        // need a real context-creation test against the 35B model BEFORE
+        // claiming the bump is safe — there is no headroom to guess at.
+        const N_RS_SEQ: u32 = 64;
+
         let context_params = LlamaContextParams::default()
             .with_n_ctx(Some(std::num::NonZeroU32::new(n_ctx as u32).unwrap()))
             .with_n_batch(n_batch)
             .with_n_ubatch(n_ubatch)
             .with_n_threads(self.config.n_threads)
-            .with_n_threads_batch(self.config.n_threads_batch);
+            .with_n_threads_batch(self.config.n_threads_batch)
+            .with_flash_attention_policy(flash_attn)
+            .with_type_k(kv_type)
+            .with_type_v(kv_type)
+            .with_ctx_type(ctx_type)
+            .with_n_rs_seq(N_RS_SEQ);
 
         debug!(
-            "Creating context with n_ctx={}, n_batch={}, n_ubatch={}, n_seq_max={}, n_threads={}, n_threads_batch={}",
-            n_ctx, n_batch, n_ubatch, self.config.n_seq_max, self.config.n_threads, self.config.n_threads_batch
+            "Creating context with n_ctx={}, n_batch={}, n_ubatch={}, n_seq_max={}, n_threads={}, n_threads_batch={}, flash_attn={}, kv_cache_type={:?}",
+            n_ctx, n_batch, n_ubatch, self.config.n_seq_max, self.config.n_threads, self.config.n_threads_batch, flash_attn, kv_type
         );
 
         model

@@ -1958,6 +1958,11 @@ send_msg({"jsonrpc": "2.0", "method": "window/logMessage", "params": {"type": 3,
 
 # Then send the actual response
 send_msg({"jsonrpc": "2.0", "id": req["id"], "result": {"capabilities": {}}})
+
+# Consume the `initialized` notification the client writes after the response.
+# Staying in a read keeps our stdin open while the client writes, so the write
+# can't hit a broken pipe by racing our exit (the source of this test's flake).
+read_msg()
 "#;
 
         let mut child = std::process::Command::new("python3")
@@ -2019,6 +2024,11 @@ send_msg({"jsonrpc": "2.0", "id": 999, "method": "workspace/diagnostic/refresh"}
 
 # Then send the correct response
 send_msg({"jsonrpc": "2.0", "id": req_id, "result": {"capabilities": {}}})
+
+# Consume the `initialized` notification the client writes after the response.
+# Staying in a read keeps our stdin open while the client writes, so the write
+# can't hit a broken pipe by racing our exit (the source of this test's flake).
+read_msg()
 "#;
 
         let mut child = std::process::Command::new("python3")

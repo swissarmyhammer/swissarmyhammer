@@ -50,6 +50,7 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                     })?;
             let board_name = board.get_str("name").unwrap_or("");
             let board_description = board.get_str("description");
+            let board_model = board.get_str("model");
             let mut all_columns = ectx.list("column").await?;
             all_columns
                 .sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
@@ -68,6 +69,7 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                 return Ok(json!({
                     "name": board_name,
                     "description": board_description,
+                    "model": board_model,
                     "columns": columns_json,
                     "projects": projects_json,
                     "tags": tags_json,
@@ -145,6 +147,7 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
             Ok(json!({
                 "name": board_name,
                 "description": board_description,
+                "model": board_model,
                 "columns": columns,
                 "projects": projects,
                 "tags": tags,
@@ -468,6 +471,36 @@ mod tests {
         let columns = result["columns"].as_array().unwrap();
         assert!(columns[0]["task_count"].is_null());
         assert!(columns[0]["ready_count"].is_null());
+    }
+
+    /// A board with no `model` set must report `null` in both response
+    /// shapes — the AI panel uses this to decide whether to fall back to its
+    /// default selection or restore the persisted choice.
+    #[tokio::test]
+    async fn test_get_board_model_null_when_unset() {
+        let (_temp, ctx) = setup().await;
+
+        let counted = GetBoard::default()
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert!(
+            counted["model"].is_null(),
+            "include_counts:true shape must expose `model` as null when unset, got {counted}"
+        );
+
+        let basic = GetBoard {
+            include_counts: false,
+        }
+        .execute(&ctx)
+        .await
+        .into_result()
+        .unwrap();
+        assert!(
+            basic["model"].is_null(),
+            "include_counts:false shape must expose `model` as null when unset, got {basic}"
+        );
     }
 
     #[tokio::test]

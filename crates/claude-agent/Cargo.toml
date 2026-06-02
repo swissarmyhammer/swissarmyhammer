@@ -41,7 +41,6 @@ once_cell = { workspace = true }
 typed-builder = { workspace = true }
 swissarmyhammer-common = { workspace = true }
 swissarmyhammer-kanban = { workspace = true }
-swissarmyhammer-modes = { workspace = true }
 swissarmyhammer-agents = { workspace = true }
 swissarmyhammer-prompts = { workspace = true }
 swissarmyhammer-config = { workspace = true }

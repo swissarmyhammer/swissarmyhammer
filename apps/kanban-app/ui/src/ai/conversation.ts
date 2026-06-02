@@ -298,6 +298,17 @@ function makeStreamingPart(
  * Returns a new parts array; the input is never mutated. When the last part of
  * the requested kind is not the final element (a tool part was emitted after
  * it), a new part is appended so the two text runs render in order.
+ *
+ * As part of producing the new array, every OTHER streaming `text`/
+ * `reasoning` part is finalized to `state: "done"` — only the just-grown or
+ * just-added part stays streaming. This is what stops the "thinking…"
+ * shimmer the moment a `</think>` closes and the next visible chunk lands:
+ * the reasoning part is no longer the active stream, so it transitions out
+ * of the streaming state immediately, without waiting for the whole
+ * agentic loop to finish (`finalizeStreamingParts` on `turn-ended`). It
+ * also makes the collapsed reasoning section toggleable to read the
+ * accumulated think text — the AI Elements components gate the toggle on
+ * `state === "done"`.
  */
 function growLastPart(
   parts: ConversationPart[],
@@ -313,10 +324,42 @@ function growLastPart(
       text: lastPart.text + text,
       state: "streaming" as const,
     };
-    return [...parts.slice(0, lastIndex), grown];
+    const earlierFinalized = parts
+      .slice(0, lastIndex)
+      .map(finalizeIfStreaming);
+    return [...earlierFinalized, grown];
   }
 
-  return [...parts, makeStreamingPart(partType, text)];
+  const earlierFinalized = parts.map(finalizeIfStreaming);
+  return [...earlierFinalized, makeStreamingPart(partType, text)];
+}
+
+/**
+ * Stamp a streaming `reasoning` part as `done`.
+ *
+ * `text` parts are deliberately NOT finalized here even when they are no
+ * longer the active stream. Two reasons:
+ *
+ * 1. `text` parts have no visible streaming-vs-done indicator in the AI
+ *    Elements components — only the reasoning Spinner does. The user-visible
+ *    bug ("thinking animation keeps animating after the think is done") is
+ *    purely a reasoning concern.
+ *
+ * 2. `isFinalized` treats a message as fully settled when EVERY
+ *    text/reasoning part is `done`. Finalizing a text part mid-message
+ *    would falsely settle the message and block the next streaming chunk
+ *    from coalescing into it — exactly the regression the existing test
+ *    "a tool call between text runs splits them into separate text parts"
+ *    catches.
+ *
+ * Tool calls / plans / other part kinds carry their own status fields and
+ * are not touched.
+ */
+function finalizeIfStreaming(part: ConversationPart): ConversationPart {
+  if (part.type === "reasoning" && part.state === "streaming") {
+    return { ...part, state: "done" as const };
+  }
+  return part;
 }
 
 /**
@@ -572,9 +615,15 @@ function appendToolCall(
   const last = lastOf(messages);
 
   if (last !== undefined && last.role === "assistant") {
+    // Finalize any prior streaming text/reasoning parts in this message —
+    // a tool call arriving means the model has stopped streaming its prose
+    // for THIS span. Same rationale as `growLastPart`'s finalization step:
+    // the reasoning shimmer must stop the moment something else takes over
+    // the active output, not at the end of the whole agentic loop.
+    const finalizedEarlier = last.parts.map(finalizeIfStreaming);
     const updated: ConversationMessage = {
       ...last,
-      parts: [...last.parts, part],
+      parts: [...finalizedEarlier, part],
     };
     return [...messages.slice(0, -1), updated];
   }

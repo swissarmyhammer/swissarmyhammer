@@ -588,20 +588,49 @@ pub fn llama_chunk_to_acp_notification(
     session_id: agent_client_protocol::schema::SessionId,
     chunk: crate::types::StreamChunk,
 ) -> agent_client_protocol::schema::SessionNotification {
+    agent_message_notification(session_id, chunk.text)
+}
+
+/// Build an `AgentMessageChunk` `SessionNotification` carrying `text`.
+///
+/// Used by the streaming turn loop to broadcast the *visible* assistant text
+/// after reasoning/tool-call markup has been stripped (see
+/// [`crate::acp::visible_text`]); the raw `StreamChunk` text is not broadcast
+/// directly, so `<think>`/`<tool_call>` spans never reach the client as message
+/// content.
+pub fn agent_message_notification(
+    session_id: agent_client_protocol::schema::SessionId,
+    text: String,
+) -> agent_client_protocol::schema::SessionNotification {
     use agent_client_protocol::schema::{
         ContentBlock, ContentChunk, SessionNotification, SessionUpdate,
     };
 
-    // Convert the text chunk to a ContentBlock
-    let content_block = ContentBlock::from(chunk.text);
-
-    // Wrap it in a ContentChunk
+    let content_block = ContentBlock::from(text);
     let content_chunk = ContentChunk::new(content_block);
-
-    // Create a SessionUpdate with the agent message chunk
     let update = SessionUpdate::AgentMessageChunk(content_chunk);
+    SessionNotification::new(session_id, update)
+}
 
-    // Return the SessionNotification
+/// Build an `AgentThoughtChunk` `SessionNotification` carrying `text`.
+///
+/// Used by the streaming turn loop to broadcast reasoning content extracted
+/// from `<think>…</think>` spans by [`crate::acp::visible_text`]. The UI can
+/// render thought chunks distinctly from assistant message text so the user
+/// can see the model's reasoning without it being mistaken for the final
+/// answer — and so a truncated-mid-think turn still surfaces something useful
+/// instead of going silent.
+pub fn agent_thought_notification(
+    session_id: agent_client_protocol::schema::SessionId,
+    text: String,
+) -> agent_client_protocol::schema::SessionNotification {
+    use agent_client_protocol::schema::{
+        ContentBlock, ContentChunk, SessionNotification, SessionUpdate,
+    };
+
+    let content_block = ContentBlock::from(text);
+    let content_chunk = ContentChunk::new(content_block);
+    let update = SessionUpdate::AgentThoughtChunk(content_chunk);
     SessionNotification::new(session_id, update)
 }
 
@@ -3037,5 +3066,482 @@ mod tests {
         assert!(needs_permission("mcp__swissarmyhammer__files")); // Unified files tool - ambiguous, defaults to requiring permission
         assert!(needs_permission("mcp__swissarmyhammer__shell_execute"));
         assert!(needs_permission("mcp__swissarmyhammer__web"));
+    }
+
+    // ============================================================
+    // ACP -> internal content block variants
+    //
+    // `acp_to_llama_messages` handles every ContentBlock variant the
+    // ACP schema currently defines. The text and resource paths are
+    // covered above; these tests pin the remaining variants directly by
+    // constructing the typed content blocks (rather than via JSON, which
+    // is brittle across schema versions).
+    // ============================================================
+
+    #[test]
+    fn test_acp_to_llama_messages_resource_link_becomes_text() {
+        use agent_client_protocol::schema::ResourceLink;
+
+        // Per ACP spec, agents MUST support resource links; the translator
+        // renders them as a `[Resource: name (uri)]` text message.
+        let link = ResourceLink::new("design-doc", "file:///docs/design.md");
+        let content = vec![ContentBlock::ResourceLink(link)];
+
+        let result = acp_to_llama_messages(content).expect("resource links are supported");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].role, MessageRole::User);
+        assert_eq!(
+            result[0].content,
+            "[Resource: design-doc (file:///docs/design.md)]"
+        );
+        assert!(result[0].tool_call_id.is_none());
+        assert!(result[0].tool_name.is_none());
+    }
+
+    #[test]
+    fn test_acp_to_llama_messages_resource_link_mixed_with_text() {
+        use agent_client_protocol::schema::ResourceLink;
+
+        // A resource link interleaved with text yields two ordered messages.
+        let content = vec![
+            ContentBlock::from("see attached"),
+            ContentBlock::ResourceLink(ResourceLink::new("readme", "file:///README.md")),
+        ];
+
+        let result = acp_to_llama_messages(content).expect("text + resource link is supported");
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].content, "see attached");
+        assert_eq!(result[1].content, "[Resource: readme (file:///README.md)]");
+    }
+
+    #[test]
+    fn test_acp_to_llama_messages_image_unsupported() {
+        use agent_client_protocol::schema::ImageContent;
+
+        let content = vec![ContentBlock::Image(ImageContent::new(
+            "base64data",
+            "image/png",
+        ))];
+
+        let result = acp_to_llama_messages(content);
+        match result {
+            Err(TranslationError::UnsupportedContent(msg)) => {
+                assert!(msg.contains("Image"));
+                assert!(msg.contains("not yet supported"));
+            }
+            other => panic!(
+                "Expected UnsupportedContent error for Image, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn test_acp_to_llama_messages_audio_unsupported() {
+        use agent_client_protocol::schema::AudioContent;
+
+        let content = vec![ContentBlock::Audio(AudioContent::new(
+            "base64audio",
+            "audio/mp3",
+        ))];
+
+        let result = acp_to_llama_messages(content);
+        match result {
+            Err(TranslationError::UnsupportedContent(msg)) => {
+                assert!(msg.contains("Audio"));
+                assert!(msg.contains("not yet supported"));
+            }
+            other => panic!(
+                "Expected UnsupportedContent error for Audio, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn test_acp_to_llama_messages_image_stops_at_first_unsupported() {
+        use agent_client_protocol::schema::ImageContent;
+
+        // Translation fails as soon as it encounters an unsupported block;
+        // text before it does not leak into a partial result.
+        let content = vec![
+            ContentBlock::from("intro"),
+            ContentBlock::Image(ImageContent::new("data", "image/png")),
+            ContentBlock::from("never reached"),
+        ];
+
+        let result = acp_to_llama_messages(content);
+        assert!(matches!(
+            result,
+            Err(TranslationError::UnsupportedContent(_))
+        ));
+    }
+
+    // ============================================================
+    // Error -> JSON-RPC error code mapping
+    //
+    // These pin the internal-error (-32603) arms that were previously
+    // untested — the `-32603` the bug log surfaced — plus the remaining
+    // typed variants across each error family and the AgentError
+    // delegation arms.
+    // ============================================================
+
+    #[test]
+    fn test_agent_error_model_maps_to_internal_error() {
+        // AgentError::Model wraps a model_loader::ModelError and maps to
+        // -32603 (Internal error) — the code seen in the bug log.
+        let error = crate::types::AgentError::Model(model_loader::ModelError::LoadingFailed(
+            "gguf parse failed".to_string(),
+        ));
+
+        let json_rpc = error.to_json_rpc_error();
+        assert_eq!(json_rpc.code, -32603);
+        assert!(!json_rpc.message.is_empty());
+        // Model errors have no structured data attached.
+        assert!(json_rpc.data.is_none());
+    }
+
+    #[test]
+    fn test_agent_error_queue_maps_to_internal_error() {
+        // AgentError::Queue maps to -32603 regardless of the wrapped variant.
+        let error = crate::types::AgentError::Queue(crate::types::QueueError::WorkerError(
+            "crashed".to_string(),
+        ));
+
+        let json_rpc = error.to_json_rpc_error();
+        assert_eq!(json_rpc.code, -32603);
+        assert!(json_rpc.data.is_none());
+    }
+
+    #[test]
+    fn test_agent_error_delegates_to_mcp_error() {
+        // AgentError::MCP delegates code and data to the inner MCPError.
+        let error = crate::types::AgentError::MCP(crate::types::MCPError::ServerNotFound(
+            "fs-server".to_string(),
+        ));
+
+        let json_rpc = error.to_json_rpc_error();
+        assert_eq!(json_rpc.code, -32602);
+        let data = json_rpc.data.expect("MCP data should be forwarded");
+        assert_eq!(data["error"], "mcp_server_not_found");
+        assert_eq!(data["serverName"], "fs-server");
+    }
+
+    #[test]
+    fn test_agent_error_delegates_to_template_error() {
+        // AgentError::Template delegates code and data to the inner TemplateError.
+        let error = crate::types::AgentError::Template(crate::types::TemplateError::Invalid(
+            "missing role".to_string(),
+        ));
+
+        let json_rpc = error.to_json_rpc_error();
+        assert_eq!(json_rpc.code, -32602);
+        let data = json_rpc.data.expect("Template data should be forwarded");
+        assert_eq!(data["error"], "template_invalid");
+        assert_eq!(data["details"], "missing role");
+    }
+
+    #[test]
+    fn test_mcp_error_connection_conversion() {
+        let error = crate::types::MCPError::Connection("socket reset".to_string());
+
+        let json_rpc = error.to_json_rpc_error();
+        assert_eq!(json_rpc.code, -32000);
+
+        let data = json_rpc.data.expect("Expected error data");
+        assert_eq!(data["error"], "mcp_connection_error");
+        assert_eq!(data["details"], "socket reset");
+    }
+
+    #[test]
+    fn test_mcp_error_http_timeout_conversion() {
+        let error = crate::types::MCPError::HttpTimeout("took 30s".to_string());
+
+        let json_rpc = error.to_json_rpc_error();
+        assert_eq!(json_rpc.code, -32000);
+
+        let data = json_rpc.data.expect("Expected error data");
+        assert_eq!(data["error"], "mcp_http_timeout");
+        assert_eq!(data["details"], "took 30s");
+    }
+
+    #[test]
+    fn test_mcp_error_http_connection_conversion() {
+        let error = crate::types::MCPError::HttpConnection("refused".to_string());
+
+        let json_rpc = error.to_json_rpc_error();
+        assert_eq!(json_rpc.code, -32000);
+
+        let data = json_rpc.data.expect("Expected error data");
+        assert_eq!(data["error"], "mcp_http_connection_failed");
+        assert_eq!(data["details"], "refused");
+    }
+
+    #[test]
+    fn test_mcp_error_timeout_conversion() {
+        let error = crate::types::MCPError::Timeout("deadline exceeded".to_string());
+
+        let json_rpc = error.to_json_rpc_error();
+        assert_eq!(json_rpc.code, -32000);
+
+        let data = json_rpc.data.expect("Expected error data");
+        assert_eq!(data["error"], "mcp_timeout");
+        assert_eq!(data["details"], "deadline exceeded");
+    }
+
+    #[test]
+    fn test_template_error_invalid_conversion() {
+        let error = crate::types::TemplateError::Invalid("no template defined".to_string());
+
+        let json_rpc = error.to_json_rpc_error();
+        assert_eq!(json_rpc.code, -32602);
+
+        let data = json_rpc.data.expect("Expected error data");
+        assert_eq!(data["error"], "template_invalid");
+        assert_eq!(data["details"], "no template defined");
+    }
+
+    #[test]
+    fn test_generation_error_internal_variants_map_to_32603() {
+        use crate::generation::GenerationError;
+
+        // Every "internal failure" generation variant maps to -32603 and
+        // carries no structured data (they fall through the `_ => None` arm).
+        let internal_errors = vec![
+            GenerationError::TokenizationFailed("bad tokens".to_string()),
+            GenerationError::BatchFailed("batch error".to_string()),
+            GenerationError::DecodingFailed("decode error".to_string()),
+            GenerationError::TokenConversionFailed("convert error".to_string()),
+            GenerationError::ContextFailed("context error".to_string()),
+            GenerationError::ContextLock,
+            GenerationError::GenerationFailed("unexpected".to_string()),
+        ];
+
+        for error in internal_errors {
+            let json_rpc = error.to_json_rpc_error();
+            assert_eq!(json_rpc.code, -32603, "wrong code for {:?}", error);
+            assert!(json_rpc.data.is_none(), "unexpected data for {:?}", error);
+            assert!(!json_rpc.message.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_generation_error_stream_closed_conversion() {
+        let error = crate::generation::GenerationError::StreamClosed;
+
+        let json_rpc = error.to_json_rpc_error();
+        assert_eq!(json_rpc.code, -32000);
+
+        let data = json_rpc.data.expect("Expected error data");
+        assert_eq!(data["error"], "stream_closed");
+    }
+
+    #[test]
+    fn test_validation_error_invalid_state_conversion() {
+        let error = crate::validation::ValidationError::InvalidState("not ready".to_string());
+
+        let json_rpc = error.to_json_rpc_error();
+        assert_eq!(json_rpc.code, -32602);
+
+        let data = json_rpc.data.expect("Expected error data");
+        assert_eq!(data["error"], "invalid_state");
+        assert_eq!(data["details"], "not ready");
+    }
+
+    #[test]
+    fn test_validation_error_content_validation_conversion() {
+        let error =
+            crate::validation::ValidationError::ContentValidation("bad encoding".to_string());
+
+        let json_rpc = error.to_json_rpc_error();
+        assert_eq!(json_rpc.code, -32602);
+
+        let data = json_rpc.data.expect("Expected error data");
+        assert_eq!(data["error"], "content_validation_failed");
+        assert_eq!(data["details"], "bad encoding");
+    }
+
+    #[test]
+    fn test_validation_error_schema_validation_conversion() {
+        let error =
+            crate::validation::ValidationError::SchemaValidation("missing field".to_string());
+
+        let json_rpc = error.to_json_rpc_error();
+        assert_eq!(json_rpc.code, -32602);
+
+        let data = json_rpc.data.expect("Expected error data");
+        assert_eq!(data["error"], "schema_validation_failed");
+        assert_eq!(data["details"], "missing field");
+    }
+
+    #[test]
+    fn test_validation_error_multiple_nests_codes() {
+        // The Multiple arm serializes each inner error's message and code.
+        let errors = vec![
+            crate::validation::ValidationError::SecurityViolation("a".to_string()),
+            crate::validation::ValidationError::SchemaValidation("b".to_string()),
+        ];
+        let error = crate::validation::ValidationError::Multiple(errors);
+
+        let data = error.to_error_data().expect("Expected error data");
+        let nested = data["errors"].as_array().expect("errors is an array");
+        assert_eq!(nested.len(), 2);
+        // Each nested entry carries the inner JSON-RPC code (-32602 for all
+        // validation errors).
+        assert_eq!(nested[0]["code"], -32602);
+        assert_eq!(nested[1]["code"], -32602);
+        assert!(nested[0]["message"].is_string());
+    }
+
+    #[test]
+    fn test_acp_protocol_error_internal_maps_to_32603() {
+        // The ToJsonRpcError impl for agent_client_protocol::Error reads the
+        // embedded `code` field. internal_error() is -32603.
+        let acp_error = agent_client_protocol::Error::internal_error();
+
+        let json_rpc = acp_error.to_json_rpc_error();
+        assert_eq!(json_rpc.code, -32603);
+    }
+
+    #[test]
+    fn test_acp_protocol_error_invalid_params_maps_to_32602() {
+        let acp_error = agent_client_protocol::Error::invalid_params();
+
+        let json_rpc = acp_error.to_json_rpc_error();
+        assert_eq!(json_rpc.code, -32602);
+    }
+
+    #[test]
+    fn test_acp_protocol_error_forwards_data() {
+        // Custom code and attached data are both preserved by the conversion.
+        let acp_error = agent_client_protocol::Error::new(-32000, "server error")
+            .data(serde_json::json!({"detail": "overloaded"}));
+
+        let json_rpc = acp_error.to_json_rpc_error();
+        assert_eq!(json_rpc.code, -32000);
+        // The message is taken from the ACP error's Display, which appends
+        // the attached data; the message text is preserved as the prefix.
+        assert!(json_rpc.message.starts_with("server error"));
+        let data = json_rpc.data.expect("data should be forwarded");
+        assert_eq!(data["detail"], "overloaded");
+    }
+
+    #[test]
+    fn test_acp_protocol_error_no_data() {
+        // When the ACP error has no data, the conversion yields None.
+        let acp_error = agent_client_protocol::Error::new(-32001, "no data here");
+
+        let json_rpc = acp_error.to_json_rpc_error();
+        assert_eq!(json_rpc.code, -32001);
+        assert!(json_rpc.data.is_none());
+    }
+
+    #[test]
+    fn test_json_rpc_error_message_matches_display() {
+        // The default to_json_rpc_error() uses the Display string as the message.
+        let error = TranslationError::UnsupportedContent("video".to_string());
+        let json_rpc = error.to_json_rpc_error();
+        assert_eq!(json_rpc.message, error.to_string());
+    }
+
+    // ============================================================
+    // ToolCallError
+    //
+    // The error surfaced by the tool-call workflow is pure data: its
+    // Display strings and From<AgentError> conversion are stable contract.
+    // ============================================================
+
+    #[test]
+    fn test_tool_call_error_display_variants() {
+        let denied = ToolCallError::PermissionDenied("fs_write".to_string());
+        assert_eq!(
+            denied.to_string(),
+            "Permission denied for tool call: fs_write"
+        );
+
+        let failed = ToolCallError::ExecutionFailed("connection lost".to_string());
+        assert_eq!(failed.to_string(), "Tool execution failed: connection lost");
+    }
+
+    #[test]
+    fn test_tool_call_error_from_agent_error() {
+        // ToolCallError::AgentError is produced via the #[from] conversion.
+        let agent_error = crate::types::AgentError::Timeout {
+            timeout: Duration::from_secs(5),
+        };
+        let tool_error: ToolCallError = agent_error.into();
+
+        match tool_error {
+            ToolCallError::AgentError(inner) => {
+                assert_eq!(inner.to_json_rpc_error().code, -32000);
+            }
+            other => panic!("Expected AgentError variant, got {:?}", other),
+        }
+    }
+
+    // ============================================================
+    // Round-trip semantics
+    //
+    // For representative messages the ACP -> internal -> ACP path
+    // preserves the carried text content.
+    // ============================================================
+
+    #[test]
+    fn test_text_content_round_trip_preserves_text() {
+        // ACP text -> internal Message -> ACP text preserves the string.
+        let original = "Round-trip me, please.";
+        let acp_in = vec![ContentBlock::from(original)];
+
+        let messages = acp_to_llama_messages(acp_in).expect("text round-trips");
+        let acp_out = llama_to_acp_content(messages);
+
+        assert_eq!(acp_out.len(), 1);
+        match &acp_out[0] {
+            ContentBlock::Text(text) => assert_eq!(text.text, original),
+            other => panic!("Expected text content block, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_multi_text_round_trip_preserves_order_and_text() {
+        let inputs = ["first", "second", "third"];
+        let acp_in: Vec<ContentBlock> = inputs.iter().map(|s| ContentBlock::from(*s)).collect();
+
+        let messages = acp_to_llama_messages(acp_in).expect("text round-trips");
+        let acp_out = llama_to_acp_content(messages);
+
+        assert_eq!(acp_out.len(), inputs.len());
+        for (block, expected) in acp_out.iter().zip(inputs.iter()) {
+            match block {
+                ContentBlock::Text(text) => assert_eq!(&text.text, expected),
+                other => panic!("Expected text content block, got {:?}", other),
+            }
+        }
+    }
+
+    #[test]
+    fn test_chunk_round_trip_preserves_text() {
+        // A stream chunk turned into an ACP notification preserves its text,
+        // and that text survives extraction back into a content block.
+        use crate::types::StreamChunk;
+        use agent_client_protocol::schema::{SessionId, SessionUpdate};
+
+        let original = "streamed delta text";
+        let session_id = SessionId::new("01HX5ZRQK9X8G2V7N3P4M5W6Y7");
+        let chunk = StreamChunk {
+            text: original.to_string(),
+            is_complete: false,
+            token_count: 4,
+            finish_reason: None,
+        };
+
+        let notification = llama_chunk_to_acp_notification(session_id, chunk);
+        match notification.update {
+            SessionUpdate::AgentMessageChunk(content_chunk) => match content_chunk.content {
+                ContentBlock::Text(text) => assert_eq!(text.text, original),
+                other => panic!("Expected text content block, got {:?}", other),
+            },
+            other => panic!("Expected AgentMessageChunk, got {:?}", other),
+        }
     }
 }

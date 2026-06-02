@@ -6,10 +6,11 @@ use crate::types::{
     FinishReason, GenerationRequest, GenerationResponse, QueueConfig, QueueError, Session,
     StreamChunk,
 };
+use async_trait::async_trait;
 use llama_common::async_utils;
 use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::model::LlamaModel;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -20,12 +21,290 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 use ulid::Ulid;
 
-/// In-memory cache of session states for efficient multi-turn conversations
-/// Maps session_id -> (state_bytes, message_count)
+/// One cached session: the complete llama.cpp context state (including the KV
+/// cache) plus the tokenization of the PROMPT those bytes were produced from.
 ///
-/// The state_bytes contain the complete llama.cpp context state including KV cache,
-/// allowing us to restore a session without disk I/O.
-type SessionStateCache = Arc<Mutex<HashMap<String, Vec<u8>>>>;
+/// `prompt_tokens` is `Some` for the streaming path, which uses a
+/// longest-common-prefix check (see `prepare_streaming_kv_cache`) to verify the
+/// cache is still a valid prefix of the next turn's prompt before reusing it —
+/// rather than trusting a bare length comparison. The batch path stores `None`
+/// (it relies on its own append-only `cached_message_count` bookkeeping).
+///
+/// `draft_state_bytes` is the per-seq snapshot of the MTP **draft** context's
+/// KV cache (via `state_seq_get_data(seq=0)`), saved on streaming turns where
+/// MTP was actually used. Without it, turn 2+ of an MTP-enabled session would
+/// start with an empty draft context — its recurrent state has never seen the
+/// prefix, so drafts collapse to noise, the target rejects them all, and we
+/// pay double-prefill cost for zero speedup. Some draft contexts are large
+/// (Q8 KV at full ctx) so this is bounded by the same byte budget as the
+/// target state.
+struct CachedSession {
+    state_bytes: Vec<u8>,
+    prompt_tokens: Option<Vec<i32>>,
+    draft_state_bytes: Option<Vec<u8>>,
+}
+
+impl CachedSession {
+    /// Combined byte footprint used by the LRU byte budget.
+    fn byte_size(&self) -> usize {
+        self.state_bytes.len() + self.draft_state_bytes.as_ref().map_or(0, |b| b.len())
+    }
+}
+
+/// Cloned-out snapshot of a cached session — target state bytes, prompt
+/// fingerprint tokens, and optional draft state bytes. Returned by
+/// [`SessionStateStore::get`] so callers can drop the lock before the
+/// comparatively slow `set_state_data`/`state_seq_set_data`.
+type CachedStateSnapshot = (Vec<u8>, Option<Vec<i32>>, Option<Vec<u8>>);
+
+/// LRU, byte-bounded in-memory store of per-session llama.cpp context state for
+/// efficient multi-turn conversations (restore without disk I/O).
+///
+/// Replaces a bare `HashMap<session_id, Vec<u8>>`, which had two problems the
+/// streaming change made acute: (1) eviction iterated `HashMap` keys in
+/// arbitrary order and dropped the first N — it could evict the ACTIVE session
+/// and keep stale ones; (2) it bounded only entry COUNT, but each entry is a
+/// FULL context-state copy (hundreds of MB on large models), so memory was
+/// unbounded in bytes. This store evicts least-recently-used first and enforces
+/// both an entry-count and a total-byte budget.
+struct SessionStateStore {
+    entries: HashMap<String, CachedSession>,
+    /// Session ids ordered least-recently-used (front) to most-recently-used (back).
+    lru: VecDeque<String>,
+    max_entries: usize,
+    max_bytes: usize,
+    cur_bytes: usize,
+}
+
+impl SessionStateStore {
+    fn new(max_entries: usize, max_bytes: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            lru: VecDeque::new(),
+            max_entries: max_entries.max(1),
+            max_bytes,
+            cur_bytes: 0,
+        }
+    }
+
+    fn contains(&self, id: &str) -> bool {
+        self.entries.contains_key(id)
+    }
+
+    /// Move `id` to the most-recently-used end of the LRU order.
+    fn touch(&mut self, id: &str) {
+        if let Some(pos) = self.lru.iter().position(|k| k == id) {
+            if let Some(k) = self.lru.remove(pos) {
+                self.lru.push_back(k);
+            }
+        }
+    }
+
+    /// Clone out a session's target state bytes + prompt fingerprint + draft
+    /// state bytes, marking it most-recently-used. Bytes are cloned (not
+    /// borrowed) so the caller can drop the lock before the comparatively slow
+    /// `set_state_data`/`state_seq_set_data`.
+    fn get(&mut self, id: &str) -> Option<CachedStateSnapshot> {
+        let out = self.entries.get(id).map(|c| {
+            (
+                c.state_bytes.clone(),
+                c.prompt_tokens.clone(),
+                c.draft_state_bytes.clone(),
+            )
+        });
+        if out.is_some() {
+            self.touch(id);
+        }
+        out
+    }
+
+    /// Find the cached session whose stored prompt tokens have the longest
+    /// common prefix with `new_tokens`, prioritising the caller's own session
+    /// when its LCP ties.
+    ///
+    /// This is the local-side version of a service prompt-prefix cache (e.g.
+    /// Anthropic's `cache_control` blocks): two ACP sessions that share the
+    /// same system + tools header — which is the common case for the kanban
+    /// app with multiple windows on the same agent — should not each pay the
+    /// 28k-token cold prefill cost. The same `common_prefix_len` /
+    /// `streaming_reuse_decision` machinery that handles within-session
+    /// continuations handles cross-session sharing once the scan picks the
+    /// right donor.
+    ///
+    /// Returns `None` when no cached entry shares any prefix with the new
+    /// prompt (no usable cache) or when no entry carries a prompt fingerprint
+    /// (e.g. the batch path's snapshots, which we cannot safely match
+    /// against).
+    fn find_best_prefix_match(
+        &mut self,
+        target_session_id: &str,
+        new_tokens: &[i32],
+    ) -> Option<PrefixMatch> {
+        // Pass 1: scan immutably to identify the best (id, lcp). Two-pass so
+        // we can `touch(id)` after, which mutably borrows.
+        let mut best: Option<(String, usize)> = None;
+        for (id, entry) in &self.entries {
+            let Some(cached_tokens) = entry.prompt_tokens.as_ref() else {
+                continue;
+            };
+            let lcp = common_prefix_len(cached_tokens, new_tokens);
+            if lcp == 0 {
+                continue;
+            }
+            let is_current = id == target_session_id;
+            let take = match &best {
+                None => true,
+                Some((_, best_lcp)) if lcp > *best_lcp => true,
+                // Tie-breaker: prefer the caller's own session id. Reusing
+                // own state avoids a foreign-state set_state_data copy on
+                // the typical warm-continuation case where the caller's
+                // prior turn IS the longest-matching prefix.
+                Some((best_id, best_lcp))
+                    if lcp == *best_lcp && is_current && best_id != target_session_id =>
+                {
+                    true
+                }
+                _ => false,
+            };
+            if take {
+                best = Some((id.clone(), lcp));
+            }
+        }
+
+        let (source_id, lcp) = best?;
+        self.touch(&source_id);
+        let entry = self
+            .entries
+            .get(&source_id)
+            .expect("just-touched id exists");
+        Some(PrefixMatch {
+            source_session_id: source_id.clone(),
+            state_bytes: entry.state_bytes.clone(),
+            draft_state_bytes: entry.draft_state_bytes.clone(),
+            lcp,
+        })
+    }
+
+    /// Insert/replace a session's cached state, then evict LRU entries until
+    /// within BOTH the entry-count and total-byte budgets.
+    fn insert(
+        &mut self,
+        id: String,
+        state_bytes: Vec<u8>,
+        prompt_tokens: Option<Vec<i32>>,
+        draft_state_bytes: Option<Vec<u8>>,
+    ) {
+        let new_bytes = state_bytes.len() + draft_state_bytes.as_ref().map_or(0, |b| b.len());
+        if let Some(old) = self.entries.insert(
+            id.clone(),
+            CachedSession {
+                state_bytes,
+                prompt_tokens,
+                draft_state_bytes,
+            },
+        ) {
+            self.cur_bytes = self.cur_bytes.saturating_sub(old.byte_size());
+        }
+        self.cur_bytes += new_bytes;
+        if self.lru.iter().any(|k| k == &id) {
+            self.touch(&id);
+        } else {
+            self.lru.push_back(id);
+        }
+        self.evict();
+    }
+
+    /// Drop least-recently-used entries until under both budgets, always keeping
+    /// at least the most-recently-used entry.
+    fn evict(&mut self) {
+        while self.lru.len() > 1
+            && (self.entries.len() > self.max_entries || self.cur_bytes > self.max_bytes)
+        {
+            let Some(victim) = self.lru.pop_front() else {
+                break;
+            };
+            if let Some(c) = self.entries.remove(&victim) {
+                self.cur_bytes = self.cur_bytes.saturating_sub(c.byte_size());
+            }
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Drop all cached state (used on queue teardown).
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.lru.clear();
+        self.cur_bytes = 0;
+    }
+}
+
+type SessionStateCache = Arc<Mutex<SessionStateStore>>;
+
+/// Result of [`SessionStateStore::find_best_prefix_match`].
+///
+/// Carries the donor session's id (purely informational, for logging which
+/// cached state was reused) plus the bytes the caller restores into its
+/// fresh context.
+struct PrefixMatch {
+    /// The session id whose cached state was selected — may differ from the
+    /// caller's session id when we share a prefix across sessions.
+    source_session_id: String,
+    /// Full target-context state bytes for `set_state_data`.
+    state_bytes: Vec<u8>,
+    /// Per-seq draft KV bytes for MTP, when the donor turn used MTP.
+    draft_state_bytes: Option<Vec<u8>>,
+    /// Number of leading tokens that matched the new prompt.
+    lcp: usize,
+}
+
+/// Default entry ceiling for the session-state cache: cpu cores / 2 (min 1),
+/// preserving the previous count-based limit.
+fn default_max_cache_entries() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| (n.get() / 2).max(1))
+        .unwrap_or(4)
+}
+
+/// Total-byte ceiling for the session-state cache. Each entry is a full llama
+/// context-state copy, so this bounds worst-case memory regardless of entry
+/// count. 2 GiB is a generous ceiling for in-memory KV state on a workstation;
+/// tune via [`SessionStateStore::new`] if a deployment needs more or less.
+const MAX_SESSION_CACHE_BYTES: usize = 2 * 1024 * 1024 * 1024;
+
+/// Detect whether a loaded model has an MTP / NextN head by sniffing the
+/// GGUF metadata for an `*.nextn_predict_layers` entry.
+///
+/// The new llama-cpp-rs fork no longer exposes `LlamaModel::has_mtp()` or a
+/// `nextn_predict_layers()` accessor; the hparam still lives in the model
+/// file though, under a key like `qwen3.nextn_predict_layers`. Returns the
+/// parsed count when present and positive (signals MTP is available), `None`
+/// otherwise.
+fn detect_nextn_predict_layers(model: &LlamaModel) -> Option<u32> {
+    let meta_count = model.meta_count();
+    for i in 0..meta_count {
+        let key = match model.meta_key_by_index(i) {
+            Ok(k) => k,
+            Err(_) => continue,
+        };
+        if !key.ends_with(".nextn_predict_layers") {
+            continue;
+        }
+        let value = match model.meta_val_str_by_index(i) {
+            Ok(v) => v,
+            Err(_) => return None,
+        };
+        return value.parse::<u32>().ok().filter(|n| *n > 0);
+    }
+    None
+}
+
+/// Length of the longest common prefix of two token sequences.
+fn common_prefix_len(a: &[i32], b: &[i32]) -> usize {
+    a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count()
+}
 
 /// Check whether we have a cached KV-state for this session, and log the
 /// resume/fresh-start decision. Returns true if the cache is usable.
@@ -36,7 +315,7 @@ fn check_and_log_session_cache(
 ) -> bool {
     let has_cached_state = {
         let cache = session_state_cache.lock().unwrap();
-        cache.contains_key(&session.id.to_string())
+        cache.contains(&session.id.to_string())
     };
     let can_use_cache = has_cached_state && session.cached_message_count > 0;
 
@@ -115,33 +394,6 @@ fn compute_template_token_count(worker_id: usize, kv_cache_position: i32) -> Opt
     Some(next_position)
 }
 
-/// Build the `(prompt, llama_ctx)` pair needed for a streaming generation. On
-/// either failure the error is pushed onto the stream and we return `None` so
-/// the caller can exit early.
-fn prepare_streaming_inference<'m>(
-    chat_template: &ChatTemplateEngine,
-    session: &Session,
-    model: &'m LlamaModel,
-    model_manager: &ModelManager,
-    stream_sender: &mpsc::Sender<Result<StreamChunk, QueueError>>,
-) -> Option<(String, LlamaContext<'m>)> {
-    let prompt = match render_streaming_prompt(chat_template, session, model, model_manager) {
-        Ok(p) => p,
-        Err(e) => {
-            report_stream_error(stream_sender, "Template rendering failed", &e);
-            return None;
-        }
-    };
-    let ctx = match create_streaming_context(model_manager, model, session) {
-        Ok(c) => c,
-        Err(e) => {
-            report_stream_error(stream_sender, "Session context creation failed", &e);
-            return None;
-        }
-    };
-    Some((prompt, ctx))
-}
-
 /// Render the session prompt for a streaming request. Matches the non-streaming
 /// path's behaviour; errors are wrapped in the caller's preferred channel.
 fn render_streaming_prompt(
@@ -165,12 +417,12 @@ fn create_streaming_context<'m>(
 
 /// Push a worker-side error onto the streaming channel without ever blocking.
 fn report_stream_error<E: std::fmt::Display>(
-    stream_sender: &mpsc::Sender<Result<StreamChunk, QueueError>>,
+    stream_sender: &mpsc::UnboundedSender<Result<StreamChunk, QueueError>>,
     context: &str,
     error: &E,
 ) {
     error!("Streaming error: {}: {}", context, error);
-    let _ = stream_sender.try_send(Err(QueueError::WorkerError(format!(
+    let _ = stream_sender.send(Err(QueueError::WorkerError(format!(
         "{}: {}",
         context, error
     ))));
@@ -210,36 +462,6 @@ fn reject_cancelled_request(
             "Request cancelled".to_string(),
         )));
     metrics.record_request_cancelled();
-}
-
-/// Drop the oldest entries from the in-memory session state cache until it is
-/// under the per-process limit (cpu_cores / 2, minimum 1). Callers must hold
-/// the cache lock.
-fn evict_oldest_session_states(worker_id: usize, cache: &mut HashMap<String, Vec<u8>>) {
-    let cache_limit = std::thread::available_parallelism()
-        .map(|n| (n.get() / 2).max(1))
-        .unwrap_or(4);
-
-    if cache.len() <= cache_limit {
-        return;
-    }
-
-    // Simple approach: remove entries until we're at limit.
-    // In production, would track access time for proper LRU.
-    let to_remove: Vec<String> = cache
-        .keys()
-        .take(cache.len() - cache_limit)
-        .cloned()
-        .collect();
-    for key in to_remove {
-        cache.remove(&key);
-    }
-    info!(
-        "Worker {} evicted old session states (limit: {}), now have {} cached",
-        worker_id,
-        cache_limit,
-        cache.len()
-    );
 }
 
 /// Lock-free counters describing the live state of a [`RequestQueue`].
@@ -382,6 +604,146 @@ pub struct QueueStats {
     pub current_throughput_tps: u64,
 }
 
+/// The inference half of the queue, abstracted behind a trait so the worker
+/// loop's lifecycle (dequeue → run a turn → release the worker → record metrics)
+/// can be exercised deterministically without a live llama.cpp model.
+///
+/// The single production implementation is [`ModelManagerExecutor`], which runs
+/// the real `with_model(...)` + `GenerationHelper` inference path byte-for-byte.
+/// Tests substitute a scripted executor so they can drive every turn outcome
+/// (normal / EOS / max-tokens / context-full / error / cancel) and assert that
+/// the worker is always released afterwards — the regression guard for the
+/// "Queue is full on retry" bug.
+///
+/// Each method performs only the inference itself: it returns the outcome (or,
+/// for streaming, pushes chunks onto the supplied sender) and leaves
+/// metric-recording and response relay to the worker, exactly as the original
+/// inline dispatch did.
+#[async_trait]
+pub(crate) trait QueueExecutor: Send + Sync {
+    /// Run a batch (non-streaming) turn and return the full response, or a
+    /// queue-level error if inference failed.
+    async fn execute_batch(
+        &self,
+        worker_id: usize,
+        queued_request: &QueuedRequest,
+    ) -> Result<GenerationResponse, QueueError>;
+
+    /// Run a streaming turn, pushing `StreamChunk`s onto `stream_sender` as they
+    /// are produced. Returns `Ok(())` when the turn finished (the worker is then
+    /// released regardless of outcome) or an error to relay onto the stream.
+    async fn execute_streaming(
+        &self,
+        worker_id: usize,
+        queued_request: &QueuedRequest,
+        stream_sender: mpsc::UnboundedSender<Result<StreamChunk, QueueError>>,
+    ) -> Result<(), QueueError>;
+}
+
+/// Production [`QueueExecutor`]: drives the real llama.cpp model through the
+/// `ModelManager::with_model` borrow and `GenerationHelper`. This carries the
+/// exact inference logic that previously lived inline in
+/// `RequestQueue::dispatch_{batch,streaming}_request`.
+pub(crate) struct ModelManagerExecutor {
+    model_manager: Arc<ModelManager>,
+    chat_template: Arc<ChatTemplateEngine>,
+    session_config: crate::types::SessionConfig,
+    session_state_cache: SessionStateCache,
+}
+
+impl ModelManagerExecutor {
+    /// Build the production executor from the shared model and queue state.
+    fn new(
+        model_manager: Arc<ModelManager>,
+        chat_template: Arc<ChatTemplateEngine>,
+        session_config: crate::types::SessionConfig,
+        session_state_cache: SessionStateCache,
+    ) -> Self {
+        Self {
+            model_manager,
+            chat_template,
+            session_config,
+            session_state_cache,
+        }
+    }
+}
+
+#[async_trait]
+impl QueueExecutor for ModelManagerExecutor {
+    async fn execute_batch(
+        &self,
+        worker_id: usize,
+        queued_request: &QueuedRequest,
+    ) -> Result<GenerationResponse, QueueError> {
+        if !self.model_manager.is_loaded().await {
+            return Err(QueueError::WorkerError("Model not loaded".to_string()));
+        }
+        let request_id = queued_request.id.clone();
+        let start_time = Instant::now();
+        let result = self
+            .model_manager
+            .with_model(|model| {
+                RequestQueue::process_batch_request_sync(
+                    worker_id,
+                    request_id.clone(),
+                    &queued_request.request,
+                    &queued_request.session,
+                    model,
+                    &self.model_manager,
+                    &queued_request.cancellation_token,
+                    &self.chat_template,
+                    &self.session_config,
+                    &self.session_state_cache,
+                )
+            })
+            .await;
+        let _ = start_time;
+        match result {
+            Ok(inner) => inner,
+            Err(model_error) => Err(QueueError::WorkerError(format!(
+                "Model error: {}",
+                model_error
+            ))),
+        }
+    }
+
+    async fn execute_streaming(
+        &self,
+        worker_id: usize,
+        queued_request: &QueuedRequest,
+        stream_sender: mpsc::UnboundedSender<Result<StreamChunk, QueueError>>,
+    ) -> Result<(), QueueError> {
+        if !self.model_manager.is_loaded().await {
+            return Err(QueueError::WorkerError("Model not loaded".to_string()));
+        }
+        let request_id = queued_request.id.clone();
+        let result = self
+            .model_manager
+            .with_model(|model| {
+                RequestQueue::process_streaming_request_sync(
+                    worker_id,
+                    request_id.clone(),
+                    &queued_request.request,
+                    &queued_request.session,
+                    model,
+                    &self.model_manager,
+                    stream_sender.clone(),
+                    &queued_request.cancellation_token,
+                    &self.chat_template,
+                    &self.session_state_cache,
+                )
+            })
+            .await;
+        match result {
+            Ok(inner) => inner,
+            Err(model_error) => Err(QueueError::WorkerError(format!(
+                "Model error: {}",
+                model_error
+            ))),
+        }
+    }
+}
+
 /// Envelope carrying a single request from `submit_request` to a worker task.
 #[derive(Debug)]
 pub struct QueuedRequest {
@@ -395,7 +757,7 @@ pub struct QueuedRequest {
     pub response_sender: oneshot::Sender<Result<GenerationResponse, QueueError>>,
     /// Optional streaming channel. When set, the request is dispatched via the
     /// streaming code path instead of the batch path.
-    pub stream_sender: Option<mpsc::Sender<Result<StreamChunk, QueueError>>>,
+    pub stream_sender: Option<mpsc::UnboundedSender<Result<StreamChunk, QueueError>>>,
     /// When the request was enqueued (used for queue-time metrics).
     pub submitted_at: Instant,
     /// Token used by callers to cancel this specific request.
@@ -439,17 +801,61 @@ impl RequestQueue {
         let model_identifier =
             crate::agent::model_identifier_for_strategy(model_manager.get_config());
         let chat_template = Arc::new(ChatTemplateEngine::with_model_strategy(&model_identifier));
-        let session_state_cache: SessionStateCache = Arc::new(Mutex::new(HashMap::new()));
+        let session_state_cache: SessionStateCache = Arc::new(Mutex::new(SessionStateStore::new(
+            default_max_cache_entries(),
+            MAX_SESSION_CACHE_BYTES,
+        )));
 
-        let worker_handles = Self::spawn_workers(
-            &config,
-            &receiver,
-            &model_manager,
-            &metrics,
-            &chat_template,
-            &session_config,
-            &session_state_cache,
-        );
+        let executor: Arc<dyn QueueExecutor> = Arc::new(ModelManagerExecutor::new(
+            model_manager.clone(),
+            chat_template.clone(),
+            session_config.clone(),
+            session_state_cache.clone(),
+        ));
+
+        Self::assemble(
+            sender,
+            receiver,
+            config,
+            metrics,
+            chat_template,
+            session_config,
+            session_state_cache,
+            executor,
+        )
+    }
+
+    /// Shared constructor body: spawn the workers against `executor` and build
+    /// the `RequestQueue`. Both the production [`RequestQueue::new`] and the
+    /// test-only `with_executor` constructor funnel through here so worker setup
+    /// stays in one place.
+    #[allow(clippy::too_many_arguments)]
+    fn assemble(
+        sender: mpsc::Sender<QueuedRequest>,
+        receiver: Arc<tokio::sync::Mutex<mpsc::Receiver<QueuedRequest>>>,
+        config: QueueConfig,
+        metrics: Arc<QueueMetrics>,
+        chat_template: Arc<ChatTemplateEngine>,
+        session_config: crate::types::SessionConfig,
+        session_state_cache: SessionStateCache,
+        executor: Arc<dyn QueueExecutor>,
+    ) -> Self {
+        let worker_handles = Self::spawn_workers(&config, &receiver, &metrics, &executor);
+
+        // KV-cache reuse (SessionStateStore restore→generate→save) is NOT guarded
+        // by a per-session lock: it is correct only when turns of a given session
+        // are serialized. The default single worker guarantees that. With more
+        // than one worker, two concurrent turns of the SAME session could
+        // interleave restore and save and corrupt the cached state, so warn.
+        if config.worker_threads > 1 {
+            warn!(
+                "RequestQueue configured with {} workers: per-session KV-cache reuse assumes \
+                 single-worker serialization and has no per-session lock. Concurrent turns of \
+                 the same session may corrupt cached context state. See follow-up card \
+                 01KSSSQ6EP42C2TCHJWNY2JFNH.",
+                config.worker_threads
+            );
+        }
 
         info!(
             "RequestQueue initialized with {} workers, max queue size: {}",
@@ -467,39 +873,80 @@ impl RequestQueue {
         }
     }
 
-    /// Spawn the configured number of worker tasks, cloning all shared state
-    /// each iteration. Kept out of `new` so the constructor stays concise.
-    #[allow(clippy::too_many_arguments)]
+    /// Enqueue a batch request without awaiting its response, returning only the
+    /// enqueue outcome. Used by capacity tests to fill the bounded channel and
+    /// observe `QueueError::Full` at — and only at — capacity, exercising
+    /// [`RequestQueue::enqueue_request`] directly.
+    #[cfg(test)]
+    fn try_enqueue_for_test(&self, session: &Session) -> Result<(), QueueError> {
+        let (response_sender, _response_receiver) = oneshot::channel();
+        let queued_request = QueuedRequest {
+            id: Ulid::new().to_string(),
+            request: GenerationRequest {
+                session_id: session.id,
+                max_tokens: Some(8),
+                temperature: Some(0.0),
+                top_p: None,
+                stop_tokens: Vec::new(),
+                stopping_config: None,
+            },
+            session: session.clone(),
+            response_sender,
+            stream_sender: None,
+            submitted_at: Instant::now(),
+            cancellation_token: CancellationToken::new(),
+        };
+        self.metrics.record_request_submitted();
+        self.enqueue_request(queued_request)
+    }
+
+    /// Build a `RequestQueue` whose workers run turns through a caller-supplied
+    /// [`QueueExecutor`] instead of the production model-backed executor.
+    ///
+    /// This is the seam the queue-lifecycle tests use to drive deterministic
+    /// turn outcomes (normal / EOS / max-tokens / context-full / error / cancel)
+    /// without a live llama.cpp model, exercising the real worker loop, release
+    /// invariants, FIFO ordering, backpressure, and queue-full handling.
+    #[cfg(test)]
+    fn with_executor(config: QueueConfig, executor: Arc<dyn QueueExecutor>) -> Self {
+        let (sender, receiver) = mpsc::channel(config.max_queue_size);
+        let receiver = Arc::new(tokio::sync::Mutex::new(receiver));
+        let metrics = Arc::new(QueueMetrics::new());
+        let chat_template = Arc::new(ChatTemplateEngine::new());
+        let session_state_cache: SessionStateCache = Arc::new(Mutex::new(SessionStateStore::new(
+            default_max_cache_entries(),
+            MAX_SESSION_CACHE_BYTES,
+        )));
+        let session_config = crate::types::SessionConfig::default();
+
+        Self::assemble(
+            sender,
+            receiver,
+            config,
+            metrics,
+            chat_template,
+            session_config,
+            session_state_cache,
+            executor,
+        )
+    }
+
+    /// Spawn the configured number of worker tasks, cloning the shared receiver,
+    /// metrics, and executor each iteration. Kept out of `new` so the
+    /// constructor stays concise.
     fn spawn_workers(
         config: &QueueConfig,
         receiver: &Arc<tokio::sync::Mutex<mpsc::Receiver<QueuedRequest>>>,
-        model_manager: &Arc<ModelManager>,
         metrics: &Arc<QueueMetrics>,
-        chat_template: &Arc<ChatTemplateEngine>,
-        session_config: &crate::types::SessionConfig,
-        session_state_cache: &SessionStateCache,
+        executor: &Arc<dyn QueueExecutor>,
     ) -> Vec<JoinHandle<()>> {
         (0..config.worker_threads)
             .map(|worker_id| {
                 let receiver = receiver.clone();
-                let model_manager = model_manager.clone();
-                let config = config.clone();
                 let metrics = metrics.clone();
-                let chat_template = chat_template.clone();
-                let session_config = session_config.clone();
-                let session_state_cache = session_state_cache.clone();
+                let executor = executor.clone();
                 tokio::spawn(async move {
-                    Self::worker_loop(
-                        worker_id,
-                        receiver,
-                        model_manager,
-                        config,
-                        metrics,
-                        chat_template,
-                        session_config,
-                        session_state_cache,
-                    )
-                    .await;
+                    Self::worker_loop(worker_id, receiver, metrics, executor).await;
                 })
             })
             .collect()
@@ -575,9 +1022,15 @@ impl RequestQueue {
         &self,
         request: GenerationRequest,
         session: &Session,
-    ) -> Result<mpsc::Receiver<Result<StreamChunk, QueueError>>, QueueError> {
+    ) -> Result<mpsc::UnboundedReceiver<Result<StreamChunk, QueueError>>, QueueError> {
         let (response_sender, _) = oneshot::channel();
-        let (stream_sender, stream_receiver) = mpsc::channel(100);
+        // Unbounded by design: see the long-form rationale on
+        // `send_with_backpressure` in generation/mod.rs. A bounded(100)
+        // stream channel had two distinct producer-wedge failure modes
+        // (consumer briefly behind → producer spins on Full;
+        // consumer task suspended → producer spins forever). StreamChunks
+        // are too small for memory pressure to matter at the decode rate.
+        let (stream_sender, stream_receiver) = mpsc::unbounded_channel();
 
         let cancellation_token = CancellationToken::new();
 
@@ -660,16 +1113,11 @@ impl RequestQueue {
         self.metrics.get_stats()
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn worker_loop(
         worker_id: usize,
         receiver: Arc<tokio::sync::Mutex<mpsc::Receiver<QueuedRequest>>>,
-        model_manager: Arc<ModelManager>,
-        _config: QueueConfig,
         metrics: Arc<QueueMetrics>,
-        chat_template: Arc<ChatTemplateEngine>,
-        session_config: crate::types::SessionConfig,
-        session_state_cache: SessionStateCache,
+        executor: Arc<dyn QueueExecutor>,
     ) {
         info!("Worker {} started", worker_id);
         while let Some(queued_request) = recv_next_request(&receiver, worker_id).await {
@@ -682,58 +1130,38 @@ impl RequestQueue {
                 reject_cancelled_request(worker_id, queued_request, queue_time, &metrics);
                 continue;
             }
-            Self::process_request(
-                worker_id,
-                queued_request,
-                model_manager.clone(),
-                metrics.clone(),
-                chat_template.clone(),
-                session_config.clone(),
-                session_state_cache.clone(),
-            )
-            .await;
+            Self::process_request(worker_id, queued_request, &metrics, executor.as_ref()).await;
         }
     }
 
+    /// Run a single dequeued request through the executor, then release the
+    /// worker by recording the outcome and relaying the response. This is the
+    /// heart of the worker-release invariant: every path through here ends with
+    /// a metric update and a response send, so the live queue size always
+    /// returns to its pre-request value once the turn finishes — regardless of
+    /// whether the turn completed, hit EOS, ran out of budget, filled the
+    /// context, errored, or was cancelled.
     async fn process_request(
         worker_id: usize,
         queued_request: QueuedRequest,
-        model_manager: Arc<ModelManager>,
-        metrics: Arc<QueueMetrics>,
-        chat_template: Arc<ChatTemplateEngine>,
-        session_config: crate::types::SessionConfig,
-        session_state_cache: SessionStateCache,
+        metrics: &QueueMetrics,
+        executor: &dyn QueueExecutor,
     ) {
         let start_time = Instant::now();
-
-        if !model_manager.is_loaded().await {
-            Self::reject_unloaded_request(queued_request, &metrics).await;
-            return;
-        }
-
         let request_id = queued_request.id.clone();
+
         if queued_request.stream_sender.is_some() {
             Self::dispatch_streaming_request(
                 worker_id,
                 queued_request,
-                &model_manager,
-                &metrics,
-                &chat_template,
+                metrics,
+                executor,
                 start_time,
             )
             .await;
         } else {
-            Self::dispatch_batch_request(
-                worker_id,
-                queued_request,
-                &model_manager,
-                &metrics,
-                &chat_template,
-                &session_config,
-                &session_state_cache,
-                start_time,
-            )
-            .await;
+            Self::dispatch_batch_request(worker_id, queued_request, metrics, executor, start_time)
+                .await;
         }
 
         let processing_time = start_time.elapsed();
@@ -743,30 +1171,13 @@ impl RequestQueue {
         );
     }
 
-    /// Short-circuit path when `model_manager.is_loaded()` is false: return a
-    /// "Model not loaded" error on whichever sender the request is waiting on
-    /// (streaming or batch).
-    async fn reject_unloaded_request(queued_request: QueuedRequest, metrics: &QueueMetrics) {
-        let error = QueueError::WorkerError("Model not loaded".to_string());
-        match queued_request.stream_sender {
-            Some(stream_sender) => {
-                let _ = stream_sender.send(Err(error)).await;
-            }
-            None => {
-                let _ = queued_request.response_sender.send(Err(error));
-            }
-        }
-        metrics.record_request_failed();
-    }
-
-    /// Drive a streaming request through the model and relay completion/error
+    /// Drive a streaming request through the executor and relay completion/error
     /// back onto the stream sender and metrics.
     async fn dispatch_streaming_request(
         worker_id: usize,
         queued_request: QueuedRequest,
-        model_manager: &Arc<ModelManager>,
         metrics: &QueueMetrics,
-        chat_template: &ChatTemplateEngine,
+        executor: &dyn QueueExecutor,
         start_time: Instant,
     ) {
         let stream_sender = queued_request
@@ -774,80 +1185,41 @@ impl RequestQueue {
             .as_ref()
             .expect("streaming dispatch requires stream_sender")
             .clone();
-        let request_id = queued_request.id.clone();
-        let result = model_manager
-            .with_model(|model| {
-                Self::process_streaming_request_sync(
-                    worker_id,
-                    request_id.clone(),
-                    &queued_request.request,
-                    &queued_request.session,
-                    model,
-                    model_manager,
-                    stream_sender.clone(),
-                    &queued_request.cancellation_token,
-                    chat_template,
-                )
-            })
+        let result = executor
+            .execute_streaming(worker_id, &queued_request, stream_sender.clone())
             .await;
         match result {
             Ok(_) => {
-                // Tokens are tracked inside process_streaming_request_sync.
+                // Tokens are tracked inside the executor's streaming path.
                 metrics.record_request_completed(start_time.elapsed(), 0);
             }
-            Err(model_error) => {
-                let queue_error = QueueError::WorkerError(format!("Model error: {}", model_error));
-                let _ = stream_sender.send(Err(queue_error)).await;
+            Err(queue_error) => {
+                // UnboundedSender::send is synchronous (no .await).
+                let _ = stream_sender.send(Err(queue_error));
                 metrics.record_request_failed();
             }
         }
     }
 
-    /// Drive a batch request through the model and send the GenerationResponse
-    /// back on the request's oneshot response channel.
-    #[allow(clippy::too_many_arguments)]
+    /// Drive a batch request through the executor and send the
+    /// GenerationResponse back on the request's oneshot response channel.
     async fn dispatch_batch_request(
         worker_id: usize,
         queued_request: QueuedRequest,
-        model_manager: &Arc<ModelManager>,
         metrics: &QueueMetrics,
-        chat_template: &ChatTemplateEngine,
-        session_config: &crate::types::SessionConfig,
-        session_state_cache: &SessionStateCache,
+        executor: &dyn QueueExecutor,
         start_time: Instant,
     ) {
-        let request_id = queued_request.id.clone();
-        let response_sender = queued_request.response_sender;
-        let result = model_manager
-            .with_model(|model| {
-                Self::process_batch_request_sync(
-                    worker_id,
-                    request_id.clone(),
-                    &queued_request.request,
-                    &queued_request.session,
-                    model,
-                    model_manager,
-                    &queued_request.cancellation_token,
-                    chat_template,
-                    session_config,
-                    session_state_cache,
-                )
-            })
-            .await;
-        let final_result = match result {
-            Ok(inner) => inner,
-            Err(model_error) => Err(QueueError::WorkerError(format!(
-                "Model error: {}",
-                model_error
-            ))),
-        };
+        // Run the turn while only borrowing the request, then move the response
+        // sender out afterwards to deliver the result on its oneshot channel.
+        let final_result = executor.execute_batch(worker_id, &queued_request).await;
         match &final_result {
             Ok(response) => {
                 metrics.record_request_completed(start_time.elapsed(), response.tokens_generated)
             }
             Err(_) => metrics.record_request_failed(),
         }
-        let _ = response_sender.send(final_result);
+        let _ = queued_request.response_sender.send(final_result);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -930,7 +1302,19 @@ impl RequestQueue {
             generation_result.tokens_generated,
             final_finish_reason
         );
-        Self::save_session_state(worker_id, &request_id, session, ctx, session_state_cache);
+        // Batch path stores no prompt fingerprint — it gates reuse via
+        // `cached_message_count` and its append-only message bookkeeping, not the
+        // streaming path's longest-common-prefix check. Batch also doesn't run
+        // MTP, so no draft-context state to snapshot.
+        Self::save_session_state(
+            worker_id,
+            &request_id,
+            session,
+            ctx,
+            session_state_cache,
+            None,
+            None,
+        );
         GenerationResponse {
             generated_text: generation_result.generated_text,
             tokens_generated: generation_result.tokens_generated,
@@ -1004,8 +1388,10 @@ impl RequestQueue {
         );
 
         let state_bytes = {
-            let cache = session_state_cache.lock().unwrap();
-            cache.get(&session.id.to_string()).cloned()
+            let mut cache = session_state_cache.lock().unwrap();
+            cache
+                .get(&session.id.to_string())
+                .map(|(bytes, _tokens, _draft)| bytes)
         };
 
         let Some(bytes) = state_bytes else {
@@ -1077,15 +1463,101 @@ impl RequestQueue {
         }
     }
 
+    /// Snapshot the target context's state at the prompt boundary into the
+    /// session cache.
+    ///
+    /// Called from the streaming generators' `on_prefill_complete` hook,
+    /// immediately after the full prompt has been prefilled and BEFORE any
+    /// generation token is sampled. The saved state therefore always ends
+    /// at exactly `prompt_tokens.len()` positions, so the next turn's LCP
+    /// trim has a rollback distance of 0 on the common path (next prompt
+    /// extends this one) and at worst a small distance when the prompt
+    /// diverges before reaching the saved end. Either way, the `n_rs_seq`
+    /// recurrent-state snapshot window never has to roll back over the
+    /// upcoming generated tokens — which is the failure mode the old
+    /// post-generation save kept hitting whenever a turn generated more
+    /// tokens than the window covered.
+    ///
+    /// Empty `prompt_tokens` (a tokenization failure upstream) skips the
+    /// save: without a fingerprint the cache entry is unusable.
+    #[allow(clippy::too_many_arguments)]
+    fn save_prompt_boundary_state(
+        worker_id: usize,
+        request_id: &str,
+        session: &Session,
+        ctx: &LlamaContext<'_>,
+        draft_ctx: Option<&LlamaContext<'_>>,
+        session_state_cache: &SessionStateCache,
+        prompt_tokens: &[i32],
+    ) {
+        if prompt_tokens.is_empty() {
+            warn!(
+                "Worker {} skipping prompt-boundary save for request {}: empty prompt fingerprint",
+                worker_id, request_id
+            );
+            return;
+        }
+
+        let state_size = ctx.get_state_size();
+        let mut state_bytes = vec![0u8; state_size];
+        let bytes_written = unsafe { ctx.copy_state_data(state_bytes.as_mut_ptr()) };
+
+        if bytes_written == 0 {
+            warn!(
+                "Worker {} failed to snapshot prompt-boundary state (wrote 0 bytes) for request {}",
+                worker_id, request_id
+            );
+            return;
+        }
+        state_bytes.truncate(bytes_written);
+
+        // Snapshot the MTP draft's per-seq KV when this turn ran with MTP.
+        // The draft mirrors the target up to the prompt boundary at this
+        // point — saving its per-seq state lets the next turn restore both
+        // halves and keep speculative decoding warm.
+        let draft_state_bytes: Option<Vec<u8>> = draft_ctx.map(|d| d.state_seq_get_data(0));
+        let draft_bytes_len = draft_state_bytes.as_ref().map_or(0, |b| b.len());
+
+        let mut cache = session_state_cache.lock().unwrap();
+        cache.insert(
+            session.id.to_string(),
+            state_bytes,
+            Some(prompt_tokens.to_vec()),
+            draft_state_bytes,
+        );
+        info!(
+            "Worker {} cached {} bytes of target + {} bytes of draft state at prompt boundary for session {} ({} messages, {} prompt tokens)",
+            worker_id,
+            bytes_written,
+            draft_bytes_len,
+            session.id,
+            session.messages.len(),
+            prompt_tokens.len()
+        );
+    }
+
     /// Copy the llama.cpp context state into the session cache so the next
-    /// turn can resume without reprocessing prior messages. Applies a simple
-    /// size-based eviction.
+    /// turn can resume without reprocessing prior messages. The store evicts
+    /// LRU entries to stay within its entry-count and byte budgets.
+    ///
+    /// `prompt_tokens` is the tokenization of the prompt these state bytes were
+    /// produced from. The streaming path passes `Some(..)` so the next turn can
+    /// verify the cache is still a valid prefix (longest-common-prefix) before
+    /// reusing it; the batch path passes `None` (it gates reuse differently).
+    ///
+    /// `draft_state_bytes` is the MTP draft context's per-seq KV snapshot (via
+    /// `state_seq_get_data(0)`). Passed `Some(..)` by the streaming MTP path
+    /// only — the next turn restores both target and draft together so the
+    /// speculative head keeps its prefix context across turns. `None` everywhere
+    /// else (batch turns and streaming turns that didn't use MTP).
     fn save_session_state(
         worker_id: usize,
         request_id: &str,
         session: &Session,
         ctx: &mut LlamaContext<'_>,
         session_state_cache: &SessionStateCache,
+        prompt_tokens: Option<Vec<i32>>,
+        draft_state_bytes: Option<Vec<u8>>,
     ) {
         let state_size = ctx.get_state_size();
         info!(
@@ -1108,17 +1580,22 @@ impl RequestQueue {
 
         state_bytes.truncate(bytes_written);
 
+        let draft_bytes_len = draft_state_bytes.as_ref().map_or(0, |b| b.len());
         let mut cache = session_state_cache.lock().unwrap();
-        cache.insert(session.id.to_string(), state_bytes);
+        cache.insert(
+            session.id.to_string(),
+            state_bytes,
+            prompt_tokens,
+            draft_state_bytes,
+        );
         info!(
-            "Worker {} cached {} bytes of state for session {} ({} messages)",
+            "Worker {} cached {} bytes of target + {} bytes of draft state for session {} ({} messages)",
             worker_id,
             bytes_written,
+            draft_bytes_len,
             session.id,
             session.messages.len()
         );
-
-        evict_oldest_session_states(worker_id, &mut cache);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1129,38 +1606,549 @@ impl RequestQueue {
         session: &Session,
         model: &LlamaModel,
         model_manager: &ModelManager,
-        stream_sender: mpsc::Sender<Result<StreamChunk, QueueError>>,
+        stream_sender: mpsc::UnboundedSender<Result<StreamChunk, QueueError>>,
         cancellation_token: &CancellationToken,
         chat_template: &ChatTemplateEngine,
+        session_state_cache: &SessionStateCache,
     ) -> Result<(), QueueError> {
         debug!(
             "Worker {} starting streaming inference for request {}",
             worker_id, request_id
         );
-        let Some((prompt, mut ctx)) = prepare_streaming_inference(
-            chat_template,
-            session,
-            model,
-            model_manager,
-            &stream_sender,
-        ) else {
-            return Ok(());
+
+        let prompt = match render_streaming_prompt(chat_template, session, model, model_manager) {
+            Ok(p) => p,
+            Err(e) => {
+                report_stream_error(&stream_sender, "Template rendering failed", &e);
+                return Ok(());
+            }
+        };
+        let mut ctx = match create_streaming_context(model_manager, model, session) {
+            Ok(c) => c,
+            Err(e) => {
+                report_stream_error(&stream_sender, "Session context creation failed", &e);
+                return Ok(());
+            }
         };
         trace!("Formatted prompt for streaming: {}", prompt);
 
-        let result = GenerationHelper::generate_stream_with_borrowed_model_and_template_offset(
-            model,
+        // Reuse the prior turn's KV cache so generation only decodes the NEW
+        // tokens this turn. The ACP agentic loop runs entirely through this
+        // streaming entry point, so without this every turn re-prefills the full
+        // prompt (system prompt + all tool schemas + history) from scratch — the
+        // dominant cost that made local generation feel far slower than a hosted
+        // model that caches the prompt prefix. This mirrors the batch path's
+        // restore/save lifecycle.
+        let prep = Self::prepare_streaming_kv_cache(
+            worker_id,
+            session,
             &mut ctx,
             &prompt,
-            request,
-            &stream_sender,
-            cancellation_token,
-            model_manager.get_batch_size(),
-            None, // No template offset - session state caching handles this
+            model,
+            session_state_cache,
         );
+        let template_token_count = prep.template_offset;
+        let cached_draft_bytes = prep.draft_state_bytes;
+
+        // Tokenize the full prompt ONCE up front so the post-prefill hook can
+        // store the fingerprint without re-tokenizing inside the closure
+        // (and without duplicating the tokenization between the standard and
+        // MTP paths). Empty on tokenization error falls back to "no save"
+        // inside `save_prompt_boundary_state` via an empty prompt_tokens guard.
+        let prompt_tokens_for_save: Vec<i32> = model
+            .str_to_token(&prompt, llama_cpp_2::model::AddBos::Always)
+            .ok()
+            .map(|toks| toks.into_iter().map(|t| t.0).collect())
+            .unwrap_or_default();
+
+        // Auto-detect MTP: when the loaded model carries the NextN/MTP head,
+        // run the draft-mtp speculative loop with a second MTP-context on the
+        // same model (target=this ctx + draft=ctx_type::Mtp). Same KV-reuse on
+        // the target; the draft is ALSO reused across turns via `apply_draft_kv_state`
+        // so its recurrent state has seen the prefix. Else: standard path.
+        //
+        // The new llama-cpp-rs fork no longer exposes `LlamaModel::has_mtp()`
+        // or `nextn_predict_layers()` directly, so we sniff the GGUF metadata
+        // for the `*.nextn_predict_layers` key — every MTP-capable architecture
+        // writes that hparam (e.g. `qwen3.nextn_predict_layers = 1`).
+        let nextn_layers = detect_nextn_predict_layers(model);
+        let use_mtp = nextn_layers.unwrap_or(0) > 0;
+        // `used_mtp` is what actually ran (vs. what we wanted). Determines
+        // whether to snapshot the draft below — we only save when MTP truly
+        // executed, otherwise a future restore would expect an aligned draft
+        // that doesn't exist.
+        let result = if use_mtp {
+            match model_manager.create_draft_session_context(model, &session.id) {
+                Ok(mut draft_ctx) => {
+                    let draft_ready = Self::apply_draft_kv_state(
+                        worker_id,
+                        session,
+                        &mut draft_ctx,
+                        cached_draft_bytes,
+                        template_token_count,
+                    );
+                    if draft_ready {
+                        info!(
+                            "Worker {} streaming with MTP speculative decoding (nextn_predict_layers={})",
+                            worker_id,
+                            nextn_layers.unwrap_or(0)
+                        );
+                        crate::generation::mtp::generate_stream_mtp(
+                            model,
+                            &mut ctx,
+                            &mut draft_ctx,
+                            &prompt,
+                            request,
+                            &stream_sender,
+                            cancellation_token,
+                            model_manager.get_batch_size(),
+                            template_token_count,
+                            crate::generation::mtp::MtpParams::default(),
+                            // Snapshot target + draft at the prompt boundary,
+                            // BEFORE generation begins. See the rationale on
+                            // `save_prompt_boundary_state` — saving here is
+                            // what makes the next turn's LCP trim rollback
+                            // distance ~0 on the common path, so n_rs_seq=64
+                            // never has to absorb a multi-hundred-token
+                            // generation tail.
+                            |target_at_boundary, draft_at_boundary| {
+                                Self::save_prompt_boundary_state(
+                                    worker_id,
+                                    &request_id,
+                                    session,
+                                    target_at_boundary,
+                                    Some(draft_at_boundary),
+                                    session_state_cache,
+                                    &prompt_tokens_for_save,
+                                );
+                            },
+                        )
+                        .map_err(|e| {
+                            crate::types::QueueError::WorkerError(format!(
+                                "MTP generation failed: {e}"
+                            ))
+                        })
+                    } else {
+                        // Draft restore/trim failed — fall back to standard
+                        // streaming for this turn. Drops the stale draft_ctx
+                        // (and its now-cleared KV) so next turn starts fresh.
+                        GenerationHelper::generate_stream_with_borrowed_model_and_template_offset(
+                            model,
+                            &mut ctx,
+                            &prompt,
+                            request,
+                            &stream_sender,
+                            cancellation_token,
+                            model_manager.get_batch_size(),
+                            template_token_count,
+                            |target_at_boundary| {
+                                Self::save_prompt_boundary_state(
+                                    worker_id,
+                                    &request_id,
+                                    session,
+                                    target_at_boundary,
+                                    None,
+                                    session_state_cache,
+                                    &prompt_tokens_for_save,
+                                );
+                            },
+                        )
+                        .map_err(|e| {
+                            crate::types::QueueError::WorkerError(format!("Generation failed: {e}"))
+                        })
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Worker {} failed to create MTP draft context ({}); falling back to standard streaming",
+                        worker_id, e
+                    );
+                    GenerationHelper::generate_stream_with_borrowed_model_and_template_offset(
+                        model,
+                        &mut ctx,
+                        &prompt,
+                        request,
+                        &stream_sender,
+                        cancellation_token,
+                        model_manager.get_batch_size(),
+                        template_token_count,
+                        |target_at_boundary| {
+                            Self::save_prompt_boundary_state(
+                                worker_id,
+                                &request_id,
+                                session,
+                                target_at_boundary,
+                                None,
+                                session_state_cache,
+                                &prompt_tokens_for_save,
+                            );
+                        },
+                    )
+                    .map_err(|e| {
+                        crate::types::QueueError::WorkerError(format!("Generation failed: {e}"))
+                    })
+                }
+            }
+        } else {
+            GenerationHelper::generate_stream_with_borrowed_model_and_template_offset(
+                model,
+                &mut ctx,
+                &prompt,
+                request,
+                &stream_sender,
+                cancellation_token,
+                model_manager.get_batch_size(),
+                template_token_count,
+                |target_at_boundary| {
+                    Self::save_prompt_boundary_state(
+                        worker_id,
+                        &request_id,
+                        session,
+                        target_at_boundary,
+                        None,
+                        session_state_cache,
+                        &prompt_tokens_for_save,
+                    );
+                },
+            )
+            .map_err(|e| crate::types::QueueError::WorkerError(format!("Generation failed: {e}")))
+        };
+
+        // No post-generation save: the prompt-boundary hook above already
+        // snapshotted state right after prefill, before any token was
+        // generated. The cached state therefore always ends at the exact
+        // prompt boundary, so the next turn's LCP rollback is 0 on the
+        // common path — n_rs_seq never has to absorb a multi-hundred-token
+        // generation tail (the bug that surfaced as "n_rs_seq window
+        // exceeded → cold full reprocess" every few turns). Disconnect /
+        // cancellation are also no longer save-skip cases: the saved state
+        // is the prompt state, which is valid whether or not generation
+        // completed.
+
         log_streaming_result(worker_id, &request_id, &stream_sender, result);
         Ok(())
     }
+
+    /// Restore the prior turn's KV cache into `ctx` and return the token offset
+    /// to resume generation from, so streaming only decodes the new tokens.
+    ///
+    /// Robust prefix validation (no length-only guessing): we store the
+    /// tokenization of the prompt the cache was built from, and here compute the
+    /// longest common prefix (LCP) between that and the NEW prompt's
+    /// tokenization. We then TRIM the KV cache to exactly the LCP
+    /// (`clear_kv_cache_seq`) so the new tokens append cleanly onto a verified
+    /// prefix. This is correct under ANY prompt change:
+    ///   - append-only growth → LCP is the shared history, the new turn's
+    ///     messages append (the prior turn's generation-prompt suffix and
+    ///     generated tokens past the LCP are trimmed and re-decoded — cheap, it
+    ///     is only the last assistant turn);
+    ///   - compaction / history rewrite → divergence shortens the LCP, and only
+    ///     the still-valid prefix is reused;
+    ///   - a stale/partial save → the divergent suffix is trimmed, never decoded
+    ///     against.
+    ///
+    /// Returns `None` ("process the full prompt", after clearing the KV) when
+    /// there is no cached state, no stored fingerprint, tokenization fails, or
+    /// the LCP leaves nothing useful to reuse (`0` or the whole new prompt).
+    /// Gated on cache PRESENCE (not `cached_message_count`) so the streaming/ACP
+    /// path self-heals across turns without extra bookkeeping.
+    ///
+    /// Returns the resume token offset (`StreamingKvPrep::template_offset`) AND
+    /// any cached draft-context bytes the MTP path should restore after creating
+    /// its draft context. We extract the draft bytes here (rather than in a
+    /// second cache lookup) so the LRU touch is single-shot and the bytes are
+    /// available even on paths that don't re-enter the cache.
+    fn prepare_streaming_kv_cache(
+        worker_id: usize,
+        session: &Session,
+        ctx: &mut LlamaContext<'_>,
+        prompt: &str,
+        model: &LlamaModel,
+        session_state_cache: &SessionStateCache,
+    ) -> StreamingKvPrep {
+        use llama_cpp_2::model::AddBos;
+
+        // Tokenize the new prompt FIRST so the cache scan can compute an LCP
+        // against every candidate donor's stored prompt tokens. Tokenization
+        // is microseconds for 28k tokens — fast relative to the prefill it
+        // potentially saves.
+        let new_tokens: Vec<i32> = match model.str_to_token(prompt, AddBos::Always) {
+            Ok(toks) => toks.into_iter().map(|t| t.0).collect(),
+            Err(e) => {
+                warn!(
+                    "Worker {} streaming: failed to tokenize prompt for prefix check ({}); processing full prompt",
+                    worker_id, e
+                );
+                return StreamingKvPrep::default();
+            }
+        };
+
+        // Cross-session prefix matching: scan ALL cached states for the best
+        // LCP match, not just this session's. This is the local equivalent
+        // of a hosted prompt-prefix cache — two windows on the same agent
+        // share the 27k-token system+tools header, and a fresh session
+        // should NOT pay a cold 28k prefill when another session already
+        // has those tokens warm in KV.
+        let match_result = {
+            let mut cache = session_state_cache.lock().unwrap();
+            cache.find_best_prefix_match(&session.id.to_string(), &new_tokens)
+        };
+        let Some(prefix_match) = match_result else {
+            info!(
+                "Worker {} streaming: no usable cached prefix for session {} across {} cached donors, processing full prompt",
+                worker_id,
+                session.id,
+                // Re-lock briefly only for the count; cheap.
+                session_state_cache.lock().unwrap().len()
+            );
+            return StreamingKvPrep::default();
+        };
+
+        let PrefixMatch {
+            source_session_id,
+            state_bytes: bytes,
+            draft_state_bytes,
+            lcp,
+        } = prefix_match;
+
+        let is_cross_session = source_session_id != session.id.to_string();
+        if is_cross_session {
+            info!(
+                "Worker {} streaming: reusing cached state from session {} as prefix donor for session {} (lcp={} of {} new tokens)",
+                worker_id,
+                source_session_id,
+                session.id,
+                lcp,
+                new_tokens.len()
+            );
+        }
+
+        // Diagnostic: when the LCP is surprisingly short (the kanban perf
+        // pain is two windows on the same agent diverging at byte 47 out of
+        // 27k+ that should be byte-identical), dump the slice around the
+        // divergence point. Decoding 32 tokens on either side of the split
+        // shows exactly what session-specific bytes are leaking into the
+        // rendered prompt — e.g. a session ULID, the cwd, a timestamp, or
+        // non-deterministic tool ordering from HashMap-backed MCP discovery.
+        //
+        // The bar of `lcp < new_tokens.len() / 2` matches "you expected to
+        // reuse most of the prompt but barely reused anything" — exactly
+        // the case worth investigating; full continuations and exact-match
+        // reuses don't trip it.
+        if is_cross_session && lcp < new_tokens.len() / 2 {
+            // Decode the slice just before and after the divergence point
+            // on each side, falling back to raw token ids if detokenization
+            // fails for any reason (e.g. partial UTF-8). Bounded to keep
+            // the log line readable.
+            const DIAG_WIN: usize = 32;
+            let _maybe_cached = session_state_cache.lock().unwrap();
+            // We don't have the donor's `prompt_tokens` here — only their
+            // bytes and lcp. Decode what we DO have: the new prompt's
+            // boundary slice. If the donor is misaligned, the recipient's
+            // boundary alone is enough to identify the variable region.
+            let start = lcp.saturating_sub(DIAG_WIN);
+            let end = (lcp + DIAG_WIN).min(new_tokens.len());
+            let new_slice: Vec<llama_cpp_2::token::LlamaToken> = new_tokens[start..end]
+                .iter()
+                .map(|&t| llama_cpp_2::token::LlamaToken(t))
+                .collect();
+            let decoded = model
+                .tokens_to_str(&new_slice, llama_cpp_2::model::Special::Tokenize)
+                .unwrap_or_else(|_| format!("{:?}", &new_tokens[start..end]));
+            warn!(
+                "Worker {} streaming: cross-session LCP is only {} of {} tokens — investigate session-specific content in the rendered prompt. New prompt around divergence (tokens {}..{}): {:?}",
+                worker_id,
+                lcp,
+                new_tokens.len(),
+                start,
+                end,
+                decoded
+            );
+        }
+
+        // Load the donor state, then verify+trim against the new prompt.
+        let _bytes_read = unsafe { ctx.set_state_data(&bytes) };
+
+        match streaming_reuse_decision(lcp, new_tokens.len()) {
+            Some(offset) => {
+                // Trim the KV to exactly the verified common prefix so the new
+                // tokens append cleanly. This drops the prior turn's divergent
+                // tail (its generation-prompt suffix + generated tokens, and any
+                // rewritten span after compaction) — positions `[offset, ∞)`.
+                //
+                // On hybrid attention + recurrent contexts `seq_rm` can return
+                // `Ok(false)` *silently* when the rollback distance exceeds the
+                // context's `n_rs_seq` snapshot ring. The KV's `max_pos`
+                // doesn't drop in that case, and the next decode trips
+                // M-RoPE's position-monotonicity check. We have to surface that
+                // and fall back to a cold full reprocess.
+                let trim_result = ctx.clear_kv_cache_seq(Some(0), Some(offset as u32), None);
+                match trim_result {
+                    Ok(true) => { /* trimmed cleanly */ }
+                    Ok(false) => {
+                        warn!(
+                            "Worker {} streaming: KV trim to common prefix returned false \
+                             (rollback distance likely exceeded the recurrent-state snapshot \
+                             window) — invalidating cache and processing full prompt",
+                            worker_id
+                        );
+                        ctx.clear_kv_cache();
+                        return StreamingKvPrep::default();
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Worker {} streaming: failed to trim KV to common prefix ({:?}); processing full prompt",
+                            worker_id, e
+                        );
+                        ctx.clear_kv_cache();
+                        return StreamingKvPrep::default();
+                    }
+                }
+                info!(
+                    "Worker {} streaming reusing {} cached tokens, processing {} new tokens for session {}",
+                    worker_id,
+                    offset,
+                    new_tokens.len().saturating_sub(offset),
+                    session.id
+                );
+                // Pass the cached draft bytes through to the caller. If MTP is
+                // active this turn, `apply_draft_kv_state` restores them into
+                // the freshly-created draft context and trims it to the same
+                // offset, so the speculative head keeps its prefix.
+                StreamingKvPrep {
+                    template_offset: Some(offset),
+                    draft_state_bytes,
+                }
+            }
+            None => {
+                info!(
+                    "Worker {} streaming: cached prefix for session {} no longer matches (common prefix {} of {} tokens); processing full prompt",
+                    worker_id,
+                    session.id,
+                    lcp,
+                    new_tokens.len()
+                );
+                ctx.clear_kv_cache();
+                // No target reuse → no draft reuse either. The draft context is
+                // brand new and would need a separate prefill to be useful, which
+                // turn-1 cold-start already handles in the MTP streaming loop.
+                StreamingKvPrep::default()
+            }
+        }
+    }
+
+    /// Restore a cached draft-context KV snapshot into a freshly-created draft
+    /// context and trim it to `template_offset` so the speculative head's
+    /// prefix lines up exactly with the target's. Returns `true` when the draft
+    /// is ready to be used in MTP; `false` when the caller should skip MTP for
+    /// this turn (fall back to standard streaming).
+    ///
+    /// Without this, turn 2+ of an MTP session runs with an empty draft
+    /// context: the recurrent state never saw [0..offset), so drafts at high
+    /// positions are uninformed, acceptance collapses to zero, and we pay
+    /// double-prefill cost (per-chunk `sync_capture` on the draft) for no
+    /// speedup. With it, only the [offset..total] suffix is mirrored on the
+    /// draft — which is the entire point of the target-side KV reuse.
+    fn apply_draft_kv_state(
+        worker_id: usize,
+        session: &Session,
+        draft_ctx: &mut LlamaContext<'_>,
+        cached_bytes: Option<Vec<u8>>,
+        template_offset: Option<usize>,
+    ) -> bool {
+        // No target reuse this turn → caller will cold-prefill the draft on
+        // every new token via `sync_capture`. That's correct (turn 1 path).
+        let Some(offset) = template_offset else {
+            return true;
+        };
+        let Some(bytes) = cached_bytes else {
+            // We reused the target's state but never saved the draft (e.g.
+            // turn 1 was processed without MTP, or save was skipped). The
+            // draft starts empty — its recurrent state for [0..offset) is
+            // missing, so drafts will be poor. Skip MTP for this turn so we
+            // don't pay double-prefill cost for no speedup; next clean turn
+            // will save draft state and resume MTP cleanly.
+            info!(
+                "Worker {} MTP: target KV reused at offset {} but no cached draft state for session {} — skipping MTP this turn",
+                worker_id, offset, session.id
+            );
+            return false;
+        };
+
+        match draft_ctx.state_seq_set_data(&bytes, 0) {
+            Ok(read) => {
+                info!(
+                    "Worker {} MTP: restored {} bytes of draft KV state for session {}",
+                    worker_id, read, session.id
+                );
+            }
+            Err(e) => {
+                warn!(
+                    "Worker {} MTP: failed to restore draft KV state ({:?}); skipping MTP this turn",
+                    worker_id, e
+                );
+                draft_ctx.clear_kv_cache();
+                return false;
+            }
+        }
+
+        // Align draft KV to the same offset the target was trimmed to. The
+        // saved draft state ran past the new LCP (it ended at the prior
+        // turn's end-of-generation); the rollback distance is the prior
+        // turn's generation length. Same `Ok(false)` silent-failure path as
+        // the target trim — fall back to skipping MTP rather than running
+        // with stale KV positions tripping M-RoPE's invariant.
+        let trim_result = draft_ctx.clear_kv_cache_seq(Some(0), Some(offset as u32), None);
+        match trim_result {
+            Ok(true) => true,
+            Ok(false) => {
+                warn!(
+                    "Worker {} MTP: draft KV trim to offset {} returned false (rollback exceeded recurrent-state window) — skipping MTP this turn",
+                    worker_id, offset
+                );
+                draft_ctx.clear_kv_cache();
+                false
+            }
+            Err(e) => {
+                warn!(
+                    "Worker {} MTP: failed to trim draft KV to offset {} ({:?}); skipping MTP this turn",
+                    worker_id, offset, e
+                );
+                draft_ctx.clear_kv_cache();
+                false
+            }
+        }
+    }
+}
+
+/// What `prepare_streaming_kv_cache` decided about reusing the prior turn's KV
+/// state. Carries both the target-side resume offset and any cached draft-side
+/// bytes so the streaming MTP path can keep its draft context aligned with the
+/// target across turns.
+#[derive(Default)]
+struct StreamingKvPrep {
+    /// Token offset to resume target generation from (`None` = full reprocess).
+    template_offset: Option<usize>,
+    /// Per-seq draft-context bytes from the prior turn, when MTP was used.
+    /// `None` when the prior turn didn't use MTP or no state was cached.
+    draft_state_bytes: Option<Vec<u8>>,
+}
+
+/// Decide the streaming resume offset from the longest-common-prefix length
+/// between the cached prompt tokens and the new prompt tokens.
+///
+/// Returns `Some(lcp)` — resume decoding at position `lcp`, the verified shared
+/// prefix — when `0 < lcp < new_len`. Returns `None` ("reprocess the full
+/// prompt") when there is nothing reusable (`lcp == 0`) or the cache already
+/// covers the entire new prompt (`lcp >= new_len`, i.e. no new tokens to
+/// decode). Because the caller trims the KV to exactly `lcp` before decoding,
+/// any cached tokens beyond `lcp` are discarded — so this needs no separate
+/// staleness/length guard.
+fn streaming_reuse_decision(lcp: usize, new_len: usize) -> Option<usize> {
+    if lcp == 0 || lcp >= new_len {
+        return None;
+    }
+    Some(lcp)
 }
 
 /// Log the outcome of a streaming generation and, on error, relay the failure
@@ -1168,7 +2156,7 @@ impl RequestQueue {
 fn log_streaming_result(
     worker_id: usize,
     request_id: &str,
-    stream_sender: &mpsc::Sender<Result<StreamChunk, QueueError>>,
+    stream_sender: &mpsc::UnboundedSender<Result<StreamChunk, QueueError>>,
     result: Result<(), impl std::fmt::Display + std::fmt::Debug>,
 ) {
     match result {
@@ -1204,8 +2192,13 @@ impl RequestQueue {
             stats.current_queue_size, stats.total_requests
         );
 
-        // Close the sender to signal workers to shutdown
-        // (sender will be dropped when this method ends)
+        // Close the sender to signal workers to shut down. This MUST happen
+        // before we await the worker handles: a worker only exits its loop once
+        // `recv()` returns `None`, which only happens after every sender is
+        // dropped. Dropping the sender here (rather than letting `self` drop at
+        // the end of the method) is what lets the awaits below complete instead
+        // of deadlocking.
+        self.sender = None;
 
         // Wait for all worker handles to complete gracefully
         let mut successful_shutdowns = 0;
@@ -1505,6 +2498,77 @@ mod tests {
         }
     }
 
+    /// Queue-lifecycle regression for bug 01KSNJ7CBK9333J0T9G4TCA7DH.
+    ///
+    /// With a single worker (the production config), a streaming turn must
+    /// release the worker and decrement the live queue size once it finishes —
+    /// success, empty, or error — so that a subsequent prompt still enqueues
+    /// instead of being rejected with "Queue is full". This test drives the real
+    /// `RequestQueue` (no mocks) with `worker_threads: 1`, drains a streaming
+    /// turn to completion, then asserts the queue drained and a second streaming
+    /// request enqueues without `QueueError::Full`.
+    #[tokio::test]
+    async fn test_streaming_worker_released_after_turn() {
+        let model_manager = setup_loaded_model_manager().await;
+        let config = QueueConfig {
+            max_queue_size: 10,
+            worker_threads: 1,
+        };
+        let session_config = crate::types::SessionConfig::default();
+        let queue = RequestQueue::new(model_manager, config, session_config);
+
+        let session = create_test_session();
+        let make_request = || GenerationRequest {
+            session_id: session.id,
+            max_tokens: Some(16),
+            temperature: Some(0.0),
+            top_p: None,
+            stop_tokens: Vec::new(),
+            stopping_config: None,
+        };
+
+        // First streaming turn: drain it fully so the worker finishes and the
+        // single worker is released back to the pool.
+        let mut receiver = queue
+            .submit_streaming_request(make_request(), &session)
+            .await
+            .expect("first streaming request should enqueue");
+        while receiver.recv().await.is_some() {
+            // Drain every chunk (the unloaded dummy model yields a single error
+            // chunk) until the stream closes.
+        }
+
+        // Give the worker a moment to record completion metrics after the stream
+        // sender is dropped.
+        for _ in 0..50 {
+            if queue.get_queue_size() == 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            queue.get_queue_size(),
+            0,
+            "worker was not released after the first streaming turn — live queue \
+             size should return to 0"
+        );
+
+        // Second streaming turn must NOT be rejected with Queue is full.
+        let second = queue
+            .submit_streaming_request(make_request(), &session)
+            .await;
+        assert!(
+            !matches!(second, Err(QueueError::Full)),
+            "second streaming request was rejected with Queue is full after the \
+             first turn released: {:?}",
+            second.err()
+        );
+        // Drain the second stream too so the test leaves no dangling work.
+        if let Ok(mut receiver) = second {
+            while receiver.recv().await.is_some() {}
+        }
+    }
+
     #[tokio::test]
     async fn test_streaming_request_functionality() {
         // Validates streaming queue submission and chunk handling when the
@@ -1541,7 +2605,7 @@ mod tests {
     /// Assert that the first chunk is a `Model not loaded` worker error and
     /// that no further chunks are produced.
     async fn assert_model_not_loaded_stream(
-        receiver: &mut mpsc::Receiver<Result<StreamChunk, QueueError>>,
+        receiver: &mut mpsc::UnboundedReceiver<Result<StreamChunk, QueueError>>,
     ) {
         let chunk_result = receiver
             .recv()
@@ -1949,5 +3013,995 @@ mod tests {
             let reconstructed: Vec<i32> = chunks.into_iter().flatten().copied().collect();
             assert_eq!(reconstructed, tokens);
         }
+    }
+
+    /// Worker-lifecycle / state-machine coverage driven by a deterministic,
+    /// weight-free executor.
+    ///
+    /// These tests run the *real* `RequestQueue` worker loop — `worker_loop`,
+    /// `process_request`, `dispatch_{batch,streaming}_request`, enqueue, FIFO,
+    /// cancellation, and backpressure — but substitute a [`ScriptedExecutor`]
+    /// for the model-backed `ModelManagerExecutor` so every turn outcome is
+    /// reproducible without a GPU or weights. The central invariant under test
+    /// is the one the "Queue is full on retry" bug violated: **after any turn
+    /// outcome the single worker must be released and the live queue size must
+    /// return to zero, so a subsequent enqueue succeeds** (never a spurious
+    /// `QueueError::Full`).
+    mod worker_lifecycle_tests {
+        use super::*;
+        use crate::generation::scripted::{ScriptToken, ScriptedModel};
+        use crate::generation::TextGenerator;
+        use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+        /// What a scripted turn should do when the worker runs it. This lets a
+        /// single executor cover the whole turn-outcome matrix the queue cares
+        /// about: a turn that produces tokens and stops for some reason, a turn
+        /// that produces nothing (the 0-token / immediate-EOS bug shape), and a
+        /// turn that fails outright.
+        #[derive(Clone)]
+        enum TurnOutcome {
+            /// Replay the scripted model to completion (reason determined by the
+            /// script + the request's `max_tokens` / `stop_tokens` / context).
+            Scripted(ScriptedModel),
+            /// Fail the turn with a worker error, as a runaway/aborted turn
+            /// would. The worker must still be released afterward.
+            Error(String),
+        }
+
+        /// A [`QueueExecutor`] backed by [`TurnOutcome`] rather than a live
+        /// model. Counts how many turns it has run so FIFO/serialization can be
+        /// asserted.
+        struct ScriptedExecutor {
+            outcome: TurnOutcome,
+            turns_run: Arc<AtomicUsize>,
+        }
+
+        impl ScriptedExecutor {
+            fn new(outcome: TurnOutcome) -> Self {
+                Self {
+                    outcome,
+                    turns_run: Arc::new(AtomicUsize::new(0)),
+                }
+            }
+
+            /// Derive a deterministic prompt from the session's messages so the
+            /// scripted model has something to record. Queue-lifecycle tests do
+            /// not depend on a chat template, only on the worker mechanics.
+            fn prompt_for(session: &Session) -> String {
+                session
+                    .messages
+                    .iter()
+                    .map(|m| m.content.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            }
+        }
+
+        #[async_trait]
+        impl QueueExecutor for ScriptedExecutor {
+            async fn execute_batch(
+                &self,
+                _worker_id: usize,
+                queued_request: &QueuedRequest,
+            ) -> Result<GenerationResponse, QueueError> {
+                self.turns_run.fetch_add(1, AtomicOrdering::SeqCst);
+                match &self.outcome {
+                    TurnOutcome::Error(msg) => Err(QueueError::WorkerError(msg.clone())),
+                    TurnOutcome::Scripted(model) => {
+                        let prompt = Self::prompt_for(&queued_request.session);
+                        let mut model = model.clone();
+                        model
+                            .generate_text(
+                                &prompt,
+                                queued_request.request.clone(),
+                                queued_request.cancellation_token.clone(),
+                            )
+                            .map_err(|e| {
+                                QueueError::WorkerError(format!("Generation failed: {}", e))
+                            })
+                    }
+                }
+            }
+
+            async fn execute_streaming(
+                &self,
+                _worker_id: usize,
+                queued_request: &QueuedRequest,
+                stream_sender: mpsc::UnboundedSender<Result<StreamChunk, QueueError>>,
+            ) -> Result<(), QueueError> {
+                self.turns_run.fetch_add(1, AtomicOrdering::SeqCst);
+                if let TurnOutcome::Error(msg) = &self.outcome {
+                    return Err(QueueError::WorkerError(msg.clone()));
+                }
+                let TurnOutcome::Scripted(model) = &self.outcome else {
+                    unreachable!("Error handled above");
+                };
+
+                let prompt = Self::prompt_for(&queued_request.session);
+                let mut model = model.clone();
+
+                // The scripted model streams into an unbounded channel; bridge
+                // those chunks onto the bounded client channel, mirroring the
+                // production streaming relay.
+                let (tx, mut rx) = mpsc::unbounded_channel();
+                let gen_result = model.generate_stream(
+                    &prompt,
+                    queued_request.request.clone(),
+                    tx,
+                    queued_request.cancellation_token.clone(),
+                );
+                while let Ok(chunk) = rx.try_recv() {
+                    // UnboundedSender::send is synchronous; only Closed
+                    // (receiver dropped) returns an error.
+                    if stream_sender.send(chunk).is_err() {
+                        break;
+                    }
+                }
+                gen_result.map_err(|e| QueueError::WorkerError(format!("Generation failed: {}", e)))
+            }
+        }
+
+        /// A single-worker queue running every turn through `outcome`.
+        fn scripted_queue(outcome: TurnOutcome) -> (RequestQueue, Arc<AtomicUsize>) {
+            let executor = ScriptedExecutor::new(outcome);
+            let turns_run = executor.turns_run.clone();
+            let config = QueueConfig {
+                max_queue_size: 10,
+                worker_threads: 1,
+            };
+            let queue = RequestQueue::with_executor(config, Arc::new(executor));
+            (queue, turns_run)
+        }
+
+        fn streaming_request(session: &Session, max_tokens: u32) -> GenerationRequest {
+            GenerationRequest {
+                session_id: session.id,
+                max_tokens: Some(max_tokens),
+                temperature: Some(0.0),
+                top_p: None,
+                stop_tokens: Vec::new(),
+                stopping_config: None,
+            }
+        }
+
+        /// Poll the live queue size until it drains to zero or the budget runs
+        /// out, so completion metrics (recorded after the stream sender drops)
+        /// have a chance to land.
+        async fn await_queue_drained(queue: &RequestQueue) {
+            for _ in 0..200 {
+                if queue.get_queue_size() == 0 {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }
+
+        /// Drive one streaming turn to completion and return the chunks observed.
+        async fn run_streaming_turn(
+            queue: &RequestQueue,
+            session: &Session,
+            request: GenerationRequest,
+        ) -> Vec<Result<StreamChunk, QueueError>> {
+            let mut receiver = queue
+                .submit_streaming_request(request, session)
+                .await
+                .expect("streaming request should enqueue");
+            let mut chunks = Vec::new();
+            while let Some(item) = receiver.recv().await {
+                chunks.push(item);
+            }
+            chunks
+        }
+
+        /// The heart of the regression suite: run a streaming turn with the
+        /// given outcome, assert the worker was released (queue drains to zero),
+        /// and assert a second turn still enqueues without `Full`. Returns the
+        /// first turn's chunks so callers can additionally assert the outcome
+        /// shape.
+        async fn assert_worker_released_after(
+            outcome: TurnOutcome,
+            max_tokens: u32,
+        ) -> Vec<Result<StreamChunk, QueueError>> {
+            let (queue, turns_run) = scripted_queue(outcome);
+            let session = create_test_session();
+
+            let chunks =
+                run_streaming_turn(&queue, &session, streaming_request(&session, max_tokens)).await;
+
+            await_queue_drained(&queue).await;
+            assert_eq!(
+                queue.get_queue_size(),
+                0,
+                "worker was not released after the turn — live queue size should return to 0"
+            );
+
+            // The single worker must accept a second turn (no spurious Full).
+            let second = queue
+                .submit_streaming_request(streaming_request(&session, max_tokens), &session)
+                .await;
+            assert!(
+                !matches!(second, Err(QueueError::Full)),
+                "second turn rejected with Queue is full after release: {:?}",
+                second.err()
+            );
+            if let Ok(mut receiver) = second {
+                while receiver.recv().await.is_some() {}
+            }
+            await_queue_drained(&queue).await;
+            assert!(
+                turns_run.load(AtomicOrdering::SeqCst) >= 2,
+                "both turns should have reached the worker"
+            );
+
+            chunks
+        }
+
+        /// Extract the completion chunk's finish reason from a stream.
+        fn completion_reason(chunks: &[Result<StreamChunk, QueueError>]) -> Option<FinishReason> {
+            chunks.iter().rev().find_map(|c| match c {
+                Ok(chunk) if chunk.is_complete => chunk.finish_reason.clone(),
+                _ => None,
+            })
+        }
+
+        // --- Worker-release-on-every-outcome matrix -------------------------
+
+        #[tokio::test]
+        async fn worker_released_after_normal_completion() {
+            // A short script that ends on its own EndOfSequence — the ordinary
+            // "model finished talking" turn.
+            let model = ScriptedModel::from_texts(["Hello", " world"]);
+            let chunks = assert_worker_released_after(TurnOutcome::Scripted(model), 64).await;
+            let text: String = chunks
+                .iter()
+                .filter_map(|c| c.as_ref().ok())
+                .filter(|c| !c.is_complete)
+                .map(|c| c.text.clone())
+                .collect();
+            assert_eq!(text, "Hello world");
+            assert_eq!(
+                completion_reason(&chunks),
+                Some(FinishReason::Stopped("EndOfSequence".to_string()))
+            );
+        }
+
+        #[tokio::test]
+        async fn worker_released_after_immediate_eos_zero_tokens() {
+            // The 0-token bug shape: the model emits EOS before any token. The
+            // worker must still be released and re-enqueue must succeed.
+            let model = ScriptedModel::new([ScriptToken::EndOfSequence]);
+            let chunks = assert_worker_released_after(TurnOutcome::Scripted(model), 64).await;
+            let token_chunks = chunks
+                .iter()
+                .filter_map(|c| c.as_ref().ok())
+                .filter(|c| !c.is_complete)
+                .count();
+            assert_eq!(token_chunks, 0, "immediate EOS yields zero token chunks");
+            assert_eq!(
+                completion_reason(&chunks),
+                Some(FinishReason::Stopped("EndOfSequence".to_string()))
+            );
+        }
+
+        #[tokio::test]
+        async fn worker_released_after_max_tokens() {
+            // A script longer than the budget stops at MaxTokens — the
+            // runaway-but-bounded turn.
+            let model = ScriptedModel::from_texts(["a", "b", "c", "d", "e", "f"]);
+            let chunks = assert_worker_released_after(TurnOutcome::Scripted(model), 3).await;
+            assert_eq!(
+                completion_reason(&chunks),
+                Some(FinishReason::Stopped("MaxTokens".to_string()))
+            );
+        }
+
+        #[tokio::test]
+        async fn worker_released_after_context_full() {
+            // A tiny context window trips the context-window guard mid-turn.
+            // create_test_session()'s single message "Hello" is one word, so
+            // simulated_prompt_tokens == 1; with context_size 3 the guard fires
+            // when 1 + generated >= 2, i.e. after one generated token.
+            let model = ScriptedModel::from_texts(["x", "y", "z", "w"]).with_context_size(3);
+            let chunks = assert_worker_released_after(TurnOutcome::Scripted(model), 64).await;
+            assert_eq!(
+                completion_reason(&chunks),
+                Some(FinishReason::Stopped("ContextWindowFull".to_string()))
+            );
+        }
+
+        #[tokio::test]
+        async fn worker_released_after_error() {
+            // A turn that fails outright must still release the worker — this is
+            // the literal second symptom of the shipped bug.
+            let chunks =
+                assert_worker_released_after(TurnOutcome::Error("runaway turn aborted".into()), 64)
+                    .await;
+            // The error is relayed onto the stream.
+            let has_error = chunks.iter().any(|c| {
+                matches!(c, Err(QueueError::WorkerError(msg)) if msg.contains("runaway turn aborted"))
+            });
+            assert!(
+                has_error,
+                "the worker error should be relayed onto the stream"
+            );
+        }
+
+        #[tokio::test]
+        async fn worker_released_after_cancelled_turn() {
+            // A turn whose cancellation token is already fired releases the
+            // worker without corrupting the queue, and a fresh turn still runs.
+            let model = ScriptedModel::from_texts(["never", "emitted"]);
+            let (queue, turns_run) = scripted_queue(TurnOutcome::Scripted(model));
+            let session = create_test_session();
+
+            // Submit, then immediately cancel this session's request. The worker
+            // either rejects it pre-process (cancelled before dequeue) or the
+            // scripted loop observes the cancel and stops cleanly — either way
+            // the worker is released.
+            let request = streaming_request(&session, 64);
+            let mut receiver = queue
+                .submit_streaming_request(request, &session)
+                .await
+                .expect("streaming request should enqueue");
+            queue.cancel_session(&session.id).await;
+            while receiver.recv().await.is_some() {}
+
+            await_queue_drained(&queue).await;
+            assert_eq!(
+                queue.get_queue_size(),
+                0,
+                "cancelled turn must release the worker"
+            );
+
+            // A subsequent turn on a fresh session enqueues and runs.
+            let session2 = create_test_session();
+            let chunks =
+                run_streaming_turn(&queue, &session2, streaming_request(&session2, 64)).await;
+            assert!(
+                !chunks.is_empty(),
+                "a turn after cancellation should still produce a completion"
+            );
+            await_queue_drained(&queue).await;
+            assert!(turns_run.load(AtomicOrdering::SeqCst) >= 1);
+        }
+
+        #[tokio::test]
+        async fn worker_released_after_batch_completion() {
+            // The batch (non-streaming) path must release the worker too, and
+            // return the collected response.
+            let model = ScriptedModel::from_texts(["one", "two", "three"]);
+            let (queue, _turns) = scripted_queue(TurnOutcome::Scripted(model));
+            let session = create_test_session();
+
+            let response = queue
+                .submit_request(streaming_request(&session, 64), &session)
+                .await
+                .expect("batch turn should succeed");
+            assert_eq!(response.generated_text, "onetwothree");
+            assert_eq!(response.tokens_generated, 3);
+
+            await_queue_drained(&queue).await;
+            assert_eq!(queue.get_queue_size(), 0, "batch turn must release worker");
+
+            // Re-enqueue succeeds.
+            let second = queue
+                .submit_request(streaming_request(&session, 64), &session)
+                .await;
+            assert!(second.is_ok(), "second batch turn should not be rejected");
+        }
+
+        // --- Queue-full only at capacity -----------------------------------
+
+        /// An executor that parks every turn on a release gate until the test
+        /// fires it, so the queue can be filled to capacity deterministically.
+        struct GatedExecutor {
+            gate: Arc<tokio::sync::Notify>,
+            entered: Arc<AtomicUsize>,
+        }
+        #[async_trait]
+        impl QueueExecutor for GatedExecutor {
+            async fn execute_batch(
+                &self,
+                _worker_id: usize,
+                _queued_request: &QueuedRequest,
+            ) -> Result<GenerationResponse, QueueError> {
+                self.entered.fetch_add(1, AtomicOrdering::SeqCst);
+                self.gate.notified().await;
+                Ok(GenerationResponse {
+                    generated_text: String::new(),
+                    tokens_generated: 0,
+                    generation_time: Duration::from_millis(0),
+                    finish_reason: FinishReason::Stopped("EndOfSequence".to_string()),
+                    complete_token_sequence: None,
+                })
+            }
+            async fn execute_streaming(
+                &self,
+                _worker_id: usize,
+                _queued_request: &QueuedRequest,
+                _stream_sender: mpsc::UnboundedSender<Result<StreamChunk, QueueError>>,
+            ) -> Result<(), QueueError> {
+                self.entered.fetch_add(1, AtomicOrdering::SeqCst);
+                self.gate.notified().await;
+                Ok(())
+            }
+        }
+
+        #[tokio::test]
+        async fn enqueue_returns_full_only_at_capacity() {
+            // Park the single worker on a gated turn, then fill the bounded
+            // channel to exactly capacity and prove the next enqueue — and only
+            // it — returns Full, while every enqueue up to capacity succeeds.
+            let gate = Arc::new(tokio::sync::Notify::new());
+            let entered = Arc::new(AtomicUsize::new(0));
+            let max_queue_size = 3;
+            let config = QueueConfig {
+                max_queue_size,
+                worker_threads: 1,
+            };
+            let queue = RequestQueue::with_executor(
+                config,
+                Arc::new(GatedExecutor {
+                    gate: gate.clone(),
+                    entered: entered.clone(),
+                }),
+            );
+            let session = create_test_session();
+
+            // First request reaches the worker and parks on the gate, removing
+            // itself from the channel buffer.
+            let _busy = queue.submit_request(streaming_request(&session, 8), &session);
+            tokio::pin!(_busy);
+            // Poll it once to dispatch into the channel, then leave it pending.
+            tokio::select! {
+                _ = &mut _busy => panic!("gated turn returned early"),
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+            }
+            assert_eq!(
+                entered.load(AtomicOrdering::SeqCst),
+                1,
+                "the worker should be parked on the first turn"
+            );
+
+            // Now the worker is busy; the bounded channel holds `max_queue_size`
+            // pending requests. Each enqueue up to capacity must succeed.
+            let mut buffered = Vec::new();
+            for i in 0..max_queue_size {
+                let result = queue.try_enqueue_for_test(&session);
+                assert!(
+                    result.is_ok(),
+                    "enqueue {} within capacity must succeed, got {:?}",
+                    i,
+                    result.err()
+                );
+                buffered.push(result);
+            }
+
+            // Capacity reached: the next enqueue must return Full.
+            let overflow = queue.try_enqueue_for_test(&session);
+            assert!(
+                matches!(overflow, Err(QueueError::Full)),
+                "enqueue past capacity must return QueueError::Full, got {:?}",
+                overflow
+            );
+
+            // Release the worker so the test shuts down cleanly.
+            gate.notify_waiters();
+        }
+
+        // --- FIFO ordering through the single worker ------------------------
+
+        #[tokio::test]
+        async fn batch_turns_processed_in_fifo_order() {
+            // A single worker processes submitted requests in submission order.
+            // We record the per-turn prompt the executor sees and assert it
+            // matches submission order.
+            let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+
+            struct RecordingExecutor {
+                seen: Arc<Mutex<Vec<String>>>,
+            }
+            #[async_trait]
+            impl QueueExecutor for RecordingExecutor {
+                async fn execute_batch(
+                    &self,
+                    _worker_id: usize,
+                    queued_request: &QueuedRequest,
+                ) -> Result<GenerationResponse, QueueError> {
+                    let content = queued_request.session.messages[0].content.clone();
+                    self.seen.lock().unwrap().push(content.clone());
+                    Ok(GenerationResponse {
+                        generated_text: content,
+                        tokens_generated: 1,
+                        generation_time: Duration::from_millis(0),
+                        finish_reason: FinishReason::Stopped("EndOfSequence".to_string()),
+                        complete_token_sequence: None,
+                    })
+                }
+                async fn execute_streaming(
+                    &self,
+                    _worker_id: usize,
+                    _queued_request: &QueuedRequest,
+                    _stream_sender: mpsc::UnboundedSender<Result<StreamChunk, QueueError>>,
+                ) -> Result<(), QueueError> {
+                    Ok(())
+                }
+            }
+
+            let config = QueueConfig {
+                max_queue_size: 16,
+                worker_threads: 1,
+            };
+            let queue = RequestQueue::with_executor(
+                config,
+                Arc::new(RecordingExecutor { seen: seen.clone() }),
+            );
+
+            // Submit several batch requests in a fixed order, awaiting each so
+            // the single worker handles them one at a time in submission order.
+            let order = ["first", "second", "third", "fourth"];
+            for label in order {
+                let mut session = create_test_session();
+                session.messages[0].content = label.to_string();
+                let response = queue
+                    .submit_request(streaming_request(&session, 8), &session)
+                    .await
+                    .expect("each batch turn should succeed");
+                assert_eq!(response.generated_text, label);
+            }
+
+            let recorded = seen.lock().unwrap().clone();
+            assert_eq!(
+                recorded,
+                order.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                "the single worker must process requests in FIFO order"
+            );
+        }
+
+        // --- Backpressure: worker_threads = 1 serializes -------------------
+
+        #[tokio::test]
+        async fn single_worker_serializes_concurrent_turns() {
+            // With worker_threads = 1, concurrently-submitted turns must not run
+            // in parallel. The executor tracks concurrent entries and asserts
+            // the peak is exactly 1.
+            let in_flight = Arc::new(AtomicUsize::new(0));
+            let peak = Arc::new(AtomicUsize::new(0));
+
+            struct SerializingExecutor {
+                in_flight: Arc<AtomicUsize>,
+                peak: Arc<AtomicUsize>,
+            }
+            #[async_trait]
+            impl QueueExecutor for SerializingExecutor {
+                async fn execute_batch(
+                    &self,
+                    _worker_id: usize,
+                    _queued_request: &QueuedRequest,
+                ) -> Result<GenerationResponse, QueueError> {
+                    let now = self.in_flight.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+                    self.peak.fetch_max(now, AtomicOrdering::SeqCst);
+                    // Hold the worker briefly so any parallel entry would be
+                    // observed as concurrency > 1.
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    self.in_flight.fetch_sub(1, AtomicOrdering::SeqCst);
+                    Ok(GenerationResponse {
+                        generated_text: String::new(),
+                        tokens_generated: 0,
+                        generation_time: Duration::from_millis(0),
+                        finish_reason: FinishReason::Stopped("EndOfSequence".to_string()),
+                        complete_token_sequence: None,
+                    })
+                }
+                async fn execute_streaming(
+                    &self,
+                    _worker_id: usize,
+                    _queued_request: &QueuedRequest,
+                    _stream_sender: mpsc::UnboundedSender<Result<StreamChunk, QueueError>>,
+                ) -> Result<(), QueueError> {
+                    Ok(())
+                }
+            }
+
+            let config = QueueConfig {
+                max_queue_size: 16,
+                worker_threads: 1,
+            };
+            let queue = Arc::new(RequestQueue::with_executor(
+                config,
+                Arc::new(SerializingExecutor {
+                    in_flight: in_flight.clone(),
+                    peak: peak.clone(),
+                }),
+            ));
+
+            // Fire several requests concurrently; the single worker must
+            // serialize them.
+            let mut handles = Vec::new();
+            for _ in 0..5 {
+                let queue = queue.clone();
+                let session = create_test_session();
+                handles.push(tokio::spawn(async move {
+                    let _ = queue
+                        .submit_request(streaming_request(&session, 8), &session)
+                        .await;
+                }));
+            }
+            for h in handles {
+                h.await.unwrap();
+            }
+
+            assert_eq!(
+                peak.load(AtomicOrdering::SeqCst),
+                1,
+                "a single worker must never run two turns concurrently"
+            );
+        }
+
+        // --- Stats / metrics snapshot --------------------------------------
+
+        #[tokio::test]
+        async fn stats_reflect_completed_turns() {
+            // After a batch turn completes, the stats snapshot reports it as
+            // completed with the generated token count, and the live size is 0.
+            let model = ScriptedModel::from_texts(["a", "b"]);
+            let (queue, _turns) = scripted_queue(TurnOutcome::Scripted(model));
+            let session = create_test_session();
+
+            let _ = queue
+                .submit_request(streaming_request(&session, 8), &session)
+                .await
+                .expect("batch turn should succeed");
+            await_queue_drained(&queue).await;
+
+            let stats = queue.get_stats();
+            assert_eq!(stats.total_requests, 1);
+            assert_eq!(stats.completed_requests, 1);
+            assert_eq!(stats.failed_requests, 0);
+            assert_eq!(stats.current_queue_size, 0);
+            assert_eq!(stats.total_tokens_generated, 2);
+            assert!(stats.peak_queue_size >= 1);
+        }
+
+        #[tokio::test]
+        async fn stats_reflect_failed_turns() {
+            // A failed turn is counted as failed (not completed) and still
+            // releases the worker.
+            let (queue, _turns) = scripted_queue(TurnOutcome::Error("boom".into()));
+            let session = create_test_session();
+
+            let result = queue
+                .submit_request(streaming_request(&session, 8), &session)
+                .await;
+            assert!(matches!(result, Err(QueueError::WorkerError(_))));
+            await_queue_drained(&queue).await;
+
+            let stats = queue.get_stats();
+            assert_eq!(stats.completed_requests, 0);
+            assert_eq!(stats.failed_requests, 1);
+            assert_eq!(stats.current_queue_size, 0);
+        }
+
+        // --- cancel_session bookkeeping ------------------------------------
+
+        #[tokio::test]
+        async fn cancel_session_returns_false_when_no_active_request() {
+            // Cancelling a session with no in-flight request returns false and
+            // does not disturb the queue.
+            let model = ScriptedModel::from_texts(["x"]);
+            let (queue, _turns) = scripted_queue(TurnOutcome::Scripted(model));
+            let unknown = SessionId::new();
+            assert!(
+                !queue.cancel_session(&unknown).await,
+                "cancelling an unknown session returns false"
+            );
+        }
+
+        // --- Queue-full on the streaming submit path -----------------------
+
+        #[tokio::test]
+        async fn streaming_submit_returns_full_at_capacity() {
+            // The streaming submit path has its own try_send + Full branch.
+            // Park the worker and fill the bounded channel to prove it fires.
+            let gate = Arc::new(tokio::sync::Notify::new());
+            let entered = Arc::new(AtomicUsize::new(0));
+            let max_queue_size = 2;
+            let config = QueueConfig {
+                max_queue_size,
+                worker_threads: 1,
+            };
+            let queue = RequestQueue::with_executor(
+                config,
+                Arc::new(GatedExecutor {
+                    gate: gate.clone(),
+                    entered: entered.clone(),
+                }),
+            );
+            let session = create_test_session();
+
+            // Occupy the worker with one streaming turn parked on the gate.
+            let _busy = queue
+                .submit_streaming_request(streaming_request(&session, 8), &session)
+                .await
+                .expect("first streaming request occupies the worker");
+            for _ in 0..40 {
+                if entered.load(AtomicOrdering::SeqCst) == 1 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+
+            // Fill the channel; eventually streaming submit must return Full.
+            let mut held = Vec::new();
+            let mut full_seen = false;
+            for _ in 0..16 {
+                match queue
+                    .submit_streaming_request(streaming_request(&session, 8), &session)
+                    .await
+                {
+                    Ok(rx) => held.push(rx),
+                    Err(QueueError::Full) => {
+                        full_seen = true;
+                        break;
+                    }
+                    Err(other) => panic!("unexpected error: {:?}", other),
+                }
+            }
+            assert!(full_seen, "streaming submit must return Full at capacity");
+            gate.notify_waiters();
+        }
+
+        // --- Shutdown closes the sender, rejecting later enqueues ----------
+
+        #[tokio::test]
+        async fn graceful_shutdown_drains_workers() {
+            // `shutdown()` closes the sender channel and joins every worker
+            // handle, exercising the graceful shutdown loop.
+            let model = ScriptedModel::from_texts(["x"]);
+            let (queue, _turns) = scripted_queue(TurnOutcome::Scripted(model));
+            let session = create_test_session();
+            let _ = queue
+                .submit_request(streaming_request(&session, 8), &session)
+                .await;
+            await_queue_drained(&queue).await;
+            queue.shutdown().await;
+        }
+
+        #[tokio::test]
+        async fn shutdown_with_timeout_returns_stats() {
+            // shutdown_with_timeout drains workers within the budget and returns
+            // a pre-shutdown stats snapshot.
+            let model = ScriptedModel::from_texts(["x"]);
+            let (queue, _turns) = scripted_queue(TurnOutcome::Scripted(model));
+            let session = create_test_session();
+            let _ = queue
+                .submit_request(streaming_request(&session, 8), &session)
+                .await;
+            let stats = queue.shutdown_with_timeout(Duration::from_secs(5)).await;
+            assert_eq!(stats.total_requests, 1);
+        }
+    }
+
+    /// Unit tests for the module-private free functions that do not need a
+    /// model, exercising branches the worker only reaches under specific
+    /// conditions (e.g. cache growth past the per-process limit).
+    mod free_fn_unit_tests {
+        use super::*;
+
+        fn state(byte: u8, len: usize) -> Vec<u8> {
+            vec![byte; len]
+        }
+
+        #[test]
+        fn store_evicts_lru_first_keeping_the_active_session() {
+            // entry budget of 2; insert A, B, touch A (now MRU), insert C.
+            // The least-recently-used (B) must be evicted, NOT the active A.
+            let mut store = SessionStateStore::new(2, usize::MAX);
+            store.insert("A".into(), state(1, 10), None, None);
+            store.insert("B".into(), state(2, 10), None, None);
+            assert!(store.get("A").is_some(), "touch A → most-recently-used");
+            store.insert("C".into(), state(3, 10), None, None);
+
+            assert_eq!(store.len(), 2, "entry budget of 2 enforced");
+            assert!(store.contains("A"), "active (recently-used) session kept");
+            assert!(store.contains("C"), "newest session kept");
+            assert!(!store.contains("B"), "least-recently-used session evicted");
+        }
+
+        #[test]
+        fn store_evicts_to_stay_within_byte_budget() {
+            // Byte budget of 25 with 10-byte entries: only 2 fit; a 3rd evicts the
+            // LRU even though the entry count (3) would otherwise be allowed.
+            let mut store = SessionStateStore::new(100, 25);
+            store.insert("A".into(), state(1, 10), None, None);
+            store.insert("B".into(), state(2, 10), None, None);
+            store.insert("C".into(), state(3, 10), None, None);
+
+            assert_eq!(store.len(), 2, "byte budget caps total entries at 2");
+            assert!(store.cur_bytes <= 25, "total bytes stay within budget");
+            assert!(!store.contains("A"), "LRU evicted under byte pressure");
+            assert!(store.contains("B") && store.contains("C"));
+        }
+
+        #[test]
+        fn store_always_keeps_at_least_one_entry() {
+            // Even a single entry larger than the byte budget is retained — we
+            // never evict the only (most-recently-used) entry.
+            let mut store = SessionStateStore::new(4, 8);
+            store.insert("solo".into(), state(1, 100), None, None);
+            assert_eq!(store.len(), 1, "the only entry is never evicted");
+            assert!(store.contains("solo"));
+        }
+
+        #[test]
+        fn store_insert_replaces_and_tracks_bytes() {
+            let mut store = SessionStateStore::new(4, usize::MAX);
+            store.insert("A".into(), state(1, 10), None, None);
+            store.insert("A".into(), state(1, 30), None, None); // replace, larger
+            assert_eq!(store.len(), 1, "replacing an id does not add an entry");
+            assert_eq!(store.cur_bytes, 30, "byte accounting follows replacement");
+        }
+
+        #[test]
+        fn store_get_returns_bytes_and_fingerprint() {
+            let mut store = SessionStateStore::new(4, usize::MAX);
+            store.insert(
+                "A".into(),
+                state(7, 3),
+                Some(vec![10, 20, 30]),
+                Some(state(8, 4)),
+            );
+            let (bytes, toks, draft) = store.get("A").expect("present");
+            assert_eq!(bytes, vec![7, 7, 7]);
+            assert_eq!(toks, Some(vec![10, 20, 30]));
+            assert_eq!(draft, Some(vec![8, 8, 8, 8]));
+            assert_eq!(store.get("missing"), None);
+        }
+
+        /// The cross-session prefix cache: when session B has nothing of its
+        /// own cached but session A has a long shared prefix, the scan picks
+        /// A as the donor. This is the local-side equivalent of Claude's
+        /// hosted prompt-prefix cache — without it, two kanban windows on
+        /// the same agent each pay a full cold 28k-token prefill.
+        #[test]
+        fn find_best_prefix_match_returns_cross_session_donor() {
+            let mut store = SessionStateStore::new(8, usize::MAX);
+            // Session A has a long cached prefix.
+            store.insert(
+                "A".into(),
+                state(1, 4),
+                Some(vec![10, 20, 30, 40, 50]),
+                None,
+            );
+            // Session B has nothing cached. Asking for B with a prompt that
+            // shares the first three tokens with A's prompt must yield A as
+            // the donor, with lcp=3.
+            let m = store
+                .find_best_prefix_match("B", &[10, 20, 30, 99, 100])
+                .expect("must return a donor when a cross-session LCP exists");
+            assert_eq!(m.source_session_id, "A");
+            assert_eq!(m.lcp, 3);
+        }
+
+        /// Tie-break: when both the caller's own session AND another session
+        /// share the same lcp, pick the caller's own — avoids an unnecessary
+        /// foreign-state copy on the typical warm-continuation case where
+        /// the session's own prior turn IS the longest match.
+        #[test]
+        fn find_best_prefix_match_prefers_current_session_on_tie() {
+            let mut store = SessionStateStore::new(8, usize::MAX);
+            store.insert("A".into(), state(1, 4), Some(vec![10, 20, 30]), None);
+            store.insert("B".into(), state(2, 4), Some(vec![10, 20, 30]), None);
+            let m = store
+                .find_best_prefix_match("B", &[10, 20, 30, 40])
+                .expect("must return a donor");
+            assert_eq!(m.source_session_id, "B", "current session wins on lcp tie");
+        }
+
+        /// A longer cross-session match still wins over the caller's own
+        /// shorter match — we always pick the deepest prefix to maximize
+        /// the prefill we can skip.
+        #[test]
+        fn find_best_prefix_match_picks_deepest_lcp_across_sessions() {
+            let mut store = SessionStateStore::new(8, usize::MAX);
+            // Session A: full 5-token prefix.
+            store.insert(
+                "A".into(),
+                state(1, 4),
+                Some(vec![10, 20, 30, 40, 50]),
+                None,
+            );
+            // Session B (the caller): only 2 leading tokens match the new prompt.
+            store.insert("B".into(), state(2, 4), Some(vec![10, 20, 99]), None);
+            // New prompt for B: matches A by 5, matches B by 2.
+            let m = store
+                .find_best_prefix_match("B", &[10, 20, 30, 40, 50, 60])
+                .expect("must return a donor");
+            assert_eq!(
+                m.source_session_id, "A",
+                "deeper foreign LCP must win over shallower own-session LCP"
+            );
+            assert_eq!(m.lcp, 5);
+        }
+
+        /// No cached entry shares ANY prefix → no donor.
+        #[test]
+        fn find_best_prefix_match_returns_none_without_overlap() {
+            let mut store = SessionStateStore::new(8, usize::MAX);
+            store.insert("A".into(), state(1, 4), Some(vec![10, 20]), None);
+            assert!(store.find_best_prefix_match("B", &[99, 100, 101]).is_none());
+        }
+
+        /// Entries written without a prompt fingerprint (the batch path's
+        /// snapshots — `prompt_tokens = None`) are NEVER candidates, since
+        /// we cannot verify their prefix.
+        #[test]
+        fn find_best_prefix_match_skips_unfingerprinted_entries() {
+            let mut store = SessionStateStore::new(8, usize::MAX);
+            store.insert("batch-only".into(), state(1, 4), None, None);
+            assert!(store.find_best_prefix_match("B", &[10, 20, 30]).is_none());
+        }
+
+        #[test]
+        fn store_byte_budget_includes_draft_bytes() {
+            // Both target and draft bytes count against the byte budget so a
+            // large pair of (target, draft) snapshots is correctly accounted
+            // for under LRU pressure.
+            let mut store = SessionStateStore::new(100, 30);
+            store.insert("A".into(), state(1, 10), None, Some(state(2, 10))); // 20
+            store.insert("B".into(), state(3, 10), None, Some(state(4, 10))); // 40 total
+                                                                              // budget 30 < 40 → LRU 'A' evicted, only 'B' remains
+            assert_eq!(store.len(), 1, "draft bytes count toward budget");
+            assert!(store.contains("B"));
+            assert!(!store.contains("A"));
+        }
+
+        #[test]
+        fn common_prefix_len_basic() {
+            assert_eq!(common_prefix_len(&[1, 2, 3], &[1, 2, 3, 4]), 3);
+            assert_eq!(common_prefix_len(&[1, 2, 3], &[1, 2, 9, 4]), 2);
+            assert_eq!(common_prefix_len(&[9, 1], &[1, 9]), 0);
+            assert_eq!(common_prefix_len(&[], &[1, 2]), 0);
+            assert_eq!(common_prefix_len(&[1, 2], &[]), 0);
+        }
+
+        #[test]
+        fn template_token_count_maps_position_to_next() {
+            // A non-negative KV-cache position maps to the next position; a
+            // negative position (fresh context) maps to None.
+            assert_eq!(compute_template_token_count(0, -1), None);
+            assert_eq!(compute_template_token_count(0, 0), Some(1));
+            assert_eq!(compute_template_token_count(0, 41), Some(42));
+        }
+
+        #[test]
+        fn streaming_reuse_decision_reuses_strict_prefix() {
+            // Common incremental case: cache shares the first `lcp` tokens of a
+            // longer new prompt, so resume decoding at `lcp`.
+            assert_eq!(streaming_reuse_decision(42, 100), Some(42));
+            assert_eq!(streaming_reuse_decision(1, 2), Some(1));
+        }
+
+        #[test]
+        fn streaming_reuse_decision_none_when_nothing_shared() {
+            // No common prefix → nothing to reuse, reprocess in full.
+            assert_eq!(streaming_reuse_decision(0, 100), None);
+        }
+
+        #[test]
+        fn streaming_reuse_decision_none_when_no_new_tokens() {
+            // Cache already covers the entire new prompt: no new tokens to decode.
+            // (Also guards the divergence/shrink case — the new prompt's length
+            // bounds `lcp`, and the caller trims the KV to `lcp` before decoding.)
+            assert_eq!(streaming_reuse_decision(100, 100), None);
+            assert_eq!(streaming_reuse_decision(120, 100), None);
+            assert_eq!(streaming_reuse_decision(0, 0), None);
+        }
+
+        // The `should_persist_stream_state` predicate and its tests were
+        // removed: state is now saved at the prompt boundary BEFORE
+        // generation begins, so cancellation or disconnect mid-generation
+        // never affects the cache (the saved state is the prompt state,
+        // which is valid regardless of whether generation completed).
     }
 }

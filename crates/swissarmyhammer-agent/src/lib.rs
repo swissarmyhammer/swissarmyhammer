@@ -77,12 +77,14 @@ use agent_client_protocol::schema::{
 use agent_client_protocol::{Agent, Client, ConnectionTo, DynConnectTo, Responder};
 use agent_client_protocol_extras::{trace_notifications, TracingAgent};
 use llama_agent::types::AgentAPI;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use swissarmyhammer_common::{ErrorSeverity, Pretty, Severity};
 use swissarmyhammer_config::model::{ModelConfig, ModelExecutorConfig, ModelExecutorType};
 use thiserror::Error;
 use tokio::sync::broadcast;
+use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 
 // ============================================================================
@@ -936,7 +938,84 @@ fn convert_mcp_servers_to_acp(
         .collect()
 }
 
-/// Create a Llama ACP agent
+/// Process-wide cache of initialized [`llama_agent::AgentServer`]s keyed by a
+/// stable identifier of the model + queue config they were built from.
+///
+/// **Why this exists.** Loading a 35B-class GGUF into memory takes seconds and
+/// hundreds of MB to tens of GB of RAM. The kanban app opens one
+/// `AgentWebSocketServer` per board and rebuilds the agent on every accepted
+/// connection — that meant two boards (or a reconnect on the same board) using
+/// the same Qwen config loaded the model TWICE, doubling RAM and serializing
+/// CPU. The fix is the whole point of ACP: one shared agent, many sessions.
+///
+/// The cache holds `Arc<AgentServer>` indefinitely for the process lifetime.
+/// We never evict: a user typically picks one or two local models and sticks
+/// with them, and dropping a cached entry would tear down its loaded weights
+/// the moment no connection holds an `Arc` clone. Selecting a different model
+/// just adds a new entry; the prior one stays warm in case the user switches
+/// back. Mirrors how the OS file cache keeps recently-used pages even when no
+/// process currently holds them open.
+///
+/// Each ACP connection still gets its own [`llama_agent::AcpServer`] wrapper
+/// so notification broadcast and session lifecycle stay per-connection — only
+/// the underlying [`AgentServer`] (model + queue + KV cache) is shared.
+type LlamaAgentCache = AsyncMutex<HashMap<LlamaAgentKey, Arc<llama_agent::AgentServer>>>;
+
+static LLAMA_AGENT_CACHE: OnceLock<LlamaAgentCache> = OnceLock::new();
+
+fn llama_agent_cache() -> &'static LlamaAgentCache {
+    LLAMA_AGENT_CACHE.get_or_init(|| AsyncMutex::new(HashMap::new()))
+}
+
+/// Stable identity for a [`llama_agent::AgentServer`] derived from its
+/// loaded-model identity plus knobs that affect what gets loaded into RAM.
+///
+/// Two configs with the same key share a cached `AgentServer`. MCP server
+/// list and queue size are deliberately NOT part of the key: MCP clients live
+/// on each connection's session, and queue sizing only governs admission
+/// control — none of those touch the model state.
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+struct LlamaAgentKey {
+    model_source: String,
+    batch_size: u32,
+    use_hf_params: bool,
+}
+
+impl LlamaAgentKey {
+    fn from_model_config(model: &llama_agent::types::ModelConfig) -> Self {
+        let model_source = match &model.source {
+            llama_agent::types::ModelSource::HuggingFace {
+                repo,
+                filename,
+                folder,
+            } => format!(
+                "hf:{}|{}|{}",
+                repo,
+                filename.as_deref().unwrap_or(""),
+                folder.as_deref().unwrap_or("")
+            ),
+            llama_agent::types::ModelSource::Local { folder, filename } => format!(
+                "local:{}|{}",
+                folder.display(),
+                filename.as_deref().unwrap_or("")
+            ),
+        };
+        Self {
+            model_source,
+            batch_size: model.batch_size,
+            use_hf_params: model.use_hf_params,
+        }
+    }
+}
+
+/// Create a Llama ACP agent.
+///
+/// Shares the heavyweight `AgentServer` (which owns the loaded model and the
+/// inference queue) across all connections that use the same model config —
+/// see [`LLAMA_AGENT_CACHE`]. Each call still returns a freshly-wrapped
+/// `AcpServer` so the per-connection notification stream and session map stay
+/// isolated, but the model itself is loaded into memory once per process per
+/// distinct config.
 async fn create_llama_agent(
     llama_config: swissarmyhammer_config::model::LlamaAgentConfig,
     mcp_config: Option<McpServerConfig>,
@@ -945,6 +1024,54 @@ async fn create_llama_agent(
     let mcp_servers =
         build_llama_mcp_servers(mcp_config.as_ref(), llama_config.mcp_server.timeout_seconds);
     let acp_mcp_servers = convert_mcp_servers_to_acp(&mcp_servers);
+
+    let agent_server = get_or_init_llama_agent_server(model_config, mcp_servers).await?;
+
+    // Create ACP server configuration with MCP servers
+    let acp_config = llama_agent::AcpConfig {
+        default_mcp_servers: acp_mcp_servers,
+        ..Default::default()
+    };
+
+    // Create the ACP server (its inherent methods serve as the per-method
+    // handlers wired into `Agent.builder()` by `wrap_llama_into_handle`).
+    // Each connection gets its own AcpServer so notifications and session
+    // lifecycle are per-connection — but the AgentServer Arc is shared with
+    // every other connection on the same model config.
+    let (acp_server, notification_rx) = llama_agent::AcpServer::new(agent_server, acp_config);
+
+    Ok(wrap_llama_into_handle(
+        Arc::new(acp_server),
+        notification_rx,
+    ))
+}
+
+/// Look up an already-initialized [`llama_agent::AgentServer`] for this model
+/// config in the process cache, or build and insert one.
+///
+/// The cache guard is held across the (potentially seconds-long) initial
+/// `AgentServer::initialize` so a second concurrent call for the same model
+/// waits on the first one's load instead of racing to load it twice. With
+/// typical usage (one or two local models) this lock is rarely contended.
+async fn get_or_init_llama_agent_server(
+    model_config: llama_agent::types::ModelConfig,
+    mcp_servers: Vec<llama_agent::types::MCPServerConfig>,
+) -> AcpResult<Arc<llama_agent::AgentServer>> {
+    let key = LlamaAgentKey::from_model_config(&model_config);
+    let cache = llama_agent_cache();
+    let mut guard = cache.lock().await;
+    if let Some(existing) = guard.get(&key) {
+        tracing::info!(
+            model_source = %key.model_source,
+            "reusing cached llama AgentServer (shared across connections)"
+        );
+        return Ok(existing.clone());
+    }
+
+    tracing::info!(
+        model_source = %key.model_source,
+        "initializing new llama AgentServer (first connection for this model)"
+    );
 
     let agent_config = llama_agent::types::AgentConfig {
         model: model_config,
@@ -957,28 +1084,14 @@ async fn create_llama_agent(
         parallel_execution_config: llama_agent::types::ParallelConfig::default(),
     };
 
-    // Initialize the AgentServer using the AgentAPI trait
     let agent_server = llama_agent::AgentServer::initialize(agent_config)
         .await
         .map_err(|e| {
             AcpError::InitializationError(format!("Failed to initialize Llama agent server: {}", e))
         })?;
-
-    // Create ACP server configuration with MCP servers
-    let acp_config = llama_agent::AcpConfig {
-        default_mcp_servers: acp_mcp_servers,
-        ..Default::default()
-    };
-
-    // Create the ACP server (its inherent methods serve as the per-method
-    // handlers wired into `Agent.builder()` by `wrap_llama_into_handle`).
-    let (acp_server, notification_rx) =
-        llama_agent::AcpServer::new(Arc::new(agent_server), acp_config);
-
-    Ok(wrap_llama_into_handle(
-        Arc::new(acp_server),
-        notification_rx,
-    ))
+    let shared = Arc::new(agent_server);
+    guard.insert(key, shared.clone());
+    Ok(shared)
 }
 
 /// Execute a prompt using an ACP agent
@@ -1438,6 +1551,147 @@ impl agent_client_protocol::ConnectTo<Client> for NoopAgent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two model configs that differ only in MCP/queue config (which DON'T
+    /// affect what gets loaded into RAM) must produce the same cache key —
+    /// otherwise opening two boards with the same Qwen model still loads
+    /// the model twice. This is the regression: pre-fix, every connection
+    /// loaded a fresh `AgentServer` so a 35B model lived in memory once per
+    /// open board.
+    #[test]
+    fn llama_agent_key_ignores_non_model_fields() {
+        use llama_agent::types::{ModelConfig, ModelSource, RetryConfig};
+
+        fn config(source: ModelSource, batch: u32, hf_params: bool) -> ModelConfig {
+            ModelConfig {
+                source,
+                batch_size: batch,
+                use_hf_params: hf_params,
+                retry_config: RetryConfig {
+                    max_retries: 1,
+                    initial_delay_ms: 1,
+                    backoff_multiplier: 1.0,
+                    max_delay_ms: 1,
+                },
+                debug: false,
+                n_seq_max: 1,
+                n_threads: 1,
+                n_threads_batch: 1,
+            }
+        }
+
+        let qwen = ModelSource::HuggingFace {
+            repo: "unsloth/Qwen3.6-35B-A3B-MTP-GGUF".into(),
+            filename: Some("Qwen3.6-35B-A3B-MXFP4_MOE.gguf".into()),
+            folder: None,
+        };
+        let key_a = LlamaAgentKey::from_model_config(&config(qwen.clone(), 512, true));
+        let key_b = LlamaAgentKey::from_model_config(&config(qwen.clone(), 512, true));
+        assert_eq!(
+            key_a, key_b,
+            "two identical Qwen configs must share a cache key"
+        );
+    }
+
+    /// Different model sources must produce different keys — sharing them
+    /// would hand a Qwen-loaded server to a caller asking for Claude
+    /// (or another HF model).
+    #[test]
+    fn llama_agent_key_separates_distinct_models() {
+        use llama_agent::types::{ModelConfig, ModelSource, RetryConfig};
+
+        fn config(source: ModelSource) -> ModelConfig {
+            ModelConfig {
+                source,
+                batch_size: 512,
+                use_hf_params: true,
+                retry_config: RetryConfig {
+                    max_retries: 1,
+                    initial_delay_ms: 1,
+                    backoff_multiplier: 1.0,
+                    max_delay_ms: 1,
+                },
+                debug: false,
+                n_seq_max: 1,
+                n_threads: 1,
+                n_threads_batch: 1,
+            }
+        }
+
+        let qwen_key = LlamaAgentKey::from_model_config(&config(ModelSource::HuggingFace {
+            repo: "unsloth/Qwen3.6-35B-A3B-MTP-GGUF".into(),
+            filename: Some("Qwen3.6-35B-A3B-MXFP4_MOE.gguf".into()),
+            folder: None,
+        }));
+        let smaller_key = LlamaAgentKey::from_model_config(&config(ModelSource::HuggingFace {
+            repo: "unsloth/Qwen3.5-0.8B-MTP-GGUF".into(),
+            filename: Some("Qwen3.5-0.8B-Q8.gguf".into()),
+            folder: None,
+        }));
+        assert_ne!(
+            qwen_key, smaller_key,
+            "different HF repos must NOT share a cached AgentServer"
+        );
+
+        // batch_size affects KV-cache sizing inside the loaded model so it
+        // is part of the key.
+        let qwen_b256 = LlamaAgentKey::from_model_config(&config(ModelSource::HuggingFace {
+            repo: "unsloth/Qwen3.6-35B-A3B-MTP-GGUF".into(),
+            filename: Some("Qwen3.6-35B-A3B-MXFP4_MOE.gguf".into()),
+            folder: None,
+        }));
+        let mut other = config(ModelSource::HuggingFace {
+            repo: "unsloth/Qwen3.6-35B-A3B-MTP-GGUF".into(),
+            filename: Some("Qwen3.6-35B-A3B-MXFP4_MOE.gguf".into()),
+            folder: None,
+        });
+        other.batch_size = 1024;
+        let qwen_b1024 = LlamaAgentKey::from_model_config(&other);
+        assert_ne!(
+            qwen_b256, qwen_b1024,
+            "different batch sizes change loaded-context dimensions; must NOT share"
+        );
+    }
+
+    /// Local-folder model sources must also key cleanly.
+    #[test]
+    fn llama_agent_key_handles_local_sources() {
+        use llama_agent::types::{ModelConfig, ModelSource, RetryConfig};
+        use std::path::PathBuf;
+
+        let base = ModelConfig {
+            source: ModelSource::Local {
+                folder: PathBuf::from("/models/qwen"),
+                filename: Some("model.gguf".to_string()),
+            },
+            batch_size: 512,
+            use_hf_params: false,
+            retry_config: RetryConfig {
+                max_retries: 1,
+                initial_delay_ms: 1,
+                backoff_multiplier: 1.0,
+                max_delay_ms: 1,
+            },
+            debug: false,
+            n_seq_max: 1,
+            n_threads: 1,
+            n_threads_batch: 1,
+        };
+        let key_a = LlamaAgentKey::from_model_config(&base);
+        let key_b = LlamaAgentKey::from_model_config(&base);
+        assert_eq!(key_a, key_b, "identical local sources share a cache key");
+
+        let mut different = base.clone();
+        different.source = ModelSource::Local {
+            folder: PathBuf::from("/models/other"),
+            filename: Some("model.gguf".to_string()),
+        };
+        assert_ne!(
+            key_a,
+            LlamaAgentKey::from_model_config(&different),
+            "different local folders must NOT share"
+        );
+    }
 
     #[test]
     fn test_agent_response_success() {

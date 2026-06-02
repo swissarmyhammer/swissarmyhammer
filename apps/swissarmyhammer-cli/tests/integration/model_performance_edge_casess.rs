@@ -742,7 +742,7 @@ async fn test_rapid_sequential_operations() -> Result<()> {
     // Simulate rapid sequential operations like a user clicking quickly
     let agents = [
         "claude-code",
-        "qwen-coder",
+        "qwen",
         "claude-code",
         "qwen-next",
         "claude-code",
@@ -814,11 +814,7 @@ agent:
 
     // Test multiple operations with potential file contention
     for i in 0..5 {
-        let model = if i % 2 == 0 {
-            "claude-code"
-        } else {
-            "qwen-coder"
-        };
+        let model = if i % 2 == 0 { "claude-code" } else { "qwen" };
 
         let use_output =
             run_sah_command_with_timeout(&["model", "use", model], Some(project_root), 10).await?;
