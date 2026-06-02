@@ -2,15 +2,31 @@
 //! on board open.
 //!
 //! Opening a board folder must make it a SwissArmyHammer workspace — the
-//! `.sah/` directory and the builtin skills must be present — without ever
-//! shelling out to `sah init` and without mutating the process working
-//! directory. Running it again must be idempotent.
+//! `.sah/` directory and the `kanban`-profile builtin skills must be present —
+//! without ever shelling out to `sah init` and without mutating the process
+//! working directory. Running it again must be idempotent.
+//!
+//! These tests exercise [`run_workspace_init_for_profile`], the exact path the
+//! kanban app uses on board open (`ensure_kanban_workspace` →
+//! `run_workspace_init_for_profile(.., "kanban", ..)`), not the deploy-all
+//! `run_workspace_init` the app no longer calls.
 
 use std::path::Path;
 
 use swissarmyhammer_common::lifecycle::{InitScope, InitStatus};
 use swissarmyhammer_common::reporter::NullReporter;
-use swissarmyhammer_workspace_init::run_workspace_init;
+use swissarmyhammer_workspace_init::run_workspace_init_for_profile;
+
+/// The init profile the kanban app deploys on board open.
+const KANBAN_PROFILE: &str = "kanban";
+
+/// The six skills that make up the `kanban` profile.
+const KANBAN_PROFILE_SKILLS: [&str; 6] =
+    ["kanban", "plan", "task", "finish", "implement", "review"];
+
+/// Skills that must NOT be deployed by the kanban profile: `explore` and
+/// `code-context` belong to the `code-context` profile; `commit` is untagged.
+const NON_KANBAN_SKILLS: [&str; 3] = ["explore", "code-context", "commit"];
 
 /// Create a minimal `.kanban` board structure under `root` that the kanban
 /// entity system can load. Mirrors the helper used by `state.rs` tests.
@@ -25,14 +41,19 @@ fn create_board_at(root: &Path) {
 }
 
 /// Opening a fresh board folder creates the SwissArmyHammer workspace layout —
-/// `.sah/` with `workflows/`, `.prompts/`, and the builtin skills under
-/// `.sah/skills/` — via in-process init.
+/// `.sah/` with `workflows/`, `.prompts/`, and exactly the `kanban`-profile
+/// skills under `.sah/skills/` — via the in-process profile init path.
 #[test]
-fn opening_a_board_creates_the_sah_workspace_and_skills() {
+fn opening_a_board_creates_the_sah_workspace_and_kanban_profile_skills() {
     let tmp = tempfile::TempDir::new().unwrap();
     create_board_at(tmp.path());
 
-    let results = run_workspace_init(tmp.path(), &InitScope::Project, &NullReporter);
+    let results = run_workspace_init_for_profile(
+        tmp.path(),
+        KANBAN_PROFILE,
+        &InitScope::Project,
+        &NullReporter,
+    );
 
     // No component may error.
     assert!(
@@ -53,15 +74,25 @@ fn opening_a_board_creates_the_sah_workspace_and_skills() {
     );
     assert!(tmp.path().join(".prompts").is_dir(), ".prompts/ must exist");
 
-    // The builtin skills are present in the board-local skills directory.
+    // Exactly the six `kanban`-profile skills are deployed.
     let skills_dir = tmp.path().join(".sah").join("skills");
     assert!(skills_dir.is_dir(), ".sah/skills/ must exist");
-    let plan_skill = skills_dir.join("plan").join("SKILL.md");
-    assert!(
-        plan_skill.is_file(),
-        "builtin `plan` skill must be deployed at {}",
-        plan_skill.display()
-    );
+    for skill in KANBAN_PROFILE_SKILLS {
+        assert!(
+            skills_dir.join(skill).join("SKILL.md").is_file(),
+            "kanban-profile skill `{skill}` must be deployed at {}",
+            skills_dir.join(skill).join("SKILL.md").display()
+        );
+    }
+
+    // Skills in other profiles (`explore`, `code-context`) and untagged
+    // builtins (`commit`) must NOT be deployed by the kanban profile.
+    for skill in NON_KANBAN_SKILLS {
+        assert!(
+            !skills_dir.join(skill).exists(),
+            "skill `{skill}` is not in the kanban profile and must not be deployed"
+        );
+    }
 
     // The original `.kanban` board folder must be untouched.
     assert!(
@@ -74,15 +105,25 @@ fn opening_a_board_creates_the_sah_workspace_and_skills() {
     );
 }
 
-/// Running workspace init twice — as happens every time a board is opened —
+/// Running the profile init twice — as happens every time a board is opened —
 /// is idempotent: no error, and no duplicated skill content.
 #[test]
 fn repeated_board_open_is_idempotent() {
     let tmp = tempfile::TempDir::new().unwrap();
     create_board_at(tmp.path());
 
-    let first = run_workspace_init(tmp.path(), &InitScope::Project, &NullReporter);
-    let second = run_workspace_init(tmp.path(), &InitScope::Project, &NullReporter);
+    let first = run_workspace_init_for_profile(
+        tmp.path(),
+        KANBAN_PROFILE,
+        &InitScope::Project,
+        &NullReporter,
+    );
+    let second = run_workspace_init_for_profile(
+        tmp.path(),
+        KANBAN_PROFILE,
+        &InitScope::Project,
+        &NullReporter,
+    );
 
     assert!(
         first.iter().all(|r| r.status != InitStatus::Error),
@@ -117,7 +158,12 @@ fn workspace_init_does_not_mutate_process_cwd() {
     create_board_at(tmp.path());
 
     let cwd_before = std::env::current_dir().unwrap();
-    let _ = run_workspace_init(tmp.path(), &InitScope::Project, &NullReporter);
+    let _ = run_workspace_init_for_profile(
+        tmp.path(),
+        KANBAN_PROFILE,
+        &InitScope::Project,
+        &NullReporter,
+    );
     let cwd_after = std::env::current_dir().unwrap();
 
     assert_eq!(

@@ -109,6 +109,15 @@ impl Initializable for ProjectStructure {
 
 // ── SkillDeployment (priority 30) ────────────────────────────────────
 
+/// The known set of init profiles a builtin skill may declare in its `profiles`
+/// frontmatter list. Profile matching is an exact `==` comparison with no
+/// normalization, so a typo or case-mismatch (`Kanban`, a trailing space) would
+/// silently exclude a skill from every profile rather than fail. Validating
+/// each builtin's `profiles` against this set turns that silent drop into a
+/// loud `debug_assert!` during development. Update this set whenever a new
+/// profile is introduced.
+const KNOWN_PROFILES: &[&str] = &["kanban", "code-context"];
+
 /// Deploys the builtin skills into a workspace-local `.sah/skills/` directory.
 ///
 /// Unlike `swissarmyhammer-cli`'s `SkillDeployment` — which deploys skills into
@@ -238,6 +247,19 @@ impl SkillDeployment {
 
         let mut count = 0;
         for (name, skill) in &skills {
+            // Catch a mistagged builtin (`Kanban`, trailing space, unknown
+            // profile name) loudly during development rather than letting it
+            // silently fall out of every profile filter. Matching is exact
+            // `==`, so an out-of-set entry would otherwise just be dropped.
+            debug_assert!(
+                skill
+                    .profiles
+                    .iter()
+                    .all(|p| KNOWN_PROFILES.contains(&p.as_str())),
+                "builtin skill `{name}` declares an unknown profile in {:?}; \
+                 known profiles are {KNOWN_PROFILES:?} (exact match, no normalization)",
+                skill.profiles
+            );
             if !self.matches_profile(skill) {
                 continue;
             }
@@ -317,9 +339,14 @@ fn write_skill(skills_dir: &Path, name: &str, skill: &Skill) -> Result<(), Strin
     let skill_md = skill_dir.join("SKILL.md");
     let rendered_md = format_skill_md(skill);
 
-    // Skip the rewrite when the deployed copy is already current. Content
-    // equality of SKILL.md (which embeds the version in its metadata) is the
-    // currency check the card calls for.
+    // Skip the rewrite when the deployed copy is already current. The currency
+    // check compares ONLY the rendered SKILL.md content — it does not diff the
+    // bundled resource files (`skill.resources.files`). That is sound because
+    // SKILL.md embeds the crate version via `{{version}}` (see
+    // `version_template_context`): any release that changes a resource file also
+    // bumps the version, which changes the rendered SKILL.md and forces a
+    // rewrite. Within a single version, resources are immutable, so SKILL.md
+    // equality is a sufficient proxy for "the whole skill directory is current".
     if let Ok(existing) = fs::read_to_string(&skill_md) {
         if existing == rendered_md {
             return Ok(());

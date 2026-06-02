@@ -247,19 +247,12 @@ mod tests {
         assert!(result.unwrap_err().contains("not found"));
     }
 
-    /// The locked `kanban`-profile membership — the workflow cluster plus the
-    /// two exploration skills llama needs to scope a real task. The filter must
-    /// select exactly this subset and nothing else.
-    const EXPECTED_KANBAN_PROFILE_SKILLS: &[&str] = &[
-        "kanban",
-        "plan",
-        "task",
-        "finish",
-        "implement",
-        "review",
-        "explore",
-        "code-context",
-    ];
+    /// The locked `kanban`-profile membership — the workflow cluster. The
+    /// `explore`/`code-context` exploration skills now belong to the separate
+    /// `code-context` profile, not `kanban`. The filter must select exactly
+    /// this subset and nothing else.
+    const EXPECTED_KANBAN_PROFILE_SKILLS: &[&str] =
+        &["kanban", "plan", "task", "finish", "implement", "review"];
 
     #[test]
     fn test_resolve_profile_skills_selects_exact_subset() {
