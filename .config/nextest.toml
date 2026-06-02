@@ -70,19 +70,20 @@ test-group = "treesitter-embedding"
 slow-timeout = { period = "60s", terminate-after = 6 }
 
 # The kanban-app AI-panel E2E tests each spin up an in-process llama-agent and
-# load the qwen-0.6B model. There are only two, but nextest's process-per-test
-# isolation would cold-load the model twice concurrently; serialising them keeps
-# the loads sequential (same reasoning as the embedding groups above). A small
-# dedicated group avoids coupling them to the larger llama serial group, so they
-# do not wait behind the whole llama-agent suite.
-[test-groups.kanban-ai-panel-e2e]
-max-threads = 1
-
+# load the qwen-0.6B model, then run several real agentic generation rounds.
+# These run on the GPU in CI (the Test job no longer forces CPU), where the Metal
+# GPU's COMPUTE is time-sliced across processes. They were previously a separate
+# max-threads=1 group so they wouldn't wait behind the whole llama-agent suite —
+# fine on CPU, but on the GPU it let an e2e turn run concurrently with a
+# llama-agent real-model test, and the heaviest op (`session/prompt`) blew its
+# hang budget under that contention. Put them in the SAME global serial lane as
+# the llama-agent / llama-embedding real-model tests so at most one real-model
+# test drives the GPU at a time.
 [[profile.default.overrides]]
 filter = "package(kanban-app) and binary(ai_panel_e2e)"
-test-group = "kanban-ai-panel-e2e"
-# The MCP tool-loop test runs several real agentic generation rounds (~50s);
-# warn every 60s, hard-kill after 6 periods.
+test-group = "llama-embedding-serial"
+# The MCP tool-loop test runs several real agentic generation rounds; warn every
+# 60s, hard-kill after 6 periods (6 minutes).
 slow-timeout = { period = "60s", terminate-after = 6 }
 
 # Apply serial execution to llama-embedding tests

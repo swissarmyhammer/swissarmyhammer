@@ -49,8 +49,11 @@ const MODEL_ID: &str = "qwen-0.6b-test";
 /// Generous hang-guard for a real-model ACP operation. This is NOT a
 /// performance assertion (a healthy turn is far faster) — it only stops the
 /// test from hanging forever if the agent wedges. The agent build on first
-/// connect includes loading the qwen-0.6B weights, so the budget is roomy.
-const OP_BUDGET: Duration = Duration::from_secs(90);
+/// connect includes loading the qwen-0.6B weights, so the budget is roomy. It
+/// is deliberately well above a healthy turn: on the shared, GPU-backed CI
+/// runner the Metal GPU is time-sliced across whatever else is running, so a
+/// turn can take several times its uncontended duration without being wedged.
+const OP_BUDGET: Duration = Duration::from_secs(240);
 
 /// Resolve `qwen-0.6b-test` to its `ModelConfig` through the exact public APIs
 /// `resolve_model_config` uses in production (`ai/models.rs`).
