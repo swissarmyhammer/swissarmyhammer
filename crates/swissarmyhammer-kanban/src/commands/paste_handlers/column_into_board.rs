@@ -39,13 +39,13 @@ use super::PasteHandler;
 use crate::clipboard::ClipboardPayload;
 use crate::column::DeleteColumn;
 use crate::commands::run_op;
+use crate::commands_core::{CommandContext, CommandError, Result};
 use crate::context::KanbanContext;
 use crate::entity::AddEntity;
 use crate::error::Result as KanbanResult;
 use async_trait::async_trait;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
-use crate::commands_core::{CommandContext, CommandError, Result};
 use swissarmyhammer_entity::EntityContext;
 
 /// Snapshot keys that must NOT be forwarded onto the new column.

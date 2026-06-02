@@ -53,7 +53,12 @@ async fn set_filter_then_undo_reverts() {
     // The store layer rewrote the on-disk YAML under the cache; reconcile the
     // cache entry from disk (production does this via the post-undo
     // reconciliation path) before reading back through the server.
-    h.perspectives.write().await.reload_from_disk(&id).await.unwrap();
+    h.perspectives
+        .write()
+        .await
+        .reload_from_disk(&id)
+        .await
+        .unwrap();
 
     let after = call_tool(
         &server,

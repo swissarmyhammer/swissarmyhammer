@@ -17,6 +17,7 @@
 use super::PasteHandler;
 use crate::clipboard::ClipboardPayload;
 use crate::commands::run_op;
+use crate::commands_core::{CommandContext, CommandError, Result};
 use crate::context::KanbanContext;
 use crate::entity::AddEntity;
 use crate::error::Result as KanbanResult;
@@ -24,7 +25,6 @@ use crate::task::DeleteTask;
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
-use crate::commands_core::{CommandContext, CommandError, Result};
 use swissarmyhammer_entity::EntityContext;
 
 /// Reserved positional override keys that must be re-derived per paste.

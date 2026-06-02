@@ -1,10 +1,10 @@
 //! Column command implementations: reorder.
 
 use super::run_op;
+use crate::commands_core::{Command, CommandContext, CommandError};
 use crate::context::KanbanContext;
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use crate::commands_core::{Command, CommandContext, CommandError};
 use swissarmyhammer_store::StoreContext;
 
 /// Reorder columns by moving a single column to a target index.
@@ -89,11 +89,11 @@ impl Command for ColumnReorderCmd {
 mod tests {
     use super::*;
     use crate::board::InitBoard;
+    use crate::commands_core::CommandContext;
     use crate::context::KanbanContext;
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use crate::commands_core::CommandContext;
     use swissarmyhammer_operations::Execute;
     use tempfile::TempDir;
 

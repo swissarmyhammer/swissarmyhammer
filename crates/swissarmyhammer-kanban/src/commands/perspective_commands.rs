@@ -4,6 +4,7 @@
 //! filter/group settings on an active perspective.
 
 use super::run_op;
+use crate::commands_core::{Command, CommandContext, CommandError};
 use crate::context::KanbanContext;
 use crate::perspective::{
     AddPerspective, DeletePerspective, GetPerspective, ListPerspectives, Perspective,
@@ -13,7 +14,6 @@ use crate::task_helpers::{enrich_all_task_entities, filter_task_ids, EntitySlugR
 use crate::virtual_tags::default_virtual_tag_registry;
 use async_trait::async_trait;
 use serde_json::Value;
-use crate::commands_core::{Command, CommandContext, CommandError};
 use swissarmyhammer_filter_expr;
 
 /// Decide whether a perspective belongs to the currently active view.

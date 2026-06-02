@@ -38,8 +38,6 @@ mod support;
 
 #[path = "integration/builtin_app_shell_commands_e2e.rs"]
 mod builtin_app_shell_commands_e2e;
-#[path = "integration/full_baseline_e2e.rs"]
-mod full_baseline_e2e;
 #[path = "integration/builtin_entity_commands_e2e.rs"]
 mod builtin_entity_commands_e2e;
 #[path = "integration/builtin_file_commands_e2e.rs"]
@@ -58,6 +56,8 @@ mod execute_emits_action_event;
 mod execute_error_closes_txn;
 #[path = "integration/execute_transaction_grouping.rs"]
 mod execute_transaction_grouping;
+#[path = "integration/full_baseline_e2e.rs"]
+mod full_baseline_e2e;
 #[path = "integration/host_bootstrap_e2e.rs"]
 mod host_bootstrap_e2e;
 #[path = "integration/mcp_notifications_e2e.rs"]

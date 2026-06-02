@@ -84,7 +84,9 @@ fn copy_dir_recursive(source: &Path, destination: &Path) {
 /// builtin-layer root so `discover_and_load_all` finds it at
 /// `<layer_root>/plugins/file-commands/`.
 fn stage_file_commands(layer_root: &Path) {
-    let source = workspace_root().join("builtin/plugins").join("file-commands");
+    let source = workspace_root()
+        .join("builtin/plugins")
+        .join("file-commands");
     assert!(
         source.is_dir(),
         "the committed file-commands bundle must exist at {}",
@@ -196,9 +198,12 @@ async fn expose_window_module(host: &PluginHost) -> Arc<BoardShell> {
     let module = InProcessServer::new(service)
         .await
         .expect("wrapping the window service in an InProcessServer should succeed");
-    host.expose_rust_module("window".to_string(), Arc::new(module) as Arc<dyn PluginMcpServer>)
-        .await
-        .expect("exposing the window module should succeed");
+    host.expose_rust_module(
+        "window".to_string(),
+        Arc::new(module) as Arc<dyn PluginMcpServer>,
+    )
+    .await
+    .expect("exposing the window module should succeed");
     shell
 }
 
@@ -440,7 +445,11 @@ fn assert_switch_board_metadata(cmd: &Value) {
 /// File/0/2.
 fn assert_close_board_metadata(cmd: &Value) {
     assert_eq!(cmd["name"], json!("Close Board"), "file.closeBoard name");
-    assert_eq!(cmd["undoable"], json!(false), "file.closeBoard undoable:false");
+    assert_eq!(
+        cmd["undoable"],
+        json!(false),
+        "file.closeBoard undoable:false"
+    );
     assert_eq!(
         cmd["keys"],
         json!({ "cua": "Mod+W", "vim": "Mod+W" }),
@@ -458,7 +467,11 @@ fn assert_close_board_metadata(cmd: &Value) {
 /// File/0/0.
 fn assert_new_board_metadata(cmd: &Value) {
     assert_eq!(cmd["name"], json!("New Board"), "file.newBoard name");
-    assert_eq!(cmd["undoable"], json!(false), "file.newBoard undoable:false");
+    assert_eq!(
+        cmd["undoable"],
+        json!(false),
+        "file.newBoard undoable:false"
+    );
     assert_eq!(
         cmd["keys"],
         json!({ "cua": "Mod+Shift+B" }),
@@ -476,7 +489,11 @@ fn assert_new_board_metadata(cmd: &Value) {
 /// File/0/1.
 fn assert_open_board_metadata(cmd: &Value) {
     assert_eq!(cmd["name"], json!("Open Board"), "file.openBoard name");
-    assert_eq!(cmd["undoable"], json!(false), "file.openBoard undoable:false");
+    assert_eq!(
+        cmd["undoable"],
+        json!(false),
+        "file.openBoard undoable:false"
+    );
     assert_eq!(
         cmd["keys"],
         json!({ "cua": "Mod+O" }),

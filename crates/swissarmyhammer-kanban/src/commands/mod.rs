@@ -17,20 +17,17 @@ pub mod perspective_commands;
 pub mod task_commands;
 pub mod ui_commands;
 
+use crate::commands_core::{Command, CommandError};
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::KanbanOperationProcessor;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use crate::commands_core::{Command, CommandError};
 use swissarmyhammer_operations::{Execute, OperationProcessor};
 
 /// Run a kanban operation through the processor, mapping errors to `CommandError`.
-pub(crate) async fn run_op<T>(
-    op: &T,
-    kanban: &KanbanContext,
-) -> crate::commands_core::Result<Value>
+pub(crate) async fn run_op<T>(op: &T, kanban: &KanbanContext) -> crate::commands_core::Result<Value>
 where
     T: Execute<KanbanContext, KanbanError> + Send + Sync,
 {
@@ -351,10 +348,10 @@ pub fn register_commands() -> CmdMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands_core::CommandContext;
     use serde_json::Value;
     use std::sync::Arc;
-    use crate::commands_core::{CommandContext};
-    use swissarmyhammer_ui_state::{UIState};
+    use swissarmyhammer_ui_state::UIState;
 
     /// Build a CommandContext with the given scope chain, target, and optional UIState.
     fn ctx_with(scope: &[&str], target: Option<&str>, ui: Option<Arc<UIState>>) -> CommandContext {

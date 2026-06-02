@@ -113,8 +113,7 @@ async fn callback_error_still_closes_the_transaction() {
     )
     .await;
 
-    let result =
-        try_call_command(&service, CallerId::HostInternal, execute_args("cmd.boom")).await;
+    let result = try_call_command(&service, CallerId::HostInternal, execute_args("cmd.boom")).await;
     assert!(result.is_err(), "a failing callback surfaces as an error");
 
     // The transaction the engine opened was closed despite the error: no

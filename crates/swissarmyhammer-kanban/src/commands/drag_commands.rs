@@ -4,9 +4,9 @@
 //! The actual `drag-session-active` event is emitted by the Tauri layer
 //! as a post-execution side effect (same pattern as BoardSwitch).
 
+use crate::commands_core::{parse_moniker, Command, CommandContext, CommandError};
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use crate::commands_core::{parse_moniker, Command, CommandContext, CommandError};
 use swissarmyhammer_ui_state::{DragSession, DragSource};
 
 use crate::clipboard::{ClipboardData, ClipboardPayload};
@@ -260,9 +260,7 @@ struct SourceKindFields {
 
 /// Extract focus-chain drag fields: required `taskId`, resolvable board
 /// path (scope chain or `boardPath` arg), optional `taskFields` snapshot.
-fn read_focus_chain_fields(
-    ctx: &CommandContext,
-) -> crate::commands_core::Result<SourceKindFields> {
+fn read_focus_chain_fields(ctx: &CommandContext) -> crate::commands_core::Result<SourceKindFields> {
     let task_id = ctx
         .args
         .get("taskId")
@@ -811,11 +809,11 @@ impl Command for DragCancelCmd {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands_core::CommandContext;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use crate::commands_core::{CommandContext};
-    use swissarmyhammer_ui_state::{UIState};
     use swissarmyhammer_operations::Execute;
+    use swissarmyhammer_ui_state::UIState;
 
     /// Build a CommandContext with the given scope chain, target, and optional UIState.
     fn ctx_with(scope: &[&str], target: Option<&str>, ui: Option<Arc<UIState>>) -> CommandContext {

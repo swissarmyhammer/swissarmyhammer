@@ -36,14 +36,14 @@ use crate::clipboard::{
     ClipboardProviderExt, InMemoryClipboard,
 };
 use crate::commands::paste_handlers::{PasteHandler, PasteMatrix};
+use crate::commands_core::CommandContext;
 use crate::context::KanbanContext;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
-use crate::commands_core::{CommandContext};
-use swissarmyhammer_ui_state::{UIState};
 use swissarmyhammer_entity::Entity;
 use swissarmyhammer_operations::Execute;
+use swissarmyhammer_ui_state::UIState;
 use tempfile::TempDir;
 
 // =============================================================================

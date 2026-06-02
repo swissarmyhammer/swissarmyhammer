@@ -262,9 +262,12 @@ async fn expose_window_module(host: &PluginHost) -> Arc<SpyShell> {
     let module = InProcessServer::new(service)
         .await
         .expect("wrapping the window service in an InProcessServer should succeed");
-    host.expose_rust_module("window".to_string(), Arc::new(module) as Arc<dyn PluginMcpServer>)
-        .await
-        .expect("exposing the window module should succeed");
+    host.expose_rust_module(
+        "window".to_string(),
+        Arc::new(module) as Arc<dyn PluginMcpServer>,
+    )
+    .await
+    .expect("exposing the window module should succeed");
     shell
 }
 
@@ -323,9 +326,12 @@ async fn expose_views_module(host: &PluginHost) -> ExposedViews {
     let module = InProcessServer::new(server)
         .await
         .expect("wrapping the views server in an InProcessServer should succeed");
-    host.expose_rust_module("views".to_string(), Arc::new(module) as Arc<dyn PluginMcpServer>)
-        .await
-        .expect("exposing the views module should succeed");
+    host.expose_rust_module(
+        "views".to_string(),
+        Arc::new(module) as Arc<dyn PluginMcpServer>,
+    )
+    .await
+    .expect("exposing the views module should succeed");
 
     ExposedViews {
         _dir: dir,
@@ -434,9 +440,7 @@ async fn kanban_misc_commands_plugin_registers_and_executes() {
     kanban
         .call(json!({ "op": "init board", "name": "Kanban Misc Board" }))
         .await;
-    let added_tag = kanban
-        .call(json!({ "op": "add tag", "name": "bug" }))
-        .await;
+    let added_tag = kanban.call(json!({ "op": "add tag", "name": "bug" })).await;
     let tag_id = kanban_payload(&added_tag)
         .get("id")
         .and_then(Value::as_str)
@@ -575,9 +579,7 @@ async fn kanban_misc_commands_plugin_registers_and_executes() {
         json!(true),
         "executing tag.update should succeed, got {tag_update}"
     );
-    let got_tag = kanban
-        .call(json!({ "op": "get tag", "id": tag_id }))
-        .await;
+    let got_tag = kanban.call(json!({ "op": "get tag", "id": tag_id })).await;
     assert_eq!(
         tag_name(&got_tag).as_deref(),
         Some("defect"),
@@ -647,8 +649,7 @@ async fn kanban_misc_commands_plugin_registers_and_executes() {
     // (`{ content, structuredContent: { ok, view, entry_id }, isError }`). The
     // written view id therefore lives under
     // `structuredContent.result.structuredContent.view.id`.
-    let view_id_value =
-        &set_view["structuredContent"]["result"]["structuredContent"]["view"]["id"];
+    let view_id_value = &set_view["structuredContent"]["result"]["structuredContent"]["view"]["id"];
     assert_eq!(
         view_id_value,
         &json!(view_id),

@@ -31,11 +31,11 @@ pub mod task_into_project;
 pub(crate) mod test_support;
 
 use crate::clipboard::ClipboardPayload;
+use crate::commands_core::{CommandContext, Result};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use crate::commands_core::{CommandContext, Result};
 
 /// A paste handler implements the semantics of pasting one entity type
 /// onto another.

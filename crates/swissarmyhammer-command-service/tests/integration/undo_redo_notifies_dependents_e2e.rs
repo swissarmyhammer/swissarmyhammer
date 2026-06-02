@@ -67,7 +67,11 @@ async fn boot() -> World {
     let tag_dir = root.join("tags");
     std::fs::create_dir_all(&tag_dir).unwrap();
     let tag_def = fields.get_entity("tag").unwrap();
-    let tag_fields: Vec<_> = fields.fields_for_entity("tag").into_iter().cloned().collect();
+    let tag_fields: Vec<_> = fields
+        .fields_for_entity("tag")
+        .into_iter()
+        .cloned()
+        .collect();
     let tag_store = EntityTypeStore::new(
         &tag_dir,
         "tag",
@@ -218,8 +222,9 @@ async fn undo_redo_reconciles_caches_and_notifies_subscribed_client() {
     let creation_notes = w.drain().await;
     let creation_changes = store_changes(&creation_notes);
     assert!(
-        creation_changes.iter().any(|n| n.params["store"] == "tag"
-            && n.origin() == Some("user")),
+        creation_changes
+            .iter()
+            .any(|n| n.params["store"] == "tag" && n.origin() == Some("user")),
         "the entity create must reach the client as origin=user; got {creation_notes:?}"
     );
     assert!(
@@ -244,7 +249,11 @@ async fn undo_redo_reconciles_caches_and_notifies_subscribed_client() {
 
     // Cache reflects the reversed state: the view is gone.
     assert!(
-        w.views.read().await.get_by_id("01VIEW0000000000000000001").is_none(),
+        w.views
+            .read()
+            .await
+            .get_by_id("01VIEW0000000000000000001")
+            .is_none(),
         "undo of the view create must evict it from the views cache"
     );
 
@@ -256,14 +265,25 @@ async fn undo_redo_reconciles_caches_and_notifies_subscribed_client() {
         .collect();
     assert!(!view_undo.is_empty(), "undo must notify the view store");
     for n in &view_undo {
-        assert_eq!(n.origin(), Some("undo"), "undo-sourced event must carry origin=undo");
+        assert_eq!(
+            n.origin(),
+            Some("undo"),
+            "undo-sourced event must carry origin=undo"
+        );
         assert!(n.txn().is_some(), "undo data events carry a txn");
-        assert_eq!(n.params["op"], "removed", "undo of a create surfaces as removed");
+        assert_eq!(
+            n.params["op"], "removed",
+            "undo of a create surfaces as removed"
+        );
     }
     // The reversed-edit data events of one undo share a single txn.
     let undo_txns: std::collections::HashSet<_> =
         view_undo.iter().filter_map(|n| n.txn()).collect();
-    assert_eq!(undo_txns.len(), 1, "one undo command = one txn across its items");
+    assert_eq!(
+        undo_txns.len(),
+        1,
+        "one undo command = one txn across its items"
+    );
 
     // The undo also fired a stack-state event (redo now available).
     let undo_stack = undo_changes(&undo_notes);
@@ -280,7 +300,11 @@ async fn undo_redo_reconciles_caches_and_notifies_subscribed_client() {
 
     // Cache reflects the reapplied state: the view is back.
     assert!(
-        w.views.read().await.get_by_id("01VIEW0000000000000000001").is_some(),
+        w.views
+            .read()
+            .await
+            .get_by_id("01VIEW0000000000000000001")
+            .is_some(),
         "redo must restore the view in the cache"
     );
 
@@ -291,14 +315,21 @@ async fn undo_redo_reconciles_caches_and_notifies_subscribed_client() {
         .collect();
     assert!(!view_redo.is_empty(), "redo must notify the view store");
     for n in &view_redo {
-        assert_eq!(n.origin(), Some("redo"), "redo-sourced event must carry origin=redo");
+        assert_eq!(
+            n.origin(),
+            Some("redo"),
+            "redo-sourced event must carry origin=redo"
+        );
         assert!(n.txn().is_some());
         // Views/perspectives use reload-item semantics: the reconcile cannot
         // recover the pre-undo `is_create` flag, so a restored view surfaces
         // as `updated` (the client reload-fetches the item either way). The
         // precise created/removed byte transition is asserted on the entity
         // store below, where the field diff makes it observable.
-        assert_eq!(n.params["op"], "updated", "redo restores the view (reload-item)");
+        assert_eq!(
+            n.params["op"], "updated",
+            "redo restores the view (reload-item)"
+        );
     }
 
     let redo_stack = undo_changes(&redo_notes);
@@ -326,7 +357,10 @@ async fn fresh_edit_after_undo_notifies_can_redo_false() {
 
     let outcome = w.store.undo().await.unwrap();
     w.reconcile(&outcome, "undo").await;
-    assert!(w.store.can_redo().await, "precondition: redo available after undo");
+    assert!(
+        w.store.can_redo().await,
+        "precondition: redo available after undo"
+    );
     let _ = w.drain().await; // discard notifications so far
 
     // A brand-new edit discards the redo tail with no undo/redo call.
@@ -334,7 +368,10 @@ async fn fresh_edit_after_undo_notifies_can_redo_false() {
     c.set("tag_name", json!("C"));
     w.entity.write(&c).await.unwrap();
 
-    assert!(!w.store.can_redo().await, "a fresh edit discards the redo tail");
+    assert!(
+        !w.store.can_redo().await,
+        "a fresh edit discards the redo tail"
+    );
 
     let notes = w.drain().await;
     let stack = undo_changes(&notes);

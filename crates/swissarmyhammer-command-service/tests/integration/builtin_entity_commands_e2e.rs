@@ -165,9 +165,12 @@ async fn expose_entity_module(host: &PluginHost) -> ExposedEntity {
     let module = InProcessServer::new(server)
         .await
         .expect("wrapping the entity server in an InProcessServer should succeed");
-    host.expose_rust_module("entity".to_string(), Arc::new(module) as Arc<dyn PluginMcpServer>)
-        .await
-        .expect("exposing the entity module should succeed");
+    host.expose_rust_module(
+        "entity".to_string(),
+        Arc::new(module) as Arc<dyn PluginMcpServer>,
+    )
+    .await
+    .expect("exposing the entity module should succeed");
 
     ExposedEntity {
         _dir: dir,
@@ -546,7 +549,11 @@ fn assert_entity_add_metadata(cmd: &Value) {
 /// `entity.update_field` — entity.yaml: undoable, visible:false; params
 /// entity_type / id / field_name / value (all args).
 fn assert_entity_update_field_metadata(cmd: &Value) {
-    assert_eq!(cmd["name"], json!("Update Field"), "entity.update_field name");
+    assert_eq!(
+        cmd["name"],
+        json!("Update Field"),
+        "entity.update_field name"
+    );
     assert_eq!(cmd["undoable"], json!(true), "entity.update_field undoable");
     assert_eq!(
         cmd["visible"],
@@ -570,9 +577,17 @@ fn assert_entity_update_field_metadata(cmd: &Value) {
 /// `entity.delete` — entity.yaml: undoable, context_menu (group 2, order 0),
 /// keys cua:Mod+Backspace; param moniker(target).
 fn assert_entity_delete_metadata(cmd: &Value) {
-    assert_eq!(cmd["name"], json!("Delete {{entity.type}}"), "entity.delete name");
+    assert_eq!(
+        cmd["name"],
+        json!("Delete {{entity.type}}"),
+        "entity.delete name"
+    );
     assert_eq!(cmd["undoable"], json!(true), "entity.delete undoable");
-    assert_eq!(cmd["context_menu"], json!(true), "entity.delete context_menu");
+    assert_eq!(
+        cmd["context_menu"],
+        json!(true),
+        "entity.delete context_menu"
+    );
     assert_eq!(
         cmd["context_menu_group"],
         json!(2),
@@ -604,7 +619,11 @@ fn assert_entity_archive_metadata(cmd: &Value) {
         "entity.archive name"
     );
     assert_eq!(cmd["undoable"], json!(true), "entity.archive undoable");
-    assert_eq!(cmd["context_menu"], json!(true), "entity.archive context_menu");
+    assert_eq!(
+        cmd["context_menu"],
+        json!(true),
+        "entity.archive context_menu"
+    );
     assert_eq!(
         cmd["context_menu_group"],
         json!(2),
@@ -697,7 +716,11 @@ fn assert_entity_cut_metadata(cmd: &Value) {
 /// keys cua:Mod+C / vim:y, menu {path:[Edit], group:1, order:1}; param
 /// moniker(target).
 fn assert_entity_copy_metadata(cmd: &Value) {
-    assert_eq!(cmd["name"], json!("Copy {{entity.type}}"), "entity.copy name");
+    assert_eq!(
+        cmd["name"],
+        json!("Copy {{entity.type}}"),
+        "entity.copy name"
+    );
     assert_eq!(cmd["undoable"], json!(false), "entity.copy undoable:false");
     assert_eq!(cmd["context_menu"], json!(true), "entity.copy context_menu");
     assert_eq!(
@@ -731,9 +754,17 @@ fn assert_entity_copy_metadata(cmd: &Value) {
 /// keys cua:Mod+V / vim:p, menu {path:[Edit], group:1, order:2}; param
 /// moniker(target).
 fn assert_entity_paste_metadata(cmd: &Value) {
-    assert_eq!(cmd["name"], json!("Paste {{entity.type}}"), "entity.paste name");
+    assert_eq!(
+        cmd["name"],
+        json!("Paste {{entity.type}}"),
+        "entity.paste name"
+    );
     assert_eq!(cmd["undoable"], json!(true), "entity.paste undoable");
-    assert_eq!(cmd["context_menu"], json!(true), "entity.paste context_menu");
+    assert_eq!(
+        cmd["context_menu"],
+        json!(true),
+        "entity.paste context_menu"
+    );
     assert_eq!(
         cmd["context_menu_group"],
         json!(1),

@@ -4699,6 +4699,7 @@ dependencies = [
  "serde",
  "serde_json",
  "swissarmyhammer-agent",
+ "swissarmyhammer-app-service",
  "swissarmyhammer-command-service",
  "swissarmyhammer-common",
  "swissarmyhammer-config",

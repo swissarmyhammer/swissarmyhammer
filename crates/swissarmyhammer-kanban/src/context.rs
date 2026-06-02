@@ -3,6 +3,7 @@
 //! The context provides access to storage and utilities. No business logic methods,
 //! just data access primitives. Commands do all the work.
 
+use crate::commands_core::OptionsRegistry;
 use crate::defaults::{
     builtin_actor_entities, builtin_entity_definitions, builtin_field_definitions,
     builtin_view_definitions, kanban_compute_engine, KanbanLookup,
@@ -12,7 +13,6 @@ use crate::types::{ActorId, ColumnId, TagId, TaskId};
 use fs2::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
-use crate::commands_core::OptionsRegistry;
 use swissarmyhammer_entity::changelog::ChangeEntry;
 use swissarmyhammer_entity::{Entity, EntityCache, EntityContext, EntityWatcher};
 use swissarmyhammer_fields::{load_yaml_dir, DeriveRegistry, FieldsContext, ValidationEngine};
@@ -48,10 +48,19 @@ pub struct KanbanContext {
     /// lifetime is tied to the `KanbanContext`'s; dropping the context
     /// triggers the watcher's `Drop` which sends its shutdown signal.
     entity_watcher: OnceCell<EntityWatcher>,
-    /// View registry (populated via `open()`, None when created via `new()`)
-    views: Option<RwLock<ViewsContext>>,
+    /// View registry (populated via `open()`, None when created via `new()`).
+    ///
+    /// Stored as an `Arc<RwLock<…>>` so the in-process `views` MCP server can
+    /// hold its own clone of the SAME kernel the rest of the app reads from
+    /// (the multi-board dispatcher scopes the active board's pair onto a
+    /// task-local — see `swissarmyhammer_views::scope_views_board_services`).
+    /// The `&RwLock` accessor [`Self::views`] still works via `Arc` deref, so
+    /// existing callers are unaffected.
+    views: Option<Arc<RwLock<ViewsContext>>>,
     /// Perspective registry — lazy-initialized on first access.
-    perspectives: OnceCell<RwLock<PerspectiveContext>>,
+    ///
+    /// Held as `Arc<RwLock<…>>` for the same reason as [`Self::views`].
+    perspectives: OnceCell<Arc<RwLock<PerspectiveContext>>>,
     /// Derive handlers for computed field read/write
     derive_registry: Arc<DeriveRegistry>,
     /// Resolver registry for `ParamDef.options_from` enrichment.
@@ -134,7 +143,7 @@ impl KanbanContext {
         let perspectives = PerspectiveContext::open(&perspectives_dir).await?;
 
         let persp_cell = OnceCell::new();
-        persp_cell.set(RwLock::new(perspectives)).ok();
+        persp_cell.set(Arc::new(RwLock::new(perspectives))).ok();
 
         let context_name = Self::derive_context_name(&root);
         Ok(Self {
@@ -144,7 +153,7 @@ impl KanbanContext {
             entities: cell,
             entity_cache: OnceCell::new(),
             entity_watcher: OnceCell::new(),
-            views: Some(RwLock::new(views)),
+            views: Some(Arc::new(RwLock::new(views))),
             perspectives: persp_cell,
             derive_registry: Arc::new(crate::derive_handlers::kanban_derive_registry()),
             options_registry: Arc::new(
@@ -196,7 +205,16 @@ impl KanbanContext {
 
     /// Access the view registry lock, if initialized.
     pub fn views(&self) -> Option<&RwLock<ViewsContext>> {
-        self.views.as_ref()
+        self.views.as_deref()
+    }
+
+    /// Shared `Arc` handle to the view registry, if initialized.
+    ///
+    /// Unlike [`Self::views`] (a borrow), this hands out an owned, clonable
+    /// handle to the SAME kernel — needed by the in-process `views` MCP server,
+    /// which the multi-board dispatcher scopes onto a task-local per call.
+    pub fn views_arc(&self) -> Option<Arc<RwLock<ViewsContext>>> {
+        self.views.clone()
     }
 
     /// Access the perspective registry if it has already been initialized.
@@ -205,18 +223,38 @@ impl KanbanContext {
     /// This is a synchronous, non-initializing accessor suitable for use in
     /// non-async contexts (e.g. `start_watcher`).
     pub fn perspective_context_if_ready(&self) -> Option<&RwLock<PerspectiveContext>> {
-        self.perspectives.get()
+        self.perspectives.get().map(|a| a.as_ref())
     }
 
     /// Access the perspective registry lock, lazy-initializing on first call.
     pub async fn perspective_context(&self) -> Result<&RwLock<PerspectiveContext>> {
+        // Drive lazy init via the arc accessor, then borrow from the cell — the
+        // cell is guaranteed populated once that call returns `Ok`.
+        self.perspective_context_arc().await?;
+        Ok(self
+            .perspectives
+            .get()
+            .expect("perspectives cell populated after perspective_context_arc returned Ok")
+            .as_ref())
+    }
+
+    /// Shared, owned `Arc` handle to the perspective registry, lazy-initializing
+    /// on first call.
+    ///
+    /// The owned counterpart to [`Self::perspective_context`], symmetric with
+    /// [`Self::views_arc`]: both hand out an owned `Arc` clone to the SAME kernel
+    /// (needed by the in-process `views` MCP server, which the multi-board
+    /// dispatcher scopes onto a task-local per call) so callers wiring both into
+    /// one bundle don't have to clone one and borrow the other.
+    pub async fn perspective_context_arc(&self) -> Result<Arc<RwLock<PerspectiveContext>>> {
         self.perspectives
             .get_or_try_init(|| async {
                 let dir = self.perspectives_dir();
                 let ctx = PerspectiveContext::open(dir).await?;
-                Ok::<RwLock<PerspectiveContext>, KanbanError>(RwLock::new(ctx))
+                Ok::<Arc<RwLock<PerspectiveContext>>, KanbanError>(Arc::new(RwLock::new(ctx)))
             })
             .await
+            .cloned()
     }
 
     // =========================================================================

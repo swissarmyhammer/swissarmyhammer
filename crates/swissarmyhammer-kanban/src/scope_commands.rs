@@ -38,16 +38,16 @@
 //! Within each phase, the shared `(id, target)` seen-set guarantees a command
 //! cannot double-emit for the same target.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use crate::commands_core::{
     Command, CommandContext, CommandDef, CommandsRegistry, KeysDef, OptionsContext,
     OptionsRegistry, ParamDef, ParamSource, TabButtonDef,
 };
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use swissarmyhammer_common::WindowInfo;
-use swissarmyhammer_ui_state::UIState;
 use swissarmyhammer_fields::FieldsContext;
 use swissarmyhammer_perspectives::PerspectiveInfo;
+use swissarmyhammer_ui_state::UIState;
 use swissarmyhammer_views::ViewInfo;
 
 /// Lightweight open-board descriptor for dynamic command generation.
@@ -750,9 +750,7 @@ fn enrich_options(
 /// When `dynamic == None`, every per-domain slot is left empty; this
 /// matches the headless / shell path where the consumer doesn't have
 /// any dynamic data to feed the resolvers.
-fn build_options_sources(
-    dynamic: Option<&DynamicSources>,
-) -> crate::commands_core::OptionsSources {
+fn build_options_sources(dynamic: Option<&DynamicSources>) -> crate::commands_core::OptionsSources {
     use crate::commands::options_resolvers::AiOptionsData;
     use crate::commands_core::OptionsSources;
     use swissarmyhammer_perspectives::PerspectivesOptionsData;
@@ -1332,7 +1330,6 @@ pub fn dedupe_for_menu_bar(commands: &mut Vec<ResolvedCommand>) {
         true
     });
 }
-
 
 #[cfg(test)]
 mod tests {

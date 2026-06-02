@@ -71,9 +71,13 @@ async fn list_rename_delete_lifecycle() {
     let id = save_perspective(&h, "One", "grid").await;
     save_perspective(&h, "Two", "grid").await;
 
-    let listed = call_tool(&server, "list perspective", json!({ "op": "list perspective" }))
-        .await
-        .unwrap();
+    let listed = call_tool(
+        &server,
+        "list perspective",
+        json!({ "op": "list perspective" }),
+    )
+    .await
+    .unwrap();
     assert_eq!(listed["count"], json!(2));
 
     // Rename.
@@ -96,9 +100,13 @@ async fn list_rename_delete_lifecycle() {
     .unwrap();
     assert_eq!(deleted["ok"], json!(true));
 
-    let after = call_tool(&server, "list perspective", json!({ "op": "list perspective" }))
-        .await
-        .unwrap();
+    let after = call_tool(
+        &server,
+        "list perspective",
+        json!({ "op": "list perspective" }),
+    )
+    .await
+    .unwrap();
     assert_eq!(after["count"], json!(1));
 }
 

@@ -26,7 +26,9 @@ use crate::error::{Result, ViewsError};
 use crate::events::ViewEvent;
 use crate::store::ViewStore;
 use crate::types::{ViewDef, ViewId};
-use swissarmyhammer_store::{EventProvenance, StoreContext, StoreHandle, StoredItemId, UndoEntryId};
+use swissarmyhammer_store::{
+    EventProvenance, StoreContext, StoreHandle, StoredItemId, UndoEntryId,
+};
 
 /// Default capacity for the view event broadcast channel.
 ///
@@ -360,11 +362,7 @@ impl ViewsContext {
     /// the reversed command's transaction id; the plain wrapper stamps
     /// `origin: "user"`. The event kind is derived from the post-rewrite
     /// on-disk state, identical across callers.
-    pub async fn reload_from_disk_with(
-        &mut self,
-        id: &str,
-        prov: EventProvenance,
-    ) -> Result<()> {
+    pub async fn reload_from_disk_with(&mut self, id: &str, prov: EventProvenance) -> Result<()> {
         let path = self.view_path(id);
         if path.exists() {
             let content = fs::read_to_string(&path).await?;

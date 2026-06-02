@@ -1,9 +1,9 @@
 use crate::commands_core::error::{CommandError, Result};
 use serde_json::Value;
-use swissarmyhammer_ui_state::UIState;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::Arc;
+use swissarmyhammer_ui_state::UIState;
 
 /// Context passed to every command — provides scope chain, target, args, and
 /// service accessors.

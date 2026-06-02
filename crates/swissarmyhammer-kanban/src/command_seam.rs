@@ -235,7 +235,9 @@ mod tests {
         // The bogus end did NOT clear the slot — the real `txn` is still
         // active until the matching end runs.
         assert_eq!(
-            ctx.current_transaction().map(|id| id.to_string()).as_deref(),
+            ctx.current_transaction()
+                .map(|id| id.to_string())
+                .as_deref(),
             Some(txn.as_str()),
             "an unparseable end must not clear the slot the matching begin set",
         );

@@ -4,8 +4,8 @@ use crate::state::{resolve_kanban_path, AppState, MenuItemHandle};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use swissarmyhammer_kanban::commands_core::{CommandDef, CommandsRegistry};
 use swissarmyhammer_common::WindowInfo;
+use swissarmyhammer_kanban::commands_core::{CommandDef, CommandsRegistry};
 use swissarmyhammer_kanban::{
     board::InitBoard, KanbanContext, KanbanOperationProcessor, OperationProcessor,
 };
@@ -850,7 +850,7 @@ async fn open_and_notify(handle: &AppHandle, path: &Path, source_window_label: O
 mod tests {
     use super::{collect_menu_entries, is_valid_accelerator_key, resolve_accelerator};
     use swissarmyhammer_kanban::commands_core::{CommandDef, KeysDef};
-use swissarmyhammer_kanban::compose_registry;
+    use swissarmyhammer_kanban::compose_registry;
     use swissarmyhammer_ui_state::UIState;
 
     /// Build a minimal `CommandDef` carrying only the per-mode keys —
@@ -893,10 +893,7 @@ use swissarmyhammer_kanban::compose_registry;
     /// the load-bearing contract for the menu wiring.
     #[test]
     fn navigation_submenu_contains_all_nine_nav_commands() {
-        let registry = compose_registry![
-            swissarmyhammer_focus,
-            swissarmyhammer_kanban,
-        ];
+        let registry = compose_registry![swissarmyhammer_focus, swissarmyhammer_kanban,];
         let ui_state = UIState::new();
         let menus = collect_menu_entries(&registry, &ui_state);
 
@@ -1108,10 +1105,7 @@ use swissarmyhammer_kanban::compose_registry;
     /// the old filter and only proves the chord branch.
     #[test]
     fn nav_commands_render_accelerators_in_cua_mode() {
-        let registry = compose_registry![
-            swissarmyhammer_focus,
-            swissarmyhammer_kanban,
-        ];
+        let registry = compose_registry![swissarmyhammer_focus, swissarmyhammer_kanban,];
 
         // Each (id, expected accelerator) pair maps directly to the
         // YAML in `swissarmyhammer-focus/builtin/commands/nav.yaml`.
@@ -1148,10 +1142,7 @@ use swissarmyhammer_kanban::compose_registry;
     /// bindings (`h`/`j`/`k`/`l`, single chars) are likewise valid.
     #[test]
     fn nav_commands_render_accelerators_in_vim_mode() {
-        let registry = compose_registry![
-            swissarmyhammer_focus,
-            swissarmyhammer_kanban,
-        ];
+        let registry = compose_registry![swissarmyhammer_focus, swissarmyhammer_kanban,];
 
         let expected = [
             ("nav.up", "k"),
@@ -1182,10 +1173,7 @@ use swissarmyhammer_kanban::compose_registry;
     /// the fallback path through the named-key allowlist.
     #[test]
     fn resolve_accelerator_falls_back_to_cua_in_vim_mode() {
-        let registry = compose_registry![
-            swissarmyhammer_focus,
-            swissarmyhammer_kanban,
-        ];
+        let registry = compose_registry![swissarmyhammer_focus, swissarmyhammer_kanban,];
 
         let cmd = registry
             .get("nav.first")

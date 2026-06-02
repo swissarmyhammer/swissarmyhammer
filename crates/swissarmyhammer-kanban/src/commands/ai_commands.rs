@@ -26,9 +26,9 @@
 //! keeps the palette entry hidden when the conversation is idle. The other
 //! four commands are always available.
 
+use crate::commands_core::{Command, CommandContext};
 use async_trait::async_trait;
 use serde_json::Value;
-use crate::commands_core::{Command, CommandContext};
 
 /// Show or hide the AI panel.
 ///

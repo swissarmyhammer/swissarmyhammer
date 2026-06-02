@@ -118,7 +118,11 @@ async fn boot() -> (TempDir, Arc<StoreContext>, Arc<EntityContext>) {
     let tag_dir = root.join("tags");
     std::fs::create_dir_all(&tag_dir).unwrap();
     let tag_def = fields.get_entity("tag").unwrap();
-    let tag_fields: Vec<_> = fields.fields_for_entity("tag").into_iter().cloned().collect();
+    let tag_fields: Vec<_> = fields
+        .fields_for_entity("tag")
+        .into_iter()
+        .cloned()
+        .collect();
     let tag_store = EntityTypeStore::new(
         &tag_dir,
         "tag",
@@ -161,7 +165,12 @@ async fn two_writes_share_one_txn_and_undo_reverts_them_as_one_group() {
 
     // Execute the command. The two callback writes happen inside the
     // bracketed transaction.
-    call_command(&service, CallerId::HostInternal, execute_args("tag.makeTwo")).await;
+    call_command(
+        &service,
+        CallerId::HostInternal,
+        execute_args("tag.makeTwo"),
+    )
+    .await;
 
     // Both entities are on disk.
     assert!(entity.read("tag", "alpha").await.is_ok());

@@ -57,9 +57,7 @@ use super::support::{call_command, execute_args, register_args};
 /// capacity (it never does at these volumes) and is surfaced as a panic so a
 /// regression that floods the channel is loud rather than silently dropping
 /// notifications.
-fn drain(
-    sub: &mut swissarmyhammer_plugin::NotificationSubscription,
-) -> Vec<McpNotification> {
+fn drain(sub: &mut swissarmyhammer_plugin::NotificationSubscription) -> Vec<McpNotification> {
     let mut out = Vec::new();
     loop {
         match sub.try_recv() {
@@ -168,7 +166,11 @@ async fn boot_real_substrate() -> Substrate {
     let tag_dir = root.join("tags");
     std::fs::create_dir_all(&tag_dir).unwrap();
     let tag_def = fields.get_entity("tag").unwrap();
-    let tag_fields: Vec<_> = fields.fields_for_entity("tag").into_iter().cloned().collect();
+    let tag_fields: Vec<_> = fields
+        .fields_for_entity("tag")
+        .into_iter()
+        .cloned()
+        .collect();
     let tag_store = EntityTypeStore::new(
         &tag_dir,
         "tag",
@@ -186,13 +188,7 @@ async fn boot_real_substrate() -> Substrate {
     entity.attach_cache(&cache);
 
     let bridge = NotificationBridge::new();
-    let fanin = spawn_notification_fanin(
-        bridge.clone(),
-        Some(cache.subscribe()),
-        None,
-        None,
-        None,
-    );
+    let fanin = spawn_notification_fanin(bridge.clone(), Some(cache.subscribe()), None, None, None);
     // Let the forwarder register its subscription before the first write.
     tokio::task::yield_now().await;
 
@@ -279,7 +275,12 @@ async fn multi_write_command_shares_one_txn_and_delivers_commands_executed() {
     .await;
 
     // Execute it. The two callback writes happen inside the bracketed txn.
-    call_command(&service, CallerId::HostInternal, execute_args("tag.makeTwo")).await;
+    call_command(
+        &service,
+        CallerId::HostInternal,
+        execute_args("tag.makeTwo"),
+    )
+    .await;
 
     let notes = drain_async(&mut client).await;
 

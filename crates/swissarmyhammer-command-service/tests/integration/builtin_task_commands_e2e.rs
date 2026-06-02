@@ -42,9 +42,7 @@ use swissarmyhammer_command_service::bootstrap::install_commands_module;
 use swissarmyhammer_config::ModelConfig;
 use swissarmyhammer_directory::KanbanConfig;
 use swissarmyhammer_git::GitOperations;
-use swissarmyhammer_plugin::{
-    CallerId, McpServer as PluginMcpServer, PluginHost, PLUGINS_SUBDIR,
-};
+use swissarmyhammer_plugin::{CallerId, McpServer as PluginMcpServer, PluginHost, PLUGINS_SUBDIR};
 use swissarmyhammer_tools::mcp::plugin_bridge::build_tool_modules;
 use swissarmyhammer_tools::mcp::ToolHandlers;
 use swissarmyhammer_tools::{register_kanban_tools, ToolContext, ToolRegistry};

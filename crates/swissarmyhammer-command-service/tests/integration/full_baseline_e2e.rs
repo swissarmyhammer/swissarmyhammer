@@ -188,9 +188,7 @@ async fn expose_stub_backends(host: &PluginHost) {
             Arc::new(backend) as Arc<dyn PluginMcpServer>,
         )
         .await
-        .unwrap_or_else(|e| {
-            panic!("exposing stub backend {module_id:?} should succeed: {e:?}")
-        });
+        .unwrap_or_else(|e| panic!("exposing stub backend {module_id:?} should succeed: {e:?}"));
     }
 }
 
@@ -203,12 +201,7 @@ fn registered_ids(list_result: &Value) -> BTreeSet<String> {
         .cloned()
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|entry| {
-            entry
-                .get("id")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
+        .filter_map(|entry| entry.get("id").and_then(Value::as_str).map(str::to_string))
         .collect()
 }
 

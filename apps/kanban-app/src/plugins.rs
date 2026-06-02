@@ -196,24 +196,42 @@ impl PluginPlatform {
         &mut self,
         ui_state: std::sync::Arc<swissarmyhammer_ui_state::UIState>,
         window_shell: Option<std::sync::Arc<dyn swissarmyhammer_window_service::WindowShell>>,
+        app_shell: Option<std::sync::Arc<dyn swissarmyhammer_app_service::AppShell>>,
     ) -> Result<std::sync::Arc<CommandService>, String> {
         let service = crate::command_services::install_app_command_services(
             &self.host,
             ui_state,
             window_shell,
+            app_shell,
         )
         .await?;
         self.command_service = Some(std::sync::Arc::clone(&service));
         Ok(service)
     }
 
+    /// Expose the `AppHandle`-backed `window` and `app` modules on this
+    /// platform's host.
+    ///
+    /// Call from the Tauri `setup_app` hook, after [`wire_command_services`]
+    /// (which wires every non-`AppHandle` module, deferring `window` / `app`)
+    /// and BEFORE [`discover_plugins`]. The `WindowShell` / `AppShell` seams
+    /// require a live `AppHandle`, which only exists at setup; exposing them
+    /// here lets the `file-commands` / `ui-commands` / `kanban-misc-commands` /
+    /// `app-shell-commands` builtin plugins satisfy `ensureServices` so the
+    /// atomic `discover_and_load_all` loads ALL 7 builtin command plugins.
+    pub(crate) async fn expose_apphandle_modules(
+        &self,
+        window_shell: Option<std::sync::Arc<dyn swissarmyhammer_window_service::WindowShell>>,
+        app_shell: Option<std::sync::Arc<dyn swissarmyhammer_app_service::AppShell>>,
+    ) -> Result<(), String> {
+        crate::command_services::expose_apphandle_modules(&self.host, window_shell, app_shell).await
+    }
+
     /// The wired `Arc<CommandService>`, or `None` when
     /// [`wire_command_services`] has not been called (test fixtures and the
     /// degraded empty platform).
     #[allow(dead_code)]
-    pub(crate) fn command_service(
-        &self,
-    ) -> Option<std::sync::Arc<CommandService>> {
+    pub(crate) fn command_service(&self) -> Option<std::sync::Arc<CommandService>> {
         self.command_service.clone()
     }
 
@@ -344,11 +362,19 @@ fn extract_builtin_plugins(cache_dir: &Path) -> Result<(), String> {
         .map_err(|e| format!("failed to create builtin plugin cache: {e}"))?;
 
     // Each top-level subdirectory of BUILTIN_PLUGINS is one plugin bundle
-    // (`kanban-builtin-probe`, `task-commands`, …). Extract each into its
-    // own `plugins/<bundle-name>/` subdirectory so the host sees them as
-    // first-class bundles. `Dir::extract` writes the directory's CONTENTS
-    // into the target — pointed at a per-bundle subdir, that produces
-    // the expected `plugins/<bundle>/<files>` layout.
+    // (`kanban-builtin-probe`, `task-commands`, …) and must land at
+    // `plugins/<bundle-name>/<files>` so the host discovers each as a
+    // first-class bundle.
+    //
+    // `Dir::extract(base)` joins the FULL embedded entry path — which already
+    // carries the `<bundle-name>/` prefix (e.g. `entity-commands/index.ts`) —
+    // onto `base`, so the base must be `plugins_dir`, NOT a per-bundle subdir
+    // (that would double-nest to `plugins/<bundle>/<bundle>/...`). `extract`
+    // only `create_dir_all`s for `Dir` ENTRIES, so a flat bundle (just an
+    // `index.ts`, no subdir) has no entry that creates its own
+    // `plugins/<bundle>/` parent — `fs::write` would then fail with ENOENT.
+    // Pre-create `plugins/<bundle-name>/` here to cover that flat case before
+    // extracting into `plugins_dir`.
     for bundle in BUILTIN_PLUGINS.dirs() {
         let bundle_name = bundle
             .path()
@@ -367,7 +393,7 @@ fn extract_builtin_plugins(cache_dir: &Path) -> Result<(), String> {
                 bundle_dir.display()
             )
         })?;
-        bundle.extract(&bundle_dir).map_err(|e| {
+        bundle.extract(&plugins_dir).map_err(|e| {
             format!(
                 "failed to extract builtin plugin bundle {}: {e}",
                 bundle_name.to_string_lossy()
@@ -476,14 +502,22 @@ mod tests {
         );
 
         // The builtin probe — bundled into the binary, extracted, loaded as the
-        // read-only builtin layer — is live: it answers a real `kanban` call
-        // through the host-exposed `kanban` server. `init board` is a real
-        // kanban effect: it creates a `.kanban` board on disk.
+        // read-only builtin layer — discovered healthy.
+        assert_eq!(
+            platform.host().reload_status("kanban-builtin-probe").await,
+            Some(ReloadStatus::Healthy),
+            "the builtin probe plugin must have been discovered and loaded"
+        );
+
+        // The builtin probe is live: it answers a real `kanban` call through the
+        // host-exposed `kanban` server (the probe registers it under the
+        // canonical name `kanban`, shared with the command plugins). `init board`
+        // is a real kanban effect: it creates a `.kanban` board on disk.
         let result = tokio::time::timeout(
             TIMEOUT,
             platform.host().call(
                 CallerId::HostInternal,
-                "kanban-builtin-probe",
+                kanban_module_id(),
                 kanban_module_id(),
                 json!({ "op": "init board", "name": "Builtin Board" }),
             ),
@@ -554,5 +588,406 @@ mod tests {
             );
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+    }
+
+    // ── Per-board PluginHost integration tests ──────────────────────────────
+    //
+    // These prove the per-board host architecture: each open board gets its own
+    // `PluginPlatform` (host + registries + CommandService), keyed by board
+    // path on its `BoardHandle`, with the global platform as the fallback for
+    // boardless windows. They drive the REAL pipeline — `AppState::open_board`
+    // builds each per-board platform from the shared roots, exactly as
+    // production does — not a fixture.
+
+    /// A builtin command id every per-board host must carry, registered by the
+    /// bundled `task-commands` plugin (`builtin/plugins/task-commands`).
+    ///
+    /// Derived from the first baseline entry so the two never drift — both name
+    /// the `task-commands` plugin's representative command.
+    const BUILTIN_COMMAND_ID: &str = BUILTIN_COMMAND_BASELINE[0];
+
+    /// One representative command id per builtin command plugin — proof that
+    /// ALL 7 plugins discovered and registered (each id comes from a distinct
+    /// bundle, and the four after `entity.add` activate the `views` / `window` /
+    /// `app` backends that previously failed `ensureServices`):
+    ///
+    /// - `task.move`        → task-commands       (`commands`, `kanban`)
+    /// - `entity.add`       → entity-commands     (`commands`, `entity`)
+    /// - `perspective.filter` → perspective-commands (`commands`, **views**)
+    /// - `file.switchBoard` → file-commands       (`commands`, **window**)
+    /// - `ui.palette.open`  → ui-commands         (`commands`, ui_state, **window**, focus)
+    /// - `view.set`         → kanban-misc-commands (`commands`, kanban, **window**, **views**)
+    /// - `app.quit`         → app-shell-commands  (`commands`, **app**, ui_state, store)
+    const BUILTIN_COMMAND_BASELINE: &[&str] = &[
+        "task.move",
+        "entity.add",
+        "perspective.filter",
+        "file.switchBoard",
+        "ui.palette.open",
+        "view.set",
+        "app.quit",
+    ];
+
+    /// The 7 builtin command-plugin bundle ids under `builtin/plugins/`
+    /// (excluding the read-only `kanban-builtin-probe`).
+    const BUILTIN_COMMAND_PLUGINS: &[&str] = &[
+        "task-commands",
+        "entity-commands",
+        "perspective-commands",
+        "file-commands",
+        "ui-commands",
+        "kanban-misc-commands",
+        "app-shell-commands",
+    ];
+
+    /// Assert a platform's host carries the full builtin command baseline — one
+    /// command from each of the 7 builtin command plugins.
+    async fn assert_builtin_baseline(platform: &super::PluginPlatform, ctx: &str) {
+        let ids = list_command_ids(platform).await;
+        for id in BUILTIN_COMMAND_BASELINE {
+            assert!(
+                ids.contains(*id),
+                "{ctx} must carry the builtin baseline command {id:?}; got {ids:?}"
+            );
+        }
+    }
+
+    /// Call `list command` on a platform's host and return the set of command
+    /// ids it reports. Mirrors the production `command_tool_call` path
+    /// (`host.call(HostInternal, "commands", "command", { op: "list command" })`).
+    async fn list_command_ids(
+        platform: &super::PluginPlatform,
+    ) -> std::collections::HashSet<String> {
+        let result = tokio::time::timeout(
+            TIMEOUT,
+            platform.host().call(
+                CallerId::HostInternal,
+                "commands",
+                "command",
+                json!({ "op": "list command" }),
+            ),
+        )
+        .await
+        .expect("list command should not hang")
+        .expect("the commands module answers list command");
+
+        command_ids_from_call_result(&result)
+    }
+
+    /// Extract the set of command ids from a `command` tool `list command`
+    /// result.
+    ///
+    /// `PluginHost::call` returns the raw rmcp `CallToolResult` JSON: the
+    /// payload is a `content` array whose first text part carries the
+    /// `{ ok, commands: [...] }` object as a JSON string. Parse that text part,
+    /// then pull each command's `id`. Falls back to a top-level / structured
+    /// `commands` array so the helper is robust to either response shape.
+    fn command_ids_from_call_result(
+        result: &serde_json::Value,
+    ) -> std::collections::HashSet<String> {
+        let commands = result
+            .get("content")
+            .and_then(|c| c.as_array())
+            .and_then(|parts| parts.iter().find_map(|p| p.get("text")?.as_str()))
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+            .and_then(|parsed| parsed.get("commands").cloned())
+            .or_else(|| {
+                result
+                    .get("structuredContent")
+                    .and_then(|sc| sc.get("commands"))
+                    .cloned()
+            })
+            .or_else(|| result.get("commands").cloned());
+
+        commands
+            .as_ref()
+            .and_then(|c| c.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|c| c.get("id").and_then(|v| v.as_str()))
+                    .map(|s| s.to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Open a board rooted at a fresh temp dir on `state`, returning the temp
+    /// dir (kept alive by the caller) and the canonical `.kanban` path the
+    /// board was registered under.
+    async fn open_temp_board(state: &AppState) -> (TempDir, std::path::PathBuf) {
+        let dir = TempDir::new().expect("board temp dir");
+        let canonical = state
+            .open_board(dir.path(), None)
+            .await
+            .expect("open_board should succeed");
+        (dir, canonical)
+    }
+
+    /// Build an `AppState` with real shared plugin roots so `open_board` builds
+    /// a per-board platform for each board. The user plugin layer starts empty
+    /// (only the bundled builtins load), which is enough to prove the builtin
+    /// command baseline and per-board isolation.
+    async fn app_state_with_plugin_roots() -> (TempDir, TempDir, TempDir, AppState) {
+        let user_root = TempDir::new().expect("user root temp dir");
+        let builtin_cache = TempDir::new().expect("builtin cache temp dir");
+        let global_board_dir = TempDir::new().expect("global tool working dir");
+        std::fs::create_dir_all(user_root.path().join("plugins")).expect("user plugins dir");
+
+        let state = AppState::new_for_test_with_plugins(
+            user_root.path().to_path_buf(),
+            builtin_cache.path().to_path_buf(),
+            global_board_dir.path().to_path_buf(),
+        )
+        .await
+        .expect("AppState should build with the plugin platform");
+
+        (user_root, builtin_cache, global_board_dir, state)
+    }
+
+    /// Two boards opened in one `AppState` each get a DISTINCT per-board
+    /// `PluginPlatform` / `CommandService`, and each carries the builtin
+    /// command baseline.
+    #[tokio::test]
+    async fn two_boards_get_distinct_platforms_with_builtin_baseline() {
+        let (_user_root, _builtin_cache, _global_dir, state) = app_state_with_plugin_roots().await;
+
+        let (_dir_a, path_a) = open_temp_board(&state).await;
+        let (_dir_b, path_b) = open_temp_board(&state).await;
+        assert_ne!(path_a, path_b, "the two boards must be distinct");
+
+        let boards = state.boards.read().await;
+        let handle_a = boards.get(&path_a).expect("board A is open").clone();
+        let handle_b = boards.get(&path_b).expect("board B is open").clone();
+        drop(boards);
+
+        let platform_a = handle_a
+            .platform()
+            .expect("board A has a per-board platform");
+        let platform_b = handle_b
+            .platform()
+            .expect("board B has a per-board platform");
+
+        // The CommandService instances are DISTINCT objects — registries are
+        // isolated per board.
+        let svc_a = platform_a
+            .lock()
+            .await
+            .command_service()
+            .expect("board A wired a command service");
+        let svc_b = platform_b
+            .lock()
+            .await
+            .command_service()
+            .expect("board B wired a command service");
+        assert!(
+            !std::sync::Arc::ptr_eq(&svc_a, &svc_b),
+            "each board must own a distinct CommandService instance"
+        );
+
+        // Each board carries the FULL builtin command baseline — all 7 plugins,
+        // including the four that need the `views` / `window` / `app` backends.
+        assert_builtin_baseline(&*platform_a.lock().await, "board A").await;
+        assert_builtin_baseline(&*platform_b.lock().await, "board B").await;
+    }
+
+    /// The global host and every per-board host load ALL 7 builtin command
+    /// plugins and register the full builtin command baseline.
+    ///
+    /// This is the acceptance for the wiring card: `discover_and_load_all` is
+    /// atomic, so a single unwired backend (`views` / `window` / `app`) would
+    /// roll back ALL 7 plugins and leave an empty command registry. A passing
+    /// run proves every backend each plugin's `ensureServices` requires is
+    /// exposed before discovery on both host kinds.
+    #[tokio::test]
+    async fn all_seven_builtin_command_plugins_load_with_full_baseline() {
+        let (_user_root, _builtin_cache, _global_dir, state) = app_state_with_plugin_roots().await;
+
+        // The global fallback host: every builtin command plugin discovered
+        // healthy, and the full baseline is registered.
+        {
+            let global = state.plugin_platform.lock().await;
+            for bundle in BUILTIN_COMMAND_PLUGINS {
+                assert_eq!(
+                    global.host().reload_status(bundle).await,
+                    Some(ReloadStatus::Healthy),
+                    "global host must load the builtin command plugin {bundle:?}"
+                );
+            }
+            assert_builtin_baseline(&global, "the global host").await;
+        }
+
+        // A per-board host built at board-open time carries the same baseline.
+        let (_dir, path) = open_temp_board(&state).await;
+        let handle = {
+            let boards = state.boards.read().await;
+            boards.get(&path).expect("board is open").clone()
+        };
+        let platform = handle.platform().expect("board has a per-board platform");
+        let platform = platform.lock().await;
+        for bundle in BUILTIN_COMMAND_PLUGINS {
+            assert_eq!(
+                platform.host().reload_status(bundle).await,
+                Some(ReloadStatus::Healthy),
+                "per-board host must load the builtin command plugin {bundle:?}"
+            );
+        }
+        assert_builtin_baseline(&platform, "the per-board host").await;
+    }
+
+    /// Closing board A drops its per-board host without affecting board B: the
+    /// command path resolved for board B still answers `list command`.
+    #[tokio::test]
+    async fn closing_a_board_drops_its_host_without_affecting_the_other() {
+        let (_user_root, _builtin_cache, _global_dir, state) = app_state_with_plugin_roots().await;
+
+        let (_dir_a, path_a) = open_temp_board(&state).await;
+        let (_dir_b, path_b) = open_temp_board(&state).await;
+
+        // Board B keeps a live, working host before and after A closes.
+        let handle_b = {
+            let boards = state.boards.read().await;
+            boards.get(&path_b).expect("board B is open").clone()
+        };
+        let platform_b = handle_b.platform().expect("board B has a platform");
+        assert!(
+            list_command_ids(&*platform_b.lock().await)
+                .await
+                .contains(BUILTIN_COMMAND_ID),
+            "board B answers before board A closes"
+        );
+
+        // Close board A — its handle (and so its per-board platform) is dropped.
+        // `close_board` keys by the canonical `.kanban` path (the same key
+        // `open_board` registered under), so pass `path_a`, not the board dir.
+        state
+            .close_board(&path_a)
+            .await
+            .expect("closing board A succeeds");
+        {
+            let boards = state.boards.read().await;
+            assert!(
+                !boards.contains_key(&path_a),
+                "board A must be removed from the open set"
+            );
+            assert!(
+                boards.contains_key(&path_b),
+                "board B must remain open after board A closes"
+            );
+        }
+
+        // Board B's host is unaffected: it still answers list command.
+        assert!(
+            list_command_ids(&*platform_b.lock().await)
+                .await
+                .contains(BUILTIN_COMMAND_ID),
+            "board B must keep answering after board A's host is dropped"
+        );
+    }
+
+    /// Register a command directly into a platform's host command registry via
+    /// the production `commands` module `register command` op, mirroring how a
+    /// project plugin would register one. The `execute` callback id only has to
+    /// resolve at dispatch time, not at register/list time, so a placeholder is
+    /// enough to prove the command lands in (and is listed by) THIS host.
+    async fn register_command_into(platform: &super::PluginPlatform, id: &str) {
+        tokio::time::timeout(
+            TIMEOUT,
+            platform.host().call(
+                CallerId::HostInternal,
+                "commands",
+                "command",
+                json!({
+                    "op": "register command",
+                    "id": id,
+                    "name": id,
+                    "execute": { "$callback": "isolation-test-callback" },
+                }),
+            ),
+        )
+        .await
+        .expect("register command should not hang")
+        .expect("the commands module answers register command");
+    }
+
+    /// REGISTRY ISOLATION: a command registered into board A's host is visible
+    /// ONLY in board A's `list command`, never board B's.
+    ///
+    /// This is the central per-board guarantee — registries are isolated, not
+    /// merely distinct objects. We register straight into one board's host
+    /// command service (the same path a project plugin's `register command`
+    /// takes) so the test holds NOW, before project-plugin loading lands; once
+    /// it does, a project plugin exercises the identical path.
+    #[tokio::test]
+    async fn a_command_registered_in_one_board_is_invisible_to_the_other() {
+        let (_user_root, _builtin_cache, _global_dir, state) = app_state_with_plugin_roots().await;
+
+        let (_dir_a, path_a) = open_temp_board(&state).await;
+        let (_dir_b, path_b) = open_temp_board(&state).await;
+
+        let (handle_a, handle_b) = {
+            let boards = state.boards.read().await;
+            (
+                boards.get(&path_a).expect("board A is open").clone(),
+                boards.get(&path_b).expect("board B is open").clone(),
+            )
+        };
+        let platform_a = handle_a
+            .platform()
+            .expect("board A has a per-board platform");
+        let platform_b = handle_b
+            .platform()
+            .expect("board B has a per-board platform");
+
+        // A unique id that is NOT part of the builtin baseline, so seeing it in
+        // a host's `list command` proves it came from this registration.
+        const ISOLATED_ID: &str = "isolation.probe.only-in-board-a";
+
+        register_command_into(&*platform_a.lock().await, ISOLATED_ID).await;
+
+        let ids_a = list_command_ids(&*platform_a.lock().await).await;
+        let ids_b = list_command_ids(&*platform_b.lock().await).await;
+
+        assert!(
+            ids_a.contains(ISOLATED_ID),
+            "board A's host must list the command registered into it; got {ids_a:?}"
+        );
+        assert!(
+            !ids_b.contains(ISOLATED_ID),
+            "board B's host must NOT see a command registered into board A — \
+             registries are isolated; got {ids_b:?}"
+        );
+        // Sanity: board B still carries the shared builtin baseline, so the
+        // absence above is isolation, not an empty registry.
+        assert!(
+            ids_b.contains(BUILTIN_COMMAND_ID),
+            "board B must still carry the builtin baseline; got {ids_b:?}"
+        );
+    }
+
+    /// A boardless / unknown window falls back to the global platform: the
+    /// window → board resolver returns `None`, and the global host still
+    /// carries the builtin command baseline.
+    #[tokio::test]
+    async fn boardless_window_falls_back_to_global_platform() {
+        let (_user_root, _builtin_cache, _global_dir, state) = app_state_with_plugin_roots().await;
+
+        // Open one board, but query an unknown window label that has no
+        // assignment in UIState.
+        let (_dir, _path) = open_temp_board(&state).await;
+        assert!(
+            state
+                .board_handle_for_window("window-with-no-board")
+                .await
+                .is_none(),
+            "an unknown window label must resolve to no board (global fallback)"
+        );
+
+        // The global platform — the fallback host for boardless windows — still
+        // carries the builtin command baseline.
+        let global = state.plugin_platform.lock().await;
+        assert!(
+            list_command_ids(&global).await.contains(BUILTIN_COMMAND_ID),
+            "the global fallback host must carry the builtin command baseline"
+        );
     }
 }

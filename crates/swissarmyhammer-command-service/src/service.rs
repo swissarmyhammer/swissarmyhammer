@@ -835,11 +835,7 @@ impl CommandService {
     ///
     /// [`TransactionSeam::begin`]: crate::TransactionSeam::begin
     /// [`TransactionSeam::end`]: crate::TransactionSeam::end
-    pub async fn dispatch(
-        &self,
-        caller: CallerId,
-        req: ExecuteCommand,
-    ) -> Result<Value, McpError> {
+    pub async fn dispatch(&self, caller: CallerId, req: ExecuteCommand) -> Result<Value, McpError> {
         self.handle_execute(caller, req).await
     }
 }

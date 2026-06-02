@@ -2,13 +2,13 @@
 //! and attachment file operations.
 
 use super::run_op;
+use crate::commands_core::{parse_moniker, Command, CommandContext, CommandError};
 use crate::context::KanbanContext;
 use crate::focus::resolve_focused_column;
 use crate::types::{ColumnId, TaskId};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
-use crate::commands_core::{parse_moniker, Command, CommandContext, CommandError};
 
 /// Create a new entity of any type using field-default values.
 ///
@@ -497,13 +497,13 @@ impl Command for AttachmentRevealCmd {
 mod tests {
     use super::*;
     use crate::board::InitBoard;
+    use crate::commands_core::CommandContext;
     use crate::context::KanbanContext;
     use crate::tag::AddTag;
     use crate::task::AddTask;
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use crate::commands_core::CommandContext;
     use swissarmyhammer_operations::Execute;
     use tempfile::TempDir;
 

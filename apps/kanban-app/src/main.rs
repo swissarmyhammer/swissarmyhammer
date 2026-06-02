@@ -6,6 +6,7 @@ mod cli;
 mod cli_install;
 mod command_services;
 mod commands;
+mod confine;
 mod deeplink;
 mod menu;
 mod plugins;
@@ -123,14 +124,26 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     wire_deep_links(app);
 
     let state = app.state::<AppState>();
+
+    // Build the AppHandle-backed `window` / `app` shells (impossible before the
+    // AppHandle existed), store them on AppState, expose them on the global
+    // plugin host, and run the global host's DEFERRED plugin discovery. This is
+    // where the global fallback host finally loads all 7 builtin command
+    // plugins: four of them activate the `window` / `app` backends, which only
+    // exist now. Must run BEFORE `auto_open_board` so each per-board host built
+    // at board-open time reads the stored shells and loads the same baseline.
+    let (window_shell, app_shell) = build_apphandle_shells(app.handle());
+    tauri::async_runtime::block_on(state.install_apphandle_shells(window_shell, app_shell));
+
     tauri::async_runtime::block_on(state.auto_open_board());
 
     let app_handle = app.handle().clone();
     tauri::async_runtime::block_on(state.start_watchers(app_handle));
 
     // Start the plugin hot-reload watcher now that the app is up — the same
-    // discover-early, watch-once-up pattern board watchers follow. The plugin
-    // platform was already discovered and loaded during `AppState::new`.
+    // discover-early, watch-once-up pattern board watchers follow. The global
+    // plugin host was discovered just above (after the AppHandle shells were
+    // wired); per-board hosts discover at board-open time.
     tauri::async_runtime::block_on(state.start_plugin_watcher());
 
     // Skip session window restore when the user deep-linked — otherwise the
@@ -148,6 +161,112 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     // dialog never delay the GUI becoming interactive.
     cli_install::spawn();
     Ok(())
+}
+
+/// Construct the production `AppHandle`-backed shells the plugin hosts expose as
+/// the `window` and `app` MCP modules.
+///
+/// `TauriAppShell` is a direct wrapper over the `AppHandle`. `TauriWindowShell`
+/// additionally needs callbacks for the operations that thread through
+/// `AppState` (which the window-service crate cannot reach) or show a native
+/// dialog; each is wired to the app's existing, proven code paths here.
+fn build_apphandle_shells(
+    handle: &tauri::AppHandle,
+) -> (
+    std::sync::Arc<dyn swissarmyhammer_window_service::WindowShell>,
+    std::sync::Arc<dyn swissarmyhammer_app_service::AppShell>,
+) {
+    use std::sync::Arc;
+    use swissarmyhammer_kanban::board::InitBoard;
+    use swissarmyhammer_kanban::{KanbanContext, KanbanOperationProcessor, OperationProcessor};
+    use swissarmyhammer_window_service::{NewWindow, TauriWindowShell, WindowShell};
+    use tauri_plugin_dialog::DialogExt;
+
+    // open_new_window → the single window-creation path (`create_window_impl`),
+    // run to completion on the confinement runtime (off the Tokio worker pool)
+    // and mapped to the seam's result.
+    let open_window: swissarmyhammer_window_service::OpenWindowFn<tauri::Wry> =
+        Arc::new(|app: &tauri::AppHandle, board_path: Option<String>| {
+            let app = app.clone();
+            let value = crate::confine::run_future(async move {
+                let state = app.state::<AppState>();
+                commands::create_window_impl(&app, &state, board_path, None, None).await
+            })?;
+            Ok(NewWindow {
+                label: value
+                    .get("label")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                board_path: value
+                    .get("board_path")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+            })
+        });
+
+    // pick_folder → the native folder picker, in blocking form (the seam shim
+    // is synchronous).
+    let pick_handle = handle.clone();
+    let pick_folder: swissarmyhammer_window_service::PickFolderFn = Arc::new(move || {
+        pick_handle
+            .dialog()
+            .file()
+            .blocking_pick_folder()
+            .and_then(|f| f.into_path().ok())
+    });
+
+    // init_board → run the in-process `InitBoard` op against a context rooted at
+    // the resolved `.kanban` path; a no-op when the board already exists.
+    let init_board: swissarmyhammer_window_service::InitBoardFn =
+        Arc::new(|path: &std::path::Path, name: &str| {
+            let path = path.to_path_buf();
+            let name = name.to_string();
+            crate::confine::run_future(async move {
+                let ctx = KanbanContext::new(&path);
+                if ctx.is_initialized() {
+                    return Ok(());
+                }
+                KanbanOperationProcessor::new()
+                    .process(&InitBoard::new(&name), &ctx)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| format!("failed to init board: {e}"))
+            })
+        });
+
+    // switch_board / close_board → thread through AppState's board lifecycle.
+    let switch_board: swissarmyhammer_window_service::SwitchBoardFn<tauri::Wry> =
+        Arc::new(|app: &tauri::AppHandle, path: &std::path::Path| {
+            let app = app.clone();
+            let path = path.to_path_buf();
+            crate::confine::run_future(async move {
+                let state = app.state::<AppState>();
+                state.open_board(&path, Some(app.clone())).await.map(|_| ())
+            })
+        });
+    let close_board: swissarmyhammer_window_service::CloseBoardFn<tauri::Wry> =
+        Arc::new(|app: &tauri::AppHandle, path: &std::path::Path| {
+            let app = app.clone();
+            let path = path.to_path_buf();
+            crate::confine::run_future(async move {
+                let state = app.state::<AppState>();
+                state.close_board(&path).await
+            })
+        });
+
+    let window_shell: Arc<dyn WindowShell> = Arc::new(TauriWindowShell::new(
+        handle.clone(),
+        open_window,
+        pick_folder,
+        init_board,
+        switch_board,
+        close_board,
+    ));
+    let app_shell: Arc<dyn swissarmyhammer_app_service::AppShell> = Arc::new(
+        swissarmyhammer_app_service::TauriAppShell::new(handle.clone()),
+    );
+    (window_shell, app_shell)
 }
 
 fn build_initial_menu(app: &tauri::App) {
@@ -353,6 +472,10 @@ fn on_window_close_requested(window: &tauri::Window, label: &str) {
         return;
     }
     state.ui_state.remove_window(label);
+    // Abort and drop this window's notification forwarder so the per-window
+    // forwarder map never grows unbounded across a session and a reused Tauri
+    // label re-binds cleanly on its next `mcp_subscribe`.
+    crate::commands::unbind_window_forwarder(label);
     tracing::info!(label = %label, "removed window entry on mid-session close");
 }
 

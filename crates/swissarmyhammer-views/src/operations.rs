@@ -411,7 +411,11 @@ pub struct SwitchPerspective {
 /// `ViewEvent`.
 ///
 /// Returns `{ ok: true, view: <object>, entry_id: <string|null> }`.
-#[operation(verb = "set", noun = "view", description = "Create or update a view definition")]
+#[operation(
+    verb = "set",
+    noun = "view",
+    description = "Create or update a view definition"
+)]
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SetView {
     /// Optional explicit id. A fresh ULID is minted when omitted.

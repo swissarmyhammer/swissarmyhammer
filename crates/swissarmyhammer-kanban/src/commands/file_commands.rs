@@ -5,9 +5,9 @@
 //! by the Tauri layer, which hooks into dispatch_command results to perform
 //! side effects.
 
+use crate::commands_core::{Command, CommandContext, CommandError};
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use crate::commands_core::{Command, CommandContext, CommandError};
 
 /// Switch the current window to a different board.
 ///
@@ -161,10 +161,10 @@ impl Command for CloseBoardCmd {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands_core::CommandContext;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use crate::commands_core::{CommandContext};
-    use swissarmyhammer_ui_state::{UIState};
+    use swissarmyhammer_ui_state::UIState;
 
     /// Build a minimal CommandContext with the given UIState, scope, and args.
     fn make_ctx(

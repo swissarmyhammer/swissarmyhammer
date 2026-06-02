@@ -5,11 +5,11 @@
 //! `task.delete` here. Task creation is served by dynamic `entity.add:task`.
 
 use super::run_op;
+use crate::commands_core::{Command, CommandContext, CommandError};
 use crate::context::KanbanContext;
 use crate::types::Ordinal;
 use async_trait::async_trait;
 use serde_json::Value;
-use crate::commands_core::{Command, CommandContext, CommandError};
 use swissarmyhammer_entity::Entity;
 
 /// Move a task to a different column/position.
@@ -256,10 +256,10 @@ impl Command for DoThisNextCmd {
 mod tests {
     use super::*;
     use crate::board::InitBoard;
+    use crate::commands_core::CommandContext;
     use crate::task::AddTask;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use crate::commands_core::CommandContext;
     use swissarmyhammer_operations::Execute;
     use tempfile::TempDir;
 

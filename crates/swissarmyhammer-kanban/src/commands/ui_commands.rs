@@ -1,8 +1,8 @@
 //! UI command implementations: inspector, palette, active view.
 
+use crate::commands_core::{Command, CommandContext, CommandError};
 use async_trait::async_trait;
 use serde_json::Value;
-use crate::commands_core::{Command, CommandContext, CommandError};
 
 /// Open the inspector for a target entity.
 ///
@@ -353,10 +353,10 @@ impl Command for SetActiveViewCmd {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands_core::CommandContext;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use crate::commands_core::{CommandContext};
-    use swissarmyhammer_ui_state::{UIState};
+    use swissarmyhammer_ui_state::UIState;
 
     /// Helper to build a CommandContext with UIState and a window scope chain.
     fn ctx_with_mode_arg(mode: &str) -> CommandContext {

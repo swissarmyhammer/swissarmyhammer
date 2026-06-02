@@ -27,11 +27,11 @@
 //! [`OptionsRegistry`]: crate::commands_core::OptionsRegistry
 //! [`OptionsResolver`]: crate::commands_core::OptionsResolver
 
-use serde::{Deserialize, Serialize};
 use crate::commands_core::{
     register_command_resolvers, OptionsContext, OptionsRegistry, OptionsResolver, OptionsSources,
     ParamOption,
 };
+use serde::{Deserialize, Serialize};
 use swissarmyhammer_perspectives::register_perspective_resolvers;
 use swissarmyhammer_views::register_view_resolvers;
 

@@ -37,16 +37,88 @@ use crate::operations::{
 };
 use crate::types::{ViewDef, ViewKind};
 
+/// The per-board kernels a [`ViewsServer`] needs at tool-call time.
+///
+/// Perspectives and views are per-board state — each board's
+/// [`PerspectiveContext`] / [`ViewsContext`] push their writes onto that
+/// board's `StoreContext`. The multi-board kanban app therefore resolves the
+/// active board's pair per call rather than capturing one pair at construction.
+///
+/// `Clone` so the value can be placed into a `tokio::task_local!` (see
+/// [`scope_views_board_services`]) and resolved out cheaply per call by the
+/// production resolver.
+#[derive(Clone)]
+pub struct ViewsBoardServices {
+    /// The board's shared perspective kernel.
+    pub perspectives: Arc<RwLock<PerspectiveContext>>,
+    /// The board's shared views kernel.
+    pub views: Arc<RwLock<ViewsContext>>,
+}
+
+/// Resolves the [`ViewsBoardServices`] to drive for the current task.
+///
+/// Production deployments back this with a `tokio::task_local!` scope set by
+/// the dispatcher (see [`scope_views_board_services`] / [`task_local_resolver`]).
+/// Returning `None` means no board is scoped on this task; tool handlers
+/// surface that as an `internal_error` rather than panicking.
+pub type ViewsBoardResolver = Arc<dyn Fn() -> Option<ViewsBoardServices> + Send + Sync>;
+
+tokio::task_local! {
+    /// Per-task active [`ViewsBoardServices`] for production dispatch.
+    ///
+    /// The kanban app is multi-board: each board's kernel pair is scoped here
+    /// by the dispatcher (alongside `swissarmyhammer-kanban`'s `CURRENT_STORE_CTX`
+    /// and the entity-mcp `CURRENT_ENTITY_BOARD_SERVICES`), and the production
+    /// [`ViewsServer`] resolver — [`task_local_resolver`] — reads back the same
+    /// pair inside its per-call `services()` lookup.
+    ///
+    /// Outside a [`scope_views_board_services`] (e.g. in tests that build the
+    /// server with a constant pair via [`ViewsServer::new`]) this task-local is
+    /// unset and a resolver built from [`task_local_resolver`] returns `None`.
+    pub static CURRENT_VIEWS_BOARD_SERVICES: ViewsBoardServices;
+}
+
+/// Scope [`CURRENT_VIEWS_BOARD_SERVICES`] to `services` for the duration of
+/// `fut`.
+///
+/// The production [`ViewsServer`] resolver ([`task_local_resolver`]) reads back
+/// the scoped pair inside every tool call, so the in-process `views` MCP
+/// surface routes per call to whichever board's kernels the dispatcher scoped.
+pub async fn scope_views_board_services<F>(services: ViewsBoardServices, fut: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    CURRENT_VIEWS_BOARD_SERVICES.scope(services, fut).await
+}
+
+/// Build the production [`ViewsBoardResolver`] that reads
+/// [`CURRENT_VIEWS_BOARD_SERVICES`].
+///
+/// Pair this with [`ViewsServer::with_resolver`]; the app's dispatcher then
+/// scopes the per-board pair around its dispatch via
+/// [`scope_views_board_services`]. Outside a scope the resolver returns `None`
+/// and tool calls fail with a structured error — a dispatcher that forgets to
+/// scope degrades gracefully rather than panicking.
+pub fn task_local_resolver() -> ViewsBoardResolver {
+    Arc::new(|| {
+        CURRENT_VIEWS_BOARD_SERVICES
+            .try_with(|services| services.clone())
+            .ok()
+    })
+}
+
 /// In-process `rmcp::ServerHandler` for the `views` operation tool.
 ///
-/// Holds shared handles to the perspective and views kernels so every verb
-/// dispatches against the same context the rest of the app reads from.
+/// Holds a [`ViewsBoardResolver`] — consulted at the top of every verb handler
+/// — so a single `ViewsServer` exposed app-wide on a plugin host can route per
+/// call to whichever board's kernels are scoped on the current `tokio` task.
+/// The previous direct-handle constructor is preserved as a thin wrapper that
+/// produces a resolver returning the same pair every call.
 #[derive(Clone)]
 pub struct ViewsServer {
-    /// The shared perspective kernel (from `swissarmyhammer-perspectives`).
-    perspectives: Arc<RwLock<PerspectiveContext>>,
-    /// The shared views kernel (from this crate).
-    views: Arc<RwLock<ViewsContext>>,
+    /// Resolves the active board's perspective + views kernels per call. See
+    /// [`ViewsBoardResolver`].
+    resolver: ViewsBoardResolver,
 }
 
 impl std::fmt::Debug for ViewsServer {
@@ -56,28 +128,45 @@ impl std::fmt::Debug for ViewsServer {
 }
 
 impl ViewsServer {
-    /// Construct a server wired to the shared perspective and views kernels.
+    /// Construct a server wired to a single board's perspective and views
+    /// kernels.
+    ///
+    /// Preserved as a constant-pair wrapper around [`ViewsServer::with_resolver`]
+    /// so single-board callers (most tests) keep a simple constructor.
     pub fn new(
         perspectives: Arc<RwLock<PerspectiveContext>>,
         views: Arc<RwLock<ViewsContext>>,
     ) -> Self {
-        Self {
-            perspectives,
-            views,
-        }
+        Self::with_resolver(Arc::new(move || {
+            Some(ViewsBoardServices {
+                perspectives: Arc::clone(&perspectives),
+                views: Arc::clone(&views),
+            })
+        }))
     }
 
-    /// Return the shared perspective kernel handle.
+    /// Build a server that resolves the active board's kernels per call.
     ///
-    /// Exposed for tests that verify the server shares the same kernel the
-    /// rest of the app reads from (`Arc::ptr_eq`).
-    pub fn perspective_context(&self) -> Arc<RwLock<PerspectiveContext>> {
-        Arc::clone(&self.perspectives)
+    /// Production constructor: pairs with a dispatcher-set `tokio::task_local`.
+    /// The resolver is consulted at the top of every verb handler so a single
+    /// `ViewsServer` can serve every board on a plugin host. Returning `None`
+    /// from the resolver surfaces as a tool-level `internal_error` rather than
+    /// panicking.
+    pub fn with_resolver(resolver: ViewsBoardResolver) -> Self {
+        Self { resolver }
     }
 
-    /// Return the shared views kernel handle.
-    pub fn views_context(&self) -> Arc<RwLock<ViewsContext>> {
-        Arc::clone(&self.views)
+    /// Resolve the active board's kernels, or return a structured
+    /// `internal_error` describing the gap.
+    fn services(&self) -> Result<ViewsBoardServices, McpError> {
+        (self.resolver)().ok_or_else(|| {
+            McpError::internal_error(
+                "no ViewsBoardServices active on this tokio task; the dispatcher \
+                 must scope a board (see `scope_views_board_services`) before \
+                 invoking a `views` tool",
+                None,
+            )
+        })
     }
 
     /// Build the platform-facing `views` tool definition.
@@ -97,7 +186,8 @@ impl ViewsServer {
 
     /// Handle `load perspective` — resolve by name, then by id.
     async fn handle_load(&self, req: LoadPerspective) -> Result<Value, McpError> {
-        let pctx = self.perspectives.read().await;
+        let services = self.services()?;
+        let pctx = services.perspectives.read().await;
         let perspective = pctx
             .get_by_name(&req.name)
             .or_else(|| pctx.get_by_id(&req.name))
@@ -116,7 +206,8 @@ impl ViewsServer {
         perspective.filter = req.filter;
         perspective.group = req.group;
 
-        let mut pctx = self.perspectives.write().await;
+        let services = self.services()?;
+        let mut pctx = services.perspectives.write().await;
         let entry_id = pctx.write(&perspective).await.map_err(persp_error_to_mcp)?;
         Ok(json!({
             "ok": true,
@@ -127,14 +218,16 @@ impl ViewsServer {
 
     /// Handle `delete perspective` — trash a perspective by id.
     async fn handle_delete(&self, req: DeletePerspective) -> Result<Value, McpError> {
-        let mut pctx = self.perspectives.write().await;
+        let services = self.services()?;
+        let mut pctx = services.perspectives.write().await;
         let (_deleted, entry_id) = pctx.delete(&req.id).await.map_err(persp_error_to_mcp)?;
         Ok(json!({ "ok": true, "entry_id": entry_id.map(|e| e.to_string()) }))
     }
 
     /// Handle `rename perspective` — change a perspective's name.
     async fn handle_rename(&self, req: RenamePerspective) -> Result<Value, McpError> {
-        let mut pctx = self.perspectives.write().await;
+        let services = self.services()?;
+        let mut pctx = services.perspectives.write().await;
         let updated = pctx
             .rename(&req.id, req.new_name)
             .await
@@ -144,7 +237,8 @@ impl ViewsServer {
 
     /// Handle `list perspective` — every loaded perspective.
     async fn handle_list(&self) -> Result<Value, McpError> {
-        let pctx = self.perspectives.read().await;
+        let services = self.services()?;
+        let pctx = services.perspectives.read().await;
         let all = pctx.all();
         let perspectives: Result<Vec<Value>, McpError> =
             all.iter().map(perspective_to_json).collect();
@@ -167,7 +261,8 @@ impl ViewsServer {
         perspective_id: &str,
         mutate: impl FnOnce(&mut Perspective),
     ) -> Result<Value, McpError> {
-        let mut pctx = self.perspectives.write().await;
+        let services = self.services()?;
+        let mut pctx = services.perspectives.write().await;
         let mut perspective = pctx
             .get_by_id(perspective_id)
             .ok_or_else(|| perspective_not_found(perspective_id))?
@@ -231,13 +326,15 @@ impl ViewsServer {
     async fn handle_toggle_sort(&self, req: ToggleSort) -> Result<Value, McpError> {
         let field = req.field;
         self.mutate_perspective(&req.perspective_id, move |p| {
-            let current = p.sort.iter().find(|e| e.field == field).map(|e| e.direction.clone());
+            let current = p
+                .sort
+                .iter()
+                .find(|e| e.field == field)
+                .map(|e| e.direction.clone());
             p.sort.retain(|e| e.field != field);
             match current {
                 None => p.sort.push(SortEntry::new(field, SortDirection::Asc)),
-                Some(SortDirection::Asc) => {
-                    p.sort.push(SortEntry::new(field, SortDirection::Desc))
-                }
+                Some(SortDirection::Asc) => p.sort.push(SortEntry::new(field, SortDirection::Desc)),
                 // desc -> none: already removed by the retain above.
                 Some(SortDirection::Desc) => {}
             }
@@ -255,8 +352,13 @@ impl ViewsServer {
 
     /// Handle `prev perspective` — resolve the previous perspective in a view.
     async fn handle_prev(&self, req: PrevPerspective) -> Result<Value, McpError> {
-        self.cycle(&req.view, req.view_id.as_deref(), req.current.as_deref(), -1)
-            .await
+        self.cycle(
+            &req.view,
+            req.view_id.as_deref(),
+            req.current.as_deref(),
+            -1,
+        )
+        .await
     }
 
     /// Shared cycling body for next/prev navigation.
@@ -272,7 +374,8 @@ impl ViewsServer {
         current: Option<&str>,
         step: isize,
     ) -> Result<Value, McpError> {
-        let pctx = self.perspectives.read().await;
+        let services = self.services()?;
+        let pctx = services.perspectives.read().await;
         let matching: Vec<&Perspective> = pctx
             .all()
             .iter()
@@ -297,7 +400,8 @@ impl ViewsServer {
 
     /// Handle `goto perspective` — resolve by id, optionally validating view.
     async fn handle_goto(&self, req: GotoPerspective) -> Result<Value, McpError> {
-        let pctx = self.perspectives.read().await;
+        let services = self.services()?;
+        let pctx = services.perspectives.read().await;
         let perspective = pctx
             .get_by_id(&req.id)
             .ok_or_else(|| perspective_not_found(&req.id))?;
@@ -319,7 +423,8 @@ impl ViewsServer {
 
     /// Handle `switch perspective` — resolve by id and surface its filter.
     async fn handle_switch(&self, req: SwitchPerspective) -> Result<Value, McpError> {
-        let pctx = self.perspectives.read().await;
+        let services = self.services()?;
+        let pctx = services.perspectives.read().await;
         let perspective = pctx
             .get_by_id(&req.perspective_id)
             .ok_or_else(|| perspective_not_found(&req.perspective_id))?;
@@ -348,7 +453,8 @@ impl ViewsServer {
             commands: Vec::new(),
         };
 
-        let mut vctx = self.views.write().await;
+        let services = self.services()?;
+        let mut vctx = services.views.write().await;
         let entry_id = vctx.write_view(&def).await.map_err(views_error_to_mcp)?;
         Ok(json!({
             "ok": true,
@@ -364,7 +470,11 @@ impl ViewsServer {
 /// id-scoped perspectives (`view_id: Some`) match strictly by id when an
 /// active id is known; legacy (`view_id: None`) perspectives match by view
 /// kind; scoped perspectives with no known active id do not leak.
-fn perspective_belongs_to_view(p: &Perspective, active_view_id: Option<&str>, view_kind: &str) -> bool {
+fn perspective_belongs_to_view(
+    p: &Perspective,
+    active_view_id: Option<&str>,
+    view_kind: &str,
+) -> bool {
     match (&p.view_id, active_view_id) {
         (Some(pid), Some(active)) => pid == active,
         (None, _) => p.view == view_kind,
@@ -433,10 +543,9 @@ fn deserialize_op<T: DeserializeOwned>(arguments: Value, op: &str) -> Result<T, 
 fn persp_error_to_mcp(err: PerspectiveError) -> McpError {
     let message = err.to_string();
     match &err {
-        PerspectiveError::NotFound { resource, id } => McpError::invalid_params(
-            message,
-            Some(json!({ "resource": resource, "id": id })),
-        ),
+        PerspectiveError::NotFound { resource, id } => {
+            McpError::invalid_params(message, Some(json!({ "resource": resource, "id": id })))
+        }
         _ => McpError::internal_error(message, None),
     }
 }
@@ -514,12 +623,21 @@ impl ViewsServer {
             "list perspective" => self.handle_list().await,
             "set filter" => self.handle_set_filter(deserialize_op(arguments, op)?).await,
             "focus filter" => Ok(json!({ "ok": true })),
-            "clear filter" => self.handle_clear_filter(deserialize_op(arguments, op)?).await,
+            "clear filter" => {
+                self.handle_clear_filter(deserialize_op(arguments, op)?)
+                    .await
+            }
             "set group" => self.handle_set_group(deserialize_op(arguments, op)?).await,
-            "clear group" => self.handle_clear_group(deserialize_op(arguments, op)?).await,
+            "clear group" => {
+                self.handle_clear_group(deserialize_op(arguments, op)?)
+                    .await
+            }
             "set sort" => self.handle_set_sort(deserialize_op(arguments, op)?).await,
             "clear sort" => self.handle_clear_sort(deserialize_op(arguments, op)?).await,
-            "toggle sort" => self.handle_toggle_sort(deserialize_op(arguments, op)?).await,
+            "toggle sort" => {
+                self.handle_toggle_sort(deserialize_op(arguments, op)?)
+                    .await
+            }
             "next perspective" => self.handle_next(deserialize_op(arguments, op)?).await,
             "prev perspective" => self.handle_prev(deserialize_op(arguments, op)?).await,
             "goto perspective" => self.handle_goto(deserialize_op(arguments, op)?).await,

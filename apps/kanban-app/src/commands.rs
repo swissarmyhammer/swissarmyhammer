@@ -1240,8 +1240,8 @@ pub(crate) async fn dispatch_command_internal(
         rw.board_path,
     )
     .await;
-    let result = dispatch_via_service(state, app, &effective_cmd, &ctx, active_handle.as_ref())
-        .await?;
+    let result =
+        dispatch_via_service(state, app, &effective_cmd, &ctx, active_handle.as_ref()).await?;
     tracing::info!(cmd = %effective_cmd, undoable, result = %result, "command completed");
 
     // Undo stack push is handled automatically inside EntityContext::write()/delete()
@@ -1299,7 +1299,14 @@ async fn try_dispatch_via_command_service(
     ctx: &swissarmyhammer_kanban::commands_core::CommandContext,
     active_handle: Option<&Arc<BoardHandle>>,
 ) -> Option<Result<Value, rmcp::ErrorData>> {
-    let service = state.plugin_platform.lock().await.command_service()?;
+    // Route to the calling board's OWN CommandService when it has a per-board
+    // platform; fall back to the global platform's service for boardless
+    // dispatch (no active board). This keeps a board's project-plugin command
+    // registrations isolated to that board.
+    let service = match active_handle.and_then(|h| h.platform()) {
+        Some(platform) => platform.lock().await.command_service()?,
+        None => state.plugin_platform.lock().await.command_service()?,
+    };
 
     let req = swissarmyhammer_command_service::ExecuteCommand {
         id: effective_cmd.to_string(),
@@ -1348,17 +1355,55 @@ async fn try_dispatch_via_command_service(
 
     let store_ctx = active_handle.map(|h| Arc::clone(&h.store_context));
 
+    // Build the per-board views kernels bundle (perspectives + views). Both are
+    // per-board state; the `views` MCP server resolves the active pair from the
+    // task-local this scopes. A board whose perspective/views contexts can't be
+    // resolved drops the bundle — `views` ops then surface their structured
+    // "no board scoped" error rather than panicking.
+    let views_services = match active_handle {
+        Some(handle) => match handle.ctx.perspective_context_arc().await {
+            Ok(persp) => {
+                handle
+                    .ctx
+                    .views_arc()
+                    .map(|views| swissarmyhammer_views::ViewsBoardServices {
+                        perspectives: persp,
+                        views,
+                    })
+            }
+            Err(e) => {
+                tracing::warn!(
+                    cmd = %effective_cmd,
+                    error = %e,
+                    "failed to resolve perspective_context for views scoping"
+                );
+                None
+            }
+        },
+        None => None,
+    };
+
     // Capture `service` by move into the dispatch future so the lock guard
-    // above doesn't need to outlive the await.
+    // above doesn't need to outlive the await. The `views` task-local is the
+    // innermost scope (boxed so the store/entity match below has one future
+    // type regardless of whether views is scoped).
     let dispatched = async move {
         service
             .dispatch(swissarmyhammer_plugin::CallerId::HostInternal, req)
             .await
     };
+    let dispatched: std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Value, rmcp::ErrorData>> + Send>,
+    > = match views_services {
+        Some(vsvc) => Box::pin(swissarmyhammer_views::scope_views_board_services(
+            vsvc, dispatched,
+        )),
+        None => Box::pin(dispatched),
+    };
 
-    // Scope both task-locals around the dispatch when we have them; otherwise
-    // run dispatch bare and let the resolvers return their structured
-    // "not scoped" errors for ops that need them.
+    // Scope the store + entity task-locals around the dispatch when we have
+    // them; otherwise run dispatch bare and let the resolvers return their
+    // structured "not scoped" errors for ops that need them.
     let raw = match (store_ctx, entity_services) {
         (Some(sctx), Some(esvc)) => {
             swissarmyhammer_kanban::command_seam::scope_store_context(
@@ -1379,9 +1424,7 @@ async fn try_dispatch_via_command_service(
     // The service wraps successful results as `{ "ok": true, "result": <value> }`.
     // Unwrap to match the legacy `execute_registered_command` contract
     // (which returns just the inner result value).
-    Some(raw.map(|v| {
-        v.get("result").cloned().unwrap_or(v)
-    }))
+    Some(raw.map(|v| v.get("result").cloned().unwrap_or(v)))
 }
 
 /// Run every post-execute side-effect — board management, drag events,
@@ -1440,8 +1483,12 @@ async fn build_dispatch_context(
         Some(Value::Object(map)) => map.into_iter().collect(),
         _ => HashMap::new(),
     };
-    let mut ctx =
-        swissarmyhammer_kanban::commands_core::CommandContext::new(effective_cmd, scope, target, args_map);
+    let mut ctx = swissarmyhammer_kanban::commands_core::CommandContext::new(
+        effective_cmd,
+        scope,
+        target,
+        args_map,
+    );
     ctx = ctx.with_ui_state(Arc::clone(&state.ui_state));
 
     let resolved_board_path =
@@ -1493,6 +1540,11 @@ async fn handle_board_switch_result(
             state
                 .ui_state
                 .set_window_board(label, &canonical.display().to_string());
+            // The window was switched IN PLACE (reused, not recreated), so its
+            // notification forwarder is still bound to the OLD board's bridge.
+            // Proactively re-bind it to the new board's bridge — don't rely on
+            // the frontend re-invoking `mcp_subscribe`.
+            rebind_window_forwarder(app, state, label).await;
             let boards = state.boards.read().await;
             if let Some(handle) = boards.get(&canonical) {
                 let name = swissarmyhammer_kanban::board_display_name(&handle.ctx).await;
@@ -1528,7 +1580,7 @@ async fn handle_board_close_result(
         .unwrap_or("main")
         .to_string();
 
-    drop_or_detach_board(state, effective_cmd, path_str, &requesting_label).await;
+    drop_or_detach_board(app, state, effective_cmd, path_str, &requesting_label).await;
     close_or_retitle_window(app, &requesting_label);
     let _ = app.emit("board-changed", ());
 }
@@ -1537,6 +1589,7 @@ async fn handle_board_close_result(
 /// just clear the requesting window's assignment so other windows keep
 /// running.
 async fn drop_or_detach_board(
+    app: &AppHandle,
     state: &AppState,
     effective_cmd: &str,
     path_str: &str,
@@ -1556,8 +1609,17 @@ async fn drop_or_detach_board(
             tracing::error!(cmd = %effective_cmd, path = %path_str, error = %e, "BoardClose: failed to close board");
         }
         state.ui_state.remove_open_board(path_str);
+        // The requesting window stays open only when it is the last visible
+        // window (see `close_or_retitle_window`); in that case it is now
+        // boardless, so move its forwarder onto the global bridge. When the
+        // window is actually closed, the close handler unbinds it instead, and
+        // this re-bind is a cheap no-op (no forwarder to move).
+        rebind_window_forwarder(app, state, requesting_label).await;
     } else {
         state.ui_state.set_window_board(requesting_label, "");
+        // Other windows keep the board open; this window detached from it, so
+        // re-bind its forwarder onto the global (boardless) bridge.
+        rebind_window_forwarder(app, state, requesting_label).await;
     }
 }
 
@@ -2246,11 +2308,43 @@ fn spatial_push_layer_inner(
 // `apps/kanban-app/ui/src/lib/mcp-notifications.ts` for the frontend ends.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Tracks whether the `mcp_subscribe` bridge→Tauri-event pump has been
-/// spawned, so a second `mcp_subscribe` call is a no-op (the bridge is one
-/// shared broadcast channel; one forwarder fans out to every Tauri listener).
-static MCP_SUBSCRIBE_STARTED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+/// The bridge a window's notification forwarder is currently bound to.
+///
+/// `Some(canonical_board_path)` when the window's board has its own per-board
+/// notification bridge; `None` when the forwarder is on the global host's bridge
+/// (a boardless window, or a board without a per-board platform). Two windows on
+/// the same board carry equal `BindKey`s but remain distinct map entries (keyed
+/// by window label).
+type BindKey = Option<PathBuf>;
+
+/// One window's live notification forwarder: the task pumping a
+/// `NotificationBridge` into per-window Tauri events, plus the bridge it is
+/// bound to so a board switch can detect a stale binding and re-bind.
+struct WindowForwarder {
+    /// Which bridge the `task` is currently forwarding from.
+    bound_to: BindKey,
+    /// Monotonic id identifying THIS forwarder instance for the window, so the
+    /// pump can tell whether it is still the registered one before removing the
+    /// entry on bridge close (a re-bind installs a newer generation).
+    generation: u64,
+    /// The spawned pump; aborted on re-bind or window close.
+    task: tauri::async_runtime::JoinHandle<()>,
+}
+
+/// Monotonic source of [`WindowForwarder::generation`] ids.
+static FORWARDER_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Per-window notification forwarders, keyed by Tauri window label.
+///
+/// Replaces the former "already-subscribed" label set: tracking the actual
+/// forwarder (and the board it is bound to) makes `mcp_subscribe` idempotent
+/// per `(label, board)` AND lets a board switch proactively re-bind a window's
+/// forwarder to the NEW board's bridge — the old set could only no-op, so after
+/// an in-place board switch a window stayed bound to its old board's bridge and
+/// silently stopped receiving events. Entries are removed (and their task
+/// aborted) on window close and when a forwarder observes its bridge close.
+static WINDOW_FORWARDERS: std::sync::LazyLock<std::sync::Mutex<HashMap<String, WindowForwarder>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
 /// Generic MCP `tools/call` from the webview onto a host-exposed module.
 ///
@@ -2272,6 +2366,7 @@ static MCP_SUBSCRIBE_STARTED: std::sync::atomic::AtomicBool =
 /// (see `dispatch_command`, …).
 #[tauri::command]
 pub async fn command_tool_call(
+    window: Window,
     state: State<'_, AppState>,
     module: Option<String>,
     tool: String,
@@ -2293,58 +2388,228 @@ pub async fn command_tool_call(
 
     let module = module.unwrap_or_else(|| tool.clone());
 
-    let platform = state.plugin_platform.lock().await;
-    platform
-        .host()
-        .call(
-            swissarmyhammer_plugin::CallerId::HostInternal,
-            &module,
-            &tool,
-            Value::Object(input),
-        )
-        .await
-        .map_err(|e| e.to_string())
+    // Route the call to the host owned by the calling window's board (resolved
+    // from the Tauri window label), so a board's project-plugin servers are
+    // only visible to that board's windows. Boardless windows (and boards
+    // without a per-board platform) fall back to the global host, so builtin +
+    // user commands still answer everywhere.
+    let board = state.board_handle_for_window(window.label()).await;
+    let input = Value::Object(input);
+    let result = match board.as_ref().and_then(|h| h.platform()) {
+        Some(per_board) => {
+            per_board
+                .lock()
+                .await
+                .host()
+                .call(
+                    swissarmyhammer_plugin::CallerId::HostInternal,
+                    &module,
+                    &tool,
+                    input,
+                )
+                .await
+        }
+        None => {
+            state
+                .plugin_platform
+                .lock()
+                .await
+                .host()
+                .call(
+                    swissarmyhammer_plugin::CallerId::HostInternal,
+                    &module,
+                    &tool,
+                    input,
+                )
+                .await
+        }
+    };
+    result.map_err(|e| e.to_string())
 }
 
-/// Start the `NotificationBridge` → Tauri-event forwarder once.
+/// Start (or re-bind) the calling window's `NotificationBridge` → Tauri-event
+/// forwarder.
 ///
-/// Idempotent: a second call is a no-op so the frontend can invoke this on
-/// every webview mount without double-spawning the pump. The bridge is one
-/// shared `broadcast` channel — one in-process subscriber fans out via
-/// `app.emit(method, params)` to every Tauri `listen(method, ...)` in the
-/// webview. The event name is the MCP notification `method` verbatim
-/// (e.g. `"notifications/store/changed"`,
-/// `"notifications/commands/changed"`), matching the constants in
-/// `mcp-notifications.ts` / `mcp-transport.ts`.
+/// Per-window and idempotent PER BOARD: a window's repeat call is a no-op while
+/// it is still bound to its current board's bridge, so the frontend can invoke
+/// this on every webview mount without double-spawning the pump. Distinct windows
+/// each get their own forwarder. The forwarder subscribes to the bridge of the
+/// window's OWN board (resolved from the Tauri window label) and emits ONLY to
+/// that window via [`Emitter::emit_to`], so a board's notifications never leak
+/// into another board's windows. Boardless windows (and boards without a
+/// per-board platform) fall back to the global host's bridge.
 ///
-/// The forwarder task lives for the app's lifetime; the frontend does not
-/// unsubscribe.
+/// Because the backend proactively re-binds on board switch (see
+/// [`rebind_window_forwarder`]), the frontend does NOT need to re-invoke this on
+/// a switch — but if it does, the per-`(label, board)` idempotency makes the
+/// extra call a harmless no-op rather than a second, duplicate forwarder.
+///
+/// The event name is the MCP notification `method` verbatim
+/// (e.g. `"notifications/store/changed"`, `"notifications/commands/changed"`),
+/// matching the constants in `mcp-notifications.ts` / `mcp-transport.ts`. The
+/// payload is the notification's `params` object — what every `subscribe*`
+/// helper in `mcp-notifications.ts` types as its `event.payload`.
 #[tauri::command]
 pub async fn mcp_subscribe(
+    window: Window,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    use std::sync::atomic::Ordering;
-    if MCP_SUBSCRIBE_STARTED.swap(true, Ordering::SeqCst) {
-        // Pump already running — every Tauri `listen(...)` already receives.
-        return Ok(());
+    bind_window_forwarder(&app, &state, window.label()).await;
+    Ok(())
+}
+
+/// Resolve the bridge `label`'s window is currently bound to: its per-board
+/// host's bridge when the window's board has one, else the global host's bridge.
+///
+/// Returns the `(BindKey, bridge)` pair so the caller can both detect a stale
+/// binding (by comparing `BindKey`s) and subscribe to the live bridge.
+async fn resolve_window_bridge(
+    state: &AppState,
+    label: &str,
+) -> (BindKey, swissarmyhammer_plugin::notify::NotificationBridge) {
+    match state.board_handle_for_window(label).await {
+        Some(handle) => match handle.platform() {
+            Some(per_board) => {
+                let key = state
+                    .ui_state
+                    .window_board(label)
+                    .map(|p| PathBuf::from(&p).canonicalize().unwrap_or(PathBuf::from(p)));
+                let bridge = per_board.lock().await.host().notification_bridge();
+                (key, bridge)
+            }
+            // Board open but no per-board platform → global bridge.
+            None => (
+                None,
+                state
+                    .plugin_platform
+                    .lock()
+                    .await
+                    .host()
+                    .notification_bridge(),
+            ),
+        },
+        // Boardless / unknown window → global bridge.
+        None => (
+            None,
+            state
+                .plugin_platform
+                .lock()
+                .await
+                .host()
+                .notification_bridge(),
+        ),
+    }
+}
+
+/// Ensure `label`'s notification forwarder is bound to its CURRENT board's
+/// bridge, spawning or re-binding as needed.
+///
+/// Idempotent per `(label, board)`: when an existing forwarder is already bound
+/// to the window's current bridge this is a no-op; when the window has no
+/// forwarder, or one bound to a DIFFERENT board (an in-place board switch), the
+/// stale forwarder (if any) is aborted and a fresh one is spawned on the current
+/// board's bridge. This is the single seam both `mcp_subscribe` and the board
+/// switch / close paths use, so the backend stays correct even if the frontend
+/// never re-subscribes.
+async fn bind_window_forwarder(app: &AppHandle, state: &AppState, label: &str) {
+    // Resolve `(key, bridge)` before taking the install lock, then re-lock below
+    // to insert (last-resolve-wins). This is a benign TOCTOU: binds for one
+    // label are serialized by the board-switch / open path, so two binds for the
+    // same window cannot race here — the resolve and the install observe the same
+    // board assignment.
+    let (key, bridge) = resolve_window_bridge(state, label).await;
+
+    {
+        // Already bound to the right bridge → nothing to do.
+        let forwarders = WINDOW_FORWARDERS.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(existing) = forwarders.get(label) {
+            if existing.bound_to == key {
+                return;
+            }
+        }
     }
 
-    let bridge = state.plugin_platform.lock().await.host().notification_bridge();
-    let mut subscription = bridge.subscribe();
+    let generation = FORWARDER_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // Spawn the forwarder before inserting its map entry. If the bridge is
+    // already closed and the pump hits `RecvError::Closed` before this insert,
+    // its generation-guarded self-evict finds no matching entry and no-ops; the
+    // (dead) entry then lingers only until the next bind/unbind for this label
+    // replaces or removes it. Harmless and self-healing — no leak across binds.
+    let task = spawn_window_forwarder(app.clone(), bridge, label.to_string(), generation);
 
+    // Install the new forwarder, aborting any prior one for this label (a
+    // re-bind, or a lost race with a concurrent bind for the same window).
+    let mut forwarders = WINDOW_FORWARDERS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(prev) = forwarders.insert(
+        label.to_string(),
+        WindowForwarder {
+            bound_to: key,
+            generation,
+            task,
+        },
+    ) {
+        prev.task.abort();
+    }
+}
+
+/// Re-bind `label`'s notification forwarder after its board assignment changed.
+///
+/// Called from the board switch / close side-effects so a window that switched
+/// boards IN PLACE (the window is reused, not recreated) is moved onto the new
+/// board's bridge proactively — without waiting on the frontend to re-subscribe.
+/// A no-op when the window has no forwarder yet (it will bind on its next
+/// `mcp_subscribe`).
+pub(crate) async fn rebind_window_forwarder(app: &AppHandle, state: &AppState, label: &str) {
+    let has_forwarder = {
+        let forwarders = WINDOW_FORWARDERS.lock().unwrap_or_else(|e| e.into_inner());
+        forwarders.contains_key(label)
+    };
+    if has_forwarder {
+        bind_window_forwarder(app, state, label).await;
+    }
+}
+
+/// Remove and abort `label`'s notification forwarder.
+///
+/// Called on window close so a closed (or reused-label) window never keeps a
+/// dangling forwarder and the map never grows unbounded across a session.
+pub(crate) fn unbind_window_forwarder(label: &str) {
+    let removed = {
+        let mut forwarders = WINDOW_FORWARDERS.lock().unwrap_or_else(|e| e.into_inner());
+        forwarders.remove(label)
+    };
+    if let Some(forwarder) = removed {
+        forwarder.task.abort();
+    }
+}
+
+/// Spawn the bridge→Tauri-event pump for one window, returning its task handle.
+///
+/// The task forwards every notification on `bridge` to `label`'s window under
+/// the notification `method` as the Tauri event name. On `RecvError::Closed`
+/// (the bridge was dropped — its board closed, or app teardown) it removes its
+/// own entry from [`WINDOW_FORWARDERS`] so a stale forwarder never lingers.
+fn spawn_window_forwarder(
+    app: AppHandle,
+    bridge: swissarmyhammer_plugin::notify::NotificationBridge,
+    label: String,
+    generation: u64,
+) -> tauri::async_runtime::JoinHandle<()> {
+    let mut subscription = bridge.subscribe();
     tauri::async_runtime::spawn(async move {
         loop {
             match subscription.recv().await {
                 Ok(notification) => {
-                    // Emit under the MCP notification `method` so the
-                    // frontend's `listen("notifications/store/changed", …)`
-                    // (and siblings) wire up unchanged. The payload is the
-                    // notification's `params` object — what every
-                    // `subscribe*` helper in `mcp-notifications.ts` types as
-                    // its `event.payload`.
-                    if let Err(e) = app.emit(&notification.method, &notification.params) {
+                    // Emit only to THIS window under the MCP notification
+                    // `method` so the frontend's
+                    // `listen("notifications/store/changed", …)` (and siblings)
+                    // wire up unchanged, but a board's events stay in its own
+                    // window.
+                    if let Err(e) = app.emit_to(&label, &notification.method, &notification.params)
+                    {
                         tracing::warn!(
+                            label = %label,
                             method = %notification.method,
                             error = %e,
                             "mcp_subscribe: failed to emit MCP notification as Tauri event"
@@ -2359,14 +2624,24 @@ pub async fn mcp_subscribe(
                     );
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    // Bridge dropped — only happens at app teardown.
+                    // Bridge dropped (board closed or app teardown). Drop our own
+                    // map entry so it doesn't linger — but only if WE are still
+                    // the registered forwarder. A re-bind installs a newer
+                    // generation under the same label; matching on `generation`
+                    // ensures we never evict the forwarder that replaced us.
+                    let mut forwarders =
+                        WINDOW_FORWARDERS.lock().unwrap_or_else(|e| e.into_inner());
+                    if forwarders
+                        .get(&label)
+                        .is_some_and(|existing| existing.generation == generation)
+                    {
+                        forwarders.remove(&label);
+                    }
                     return;
                 }
             }
         }
-    });
-
-    Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -2732,4 +3007,3 @@ mod tests {
         );
     }
 }
-

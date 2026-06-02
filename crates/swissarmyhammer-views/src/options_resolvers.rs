@@ -11,7 +11,9 @@
 //! [`OptionsRegistry`]: swissarmyhammer_command_options::OptionsRegistry
 //! [`OptionsResolver`]: swissarmyhammer_command_options::OptionsResolver
 
-use swissarmyhammer_command_options::{OptionsContext, OptionsRegistry, OptionsResolver, ParamOption};
+use swissarmyhammer_command_options::{
+    OptionsContext, OptionsRegistry, OptionsResolver, ParamOption,
+};
 
 use crate::types::ViewKind;
 

@@ -517,7 +517,12 @@ async fn ui_commands_plugin_registers_and_executes() {
         "cua",
         "precondition: the default keymap mode is cua"
     );
-    execute_ok(&service, "ui.mode.set", json!({ "args": { "mode": "vim" } })).await;
+    execute_ok(
+        &service,
+        "ui.mode.set",
+        json!({ "args": { "mode": "vim" } }),
+    )
+    .await;
     assert_eq!(
         backends.ui_state.keymap_mode(),
         "vim",
@@ -640,7 +645,11 @@ fn assert_single_param(cmd: &Value, id: &str, name: &str, from: &str) {
 /// `ui.inspect` — ui.yaml: context_menu (group 3, order 0); param
 /// moniker(target); no keys/menu.
 fn assert_ui_inspect(cmd: &Value) {
-    assert_eq!(cmd["name"], json!("Inspect {{entity.type}}"), "ui.inspect name");
+    assert_eq!(
+        cmd["name"],
+        json!("Inspect {{entity.type}}"),
+        "ui.inspect name"
+    );
     assert_eq!(cmd["context_menu"], json!(true), "ui.inspect context_menu");
     assert_eq!(
         cmd["context_menu_group"],
@@ -659,7 +668,11 @@ fn assert_ui_inspect(cmd: &Value) {
 
 /// `ui.inspector.close` — ui.yaml: keys cua:Escape / vim:q; no menu.
 fn assert_inspector_close(cmd: &Value) {
-    assert_eq!(cmd["name"], json!("Close Inspector"), "ui.inspector.close name");
+    assert_eq!(
+        cmd["name"],
+        json!("Close Inspector"),
+        "ui.inspector.close name"
+    );
     assert_eq!(
         cmd["keys"],
         json!({ "cua": "Escape", "vim": "q" }),
@@ -708,7 +721,11 @@ fn assert_inspector_set_width(cmd: &Value) {
 
 /// `ui.palette.open` — ui.yaml: keys cua:Mod+K / vim:":"; no menu.
 fn assert_palette_open(cmd: &Value) {
-    assert_eq!(cmd["name"], json!("Command Palette"), "ui.palette.open name");
+    assert_eq!(
+        cmd["name"],
+        json!("Command Palette"),
+        "ui.palette.open name"
+    );
     assert_eq!(
         cmd["keys"],
         json!({ "cua": "Mod+K", "vim": ":" }),
@@ -720,7 +737,11 @@ fn assert_palette_open(cmd: &Value) {
 /// `ui.palette.close` — ui.yaml: visible:false; no keys/menu.
 fn assert_palette_close(cmd: &Value) {
     assert_eq!(cmd["name"], json!("Close Palette"), "ui.palette.close name");
-    assert_eq!(cmd["visible"], json!(false), "ui.palette.close visible:false");
+    assert_eq!(
+        cmd["visible"],
+        json!(false),
+        "ui.palette.close visible:false"
+    );
     assert_no_keys(cmd, "ui.palette.close");
     assert_no_menu(cmd, "ui.palette.close");
 }

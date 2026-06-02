@@ -108,7 +108,8 @@ pub async fn install_commands_module_with(
     let dispatcher: Arc<dyn CallbackDispatcher> =
         Arc::new(HostCallbackDispatcher::new(host.clone()));
     let lifecycle: Arc<dyn CallerLifecycle> = Arc::new(HostCallerLifecycle::new(host.clone()));
-    let action_sink: Arc<dyn ActionSink> = Arc::new(BridgeActionSink::new(host.notification_bridge()));
+    let action_sink: Arc<dyn ActionSink> =
+        Arc::new(BridgeActionSink::new(host.notification_bridge()));
 
     let mut service = CommandService::new()
         .with_dispatcher(dispatcher)

@@ -1134,14 +1134,61 @@ whichever layer they ship in:
 | Layer       | Path                                                 | Source              |
 | ----------- | ---------------------------------------------------- | ------------------- |
 | **builtin** | compiled into the host binary via `include_dir!`     | host build          |
-| **user**    | `$XDG_CONFIG_HOME/sah/plugins/<plugin-id>/`          | user-installed      |
-| **project** | `<git_root>/.sah/plugins/<plugin-id>/`               | repo-checked-in     |
+| **user**    | `$XDG_CONFIG_HOME/kanban/plugins/<plugin-id>/`       | user-installed      |
+| **project** | `<board_dir>/.kanban/plugins/<plugin-id>/`           | repo-checked-in     |
 
-The host loads them with `ManagedDirectory<SwissarmyhammerConfig>` and a
-`VirtualFileSystem` scoped to the `plugins/` subdirectory. The directory
-*name* on disk is authoritative for identity across layers — a `weather/`
-directory in the project layer shadows a `weather/` directory in the
-user layer regardless of what their `Plugin` subclasses set for `name`.
+The directory namespace is the **embedder's**, not a fixed `sah` one. The
+kanban app resolves its layers through `swissarmyhammer_directory::KanbanConfig`
+(`XDG_NAME = "kanban"`, `DIR_NAME = ".kanban"`), so the user layer is
+`~/.config/kanban/plugins/` and the project layer is the `.kanban/plugins/`
+directory of the board's own folder. A different embedder (a future TUI or
+headless host) supplies its own `DirectoryConfig` and so its own namespace —
+the platform hardcodes none.
+
+The host loads each layer with a `VirtualFileSystem` scoped to the `plugins/`
+subdirectory. The directory *name* on disk is authoritative for identity
+across layers — a `weather/` directory in the project layer shadows a
+`weather/` directory in the user layer regardless of what their `Plugin`
+subclasses set for `name`.
+
+### Project layer is per board window
+
+The project layer is **not global** — its root is the board the window is
+showing, so each kanban board window discovers project plugins from *its own*
+`<board_dir>/.kanban/plugins/`. Two windows open on two different boards see
+two different project-layer plugin sets, each stacked over the shared user and
+builtin layers. The builtin and user layers are process-wide; only the project
+layer (and the registrations it produces) is scoped to the board window.
+
+The kanban app is multi-window in a single process: `window.new` builds a new
+`WebviewWindow` in-process, and a window can open, close, or switch the board
+it shows at runtime. Today there is one process-wide `PluginHost` on
+`AppState`, with one global server registry and one global command registry —
+which cannot give each board window its own project-layer plugin set.
+
+**Chosen model: one `PluginHost` per board window.** Each open board window
+owns its own host — its own V8 isolate pool, its own `ServerRegistry`, its own
+command registry and `CommandService` — rooted at the shared builtin and user
+layers plus *that window's board* as the project layer
+(`<board_dir>/.kanban/plugins/`). Full registry isolation falls out for free:
+- a project plugin's commands and servers surface only in their own window,
+  because each window's palette/menus read that window's host;
+- two boards each shipping a `weather` plugin (or each overriding `task.move`)
+  never collide, because they are different registries entirely;
+- closing or switching a board tears down that window's host — isolates,
+  registrations, watcher — without touching any other window.
+
+The builtin bundles are extracted to a shared on-disk cache once at startup;
+each per-window host discovers from that cache and the shared user `plugins/`
+dir, so the *source* is shared even though each host loads its own isolates.
+The cost is N× the V8 per-isolate floor for N open windows — accepted in
+exchange for the simplest isolation model. `AppState` holds a map of
+window → host instead of a single host; command dispatch resolves the host of
+the calling `WebviewWindow`. Each per-window host still wires its command
+backends to its board (the existing `tokio::task_local!` substrate seam is set
+around that host's dispatch), so the data path is unchanged; only the host and
+its registries become per-window. The hot-reload watcher runs per host: the
+shared user `plugins/` dir plus that window's board `.kanban/plugins/`.
 
 ### Precedence
 

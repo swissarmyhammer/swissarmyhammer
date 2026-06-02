@@ -4,10 +4,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
-use swissarmyhammer_kanban::commands_core::{load_yaml_dir, CommandsRegistry};
 use swissarmyhammer_entity::Entity;
 use swissarmyhammer_entity_search::EntitySearchIndex;
 use swissarmyhammer_kanban::clipboard::ClipboardProvider;
+use swissarmyhammer_kanban::commands_core::{load_yaml_dir, CommandsRegistry};
 use swissarmyhammer_kanban::KanbanContext;
 use swissarmyhammer_tools::mcp::unified_server::{
     start_mcp_server_with_options, McpServerHandle, McpServerMode,
@@ -107,12 +107,43 @@ pub(crate) struct BoardHandle {
     /// `shutdown()`. It is always `Some` for a board returned by
     /// [`BoardHandle::open`].
     mcp_server: Option<McpServerHandle>,
+    /// This board's own plugin host — a [`PluginPlatform`] with its own
+    /// [`swissarmyhammer_plugin::PluginHost`], `ServerRegistry`, command
+    /// registry, [`CommandService`](swissarmyhammer_command_service::CommandService),
+    /// and notification bridge, isolated from every other board's host.
+    ///
+    /// Keyed implicitly by board path (the board is itself the
+    /// [`AppState::boards`](crate::state::AppState::boards) map key), so a
+    /// project plugin loaded for this board can never leak into another board's
+    /// registries. Dispatch resolves the calling window's board and routes to
+    /// this platform; windows with no board open fall back to the global
+    /// [`AppState::plugin_platform`](crate::state::AppState::plugin_platform).
+    ///
+    /// `Option` so a board can still open if its per-board platform fails to
+    /// build (the board then has no project plugins, but its data path is
+    /// unaffected and callers fall back to the global platform). Held under
+    /// `TokioMutex` to mirror the global platform — the per-board hot-reload
+    /// watcher (a separate card) will mutate it after construction.
+    platform: Option<TokioMutex<PluginPlatform>>,
 }
 
 impl Drop for BoardHandle {
     fn drop(&mut self) {
         if let Some(task) = self.bridge_task.take() {
             task.abort();
+        }
+
+        // Drop the per-board plugin platform OFF the Tokio worker pool. Its
+        // `PluginHost` is the sole `Arc<HostInner>` owner, so dropping it runs
+        // `BridgeRuntime::drop`, which does a blocking thread-`join()` to tear
+        // the host's V8 isolate runtime down. `close_board` calls this drop
+        // while holding the `boards` write lock from a worker, so doing the
+        // blocking join inline would stall a worker (and hold the lock) across
+        // runtime teardown — the same hazard the `mcp_server` shutdown below was
+        // written to avoid. Hand the owned platform to the shared confinement
+        // runtime to be dropped there instead.
+        if let Some(platform) = self.platform.take() {
+            crate::confine::drop_confined(platform);
         }
 
         // Shut the per-board MCP server down so closing a board never leaks a
@@ -234,7 +265,27 @@ impl BoardHandle {
     ///
     /// Does NOT start the bridge task — call `start_watcher` after the
     /// Tauri `AppHandle` is available so the bridge can emit events.
-    pub async fn open(kanban_path: PathBuf) -> Result<Self, String> {
+    ///
+    /// `plugin_roots` carries the shared plugin-layer roots (`user_root`,
+    /// `builtin_cache`) so this board can build its OWN [`PluginPlatform`]
+    /// rooted at the board dir. The SOURCE of plugins is shared (the same
+    /// builtin cache + user `plugins/` directory), but the host — and so its
+    /// registries — is isolated per board. `None` skips the per-board platform
+    /// (callers then fall back to the global one): the kanban app passes the
+    /// shared roots, while plain unit-test constructors that don't exercise
+    /// plugins pass `None` to avoid extracting builtins and spinning isolates.
+    ///
+    /// `apphandle_shells` carries the `(window, app)` shells stored on
+    /// [`AppState`] at setup. When present, the per-board host exposes the
+    /// `window` / `app` modules too, so its `discover_and_load_all` loads the
+    /// four `AppHandle`-dependent builtin command plugins alongside the rest.
+    /// `None` (e.g. a board opened before `setup_app` stored the shells, or a
+    /// test that doesn't exercise those backends) leaves them unexposed.
+    pub async fn open(
+        kanban_path: PathBuf,
+        plugin_roots: Option<&PluginRoots>,
+        apphandle_shells: ApphandleShells,
+    ) -> Result<Self, String> {
         ensure_sah_workspace(&kanban_path);
 
         let ctx = KanbanContext::open(&kanban_path)
@@ -287,6 +338,18 @@ impl BoardHandle {
 
         let mcp_server = start_board_mcp_server(&kanban_path).await;
 
+        // Build this board's OWN plugin host, rooted at the board dir, from the
+        // shared builtin cache + user plugin layer. Mirrors the global platform
+        // wiring (build → wire_command_services → expose window/app → discover),
+        // so a per-board host carries the same builtin command baseline as the
+        // global one — only the registries are isolated. `project_root` is
+        // intentionally left `None` here (a follow-up card wires it to the board
+        // dir); the structure is the deliverable.
+        let platform = match plugin_roots {
+            Some(roots) => build_board_platform(roots, &kanban_path, apphandle_shells).await,
+            None => None,
+        };
+
         Ok(Self {
             ctx: Arc::new(ctx),
             store_context,
@@ -294,7 +357,18 @@ impl BoardHandle {
             search_index,
             bridge_task: None,
             mcp_server,
+            platform: platform.map(TokioMutex::new),
         })
+    }
+
+    /// This board's per-board plugin platform, or `None` when the board was
+    /// opened without shared plugin roots or its platform failed to build.
+    ///
+    /// Dispatch resolves the calling window's board and reads this platform's
+    /// `command_service()` / `host()`; a `None` here (or no board for the
+    /// window) means the caller falls back to the global platform.
+    pub(crate) fn platform(&self) -> Option<&TokioMutex<PluginPlatform>> {
+        self.platform.as_ref()
     }
 
     /// The board's in-process MCP server URL, e.g.
@@ -473,6 +547,29 @@ pub(crate) struct AppState {
     /// Tauri `setup` hook, via [`Self::start_plugin_watcher`]), which mutates
     /// the platform.
     pub(crate) plugin_platform: TokioMutex<PluginPlatform>,
+    /// Shared plugin-layer roots used to build each board's OWN
+    /// [`PluginPlatform`] at board-open time (see
+    /// [`BoardHandle::platform`]). The builtin cache + user `plugins/`
+    /// directory are the same for every board — the SOURCE is shared — so the
+    /// per-board hosts only isolate the registries, not the plugin files.
+    ///
+    /// `None` when the directories couldn't be resolved or for unit-test
+    /// constructors that don't exercise plugins; boards opened then have no
+    /// per-board platform and dispatch falls back to the global one.
+    plugin_roots: Option<PluginRoots>,
+    /// The `AppHandle`-backed shells (`window` + `app`) the plugin hosts expose
+    /// as the `window` / `app` MCP modules.
+    ///
+    /// Both seams need a live Tauri `AppHandle`, which does not exist at
+    /// `AppState::new`; they are constructed and stored here from the
+    /// `setup_app` hook (via [`Self::install_apphandle_shells`]) before the
+    /// global host's deferred discovery runs. Each per-board host built at
+    /// board-open time reads these back so its `discover_and_load_all` also
+    /// loads the four `AppHandle`-dependent builtin command plugins. `OnceLock`
+    /// because they are written exactly once at setup and read concurrently
+    /// from board-open thereafter.
+    window_shell: std::sync::OnceLock<Arc<dyn swissarmyhammer_window_service::WindowShell>>,
+    app_shell: std::sync::OnceLock<Arc<dyn swissarmyhammer_app_service::AppShell>>,
     /// Running in-process AI agent endpoints, keyed by board path.
     ///
     /// `ai_start_agent` registers one endpoint per board here; `close_board`
@@ -500,28 +597,35 @@ impl AppState {
     /// layer is the bundle tree compiled into the binary.
     pub async fn new() -> Self {
         let ui_state = Arc::new(swissarmyhammer_kanban::default_ui_state(CONFIG_APP_SUBDIR));
-        let mut platform = build_plugin_platform().await;
 
-        // Production wiring: expose the command-service-side MCP modules on
-        // the host (deferring `window` to the Tauri setup hook where the
-        // AppHandle exists), then run plugin discovery so any builtin or
-        // user-layer plugin that activates `{ rust: "commands" }` (or one
-        // of its siblings) finds the module already exposed. A failure to
-        // wire degrades to running with the old YAML command path: the
-        // command service modules just aren't there.
+        // Resolve the shared plugin-layer roots ONCE. The same builtin cache +
+        // user `plugins/` directory feed both the global platform and every
+        // per-board platform, so the SOURCE of plugins is shared even though
+        // each host's registries are isolated.
+        let plugin_roots = PluginRoots::resolve(Arc::clone(&ui_state));
+        let mut platform = build_plugin_platform(plugin_roots.as_ref()).await;
+
+        // Production wiring: expose every NON-`AppHandle` command-service MCP
+        // module (`store`, `entity`, `views`, `ui_state`, `focus`, `commands`)
+        // on the host now. The `window` / `app` modules are deferred to the
+        // Tauri `setup_app` hook, where the `AppHandle` (and so the
+        // `WindowShell` / `AppShell` seams) exists.
+        //
+        // Plugin discovery is INTENTIONALLY deferred too: `discover_and_load_all`
+        // is atomic, and four of the seven builtin command plugins activate the
+        // `window` / `app` backends at `ensureServices` time — discovering here
+        // (before those backends are exposed) would fail ALL seven. Discovery
+        // is driven once from `setup_app` after the shells are wired. A failure
+        // to wire degrades to running without the new dispatch path.
         if let Err(e) = platform
-            .wire_command_services(Arc::clone(&ui_state), None)
+            .wire_command_services(Arc::clone(&ui_state), None, None)
             .await
         {
             tracing::warn!(error = %e, "failed to wire command-service modules; \
                                         new dispatch path will not be available");
         }
-        if let Err(e) = platform.discover_plugins().await {
-            tracing::warn!(error = %e, "plugin discovery failed; \
-                                        builtin and user-layer plugins are not loaded");
-        }
 
-        Self::with_ui_state(ui_state, platform)
+        Self::with_ui_state(ui_state, platform, plugin_roots)
     }
 
     /// Create AppState with a freshly loaded UIState written to a
@@ -537,9 +641,12 @@ impl AppState {
     #[cfg(test)]
     pub fn new_for_test() -> Self {
         let path = std::env::temp_dir().join(format!("kanban-test-{}.yaml", ulid::Ulid::new()));
+        // No shared plugin roots: plain unit tests don't open real boards, and
+        // boards opened without roots skip the per-board platform.
         Self::with_ui_state(
             Arc::new(UIState::load(path)),
             PluginPlatform::for_tests_empty(),
+            None,
         )
     }
 
@@ -562,11 +669,43 @@ impl AppState {
         tool_working_dir: PathBuf,
     ) -> Result<Self, String> {
         let path = std::env::temp_dir().join(format!("kanban-test-{}.yaml", ulid::Ulid::new()));
-        let platform = PluginPlatform::build(user_root, builtin_cache, tool_working_dir).await?;
-        // `build` no longer auto-discovers — tests using this constructor
-        // exercise plugin discovery, so do it here.
+        let ui_state = Arc::new(UIState::load(path));
+        let mut platform =
+            PluginPlatform::build(user_root.clone(), builtin_cache.clone(), tool_working_dir)
+                .await?;
+        // Mirror production: wire the non-AppHandle command-service modules,
+        // then expose `window` / `app` from SPY shells, then discover — so the
+        // bundled command plugins (which `ensureServices` against those modules
+        // at `load()`) find every backend already exposed and the atomic
+        // `discover_and_load_all` loads ALL 7 builtin command plugins. Spy
+        // shells stand in for the Tauri-`AppHandle`-backed production shells,
+        // which can't be built in a headless test.
+        let window_shell: Arc<dyn swissarmyhammer_window_service::WindowShell> =
+            Arc::new(tests::SpyWindowShell);
+        let app_shell: Arc<dyn swissarmyhammer_app_service::AppShell> =
+            Arc::new(tests::SpyAppShell);
+        platform
+            .wire_command_services(
+                Arc::clone(&ui_state),
+                Some(Arc::clone(&window_shell)),
+                Some(Arc::clone(&app_shell)),
+            )
+            .await?;
         platform.discover_plugins().await?;
-        Ok(Self::with_ui_state(Arc::new(UIState::load(path)), platform))
+        // Stash the same shared roots so boards opened on this AppState build
+        // their own per-board platforms (the per-board-host integration tests
+        // rely on this).
+        let plugin_roots = Some(PluginRoots {
+            user_root,
+            builtin_cache,
+            ui_state: Arc::clone(&ui_state),
+        });
+        let state = Self::with_ui_state(ui_state, platform, plugin_roots);
+        // Store the spy shells so boards opened on this AppState wire `window` /
+        // `app` into their per-board hosts too (mirrors `install_apphandle_shells`).
+        let _ = state.window_shell.set(window_shell);
+        let _ = state.app_shell.set(app_shell);
+        Ok(state)
     }
 
     /// Internal constructor that takes an already-loaded [`UIState`] and a
@@ -582,7 +721,11 @@ impl AppState {
     /// layer on top later via [`Self::reload_command_overrides`]. The plugin
     /// platform is built by the caller because its construction is async,
     /// while this funnel stays synchronous.
-    fn with_ui_state(ui_state: Arc<UIState>, plugin_platform: PluginPlatform) -> Self {
+    fn with_ui_state(
+        ui_state: Arc<UIState>,
+        plugin_platform: PluginPlatform,
+        plugin_roots: Option<PluginRoots>,
+    ) -> Self {
         Self {
             boards: RwLock::new(HashMap::new()),
             ui_state,
@@ -600,8 +743,56 @@ impl AppState {
             shutting_down: AtomicBool::new(false),
             deep_link_handled: AtomicBool::new(false),
             plugin_platform: TokioMutex::new(plugin_platform),
+            plugin_roots,
+            window_shell: std::sync::OnceLock::new(),
+            app_shell: std::sync::OnceLock::new(),
             running_agents: crate::ai::models::RunningAgents::new(),
         }
+    }
+
+    /// Store the `AppHandle`-backed shells, expose `window` + `app` on the
+    /// global plugin host, then run the global host's deferred plugin discovery.
+    ///
+    /// Call ONCE from the Tauri `setup_app` hook, after the `AppHandle` exists
+    /// and BEFORE [`Self::auto_open_board`] (so the stored shells are available
+    /// when each per-board host is built at board-open time) and before
+    /// [`Self::start_plugin_watcher`].
+    ///
+    /// This is where the global fallback host finally loads all 7 builtin
+    /// command plugins: `AppState::new` deferred discovery because four of them
+    /// need the `window` / `app` backends, which only exist now. Idempotent on
+    /// the shell storage (the `OnceLock`s only accept the first write); a
+    /// discovery failure is logged, not propagated, so a broken plugin layer
+    /// never blocks the app from starting.
+    pub async fn install_apphandle_shells(
+        &self,
+        window_shell: Arc<dyn swissarmyhammer_window_service::WindowShell>,
+        app_shell: Arc<dyn swissarmyhammer_app_service::AppShell>,
+    ) {
+        let _ = self.window_shell.set(Arc::clone(&window_shell));
+        let _ = self.app_shell.set(Arc::clone(&app_shell));
+
+        let platform = self.plugin_platform.lock().await;
+        if let Err(e) = platform
+            .expose_apphandle_modules(Some(window_shell), Some(app_shell))
+            .await
+        {
+            tracing::warn!(error = %e, "failed to expose window/app modules on the global host; \
+                                        AppHandle-dependent builtin command plugins will not load");
+        }
+        if let Err(e) = platform.discover_plugins().await {
+            tracing::warn!(error = %e, "global plugin discovery failed; \
+                                        builtin and user-layer plugins are not loaded");
+        }
+    }
+
+    /// The stored `AppHandle`-backed shells, if [`Self::install_apphandle_shells`]
+    /// has run. Returns `(window, app)` clones for a per-board host build to
+    /// expose the same `window` / `app` backends the global host carries.
+    fn apphandle_shells(&self) -> ApphandleShells {
+        let window = self.window_shell.get()?;
+        let app = self.app_shell.get()?;
+        Some((Arc::clone(window), Arc::clone(app)))
     }
 
     /// Start the plugin hot-reload watcher.
@@ -634,7 +825,12 @@ impl AppState {
             return Ok(canonical);
         }
 
-        let mut handle = BoardHandle::open(kanban_path).await?;
+        let mut handle = BoardHandle::open(
+            kanban_path,
+            self.plugin_roots.as_ref(),
+            self.apphandle_shells(),
+        )
+        .await?;
         handle.ensure_os_actor().await;
         let board_name = read_board_name(&handle, &canonical).await;
 
@@ -862,7 +1058,8 @@ impl AppState {
             .map(|(n, c)| (n.as_str(), c.as_str()))
             .collect();
         sources.extend(user_refs);
-        let registry = swissarmyhammer_kanban::commands_core::CommandsRegistry::from_yaml_sources(&sources);
+        let registry =
+            swissarmyhammer_kanban::commands_core::CommandsRegistry::from_yaml_sources(&sources);
 
         *self.commands_registry.write().await = registry;
         tracing::info!(
@@ -935,48 +1132,249 @@ impl AppState {
         let boards = self.boards.read().await;
         boards.get(&path).cloned()
     }
+
+    /// Resolve the calling window's board handle from its label.
+    ///
+    /// Maps `label` → board path via the per-window assignment persisted in
+    /// [`UIState`](swissarmyhammer_ui_state::UIState) (`window_board`), then
+    /// canonicalizes that path the same way [`open_board`](Self::open_board)
+    /// keys the `boards` map and looks it up. Returns `None` for a boardless
+    /// window (no assignment) or an unknown label — the caller then falls back
+    /// to the global plugin platform.
+    pub(crate) async fn board_handle_for_window(&self, label: &str) -> Option<Arc<BoardHandle>> {
+        let path_str = self.ui_state.window_board(label)?;
+        let canonical = PathBuf::from(&path_str)
+            .canonicalize()
+            .unwrap_or_else(|_| PathBuf::from(&path_str));
+        let boards = self.boards.read().await;
+        boards.get(&canonical).cloned()
+    }
 }
 
-/// Builds the production plugin platform, falling back to an inert one.
+/// The shared plugin-layer roots used to build every [`PluginPlatform`] in the
+/// app — the one global platform on [`AppState`] and each board's own platform
+/// on [`BoardHandle`].
 ///
-/// The user plugin layer lives under `$XDG_CONFIG_HOME/kanban` (resolved via
-/// [`swissarmyhammer_directory::KanbanConfig`]); the builtin plugins are
-/// extracted into the XDG cache directory; the exposed `kanban` tool resolves
-/// its board against the current working directory — the same directory
-/// `auto_open_board` discovers boards from.
-///
-/// A failure to resolve the directories or to load a plugin is logged and the
-/// app continues with an empty [`PluginPlatform`]: a broken plugin layer must
-/// not stop the kanban app from opening boards.
-async fn build_plugin_platform() -> PluginPlatform {
-    use swissarmyhammer_directory::{KanbanConfig, ManagedDirectory};
+/// The user plugin layer lives under `$XDG_CONFIG_HOME/kanban` and the builtin
+/// plugins are extracted into the XDG cache directory; both are SHARED across
+/// boards (the per-board hosts only isolate their registries, not the plugin
+/// files). `ui_state` is carried so a per-board platform can wire its own
+/// command-service modules against the same shared UI state.
+#[derive(Clone)]
+pub(crate) struct PluginRoots {
+    /// The writable user-layer plugin root (`$XDG_CONFIG_HOME/kanban`).
+    user_root: PathBuf,
+    /// The directory the bundled builtin plugins are extracted into; it becomes
+    /// each host's read-only builtin layer root.
+    builtin_cache: PathBuf,
+    /// Shared UI state, threaded into each per-board platform's
+    /// `wire_command_services` call.
+    ui_state: Arc<UIState>,
+}
 
-    let user_root = match ManagedDirectory::<KanbanConfig>::xdg_config() {
-        Ok(dir) => dir.root().to_path_buf(),
-        Err(e) => {
-            tracing::warn!(error = %e, "could not resolve kanban config dir; plugins disabled");
-            return PluginPlatform::empty(std::env::temp_dir().join("kanban-plugins-disabled"));
-        }
-    };
-    let builtin_cache = match ManagedDirectory::<KanbanConfig>::xdg_cache() {
-        Ok(dir) => dir.root().join("builtin-plugins"),
-        Err(e) => {
-            tracing::warn!(error = %e, "could not resolve kanban cache dir; plugins disabled");
-            return PluginPlatform::empty(user_root);
-        }
+impl PluginRoots {
+    /// Resolve the shared plugin-layer roots from the XDG directories.
+    ///
+    /// Returns `None` when either directory can't be resolved — plugins are
+    /// then disabled app-wide (no global platform built from real roots, and
+    /// boards open without per-board platforms), but board data still works.
+    fn resolve(ui_state: Arc<UIState>) -> Option<Self> {
+        use swissarmyhammer_directory::{KanbanConfig, ManagedDirectory};
+
+        let user_root = match ManagedDirectory::<KanbanConfig>::xdg_config() {
+            Ok(dir) => dir.root().to_path_buf(),
+            Err(e) => {
+                tracing::warn!(error = %e, "could not resolve kanban config dir; plugins disabled");
+                return None;
+            }
+        };
+        let builtin_cache = match ManagedDirectory::<KanbanConfig>::xdg_cache() {
+            Ok(dir) => dir.root().join("builtin-plugins"),
+            Err(e) => {
+                tracing::warn!(error = %e, "could not resolve kanban cache dir; plugins disabled");
+                return None;
+            }
+        };
+        Some(Self {
+            user_root,
+            builtin_cache,
+            ui_state,
+        })
+    }
+}
+
+/// Builds the production global plugin platform, falling back to an inert one.
+///
+/// The global platform is the fallback host for windows with no board open. It
+/// is rooted at the shared `user_root` + `builtin_cache` (from `roots`) with
+/// the exposed `kanban` tool resolving its board against the current working
+/// directory — the same directory `auto_open_board` discovers boards from.
+///
+/// A failure to resolve the directories (`roots` is `None`) or to load a plugin
+/// is logged and the app continues with an empty [`PluginPlatform`]: a broken
+/// plugin layer must not stop the kanban app from opening boards.
+async fn build_plugin_platform(roots: Option<&PluginRoots>) -> PluginPlatform {
+    let Some(roots) = roots else {
+        return PluginPlatform::empty(std::env::temp_dir().join("kanban-plugins-disabled"));
     };
     let tool_working_dir = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
 
-    match PluginPlatform::build(user_root.clone(), builtin_cache, tool_working_dir).await {
+    match PluginPlatform::build(
+        roots.user_root.clone(),
+        roots.builtin_cache.clone(),
+        tool_working_dir,
+    )
+    .await
+    {
         Ok(platform) => {
-            tracing::info!(user_root = %user_root.display(), "kanban plugin platform ready");
+            tracing::info!(user_root = %roots.user_root.display(), "kanban plugin platform ready");
             platform
         }
         Err(e) => {
             tracing::warn!(error = %e, "failed to build kanban plugin platform; plugins disabled");
-            PluginPlatform::empty(user_root)
+            PluginPlatform::empty(roots.user_root.clone())
         }
     }
+}
+
+/// The `(window, app)` shells a per-board host exposes as the `window` / `app`
+/// MCP modules. `None` when [`AppState::install_apphandle_shells`] has not run
+/// yet (a board opened before setup) — the per-board host then loads only the
+/// non-`AppHandle` builtin plugins.
+type ApphandleShells = Option<(
+    Arc<dyn swissarmyhammer_window_service::WindowShell>,
+    Arc<dyn swissarmyhammer_app_service::AppShell>,
+)>;
+
+/// Build a board's OWN plugin platform, rooted at the board dir, from the
+/// shared plugin roots.
+///
+/// Mirrors the global wiring: `build` → `wire_command_services` → expose
+/// `window` / `app` (from `apphandle_shells`) → `discover_plugins`. The host is
+/// therefore identical in capability to the global one; only its registries are
+/// isolated. `tool_working_dir` is the board dir (the parent of
+/// `<board>/.kanban`), so this host's exposed `kanban` tool resolves THIS board.
+///
+/// `project_root` is intentionally NOT set to the board dir yet — that is the
+/// next card. Returns `None` (logged) on any failure so a broken plugin layer
+/// never blocks opening the board; the caller then falls back to the global
+/// platform for this board's windows.
+async fn build_board_platform(
+    roots: &PluginRoots,
+    kanban_path: &Path,
+    apphandle_shells: ApphandleShells,
+) -> Option<PluginPlatform> {
+    let board_dir = kanban_path.parent().unwrap_or(kanban_path).to_path_buf();
+    let roots = roots.clone();
+    let board_dir_for_task = board_dir.clone();
+
+    // Build + wire + discover on the shared confinement runtime, off the Tokio
+    // worker pool.
+    //
+    // Why off-worker: `wire_command_services` and `discover_plugins` borrow
+    // `&PluginPlatform` across `.await` points, and `PluginPlatform` is `Send`
+    // but not `Sync` (its `PluginHost` carries the JS isolate state). Holding
+    // that `&` across an await makes the surrounding future `!Send`, which would
+    // taint `BoardHandle::open` / `open_board` — both of which the menu handlers
+    // run inside `tauri::async_runtime::spawn`, where the future must be `Send`.
+    // [`crate::confine::spawn_confined`] runs the `!Send` build span on the
+    // confinement runtime's blocking pool and returns a `JoinHandle` we `.await`
+    // here, so the main worker is freed (not blocked) and only the owned (and
+    // `Send`) `PluginPlatform` crosses back, keeping the caller's future `Send`.
+    // It is the SAME confinement seam the synchronous `WindowShell` ops and the
+    // per-board host teardown use, so the strategy lives in one place. The global
+    // platform built in `AppState::new` doesn't need this — that future is
+    // awaited directly in `main`, never spawned with a `Send` bound.
+    let built = crate::confine::spawn_confined(move |handle: &tokio::runtime::Handle| {
+        handle.block_on(build_board_platform_inner(
+            &roots,
+            &board_dir_for_task,
+            apphandle_shells,
+        ))
+    })
+    .await;
+
+    match built {
+        Ok(platform) => platform,
+        Err(e) => {
+            tracing::warn!(
+                board = %board_dir.display(),
+                error = %e,
+                "per-board plugin platform build task panicked"
+            );
+            None
+        }
+    }
+}
+
+/// Build + wire + discover the per-board platform on the current runtime.
+///
+/// Split out of [`build_board_platform`] so the `!Send` build span (it borrows
+/// `&PluginPlatform` across awaits) runs entirely on the shared confinement
+/// runtime that helper routes it onto. Mirrors the global wiring:
+/// `build` → `wire_command_services(None, None)` → expose `window` / `app` →
+/// `discover_plugins`.
+async fn build_board_platform_inner(
+    roots: &PluginRoots,
+    board_dir: &Path,
+    apphandle_shells: ApphandleShells,
+) -> Option<PluginPlatform> {
+    let mut platform = match PluginPlatform::build(
+        roots.user_root.clone(),
+        roots.builtin_cache.clone(),
+        board_dir.to_path_buf(),
+    )
+    .await
+    {
+        Ok(platform) => platform,
+        Err(e) => {
+            tracing::warn!(
+                board = %board_dir.display(),
+                error = %e,
+                "failed to build per-board plugin platform; board falls back to global host"
+            );
+            return None;
+        }
+    };
+
+    if let Err(e) = platform
+        .wire_command_services(Arc::clone(&roots.ui_state), None, None)
+        .await
+    {
+        tracing::warn!(
+            board = %board_dir.display(),
+            error = %e,
+            "failed to wire per-board command-service modules"
+        );
+    }
+    // Expose the AppHandle-backed `window` / `app` modules (when the shells are
+    // available) BEFORE discovery, so this board's host loads the four
+    // AppHandle-dependent builtin command plugins too. A board opened before
+    // setup stored the shells gets `None` here and loads the rest.
+    let (window_shell, app_shell) = match apphandle_shells {
+        Some((w, a)) => (Some(w), Some(a)),
+        None => (None, None),
+    };
+    if let Err(e) = platform
+        .expose_apphandle_modules(window_shell, app_shell)
+        .await
+    {
+        tracing::warn!(
+            board = %board_dir.display(),
+            error = %e,
+            "failed to expose per-board window/app modules"
+        );
+    }
+    if let Err(e) = platform.discover_plugins().await {
+        tracing::warn!(
+            board = %board_dir.display(),
+            error = %e,
+            "per-board plugin discovery failed"
+        );
+    }
+
+    tracing::info!(board = %board_dir.display(), "per-board plugin platform ready");
+    Some(platform)
 }
 
 /// Walk up from `start_dir` looking for a `.kanban` subdirectory.
@@ -1277,6 +1675,81 @@ fn macos_profile_picture(_username: &str) -> Option<String> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    use swissarmyhammer_app_service::{AboutInfo, AppShell};
+    use swissarmyhammer_window_service::{
+        CreatedBoard, MonitorInfo, NewWindow, OpenedBoard, WindowPosition, WindowShell,
+    };
+
+    /// A no-op [`WindowShell`] for the plugin-platform tests.
+    ///
+    /// The per-window / baseline tests only need the `window` MCP module
+    /// EXPOSED so the `file-commands` / `ui-commands` / `kanban-misc-commands`
+    /// builtin plugins satisfy `ensureServices` and load — they don't drive any
+    /// window op — so every method returns a benign canned value.
+    pub(super) struct SpyWindowShell;
+
+    impl WindowShell for SpyWindowShell {
+        fn open_new_window(&self, board_path: Option<String>) -> Result<NewWindow, String> {
+            Ok(NewWindow {
+                label: "spy-window".to_string(),
+                board_path,
+            })
+        }
+        fn activate_window(&self, _label: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn set_window_position(&self, _label: &str, _pos: WindowPosition) -> Result<(), String> {
+            Ok(())
+        }
+        fn get_window_position(&self, _label: &str) -> Result<WindowPosition, String> {
+            Ok(WindowPosition { x: 0, y: 0 })
+        }
+        fn get_monitors(&self) -> Result<Vec<MonitorInfo>, String> {
+            Ok(Vec::new())
+        }
+        fn close_window(&self, _label: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn open_path(&self, _path: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn reveal_path(&self, _path: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn switch_board(&self, _path: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn close_board(&self, _path: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn new_board(&self) -> Result<CreatedBoard, String> {
+            Ok(CreatedBoard {
+                path: "/tmp/spy-board".to_string(),
+                name: "spy-board".to_string(),
+            })
+        }
+        fn open_board(&self) -> Result<Option<OpenedBoard>, String> {
+            Ok(None)
+        }
+    }
+
+    /// A no-op [`AppShell`] for the plugin-platform tests, exposed for the same
+    /// reason as [`SpyWindowShell`] (so `app-shell-commands` loads).
+    pub(super) struct SpyAppShell;
+
+    impl AppShell for SpyAppShell {
+        fn quit(&self) {}
+        fn show_about(&self) -> AboutInfo {
+            AboutInfo {
+                name: "kanban-app-test".to_string(),
+                version: "0.0.0".to_string(),
+            }
+        }
+        fn show_help(&self) -> String {
+            "https://help.example/test".to_string()
+        }
+    }
 
     #[test]
     fn test_resolve_existing_kanban_dir() {

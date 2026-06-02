@@ -370,7 +370,12 @@ async fn app_shell_commands_plugin_registers_and_executes() {
     backends.entity_ctx.write(&tag).await.expect("write tag");
     let tag_id = tag.id.as_str().to_string();
     assert_eq!(
-        backends.entity_ctx.list("tag").await.expect("list tags").len(),
+        backends
+            .entity_ctx
+            .list("tag")
+            .await
+            .expect("list tags")
+            .len(),
         1,
         "the seeded tag is live before undo"
     );
@@ -378,7 +383,12 @@ async fn app_shell_commands_plugin_registers_and_executes() {
     // app.undo → store `undo stack`: the tag write reverts.
     execute_ok(&service, "app.undo", json!({})).await;
     assert_eq!(
-        backends.entity_ctx.list("tag").await.expect("list tags").len(),
+        backends
+            .entity_ctx
+            .list("tag")
+            .await
+            .expect("list tags")
+            .len(),
         0,
         "app.undo must revert the tag write via the shared store stack"
     );

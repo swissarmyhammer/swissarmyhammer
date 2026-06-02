@@ -27,7 +27,10 @@ pub use error::{Result, ViewsError};
 pub use events::ViewEvent;
 pub use operations::operations;
 pub use options_resolvers::{register_view_resolvers, ViewKindsResolver};
-pub use server::ViewsServer;
+pub use server::{
+    scope_views_board_services, task_local_resolver, ViewsBoardResolver, ViewsBoardServices,
+    ViewsServer,
+};
 pub use store::{ViewStore, VIEW_STORE_NAME};
 pub use types::{ViewCommand, ViewCommandKeys, ViewDef, ViewId, ViewKind};
 pub use view_info::ViewInfo;

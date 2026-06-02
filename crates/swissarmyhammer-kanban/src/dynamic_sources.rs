@@ -31,8 +31,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use swissarmyhammer_common::WindowInfo;
-use swissarmyhammer_ui_state::{UIState};
 use swissarmyhammer_perspectives::{PerspectiveFieldInfo, PerspectiveInfo};
+use swissarmyhammer_ui_state::UIState;
 use swissarmyhammer_views::ViewInfo;
 
 use crate::commands::perspective_commands::perspective_belongs_to_active_view;

@@ -21,9 +21,9 @@
 use super::attachment_onto_task::AttachmentOntoTaskHandler;
 use super::PasteHandler;
 use crate::clipboard::ClipboardPayload;
+use crate::commands_core::{CommandContext, CommandError, Result};
 use async_trait::async_trait;
 use serde_json::Value;
-use crate::commands_core::{CommandContext, CommandError, Result};
 
 /// Dispatch shim that forwards `(attachment, attachment)` paste
 /// invocations to the parent task via [`AttachmentOntoTaskHandler`].
@@ -75,12 +75,12 @@ impl PasteHandler for AttachmentOntoAttachmentHandler {
 mod tests {
     use super::*;
     use crate::commands::paste_handlers::test_support::{attachment_clipboard, matrix_with, setup};
+    use crate::commands_core::CommandContext;
     use crate::task::AddTask;
     use crate::Execute;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use crate::commands_core::{CommandContext};
-    use swissarmyhammer_ui_state::{UIState};
+    use swissarmyhammer_ui_state::UIState;
 
     /// Build a `CommandContext` whose scope chain looks like the real
     /// frontend's attachment row focus chain, with the supplied `target`

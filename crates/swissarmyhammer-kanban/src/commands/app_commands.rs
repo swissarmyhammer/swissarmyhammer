@@ -1,9 +1,9 @@
 //! Application-level command implementations: quit, keymap mode, about, help,
 //! reset windows, dismiss, command palette, search palette, undo, redo.
 
+use crate::commands_core::{Command, CommandContext, CommandError};
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use crate::commands_core::{Command, CommandContext, CommandError};
 use swissarmyhammer_entity::EntityContext;
 use swissarmyhammer_perspectives::{PerspectiveContext, PERSPECTIVE_STORE_NAME};
 use swissarmyhammer_store::{EventProvenance, StoreContext, StoreError, UndoEntryId, UndoOutcome};
@@ -207,7 +207,10 @@ impl Command for KanbanUndoCmd {
     /// Delegates to the generic `UndoCmd::available` so the availability
     /// contract stays consistent across crates.
     fn available(&self, ctx: &CommandContext) -> bool {
-        ctx.ui_state.as_ref().map(|ui| ui.can_undo()).unwrap_or(false)
+        ctx.ui_state
+            .as_ref()
+            .map(|ui| ui.can_undo())
+            .unwrap_or(false)
     }
 
     async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
@@ -237,7 +240,10 @@ pub struct KanbanRedoCmd;
 impl Command for KanbanRedoCmd {
     /// Returns `true` only when the undo stack has entries to redo.
     fn available(&self, ctx: &CommandContext) -> bool {
-        ctx.ui_state.as_ref().map(|ui| ui.can_redo()).unwrap_or(false)
+        ctx.ui_state
+            .as_ref()
+            .map(|ui| ui.can_redo())
+            .unwrap_or(false)
     }
 
     async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
@@ -321,14 +327,7 @@ async fn reconcile_post_undo_caches(ctx: &CommandContext, outcome: &UndoOutcome,
         .and_then(|k| k.perspective_context_if_ready());
     let views = kanban.as_ref().and_then(|k| k.views());
 
-    reconcile_caches(
-        outcome,
-        origin,
-        ectx.as_deref(),
-        views,
-        perspectives,
-    )
-    .await;
+    reconcile_caches(outcome, origin, ectx.as_deref(), views, perspectives).await;
 }
 
 /// The category-keyed, per-item cache reconcile shared by production

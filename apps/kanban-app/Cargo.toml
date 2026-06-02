@@ -32,6 +32,7 @@ swissarmyhammer-command-service = { workspace = true }
 swissarmyhammer-entity-mcp = { workspace = true }
 rmcp = { workspace = true }
 swissarmyhammer-window-service = { workspace = true }
+swissarmyhammer-app-service = { workspace = true }
 swissarmyhammer-tools = { workspace = true }
 swissarmyhammer-git = { workspace = true }
 include_dir = { workspace = true }

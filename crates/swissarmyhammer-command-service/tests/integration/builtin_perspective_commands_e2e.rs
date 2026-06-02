@@ -141,9 +141,12 @@ async fn expose_views_module(host: &PluginHost) -> ExposedViews {
     let module = InProcessServer::new(server)
         .await
         .expect("wrapping the views server in an InProcessServer should succeed");
-    host.expose_rust_module("views".to_string(), Arc::new(module) as Arc<dyn PluginMcpServer>)
-        .await
-        .expect("exposing the views module should succeed");
+    host.expose_rust_module(
+        "views".to_string(),
+        Arc::new(module) as Arc<dyn PluginMcpServer>,
+    )
+    .await
+    .expect("exposing the views module should succeed");
 
     ExposedViews {
         _dir: dir,
@@ -316,7 +319,14 @@ async fn perspective_commands_plugin_registers_and_executes() {
         "perspective.filter should succeed, got {set_filter}"
     );
     assert_eq!(
-        views.perspectives.read().await.get_by_id(&persp_id).unwrap().filter.as_deref(),
+        views
+            .perspectives
+            .read()
+            .await
+            .get_by_id(&persp_id)
+            .unwrap()
+            .filter
+            .as_deref(),
         Some("#bug"),
         "perspective.filter must have written the filter through the perspective kernel"
     );
@@ -341,7 +351,14 @@ async fn perspective_commands_plugin_registers_and_executes() {
         "perspective.group should succeed, got {set_group}"
     );
     assert_eq!(
-        views.perspectives.read().await.get_by_id(&persp_id).unwrap().group.as_deref(),
+        views
+            .perspectives
+            .read()
+            .await
+            .get_by_id(&persp_id)
+            .unwrap()
+            .group
+            .as_deref(),
         Some("status"),
         "perspective.group must have written the group field through the perspective kernel"
     );
@@ -543,7 +560,11 @@ fn assert_command_metadata(cmd: &Value, spec: &MetaSpec) {
             cmd["params"]
         );
     } else {
-        assert_eq!(cmd["params"], spec.params, "{} params must match the YAML 1:1", spec.id);
+        assert_eq!(
+            cmd["params"], spec.params,
+            "{} params must match the YAML 1:1",
+            spec.id
+        );
     }
 }
 
