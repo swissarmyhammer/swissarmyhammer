@@ -47,13 +47,15 @@ struct CachedSession {
 impl CachedSession {
     /// Combined byte footprint used by the LRU byte budget.
     fn byte_size(&self) -> usize {
-        self.state_bytes.len()
-            + self
-                .draft_state_bytes
-                .as_ref()
-                .map_or(0, |b| b.len())
+        self.state_bytes.len() + self.draft_state_bytes.as_ref().map_or(0, |b| b.len())
     }
 }
+
+/// Cloned-out snapshot of a cached session — target state bytes, prompt
+/// fingerprint tokens, and optional draft state bytes. Returned by
+/// [`SessionStateStore::get`] so callers can drop the lock before the
+/// comparatively slow `set_state_data`/`state_seq_set_data`.
+type CachedStateSnapshot = (Vec<u8>, Option<Vec<i32>>, Option<Vec<u8>>);
 
 /// LRU, byte-bounded in-memory store of per-session llama.cpp context state for
 /// efficient multi-turn conversations (restore without disk I/O).
@@ -102,7 +104,7 @@ impl SessionStateStore {
     /// state bytes, marking it most-recently-used. Bytes are cloned (not
     /// borrowed) so the caller can drop the lock before the comparatively slow
     /// `set_state_data`/`state_seq_set_data`.
-    fn get(&mut self, id: &str) -> Option<(Vec<u8>, Option<Vec<i32>>, Option<Vec<u8>>)> {
+    fn get(&mut self, id: &str) -> Option<CachedStateSnapshot> {
         let out = self.entries.get(id).map(|c| {
             (
                 c.state_bytes.clone(),
@@ -157,7 +159,11 @@ impl SessionStateStore {
                 // own state avoids a foreign-state set_state_data copy on
                 // the typical warm-continuation case where the caller's
                 // prior turn IS the longest-matching prefix.
-                Some((best_id, best_lcp)) if lcp == *best_lcp && is_current && best_id != target_session_id => true,
+                Some((best_id, best_lcp))
+                    if lcp == *best_lcp && is_current && best_id != target_session_id =>
+                {
+                    true
+                }
                 _ => false,
             };
             if take {
@@ -167,7 +173,10 @@ impl SessionStateStore {
 
         let (source_id, lcp) = best?;
         self.touch(&source_id);
-        let entry = self.entries.get(&source_id).expect("just-touched id exists");
+        let entry = self
+            .entries
+            .get(&source_id)
+            .expect("just-touched id exists");
         Some(PrefixMatch {
             source_session_id: source_id.clone(),
             state_bytes: entry.state_bytes.clone(),
@@ -185,8 +194,7 @@ impl SessionStateStore {
         prompt_tokens: Option<Vec<i32>>,
         draft_state_bytes: Option<Vec<u8>>,
     ) {
-        let new_bytes = state_bytes.len()
-            + draft_state_bytes.as_ref().map_or(0, |b| b.len());
+        let new_bytes = state_bytes.len() + draft_state_bytes.as_ref().map_or(0, |b| b.len());
         if let Some(old) = self.entries.insert(
             id.clone(),
             CachedSession {
@@ -1715,9 +1723,11 @@ impl RequestQueue {
                                 );
                             },
                         )
-                        .map_err(|e| crate::types::QueueError::WorkerError(format!(
-                            "MTP generation failed: {e}"
-                        )))
+                        .map_err(|e| {
+                            crate::types::QueueError::WorkerError(format!(
+                                "MTP generation failed: {e}"
+                            ))
+                        })
                     } else {
                         // Draft restore/trim failed — fall back to standard
                         // streaming for this turn. Drops the stale draft_ctx
@@ -1743,9 +1753,9 @@ impl RequestQueue {
                                 );
                             },
                         )
-                        .map_err(|e| crate::types::QueueError::WorkerError(format!(
-                            "Generation failed: {e}"
-                        )))
+                        .map_err(|e| {
+                            crate::types::QueueError::WorkerError(format!("Generation failed: {e}"))
+                        })
                     }
                 }
                 Err(e) => {
@@ -1774,9 +1784,9 @@ impl RequestQueue {
                             );
                         },
                     )
-                    .map_err(|e| crate::types::QueueError::WorkerError(format!(
-                        "Generation failed: {e}"
-                    )))
+                    .map_err(|e| {
+                        crate::types::QueueError::WorkerError(format!("Generation failed: {e}"))
+                    })
                 }
             }
         } else {
@@ -1801,9 +1811,7 @@ impl RequestQueue {
                     );
                 },
             )
-            .map_err(|e| crate::types::QueueError::WorkerError(format!(
-                "Generation failed: {e}"
-            )))
+            .map_err(|e| crate::types::QueueError::WorkerError(format!("Generation failed: {e}")))
         };
 
         // No post-generation save: the prompt-boundary hook above already
@@ -1974,8 +1982,7 @@ impl RequestQueue {
                 // doesn't drop in that case, and the next decode trips
                 // M-RoPE's position-monotonicity check. We have to surface that
                 // and fall back to a cold full reprocess.
-                let trim_result =
-                    ctx.clear_kv_cache_seq(Some(0), Some(offset as u32), None);
+                let trim_result = ctx.clear_kv_cache_seq(Some(0), Some(offset as u32), None);
                 match trim_result {
                     Ok(true) => { /* trimmed cleanly */ }
                     Ok(false) => {
@@ -2091,8 +2098,7 @@ impl RequestQueue {
         // turn's generation length. Same `Ok(false)` silent-failure path as
         // the target trim — fall back to skipping MTP rather than running
         // with stale KV positions tripping M-RoPE's invariant.
-        let trim_result =
-            draft_ctx.clear_kv_cache_seq(Some(0), Some(offset as u32), None);
+        let trim_result = draft_ctx.clear_kv_cache_seq(Some(0), Some(offset as u32), None);
         match trim_result {
             Ok(true) => true,
             Ok(false) => {
@@ -3923,9 +3929,7 @@ mod tests {
         fn find_best_prefix_match_returns_none_without_overlap() {
             let mut store = SessionStateStore::new(8, usize::MAX);
             store.insert("A".into(), state(1, 4), Some(vec![10, 20]), None);
-            assert!(store
-                .find_best_prefix_match("B", &[99, 100, 101])
-                .is_none());
+            assert!(store.find_best_prefix_match("B", &[99, 100, 101]).is_none());
         }
 
         /// Entries written without a prompt fingerprint (the batch path's
@@ -3935,9 +3939,7 @@ mod tests {
         fn find_best_prefix_match_skips_unfingerprinted_entries() {
             let mut store = SessionStateStore::new(8, usize::MAX);
             store.insert("batch-only".into(), state(1, 4), None, None);
-            assert!(store
-                .find_best_prefix_match("B", &[10, 20, 30])
-                .is_none());
+            assert!(store.find_best_prefix_match("B", &[10, 20, 30]).is_none());
         }
 
         #[test]
@@ -3948,7 +3950,7 @@ mod tests {
             let mut store = SessionStateStore::new(100, 30);
             store.insert("A".into(), state(1, 10), None, Some(state(2, 10))); // 20
             store.insert("B".into(), state(3, 10), None, Some(state(4, 10))); // 40 total
-            // budget 30 < 40 → LRU 'A' evicted, only 'B' remains
+                                                                              // budget 30 < 40 → LRU 'A' evicted, only 'B' remains
             assert_eq!(store.len(), 1, "draft bytes count toward budget");
             assert!(store.contains("B"));
             assert!(!store.contains("A"));
