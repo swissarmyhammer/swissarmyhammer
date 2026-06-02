@@ -10,7 +10,12 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  LLAMA_N_GPU_LAYERS: "0"
+  # NOTE: the self-hosted Test runner is a Mac WITH a Metal GPU, so the suite
+  # runs on the GPU (llama-agent defaults to offloading all layers). This is
+  # required by the Metal-offload proof test and keeps the real-model e2e tests
+  # fast enough to stay well under their hang-guard. The coverage gate overrides
+  # this with LLAMA_N_GPU_LAYERS=0 at the step level for deterministic CPU
+  # coverage; tests that require the GPU skip themselves under that override.
 
 jobs:
   test:
