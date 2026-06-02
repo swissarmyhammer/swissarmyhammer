@@ -1,6 +1,6 @@
 ---
 name: explore
-description: Codebase exploration and discovery assistant
+description: Fast read-only agent for file searches, symbol lookups, and codebase questions like "where is X defined?", "where is X called?", or "how does X flow through the system?". Prefer over shell-based exploration.
 skills:
   - explore
 ---

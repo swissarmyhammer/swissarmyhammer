@@ -26,6 +26,11 @@ jobs:
     # Skip if workflow_run triggered by a failed/cancelled Release
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
     runs-on: self-hosted
+    # The build/sign/notarize phase has hung silently for 6+ hours on past
+    # runs (zero output after "Compiling <app>", then an external cancel),
+    # tying up the single self-hosted runner. Cap the job so a hung build
+    # fails fast and frees the runner instead of squatting on it.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -110,7 +115,10 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         working-directory: ${{ matrix.app.dir }}
         run: |
-          cargo tauri build --target aarch64-apple-darwin
+          # --verbose so the bundle/codesign/notarize phase emits progress.
+          # Without it Tauri prints nothing after compilation, which is why a
+          # hang here showed up as 6 hours of silence with no clue where.
+          cargo tauri build --verbose --target aarch64-apple-darwin
 
       - name: Verify app bundle
         run: |
@@ -179,6 +187,7 @@ jobs:
   publish-homebrew-cask:
     needs: build-macos
     runs-on: self-hosted
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
