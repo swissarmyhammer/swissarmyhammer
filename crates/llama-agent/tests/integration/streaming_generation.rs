@@ -458,7 +458,7 @@ async fn test_second_streaming_prompt_after_turn_succeeds() {
 /// Two streaming turns on the same session, appended append-only (assistant turn
 /// + new user turn between them, exactly as the ACP loop does). It captures the
 /// queue worker's own logs and asserts:
-///   - turn 1 logged a cold start ("no cached KV state … processing full
+///   - turn 1 logged a cold start ("no usable cached prefix … processing full
 ///     prompt") — the save side ran, populating the cache, and
 ///   - turn 2 logged "streaming reusing N cached tokens" — the restore side ran
 ///     and skipped the cached prefix.
@@ -546,9 +546,9 @@ async fn test_streaming_reuses_kv_cache_across_turns() {
     let logs = String::from_utf8_lossy(&buffer.lock().unwrap()).into_owned();
 
     assert!(
-        logs.contains("no cached KV state"),
-        "turn 1 should log a cold start (no cached KV state) — proving the cache \
-         began empty. Captured logs:\n{logs}"
+        logs.contains("no usable cached prefix"),
+        "turn 1 should log a cold start (no usable cached prefix … processing full \
+         prompt) — proving the cache began empty. Captured logs:\n{logs}"
     );
     assert!(
         logs.contains("streaming reusing"),
