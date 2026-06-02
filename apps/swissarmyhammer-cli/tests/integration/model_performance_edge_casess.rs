@@ -814,11 +814,7 @@ agent:
 
     // Test multiple operations with potential file contention
     for i in 0..5 {
-        let model = if i % 2 == 0 {
-            "claude-code"
-        } else {
-            "qwen"
-        };
+        let model = if i % 2 == 0 { "claude-code" } else { "qwen" };
 
         let use_output =
             run_sah_command_with_timeout(&["model", "use", model], Some(project_root), 10).await?;

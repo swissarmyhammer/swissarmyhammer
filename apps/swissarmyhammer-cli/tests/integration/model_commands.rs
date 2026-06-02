@@ -138,10 +138,7 @@ async fn test_model_list_basic_functionality() -> Result<()> {
         stdout.contains("claude-code"),
         "Should list claude-code model"
     );
-    assert!(
-        stdout.contains("qwen"),
-        "Should list qwen model"
-    );
+    assert!(stdout.contains("qwen"), "Should list qwen model");
 
     // Should show summary information
     assert!(
@@ -198,10 +195,7 @@ async fn test_model_list_json_format() -> Result<()> {
         model_names.contains(&"claude-code"),
         "Should include claude-code"
     );
-    assert!(
-        model_names.contains(&"qwen"),
-        "Should include qwen"
-    );
+    assert!(model_names.contains(&"qwen"), "Should include qwen");
 
     Ok(())
 }
@@ -733,10 +727,7 @@ async fn test_complete_model_workflow() -> Result<()> {
 
         if switch_output.status.success() {
             let switch_stdout = String::from_utf8_lossy(&switch_output.stdout);
-            assert!(
-                switch_stdout.contains("qwen"),
-                "Should show new model"
-            );
+            assert!(switch_stdout.contains("qwen"), "Should show new model");
 
             // Step 5: Verify config was updated
             let config_content = fs::read_to_string(&config_path)?;

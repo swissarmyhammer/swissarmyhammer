@@ -169,11 +169,15 @@ pub fn session_updates_to_messages(updates: &[SessionUpdate]) -> Vec<Message> {
         match update {
             SessionUpdate::AgentThoughtChunk(chunk) => {
                 let text = content_block_text(&chunk.content);
-                buffered.get_or_insert_with(AssistantBuilder::default).push_thought(&text);
+                buffered
+                    .get_or_insert_with(AssistantBuilder::default)
+                    .push_thought(&text);
             }
             SessionUpdate::AgentMessageChunk(chunk) => {
                 let text = content_block_text(&chunk.content);
-                buffered.get_or_insert_with(AssistantBuilder::default).push_visible(&text);
+                buffered
+                    .get_or_insert_with(AssistantBuilder::default)
+                    .push_visible(&text);
             }
             other => {
                 if let Some(builder) = buffered.take() {

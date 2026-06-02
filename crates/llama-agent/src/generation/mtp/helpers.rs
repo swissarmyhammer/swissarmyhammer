@@ -132,22 +132,34 @@ mod tests {
 
     #[test]
     fn longest_accepted_prefix_full_match() {
-        assert_eq!(longest_accepted_prefix(&toks(&[1, 2, 3]), &toks(&[1, 2, 3])), 3);
+        assert_eq!(
+            longest_accepted_prefix(&toks(&[1, 2, 3]), &toks(&[1, 2, 3])),
+            3
+        );
     }
 
     #[test]
     fn longest_accepted_prefix_partial_match() {
-        assert_eq!(longest_accepted_prefix(&toks(&[1, 2, 9]), &toks(&[1, 2, 3])), 2);
+        assert_eq!(
+            longest_accepted_prefix(&toks(&[1, 2, 9]), &toks(&[1, 2, 3])),
+            2
+        );
     }
 
     #[test]
     fn longest_accepted_prefix_divergent_at_zero() {
-        assert_eq!(longest_accepted_prefix(&toks(&[9, 2, 3]), &toks(&[1, 2, 3])), 0);
+        assert_eq!(
+            longest_accepted_prefix(&toks(&[9, 2, 3]), &toks(&[1, 2, 3])),
+            0
+        );
     }
 
     #[test]
     fn longest_accepted_prefix_stops_at_shorter_slice() {
-        assert_eq!(longest_accepted_prefix(&toks(&[1, 2]), &toks(&[1, 2, 3])), 2);
+        assert_eq!(
+            longest_accepted_prefix(&toks(&[1, 2]), &toks(&[1, 2, 3])),
+            2
+        );
     }
 
     #[test]
@@ -200,35 +212,50 @@ mod tests {
     fn verify_acceptance_full_match_takes_frontier_next() {
         let target_chosen = toks(&[1, 2, 3, 4]);
         let drafts = toks(&[1, 2, 3]);
-        assert_eq!(verify_acceptance(&target_chosen, &drafts), (3, LlamaToken(4)));
+        assert_eq!(
+            verify_acceptance(&target_chosen, &drafts),
+            (3, LlamaToken(4))
+        );
     }
 
     #[test]
     fn verify_acceptance_partial_match_next_is_frontier_choice() {
         let target_chosen = toks(&[1, 2, 9, 99]);
         let drafts = toks(&[1, 2, 3]);
-        assert_eq!(verify_acceptance(&target_chosen, &drafts), (2, LlamaToken(9)));
+        assert_eq!(
+            verify_acceptance(&target_chosen, &drafts),
+            (2, LlamaToken(9))
+        );
     }
 
     #[test]
     fn verify_acceptance_zero_match_next_is_id_last_prediction() {
         let target_chosen = toks(&[5, 6, 7]);
         let drafts = toks(&[1, 2]);
-        assert_eq!(verify_acceptance(&target_chosen, &drafts), (0, LlamaToken(5)));
+        assert_eq!(
+            verify_acceptance(&target_chosen, &drafts),
+            (0, LlamaToken(5))
+        );
     }
 
     #[test]
     fn verify_acceptance_single_draft_accepted() {
         let target_chosen = toks(&[1, 2]);
         let drafts = toks(&[1]);
-        assert_eq!(verify_acceptance(&target_chosen, &drafts), (1, LlamaToken(2)));
+        assert_eq!(
+            verify_acceptance(&target_chosen, &drafts),
+            (1, LlamaToken(2))
+        );
     }
 
     #[test]
     fn verify_acceptance_single_draft_rejected() {
         let target_chosen = toks(&[9, 8]);
         let drafts = toks(&[1]);
-        assert_eq!(verify_acceptance(&target_chosen, &drafts), (0, LlamaToken(9)));
+        assert_eq!(
+            verify_acceptance(&target_chosen, &drafts),
+            (0, LlamaToken(9))
+        );
     }
 
     #[test]
@@ -247,7 +274,10 @@ mod tests {
 
     #[test]
     fn compose_emitted_partial_prefix() {
-        assert_eq!(compose_emitted(&toks(&[1, 2]), LlamaToken(9)), toks(&[1, 2, 9]));
+        assert_eq!(
+            compose_emitted(&toks(&[1, 2]), LlamaToken(9)),
+            toks(&[1, 2, 9])
+        );
     }
 
     #[test]

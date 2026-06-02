@@ -36,9 +36,7 @@ fn test_builtin_models_specific_content() {
     assert!(claude_content.contains("type: claude-code"));
 
     // Test qwen agent
-    let qwen_content = agents_map
-        .get("qwen")
-        .expect("qwen agent should exist");
+    let qwen_content = agents_map.get("qwen").expect("qwen agent should exist");
     assert!(qwen_content.contains("type: llama-agent"));
     assert!(
         qwen_content.contains("unsloth/Qwen3"),

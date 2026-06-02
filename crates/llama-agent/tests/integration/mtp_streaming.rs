@@ -164,12 +164,17 @@ async fn streaming_mtp_produces_tokens_on_mtp_model() {
         !text.trim().is_empty(),
         "MTP streaming produced no visible text despite {tokens} tokens"
     );
-    let reason = finish_reason
-        .expect("MTP stream must terminate with a finish reason (the terminal chunk)");
+    let reason =
+        finish_reason.expect("MTP stream must terminate with a finish reason (the terminal chunk)");
     let llama_agent::types::FinishReason::Stopped(reason) = reason;
     assert!(
-        ["EndOfSequence", "StopToken", "MaxTokens", "ContextWindowFull"]
-            .contains(&reason.as_str()),
+        [
+            "EndOfSequence",
+            "StopToken",
+            "MaxTokens",
+            "ContextWindowFull"
+        ]
+        .contains(&reason.as_str()),
         "unexpected MTP finish reason: {reason}"
     );
 }

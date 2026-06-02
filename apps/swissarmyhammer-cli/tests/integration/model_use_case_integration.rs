@@ -180,10 +180,7 @@ async fn test_model_use_sets_model() -> Result<()> {
         eprintln!("Command failed with stderr: {}", stderr);
     }
 
-    assert!(
-        output.status.success(),
-        "model use qwen should succeed"
-    );
+    assert!(output.status.success(), "model use qwen should succeed");
 
     ctx.assert_config_contains_model("qwen")?;
 

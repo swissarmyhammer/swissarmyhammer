@@ -416,7 +416,9 @@ async fn execute_task_query_operation(
             if let Some(page) = op.get_u64("page").and_then(|n| usize::try_from(n).ok()) {
                 cmd = cmd.with_page(page);
             }
-            if let Some(page_size) = op.get_u64("page_size").and_then(|n| usize::try_from(n).ok())
+            if let Some(page_size) = op
+                .get_u64("page_size")
+                .and_then(|n| usize::try_from(n).ok())
             {
                 cmd = cmd.with_page_size(page_size);
             }

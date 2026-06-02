@@ -116,9 +116,7 @@ where
         }
         batch.clear();
         let chunk_positions: Vec<i32> = (0..chunk.len())
-            .map(|i| {
-                i32::try_from(absolute_position + i).expect("prefill position fits into i32")
-            })
+            .map(|i| i32::try_from(absolute_position + i).expect("prefill position fits into i32"))
             .collect();
         for (i, token) in chunk.iter().enumerate() {
             batch
@@ -160,11 +158,7 @@ where
     let mut empty_drafts: usize = 0;
     let turn_start = std::time::Instant::now();
 
-    let log_stats = |reason: &str,
-                     tokens: usize,
-                     passes: usize,
-                     accepted: usize,
-                     empty: usize| {
+    let log_stats = |reason: &str, tokens: usize, passes: usize, accepted: usize, empty: usize| {
         let elapsed = turn_start.elapsed();
         let tps = if elapsed.as_secs_f64() > 0.0 {
             (tokens as f64) / elapsed.as_secs_f64()
@@ -205,15 +199,33 @@ where
 
     loop {
         if check_cancelled(cancellation_token, stream_sender) {
-            log_stats("Cancelled", tokens_generated, target_passes, accepted_total, empty_drafts);
+            log_stats(
+                "Cancelled",
+                tokens_generated,
+                target_passes,
+                accepted_total,
+                empty_drafts,
+            );
             return Ok(());
         }
         if tokens_generated >= max_tokens {
-            log_stats("MaxTokens", tokens_generated, target_passes, accepted_total, empty_drafts);
+            log_stats(
+                "MaxTokens",
+                tokens_generated,
+                target_passes,
+                accepted_total,
+                empty_drafts,
+            );
             return finish(stream_sender, "MaxTokens");
         }
         if budget::reached_context_limit(total_token_count, tokens_generated, context_size) {
-            log_stats("ContextWindowFull", tokens_generated, target_passes, accepted_total, empty_drafts);
+            log_stats(
+                "ContextWindowFull",
+                tokens_generated,
+                target_passes,
+                accepted_total,
+                empty_drafts,
+            );
             return finish(stream_sender, "ContextWindowFull");
         }
 
@@ -263,20 +275,44 @@ where
         // max_tokens.
         for token in accepted.iter().chain(std::iter::once(&next_token)) {
             if check_cancelled(cancellation_token, stream_sender) {
-                log_stats("Cancelled", tokens_generated, target_passes, accepted_total, empty_drafts);
+                log_stats(
+                    "Cancelled",
+                    tokens_generated,
+                    target_passes,
+                    accepted_total,
+                    empty_drafts,
+                );
                 return Ok(());
             }
             if model.is_eog_token(*token) {
-                log_stats("EndOfSequence", tokens_generated, target_passes, accepted_total, empty_drafts);
+                log_stats(
+                    "EndOfSequence",
+                    tokens_generated,
+                    target_passes,
+                    accepted_total,
+                    empty_drafts,
+                );
                 return finish(stream_sender, "EndOfSequence");
             }
             if let Some(()) = emit_token(model, *token, stream_sender)? {
-                log_stats("Disconnected", tokens_generated, target_passes, accepted_total, empty_drafts);
+                log_stats(
+                    "Disconnected",
+                    tokens_generated,
+                    target_passes,
+                    accepted_total,
+                    empty_drafts,
+                );
                 return Ok(());
             }
             tokens_generated += 1;
             if tokens_generated >= max_tokens {
-                log_stats("MaxTokens", tokens_generated, target_passes, accepted_total, empty_drafts);
+                log_stats(
+                    "MaxTokens",
+                    tokens_generated,
+                    target_passes,
+                    accepted_total,
+                    empty_drafts,
+                );
                 return finish(stream_sender, "MaxTokens");
             }
         }
@@ -349,7 +385,6 @@ fn finish(
     let _ = send_with_backpressure(stream_sender, Ok(final_chunk));
     Ok(())
 }
-
 
 /// Check the cancellation token; on cancellation, push the standard queue
 /// "Request cancelled" error and return `true` so the caller can short-circuit.

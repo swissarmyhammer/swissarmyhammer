@@ -80,11 +80,11 @@ use llama_agent::types::AgentAPI;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
-use tokio::sync::Mutex as AsyncMutex;
 use swissarmyhammer_common::{ErrorSeverity, Pretty, Severity};
 use swissarmyhammer_config::model::{ModelConfig, ModelExecutorConfig, ModelExecutorType};
 use thiserror::Error;
 use tokio::sync::broadcast;
+use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 
 // ============================================================================

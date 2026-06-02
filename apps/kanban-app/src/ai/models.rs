@@ -718,8 +718,8 @@ mod tests {
     fn resolve_model_config_for_local_llama_model() {
         // `qwen` is a built-in `llama-agent` model. Resolving it must
         // yield a runnable chat-agent config.
-        let config = resolve_model_config("qwen")
-            .expect("a built-in llama model must resolve to a config");
+        let config =
+            resolve_model_config("qwen").expect("a built-in llama model must resolve to a config");
         assert_eq!(config.executor_type(), ModelExecutorType::LlamaAgent);
     }
 

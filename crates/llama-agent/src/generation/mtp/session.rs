@@ -215,7 +215,12 @@ impl MtpSession {
         loop {
             let (top1, top1_prob) = self.top1(draft, i_batch);
 
-            if draft_should_stop(top1_prob, self.params.p_min, result.len(), self.params.n_max) {
+            if draft_should_stop(
+                top1_prob,
+                self.params.p_min,
+                result.len(),
+                self.params.n_max,
+            ) {
                 break;
             }
 
@@ -271,7 +276,10 @@ impl MtpSession {
         n_past: i32,
         seq_id: i32,
     ) -> Result<VerifyOutcome> {
-        assert!(!drafts.is_empty(), "verify requires at least one draft token");
+        assert!(
+            !drafts.is_empty(),
+            "verify requires at least one draft token"
+        );
         let n = drafts.len();
 
         let mut batch = LlamaBatch::new(n + 1, 1);
@@ -281,7 +289,9 @@ impl MtpSession {
                 .add(token, n_past + offset, &[seq_id], true)
                 .context("verify batch sized for id_last plus the draft positions")?;
         }
-        target.decode(&mut batch).context("target verify decode failed")?;
+        target
+            .decode(&mut batch)
+            .context("target verify decode failed")?;
 
         // The target's greedy choice (argmax logit) at each batch index 0..=n.
         let target_chosen: Vec<LlamaToken> = (0..=n)

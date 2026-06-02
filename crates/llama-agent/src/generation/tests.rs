@@ -86,8 +86,7 @@ mod backpressure_tests {
             .enable_all()
             .build()
             .unwrap();
-        let (tx, mut rx) =
-            mpsc::unbounded_channel::<Result<StreamChunk, QueueError>>();
+        let (tx, mut rx) = mpsc::unbounded_channel::<Result<StreamChunk, QueueError>>();
 
         let producer = thread::spawn(move || -> Result<(), u32> {
             for i in 0..5u32 {
@@ -150,8 +149,7 @@ mod no_try_send_for_chunks {
     /// MUST be `send_with_backpressure`. `try_send(Err(...))` sites are
     /// allowed only on cancellation paths through the helper itself.
     fn assert_no_try_send_chunks(path: &str) {
-        let body = std::fs::read_to_string(path)
-            .unwrap_or_else(|e| panic!("read {path}: {e}"));
+        let body = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
         for (i, line) in body.lines().enumerate() {
             let trimmed = line.trim_start();
             if trimmed.starts_with("//") || trimmed.starts_with("///") {

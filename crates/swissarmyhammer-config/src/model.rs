@@ -2701,11 +2701,7 @@ executor:
 
         // The embedding model and the other untagged llama chat variants must
         // not carry the `kanban` tag — they should not surface in the panel.
-        for name in [
-            "qwen-embedding",
-            "qwen-0.6b-test",
-            "qwen-0.8b-mtp-test",
-        ] {
+        for name in ["qwen-embedding", "qwen-0.6b-test", "qwen-0.8b-mtp-test"] {
             let model = models
                 .iter()
                 .find(|m| m.name == name)
@@ -2799,10 +2795,7 @@ quiet: true"#;
             agent_names.contains(&"claude-code"),
             "Should contain claude-code agent"
         );
-        assert!(
-            agent_names.contains(&"qwen"),
-            "Should contain qwen agent"
-        );
+        assert!(agent_names.contains(&"qwen"), "Should contain qwen agent");
     }
 
     #[test]
@@ -2979,10 +2972,7 @@ quiet: false"#;
             agent_names.contains(&"claude-code"),
             "Should contain claude-code agent"
         );
-        assert!(
-            agent_names.contains(&"qwen"),
-            "Should contain qwen agent"
-        );
+        assert!(agent_names.contains(&"qwen"), "Should contain qwen agent");
     }
 
     #[test]
@@ -3584,10 +3574,7 @@ model: qwen
             updated_config.contains("claude-code"),
             "Should contain new model name"
         );
-        assert!(
-            !updated_config.contains("qwen"),
-            "Should replace old model"
-        );
+        assert!(!updated_config.contains("qwen"), "Should replace old model");
     }
 
     #[test]

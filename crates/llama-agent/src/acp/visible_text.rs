@@ -382,9 +382,8 @@ mod tests {
 
     #[test]
     fn multiple_spans_in_one_stream() {
-        let (visible, thought) = run(&[
-            "<think>a</think>X<tool_call>b</tool_call>Y<think>c</think>Z",
-        ]);
+        let (visible, thought) =
+            run(&["<think>a</think>X<tool_call>b</tool_call>Y<think>c</think>Z"]);
         assert_eq!(visible, "XYZ");
         assert_eq!(thought, "ac");
     }

@@ -136,8 +136,7 @@ impl Execute<KanbanContext, KanbanError> for ListTasks {
                 .clamp(1, MAX_PAGE_SIZE);
             let total_pages = total.div_ceil(page_size).max(1);
             let start = (page - 1).saturating_mul(page_size);
-            let paginated: Vec<Value> =
-                filtered.into_iter().skip(start).take(page_size).collect();
+            let paginated: Vec<Value> = filtered.into_iter().skip(start).take(page_size).collect();
 
             Ok(serde_json::json!({
                 "tasks": paginated,
