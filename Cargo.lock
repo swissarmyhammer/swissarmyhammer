@@ -4518,7 +4518,7 @@ dependencies = [
 [[package]]
 name = "llama-cpp-2"
 version = "0.1.123"
-source = "git+https://github.com/swissarmyhammer/llama-cpp-rs?rev=65ff02f641bfd43c21585ec6bc55bd060bbe5a4b#65ff02f641bfd43c21585ec6bc55bd060bbe5a4b"
+source = "git+https://github.com/swissarmyhammer/llama-cpp-rs#5a6ab38f2808e8fd6987ab7e2f7937f48e1d9653"
 dependencies = [
  "enumflags2",
  "llama-cpp-sys-2",
@@ -4530,7 +4530,7 @@ dependencies = [
 [[package]]
 name = "llama-cpp-sys-2"
 version = "0.1.123"
-source = "git+https://github.com/swissarmyhammer/llama-cpp-rs?rev=65ff02f641bfd43c21585ec6bc55bd060bbe5a4b#65ff02f641bfd43c21585ec6bc55bd060bbe5a4b"
+source = "git+https://github.com/swissarmyhammer/llama-cpp-rs#5a6ab38f2808e8fd6987ab7e2f7937f48e1d9653"
 dependencies = [
  "bindgen",
  "cc",
