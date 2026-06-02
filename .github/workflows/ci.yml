@@ -10,12 +10,15 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # NOTE: the self-hosted runner is a Mac WITH a Metal GPU, so the whole suite —
-  # the Test job AND the llama-agent coverage gate — runs on the GPU (llama-agent
-  # defaults to offloading all layers). This is required by the Metal-offload
-  # proof test and keeps the real-model tests fast enough to stay well under their
-  # hang-guards. Do NOT set LLAMA_N_GPU_LAYERS=0 here or on the coverage step:
-  # CPU-forced real-model inference is what dragged the coverage gate to ~40 min.
+  # NOTE: the self-hosted runner is a Mac WITH a Metal GPU, so the Test job runs
+  # on the GPU (llama-agent defaults to offloading all layers). This is required
+  # by the Metal-offload proof test and keeps the real-model tests fast enough to
+  # stay well under their hang-guards. Do NOT set LLAMA_N_GPU_LAYERS=0 here —
+  # CPU-forced real-model inference is dramatically slower.
+  #
+  # The llama-agent coverage gate is intentionally NOT here: instrumented
+  # real-model coverage is slow, so it lives in its own manually-triggered
+  # workflow (.github/workflows/coverage.yml).
 
 jobs:
   test:
@@ -39,62 +42,6 @@ jobs:
           fi
       - name: Run tests
         run: cargo nextest run --no-fail-fast
-
-  llama-agent-coverage:
-    name: llama-agent coverage gate
-    runs-on: self-hosted
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "swissarmyhammer-ci"
-      - uses: taiki-e/install-action@cargo-llvm-cov
-      # Lock in the line coverage of llama-agent (incl. the ACP submodule) so a
-      # future change cannot silently drop back toward the state that let the
-      # 0-token streaming bug ship. The threshold is enforced by
-      # scripts/llama_agent_gap_report.py against an llama-agent/src-scoped LCOV
-      # — NOT by `cargo llvm-cov --fail-under-lines`, which gates the
-      # workspace-wide TOTAL (polluted by other crates instrumented as
-      # path-deps) and is meaningless here.
-      #
-      # Threshold derivation (post-epic, measured 2026-05-28):
-      #   achieved 85.04% crate line coverage; baseline (pre-epic) was 78.01%.
-      #   Crate floor = 80% — above baseline (so it ratchets / blocks regression
-      #   to pre-epic) with ~5pt slack for model-availability variance (the
-      #   real-model smoke tests use the small qwen-0.6B and skip on HF
-      #   rate-limit; on this self-hosted runner the model is cached so they run,
-      #   but the margin absorbs a transient skip). NOT 100% — that invites
-      #   coverage-gaming and brittle exclusions.
-      #   Per-file critical floors guard the behaviour-critical / bug-prone
-      #   modules harder than the crate average, so a regression there fails even
-      #   if the crate total stays up.
-      #
-      # Exclusions: the real-model FFI decode loops (generation/mod.rs,
-      # model.rs load path) bind llama.cpp and are covered by the small-model
-      # smoke tests, not unit coverage — they are not separately gated. No 27B
-      # model is downloaded: the suite is hardcoded to qwen-0.6B (src/test_models.rs).
-      - name: Measure llama-agent coverage (small model only)
-        # Runs on the GPU (no LLAMA_N_GPU_LAYERS override). Coverage measures
-        # which lines of llama-agent/src execute, and that is identical on GPU and
-        # CPU — the GPU/CPU split lives in llama.cpp's C kernels, not in Rust — so
-        # the gate threshold is unaffected. Forcing CPU here previously dragged the
-        # real-model smoke tests out to a ~40-minute step; on the GPU they finish
-        # in seconds.
-        run: cargo llvm-cov --package llama-agent --no-fail-fast --lcov --output-path llama-agent.lcov
-      - name: Enforce coverage gate
-        run: |
-          python3 scripts/llama_agent_gap_report.py llama-agent.lcov \
-            --fail-under 80 \
-            --critical generation/budget.rs:100 \
-            --critical stopper/mod.rs:95 \
-            --critical queue.rs:90 \
-            --critical acp/translation.rs:90 \
-            --critical chat_template.rs:80
 
   frontend:
     name: Frontend
