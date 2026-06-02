@@ -313,10 +313,11 @@ impl BoardHandle {
     /// Does NOT start the bridge task — call `start_watcher` after the
     /// Tauri `AppHandle` is available so the bridge can emit events.
     pub async fn open(kanban_path: PathBuf) -> Result<Self, String> {
-        // Deploy the kanban-profile skills synchronously BEFORE starting the
+        // Ensure the board workspace's tools synchronously BEFORE starting the
         // board MCP server below: the `skill` tool resolves from `.sah/skills/`,
-        // so the skills must be on disk before the server can serve them.
-        ensure_kanban_workspace(&kanban_path);
+        // so the kanban tool's skills must be on disk before the server can
+        // serve them.
+        ensure_workspace_tools(&kanban_path);
 
         let ctx = KanbanContext::open(&kanban_path)
             .await
@@ -1031,27 +1032,26 @@ pub fn resolve_kanban_path(path: &Path) -> Result<PathBuf, std::io::Error> {
     Ok(child)
 }
 
-/// The init profile whose tagged builtin skills the kanban app deploys into a
-/// board's `.sah/` workspace.
+/// Ensure the board workspace's tools via in-process init, **synchronously,
+/// before the board's MCP server starts**.
 ///
-/// Only the `kanban`-profile cluster (the workflow skills: `kanban`, `plan`,
-/// `task`, `finish`, `implement`, `review`) is deployed — not all ~22 builtin
-/// skills — keeping board open fast.
-const KANBAN_PROFILE: &str = "kanban";
-
-/// Make the board folder a SwissArmyHammer workspace via in-process init,
-/// **synchronously, before the board's MCP server starts**.
+/// A board's workspace is a *set of tools*; ensuring it means running each
+/// tool's `Initializable` rooted at the board folder (the parent of the
+/// `.kanban` directory), at project scope. Today that set is exactly the kanban
+/// tool, whose init deploys its profile's builtin skills (the workflow cluster:
+/// `kanban`, `plan`, `task`, `finish`, `implement`, `review`) under
+/// `<board>/.sah/skills/` — the directory the board MCP server's `skill` tool
+/// reads. There is no separate generic "SAH workspace" step (no
+/// `ProjectStructure` / `.prompts/` / `workflows/`); the workspace is just its
+/// tools.
 ///
-/// Runs the root-explicit [`swissarmyhammer_workspace_init`] components rooted
-/// at the board folder (the parent of the `.kanban` directory), at project
-/// scope, so the in-process agent has the same `.sah/` workspace and the
-/// `kanban`-profile builtin skills. This never shells out to `sah` and never
-/// mutates the process working directory — the components are rooted at the
-/// explicit board path, which is essential in a multi-board desktop process.
+/// This never shells out to `sah` and never mutates the process working
+/// directory — [`run_workspace_tools_init`] is rooted at the explicit board
+/// path, which is essential in a multi-board desktop process.
 ///
 /// Two correctness/perf properties matter here:
 ///
-/// 1. **Profile-filtered.** Only the `kanban`-profile skills are deployed, not
+/// 1. **Tool-scoped.** Only the kanban tool's profile skills are deployed, not
 ///    every builtin skill. This is what the previous deploy-everything path
 ///    cost (~19s × number of restored boards on cold start). Deploying just the
 ///    6 idempotent profile skills is fast enough to run inline.
@@ -1063,39 +1063,41 @@ const KANBAN_PROFILE: &str = "kanban";
 ///
 /// The operation is idempotent (skills already current on disk are not
 /// rewritten), so it is safe to call on every board open. Failures are logged
-/// and swallowed: a board must still open even if skill deployment hits a
-/// filesystem problem.
-fn ensure_kanban_workspace(kanban_path: &Path) {
+/// and swallowed: a board must still open even if tool init hits a filesystem
+/// problem.
+///
+/// [`run_workspace_tools_init`]: swissarmyhammer_workspace_init::run_workspace_tools_init
+fn ensure_workspace_tools(kanban_path: &Path) {
     // The board folder is the parent of the `.kanban` directory; `.sah/` is
     // created as its sibling.
     let Some(board_dir) = kanban_path.parent() else {
         tracing::warn!(
             path = %kanban_path.display(),
-            "cannot initialize kanban workspace: .kanban path has no parent"
+            "cannot ensure kanban workspace tools: .kanban path has no parent"
         );
         return;
     };
 
-    // Synchronous on purpose: the kanban-profile deploy must complete before
-    // the board's MCP server starts serving the `skill` tool. It is only 6
-    // idempotent skills, so blocking here is cheap and keeps the ~19s stall
+    // Synchronous on purpose: the kanban tool's skill deploy must complete
+    // before the board's MCP server starts serving the `skill` tool. It is only
+    // 6 idempotent skills, so blocking here is cheap and keeps the ~19s stall
     // gone without the deploy-vs-server race a backgrounded deploy creates.
-    deploy_kanban_workspace(board_dir);
+    deploy_workspace_tools(board_dir);
 }
 
-/// Synchronously deploy the `kanban`-profile workspace into `board_dir`.
+/// Synchronously run the board workspace's tool inits into `board_dir`.
 ///
-/// Runs [`swissarmyhammer_workspace_init::run_workspace_init_for_profile`] and
-/// logs any component failures. Separated from [`ensure_kanban_workspace`] so
-/// the blocking work is a plain function the integration tests can call
-/// deterministically.
-fn deploy_kanban_workspace(board_dir: &Path) {
+/// Runs [`swissarmyhammer_workspace_init::run_workspace_tools_init`] — each
+/// workspace tool's `Initializable` (currently just the kanban tool's skill
+/// deployment) — and logs any component failures. Separated from
+/// [`ensure_workspace_tools`] so the blocking work is a plain function the
+/// integration tests can call deterministically.
+fn deploy_workspace_tools(board_dir: &Path) {
     use swissarmyhammer_common::lifecycle::{InitScope, InitStatus};
     use swissarmyhammer_common::reporter::NullReporter;
 
-    let results = swissarmyhammer_workspace_init::run_workspace_init_for_profile(
+    let results = swissarmyhammer_workspace_init::run_workspace_tools_init(
         board_dir,
-        KANBAN_PROFILE,
         &InitScope::Project,
         &NullReporter,
     );
@@ -1103,12 +1105,12 @@ fn deploy_kanban_workspace(board_dir: &Path) {
         tracing::warn!(
             component = %r.name,
             error = %r.message,
-            "SAH workspace init component failed"
+            "kanban workspace tool init component failed"
         );
     }
     tracing::info!(
         path = %board_dir.display(),
-        "ensured SAH workspace for board folder"
+        "ensured workspace tools for board folder"
     );
 }
 
@@ -1135,10 +1137,11 @@ fn deploy_kanban_workspace(board_dir: &Path) {
 /// The server's working directory is the board folder — the parent of the
 /// `.kanban` directory — so its `kanban` tool operates on this board's
 /// `.kanban` and its skills/prompts resolve from the board's `.sah/`
-/// workspace. That workspace is created by [`ensure_kanban_workspace`], which
-/// `BoardHandle::open` calls synchronously and to completion *before* this
-/// function, so the `.sah/skills/` are guaranteed on disk by the time the
-/// server begins serving the `skill` tool — there is no deploy-vs-server race.
+/// workspace. The board's workspace tools are ensured by
+/// [`ensure_workspace_tools`], which `BoardHandle::open` calls synchronously
+/// and to completion *before* this function, so the `.sah/skills/` are
+/// guaranteed on disk by the time the server begins serving the `skill` tool —
+/// there is no deploy-vs-server race.
 ///
 /// Returns `None` when the `.kanban` path has no parent or the server fails
 /// to bind; failures are logged and swallowed so a filesystem or port problem
@@ -1471,17 +1474,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_open_board_creates_sah_workspace_at_board_folder() {
+    async fn test_open_board_deploys_kanban_tool_skills_at_board_folder() {
         // Drives the real production entry point — `AppState::open_board`
-        // delegates to `BoardHandle::open`, which calls `ensure_kanban_workspace`
-        // with the resolved `.kanban` path and roots the workspace init at
-        // `kanban_path.parent()` (the board folder). Skill deployment is
-        // synchronous and completes before `open_board` returns, so the
-        // assertions read the filesystem directly with no polling.
+        // delegates to `BoardHandle::open`, which calls `ensure_workspace_tools`
+        // with the resolved `.kanban` path and roots the workspace tool init at
+        // `kanban_path.parent()` (the board folder). The kanban tool's skill
+        // deployment is synchronous and completes before `open_board` returns,
+        // so the assertions read the filesystem directly with no polling.
         //
         // This test fails if either piece of the production wiring regresses:
-        //   - if `ensure_kanban_workspace` is removed from `BoardHandle::open`,
-        //     nothing creates `.sah/` and the assertions below fail;
+        //   - if `ensure_workspace_tools` is removed from `BoardHandle::open`,
+        //     nothing creates `.sah/skills/` and the assertions below fail;
         //   - if the `.parent()` board-folder math is wrong (e.g. rooting at
         //     `.kanban/` itself), `.sah/` lands inside `.kanban/` rather than
         //     beside it, so `<board>/.sah/skills/plan/SKILL.md` is absent.
@@ -1517,6 +1520,14 @@ mod tests {
                 "skill `{skill}` is not in the kanban profile and must not be deployed by the kanban app"
             );
         }
+
+        // The board-open path ensures only the workspace's *tools*; there is no
+        // generic SAH workspace step, so the `ProjectStructure` `.prompts/`
+        // directory must never be created here.
+        assert!(
+            !board_dir.join(".prompts").exists(),
+            ".prompts/ must not be created — the board open path ensures tools only, not a generic SAH workspace"
+        );
 
         // `.sah/` must be a sibling of `.kanban/`, never nested inside it —
         // this is what proves the `kanban_path.parent()` math is correct.

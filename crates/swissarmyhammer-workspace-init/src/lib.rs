@@ -38,7 +38,10 @@ mod components;
 mod registry;
 
 pub use components::{ProjectStructure, SkillDeployment};
-pub use registry::{register_workspace_init, run_workspace_init, run_workspace_init_for_profile};
+pub use registry::{
+    register_workspace_init, run_workspace_init, run_workspace_init_for_profile,
+    run_workspace_tools_init,
+};
 
 // Re-export the lifecycle vocabulary so consumers don't need a direct
 // dependency on `swissarmyhammer-common` just to inspect init results.
