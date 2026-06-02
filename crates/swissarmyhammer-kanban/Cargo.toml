@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Kanban board engine with file-backed storage for task management"
+description = "Git-native kanban board engine — versionable, file-backed (Markdown + YAML) task storage for humans and AI agents"
 
 [dependencies]
 # Workspace dependencies

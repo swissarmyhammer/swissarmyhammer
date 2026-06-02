@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Tauri desktop app for SwissArmyHammer Kanban board"
+description = "Desktop GUI for the git-native kanban board — watch and drive AI agents (ACP) over your versionable .kanban/ files"
 
 [package.metadata.dist]
 dist = false

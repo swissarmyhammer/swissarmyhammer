@@ -1,28 +1,59 @@
 <div align="center">
 
-<img src="icon.png" alt="kanban" width="256" height="256">
+<img src="icon.png" alt="kanban" width="128" height="128">
 
 # kanban
 
-**Persistent task memory for AI coding agents.**
+**A git-native task board for humans and AI coding agents.**
+
+Plain files you can version. One board, three faces — a **GUI**, a **CLI**, and an **MCP** server. Plug your agents in over **MCP** and **ACP**.
+
+[![MCP](https://img.shields.io/badge/MCP-server-green.svg)](https://modelcontextprotocol.io)
+[![ACP](https://img.shields.io/badge/ACP-agents-blue.svg)](https://agentclientprotocol.com)
+[![Rust](https://img.shields.io/badge/rust-single%20binary-orange.svg)](https://www.rust-lang.org/)
+[![Storage](https://img.shields.io/badge/storage-git--native-purple.svg)](#version-your-board-not-a-database)
 
 </div>
 
 ---
 
-kanban is an MCP server and CLI that gives AI coding agents a real kanban board. Instead of losing context between sessions or drowning in a sprawling TODO list, the agent reads and writes tasks on a file-backed board that lives next to your code. The same board is also a first-class CLI for humans, and powers the kanban desktop app.
+kanban gives your AI coding agent a real board to work — and gives *you* one to watch. Tasks live as **plain Markdown + YAML files in `.kanban/`, right next to your code**, so the board is something you can `git diff`, `git blame`, branch, and merge. The same board drives a CLI for your scripts, an MCP tool for your agent, and a native desktop app for you — no database, no daemon, no cloud.
 
-## Why
+## Agents forget. Your board shouldn't.
 
-LLM agents forget. Chat context evaporates, scratchpad TODOs vanish between sessions, and "what was I doing?" becomes a tax the agent pays every time it starts up. kanban fixes that by giving the agent a durable board it owns — tasks persist across sessions, multiple agents can coordinate on the same board, and humans can see exactly what the agent is working on.
+Chat context evaporates. Scratchpad TODOs vanish between sessions. "What was I doing?" becomes a tax the agent pays every time it wakes up. kanban fixes that by giving the agent a durable board it *owns*: tasks persist across sessions, multiple agents coordinate on the same cards, and you can see — live — exactly what your agent is working on and what it'll pick up next.
 
-- **Persistent task memory** — the board is plain files in `.kanban/`, committed with your code and survives restarts
-- **Agent-native** — operations are exposed as a single `kanban` MCP tool with verb-noun operations (`add task`, `move task`, `next task`) and forgiving input
-- **Human-friendly** — the same operations are available as CLI subcommands (`kanban task add`, `kanban task list`) and in the kanban desktop app
-- **Ready-task planning** — `next task` returns the oldest actionable card, respecting dependencies, so the agent always knows what to pick up next
-- **Tags, projects, dependencies** — model real work without leaving the terminal or the agent loop
+## What makes it different
 
-The agent uses the board like a teammate does: plan the work as cards, move them through the board, leave comments, and pick up the next ready thing.
+- 🗂️ **Versionable, not a database.** The board is Markdown + YAML + an append-only JSONL changelog per task. Review a status change in a PR. `git blame` who closed a card. Branch your plan, merge it back. Your task history travels with your code — no SQL blob, no export step. ([details ↓](#version-your-board-not-a-database))
+- 🖥️ **One board, three faces.** A native **desktop GUI**, a scriptable **CLI**, and an **MCP server** — all reading and writing the same `.kanban/` files. Humans, shell scripts, and agents on one source of truth.
+- 🔌 **Plugs into your tools — MCP *and* ACP.** Expose the board to Claude Code, Cursor, Windsurf, or any MCP-compatible agent. Or drive an agent — Claude Code, or a **local llama model** — right inside the GUI over ACP. Bring your own agent; the board is the contract.
+- 🎯 **Ready-task planning with real dependencies.** `next task` returns the oldest *unblocked* card, honoring `depends_on`, so the agent always knows the right next thing — no re-planning, no picking blocked work.
+- 👥 **Human + agent co-ownership, in real time.** Assignees are typed `human` or `agent` (`claude-code` is just another teammate). Watch cards move across the board live as your agent works.
+- 🦀 **Local-first, single Rust binary.** Fast startup, no runtime deps, no Docker, no service to babysit. The board is files; the tool is one binary.
+
+The agent uses the board the way a good teammate does: plan the work as cards, move them across columns, record progress, and pick up the next ready thing.
+
+## Version your board, not a database
+
+Every task is a Markdown file with YAML frontmatter — so a move from `doing` to `done` is just a line in a diff your team can review:
+
+```diff
+  # .kanban/tasks/01KSSTMWWS064Q6QC9BD3J1DN5.md
+  ---
+  assignees:
+  - claude-code
+- position_column: doing
++ position_column: done
+  title: 'kanban init/deinit: adopt mirdan per-agent strategy'
+  ---
+  ## What
+  Bring `kanban init/deinit` in line with the shelltool/sah pattern...
+```
+
+The card body is real Markdown, so agents write rich, durable task notes — acceptance criteria, references, decisions — that survive across sessions and show up in code review. Alongside each task, an append-only `.jsonl` changelog records every create/update with a timestamp and a patch: a full, git-versioned audit trail of how the work evolved.
+
+Compare that to a board locked in a SQL database or a separate service: with kanban there's nothing to export, nothing to reconcile, and nothing that drifts from the commit it belongs to.
 
 ## Install
 
@@ -114,6 +145,35 @@ You do not need the desktop app to use the CLI. The standalone `kanban` CLI inst
 
 All board, task, column, tag, and project operations are exposed as noun/verb subcommands. Run `kanban --help` to see the full list.
 
+## What's on disk
+
+The whole board is a directory you can read, diff, and commit:
+
+```
+.kanban/
+  tasks/            # one Markdown + YAML file per card, plus an append-only
+                    #   .jsonl changelog per task (full, versioned history)
+  projects/         # projects as YAML
+  tags/             # tags as YAML
+  perspectives/     # saved board views as YAML
+```
+
+No proprietary format, no database file, no cloud. Check it into git and your task history lives — and merges — right alongside your code.
+
+## How it compares
+
+kanban is part of a young, exciting category of agent-native task tools — [beads](https://github.com/steveyegge/beads) and [kata](https://github.com/kenn-io/kata) are both worth a look. Here's where kanban stakes its ground:
+
+| | **kanban** | Database-backed trackers | Service/ledger trackers |
+|---|---|---|---|
+| **Where the board lives** | Plain files **in your repo** (`.kanban/`) | A version-controlled **SQL database** | A **local service** beside the repo |
+| **Versioning** | Normal `git diff` / `blame` / branch / merge on text | The database's own versioning | Export/import for backup & migration |
+| **Human UI** | Native **desktop GUI** + CLI | CLI | Terminal **TUI** + CLI |
+| **Agent integration** | **MCP** (expose the board) **+ ACP** (run agents in the GUI) | MCP / CLI | CLI + events / webhooks |
+| **Runtime** | One Rust binary, **no daemon** | Database engine | Optional remote daemon |
+
+The bet: your task board belongs in your repo, in a format your team — and your `git` — already understands, reachable from whatever surface you're working in.
+
 ## Works With
 
-Claude Code, Cursor, Windsurf, or any MCP-compatible agent. The same board is also available directly from the CLI and from the kanban desktop app.
+Claude Code, Cursor, Windsurf, or any MCP-compatible agent — over MCP. Drive an agent (Claude Code or a local llama model) directly inside the desktop app — over ACP. And every operation is a plain CLI subcommand for your scripts and CI. One board, every surface.
