@@ -57,63 +57,55 @@ Compare that to a board locked in a SQL database or a separate service: with kan
 
 ## Install
 
-### macOS (Homebrew)
+There are two ways to install, depending on whether you want the desktop GUI. **Both give you the `kanban` CLI** (and MCP server) — the app just bundles it.
 
-```bash
-brew install swissarmyhammer/tap/kanban
-```
+### Option A — Desktop app + CLI (recommended on macOS)
 
-### Linux
+`Kanban.app` ships the `kanban` CLI inside its own bundle (signed and notarized with the app), so **installing the app gets you the GUI *and* the command** — no separate CLI step.
 
-```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/swissarmyhammer/swissarmyhammer/releases/latest/download/kanban-cli-installer.sh | sh
-```
-
-### From source
-
-```bash
-cargo install --git https://github.com/swissarmyhammer/swissarmyhammer kanban-cli
-```
-
-Then set up the tool:
-
-```bash
-kanban init
-```
-
-This registers the MCP server with your agent, deploys the builtin `kanban` skill that teaches the agent how to use the board, and prepares the project for task tracking.
-
-## Desktop app
-
-<div align="center">
-
-<img src="icon.png" alt="kanban desktop app" width="128" height="128">
-
-</div>
-
-The kanban desktop app is a Tauri-based GUI for browsing and editing the same `.kanban/` board the CLI and MCP server use. The CLI's `kanban open .` command launches it.
-
-**Installing the app also gives you the `kanban` CLI** — the standalone CLI is bundled inside `Kanban.app` (at `Contents/MacOS/kanban`, signed and notarized with the bundle). You do not have to install the CLI separately on macOS; pick whichever install method you prefer below and you get both the app and the command.
-
-### macOS (Homebrew cask)
+**Homebrew cask:**
 
 ```bash
 brew install --cask swissarmyhammer/tap/kanban
 ```
 
-The cask carries a `binary` stanza, so Homebrew links the bundled `kanban` CLI onto your `PATH` automatically. No further action — open a terminal and run `kanban`. (The cask also declares `conflicts_with formula: "kanban"` so it never collides with the standalone CLI formula below.)
+The cask carries a `binary` stanza, so Homebrew links the bundled `kanban` CLI onto your `PATH` automatically — open a terminal and run `kanban`.
 
-### macOS (direct download)
-
-Grab the signed, notarized DMG from the latest GitHub release:
+**Direct download (DMG):**
 
 ```
 https://github.com/swissarmyhammer/swissarmyhammer/releases/latest/download/Kanban_aarch64.dmg
 ```
 
-When you drag `Kanban.app` to `/Applications` from a DMG, there is no package manager to link the CLI. Instead, the app self-installs the `kanban` CLI onto your `PATH` at launch: it creates a `kanban` symlink in a directory that is both user-writable and on the default `PATH` (preferring your Homebrew `bin`). If no user-writable `PATH` directory exists, the app falls back to `/usr/local/bin` — and since that directory is root-owned, it shows an explanatory dialog followed by the macOS admin password prompt to create the symlink there. Self-install is gated solely on the symlink: if the `kanban` CLI is not linked (you declined, or the link was later removed), the app offers to install it again on a later launch; once it is linked, the app stays silent.
+Drag `Kanban.app` to `/Applications`. With no package manager to link the CLI, the app self-installs the `kanban` command onto your `PATH` at launch: it creates a `kanban` symlink in a user-writable `PATH` directory (preferring your Homebrew `bin`), falling back to `/usr/local/bin` with an admin-password prompt if needed. It is silent, idempotent, and self-healing — if the link is ever missing, the next launch offers to recreate it.
 
-### From source
+> macOS (Apple Silicon) is the only platform with a prebuilt app today. On Linux/Windows, install the CLI (Option B) or build the app from source.
+
+### Option B — CLI only (headless, Linux, CI)
+
+No GUI — just the `kanban` binary (CLI + MCP server). The right choice for servers, Linux, and CI.
+
+**macOS / Linux (Homebrew formula):**
+
+```bash
+brew install swissarmyhammer/tap/kanban
+```
+
+**Linux (install script):**
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/swissarmyhammer/swissarmyhammer/releases/latest/download/kanban-cli-installer.sh | sh
+```
+
+**From source (any platform):**
+
+```bash
+cargo install --git https://github.com/swissarmyhammer/swissarmyhammer kanban-cli
+```
+
+> On macOS the cask (Option A) and the formula (Option B) both provide a `kanban` command, so the cask declares `conflicts_with formula: "kanban"` — they never fight over your `PATH`. Pick the cask if you want the GUI, the formula if you only want the CLI.
+
+### Build the app from source
 
 Requires the [Tauri prerequisites](https://tauri.app/start/prerequisites/) and Node.js 22+:
 
@@ -123,13 +115,18 @@ cd swissarmyhammer/apps/kanban-app
 cargo tauri build
 ```
 
-The built `.app` lands under `target/release/bundle/` and bundles the `kanban` CLI inside it.
+The built `.app` lands under `target/release/bundle/` with the `kanban` CLI bundled inside it.
 
-> macOS (Apple Silicon) is the only platform with prebuilt binaries today. On other platforms, build from source.
+### Set up your project
 
-### Installing just the CLI
+However you installed, wire kanban into your project once:
 
-You do not need the desktop app to use the CLI. The standalone `kanban` CLI installs are listed under [Install](#install) above (`brew install swissarmyhammer/tap/kanban`, the Linux installer script, or `cargo install`), and remain the right choice for headless, Linux, and CI environments where a GUI app is not wanted. On macOS, the cask's `conflicts_with formula: "kanban"` ensures the standalone formula and the app-bundled CLI never both try to own `kanban` on your `PATH`.
+```bash
+kanban init       # register the MCP server with your agent + deploy the kanban skill
+kanban open .     # launch the desktop app for this project (if installed)
+```
+
+`kanban init` registers the MCP server with your agent, deploys the builtin `kanban` skill that teaches the agent how to use the board, and prepares the project for task tracking.
 
 ## Commands
 
