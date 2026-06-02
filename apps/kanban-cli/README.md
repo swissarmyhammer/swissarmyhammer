@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="icon.png" alt="kanban" width="256" height="256">
+<img src="icon.png" alt="kanban" width="128" height="128">
 
 # kanban
 
