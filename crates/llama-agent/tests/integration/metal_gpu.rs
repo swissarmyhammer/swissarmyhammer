@@ -100,11 +100,11 @@ async fn qwen_small_model_loads_on_metal_gpu() {
         .try_init();
 
     // This test PROVES every layer is offloaded to the Metal GPU. When the
-    // environment explicitly disables GPU offload (`LLAMA_N_GPU_LAYERS=0`, as the
-    // coverage gate sets for deterministic CPU coverage runs), that proof is
-    // impossible by construction — skip rather than assert a GPU truth the
-    // environment forbade. With the var unset (the Test job on the GPU runner),
-    // `default_model_params` requests all layers and the proof runs.
+    // environment explicitly disables GPU offload (`LLAMA_N_GPU_LAYERS=0`, e.g. a
+    // deliberate local CPU run), that proof is impossible by construction — skip
+    // rather than assert a GPU truth the environment forbade. With the var unset
+    // (CI and normal GPU runs), `default_model_params` requests all layers and
+    // the proof runs.
     if std::env::var("LLAMA_N_GPU_LAYERS").ok().as_deref() == Some("0") {
         tracing::warn!(
             "skipping Metal offload proof: LLAMA_N_GPU_LAYERS=0 disables GPU offload by request"

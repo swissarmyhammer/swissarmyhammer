@@ -10,12 +10,12 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # NOTE: the self-hosted Test runner is a Mac WITH a Metal GPU, so the suite
-  # runs on the GPU (llama-agent defaults to offloading all layers). This is
-  # required by the Metal-offload proof test and keeps the real-model e2e tests
-  # fast enough to stay well under their hang-guard. The coverage gate overrides
-  # this with LLAMA_N_GPU_LAYERS=0 at the step level for deterministic CPU
-  # coverage; tests that require the GPU skip themselves under that override.
+  # NOTE: the self-hosted runner is a Mac WITH a Metal GPU, so the whole suite —
+  # the Test job AND the llama-agent coverage gate — runs on the GPU (llama-agent
+  # defaults to offloading all layers). This is required by the Metal-offload
+  # proof test and keeps the real-model tests fast enough to stay well under their
+  # hang-guards. Do NOT set LLAMA_N_GPU_LAYERS=0 here or on the coverage step:
+  # CPU-forced real-model inference is what dragged the coverage gate to ~40 min.
 
 jobs:
   test:
@@ -79,8 +79,12 @@ jobs:
       # smoke tests, not unit coverage — they are not separately gated. No 27B
       # model is downloaded: the suite is hardcoded to qwen-0.6B (src/test_models.rs).
       - name: Measure llama-agent coverage (small model only)
-        env:
-          LLAMA_N_GPU_LAYERS: "0"
+        # Runs on the GPU (no LLAMA_N_GPU_LAYERS override). Coverage measures
+        # which lines of llama-agent/src execute, and that is identical on GPU and
+        # CPU — the GPU/CPU split lives in llama.cpp's C kernels, not in Rust — so
+        # the gate threshold is unaffected. Forcing CPU here previously dragged the
+        # real-model smoke tests out to a ~40-minute step; on the GPU they finish
+        # in seconds.
         run: cargo llvm-cov --package llama-agent --no-fail-fast --lcov --output-path llama-agent.lcov
       - name: Enforce coverage gate
         run: |
