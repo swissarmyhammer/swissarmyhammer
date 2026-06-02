@@ -70,13 +70,38 @@ pub struct ShellState {
 impl ShellState {
     /// Create a new ShellState, initializing the .shell/ directory and log file.
     ///
-    /// Resolves `.shell/` to an absolute path at creation time so all stored
-    /// paths remain valid even if the process CWD changes later.
+    /// Prefers `.shell/` under the current directory so a server launched in a
+    /// project keeps its shell history alongside that project. Falls back to a
+    /// unique temp directory when the CWD is unavailable *or not writable* —
+    /// resolving to an absolute path at creation time so stored paths stay
+    /// valid even if the process CWD changes later.
+    ///
+    /// The not-writable fallback matters for GUI launches: a bundled macOS app
+    /// opened from Finder runs with CWD = `/`, which is a read-only system
+    /// volume, so `create_dir_all("/.shell")` fails with EROFS. Falling back
+    /// here keeps that from aborting the whole app via
+    /// [`ShellExecuteTool::new`](super::ShellExecuteTool::new)'s `expect`.
     pub fn new() -> anyhow::Result<Self> {
-        let base = std::env::current_dir()
-            .map(|cwd| cwd.join(".shell"))
-            .unwrap_or_else(|_| std::env::temp_dir().join(format!(".shell-{}", ulid::Ulid::new())));
-        Self::new_in_dir(base)
+        let preferred = std::env::current_dir().ok().map(|cwd| cwd.join(".shell"));
+        Self::new_with_preferred(preferred)
+    }
+
+    /// Build a `ShellState`, preferring `preferred` (e.g. `<cwd>/.shell`) but
+    /// falling back to a unique temp directory when it is `None` or cannot be
+    /// created (missing, read-only, or otherwise unwritable).
+    fn new_with_preferred(preferred: Option<PathBuf>) -> anyhow::Result<Self> {
+        if let Some(dir) = preferred {
+            match Self::with_dir(dir.clone()) {
+                Ok(state) => return Ok(state),
+                Err(error) => tracing::warn!(
+                    %error,
+                    dir = %dir.display(),
+                    "shell state: preferred .shell directory is not writable; \
+                     falling back to a temp directory"
+                ),
+            }
+        }
+        Self::with_dir(std::env::temp_dir().join(format!(".shell-{}", ulid::Ulid::new())))
     }
 
     /// Create a new ShellState with an explicit base directory for the .shell/ data.
@@ -356,6 +381,41 @@ mod tests {
         assert_eq!(CommandStatus::Completed.to_string(), "completed");
         assert_eq!(CommandStatus::Killed.to_string(), "killed");
         assert_eq!(CommandStatus::TimedOut.to_string(), "timed_out");
+    }
+
+    /// Regression: `new_with_preferred` must fall back to a temp directory when
+    /// the preferred `.shell` location cannot be created. A bundled macOS GUI
+    /// app launched from Finder runs with CWD = `/` (a read-only system
+    /// volume), so `create_dir_all("/.shell")` fails with EROFS. Before this
+    /// fallback, that error propagated through `ShellExecuteTool::new()`'s
+    /// `expect("Failed to initialize shell state")` and aborted the whole app
+    /// on launch (panic in `did_finish_launching`).
+    #[cfg(unix)]
+    #[test]
+    fn falls_back_to_temp_when_preferred_dir_is_read_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let read_only = tmp.path().join("read-only");
+        std::fs::create_dir(&read_only).expect("create read-only dir");
+        std::fs::set_permissions(&read_only, std::fs::Permissions::from_mode(0o555))
+            .expect("chmod read-only");
+
+        let preferred = read_only.join(".shell");
+        let state = ShellState::new_with_preferred(Some(preferred))
+            .expect("must not error: should fall back to a writable temp dir");
+
+        // It fell back — the log path is NOT under the read-only directory...
+        assert!(
+            !state.log_path.starts_with(&read_only),
+            "expected fallback away from read-only dir, got {}",
+            state.log_path.display()
+        );
+        // ...and the fallback location is actually usable.
+        assert!(state.log_path.exists(), "fallback log file should exist");
+
+        // Restore perms so TempDir cleanup can remove the directory.
+        let _ = std::fs::set_permissions(&read_only, std::fs::Permissions::from_mode(0o755));
     }
 
     // =================================================================
