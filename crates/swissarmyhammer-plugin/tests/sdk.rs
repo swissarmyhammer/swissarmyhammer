@@ -454,3 +454,113 @@ async fn reserved_names_are_not_path_segments() {
         "accessing a RESERVED name must not produce a tools/call"
     );
 }
+
+/// The SDK's `scopeId` / `targetId` moniker helpers resolve the id half of a
+/// `"<entityType>:<id>"` moniker out of a {@link CommandContext}.
+///
+/// This is genuine runtime unit coverage of the moniker logic the command
+/// plugins delegate to the SDK for: it imports `scopeId` / `targetId` from
+/// `@swissarmyhammer/plugin` into a real isolate, calls them against crafted
+/// contexts, and returns the results so the test can assert each branch:
+///
+///   * **leaf-last scan** — with two `task:` monikers in the chain, the NEAREST
+///     (last) one wins;
+///   * **type-prefix match** — the helper returns the id half of the matching
+///     type and skips monikers of other types;
+///   * **target type mismatch** — `targetId` for a different type than the
+///     target moniker carries returns `undefined`;
+///   * **missing scope / target** — an empty / absent chain or target returns
+///     `undefined`.
+#[tokio::test]
+async fn scope_and_target_id_resolve_monikers() {
+    let bundle = tempfile::TempDir::new().expect("temp dir");
+    // Import the helpers and probe every branch. `undefined` does not survive
+    // JSON, so each undefined-returning case is mapped to the sentinel string
+    // "UNDEFINED" before it is recorded on `__result`.
+    let entry = "import { Plugin, scopeId, targetId } from '@swissarmyhammer/plugin';\n\
+         const u = (v: string | undefined): string => (v === undefined ? 'UNDEFINED' : v);\n\
+         export default class MonikerProbe extends Plugin {\n\
+           async load(): Promise<unknown> {\n\
+             // Leaf-last: nearest (last) task moniker wins over the earlier one,\n\
+             // and a board moniker in between is skipped on a `task` lookup.\n\
+             const leafLast = scopeId(\n\
+               { scope_chain: ['task:first', 'board:01A', 'task:nearest'] },\n\
+               'task',\n\
+             );\n\
+             // Type-prefix match: only the `board` moniker is returned for a\n\
+             // `board` lookup even though a `task` moniker is nearer the leaf.\n\
+             const prefixMatch = scopeId(\n\
+               { scope_chain: ['board:42', 'task:99'] },\n\
+               'board',\n\
+             );\n\
+             // No matching type in scope → undefined.\n\
+             const scopeMismatch = scopeId({ scope_chain: ['tag:x'] }, 'task');\n\
+             // Absent scope chain → undefined.\n\
+             const scopeMissing = scopeId({}, 'task');\n\
+             // Target of the matching type → the id half.\n\
+             const targetMatch = targetId({ target: 'column:done' }, 'column');\n\
+             // Target of a different type → undefined.\n\
+             const targetMismatch = targetId({ target: 'task:7' }, 'column');\n\
+             // No target → undefined.\n\
+             const targetMissing = targetId({}, 'column');\n\
+             return {\n\
+               leafLast: u(leafLast),\n\
+               prefixMatch: u(prefixMatch),\n\
+               scopeMismatch: u(scopeMismatch),\n\
+               scopeMissing: u(scopeMissing),\n\
+               targetMatch: u(targetMatch),\n\
+               targetMismatch: u(targetMismatch),\n\
+               targetMissing: u(targetMissing),\n\
+             };\n\
+           }\n\
+         }\n";
+    std::fs::write(bundle.path().join("entry.ts"), entry).expect("entry.ts should be written");
+
+    let dispatcher = Arc::new(RecordingDispatcher::default());
+    let runtime = PluginRuntime::new(config_with(dispatcher.clone())).expect("runtime starts");
+
+    let result = tokio::time::timeout(
+        TIMEOUT,
+        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", PluginLifecycle::Load),
+    )
+    .await
+    .expect("loading the plugin should not hang")
+    .expect("the plugin's load should succeed");
+
+    let field = |key: &str| result.get(key).and_then(Value::as_str).unwrap_or("");
+    assert_eq!(
+        field("leafLast"),
+        "nearest",
+        "scopeId must scan leaf-last so the nearest matching moniker wins, got: {result}"
+    );
+    assert_eq!(
+        field("prefixMatch"),
+        "42",
+        "scopeId must return the id half of the type-matching moniker, got: {result}"
+    );
+    assert_eq!(
+        field("scopeMismatch"),
+        "UNDEFINED",
+        "scopeId must return undefined when no moniker of the type is in scope, got: {result}"
+    );
+    assert_eq!(
+        field("scopeMissing"),
+        "UNDEFINED",
+        "scopeId must return undefined for an absent scope chain, got: {result}"
+    );
+    assert_eq!(
+        field("targetMatch"),
+        "done",
+        "targetId must return the id half of a same-type target moniker, got: {result}"
+    );
+    assert_eq!(
+        field("targetMismatch"),
+        "UNDEFINED",
+        "targetId must return undefined when the target is a different type, got: {result}"
+    );
+    assert_eq!(
+        field("targetMissing"),
+        "UNDEFINED",
+        "targetId must return undefined when there is no target, got: {result}"
+    );
+}

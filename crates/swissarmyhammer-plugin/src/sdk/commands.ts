@@ -147,6 +147,65 @@ export type Availability =
   | { ok: false; reason: string };
 
 /**
+ * Resolve the id of the nearest scope-chain moniker of `entityType`.
+ *
+ * This is the SDK home for the moniker resolution every command callback
+ * needs: a YAML `from: scope_chain` param with `entity_type: <t>` resolves to
+ * the id half of the nearest `"<t>:<id>"` moniker in {@link CommandContext.scope_chain}.
+ * Scope chains are leaf-last (e.g. `["board:01A", "task:42"]`), so the scan
+ * runs from the END of the chain — the nearest entity wins. The "id" half is
+ * everything after the `"<entityType>:"` prefix verbatim, so a moniker whose id
+ * itself contains a colon (e.g. an `attachment:{path}` whose path has a colon)
+ * resolves to the full remainder.
+ *
+ * Returns `undefined` when no moniker of `entityType` is in scope — the signal
+ * an `available` precondition is unmet.
+ *
+ * @param ctx - the dispatch context the command service passed the callback.
+ * @param entityType - the moniker entity type to resolve (e.g. `"task"`).
+ * @returns the id half of the nearest matching moniker, or `undefined`.
+ */
+export function scopeId(
+  ctx: CommandContext,
+  entityType: string,
+): string | undefined {
+  const prefix = `${entityType}:`;
+  // Scope chains are leaf-last; scan from the leaf so the nearest entity wins.
+  const chain = ctx.scope_chain ?? [];
+  for (let i = chain.length - 1; i >= 0; i -= 1) {
+    const moniker = chain[i];
+    if (moniker.startsWith(prefix)) {
+      return moniker.slice(prefix.length);
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Resolve the id of the context target moniker when it is of `entityType`.
+ *
+ * A YAML `from: target` param with `entity_type: <t>` resolves to the id half
+ * of {@link CommandContext.target} when the target moniker is a `"<t>:<id>"`
+ * pair. Returns `undefined` when there is no target or it is a different entity
+ * type. As with {@link scopeId}, the id half is the verbatim remainder after
+ * the `"<entityType>:"` prefix.
+ *
+ * @param ctx - the dispatch context the command service passed the callback.
+ * @param entityType - the moniker entity type to match (e.g. `"column"`).
+ * @returns the id half of the target moniker when it is of `entityType`, or
+ *   `undefined`.
+ */
+export function targetId(
+  ctx: CommandContext,
+  entityType: string,
+): string | undefined {
+  const target = ctx.target;
+  if (target === undefined) return undefined;
+  const prefix = `${entityType}:`;
+  return target.startsWith(prefix) ? target.slice(prefix.length) : undefined;
+}
+
+/**
  * Register every command in `commands` on `plugin` through the command service.
  *
  * For each entry, dispatches the SDK's operation-tool path form

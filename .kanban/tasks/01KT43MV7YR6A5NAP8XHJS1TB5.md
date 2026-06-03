@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KT43M7TXNKP4C4R69X6F05WZ
-position_column: todo
-position_ordinal: a780
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffe280
 project: command-service
 title: Add scopeId / targetId moniker helpers to the command SDK
 ---

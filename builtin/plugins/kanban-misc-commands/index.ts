@@ -30,33 +30,9 @@ import {
   Plugin,
   ensureServices,
   registerCommands,
+  scopeId,
   unwrapResult,
 } from "@swissarmyhammer/plugin";
-
-/**
- * Resolve the id of the first scope-chain moniker of `entityType`.
- *
- * A `from: scope_chain` param with `entity_type: <t>` resolves to the id half
- * of the nearest `"<t>:<id>"` moniker in the chain. Returns `undefined` when no
- * such moniker is in scope — the signal an `available` precondition is unmet.
- *
- * For `attachment` monikers the "id" half is the attachment's file path
- * (`attachment:{path}`), which is exactly the value the `window` open / reveal
- * verbs take — mirroring the legacy `AttachmentOpenCmd` / `AttachmentRevealCmd`
- * path resolution.
- */
-function scopeId(ctx: CommandContext, entityType: string): string | undefined {
-  const prefix = `${entityType}:`;
-  // Scope chains are leaf-last; scan from the leaf so the nearest entity wins.
-  const chain = ctx.scope_chain ?? [];
-  for (let i = chain.length - 1; i >= 0; i -= 1) {
-    const moniker = chain[i];
-    if (moniker.startsWith(prefix)) {
-      return moniker.slice(prefix.length);
-    }
-  }
-  return undefined;
-}
 
 /**
  * The kanban-misc-commands builtin plugin.

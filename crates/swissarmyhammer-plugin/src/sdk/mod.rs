@@ -130,6 +130,14 @@ mod tests {
             SDK_COMMANDS_SOURCE.contains("export interface CommandRegistration"),
             "the SDK must export the CommandRegistration interface"
         );
+        assert!(
+            SDK_COMMANDS_SOURCE.contains("export function scopeId"),
+            "the SDK must export the scopeId moniker helper"
+        );
+        assert!(
+            SDK_COMMANDS_SOURCE.contains("export function targetId"),
+            "the SDK must export the targetId moniker helper"
+        );
     }
 
     /// The combined SDK source carries every file's surface end to end.

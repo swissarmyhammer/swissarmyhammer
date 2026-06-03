@@ -24,6 +24,8 @@ import {
   Plugin,
   ensureServices,
   registerCommands,
+  scopeId,
+  targetId,
   unwrapResult,
 } from "@swissarmyhammer/plugin";
 
@@ -69,40 +71,6 @@ async function sortedColumnTasks(
   }
   out.sort((a, b) => (a.ordinal < b.ordinal ? -1 : a.ordinal > b.ordinal ? 1 : 0));
   return out;
-}
-
-/**
- * Resolve the id of the first scope-chain moniker of `entityType`.
- *
- * A `from: scope_chain` param with `entity_type: <t>` resolves to the id half
- * of the nearest `"<t>:<id>"` moniker in the chain. Returns `undefined` when no
- * such moniker is in scope — the signal an `available` precondition is unmet.
- */
-function scopeId(ctx: CommandContext, entityType: string): string | undefined {
-  const prefix = `${entityType}:`;
-  // Scope chains are leaf-last; scan from the leaf so the nearest entity wins.
-  const chain = ctx.scope_chain ?? [];
-  for (let i = chain.length - 1; i >= 0; i -= 1) {
-    const moniker = chain[i];
-    if (moniker.startsWith(prefix)) {
-      return moniker.slice(prefix.length);
-    }
-  }
-  return undefined;
-}
-
-/**
- * Resolve the id of the context target moniker when it is of `entityType`.
- *
- * A `from: target` param with `entity_type: <t>` resolves to the id half of
- * `ctx.target` when the target moniker is a `"<t>:<id>"` pair. Returns
- * `undefined` when there is no target or it is a different entity type.
- */
-function targetId(ctx: CommandContext, entityType: string): string | undefined {
-  const target = ctx.target;
-  if (target === undefined) return undefined;
-  const prefix = `${entityType}:`;
-  return target.startsWith(prefix) ? target.slice(prefix.length) : undefined;
 }
 
 /**
