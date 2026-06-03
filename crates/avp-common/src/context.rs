@@ -50,7 +50,7 @@ use swissarmyhammer_tools::mcp::unified_server::{
 };
 use tokio::sync::Mutex;
 
-use swissarmyhammer_config::model::{ModelConfig, ModelExecutorType, ModelManager, ModelPaths};
+use swissarmyhammer_config::model::{ModelConfig, ModelManager, ModelPaths};
 
 use crate::error::AvpError;
 use crate::turn::TurnStateManager;
@@ -631,21 +631,6 @@ impl AvpContext {
         RecordingAgent::new(inner, path)
     }
 
-    /// Decide whether the in-process validator MCP server should register agent tools.
-    ///
-    /// `agent_mode` controls which tool surface the in-process sah server
-    /// exposes. ClaudeCode brings its own Read/Glob/Grep, so registering the
-    /// agent tool set on top would just create duplicates and confuse the
-    /// model — Claude only needs sah's domain tools (kanban, etc.), which the
-    /// `agent_mode: false` registration provides. LlamaAgent (qwen, etc.) has
-    /// no built-in tools, so it relies on the agent tool set.
-    fn agent_mode_for_validator(&self) -> bool {
-        matches!(
-            self.model_config.executor_type(),
-            ModelExecutorType::LlamaAgent
-        )
-    }
-
     /// Start an in-process sah MCP server for validator tools.
     ///
     /// Binds an HTTP listener on `127.0.0.1:0` (random ephemeral port) using
@@ -654,9 +639,10 @@ impl AvpContext {
     /// the unified server) and the [`McpServerHandle`] whose `Drop` triggers
     /// graceful shutdown of the spawned server task.
     ///
-    /// `agent_mode` is determined by [`Self::agent_mode_for_validator`]:
-    /// `LlamaAgent` → `true` (qwen needs Read/Glob/Grep/code_context),
-    /// `ClaudeCode` → `false` (claude already has its own).
+    /// The unified server registers the full tool union; the `/mcp/validator`
+    /// sub-route then exposes only the validator allowlist (filtered by
+    /// `is_validator_tool()`), so the validator surface is the same regardless
+    /// of the host model.
     ///
     /// Working directory is set to the repo root (parent of `<AVP_DIR>/`) so
     /// the in-process tools see the project, not the AVP bookkeeping dir.
@@ -674,10 +660,7 @@ impl AvpContext {
             .unwrap_or_else(|| self.project_dir.root())
             .to_path_buf();
 
-        let agent_mode = self.agent_mode_for_validator();
-
         tracing::debug!(
-            agent_mode,
             working_dir = %project_root.display(),
             "Starting in-process sah MCP server for validator tools"
         );
@@ -687,7 +670,6 @@ impl AvpContext {
             None,                               // default PromptLibrary
             None,                               // no model override
             Some(project_root),
-            agent_mode,
         )
         .await
         .map_err(|e| {
@@ -710,7 +692,6 @@ impl AvpContext {
 
         tracing::info!(
             url = %validator_url,
-            agent_mode,
             "Validator agent in-process MCP server bound; agent will use this endpoint for tool calls"
         );
 
@@ -2049,57 +2030,6 @@ mod tests {
             released,
             "port {} should no longer be listening after AvpContext is dropped",
             port
-        );
-
-        std::env::set_current_dir(&original_dir).unwrap();
-    }
-
-    /// `agent_mode_for_validator` must be `false` for the default ClaudeCode
-    /// model (claude has its own Read/Glob/Grep — registering the agent tool
-    /// set would just confuse the model).
-    #[test]
-    #[serial_test::serial(cwd)]
-    fn test_agent_mode_for_validator_defaults_to_false_for_claude() {
-        let temp = TempDir::new().unwrap();
-        fs::create_dir_all(temp.path().join(".git")).unwrap();
-
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp.path()).unwrap();
-
-        let ctx = AvpContext::init().unwrap();
-
-        // Default config is ClaudeCode → no agent tools needed.
-        assert!(
-            !ctx.agent_mode_for_validator(),
-            "agent_mode must be false for ClaudeCode validator"
-        );
-
-        std::env::set_current_dir(&original_dir).unwrap();
-    }
-
-    /// `agent_mode_for_validator` must be `true` for a LlamaAgent model
-    /// (qwen has no built-in tools — the in-process sah server must register
-    /// the agent tool set so Read/Glob/Grep/code_context are available).
-    #[test]
-    #[serial_test::serial(cwd)]
-    fn test_agent_mode_for_validator_is_true_for_llama_agent() {
-        use swissarmyhammer_config::model::LlamaAgentConfig;
-
-        let temp = TempDir::new().unwrap();
-        fs::create_dir_all(temp.path().join(".git")).unwrap();
-
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp.path()).unwrap();
-
-        let mut ctx = AvpContext::init().unwrap();
-        // Swap in a LlamaAgent config so executor_type() returns LlamaAgent.
-        // Direct field mutation is permitted within the same module's test
-        // submodule and avoids adding a public test-only constructor.
-        ctx.model_config = ModelConfig::llama_agent(LlamaAgentConfig::for_testing());
-
-        assert!(
-            ctx.agent_mode_for_validator(),
-            "agent_mode must be true for LlamaAgent validator"
         );
 
         std::env::set_current_dir(&original_dir).unwrap();

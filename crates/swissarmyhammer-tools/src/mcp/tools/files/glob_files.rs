@@ -9,7 +9,7 @@
 //! validator endpoint needs tools whose **names** match what Hermes-style
 //! models naturally emit, rather than the CLI-friendly `op`-dispatched form.
 
-use crate::mcp::tool_registry::{McpTool, ToolContext, ValidatorTool};
+use crate::mcp::tool_registry::{McpTool, ToolCategory, ToolContext, ValidatorTool};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
@@ -83,6 +83,12 @@ impl McpTool for GlobFilesTool {
         true
     }
 
+    fn category(&self) -> ToolCategory {
+        // Globbing files is a base agent capability. Validator availability is
+        // governed separately by `is_validator_tool()`.
+        ToolCategory::Agent
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
@@ -138,6 +144,12 @@ mod tests {
     fn test_is_validator_tool() {
         let tool = GlobFilesTool::new();
         assert!(tool.is_validator_tool());
+    }
+
+    #[test]
+    fn test_category_is_agent() {
+        let tool = GlobFilesTool::new();
+        assert_eq!(McpTool::category(&tool), ToolCategory::Agent);
     }
 
     #[test]

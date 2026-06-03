@@ -946,7 +946,7 @@ impl swissarmyhammer_common::health::Doctorable for CodeContextTool {
         use swissarmyhammer_common::health::HealthCheck;
 
         let mut checks = Vec::new();
-        let cat = self.category();
+        let cat = swissarmyhammer_common::health::Doctorable::category(self);
 
         // Check LSP server availability for detected project type
         let cwd = std::env::current_dir().unwrap_or_default();

@@ -92,7 +92,7 @@ pub struct McpServer {
     /// Skill library - kept alive to back the SkillTool's shared reference
     #[allow(dead_code)]
     skill_library: Arc<RwLock<SkillLibrary>>,
-    /// Agent library - kept alive to back the AgentTool's shared reference
+    /// Agent library - kept alive to back the agent tool's shared reference
     #[allow(dead_code)]
     agent_library: Arc<RwLock<AgentLibrary>>,
     /// Working directory — stored for deferred initialization (e.g. code-context)
@@ -227,7 +227,7 @@ impl McpServer {
             // Fallback to a temporary directory if current directory is not accessible
             std::env::temp_dir()
         });
-        Self::new_with_work_dir(library, work_dir, None, false).await
+        Self::new_with_work_dir(library, work_dir, None).await
     }
 
     /// Create a new MCP server with the provided prompt library and working directory.
@@ -237,7 +237,6 @@ impl McpServer {
     /// * `library` - The prompt library to serve via MCP
     /// * `work_dir` - The working directory to use for issue storage and git operations
     /// * `model_override` - Optional model name to override all use case model assignments
-    /// * `agent_mode` - Whether to register agent tools (true when powering a full agent)
     ///
     /// # Returns
     ///
@@ -249,7 +248,6 @@ impl McpServer {
         library: PromptLibrary,
         work_dir: PathBuf,
         model_override: Option<String>,
-        agent_mode: bool,
     ) -> Result<Self> {
         let git_ops_arc = Self::initialize_git_operations(work_dir.clone());
         let tool_handlers = ToolHandlers::new();
@@ -267,7 +265,6 @@ impl McpServer {
             skill_library.clone(),
             agent_library.clone(),
             prompt_library.clone(),
-            agent_mode,
         )
         .await;
 
@@ -606,7 +603,6 @@ impl McpServer {
     /// * `agent_config` - Agent configuration
     /// * `working_dir` - Working directory for tool operations
     /// * `skill_library` - Shared skill library
-    /// * `agent_mode` - Whether to register agent tools
     ///
     /// # Returns
     ///
@@ -620,7 +616,6 @@ impl McpServer {
         skill_library: Arc<RwLock<SkillLibrary>>,
         agent_library: Arc<RwLock<AgentLibrary>>,
         prompt_library: Arc<RwLock<PromptLibrary>>,
-        agent_mode: bool,
     ) -> (Arc<RwLock<ToolRegistry>>, Arc<ToolContext>) {
         let mut tool_registry = ToolRegistry::new();
         Self::register_all_tools(
@@ -628,7 +623,6 @@ impl McpServer {
             skill_library,
             agent_library,
             prompt_library.clone(),
-            agent_mode,
         )
         .await;
 
@@ -647,16 +641,15 @@ impl McpServer {
 
     /// Register all available tools in the tool registry.
     ///
-    /// All tools are registered unconditionally. When `agent_mode` is false,
-    /// tools that implement `AgentTool` (and return `is_agent_tool() == true`)
-    /// are removed via `remove_agent_tools()`. This keeps the filtering
-    /// trait-driven rather than hardcoded in if statements.
+    /// All tools are registered unconditionally. Each tool carries a structural
+    /// [`category()`](crate::mcp::tool_registry::McpTool::category) describing its
+    /// relationship to a host agent; composing a per-client tool surface from
+    /// those categories happens at the serve boundary, not here.
     async fn register_all_tools(
         tool_registry: &mut ToolRegistry,
         skill_library: Arc<RwLock<SkillLibrary>>,
         agent_library: Arc<RwLock<AgentLibrary>>,
         prompt_library: Arc<RwLock<PromptLibrary>>,
-        agent_mode: bool,
     ) {
         register_git_tools(tool_registry);
         register_kanban_tools(tool_registry);
@@ -668,11 +661,6 @@ impl McpServer {
         register_agent_tools(tool_registry, agent_library, prompt_library.clone());
         register_file_tools(tool_registry);
         register_skill_tools(tool_registry, skill_library, prompt_library);
-
-        if !agent_mode {
-            tool_registry.remove_agent_tools();
-            tracing::debug!("Removed agent-only tools (agent_mode=false)");
-        }
 
         // Apply tool enable/disable config from tools.yaml (global + project layers)
         let tool_config = super::tool_config::load_merged_tool_config();
@@ -2180,14 +2168,10 @@ mod tests {
         let test_file = tmp.path().join("test.txt");
         std::fs::write(&test_file, "hello world").unwrap();
 
-        let server = McpServer::new_with_work_dir(
-            PromptLibrary::default(),
-            tmp.path().to_path_buf(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+        let server =
+            McpServer::new_with_work_dir(PromptLibrary::default(), tmp.path().to_path_buf(), None)
+                .await
+                .unwrap();
 
         let validator = server.create_validator_server();
 
@@ -2331,14 +2315,10 @@ mod tests {
     #[serial_test::serial(cwd)]
     async fn test_new_with_work_dir_creates_server() {
         let tmp = tempfile::tempdir().unwrap();
-        let server = McpServer::new_with_work_dir(
-            PromptLibrary::default(),
-            tmp.path().to_path_buf(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+        let server =
+            McpServer::new_with_work_dir(PromptLibrary::default(), tmp.path().to_path_buf(), None)
+                .await
+                .unwrap();
 
         // The server should store the working directory
         assert_eq!(server.work_dir, Some(tmp.path().to_path_buf()));
@@ -2346,37 +2326,25 @@ mod tests {
 
     #[tokio::test]
     #[serial_test::serial(cwd)]
-    async fn test_new_with_work_dir_agent_mode_registers_agent_tools() {
+    async fn test_new_with_work_dir_registers_agent_tools() {
         let tmp = tempfile::tempdir().unwrap();
-        let server_no_agent = McpServer::new_with_work_dir(
-            PromptLibrary::default(),
-            tmp.path().to_path_buf(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+        let server =
+            McpServer::new_with_work_dir(PromptLibrary::default(), tmp.path().to_path_buf(), None)
+                .await
+                .unwrap();
 
-        let server_agent = McpServer::new_with_work_dir(
-            PromptLibrary::default(),
-            tmp.path().to_path_buf(),
-            None,
-            true,
-        )
-        .await
-        .unwrap();
-
-        let tools_no_agent = server_no_agent.list_tools().await;
-        let tools_agent = server_agent.list_tools().await;
-
-        // Agent mode should have at least as many tools as non-agent mode
-        // (agent-only tools are added, not subtracted)
-        assert!(
-            tools_agent.len() >= tools_no_agent.len(),
-            "Agent mode should have >= tools: agent={}, non-agent={}",
-            tools_agent.len(),
-            tools_no_agent.len()
-        );
+        // The full tool union is always registered — agent capabilities
+        // (files, web, skill, agent) are present regardless of host. Per-client
+        // composition happens at the serve boundary, not here.
+        let tools = server.list_tools().await;
+        for expected in ["files", "web", "skill", "agent"] {
+            assert!(
+                tools.iter().any(|t| t.name == expected),
+                "expected agent tool '{}' to be registered; got: {:?}",
+                expected,
+                tools.iter().map(|t| &t.name).collect::<Vec<_>>()
+            );
+        }
     }
 
     // ---------------------------------------------------------------
@@ -2508,8 +2476,9 @@ mod tests {
             tools.len()
         );
 
-        // Verify some core non-agent tools are present (agent tools like
-        // "files" and "web" are removed when agent_mode=false)
+        // Verify some core shared tools are present. The full tool union is
+        // always registered; per-client composition happens at the serve
+        // boundary, not in registration.
         let tool_names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
         assert!(
             tool_names.contains(&"shell".to_string()),
@@ -2711,14 +2680,10 @@ mod tests {
     #[serial_test::serial(cwd)]
     async fn test_create_validator_server_shares_work_dir() {
         let tmp = tempfile::tempdir().unwrap();
-        let server = McpServer::new_with_work_dir(
-            PromptLibrary::default(),
-            tmp.path().to_path_buf(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+        let server =
+            McpServer::new_with_work_dir(PromptLibrary::default(), tmp.path().to_path_buf(), None)
+                .await
+                .unwrap();
 
         let validator = server.create_validator_server();
 
@@ -2735,14 +2700,10 @@ mod tests {
         let test_file = tmp.path().join("hello.txt");
         std::fs::write(&test_file, "hi").unwrap();
 
-        let server = McpServer::new_with_work_dir(
-            PromptLibrary::default(),
-            tmp.path().to_path_buf(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+        let server =
+            McpServer::new_with_work_dir(PromptLibrary::default(), tmp.path().to_path_buf(), None)
+                .await
+                .unwrap();
 
         let validator = server.create_validator_server();
 

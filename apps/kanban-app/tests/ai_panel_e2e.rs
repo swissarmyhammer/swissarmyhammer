@@ -354,7 +354,6 @@ async fn test_ai_panel_e2e_mcp_tool_reachable_in_session() {
         None,
         None,
         Some(board.path().to_path_buf()),
-        true,
     )
     .await
     .expect("the board MCP server must start");

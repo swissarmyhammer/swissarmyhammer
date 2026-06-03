@@ -5,7 +5,7 @@
 //! `<available_agents>` so the host agent knows about subagents without them
 //! being in the system prompt.
 
-use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext, ToolRegistry};
+use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolCategory, ToolContext, ToolRegistry};
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use rmcp::model::CallToolResult;
@@ -110,7 +110,7 @@ impl swissarmyhammer_common::health::Doctorable for AgentMcpTool {
     fn run_health_checks(&self) -> Vec<swissarmyhammer_common::health::HealthCheck> {
         use swissarmyhammer_common::health::HealthCheck;
 
-        let cat = self.category();
+        let cat = swissarmyhammer_common::health::Doctorable::category(self);
         match self.library.try_read() {
             Ok(lib) => {
                 let agents = lib.list();
@@ -157,6 +157,11 @@ impl McpTool for AgentMcpTool {
 
     fn operations(&self) -> &'static [&'static dyn Operation] {
         *AGENT_OPERATIONS
+    }
+
+    fn category(&self) -> ToolCategory {
+        // Subagent delegation is a base agent capability.
+        ToolCategory::Agent
     }
 
     async fn execute(
@@ -399,6 +404,13 @@ mod tests {
         assert_eq!(<AgentMcpTool as Doctorable>::category(&tool), "tools");
         assert_eq!(<AgentMcpTool as Initializable>::name(&tool), "Agent");
         assert_eq!(<AgentMcpTool as Initializable>::category(&tool), "tools");
+    }
+
+    #[tokio::test]
+    async fn test_mcp_category_is_agent() {
+        let library = Arc::new(RwLock::new(AgentLibrary::new()));
+        let tool = AgentMcpTool::new(library, default_prompt_library());
+        assert_eq!(McpTool::category(&tool), ToolCategory::Agent);
     }
 
     #[tokio::test]

@@ -1123,16 +1123,13 @@ fn deploy_workspace_tools(board_dir: &Path) {
 /// `connection_url` literally at port `0`, so `None` is the variant that
 /// actually yields a usable `http://127.0.0.1:<port>/mcp` URL.
 ///
-/// `agent_mode` is `true`: this registers the agent-only tools (`skill`,
-/// `web`, the full-access `files`) on top of the always-on domain tools
-/// (`kanban`, `git`, `code_context`, `shell`, …). The task requires the
-/// **full** toolset — explicitly "kanban, skills/prompts, code-context,
-/// files, etc." With `agent_mode = false`, `register_all_tools` calls
-/// `remove_agent_tools()`, which strips `skill`/`web`/full-`files`; that
-/// would contradict the full-toolset requirement and leave the board-folder
-/// rooting (whose purpose is so "skills/prompts resolve from that board's
-/// SAH directory") without the `skill` tool that consumes it. So
-/// `start_mcp_server_with_options(.., agent_mode = true)` is used.
+/// The server registers the **full** tool union — the agent-category tools
+/// (`skill`, `web`, the full-access `files`) alongside the shared domain tools
+/// (`kanban`, `git`, `code_context`, `shell`, …). The task requires the full
+/// toolset — explicitly "kanban, skills/prompts, code-context, files, etc." —
+/// and the board-folder rooting (whose purpose is so "skills/prompts resolve
+/// from that board's SAH directory") relies on the `skill` tool that consumes
+/// it.
 ///
 /// The server's working directory is the board folder — the parent of the
 /// `.kanban` directory — so its `kanban` tool operates on this board's
@@ -1161,7 +1158,6 @@ async fn start_board_mcp_server(kanban_path: &Path) -> Option<McpServerHandle> {
         None,
         None,
         Some(board_dir.to_path_buf()),
-        true,
     )
     .await
     {
@@ -1747,12 +1743,11 @@ mod tests {
 
         // `tools/list` must carry the FULL SAH toolset — not just `kanban`.
         // Assert the specific tools the task requires so a regression in tool
-        // registration (or a flip back to `agent_mode = false`, which would
-        // strip `skill`/`web`/full-`files`) is actually caught. The expected
-        // names are the `McpTool::name()` strings the server registers:
-        //   - `kanban`, `git`, `code_context` — always-on domain tools
-        //   - `skill`, `files`, `web` — agent tools, present only because the
-        //     board server runs with `agent_mode = true`
+        // registration is actually caught. The expected names are the
+        // `McpTool::name()` strings the server registers:
+        //   - `kanban`, `git`, `code_context` — shared domain tools
+        //   - `skill`, `files`, `web` — agent-category tools, always part of the
+        //     registered tool union
         let client = swissarmyhammer_tools::mcp::test_utils::create_test_client(&mcp_url).await;
         let tools = client
             .list_tools(Default::default())
@@ -1762,8 +1757,7 @@ mod tests {
         for expected in ["kanban", "git", "code_context", "skill", "files", "web"] {
             assert!(
                 tool_names.iter().any(|n| n == expected),
-                "tools/list must include the full SAH tool `{expected}` \
-                 (agent_mode = true serves the agent tools), got {tool_names:?}"
+                "tools/list must include the full SAH tool `{expected}`, got {tool_names:?}"
             );
         }
 

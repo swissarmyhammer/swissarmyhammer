@@ -103,7 +103,6 @@ mod tests {
             None,
             None,
             Some(temp.path().to_path_buf()),
-            true,
         )
         .await
         .unwrap();
@@ -127,17 +126,17 @@ mod tests {
     // client handshake — see `test_client_handshake_is_fast` for the full story.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_client_list_tools() {
-        // Use agent_mode=true since this test checks for agent tools (files).
-        // Pass a tempdir as working_dir so the server doesn't bind to the host
-        // monorepo — prevents `startup_cleanup` from walking/hashing it and lets
-        // multiple server tests run in parallel without a CWD serial guard.
+        // The full tool union (including agent tools like `files`) is always
+        // registered. Pass a tempdir as working_dir so the server doesn't bind
+        // to the host monorepo — prevents `startup_cleanup` from walking/hashing
+        // it and lets multiple server tests run in parallel without a CWD serial
+        // guard.
         let temp = tempfile::TempDir::new().unwrap();
         let mut server = start_mcp_server_with_options(
             McpServerMode::Http { port: None },
             None,
             None,
             Some(temp.path().to_path_buf()),
-            true,
         )
         .await
         .unwrap();
@@ -163,7 +162,6 @@ mod tests {
             None,
             None,
             Some(temp.path().to_path_buf()),
-            false,
         )
         .await
         .unwrap();
@@ -179,14 +177,14 @@ mod tests {
     // multi_thread required — see `test_client_handshake_is_fast`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_client_call_tool() {
-        // Use agent_mode=true since this test calls files (an agent tool).
+        // The full tool union (including agent tools like `files`) is always
+        // registered.
         let temp = tempfile::TempDir::new().unwrap();
         let mut server = start_mcp_server_with_options(
             McpServerMode::Http { port: None },
             None,
             None,
             Some(temp.path().to_path_buf()),
-            true,
         )
         .await
         .unwrap();

@@ -37,20 +37,16 @@ impl CliToolContext {
 
     /// Create a fully isolated context with no HTTP server and no env var mutation.
     ///
-    /// Creates an in-process `McpServer` with agent_mode=true (all tools registered)
+    /// Creates an in-process `McpServer` (the full tool union is registered)
     /// using only the provided working directory. Safe for parallel test execution.
     pub async fn new_isolated(
         working_dir: &std::path::Path,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         use swissarmyhammer_prompts::PromptLibrary;
 
-        let mcp_server = McpServer::new_with_work_dir(
-            PromptLibrary::default(),
-            working_dir.to_path_buf(),
-            None,
-            true,
-        )
-        .await?;
+        let mcp_server =
+            McpServer::new_with_work_dir(PromptLibrary::default(), working_dir.to_path_buf(), None)
+                .await?;
         mcp_server.initialize().await?;
         let server_arc = Arc::new(mcp_server);
 
@@ -61,32 +57,6 @@ impl CliToolContext {
             tool_registry: tool_registry_arc,
             mcp_server_handle: None,
             server: Some(server_arc),
-        })
-    }
-
-    /// Create a new CLI tool context with agent mode forced on.
-    ///
-    /// In agent mode, additional tools (files, shell, skill) are registered
-    /// that are normally omitted when running alongside Claude Code.
-    /// This is useful for tests that need to exercise agent-only tools.
-    #[allow(dead_code)] // Used in tests
-    pub async fn new_with_agent_mode(
-        working_dir: &std::path::Path,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        let mcp_server_handle = Self::initialize_mcp_server_with_agent_mode(
-            None,
-            Some(working_dir.to_path_buf()),
-            true,
-        )
-        .await?;
-
-        let tool_registry = Self::create_tool_registry().await;
-        let tool_registry_arc = Arc::new(RwLock::new(tool_registry));
-
-        Ok(Self {
-            tool_registry: tool_registry_arc,
-            mcp_server_handle: Some(mcp_server_handle),
-            server: None,
         })
     }
 
@@ -119,35 +89,14 @@ impl CliToolContext {
         })
     }
 
-    /// Initialize MCP HTTP server, resolving agent mode from model config.
+    /// Initialize the MCP HTTP server backing this CLI tool context.
+    ///
+    /// The server registers the full tool union; each tool carries a structural
+    /// category consumed by the serve boundary, so no host-conditional
+    /// registration happens here.
     async fn initialize_mcp_server(
         model_override: Option<&str>,
         working_dir: Option<std::path::PathBuf>,
-    ) -> Result<
-        swissarmyhammer_tools::mcp::unified_server::McpServerHandle,
-        Box<dyn std::error::Error>,
-    > {
-        // Resolve the agent type to decide whether to register agent tools.
-        // Claude Code has native tools (Bash, Read, Write, Edit, skills) so it
-        // does NOT need MCP agent tools (shell, files, skill).
-        // LlamaAgent has no native tools and relies entirely on MCP.
-        use swissarmyhammer_config::model::{ModelExecutorType, ModelManager, ModelPaths};
-        let agent_mode = match ModelManager::resolve_agent_config(&ModelPaths::sah()) {
-            Ok(config) => config.executor_type() != ModelExecutorType::ClaudeCode,
-            Err(_) => false, // Default is ClaudeCode, so no agent tools needed
-        };
-
-        Self::initialize_mcp_server_with_agent_mode(model_override, working_dir, agent_mode).await
-    }
-
-    /// Initialize MCP HTTP server with an explicit agent mode setting.
-    ///
-    /// When `agent_mode` is true, agent-specific tools (files, shell, skill) are
-    /// registered in addition to the always-available domain tools.
-    async fn initialize_mcp_server_with_agent_mode(
-        model_override: Option<&str>,
-        working_dir: Option<std::path::PathBuf>,
-        agent_mode: bool,
     ) -> Result<
         swissarmyhammer_tools::mcp::unified_server::McpServerHandle,
         Box<dyn std::error::Error>,
@@ -156,14 +105,11 @@ impl CliToolContext {
 
         std::env::set_var("SAH_CLI_MODE", "1");
 
-        tracing::info!("Agent mode for MCP server: {agent_mode}");
-
         let mcp_server_handle = start_mcp_server_with_options(
             McpServerMode::Http { port: None },
             None,
             model_override.map(|s| s.to_string()),
             working_dir,
-            agent_mode,
         )
         .await?;
 

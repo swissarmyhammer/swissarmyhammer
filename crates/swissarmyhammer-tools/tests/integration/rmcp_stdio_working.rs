@@ -17,8 +17,8 @@ use swissarmyhammer_tools::mcp::{
 /// - Fast execution (<1s instead of 20-30s)
 #[tokio::test]
 async fn test_rmcp_client_lists_tools_and_prompts() {
-    // Start in-process HTTP MCP server.
-    // Use agent_mode=true since this test checks for agent tools (files).
+    // Start in-process HTTP MCP server. The full tool union (including agent
+    // tools like `files`) is always registered.
     // Pass an isolated temp dir as working_dir so that `initialize_code_context`
     // sees no enclosing git repository and skips the synchronous
     // startup_cleanup walk — which would otherwise hash every file in the
@@ -29,7 +29,6 @@ async fn test_rmcp_client_lists_tools_and_prompts() {
         None,
         None,
         Some(temp.path().to_path_buf()),
-        true,
     )
     .await
     .expect("Failed to start in-process MCP server");

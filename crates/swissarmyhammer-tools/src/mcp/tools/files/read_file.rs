@@ -27,7 +27,7 @@
 //! - **No write operations**: This tool wraps only the read handler — write
 //!   and edit operations are not reachable through it.
 
-use crate::mcp::tool_registry::{McpTool, ToolContext, ValidatorTool};
+use crate::mcp::tool_registry::{McpTool, ToolCategory, ToolContext, ValidatorTool};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
@@ -97,6 +97,12 @@ impl McpTool for ReadFileTool {
         true
     }
 
+    fn category(&self) -> ToolCategory {
+        // Reading files is a base agent capability. Validator availability is
+        // governed separately by `is_validator_tool()`.
+        ToolCategory::Agent
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
@@ -155,10 +161,10 @@ mod tests {
     }
 
     #[test]
-    fn test_is_not_agent_tool() {
+    fn test_category_is_agent() {
         let tool = ReadFileTool::new();
-        // Read-only validator tools are not agent tools.
-        assert!(!tool.is_agent_tool());
+        // Reading files is a base agent capability.
+        assert_eq!(McpTool::category(&tool), ToolCategory::Agent);
     }
 
     #[test]

@@ -592,15 +592,16 @@ pub async fn start_mcp_server(
     model_override: Option<String>,
     working_dir: Option<std::path::PathBuf>,
 ) -> Result<McpServerHandle> {
-    start_mcp_server_with_options(mode, library, model_override, working_dir, false).await
+    start_mcp_server_with_options(mode, library, model_override, working_dir).await
 }
 
-/// Start unified MCP server with agent mode control
+/// Start unified MCP server.
 ///
-/// When `agent_mode` is true, the server registers agent tools (file editing,
-/// shell, grep, skills, etc.) that provide base agent behavior. When false,
-/// only domain-specific tools are registered — suitable for running alongside
-/// an existing agent like Claude Code that already has these capabilities.
+/// The server registers the full tool union — shared domain tools plus the base
+/// agent capabilities (file editing, shell, grep, skills, etc.). Each tool
+/// carries a structural [`category()`](crate::mcp::tool_registry::McpTool::category);
+/// composing a per-client tool surface from those categories is the
+/// responsibility of the serve boundary, not registration.
 ///
 /// # Arguments
 ///
@@ -608,7 +609,6 @@ pub async fn start_mcp_server(
 /// * `library` - Optional prompt library (creates new if None)
 /// * `model_override` - Optional model name to override all use case assignments
 /// * `working_dir` - Optional working directory (uses current_dir if None)
-/// * `agent_mode` - Whether to register agent tools (true for llama-agent, false for Claude Code)
 ///
 /// # Returns
 ///
@@ -618,7 +618,6 @@ pub async fn start_mcp_server_with_options(
     library: Option<PromptLibrary>,
     model_override: Option<String>,
     working_dir: Option<std::path::PathBuf>,
-    agent_mode: bool,
 ) -> Result<McpServerHandle> {
     // Configure MCP logging to match sah serve behavior
     // NOTE: Skip logging configuration when called from CLI as main.rs already handles it
@@ -627,11 +626,9 @@ pub async fn start_mcp_server_with_options(
         configure_mcp_logging(None);
     }
     match mode {
-        McpServerMode::Stdio => {
-            start_stdio_server(library, model_override, working_dir, agent_mode).await
-        }
+        McpServerMode::Stdio => start_stdio_server(library, model_override, working_dir).await,
         McpServerMode::Http { port } => {
-            start_http_server(port, library, model_override, working_dir, agent_mode).await
+            start_http_server(port, library, model_override, working_dir).await
         }
     }
 }
@@ -673,7 +670,6 @@ async fn resolve_port(port: Option<u16>) -> Result<u16> {
 /// * `port` - Server port to set in tool context
 /// * `model_override` - Optional model name to override use case assignments
 /// * `working_dir` - Optional working directory (uses current_dir if None)
-/// * `agent_mode` - Whether to register agent tools
 ///
 /// # Returns
 /// * `Result<Arc<McpServer>>` - Initialized server with self-reference configured
@@ -682,13 +678,11 @@ async fn initialize_mcp_server(
     port: u16,
     model_override: Option<String>,
     working_dir: Option<std::path::PathBuf>,
-    agent_mode: bool,
 ) -> Result<Arc<McpServer>> {
     let library = library.unwrap_or_default();
     let work_dir = working_dir
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir()));
-    let server =
-        McpServer::new_with_work_dir(library, work_dir, model_override, agent_mode).await?;
+    let server = McpServer::new_with_work_dir(library, work_dir, model_override).await?;
     server.initialize().await?;
     server.set_server_port(port).await;
 
@@ -1006,7 +1000,6 @@ async fn start_stdio_server(
     library: Option<PromptLibrary>,
     model_override: Option<String>,
     working_dir: Option<std::path::PathBuf>,
-    agent_mode: bool,
 ) -> Result<McpServerHandle> {
     tracing::info!("Starting unified MCP server in stdio mode");
 
@@ -1015,14 +1008,13 @@ async fn start_stdio_server(
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir()));
     let temp_server =
-        McpServer::new_with_work_dir(library, work_dir, model_override.clone(), agent_mode).await?;
+        McpServer::new_with_work_dir(library, work_dir, model_override.clone()).await?;
     let temp_server_arc = Arc::new(temp_server);
 
     let (http_port, router, http_listener, stats) =
         setup_http_server_for_stdio(temp_server_arc).await?;
 
-    let server_arc =
-        initialize_mcp_server(None, http_port, model_override, working_dir, agent_mode).await?;
+    let server_arc = initialize_mcp_server(None, http_port, model_override, working_dir).await?;
     tracing::debug!("Set MCP server self-reference in tool context (stdio)");
     tracing::info!(
         "Set MCP server port {} in tool context for workflows",
@@ -1143,21 +1135,14 @@ async fn start_http_server(
     library: Option<PromptLibrary>,
     model_override: Option<String>,
     working_dir: Option<std::path::PathBuf>,
-    agent_mode: bool,
 ) -> Result<McpServerHandle> {
     tracing::debug!("start_http_server called with port: {}", Pretty(&port));
 
     let actual_port = resolve_http_port(port).await?;
 
     tracing::debug!("Creating MCP server");
-    let server_arc = initialize_mcp_server(
-        library,
-        actual_port,
-        model_override,
-        working_dir,
-        agent_mode,
-    )
-    .await?;
+    let server_arc =
+        initialize_mcp_server(library, actual_port, model_override, working_dir).await?;
     tracing::debug!("MCP server initialized");
 
     let stats = ServerStats::new();
@@ -1171,7 +1156,6 @@ async fn start_http_server(
     tracing::info!(
         connection_url = %connection_url,
         port = actual_port,
-        agent_mode,
         event = "server_start",
         "HTTP MCP server confirmed ready"
     );
@@ -1856,26 +1840,14 @@ mod tests {
     #[tokio::test]
     #[test_log::test]
     #[serial_test::serial(cwd)]
-    async fn test_start_mcp_server_with_options_agent_mode_false() {
-        // Test start_mcp_server_with_options with agent_mode=false (default path)
+    async fn test_start_mcp_server_with_options_binds_port() {
+        // Test the default start_mcp_server_with_options path binds the
+        // requested port. The server registers the full tool union.
         let mode = McpServerMode::Http { port: Some(18084) };
-        let mut server = start_mcp_server_with_options(mode, None, None, None, false)
+        let mut server = start_mcp_server_with_options(mode, None, None, None)
             .await
             .unwrap();
         assert_eq!(server.port().unwrap(), 18084);
-        server.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    #[test_log::test]
-    #[serial_test::serial(cwd)]
-    async fn test_start_mcp_server_with_options_agent_mode_true() {
-        // Test start_mcp_server_with_options with agent_mode=true (agent tool registration)
-        let mode = McpServerMode::Http { port: Some(18085) };
-        let mut server = start_mcp_server_with_options(mode, None, None, None, true)
-            .await
-            .unwrap();
-        assert_eq!(server.port().unwrap(), 18085);
         server.shutdown().await.unwrap();
     }
 
@@ -1890,7 +1862,6 @@ mod tests {
             None,
             Some("nonexistent-model-that-does-not-exist".to_string()),
             None,
-            false,
         )
         .await;
         assert!(
@@ -1915,15 +1886,10 @@ mod tests {
         // Test that custom working directory is accepted
         let temp_dir = tempfile::tempdir().unwrap();
         let mode = McpServerMode::Http { port: Some(18087) };
-        let mut server = start_mcp_server_with_options(
-            mode,
-            None,
-            None,
-            Some(temp_dir.path().to_path_buf()),
-            false,
-        )
-        .await
-        .unwrap();
+        let mut server =
+            start_mcp_server_with_options(mode, None, None, Some(temp_dir.path().to_path_buf()))
+                .await
+                .unwrap();
         assert!(server.port().unwrap() > 0);
         server.shutdown().await.unwrap();
     }
@@ -1935,7 +1901,7 @@ mod tests {
         // When SAH_CLI_MODE is set, configure_mcp_logging should be skipped
         std::env::set_var("SAH_CLI_MODE", "1");
         let mode = McpServerMode::Http { port: Some(18088) };
-        let result = start_mcp_server_with_options(mode, None, None, None, false).await;
+        let result = start_mcp_server_with_options(mode, None, None, None).await;
         std::env::remove_var("SAH_CLI_MODE");
         let mut server = result.unwrap();
         assert_eq!(server.port().unwrap(), 18088);
@@ -1977,8 +1943,8 @@ mod tests {
     /// also catches reverting the split: if the unified `files` tool sneaks
     /// back onto the validator surface, the assertion fails.
     ///
-    /// Independent of `agent_mode` because validator tool filtering is
-    /// driven by `is_validator_tool()`, not `is_agent_tool()`.
+    /// Validator tool filtering is driven by `is_validator_tool()`; the full
+    /// server registering the maximal tool set must not leak onto this route.
     #[tokio::test]
     #[test_log::test]
     #[serial_test::serial(cwd)]
@@ -1989,16 +1955,14 @@ mod tests {
         // Bind an in-process HTTP MCP server in a clean tempdir so its
         // index does not walk the host monorepo.
         let temp = tempfile::TempDir::new().unwrap();
+        // The validator route filters by is_validator_tool(); the full server
+        // registers the maximal tool set, so this verifies the validator route
+        // stays minimal regardless.
         let mut server = start_mcp_server_with_options(
             McpServerMode::Http { port: None },
             None,
             None,
             Some(temp.path().to_path_buf()),
-            // agent_mode is irrelevant for the validator route — it filters
-            // by is_validator_tool(), not is_agent_tool(). Pass true so we
-            // explicitly verify the validator route stays minimal even when
-            // the full server has the maximal tool set.
-            true,
         )
         .await
         .unwrap();

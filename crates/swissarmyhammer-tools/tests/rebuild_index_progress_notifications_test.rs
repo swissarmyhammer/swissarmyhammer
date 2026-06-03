@@ -135,15 +135,14 @@ fn make_token(s: &str) -> ProgressToken {
 #[tokio::test]
 async fn rebuild_index_emits_progress_notifications_when_token_supplied() {
     // 1. Stand up an in-process HTTP MCP server scoped to a tempdir so it
-    //    doesn't walk the host repo. agent_mode=true is required because
-    //    `code_context` is registered through the agent path.
+    //    doesn't walk the host repo. The full tool union is registered, so
+    //    `code_context` is available.
     let project = create_test_project();
     let mut server = start_mcp_server_with_options(
         McpServerMode::Http { port: None },
         None,
         None,
         Some(project.path().to_path_buf()),
-        true,
     )
     .await
     .expect("start MCP server");

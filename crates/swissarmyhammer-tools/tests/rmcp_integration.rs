@@ -18,16 +18,16 @@ use swissarmyhammer_tools::mcp::{
 /// - Fast execution (<1s instead of 20-30s)
 #[tokio::test]
 async fn test_mcp_server_with_rmcp_client() {
-    // Start in-process HTTP MCP server with agent_mode=true since we test agent tools.
-    // Run against an isolated temp dir so `initialize_code_context` skips the
-    // synchronous monorepo walk that would otherwise run when MCP Initialize fires.
+    // Start in-process HTTP MCP server. The full tool union (including agent
+    // tools) is always registered. Run against an isolated temp dir so
+    // `initialize_code_context` skips the synchronous monorepo walk that would
+    // otherwise run when MCP Initialize fires.
     let temp = tempfile::TempDir::new().expect("Failed to create temp dir");
     let mut server = start_mcp_server_with_options(
         McpServerMode::Http { port: None },
         None,
         None,
         Some(temp.path().to_path_buf()),
-        true,
     )
     .await
     .expect("Failed to start in-process MCP server");

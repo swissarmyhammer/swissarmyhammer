@@ -114,9 +114,6 @@ async fn start_validator_server() -> (McpServerHandle, String) {
         None,
         None,
         Some(project_root),
-        // agent_mode = true matches the LlamaAgent validator path
-        // (`Context::agent_mode_for_validator` returns true for Llama).
-        true,
     )
     .await
     .expect("validator MCP server must start");
