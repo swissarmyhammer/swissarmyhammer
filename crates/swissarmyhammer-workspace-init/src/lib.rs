@@ -8,7 +8,7 @@
 //! The components here are the workspace-structure and builtin-skills slice of
 //! `sah init` — the parts that make a folder a usable SwissArmyHammer
 //! workspace. They deliberately exclude the Claude-Code `.claude/settings.json`
-//! integration (`deny-bash`, `statusline`) and the agent-detection-based MCP /
+//! integration (`statusline`) and the agent-detection-based MCP /
 //! subagent registration, which are concerns of the external `claude` CLI and
 //! not of an in-process agent operating on a single workspace directory.
 //!

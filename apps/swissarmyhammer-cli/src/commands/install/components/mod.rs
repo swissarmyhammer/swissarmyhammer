@@ -48,7 +48,6 @@ fn sah_mcp_server_entry() -> mirdan::mcp_config::McpServerEntry {
 /// * `remove_directory` - Whether `ProjectStructure::deinit` should delete directories.
 pub fn register_all(registry: &mut InitRegistry, remove_directory: bool) {
     registry.register(McpRegistration);
-    registry.register(AllowBashCleanup);
     registry.register(Statusline);
     registry.register(ProjectStructure::new(remove_directory));
     registry.register(ClaudeMd);
@@ -107,67 +106,6 @@ impl Initializable for McpRegistration {
     }
 }
 
-// ── AllowBashCleanup (priority 20) ───────────────────────────────────
-
-/// Cleanup-only component that re-allows the built-in "Bash" tool on deinit.
-///
-/// `sah init` does **not** deny Bash. The Bash deny is owned by the serve path,
-/// which writes it idempotently into Claude's local settings only when a Claude
-/// client connects (see `swissarmyhammer-tools`'s serve-time deny). `init` going
-/// agent-agnostic means there is nothing to deny here — `init` is a no-op.
-///
-/// `deinit` retains the teardown: it calls [`mirdan::install::allow_tool`] so a
-/// previously serve-applied Bash deny is removed across detected agents. mirdan
-/// dispatches to each agent's `mirdan::strategy`; agents with no permission
-/// mechanism (everything but Claude Code today) are silently skipped. The
-/// component just declares the tool name and scope.
-pub struct AllowBashCleanup;
-
-impl Initializable for AllowBashCleanup {
-    /// The component name for the Bash permission cleanup.
-    fn name(&self) -> &str {
-        "allow-bash-cleanup"
-    }
-
-    /// Human-readable label for this component.
-    fn display_name(&self) -> &str {
-        "Permissions"
-    }
-
-    /// Component category: configuration tasks.
-    fn category(&self) -> &str {
-        "configuration"
-    }
-
-    /// Component priority: 20 (first per-agent settings edit, after MCP registration).
-    fn priority(&self) -> i32 {
-        20
-    }
-
-    /// Applicable to project, local, and user scope installations.
-    fn is_applicable(&self, scope: &InitScope) -> bool {
-        matches!(
-            scope,
-            InitScope::Project | InitScope::Local | InitScope::User
-        )
-    }
-
-    /// No-op on init: `sah init` no longer denies Bash. The deny is applied at
-    /// serve time, gated on a connecting Claude client.
-    fn init(&self, _scope: &InitScope, _reporter: &dyn InitReporter) -> Vec<InitResult> {
-        vec![InitResult::skipped(
-            self.name(),
-            "Bash deny is applied at serve time, not init",
-        )]
-    }
-
-    /// Allow the built-in Bash tool again across detected agents for `scope`,
-    /// tearing down any serve-applied deny.
-    fn deinit(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        mirdan::install::allow_tool(*scope, "Bash", reporter)
-    }
-}
-
 // ── Statusline (priority 30) ─────────────────────────────────────────
 
 /// Manages the `statusLine` block in each detected agent's settings file.
@@ -195,7 +133,7 @@ impl Initializable for Statusline {
         "configuration"
     }
 
-    /// Component priority: 30 (runs after `Permissions`, before project workspace setup).
+    /// Component priority: 30 (runs after `McpRegistration`, before project workspace setup).
     fn priority(&self) -> i32 {
         30
     }
@@ -1216,8 +1154,8 @@ mod tests {
     }
 
     /// Build a minimal `AgentDef` for tests that only need the agent identity +
-    /// a `global_settings_path` (e.g. the install/status agreement tests for
-    /// deny-Bash). All other path fields are left `None` and the detect list is
+    /// a `global_settings_path` (e.g. the install/status agreement test for the
+    /// serve-time Bash deny). All other path fields are left `None` and the detect list is
     /// empty. Centralising this means adding a new field to `AgentDef` only
     /// breaks `AgentDef` itself, not every test that happens to need a
     /// synthetic agent.
@@ -1295,9 +1233,8 @@ mod tests {
     }
 
     /// The Claude strategy's `deny_tool` (the writer the serve-time deny path
-    /// and `AllowBashCleanup`'s inverse `allow_tool` both target) writes a
-    /// settings file that `mirdan::status::permissions_present` recognizes as
-    /// installed.
+    /// targets) writes a settings file that
+    /// `mirdan::status::permissions_present` recognizes as installed.
     #[test]
     fn test_install_deny_bash_agrees_with_status_detector() {
         use mirdan::strategy::{AgentConfigStrategy, ClaudeCodeStrategy};
@@ -1590,91 +1527,6 @@ agents:
             "expected {} to be removed after deinit user",
             global_claude_md.display()
         );
-    }
-
-    // ── AllowBashCleanup component tests ─────────────────────────────────
-
-    #[test]
-    fn test_allow_bash_cleanup_is_applicable_all_scopes() {
-        // The cleanup component must run in every scope so `sah deinit`
-        // re-allows Bash regardless of how it was installed.
-        assert!(AllowBashCleanup.is_applicable(&InitScope::User));
-        assert!(AllowBashCleanup.is_applicable(&InitScope::Project));
-        assert!(AllowBashCleanup.is_applicable(&InitScope::Local));
-    }
-
-    /// `sah init` must NOT deny Bash: `AllowBashCleanup::init` is a no-op that
-    /// writes nothing. The deny is owned by the serve path, gated on a
-    /// connecting Claude client, so init going agent-agnostic must leave the
-    /// global settings file untouched.
-    #[test]
-    #[serial_test::serial(home_env)]
-    fn test_allow_bash_cleanup_init_writes_no_deny() {
-        use swissarmyhammer_common::lifecycle::InitStatus;
-        use swissarmyhammer_common::reporter::NullReporter;
-        use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
-
-        let env = IsolatedTestEnvironment::new().unwrap();
-        // claude-code's global settings file is ~/.claude/settings.json, which
-        // resolves under the isolated HOME.
-        let global_settings = env.home_path().join(".claude").join("settings.json");
-        assert!(!global_settings.exists());
-
-        let reporter = NullReporter;
-
-        let results = AllowBashCleanup.init(&InitScope::User, &reporter);
-        assert!(
-            results.iter().all(|r| r.status != InitStatus::Error),
-            "init produced errors: {:?}",
-            results
-        );
-
-        // The whole point of this card: init writes no Bash deny. The settings
-        // file must not even be created by this component.
-        assert!(
-            !global_settings.exists(),
-            "init must not write a Bash deny; unexpectedly created {}",
-            global_settings.display()
-        );
-    }
-
-    /// `sah deinit` must still re-allow Bash, tearing down a serve-applied deny.
-    /// Seed `permissions.deny = ["Bash"]` in the global settings file (as the
-    /// serve path would have written), then assert `deinit` removes it.
-    #[test]
-    #[serial_test::serial(home_env)]
-    fn test_allow_bash_cleanup_deinit_removes_serve_applied_deny() {
-        use swissarmyhammer_common::lifecycle::InitStatus;
-        use swissarmyhammer_common::reporter::NullReporter;
-        use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
-
-        let env = IsolatedTestEnvironment::new().unwrap();
-        let global_settings = env.home_path().join(".claude").join("settings.json");
-
-        // Seed a serve-applied Bash deny into the global settings file.
-        std::fs::create_dir_all(global_settings.parent().unwrap()).unwrap();
-        std::fs::write(&global_settings, r#"{"permissions":{"deny":["Bash"]}}"#).unwrap();
-
-        let reporter = NullReporter;
-        let results = AllowBashCleanup.deinit(&InitScope::User, &reporter);
-        assert!(
-            results.iter().all(|r| r.status != InitStatus::Error),
-            "deinit produced errors: {:?}",
-            results
-        );
-
-        let content = std::fs::read_to_string(&global_settings).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
-        let deny_after = parsed
-            .pointer("/permissions/deny")
-            .and_then(|v| v.as_array());
-        if let Some(arr) = deny_after {
-            assert!(
-                !arr.iter().any(|v| v.as_str() == Some("Bash")),
-                "Bash should be gone from permissions.deny after deinit, got {:?}",
-                arr
-            );
-        }
     }
 
     // ── Statusline component tests ──────────────────────────────────────

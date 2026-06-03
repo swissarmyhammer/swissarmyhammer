@@ -23,7 +23,6 @@ use swissarmyhammer_common::lifecycle::InitRegistry;
 /// | Priority | Component (display name)                       | User | Notes                                                |
 /// |---------:|-----------------------------------------------|:----:|------------------------------------------------------|
 /// | 10       | McpRegistration ("Register MCP server")       |  y   | Delegates to mirdan appliers (per-agent strategies)  |
-/// | 20       | AllowBashCleanup ("Permissions")              |  y   | deinit-only: re-allows Bash (init is a no-op; serve owns the deny) |
 /// | 30       | Statusline ("Statusline")                     |  y   | Edits each agent's per-scope settings file           |
 /// | 40       | ProjectStructure ("Project workspace")        |  -   | Project-only — skipped in User scope (see below)     |
 /// | 50       | ClaudeMd ("Preamble")                         |  y   | Targets each agent's per-scope preamble file         |
@@ -38,7 +37,10 @@ use swissarmyhammer_common::lifecycle::InitRegistry;
 /// test selectors.
 ///
 /// Components at priorities 10–80 (except `SkillDeployment`) plus `KanbanTool`
-/// are registered by [`super::install::components::register_all`].
+/// are registered by [`super::install::components::register_all`]. There is no
+/// Bash-permission component: the Bash deny is owned by the serve path (applied
+/// when a Claude client connects) and is sticky — neither `sah init` nor
+/// `sah deinit` denies or re-allows Bash.
 /// `SkillDeployment` (priority 60) lives in [`super::skill`] and is registered
 /// directly here, matching how sibling CLIs (`shelltool-cli`, `code-context-cli`)
 /// register their own `*SkillDeployment` components.
@@ -81,10 +83,12 @@ mod tests {
     fn test_register_all_populates_registry() {
         let mut registry = InitRegistry::new();
         register_all(&mut registry, false);
-        // 8 components from components::register_all (the 7 installable components
-        // + KanbanTool) + 1 SkillDeployment (from commands::skill) = 9.
-        // (ClaudeLocalScope was folded into McpRegistration's mirdan applier.)
-        assert_eq!(registry.len(), 9);
+        // 7 components from components::register_all (the 6 installable components
+        // + KanbanTool) + 1 SkillDeployment (from commands::skill) = 8.
+        // (ClaudeLocalScope was folded into McpRegistration's mirdan applier;
+        // AllowBashCleanup was removed — the serve-time Bash deny is sticky and
+        // deinit must not re-allow it.)
+        assert_eq!(registry.len(), 8);
     }
 
     #[test]
@@ -92,7 +96,7 @@ mod tests {
         let mut registry = InitRegistry::new();
         register_all(&mut registry, true);
         // Same component count regardless of remove_directory flag
-        assert_eq!(registry.len(), 9);
+        assert_eq!(registry.len(), 8);
     }
 
     #[test]
@@ -156,6 +160,47 @@ mod tests {
         let _results = registry.run_all_deinit(
             &swissarmyhammer_common::lifecycle::InitScope::Project,
             &reporter,
+        );
+    }
+
+    /// Guard: `sah deinit` must NOT clean up the serve-applied Bash deny.
+    ///
+    /// The Bash deny is owned by the serve path and is sticky — the
+    /// `AllowBashCleanup` component that previously re-allowed Bash on deinit
+    /// was removed. Seed a pre-existing `permissions.deny: ["Bash"]` into the
+    /// user-scope settings file (as the serve path would have written) and run
+    /// the full deinit flow; the deny must survive untouched.
+    #[test]
+    #[serial_test::serial(home_env)]
+    fn test_deinit_does_not_reallow_bash() {
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+
+        // claude-code's global settings file is ~/.claude/settings.json, which
+        // resolves under the isolated HOME.
+        let global_settings = env.home_path().join(".claude").join("settings.json");
+        std::fs::create_dir_all(global_settings.parent().unwrap()).unwrap();
+        std::fs::write(&global_settings, r#"{"permissions":{"deny":["Bash"]}}"#).unwrap();
+
+        let mut registry = InitRegistry::new();
+        register_all(&mut registry, false);
+        let reporter = NullReporter;
+        registry.run_all_deinit(
+            &swissarmyhammer_common::lifecycle::InitScope::User,
+            &reporter,
+        );
+
+        // The deny must still be present: deinit owns no Bash-permission
+        // teardown, so a serve-applied deny survives.
+        let content = std::fs::read_to_string(&global_settings).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        let deny = parsed
+            .pointer("/permissions/deny")
+            .and_then(|v| v.as_array())
+            .expect("permissions.deny must still be present after deinit");
+        assert!(
+            deny.iter().any(|v| v.as_str() == Some("Bash")),
+            "Bash must remain in permissions.deny after deinit (serve-time deny is sticky), got {:?}",
+            deny
         );
     }
 }
