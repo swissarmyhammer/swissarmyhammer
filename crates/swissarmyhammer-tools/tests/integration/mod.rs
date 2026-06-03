@@ -9,6 +9,7 @@ mod mcp_server_paritys;
 mod per_client_tool_composition;
 mod rmcp_stdio_working;
 mod semantic_search_e2e;
+mod serve_time_bash_deny;
 mod skill_e2e;
 mod web_fetch_specification_compliance;
 mod web_search_integration;

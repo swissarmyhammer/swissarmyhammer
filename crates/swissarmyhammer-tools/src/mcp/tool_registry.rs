@@ -1204,6 +1204,29 @@ impl ToolRegistry {
         self.list_tools_filtered(|tool| host.serves(McpTool::category(tool)))
     }
 
+    /// Collect the native host tools superseded by the registry's
+    /// [`ToolCategory::Replacement`] tools.
+    ///
+    /// Each `Replacement { native }` tool declares the native host tool it
+    /// supersedes (e.g. `shell` supersedes `"Bash"`). This returns those
+    /// `native` names — the single source of truth for which native tools the
+    /// serve boundary should suppress on a host that receives the replacements.
+    /// Today that is exactly `["Bash"]` (from `shell`), but deriving it from the
+    /// category metadata keeps the suppression tied to the served set rather than
+    /// a hardcoded list. Names are deduplicated; order is unspecified.
+    pub fn replacement_natives(&self) -> Vec<&'static str> {
+        let mut natives: Vec<&'static str> = self
+            .iter_tools()
+            .filter_map(|tool| match McpTool::category(tool) {
+                ToolCategory::Replacement { native } => Some(native),
+                _ => None,
+            })
+            .collect();
+        natives.sort_unstable();
+        natives.dedup();
+        natives
+    }
+
     /// Build the MCP `Tool` objects for every enabled tool that satisfies
     /// `keep`, sharing the schema/meta construction across the unfiltered and
     /// host-filtered entry points.
@@ -3197,6 +3220,99 @@ mod tests {
             ToolCategory::Replacement { native: "Bash" },
             ToolCategory::Agent
         );
+    }
+
+    /// Mock tool reporting a `Replacement` category for a configurable native.
+    struct MockReplacementTool {
+        name: &'static str,
+        native: &'static str,
+    }
+    impl swissarmyhammer_common::health::Doctorable for MockReplacementTool {
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn category(&self) -> &str {
+            "tools"
+        }
+        fn run_health_checks(&self) -> Vec<swissarmyhammer_common::health::HealthCheck> {
+            Vec::new()
+        }
+        fn is_applicable(&self) -> bool {
+            true
+        }
+    }
+    impl swissarmyhammer_common::lifecycle::Initializable for MockReplacementTool {
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn category(&self) -> &str {
+            "tools"
+        }
+    }
+    #[async_trait::async_trait]
+    impl McpTool for MockReplacementTool {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+        fn description(&self) -> &'static str {
+            "A replacement tool"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object", "properties": {}})
+        }
+        async fn execute(
+            &self,
+            _args: serde_json::Map<String, serde_json::Value>,
+            _ctx: &ToolContext,
+        ) -> std::result::Result<CallToolResult, McpError> {
+            Ok(BaseToolImpl::create_success_response("replacement"))
+        }
+        fn category(&self) -> ToolCategory {
+            ToolCategory::Replacement {
+                native: self.native,
+            }
+        }
+    }
+
+    #[test]
+    fn test_replacement_natives_collects_only_replacement_natives() {
+        let mut registry = ToolRegistry::new();
+        // Shared and Agent tools contribute no natives.
+        registry.register(KanbanTool);
+        registry.register(MockAgentTool);
+        registry.register(MockReplacementTool {
+            name: "shell-mock",
+            native: "Bash",
+        });
+
+        assert_eq!(registry.replacement_natives(), vec!["Bash"]);
+    }
+
+    #[test]
+    fn test_replacement_natives_dedups_and_sorts() {
+        let mut registry = ToolRegistry::new();
+        registry.register(MockReplacementTool {
+            name: "z-tool",
+            native: "Zsh",
+        });
+        registry.register(MockReplacementTool {
+            name: "a-tool",
+            native: "Bash",
+        });
+        registry.register(MockReplacementTool {
+            name: "dup-tool",
+            native: "Bash",
+        });
+
+        // Sorted and deduplicated regardless of registration/name order.
+        assert_eq!(registry.replacement_natives(), vec!["Bash", "Zsh"]);
+    }
+
+    #[test]
+    fn test_replacement_natives_empty_when_no_replacements() {
+        let mut registry = ToolRegistry::new();
+        registry.register(KanbanTool);
+        assert!(registry.replacement_natives().is_empty());
     }
 
     // --- get_tool_by_cli_name tests ---

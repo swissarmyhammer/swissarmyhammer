@@ -114,6 +114,15 @@ pub struct McpServer {
     ///   even though no [`Host`] reports `serves(Agent)`, so per-client filtering
     ///   would serve zero tools.
     compose_per_client: bool,
+    /// Latches once the serve-time native-tool deny has run for a Claude client.
+    ///
+    /// When a Claude client connects, the serve path denies the native host
+    /// tool(s) superseded by the served `Replacement` tools (e.g. `Bash`, since
+    /// `shell` replaces it) so the served tool truly supersedes Claude's native
+    /// rather than competing with it. The deny is idempotent, but this flag keeps
+    /// it from re-writing settings on every `initialize`; the first Claude
+    /// connection latches it. Shared across clones so all share the same latch.
+    bash_denied: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Determine if a retry should be attempted based on the error and attempt count.
@@ -295,6 +304,7 @@ impl McpServer {
             work_dir: Some(work_dir),
             tool_config_watcher: Arc::new(Mutex::new(super::tool_config::ToolConfigWatcher::new())),
             compose_per_client: true,
+            bash_denied: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
@@ -766,6 +776,9 @@ impl McpServer {
             // serve it verbatim rather than re-filtering by host/category, which
             // would strip its `Agent`-category read-only file tools.
             compose_per_client: false,
+            // Non-primary instance: the serve-time deny is gated on
+            // `compose_per_client`, so this latch is never read. Its own flag.
+            bash_denied: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -850,6 +863,82 @@ impl McpServer {
             // This registry IS the set to serve; serve it verbatim rather than
             // re-filtering by host/category (which strips all `Agent` tools).
             compose_per_client: false,
+            // Non-primary instance (the llama mount): never fires the serve-time
+            // deny (gated on `compose_per_client`, and llama is not Claude).
+            bash_denied: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// Suppress the native host tools the served `Replacement` tools supersede,
+    /// for a Claude client connecting at serve time.
+    ///
+    /// A `Replacement { native }` tool (today only `shell`, replacing `"Bash"`)
+    /// is served to Claude so it supersedes Claude's native tool of that name.
+    /// For the supersession to be real, Claude's native must also be *denied* —
+    /// otherwise the model sees both and may keep reaching for the native. This
+    /// writes that deny into Claude's local settings via the same idempotent
+    /// mirdan primitive `sah init` already uses ([`mirdan::install::deny_tool`]),
+    /// deriving the native names from the registry's `Replacement` categories
+    /// rather than hardcoding `"Bash"`, so the suppression tracks the served set.
+    ///
+    /// Gates:
+    /// - **Primary serve only.** Skips when `compose_per_client` is `false` (the
+    ///   validator and llama-mount instances), which never advertise the
+    ///   `Replacement` tools and so must not write denies.
+    /// - **Claude only.** llama and unknown clients keep their native tools;
+    ///   re-allowing is left to `deinit`, not self-corrected here.
+    /// - **Once.** Latches on first Claude connection so repeated `initialize`s
+    ///   don't rewrite settings; the underlying deny is idempotent regardless.
+    ///
+    /// Scope is [`InitScope::Local`] — Claude's `.claude/settings.local.json`,
+    /// resolved from the serve working directory — so the deny is a runtime/local
+    /// change, not a committed repo edit. Reports through a `tracing`-backed
+    /// reporter because serve-path stderr is swallowed by the MCP transport.
+    async fn apply_serve_time_native_deny(&self, client_info: &Implementation) {
+        use std::sync::atomic::Ordering;
+        use swissarmyhammer_common::lifecycle::InitScope;
+        use swissarmyhammer_common::reporter::TracingReporter;
+
+        // Only the primary per-client serve instance suppresses natives; the
+        // validator and llama-mount instances serve pre-scoped registries and
+        // must never write agent settings.
+        if !self.compose_per_client {
+            return;
+        }
+
+        if Host::from_client_info(client_info) != Host::Claude {
+            return;
+        }
+
+        // Latch: first Claude connection wins; later ones are no-ops.
+        if self.bash_denied.swap(true, Ordering::SeqCst) {
+            return;
+        }
+
+        let natives = {
+            let registry = self.tool_registry.read().await;
+            registry.replacement_natives()
+        };
+
+        let reporter = TracingReporter;
+        for native in natives {
+            let results = mirdan::install::deny_tool(InitScope::Local, native, &reporter);
+            for r in &results {
+                if r.status == swissarmyhammer_common::lifecycle::InitStatus::Error {
+                    tracing::warn!(
+                        native = native,
+                        "serve-time native deny error: {} — {}",
+                        r.name,
+                        r.message
+                    );
+                }
+            }
+            tracing::info!(
+                native = native,
+                client = %client_info.name,
+                event = "serve_native_denied",
+                "Denied native host tool for Claude (replaced by served tool)"
+            );
         }
     }
 
@@ -1772,6 +1861,13 @@ impl ServerHandler for McpServer {
 
         // Auto-create agent actor for the connecting MCP client
         self.ensure_agent_actor(&request.client_info.name).await;
+
+        // Suppress the native host tool(s) the served `Replacement` tools
+        // supersede (e.g. Claude's `Bash`, replaced by `shell`) so the served
+        // tool truly replaces the native rather than competing with it. Gated on
+        // the connecting client being Claude.
+        self.apply_serve_time_native_deny(&request.client_info)
+            .await;
 
         // Start code-context background work (LSP, indexing, file watcher)
         // only when an MCP client actually connects — not in the constructor.
