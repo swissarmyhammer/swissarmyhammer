@@ -122,8 +122,10 @@ pub(crate) struct BoardHandle {
     /// `Option` so a board can still open if its per-board platform fails to
     /// build (the board then has no project plugins, but its data path is
     /// unaffected and callers fall back to the global platform). Held under
-    /// `TokioMutex` to mirror the global platform — the per-board hot-reload
-    /// watcher (a separate card) will mutate it after construction.
+    /// `TokioMutex` to mirror the global platform; it owns this board's own
+    /// hot-reload [`PluginWatcher`](swissarmyhammer_plugin::host::PluginWatcher)
+    /// (started at board-open over the user + this board's project layer), so
+    /// dropping the platform on board close also tears the watcher down.
     platform: Option<TokioMutex<PluginPlatform>>,
 }
 
@@ -136,12 +138,15 @@ impl Drop for BoardHandle {
         // Drop the per-board plugin platform OFF the Tokio worker pool. Its
         // `PluginHost` is the sole `Arc<HostInner>` owner, so dropping it runs
         // `BridgeRuntime::drop`, which does a blocking thread-`join()` to tear
-        // the host's V8 isolate runtime down. `close_board` calls this drop
-        // while holding the `boards` write lock from a worker, so doing the
-        // blocking join inline would stall a worker (and hold the lock) across
-        // runtime teardown — the same hazard the `mcp_server` shutdown below was
-        // written to avoid. Hand the owned platform to the shared confinement
-        // runtime to be dropped there instead.
+        // the host's V8 isolate runtime down. The platform also owns this
+        // board's hot-reload `PluginWatcher`, dropped here too: its `Drop` only
+        // `abort()`s the drain task (non-blocking), so the watcher leaks neither
+        // a task nor an OS watcher when the board closes. `close_board` calls
+        // this drop while holding the `boards` write lock from a worker, so
+        // doing the blocking host join inline would stall a worker (and hold the
+        // lock) across runtime teardown — the same hazard the `mcp_server`
+        // shutdown below was written to avoid. Hand the owned platform to the
+        // shared confinement runtime to be dropped there instead.
         if let Some(platform) = self.platform.take() {
             crate::confine::drop_confined(platform);
         }
@@ -1391,6 +1396,17 @@ async fn build_board_platform_inner(
             "per-board plugin discovery failed"
         );
     }
+
+    // Start this board's OWN hot-reload watcher AFTER discovery, so it
+    // reconciles against the just-loaded baseline. The host's `watch_roots`
+    // covers both the shared user `plugins/` dir AND this board's project
+    // `<board_dir>/.kanban/plugins/` dir (the host was built with that project
+    // root), so an edit/add/remove under either layer reloads/loads/unloads the
+    // affected plugin in THIS board's host only — never another board's. The
+    // watcher's drain task spawns on the confinement runtime (this whole build
+    // span runs there via `spawn_confined`), the same runtime the platform is
+    // later dropped on, so teardown stays off the Tokio worker pool.
+    platform.start_watcher().await;
 
     tracing::info!(board = %board_dir.display(), "per-board plugin platform ready");
     Some(platform)

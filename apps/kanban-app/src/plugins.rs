@@ -88,8 +88,11 @@ pub(crate) struct PluginPlatform {
     /// The hot-reload watcher watches its `plugins/` subdirectory.
     user_root: PathBuf,
 
-    /// The hot-reload watcher; kept alive so the host reacts to plugin files
-    /// changing on disk. `None` until [`start_watcher`](Self::start_watcher).
+    /// The hot-reload watcher over this host's writable layers; kept alive so
+    /// the host reacts to plugin files changing on disk and dropped with the
+    /// platform (the per-board platform drop tears it down on board close).
+    /// `None` until [`start_watcher`](Self::start_watcher) — the global platform
+    /// starts it from the Tauri setup hook, a per-board platform at board-open.
     watcher: Option<PluginWatcher>,
 
     /// The wired command service, populated by
@@ -276,11 +279,27 @@ impl PluginPlatform {
         Self::empty(user_root)
     }
 
-    /// Starts the hot-reload watcher on the user-layer `plugins/` directory.
+    /// Starts the hot-reload watcher over every writable plugin layer this
+    /// platform's host owns.
     ///
-    /// Call this from the Tauri `setup` hook — alongside
+    /// The watcher covers each of the host's writable roots' `plugins/`
+    /// subdirectories — the shared user-layer dir always, plus this host's
+    /// project-layer dir when it has one (a per-board host's
+    /// `<board_dir>/.kanban/plugins/`). An edit/add/remove under any watched
+    /// layer reloads/loads/unloads the affected plugin in THIS host only, so a
+    /// per-board host reacts to its board's project plugins without touching any
+    /// other board's host. The read-only builtin layer is never watched.
+    ///
+    /// The global platform calls this from the Tauri `setup` hook — alongside
     /// [`AppState::start_watchers`](crate::state::AppState::start_watchers) —
-    /// once the app is up. Idempotent: a second call replaces the watcher.
+    /// once the app is up; a per-board platform calls it at board-open time, as
+    /// part of building the board's host. Idempotent: a second call replaces the
+    /// watcher.
+    ///
+    /// The returned [`PluginWatcher`] is owned by this platform, so it is torn
+    /// down when the platform is dropped (board close/switch drops the per-board
+    /// platform via [`crate::confine::drop_confined`]); its `Drop` only aborts
+    /// the drain task, so teardown never blocks a worker.
     ///
     /// A failure to start the watcher is logged rather than propagated: the
     /// already-loaded plugins keep running, only hot reload is unavailable.
@@ -288,8 +307,8 @@ impl PluginPlatform {
         match self.host.watch_plugins::<KanbanConfig>().await {
             Ok(watcher) => {
                 tracing::info!(
-                    root = %self.user_root.join("plugins").display(),
-                    "kanban plugin hot-reload watcher started"
+                    user_root = %self.user_root.join(PLUGINS_SUBDIR).display(),
+                    "kanban plugin hot-reload watcher started over the host's writable layers"
                 );
                 self.watcher = Some(watcher);
             }
@@ -1202,5 +1221,242 @@ mod tests {
             list_command_ids(&global).await.contains(BUILTIN_COMMAND_ID),
             "the global fallback host must carry the builtin command baseline"
         );
+    }
+
+    // ── Per-board hot-reload watcher integration tests ──────────────────────
+    //
+    // These prove the per-board watcher (started at board-open over the user +
+    // this board's project `<board_dir>/.kanban/plugins/` layers) hot-reloads
+    // project plugins LIVE in that board's host only, and that closing the board
+    // tears the watcher down with no leak. They drive the REAL pipeline —
+    // `open_board` builds each per-board host AND starts its watcher — not a
+    // fixture. Every wait is a bounded poll (not a fixed sleep), so a regression
+    // fails fast instead of hanging CI; the only fixed sleep is the short OS
+    // watcher-registration settle the existing user-layer hot-reload test uses.
+
+    /// Poll `platform`'s host `list command` until `pred` holds over the listed
+    /// command ids, or `SETTLE` elapses (then fail with `context`).
+    ///
+    /// This is the deterministic wait the watcher tests use in place of a fixed
+    /// sleep: a watcher-driven load/reload/unload settles well within `SETTLE`,
+    /// and a genuine regression trips the deadline rather than hanging.
+    async fn poll_command_ids_until(
+        platform: &tokio::sync::Mutex<super::PluginPlatform>,
+        context: &str,
+        pred: impl Fn(&std::collections::HashSet<String>) -> bool,
+    ) {
+        let deadline = Instant::now() + SETTLE;
+        loop {
+            let ids = list_command_ids(&*platform.lock().await).await;
+            if pred(&ids) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{context} within {SETTLE:?}; last seen ids: {ids:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// HOT RELOAD, PER BOARD: adding / editing / removing a project plugin under
+    /// an OPEN board's `<board_dir>/.kanban/plugins/` loads / reloads / unloads
+    /// it LIVE in that board's host — and never touches a second board's host.
+    ///
+    /// This is the card's acceptance, driven end to end through the real
+    /// watcher: board A's watcher (started at open over A's project layer) must
+    /// react to a project-plugin add (load), an edit changing its command id
+    /// (reload), and a directory removal (unload), each observed in A's
+    /// `list command`. Board B — a distinct open board with its own host and
+    /// watcher — must never see any of A's project commands, proving each
+    /// watcher reconciles ONLY its own host.
+    #[tokio::test]
+    async fn editing_a_project_plugin_hot_reloads_in_its_board_only() {
+        use std::collections::HashSet;
+
+        let (_user_root, _builtin_cache, _global_dir, state) = app_state_with_plugin_roots().await;
+
+        // Two distinct open boards, each with its own per-board host + watcher.
+        // Board A starts WITHOUT the project plugin, so the watcher (not the
+        // open-time discovery) is what loads it when it appears.
+        let (dir_a, path_a) = open_temp_board(&state).await;
+        let (_dir_b, path_b) = open_temp_board(&state).await;
+        assert_ne!(path_a, path_b, "the two boards must be distinct");
+
+        let (handle_a, handle_b) = {
+            let boards = state.boards.read().await;
+            (
+                boards.get(&path_a).expect("board A is open").clone(),
+                boards.get(&path_b).expect("board B is open").clone(),
+            )
+        };
+        let platform_a = handle_a.platform().expect("board A has a platform");
+        let platform_b = handle_b.platform().expect("board B has a platform");
+
+        // Command ids that are NOT part of the builtin baseline, so observing
+        // one in a host's `list command` proves it came from board A's project
+        // plugin via the watcher.
+        const ADDED_COMMAND: &str = "hotreload.probe.added";
+        const EDITED_COMMAND: &str = "hotreload.probe.edited";
+        const PLUGIN_ID: &str = "board-a-hotreload-plugin";
+
+        // Let board A's OS watcher register before mutating its project tree
+        // (same settle the user-layer hot-reload test uses).
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // ADD: drop a project plugin into board A's project layer. The watcher
+        // must load it and register ADDED_COMMAND in board A's host.
+        write_project_command_plugin(dir_a.path(), PLUGIN_ID, ADDED_COMMAND);
+        poll_command_ids_until(
+            platform_a,
+            "board A's watcher must load the added project plugin",
+            |ids| ids.contains(ADDED_COMMAND),
+        )
+        .await;
+
+        // EDIT: rewrite the SAME plugin id to register a different command. The
+        // watcher must reload it in place — the new command appears and the old
+        // one is gone — in board A's host.
+        write_project_command_plugin(dir_a.path(), PLUGIN_ID, EDITED_COMMAND);
+        poll_command_ids_until(
+            platform_a,
+            "board A's watcher must reload the edited project plugin",
+            |ids| ids.contains(EDITED_COMMAND) && !ids.contains(ADDED_COMMAND),
+        )
+        .await;
+
+        // REMOVE: delete the plugin directory. The watcher must unload it — the
+        // edited command disappears from board A's host.
+        std::fs::remove_dir_all(dir_a.path().join(".kanban").join("plugins").join(PLUGIN_ID))
+            .expect("remove board A's project plugin dir");
+        poll_command_ids_until(
+            platform_a,
+            "board A's watcher must unload the removed project plugin",
+            |ids| !ids.contains(EDITED_COMMAND),
+        )
+        .await;
+
+        // Throughout, board B's host never saw ANY of board A's project
+        // commands — its watcher reconciles only its own host. (Board B still
+        // carries the shared builtin baseline, so the absence is isolation, not
+        // an empty registry.)
+        let ids_b: HashSet<String> = list_command_ids(&*platform_b.lock().await).await;
+        assert!(
+            !ids_b.contains(ADDED_COMMAND) && !ids_b.contains(EDITED_COMMAND),
+            "board B must never see board A's project commands; got {ids_b:?}"
+        );
+        assert!(
+            ids_b.contains(BUILTIN_COMMAND_ID),
+            "board B must still carry the builtin baseline; got {ids_b:?}"
+        );
+    }
+
+    /// NO LEAK ON CLOSE: closing a board drops its `BoardHandle` — and with it
+    /// the per-board platform that owns the hot-reload watcher — so the watcher
+    /// stops and a subsequent project-plugin change does nothing.
+    ///
+    /// The teardown is asserted two ways. First, structurally: a `Weak` to the
+    /// board's handle no longer upgrades after close, proving the handle (and so
+    /// its owned watcher) was dropped — no leaked strong reference keeps it
+    /// alive. Second, behaviorally: writing a project plugin into the now-closed
+    /// board's project dir produces no observable effect (there is no host left
+    /// to load it, and no watcher to react) — `close_board` and the subsequent
+    /// mutation both run cleanly.
+    #[tokio::test]
+    async fn closing_a_board_stops_its_hot_reload_watcher() {
+        let (_user_root, _builtin_cache, _global_dir, state) = app_state_with_plugin_roots().await;
+
+        let (dir, path) = open_temp_board(&state).await;
+
+        // Hold a Weak to the board handle, but NOT a strong clone past this
+        // block: the only strong reference must be the one inside `state.boards`,
+        // so closing the board drops the handle (and its watcher) deterministically.
+        let weak = {
+            let boards = state.boards.read().await;
+            let handle = boards.get(&path).expect("board is open").clone();
+            std::sync::Arc::downgrade(&handle)
+            // `handle` (the strong clone) drops here.
+        };
+
+        // Sanity: the watcher is live before close — its host loads a project
+        // plugin dropped after open. Settle the OS watcher first. The poll
+        // re-resolves the host through `state.boards` each iteration, so it holds
+        // no `BoardHandle` strong reference that would keep the handle alive past
+        // close.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        const BEFORE_CLOSE_COMMAND: &str = "hotreload.probe.before-close";
+        write_project_command_plugin(dir.path(), "pre-close-plugin", BEFORE_CLOSE_COMMAND);
+        poll_command_ids_until_via_map(
+            &state,
+            &path,
+            "the watcher must load a project plugin before close",
+            |ids| ids.contains(BEFORE_CLOSE_COMMAND),
+        )
+        .await;
+
+        // Close the board — its handle is removed from the map and, with no
+        // other strong reference, dropped. `BoardHandle::drop` tears the
+        // platform (and its watcher) down on the confinement runtime.
+        state.close_board(&path).await.expect("closing the board");
+
+        // STRUCTURAL: the handle is gone — the Weak no longer upgrades, so no
+        // strong reference (and so no live watcher) leaked.
+        let deadline = Instant::now() + SETTLE;
+        loop {
+            if weak.upgrade().is_none() {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the closed board's handle (and its watcher) was never dropped within {SETTLE:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        // BEHAVIORAL: a project-plugin change after close runs cleanly and has
+        // no host to affect — the board is gone from the open set, so there is
+        // nothing left to observe a reload on.
+        write_project_command_plugin(
+            dir.path(),
+            "post-close-plugin",
+            "hotreload.probe.after-close",
+        );
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let boards = state.boards.read().await;
+        assert!(
+            !boards.contains_key(&path),
+            "the closed board must stay out of the open set after a late plugin write"
+        );
+    }
+
+    /// Poll a board's host `list command` (re-resolved through `state.boards` on
+    /// each iteration, so no `BoardHandle` strong reference is held across the
+    /// poll) until `pred` holds, or `SETTLE` elapses.
+    async fn poll_command_ids_until_via_map(
+        state: &AppState,
+        path: &std::path::Path,
+        context: &str,
+        pred: impl Fn(&std::collections::HashSet<String>) -> bool,
+    ) {
+        let deadline = Instant::now() + SETTLE;
+        loop {
+            let ids = {
+                let boards = state.boards.read().await;
+                let handle = boards.get(path).expect("board is open").clone();
+                let platform = handle.platform().expect("board has a platform");
+                let guard = platform.lock().await;
+                let ids = list_command_ids(&guard).await;
+                drop(guard);
+                ids
+            };
+            if pred(&ids) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{context} within {SETTLE:?}; last seen ids: {ids:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 }

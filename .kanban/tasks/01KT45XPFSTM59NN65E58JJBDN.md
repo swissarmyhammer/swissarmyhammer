@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KT45WX7DR10FVVZHQE0QT3JT
 - 01KT45XAJEJJE05AQ7QDB63G3E
-position_column: todo
-position_ordinal: aa80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffe480
 project: plugin-arch
 title: Per-window hot-reload watcher includes the board's .kanban/plugins dir
 ---
