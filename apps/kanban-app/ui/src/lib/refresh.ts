@@ -9,11 +9,8 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import type {
-  OpenBoard,
-  BoardDataResponse,
-  EntityListResponse,
-} from "@/types/kanban";
+import { getBoardData, listOpenBoards } from "@/lib/window-mcp";
+import type { OpenBoard, EntityListResponse } from "@/types/kanban";
 import { entityFromBag, parseBoardData } from "@/types/kanban";
 import type { BoardData, Entity } from "@/types/kanban";
 
@@ -41,7 +38,7 @@ export async function refreshBoards(
   // to get_board_data or list_entities via Promise.all.
   let openBoards: OpenBoard[] = [];
   try {
-    openBoards = await invoke<OpenBoard[]>("list_open_boards");
+    openBoards = await listOpenBoards();
   } catch (error) {
     console.error("Failed to list open boards:", error);
   }
@@ -52,7 +49,7 @@ export async function refreshBoards(
   try {
     const bp = boardPath ? { boardPath } : {};
     const [bd, taskData, actorData, projectData] = await Promise.all([
-      invoke<BoardDataResponse>("get_board_data", bp),
+      getBoardData(boardPath),
       invoke<EntityListResponse>("list_entities", {
         entityType: "task",
         ...(taskFilter ? { filter: taskFilter } : {}),

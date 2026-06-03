@@ -23,8 +23,8 @@ use swissarmyhammer_app_service::{AboutInfo, AppService, AppShell};
 ///
 /// Each call appends a tag to `calls`; `quit` / `about` / `help` push
 /// `"quit"`, `"about"`, `"help"` respectively. `show_about` returns the canned
-/// [`AboutInfo`] the harness was built with, and `show_help` returns the
-/// canned help target.
+/// [`AboutInfo`] the harness was built with, and `show_help` returns the canned
+/// help target.
 pub struct SpyShell {
     /// Ordered log of shell method tags, one per call.
     pub calls: Mutex<Vec<&'static str>>,

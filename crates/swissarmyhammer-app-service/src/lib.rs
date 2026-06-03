@@ -12,6 +12,11 @@
 //!   dialog.
 //! - **help** (`show help`) — route the user to the help / documentation.
 //!
+//! The multi-board management reads (`list open boards` / `get board data`) live
+//! on the `window` server, alongside the board-lifecycle writes — that server
+//! already owns the full open/close/new/switch board lifecycle, so the read
+//! counterparts belong there too, not here.
+//!
 //! Undo / redo are deliberately absent — those are store-layer concerns and
 //! live on the `store` MCP server. UI panel toggles (command palette, search)
 //! live on the `ui_state` server.

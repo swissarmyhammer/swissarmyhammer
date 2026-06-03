@@ -149,9 +149,17 @@ async fn resolve_handle(
     }
 }
 
-/// List all currently open boards.
-#[tauri::command]
-pub async fn list_open_boards(state: State<'_, AppState>) -> Result<Value, String> {
+/// List all currently open boards as the `[{ path, name, is_active }]` array.
+///
+/// Enumerates `AppState::boards` (the open-board set), marking the
+/// most-recently-focused board as active, and resolves each board's display
+/// name. Multi-board management read backing the `window` MCP server's
+/// `list open boards` op — the per-board `entity` server has no home for it, so
+/// the bootstrap wires this into the [`WindowShell`] callback seam alongside the
+/// board-lifecycle writes.
+///
+/// [`WindowShell`]: swissarmyhammer_window_service::WindowShell
+pub(crate) async fn list_open_boards_impl(state: &AppState) -> Result<Value, String> {
     let boards = state.boards.read().await;
     let most_recent = state.ui_state.most_recent_board().map(PathBuf::from);
 
@@ -588,12 +596,18 @@ fn build_board_summary(
 /// Columns and tags are returned as `Entity::to_json()` with
 /// computed count fields injected. Tasks are NOT included (use `list_entities`
 /// for that). A summary object provides aggregate counts.
-#[tauri::command]
-pub async fn get_board_data(
-    state: State<'_, AppState>,
+///
+/// Multi-board management read backing the `window` MCP server's `get board
+/// data` op: resolves a board handle across the open set (the given path, or the
+/// active board when `None`). The bootstrap wires this into the [`WindowShell`]
+/// callback seam alongside the board-lifecycle writes.
+///
+/// [`WindowShell`]: swissarmyhammer_window_service::WindowShell
+pub(crate) async fn get_board_data_impl(
+    state: &AppState,
     board_path: Option<String>,
 ) -> Result<Value, String> {
-    let handle = resolve_handle(&state, board_path).await?;
+    let handle = resolve_handle(state, board_path).await?;
     let ectx = handle
         .ctx
         .entity_context()

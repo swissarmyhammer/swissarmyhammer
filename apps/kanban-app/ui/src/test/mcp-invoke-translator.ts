@@ -88,6 +88,16 @@ function translate(bag: unknown): TranslatedLegacyCall | null {
       op,
     };
   }
+  if (tool === "window" && op === "list open boards") {
+    return { cmd: "list_open_boards", args: {}, tool, op };
+  }
+  if (tool === "window" && op === "get board data") {
+    // The window server wire uses `board_path`; legacy `get_board_data` keys off
+    // `boardPath`. Map it back so legacy mocks find their argument.
+    const args: Record<string, unknown> = {};
+    if (params.board_path !== undefined) args.boardPath = params.board_path;
+    return { cmd: "get_board_data", args, tool, op };
+  }
   return null;
 }
 
@@ -108,6 +118,16 @@ function rewrap(tool: string, op: string, result: unknown): unknown {
   }
   if (tool === "entity" && op === "get entity") {
     return { ok: true, entity: result ?? {} };
+  }
+  if (tool === "window" && op === "list open boards") {
+    // `listOpenBoards` unwraps `result.boards`; legacy mocks return the raw
+    // `OpenBoard[]`, so wrap it in the server's `{ ok, boards }` envelope.
+    return { ok: true, boards: result ?? [] };
+  }
+  if (tool === "window" && op === "get board data") {
+    // `getBoardData` returns the projection object directly (the server merges
+    // `ok` into it), so pass the legacy `BoardDataResponse` through unchanged.
+    return result;
   }
   return result;
 }

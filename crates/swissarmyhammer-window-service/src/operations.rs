@@ -21,6 +21,15 @@
 //!   `AppState::close_board`), `NewBoard` (backs `file.newBoard`, ports the
 //!   `new_board_dialog` folder-picker path), and `OpenBoard` (backs
 //!   `file.openBoard`, ports the `open_board_dialog` folder-picker path).
+//!
+//! - **board-management reads** — `ListOpenBoards` (ports `list_open_boards`,
+//!   enumerates the open-board set marking the active board) and `GetBoardData`
+//!   (ports `get_board_data`, projects one board's aggregate summary). These
+//!   ride the app-wide `window` server alongside the board-lifecycle writes: the
+//!   server already owns the full open/close/new/switch board lifecycle and is
+//!   AppHandle-backed, so the read counterparts (`list` / `get`) belong here too.
+//!   The per-board `entity` server cannot host them — they span the whole open
+//!   set / resolve a handle across it.
 
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
@@ -298,6 +307,48 @@ pub struct ShowContextMenu {
     pub window_label: Option<String>,
 }
 
+// Board-management reads ─────────────────────────────────────────────────
+
+/// List every currently open board.
+///
+/// Ports the `list_open_boards` Tauri command (`apps/kanban-app/src/
+/// commands.rs`): enumerate the open-board set, mark which one is active
+/// (most-recently-focused), and return each board's path / name / active flag.
+/// This is a multi-board read with no per-board `entity` server home, so it
+/// rides the app-wide `window` server alongside the board-lifecycle writes,
+/// behind an injected shell callback.
+///
+/// Returns `{ ok: true, boards: [{ path, name, is_active }, ...] }`.
+#[operation(
+    verb = "list",
+    noun = "open boards",
+    description = "List every currently open board, marking the active one"
+)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ListOpenBoards {}
+
+/// Project one board's aggregate summary.
+///
+/// Ports the `get_board_data` Tauri command (`apps/kanban-app/src/commands.rs`):
+/// resolve the board handle (the given path, or the active board when omitted)
+/// and return the board entity, its columns with injected task / ready counts,
+/// its tags, the virtual-tag metadata, and a summary of aggregate totals. Tasks
+/// themselves are NOT included (callers use the entity listing for those).
+///
+/// Returns `{ ok: true, board, columns, tags, virtual_tag_meta, summary }`.
+#[operation(
+    verb = "get",
+    noun = "board data",
+    description = "Project one board's aggregate summary (columns w/ counts, tags, totals)"
+)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct GetBoardData {
+    /// The board path to summarize. When omitted, the shell resolves the active
+    /// board — matching the original command's `resolve_handle(None)` fallback.
+    #[serde(default)]
+    pub board_path: Option<String>,
+}
+
 /// All window operations — the canonical list used for schema generation.
 ///
 /// Both the wire-schema generator (`generate_mcp_schema`) and the discovery
@@ -319,6 +370,8 @@ static WINDOW_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(
         Box::leak(Box::<NewBoard>::default()) as &dyn Operation,
         Box::leak(Box::<OpenBoard>::default()) as &dyn Operation,
         Box::leak(Box::<ShowContextMenu>::default()) as &dyn Operation,
+        Box::leak(Box::<ListOpenBoards>::default()) as &dyn Operation,
+        Box::leak(Box::<GetBoardData>::default()) as &dyn Operation,
     ]
 });
 

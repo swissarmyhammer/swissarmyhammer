@@ -7,6 +7,7 @@
 //! GUI, or a real file manager.
 
 mod board_lifecycle_e2e;
+mod board_reads_e2e;
 mod common;
 mod meta_snapshot;
 mod window_e2e;

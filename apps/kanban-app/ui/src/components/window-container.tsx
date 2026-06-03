@@ -35,6 +35,7 @@ import {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listOpenBoards } from "@/lib/window-mcp";
 import { subscribeStoreChanged } from "@/lib/mcp-notifications";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "sonner";
@@ -422,7 +423,7 @@ async function fetchAssignedBoardPath(): Promise<string | undefined> {
 async function runBoardChanged(deps: WindowBoardDeps): Promise<void> {
   let boards: OpenBoard[] = [];
   try {
-    boards = await invoke<OpenBoard[]>("list_open_boards");
+    boards = await listOpenBoards();
   } catch {
     /* ignore */
   }

@@ -31,6 +31,18 @@
 //! - **open** (`open board`) — open a board via the OS file-open dialog. Backs
 //!   `file.openBoard`; ports `open_board_dialog`.
 //!
+//! **board-management reads** group:
+//! - **list** (`list open boards`) — enumerate the open-board set, marking the
+//!   active board. Ports `list_open_boards`.
+//! - **get** (`get board data`) — project one board's aggregate summary. Ports
+//!   `get_board_data`.
+//!
+//! The two board reads ride this server alongside the board-lifecycle writes:
+//! the `window` server already owns the full open/close/new/switch board
+//! lifecycle and is AppHandle-backed, so the read counterparts belong here too.
+//! Their projection threads through `AppState` (which this crate cannot own), so
+//! — exactly like the lifecycle writes — they are supplied as injected callbacks.
+//!
 //! The board open / close / init side effects and the OS dialog all thread
 //! through state this crate cannot own (`AppState`, the tauri dialog plugin), so
 //! — exactly as new-window creation does — they are supplied as injected
@@ -55,13 +67,13 @@ pub mod service;
 pub mod shell;
 
 pub use operations::{
-    operations, ActivateWindow, CloseBoard, CloseWindow, GetMonitors, GetWindowPosition, NewBoard,
-    OpenBoard, OpenNewWindow, OpenPath, RevealPath, SetWindowPosition, ShowContextMenu,
-    SwitchBoard,
+    operations, ActivateWindow, CloseBoard, CloseWindow, GetBoardData, GetMonitors,
+    GetWindowPosition, ListOpenBoards, NewBoard, OpenBoard, OpenNewWindow, OpenPath, RevealPath,
+    SetWindowPosition, ShowContextMenu, SwitchBoard,
 };
 pub use service::WindowService;
 pub use shell::{
-    run_new_board, run_open_board, CloseBoardFn, ContextMenuItem, CreatedBoard, InitBoardFn,
-    MonitorInfo, NewWindow, OpenWindowFn, OpenedBoard, PickFolderFn, SwitchBoardFn,
-    TauriWindowShell, WindowPosition, WindowShell,
+    run_new_board, run_open_board, CloseBoardFn, ContextMenuItem, CreatedBoard, GetBoardDataFn,
+    InitBoardFn, ListOpenBoardsFn, MonitorInfo, NewWindow, OpenWindowFn, OpenedBoard, PickFolderFn,
+    SwitchBoardFn, TauriWindowShell, WindowPosition, WindowShell,
 };

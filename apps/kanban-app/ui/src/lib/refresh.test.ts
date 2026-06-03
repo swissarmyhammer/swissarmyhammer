@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+import {
+  wrapMcpDispatch,
+  type LegacyDispatcher,
+} from "@/test/mcp-invoke-translator";
+
 const mockInvoke = vi.fn((..._args: unknown[]) => Promise.resolve({}));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -7,6 +12,23 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { refreshBoards } from "./refresh";
+
+/**
+ * Install a legacy `(cmd, args)` dispatcher behind the MCP translator.
+ *
+ * `refreshBoards` reaches `list_open_boards` / `get_board_data` through the
+ * `app` MCP server (`invoke("command_tool_call", …)`), so the legacy verb
+ * bodies below run only once the translator unwraps the envelope and records
+ * the synthetic `["list_open_boards", …]` / `["get_board_data", { boardPath }]`
+ * call on `mockInvoke.mock.calls` — keeping the legacy-shape assertions intact.
+ */
+function installLegacy(legacy: LegacyDispatcher): void {
+  const wrapped = wrapMcpDispatch(mockInvoke, legacy);
+  mockInvoke.mockImplementation(async (...args: unknown[]) => {
+    const result = await wrapped(args[0] as string, args[1]);
+    return (result ?? {}) as Record<string, unknown>;
+  });
+}
 
 describe("refreshBoards", () => {
   beforeEach(() => {
@@ -16,8 +38,7 @@ describe("refreshBoards", () => {
   it("returns open boards even when get_board_data fails", async () => {
     // Simulate: list_open_boards succeeds with 2 boards,
     // but get_board_data fails (new board not fully ready).
-    mockInvoke.mockImplementation((...args: unknown[]) => {
-      const cmd = args[0] as string;
+    installLegacy((cmd) => {
       if (cmd === "list_open_boards") {
         return Promise.resolve([
           { path: "/a/.kanban", is_active: false, name: "Board A" },
@@ -43,8 +64,7 @@ describe("refreshBoards", () => {
   });
 
   it("returns all data when everything succeeds", async () => {
-    mockInvoke.mockImplementation((...args: unknown[]) => {
-      const cmd = args[0] as string;
+    installLegacy((cmd) => {
       if (cmd === "list_open_boards") {
         return Promise.resolve([
           { path: "/a/.kanban", is_active: true, name: "Board A" },
@@ -88,8 +108,7 @@ describe("refreshBoards", () => {
   });
 
   it("passes boardPath to get_board_data and list_entities when provided", async () => {
-    mockInvoke.mockImplementation((...args: unknown[]) => {
-      const cmd = args[0] as string;
+    installLegacy((cmd) => {
       if (cmd === "list_open_boards") {
         return Promise.resolve([
           { path: "/a/.kanban", is_active: true, name: "Board A" },
@@ -137,8 +156,7 @@ describe("refreshBoards", () => {
   });
 
   it("does not pass boardPath when omitted", async () => {
-    mockInvoke.mockImplementation((...args: unknown[]) => {
-      const cmd = args[0] as string;
+    installLegacy((cmd) => {
       if (cmd === "list_open_boards") {
         return Promise.resolve([
           { path: "/a/.kanban", is_active: true, name: "Board A" },
@@ -177,8 +195,7 @@ describe("refreshBoards", () => {
   });
 
   it("returns open boards even when list_entities fails", async () => {
-    mockInvoke.mockImplementation((...args: unknown[]) => {
-      const cmd = args[0] as string;
+    installLegacy((cmd) => {
       if (cmd === "list_open_boards") {
         return Promise.resolve([
           { path: "/a/.kanban", is_active: false, name: "Board A" },

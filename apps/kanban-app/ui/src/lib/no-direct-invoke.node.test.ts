@@ -75,14 +75,11 @@ const ALLOWED_INVOKE_HANDLERS = new Set<string>([
   // it is no longer allow-listed.)
   "save_dropped_file", // native: receives raw HTML5-dropped bytes (possibly large binary) and writes a temp file — wrong payload for the MCP wire
 
-  // ── Board-management reads — documented natives, follow-up filed. ──
-  // Both enumerate / aggregate over the multi-board open set
-  // (`state.boards`, `resolve_handle(board_path)`); the `entity` MCP server is
-  // per-board-scoped and has no board-enumeration/summary op. Migrating them
-  // needs a new board-management server surface, not a trivial op on an
-  // exposed server — tracked as `01KT777JCZBDJPETEXSPAGJDVE`.
-  "list_open_boards", // native: enumerates the open-board set + active-board marker — needs board-management server (01KT777JCZBDJPETEXSPAGJDVE)
-  "get_board_data", // native: per-board aggregate summary across the open-set — needs board-management server (01KT777JCZBDJPETEXSPAGJDVE)
+  // (`list_open_boards` / `get_board_data` migrated to the `window` MCP server's
+  // `list open boards` / `get board data` ops behind the AppHandle-backed
+  // `WindowShell` seam, alongside the board-lifecycle writes — task
+  // `01KT777JCZBDJPETEXSPAGJDVE` — so they are no longer allow-listed; call
+  // sites route through `@/lib/window-mcp`.)
 
   // ── Still-Tauri data feeds (out of this audit's scope) — natives pending a
   // later migration stage. Each threads through `resolve_handle(board_path)`

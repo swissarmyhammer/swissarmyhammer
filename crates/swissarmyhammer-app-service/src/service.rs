@@ -5,12 +5,15 @@
 //! tool whose `inputSchema` and `_meta` are derived from the operation
 //! structs in [`crate::operations`].
 //!
-//! The tool exposes genuine shell actions only:
+//! The tool exposes app-shell actions:
 //!
 //! - **quit** (`quit app`) — terminate the process (ports the original
 //!   `quit_app` Tauri command).
 //! - **about** (`show about`) — surface the app's name / version.
 //! - **help** (`show help`) — route the user to the help / docs.
+//!
+//! The multi-board management reads (`list open boards` / `get board data`) live
+//! on the `window` server, alongside the board-lifecycle writes — not here.
 //!
 //! Undo / redo are NOT here — those live on the `store` server. UI panel
 //! toggles live on the `ui_state` server.

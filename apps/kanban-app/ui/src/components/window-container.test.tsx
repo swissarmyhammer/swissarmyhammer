@@ -15,6 +15,15 @@ const { mockInvoke, mockListen, mockWindowListen, listeners, windowListeners } =
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const mockInvoke = vi.fn((..._args: any[]): Promise<any> => {
       const cmd = _args[0] as string;
+      // The board reads ride the `window` MCP server now, so the default impl
+      // answers the `list open boards` envelope with an empty set.
+      if (cmd === "command_tool_call") {
+        const bag = (_args[1] ?? {}) as Record<string, any>;
+        if (bag.tool === "window" && bag.op === "list open boards")
+          return Promise.resolve({ ok: true, boards: [] });
+        if (bag.tool === "window" && bag.op === "get board data")
+          return Promise.resolve(null);
+      }
       if (cmd === "get_ui_state")
         return Promise.resolve({
           palette_open: false,
@@ -94,9 +103,27 @@ import {
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
 import { asSegment } from "@/types/spatial";
+import { wrapMcpDispatch } from "@/test/mcp-invoke-translator";
 
 /** Identity-stable layer name for the test window root, matches App.tsx. */
 const WINDOW_LAYER_NAME = asSegment("window");
+
+/**
+ * Install a legacy `(cmd, args?) => …` invoke impl behind the MCP translator.
+ *
+ * `WindowContainer` reaches `list_open_boards` / `get_board_data` through the
+ * `app` MCP server (`invoke("command_tool_call", …)`), so the legacy verb
+ * branches below run only once the translator unwraps the envelope. Direct
+ * natives (`get_ui_state`, `dispatch_command`, `list_entities`) pass straight
+ * through.
+ */
+function installInvoke(
+  legacy: (cmd: string, args?: unknown) => Promise<unknown>,
+): void {
+  mockInvoke.mockImplementation(
+    wrapMcpDispatch(mockInvoke, legacy) as (...args: unknown[]) => Promise<unknown>,
+  );
+}
 
 /**
  * Wrap children in the spatial-focus + window-root layer providers that
@@ -283,7 +310,7 @@ describe("WindowContainer", () => {
 
   it("board-opened event updates activeBoardPath", async () => {
     // Mock refreshEntities to return board data
-    mockInvoke.mockImplementation((cmd: string) => {
+    installInvoke((cmd: string) => {
       if (cmd === "get_ui_state")
         return Promise.resolve({
           palette_open: false,
@@ -344,7 +371,7 @@ describe("WindowContainer", () => {
   });
 
   it("a structural store/changed refreshes the open boards list", async () => {
-    mockInvoke.mockImplementation((cmd: string) => {
+    installInvoke((cmd: string) => {
       if (cmd === "get_ui_state")
         return Promise.resolve({
           palette_open: false,
@@ -416,7 +443,7 @@ describe("WindowContainer", () => {
   });
 
   it("handleSwitchBoard updates activeBoardPath and dispatches file.switchBoard", async () => {
-    mockInvoke.mockImplementation((cmd: string) => {
+    installInvoke((cmd: string) => {
       if (cmd === "get_ui_state")
         return Promise.resolve({
           palette_open: false,
@@ -512,7 +539,7 @@ describe("WindowContainer", () => {
       resolveDispatch = resolve;
     });
 
-    mockInvoke.mockImplementation((cmd: string) => {
+    installInvoke((cmd: string) => {
       if (cmd === "get_ui_state")
         return Promise.resolve({
           palette_open: false,

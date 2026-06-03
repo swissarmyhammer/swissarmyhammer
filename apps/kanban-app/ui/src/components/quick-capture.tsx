@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { EntityIcon } from "@/components/entity-icon";
-import { invoke } from "@tauri-apps/api/core";
+import { getBoardData, listOpenBoards } from "@/lib/window-mcp";
 import { subscribeStoreChanged } from "@/lib/mcp-notifications";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { useDispatchCommand } from "@/lib/command-scope";
@@ -23,7 +23,7 @@ import { TextEditor } from "@/components/fields/text-editor";
 import { BoardSelector } from "@/components/board-selector";
 import { useUIState } from "@/lib/ui-state-context";
 import appIcon from "@/assets/app-icon-32.png";
-import type { OpenBoard, BoardDataResponse, Entity } from "@/types/kanban";
+import type { OpenBoard, Entity } from "@/types/kanban";
 import { entityFromBag, getNum } from "@/types/kanban";
 
 const STORAGE_KEY = "quick-capture-last-board";
@@ -59,7 +59,7 @@ function useBoardList() {
 
   const loadBoards = useCallback(async () => {
     try {
-      const result = await invoke<OpenBoard[]>("list_open_boards");
+      const result = await listOpenBoards();
       if (!mountedRef.current) return;
       setBoards(result);
       const stored = localStorage.getItem(STORAGE_KEY);
@@ -205,9 +205,7 @@ function useQuickCaptureSubmit(
       if (!selectedPath || !text.trim()) return;
       try {
         const active = boards.find((b) => b.is_active);
-        const boardData = await invoke<BoardDataResponse>("get_board_data", {
-          boardPath: selectedPath,
-        });
+        const boardData = await getBoardData(selectedPath);
         const columns = boardData.columns
           .map(entityFromBag)
           .sort((a, b) => getNum(a, "order") - getNum(b, "order"));

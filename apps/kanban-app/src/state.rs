@@ -1775,6 +1775,15 @@ mod tests {
         ) -> Result<(), String> {
             Ok(())
         }
+        fn list_open_boards(&self) -> Result<serde_json::Value, String> {
+            Ok(serde_json::json!([]))
+        }
+        fn get_board_data(
+            &self,
+            _board_path: Option<String>,
+        ) -> Result<serde_json::Value, String> {
+            Ok(serde_json::json!({}))
+        }
     }
 
     /// A no-op [`AppShell`] for the plugin-platform tests, exposed for the same

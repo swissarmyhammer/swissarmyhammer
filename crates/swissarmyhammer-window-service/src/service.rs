@@ -33,9 +33,9 @@ use serde_json::Value;
 use swissarmyhammer_operations_macros::operation_tool;
 
 use crate::operations::{
-    operations, ActivateWindow, CloseBoard, CloseWindow, GetMonitors, GetWindowPosition, NewBoard,
-    OpenBoard, OpenNewWindow, OpenPath, RevealPath, SetWindowPosition, ShowContextMenu,
-    SwitchBoard,
+    operations, ActivateWindow, CloseBoard, CloseWindow, GetBoardData, GetMonitors,
+    GetWindowPosition, ListOpenBoards, NewBoard, OpenBoard, OpenNewWindow, OpenPath, RevealPath,
+    SetWindowPosition, ShowContextMenu, SwitchBoard,
 };
 use crate::shell::{WindowPosition, WindowShell};
 
@@ -198,6 +198,33 @@ impl WindowService {
             .map_err(shell_error)?;
         Ok(serde_json::json!({ "ok": true, "count": count }))
     }
+
+    /// Handle a `ListOpenBoards` call — enumerate the open boards via the shell.
+    ///
+    /// The shell returns the same `[{ path, name, is_active }]` array the
+    /// original `list_open_boards` Tauri command produced; it is wrapped under
+    /// `boards` in the structured envelope.
+    fn handle_list_open_boards(&self, _req: ListOpenBoards) -> Result<Value, McpError> {
+        let boards = self.shell.list_open_boards().map_err(shell_error)?;
+        Ok(serde_json::json!({ "ok": true, "boards": boards }))
+    }
+
+    /// Handle a `GetBoardData` call — project the board summary via the shell.
+    ///
+    /// The shell returns the same `{ board, columns, tags, virtual_tag_meta,
+    /// summary }` object the original `get_board_data` Tauri command produced;
+    /// `ok: true` is merged into it so the response shape is unchanged for
+    /// callers.
+    fn handle_get_board_data(&self, req: GetBoardData) -> Result<Value, McpError> {
+        let mut data = self
+            .shell
+            .get_board_data(req.board_path)
+            .map_err(shell_error)?;
+        if let Value::Object(map) = &mut data {
+            map.insert("ok".to_string(), Value::Bool(true));
+        }
+        Ok(data)
+    }
 }
 
 /// Map a shell error string onto an rmcp `internal_error`.
@@ -317,6 +344,14 @@ impl ServerHandler for WindowService {
             "show context menu" => {
                 let req: ShowContextMenu = deserialize_op(arguments, &op)?;
                 self.handle_show_context_menu(req)?
+            }
+            "list open boards" => {
+                let req: ListOpenBoards = deserialize_op(arguments, &op)?;
+                self.handle_list_open_boards(req)?
+            }
+            "get board data" => {
+                let req: GetBoardData = deserialize_op(arguments, &op)?;
+                self.handle_get_board_data(req)?
             }
             other => {
                 return Err(McpError::invalid_params(

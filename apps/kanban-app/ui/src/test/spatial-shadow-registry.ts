@@ -576,6 +576,19 @@ export function installShadowNavigator(
         },
       };
     }
+    if (tool === "window" && op === "list open boards") {
+      return { cmd: "list_open_boards", args: {} };
+    }
+    if (tool === "window" && op === "get board data") {
+      // The window server wire uses `board_path`; the legacy `get_board_data`
+      // fallback keys off `boardPath`. Map it back so `defaultInvokeImpl`
+      // serves the right board.
+      const boardArgs: Record<string, unknown> = {};
+      if ((params as Record<string, unknown>).board_path !== undefined) {
+        boardArgs.boardPath = (params as Record<string, unknown>).board_path;
+      }
+      return { cmd: "get_board_data", args: boardArgs };
+    }
     return null;
   };
 
@@ -622,6 +635,16 @@ export function installShadowNavigator(
         }
         if (tool === "entity" && op === "get entity") {
           return { ok: true, entity: result ?? {} };
+        }
+        if (tool === "window" && op === "list open boards") {
+          // `listOpenBoards` unwraps `result.boards`; the legacy fallback
+          // returns the raw `OpenBoard[]`, so wrap it in the server envelope.
+          return { ok: true, boards: result ?? [] };
+        }
+        if (tool === "window" && op === "get board data") {
+          // `getBoardData` returns the projection object directly, so pass the
+          // legacy `BoardDataResponse` through unchanged.
+          return result;
         }
         return result;
       }

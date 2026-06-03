@@ -95,6 +95,23 @@ import {
   useRefreshEntities,
   useEntitiesByType,
 } from "./rust-engine-container";
+import { wrapMcpDispatch } from "@/test/mcp-invoke-translator";
+
+/**
+ * Install a legacy `(cmd, args?) => …` invoke impl behind the MCP translator.
+ *
+ * The real `refreshBoards` (which these tests forward to) reaches
+ * `list_open_boards` / `get_board_data` through the `window` MCP server
+ * (`invoke("command_tool_call", …)`), so the legacy verb branches below run
+ * only once the translator unwraps the envelope. Direct natives pass through.
+ */
+function installInvoke(
+  legacy: (cmd: string, args?: unknown) => Promise<unknown>,
+): void {
+  mockInvoke.mockImplementation(
+    wrapMcpDispatch(mockInvoke, legacy) as (...args: unknown[]) => Promise<unknown>,
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Helper: emits a Tauri event to registered listeners
@@ -432,7 +449,7 @@ describe("RustEngineContainer", () => {
       id: "t1",
       title: "Task",
     };
-    mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
+    installInvoke((cmd: string, args?: unknown) => {
       if (cmd === "get_entity") return Promise.resolve(taskBag);
       if (cmd === "get_ui_state")
         return Promise.resolve({
@@ -649,7 +666,7 @@ describe("RustEngineContainer", () => {
       id: "t1",
       title: "Fetched Task",
     };
-    mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
+    installInvoke((cmd: string, args?: unknown) => {
       if (cmd === "get_ui_state")
         return Promise.resolve({
           palette_open: false,

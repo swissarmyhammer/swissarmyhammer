@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: b080
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffea80
 project: command-cutover
 title: Design board-management MCP server surface; migrate list_open_boards + get_board_data off Tauri
 ---

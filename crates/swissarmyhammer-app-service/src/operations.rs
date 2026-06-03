@@ -6,13 +6,17 @@
 //! same `APP_OPERATIONS` slice via the `operation_tool!` macro, so the two
 //! cannot drift.
 //!
-//! The `app` server exposes only genuine app-shell actions — actions that
-//! belong to the window manager / OS chrome rather than to any document or
-//! UI panel:
+//! The `app` server exposes genuine app-shell actions — actions that belong to
+//! the window manager / OS chrome rather than to any document or UI panel:
 //!
 //! - **quit** (`quit app`) — terminate the process.
 //! - **about** (`show about`) — surface the app's name / version.
 //! - **help** (`show help`) — route the user to the help / docs.
+//!
+//! The multi-board management reads (`list open boards` / `get board data`) live
+//! on the `window` server, not here: that server already owns the full
+//! open/close/new/switch board lifecycle, so the read counterparts belong
+//! alongside it.
 //!
 //! Undo / redo are deliberately absent — those are store-layer concerns and
 //! live on the `store` MCP server. UI panel toggles (command palette, search)

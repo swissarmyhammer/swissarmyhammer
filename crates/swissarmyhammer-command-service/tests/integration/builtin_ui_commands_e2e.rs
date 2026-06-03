@@ -202,6 +202,14 @@ impl WindowShell for SpyShell {
     ) -> Result<(), String> {
         Ok(())
     }
+
+    fn list_open_boards(&self) -> Result<Value, String> {
+        Ok(json!([]))
+    }
+
+    fn get_board_data(&self, _board_path: Option<String>) -> Result<Value, String> {
+        Ok(json!({}))
+    }
 }
 
 // ───────────────────────────────────────────────────────────────────────────

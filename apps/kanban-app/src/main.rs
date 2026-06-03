@@ -64,14 +64,12 @@ fn run_app(app_state: AppState) {
         .invoke_handler(tauri::generate_handler![
             commands::dispatch_command,
             commands::list_commands_for_scope,
-            commands::list_open_boards,
             commands::get_ui_state,
             commands::get_entity_schema,
             commands::list_entity_types,
             commands::list_entities,
             commands::search_mentions,
             commands::search_entities,
-            commands::get_board_data,
             commands::quit_app,
             commands::new_board_dialog,
             commands::open_board_dialog,
@@ -254,6 +252,30 @@ fn build_apphandle_shells(
             })
         });
 
+    // list_open_boards / get_board_data → the multi-board management reads,
+    // hosted on the `window` server alongside the board-lifecycle writes. Both
+    // thread through `AppState` (the open-board set / per-board entity contexts),
+    // which the window-service crate cannot reach, so — exactly like the
+    // switch_board / close_board callbacks above — they run the existing
+    // projection on the confinement runtime and hand the JSON back to the seam.
+    let list_handle = handle.clone();
+    let list_open_boards: swissarmyhammer_window_service::ListOpenBoardsFn = Arc::new(move || {
+        let app = list_handle.clone();
+        crate::confine::run_future(async move {
+            let state = app.state::<AppState>();
+            commands::list_open_boards_impl(&state).await
+        })
+    });
+    let data_handle = handle.clone();
+    let get_board_data: swissarmyhammer_window_service::GetBoardDataFn =
+        Arc::new(move |board_path: Option<String>| {
+            let app = data_handle.clone();
+            crate::confine::run_future(async move {
+                let state = app.state::<AppState>();
+                commands::get_board_data_impl(&state, board_path).await
+            })
+        });
+
     let window_shell: Arc<dyn WindowShell> = Arc::new(TauriWindowShell::new(
         handle.clone(),
         open_window,
@@ -261,10 +283,13 @@ fn build_apphandle_shells(
         init_board,
         switch_board,
         close_board,
+        list_open_boards,
+        get_board_data,
     ));
-    let app_shell: Arc<dyn swissarmyhammer_app_service::AppShell> = Arc::new(
-        swissarmyhammer_app_service::TauriAppShell::new(handle.clone()),
-    );
+
+    // The `app` shell is now a plain AppHandle wrapper (quit / about / help).
+    let app_shell: Arc<dyn swissarmyhammer_app_service::AppShell> =
+        Arc::new(swissarmyhammer_app_service::TauriAppShell::new(handle.clone()));
     (window_shell, app_shell)
 }
 

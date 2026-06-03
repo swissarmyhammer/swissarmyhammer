@@ -44,6 +44,12 @@ pub struct SpyShell {
     /// resolving to a chosen folder. `None` models the user cancelling the
     /// OS file-open dialog.
     pub open_board: Option<OpenedBoard>,
+    /// The JSON `list_open_boards` hands back.
+    pub open_boards: Value,
+    /// The JSON `get_board_data` hands back.
+    pub board_data: Value,
+    /// The `board_path` argument of the last `get_board_data` call.
+    pub last_board_path: Mutex<Option<String>>,
 }
 
 impl SpyShell {
@@ -66,6 +72,9 @@ impl SpyShell {
             open_board: Some(OpenedBoard {
                 path: "/tmp/opened-board".to_string(),
             }),
+            open_boards: serde_json::json!([]),
+            board_data: serde_json::json!({}),
+            last_board_path: Mutex::new(None),
         }
     }
 
@@ -80,6 +89,18 @@ impl SpyShell {
     pub fn with_open_board(mut self, open_board: Option<OpenedBoard>) -> Self {
         self.open_board = open_board;
         self
+    }
+
+    /// Set the canned values the board-management reads return.
+    pub fn with_board_reads(mut self, open_boards: Value, board_data: Value) -> Self {
+        self.open_boards = open_boards;
+        self.board_data = board_data;
+        self
+    }
+
+    /// The `board_path` the most recent `get_board_data` call carried.
+    pub fn last_board_path(&self) -> Option<String> {
+        self.last_board_path.lock().unwrap().clone()
     }
 
     /// Snapshot the recorded call tags in order.
@@ -174,6 +195,17 @@ impl WindowShell for SpyShell {
             window_label.as_deref().unwrap_or("-")
         ));
         Ok(())
+    }
+
+    fn list_open_boards(&self) -> Result<Value, String> {
+        self.record("list_open_boards");
+        Ok(self.open_boards.clone())
+    }
+
+    fn get_board_data(&self, board_path: Option<String>) -> Result<Value, String> {
+        self.record("get_board_data");
+        *self.last_board_path.lock().unwrap() = board_path;
+        Ok(self.board_data.clone())
     }
 }
 

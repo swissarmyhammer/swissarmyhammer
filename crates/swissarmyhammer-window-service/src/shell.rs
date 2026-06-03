@@ -240,6 +240,25 @@ pub trait WindowShell: Send + Sync {
         items: Vec<ContextMenuItem>,
         window_label: Option<String>,
     ) -> Result<(), String>;
+
+    /// Enumerate the currently open boards, marking the active one.
+    ///
+    /// Backs `list open boards`. Returns the JSON array the original
+    /// `list_open_boards` Tauri command produced — one
+    /// `{ path, name, is_active }` object per open board. The projection spans
+    /// the whole open-board set (`AppState` this crate cannot reach), so — like
+    /// `switch_board` / `close_board` — the production impl delegates to an
+    /// injected callback.
+    fn list_open_boards(&self) -> Result<serde_json::Value, String>;
+
+    /// Project one board's aggregate summary.
+    ///
+    /// Backs `get board data`. `board_path` selects the board (the active board
+    /// when `None`). Returns the JSON object the original `get_board_data` Tauri
+    /// command produced (`board`, `columns`, `tags`, `virtual_tag_meta`,
+    /// `summary`). The projection reaches per-board entity state this crate
+    /// cannot own, so the production impl delegates to an injected callback.
+    fn get_board_data(&self, board_path: Option<String>) -> Result<serde_json::Value, String>;
 }
 
 use std::sync::Arc;
@@ -288,6 +307,24 @@ pub type SwitchBoardFn<R> = Arc<dyn Fn(&AppHandle<R>, &Path) -> Result<(), Strin
 /// `open_board`. Backs `close_board`.
 pub type CloseBoardFn<R> = Arc<dyn Fn(&AppHandle<R>, &Path) -> Result<(), String> + Send + Sync>;
 
+/// A callback that enumerates the open boards as the `list_open_boards` JSON
+/// array.
+///
+/// The open-board set lives in `AppState`, which this crate cannot — and should
+/// not — depend on, exactly like the board-lifecycle callbacks. The bootstrap
+/// site supplies this closure wired to the real board enumeration. Backs
+/// `list_open_boards`.
+pub type ListOpenBoardsFn = Arc<dyn Fn() -> Result<serde_json::Value, String> + Send + Sync>;
+
+/// A callback that projects one board's aggregate summary as the
+/// `get_board_data` JSON object, given the optional board path.
+///
+/// The projection resolves a board handle across the open set and reads its
+/// per-board entity context — `AppState` state this crate cannot reach — so the
+/// bootstrap supplies it wired to the real projection. Backs `get_board_data`.
+pub type GetBoardDataFn =
+    Arc<dyn Fn(Option<String>) -> Result<serde_json::Value, String> + Send + Sync>;
+
 /// Production [`WindowShell`] backed by a live `tauri::AppHandle`.
 ///
 /// Generic over the tauri [`Runtime`] so it works against both the real `Wry`
@@ -304,6 +341,8 @@ pub struct TauriWindowShell<R: Runtime> {
     init_board: InitBoardFn,
     switch_board: SwitchBoardFn<R>,
     close_board: CloseBoardFn<R>,
+    list_open_boards: ListOpenBoardsFn,
+    get_board_data: GetBoardDataFn,
 }
 
 impl<R: Runtime> TauriWindowShell<R> {
@@ -313,8 +352,10 @@ impl<R: Runtime> TauriWindowShell<R> {
     /// `open_window` backs new-window creation; `pick_folder` is the OS
     /// folder-picker shim the board dialogs drive; `init_board` initializes a
     /// board at a resolved path; `switch_board` / `close_board` thread board
-    /// open / close through `AppState`. Each touches state this crate cannot
-    /// own, so all are supplied by the app-shell bootstrap.
+    /// open / close through `AppState`; `list_open_boards` / `get_board_data`
+    /// back the multi-board management reads. Each touches state this crate
+    /// cannot own, so all are supplied by the app-shell bootstrap.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         app: AppHandle<R>,
         open_window: OpenWindowFn<R>,
@@ -322,6 +363,8 @@ impl<R: Runtime> TauriWindowShell<R> {
         init_board: InitBoardFn,
         switch_board: SwitchBoardFn<R>,
         close_board: CloseBoardFn<R>,
+        list_open_boards: ListOpenBoardsFn,
+        get_board_data: GetBoardDataFn,
     ) -> Self {
         Self {
             app,
@@ -330,6 +373,8 @@ impl<R: Runtime> TauriWindowShell<R> {
             init_board,
             switch_board,
             close_board,
+            list_open_boards,
+            get_board_data,
         }
     }
 
@@ -562,6 +607,16 @@ impl<R: Runtime> WindowShell for TauriWindowShell<R> {
         let window = self.target_window(window_label.as_deref())?;
         menu.popup(window)
             .map_err(|e| format!("failed to show context menu: {e}"))
+    }
+
+    /// Enumerate the open boards via the injected callback.
+    fn list_open_boards(&self) -> Result<serde_json::Value, String> {
+        (self.list_open_boards)()
+    }
+
+    /// Project the requested board's summary via the injected callback.
+    fn get_board_data(&self, board_path: Option<String>) -> Result<serde_json::Value, String> {
+        (self.get_board_data)(board_path)
     }
 }
 
