@@ -10,7 +10,6 @@ metadata:
   version: "{{version}}"
 ---
 
-{% include "_partials/coding-standards" %}
 
 # Deduplicate
 

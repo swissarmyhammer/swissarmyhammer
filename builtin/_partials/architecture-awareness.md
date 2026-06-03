@@ -4,7 +4,7 @@ description: Read and respect ARCHITECTURE.md when it exists at the project root
 partial: true
 ---
 
-## Architecture Awareness
+### Architecture Awareness
 
 If an `ARCHITECTURE.md` file exists at the project root, read it before you act.
 It is the project's own description of how the system is structured — its
