@@ -7,8 +7,9 @@ repository.workspace = true
 homepage.workspace = true
 description = "Standalone MCP code-context tool CLI for AI coding agents"
 
+# No `formula = "..."` override: the formula is named after the crate
+# (`code-context-cli`), consistent with every other CLI in the workspace.
 [package.metadata.dist]
-formula = "code-context"
 
 [[bin]]
 name = "code-context"

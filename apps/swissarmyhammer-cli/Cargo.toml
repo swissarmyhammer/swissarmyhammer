@@ -13,8 +13,14 @@ homepage.workspace = true
 description = "Command-line interface for SwissArmyHammer prompt management"
 default-run = "sah"
 
+# Distributed via Homebrew as the `swissarmyhammer-cli` formula (binary `sah`).
+# Naming is consistent across the workspace: every CLI crate is `*-cli` and
+# ships a `<name>-cli` formula; GUI apps own the short cask token. Do NOT add a
+# `formula = "..."` override here -- that is exactly what made the tap
+# inconsistent (short formulae colliding with app casks, plus uncollected
+# rename fossils).
 [package.metadata.dist]
-dist = false
+dist = true
 
 [lib]
 name = "swissarmyhammer_cli"

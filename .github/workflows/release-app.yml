@@ -186,6 +186,14 @@ jobs:
 
   publish-homebrew-cask:
     needs: build-macos
+    # Run even when build-macos partially failed: each app is its own matrix
+    # leg here and downloads only its own DMG artifact, so a failed/hung build
+    # for one app (e.g. the kanban Tauri build) must not block publishing the
+    # cask for an app that built fine (e.g. mirdan). Previously `needs:
+    # build-macos` with the default `if` skipped this whole job whenever any
+    # build leg failed -- which is why BOTH casks were frozen for months while
+    # only kanban was actually broken. Skip only if build-macos never ran.
+    if: ${{ always() && needs.build-macos.result != 'skipped' }}
     runs-on: self-hosted
     timeout-minutes: 15
     strategy:
@@ -218,13 +226,23 @@ jobs:
           echo "value=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Download DMG artifact
+        id: dl
+        # The build leg only uploads this artifact on success. If that app's
+        # build failed, the download fails -- tolerate it so this leg skips
+        # cleanly instead of erroring, while other apps' legs still publish.
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: ${{ matrix.app.name }}-app-dmg
           path: dmg/
 
+      - name: No DMG -- skipping this app
+        if: ${{ steps.dl.outcome != 'success' }}
+        run: echo "No DMG artifact for ${{ matrix.app.name }} (build failed or skipped); not publishing its cask."
+
       - name: Compute SHA256
         id: sha
+        if: ${{ steps.dl.outcome == 'success' }}
         run: |
           DMG=$(find dmg -name "*.dmg" | head -1)
           SHA=$(shasum -a 256 "$DMG" | cut -d' ' -f1)
@@ -234,6 +252,7 @@ jobs:
           echo "SHA256: $SHA for $NAME"
 
       - name: Checkout swissarmyhammer
+        if: ${{ steps.dl.outcome == 'success' }}
         uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -241,6 +260,7 @@ jobs:
           path: swissarmyhammer
 
       - name: Checkout homebrew-tap
+        if: ${{ steps.dl.outcome == 'success' }}
         uses: actions/checkout@v4
         with:
           persist-credentials: true
@@ -249,6 +269,7 @@ jobs:
           path: homebrew-tap
 
       - name: Update cask
+        if: ${{ steps.dl.outcome == 'success' }}
         env:
           VERSION: ${{ steps.tag.outputs.value }}
           SHA256: ${{ steps.sha.outputs.sha256 }}
@@ -284,6 +305,7 @@ jobs:
             > homebrew-tap/Casks/${{ matrix.app.name }}.rb
 
       - name: Push cask
+        if: ${{ steps.dl.outcome == 'success' }}
         working-directory: homebrew-tap
         run: |
           git config user.name "mirdan bot"
