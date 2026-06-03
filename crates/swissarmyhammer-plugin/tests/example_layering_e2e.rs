@@ -57,13 +57,18 @@ use swissarmyhammer_plugin::{
 /// It lives at the repository root under `builtin/plugins/`, not in the crate's
 /// `examples/plugins/` tree, so [`stage_repo_builtin_probe`] resolves it rather
 /// than [`support::stage_example`]. Its `load()` registers `{ rust: "kanban" }`
-/// under the server name `kanban-builtin-probe`.
+/// under the canonical server name `kanban` (see [`PROBE_SERVER`]); this const
+/// is the bundle's directory id, which is distinct from that server name.
 const BUILTIN_PROBE: &str = "kanban-builtin-probe";
 
 /// The server name the `kanban-builtin-probe` bundle registers — it is the
-/// `register()` name in the bundle's `index.ts`, and it matches the bundle's
-/// directory name (the plugin's identity).
-const PROBE_SERVER: &str = "kanban-builtin-probe";
+/// `register()` name in the bundle's `index.ts`. The probe registers the
+/// host's `{ rust: "kanban" }` module under the *canonical* server name
+/// `"kanban"` (not its directory name), so it shares the one single-activation
+/// in-process module with the kanban command plugins instead of starving them.
+/// The bundle's identity stays its directory name ([`BUILTIN_PROBE`]); only the
+/// server it exposes is the canonical `"kanban"`.
+const PROBE_SERVER: &str = "kanban";
 
 /// The server name the committed `file-notes` example registers `{ rust: "files" }`
 /// under. It must match the `register` call in the bundle's `index.ts`.
@@ -236,9 +241,9 @@ fn assert_discovered_sources(layers: &[LayerRoot], expected: &[(&str, FileSource
 /// Co-loads the two committed bundles that genuinely coexist across two layers,
 /// asserts each loaded from its own layer source, then unloads both.
 ///
-/// `kanban-builtin-probe` (`{ rust: "kanban" }`, server `kanban-builtin-probe`)
-/// and `file-notes` (`{ rust: "files" }`, server `fs`) consume distinct modules
-/// and register distinct server names, so unlike the three `kanban`-consuming
+/// `kanban-builtin-probe` (`{ rust: "kanban" }`, server `kanban`) and
+/// `file-notes` (`{ rust: "files" }`, server `fs`) consume distinct modules and
+/// register distinct server names, so unlike the three `kanban`-consuming
 /// examples they can load into one host at once. This single test stitches the
 /// layer-stacking capability together against committed bundles:
 ///
@@ -332,10 +337,11 @@ async fn committed_examples_coload_across_layers() {
     );
 
     // Effect 1 — the builtin probe is live. It registered `{ rust: "kanban" }`
-    // under `kanban-builtin-probe`; routing a real `kanban` `init board` call
-    // through that server creates a `.kanban` board on disk — an effect only a
-    // discovered-and-loaded probe whose server is routable can produce. The
-    // `kanban` tool resolves its board against the server's `work_dir`.
+    // under the canonical server name `kanban`; routing a real `kanban`
+    // `init board` call through that server creates a `.kanban` board on disk —
+    // an effect only a discovered-and-loaded probe whose server is routable can
+    // produce. The `kanban` tool resolves its board against the server's
+    // `work_dir`.
     let probe_result = tokio::time::timeout(
         support::TIMEOUT,
         host.call(

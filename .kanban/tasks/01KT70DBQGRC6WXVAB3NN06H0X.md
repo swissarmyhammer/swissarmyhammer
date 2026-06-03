@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ae80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffe880
 project: plugin-examples
 title: Fix failing example_layering_e2e::committed_examples_coload_across_layers (probe server-name mismatch)
 ---
