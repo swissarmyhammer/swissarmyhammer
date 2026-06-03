@@ -4,12 +4,15 @@
 // params with their options_from resolvers) and makes one `views` MCP call.
 
 import {
+  type Availability,
   type CommandContext,
+  scopeId,
+} from "@swissarmyhammer/plugin";
+
+import {
   type CommandSpec,
   type ViewsDispatch,
-  type Availability,
   perspectiveId,
-  scopeId,
 } from "./context.ts";
 
 /** Build the three sort-sub-domain command registrations. */
@@ -29,14 +32,31 @@ export function sortCommands(views: ViewsDispatch): CommandSpec[] {
       tab_button: { icon: "arrow-up-down" },
       undoable: true,
       params: [
-        { name: "field", from: "args", shape: "enum", options_from: "perspective.fields" },
-        { name: "direction", from: "args", shape: "enum", options_from: "sort.directions" },
-        { name: "perspective_id", from: "scope_chain", entity_type: "perspective" },
+        {
+          name: "field",
+          from: "args",
+          shape: "enum",
+          options_from: "perspective.fields",
+        },
+        {
+          name: "direction",
+          from: "args",
+          shape: "enum",
+          options_from: "sort.directions",
+        },
+        {
+          name: "perspective_id",
+          from: "scope_chain",
+          entity_type: "perspective",
+        },
       ],
       available: (rawCtx: unknown) => {
         const ctx = (rawCtx ?? {}) as CommandContext;
         if (scopeId(ctx, "perspective") === undefined) {
-          return { ok: false, reason: "Select a perspective first" } satisfies Availability;
+          return {
+            ok: false,
+            reason: "Select a perspective first",
+          } satisfies Availability;
         }
         return { ok: true } satisfies Availability;
       },
@@ -88,7 +108,10 @@ export function sortCommands(views: ViewsDispatch): CommandSpec[] {
         const ctx = (rawCtx ?? {}) as CommandContext;
         const id = perspectiveId(ctx);
         const field = ctx.args?.field;
-        return await views.views.views.sort.toggle({ perspective_id: id, field });
+        return await views.views.views.sort.toggle({
+          perspective_id: id,
+          field,
+        });
       },
     },
   ];

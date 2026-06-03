@@ -1,7 +1,11 @@
-// Shared command-context types + scope helpers for the perspective-commands
-// plugin's sub-domain modules. Mirrors the helpers in the task-commands /
-// kanban-misc-commands templates 1:1 so every sub-file resolves params the
-// same way.
+// Perspective-specific command-context surfaces for the perspective-commands
+// plugin's sub-domain modules. The shared command-context type
+// (`CommandContext`), availability shape (`Availability`), and scope-moniker
+// resolver (`scopeId`) now live in `@swissarmyhammer/plugin`; this module hosts
+// only what is unique to perspective-commands — the `views` dispatch surface,
+// the registration-row alias, and the `perspective_id` cascade resolver.
+
+import { type CommandContext, scopeId } from "@swissarmyhammer/plugin";
 
 /** The plugin `this` proxy exposes `this.views.views.<noun>.<verb>(...)`. */
 export interface ViewsDispatch {
@@ -36,52 +40,8 @@ export interface ViewsDispatch {
   };
 }
 
-/**
- * The dispatch context the command service passes a command callback.
- *
- * Mirrors `swissarmyhammer_command_service::CommandContext`: the active scope
- * monikers, the optional context-menu target moniker, and a free-form args
- * bag the dispatching surface populates. A moniker is an `"<entity_type>:<id>"`
- * pair (e.g. `"perspective:01ABC"`), which is what a YAML `from: scope_chain`
- * param resolves against.
- */
-export interface CommandContext {
-  /** Active scope monikers, leaf-last (e.g. `["board:01A", "perspective:42"]`). */
-  scope_chain?: string[];
-  /** Context-menu target moniker (the entity the menu fired over). */
-  target?: string;
-  /** Free-form args bag populated by the dispatching surface. */
-  args?: Record<string, unknown>;
-}
-
-/** An `available` callback result: ok, or not-ok with a user-facing reason. */
-export type Availability = { ok: true } | { ok: false; reason: string };
-
 /** A registration row, as `registerCommands` accepts. */
 export type CommandSpec = Record<string, unknown>;
-
-/**
- * Resolve the id of the first scope-chain moniker of `entityType`.
- *
- * A `from: scope_chain` param with `entity_type: <t>` resolves to the id half
- * of the nearest `"<t>:<id>"` moniker in the chain. Returns `undefined` when no
- * such moniker is in scope — the signal an `available` precondition is unmet.
- */
-export function scopeId(
-  ctx: CommandContext,
-  entityType: string,
-): string | undefined {
-  const prefix = `${entityType}:`;
-  const chain = ctx.scope_chain ?? [];
-  // Scope chains are leaf-last; scan from the leaf so the nearest entity wins.
-  for (let i = chain.length - 1; i >= 0; i -= 1) {
-    const moniker = chain[i];
-    if (moniker.startsWith(prefix)) {
-      return moniker.slice(prefix.length);
-    }
-  }
-  return undefined;
-}
 
 /**
  * Resolve a `perspective_id` param: the YAML uses two sources for it —

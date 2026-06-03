@@ -4,12 +4,15 @@
 // / clear).
 
 import {
+  type Availability,
   type CommandContext,
+  scopeId,
+} from "@swissarmyhammer/plugin";
+
+import {
   type CommandSpec,
   type ViewsDispatch,
-  type Availability,
   perspectiveId,
-  scopeId,
 } from "./context.ts";
 
 /** Build the three filter-sub-domain command registrations. */
@@ -26,12 +29,19 @@ export function filterCommands(views: ViewsDispatch): CommandSpec[] {
       scope: ["entity:perspective"],
       tab_button: { icon: "filter" },
       params: [
-        { name: "perspective_id", from: "scope_chain", entity_type: "perspective" },
+        {
+          name: "perspective_id",
+          from: "scope_chain",
+          entity_type: "perspective",
+        },
       ],
       available: (rawCtx: unknown) => {
         const ctx = (rawCtx ?? {}) as CommandContext;
         if (scopeId(ctx, "perspective") === undefined) {
-          return { ok: false, reason: "Select a perspective first" } satisfies Availability;
+          return {
+            ok: false,
+            reason: "Select a perspective first",
+          } satisfies Availability;
         }
         return { ok: true } satisfies Availability;
       },
@@ -58,7 +68,10 @@ export function filterCommands(views: ViewsDispatch): CommandSpec[] {
         const ctx = (rawCtx ?? {}) as CommandContext;
         const id = perspectiveId(ctx);
         const filter = ctx.args?.filter;
-        return await views.views.views.filter.set({ perspective_id: id, filter });
+        return await views.views.views.filter.set({
+          perspective_id: id,
+          filter,
+        });
       },
     },
 

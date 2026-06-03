@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: af80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffe980
 project: command-service
 title: Dedupe perspective-commands scopeId onto the SDK helper
 ---

@@ -8,11 +8,9 @@
 // `execute` closures translate the YAML arg names onto the op field names; the
 // registered `params` metadata stays the YAML's names so the port is 1:1.
 
-import {
-  type CommandContext,
-  type CommandSpec,
-  type ViewsDispatch,
-} from "./context.ts";
+import { type CommandContext } from "@swissarmyhammer/plugin";
+
+import { type CommandSpec, type ViewsDispatch } from "./context.ts";
 
 /** Build the four nav-sub-domain command registrations. */
 export function navCommands(views: ViewsDispatch): CommandSpec[] {

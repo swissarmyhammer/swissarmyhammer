@@ -4,12 +4,12 @@
 // metadata 1:1 and makes one `views` MCP call.
 
 import {
-  type CommandContext,
-  type CommandSpec,
-  type ViewsDispatch,
   type Availability,
+  type CommandContext,
   scopeId,
-} from "./context.ts";
+} from "@swissarmyhammer/plugin";
+
+import { type CommandSpec, type ViewsDispatch } from "./context.ts";
 
 /** Build the five lifecycle-sub-domain command registrations. */
 export function lifecycleCommands(views: ViewsDispatch): CommandSpec[] {
@@ -65,7 +65,10 @@ export function lifecycleCommands(views: ViewsDispatch): CommandSpec[] {
         const ctx = (rawCtx ?? {}) as CommandContext;
         const id = scopeId(ctx, "perspective") ?? ctx.args?.name;
         if (id === undefined) {
-          return { ok: false, reason: "Select a perspective first" } satisfies Availability;
+          return {
+            ok: false,
+            reason: "Select a perspective first",
+          } satisfies Availability;
         }
         return { ok: true } satisfies Availability;
       },

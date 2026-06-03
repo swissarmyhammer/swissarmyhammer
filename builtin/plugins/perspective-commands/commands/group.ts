@@ -4,12 +4,15 @@
 // verbatim) and makes exactly one `views` MCP call.
 
 import {
+  type Availability,
   type CommandContext,
+  scopeId,
+} from "@swissarmyhammer/plugin";
+
+import {
   type CommandSpec,
   type ViewsDispatch,
-  type Availability,
   perspectiveId,
-  scopeId,
 } from "./context.ts";
 
 /** Build the two group-sub-domain command registrations. */
@@ -34,12 +37,19 @@ export function groupCommands(views: ViewsDispatch): CommandSpec[] {
           options_from: "perspective.fields",
           clear_command: "perspective.clearGroup",
         },
-        { name: "perspective_id", from: "scope_chain", entity_type: "perspective" },
+        {
+          name: "perspective_id",
+          from: "scope_chain",
+          entity_type: "perspective",
+        },
       ],
       available: (rawCtx: unknown) => {
         const ctx = (rawCtx ?? {}) as CommandContext;
         if (scopeId(ctx, "perspective") === undefined) {
-          return { ok: false, reason: "Select a perspective first" } satisfies Availability;
+          return {
+            ok: false,
+            reason: "Select a perspective first",
+          } satisfies Availability;
         }
         return { ok: true } satisfies Availability;
       },
