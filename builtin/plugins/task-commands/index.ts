@@ -19,35 +19,12 @@
 // `task.doThisNext`) all route to the `kanban` MCP server's operation tool.
 
 import {
+  Availability,
+  CommandContext,
   Plugin,
   ensureServices,
   registerCommands,
 } from "@swissarmyhammer/plugin";
-
-// ───────────────────────────────────────────────────────────────────────────
-// The command context the host hands every `execute` / `available` callback.
-// ───────────────────────────────────────────────────────────────────────────
-
-/**
- * The dispatch context the command service passes a command callback.
- *
- * Mirrors `swissarmyhammer_command_service::CommandContext`: the active scope
- * monikers, the optional context-menu target moniker, and a free-form args
- * bag the dispatching surface populates. A moniker is an `"<entity_type>:<id>"`
- * pair (e.g. `"task:01ABC"`), which is what a YAML `from: scope_chain` /
- * `from: target` param resolves against.
- */
-interface CommandContext {
-  /** Active scope monikers, leaf-last (e.g. `["board:01A", "task:42"]`). */
-  scope_chain?: string[];
-  /** Context-menu target moniker (the entity the menu fired over). */
-  target?: string;
-  /** Free-form args bag populated by the dispatching surface. */
-  args?: Record<string, unknown>;
-}
-
-/** An `available` callback result: ok, or not-ok with a user-facing reason. */
-type Availability = { ok: true } | { ok: false; reason: string };
 
 /**
  * Parse the JSON payload a kanban operation tool returns.

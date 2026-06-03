@@ -24,33 +24,11 @@
 // the ui-commands plugin task.)
 
 import {
+  CommandContext,
   Plugin,
   ensureServices,
   registerCommands,
 } from "@swissarmyhammer/plugin";
-
-// ───────────────────────────────────────────────────────────────────────────
-// The command context the host hands every `execute` callback.
-// ───────────────────────────────────────────────────────────────────────────
-
-/**
- * The dispatch context the command service passes a command callback.
- *
- * Mirrors `swissarmyhammer_command_service::CommandContext`: the active scope
- * monikers, the optional context-menu target moniker, and a free-form args
- * bag the dispatching surface populates. The board-file commands carry no
- * scope or params in `file.yaml`, so they read only `args` (the `switchBoard`
- * / `closeBoard` palette pre-fills the target board `path`); `newBoard` /
- * `openBoard` take no input and drive the OS picker on the host side.
- */
-interface CommandContext {
-  /** Active scope monikers, leaf-last (e.g. `["board:01A"]`). */
-  scope_chain?: string[];
-  /** Context-menu target moniker (the entity the menu fired over). */
-  target?: string;
-  /** Free-form args bag populated by the dispatching surface. */
-  args?: Record<string, unknown>;
-}
 
 /**
  * The file-commands builtin plugin.

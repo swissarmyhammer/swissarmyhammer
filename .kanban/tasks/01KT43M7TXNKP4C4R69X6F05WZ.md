@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: a580
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffe080
 project: command-service
 title: Export CommandContext + Availability types from the command SDK (commands.ts)
 ---

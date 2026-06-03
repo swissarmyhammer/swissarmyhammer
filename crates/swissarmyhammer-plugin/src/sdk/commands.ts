@@ -102,6 +102,51 @@ export interface CommandRegistration {
 }
 
 /**
+ * The dispatch context the command service passes a command callback.
+ *
+ * Mirrors `swissarmyhammer_command_service::CommandContext` (the wire contract
+ * the host serialises into each `available` / `execute` invocation): the active
+ * scope monikers, the optional context-menu target moniker, and a free-form
+ * args bag the dispatching surface populates. A moniker is an
+ * `"<entity_type>:<id>"` pair (e.g. `"task:01ABC"`), which is what a YAML
+ * `from: scope_chain` / `from: target` param resolves against.
+ *
+ * Every field is optional: the Rust struct serialises with
+ * `skip_serializing_if` for each, so an empty context arrives as `{}`. Callbacks
+ * conventionally coalesce the raw value to `{}` before reading it
+ * (`(rawCtx ?? {}) as CommandContext`).
+ */
+export interface CommandContext {
+  /** Active scope monikers, leaf-last (e.g. `["board:01A", "task:42"]`). */
+  scope_chain?: string[];
+  /** Context-menu target moniker (the entity the menu fired over). */
+  target?: string;
+  /** Free-form args bag populated by the dispatching surface. */
+  args?: Record<string, unknown>;
+}
+
+/**
+ * The result an `available` callback may return.
+ *
+ * The command service contracts `available` as synchronous and accepts the
+ * full shape its `interpret_available` resolver understands
+ * (`swissarmyhammer-command-service::service::interpret_available`):
+ *
+ *   * a bare `boolean` — `true` is available, `false` is unavailable with the
+ *     service's canonical default reason;
+ *   * `{ ok: true }` — available (an object missing `ok` is also treated as
+ *     available, but `{ ok: true }` is the explicit form);
+ *   * `{ ok: false; reason: string }` — unavailable, the `reason` surfaced to
+ *     callers (palette tooltips on grayed-out entries).
+ *
+ * Returning nothing (an absent `available` callback) means always available.
+ */
+export type Availability =
+  | boolean
+  | { ok: true }
+  | { ok: false; reason: string };
+
+/**
  * Register every command in `commands` on `plugin` through the command service.
  *
  * For each entry, dispatches the SDK's operation-tool path form
