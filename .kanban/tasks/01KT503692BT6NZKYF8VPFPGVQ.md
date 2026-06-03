@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: doing
-position_ordinal: '80'
+position_column: done
+position_ordinal: 7a80
 title: Skill `profiles` metadata → install only profile-matched skills at tool init
 ---
 Make builtin skills self-declare which init profile(s) they belong to (profile = tool); a tool's init deploys only the skills tagged for it. Today the kanban app deploys ALL 22 builtin skills from scratch on every board open (~19s, blocks the window). After this, kanban tool init deploys only the 6 `kanban`-profile skills, idempotently.
