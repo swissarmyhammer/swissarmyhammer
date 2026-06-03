@@ -171,10 +171,14 @@ async fn test_search_skill_no_matches() {
 }
 
 #[tokio::test]
-async fn test_skill_tool_always_registered() {
-    // The full server registers the complete tool union, so the agent-category
-    // `skill` tool is always present. Per-client composition (mounting or
-    // omitting agent tools per host) happens at the serve boundary, not here.
+async fn test_skill_tool_registered_but_not_advertised_to_unknown_host() {
+    // The full server registers the complete tool union, but `tools/list`
+    // composes the advertised set per connecting client. `skill` is an
+    // `Agent`-category tool, which SAH never advertises (off-the-shelf agents
+    // provide it natively, llama mounts its own). The default `test-client` is
+    // an unknown host, so `skill` is absent from its `tools/list` — yet it
+    // remains registered and *callable* (see `test_get_verb_backward_compat`,
+    // which invokes it successfully).
     let (server, client, _temp) = setup().await;
     let tools = client
         .list_tools(Default::default())
@@ -182,8 +186,8 @@ async fn test_skill_tool_always_registered() {
         .expect("list tools should succeed");
     let tool_names: Vec<String> = tools.tools.iter().map(|t| t.name.to_string()).collect();
     assert!(
-        tool_names.contains(&"skill".to_string()),
-        "the full server should register the skill tool, got: {:?}",
+        !tool_names.contains(&"skill".to_string()),
+        "the Agent-category skill tool must not be advertised to any host, got: {:?}",
         tool_names
     );
     teardown(server, client).await;

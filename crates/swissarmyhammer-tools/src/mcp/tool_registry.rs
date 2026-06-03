@@ -1188,9 +1188,33 @@ impl ToolRegistry {
     /// with `"anthropic/alwaysLoad": true` so Claude Code loads them eagerly
     /// without requiring a ToolSearch round-trip.
     pub fn list_tools(&self) -> Vec<Tool> {
+        self.list_tools_filtered(|_| true)
+    }
+
+    /// Get registered tools for the MCP list_tools response, composed for a
+    /// specific connecting host.
+    ///
+    /// Like [`list_tools`](Self::list_tools), but additionally keeps only tools
+    /// the `host` is served per the `(Host, ToolCategory)` policy in
+    /// [`Host::serves`](crate::mcp::host::Host::serves). This is how the serve
+    /// boundary advertises a per-client tool surface (e.g. Claude gets the
+    /// `Shared` and `Replacement` tools; llama and unknown clients get `Shared`
+    /// only) without maintaining a separate registry per host.
+    pub fn list_tools_for_host(&self, host: crate::mcp::host::Host) -> Vec<Tool> {
+        self.list_tools_filtered(|tool| host.serves(McpTool::category(tool)))
+    }
+
+    /// Build the MCP `Tool` objects for every enabled tool that satisfies
+    /// `keep`, sharing the schema/meta construction across the unfiltered and
+    /// host-filtered entry points.
+    fn list_tools_filtered<F>(&self, keep: F) -> Vec<Tool>
+    where
+        F: Fn(&dyn McpTool) -> bool,
+    {
         self.tools
             .values()
             .filter(|tool| !self.disabled_tools.contains(McpTool::name(tool.as_ref())))
+            .filter(|tool| keep(tool.as_ref()))
             .map(|tool| {
                 let schema = tool.schema();
                 let schema_map = if let serde_json::Value::Object(map) = schema {

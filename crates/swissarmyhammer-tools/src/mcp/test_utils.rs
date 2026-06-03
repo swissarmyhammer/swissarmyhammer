@@ -50,8 +50,30 @@ static TEST_HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
 ///
 /// # Returns
 /// An initialized RMCP client ready to make MCP protocol calls
-#[allow(clippy::field_reassign_with_default)] // field init syntax breaks with #[non_exhaustive] in newer rmcp
 pub async fn create_test_client(server_url: &str) -> RunningService<rmcp::RoleClient, ClientInfo> {
+    create_test_client_named(server_url, "test-client").await
+}
+
+/// Creates a test RMCP client that reports a specific `Implementation` name.
+///
+/// The reported name flows into the server's `initialize` handshake, where it
+/// drives the per-client served-set composition (see
+/// [`crate::mcp::host::Host`]). Tests that assert host-specific `tools/list`
+/// behavior (Claude vs llama vs unknown) use this to connect under the name a
+/// real host would report — e.g. `"claude-code"` or
+/// `"llama_agent_notifying_client"`.
+///
+/// # Arguments
+/// * `server_url` - The base URL of the MCP HTTP server
+/// * `client_name` - The `Implementation` name to advertise at `initialize`
+///
+/// # Returns
+/// An initialized RMCP client ready to make MCP protocol calls
+#[allow(clippy::field_reassign_with_default)] // field init syntax breaks with #[non_exhaustive] in newer rmcp
+pub async fn create_test_client_named(
+    server_url: &str,
+    client_name: &str,
+) -> RunningService<rmcp::RoleClient, ClientInfo> {
     let transport = StreamableHttpClientTransport::with_client(TEST_HTTP_CLIENT.clone(), {
         let mut config =
             rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig::default();
@@ -61,7 +83,7 @@ pub async fn create_test_client(server_url: &str) -> RunningService<rmcp::RoleCl
 
     let client_info = ClientInfo::new(
         ClientCapabilities::default(),
-        Implementation::new("test-client", "1.0.0"),
+        Implementation::new(client_name, "1.0.0"),
     );
 
     client_info
@@ -126,11 +148,12 @@ mod tests {
     // client handshake — see `test_client_handshake_is_fast` for the full story.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_client_list_tools() {
-        // The full tool union (including agent tools like `files`) is always
-        // registered. Pass a tempdir as working_dir so the server doesn't bind
-        // to the host monorepo — prevents `startup_cleanup` from walking/hashing
-        // it and lets multiple server tests run in parallel without a CWD serial
-        // guard.
+        // The full tool union is registered, but `tools/list` composes the
+        // advertised set per connecting client. The default `test-client` name
+        // is an unknown host → `Shared` only, so `Agent`-category tools like
+        // `files` are NOT advertised (host-specific behavior is asserted in the
+        // `per_client_tool_composition` integration test). Pass a tempdir as
+        // working_dir so the server doesn't bind to the host monorepo.
         let temp = tempfile::TempDir::new().unwrap();
         let mut server = start_mcp_server_with_options(
             McpServerMode::Http { port: None },
@@ -147,7 +170,16 @@ mod tests {
         assert!(!tools.tools.is_empty());
 
         let tool_names: Vec<String> = tools.tools.iter().map(|t| t.name.to_string()).collect();
-        assert!(tool_names.contains(&"files".to_string()));
+        // Unknown host gets `Shared` only: the `Agent`-category `files` tool is
+        // not advertised, but `Shared` tools like `kanban` are.
+        assert!(
+            !tool_names.contains(&"files".to_string()),
+            "unknown host must not be advertised the Agent-category `files` tool"
+        );
+        assert!(
+            tool_names.contains(&"kanban".to_string()),
+            "every host must be advertised Shared tools like `kanban`"
+        );
 
         client.cancel().await.unwrap();
         server.shutdown().await.unwrap();

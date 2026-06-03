@@ -46,9 +46,14 @@ async fn test_rmcp_client_lists_tools_and_prompts() {
 
     let tool_names: Vec<String> = tools.tools.iter().map(|t| t.name.to_string()).collect();
 
+    // The full tool union is registered, but `tools/list` is composed per
+    // connecting client. The default `test-client` name is an unknown host, so
+    // it is advertised `Shared` tools only — not the `Agent`-category `files`
+    // tool. The `files` tool remains *callable* below (composition gates what is
+    // advertised, not what is invocable).
     assert!(
-        tool_names.contains(&"files".to_string()),
-        "Should have files tool"
+        !tool_names.contains(&"files".to_string()),
+        "unknown host must not be advertised the Agent-category files tool"
     );
 
     // List prompts — the `expect` above already verifies the call succeeds;

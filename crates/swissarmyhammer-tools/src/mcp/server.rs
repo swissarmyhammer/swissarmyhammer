@@ -2,6 +2,7 @@
 // sah rule ignore acp/capability-enforcement
 
 use crate::mcp::file_watcher::{FileWatcher, McpFileWatcherCallback};
+use crate::mcp::host::Host;
 use rmcp::model::*;
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
@@ -99,6 +100,14 @@ pub struct McpServer {
     work_dir: Option<PathBuf>,
     /// Watches tools.yaml for changes, reloads on list_tools() calls
     tool_config_watcher: Arc<Mutex<super::tool_config::ToolConfigWatcher>>,
+    /// Whether `list_tools` composes its advertised set per connecting client.
+    ///
+    /// `true` for the full server: each connection's `tools/list` is filtered by
+    /// the client's [`Host`](super::host::Host) identity and each tool's
+    /// `category()` (Claude → `Shared` + `Replacement`; llama/unknown → `Shared`
+    /// only). `false` for the validator server, whose minimal registry is already
+    /// scoped by `is_validator_tool()` and must be served verbatim.
+    compose_per_client: bool,
 }
 
 /// Determine if a retry should be attempted based on the error and attempt count.
@@ -279,6 +288,7 @@ impl McpServer {
             agent_library,
             work_dir: Some(work_dir),
             tool_config_watcher: Arc::new(Mutex::new(super::tool_config::ToolConfigWatcher::new())),
+            compose_per_client: true,
         })
     }
 
@@ -746,6 +756,10 @@ impl McpServer {
             agent_library: self.agent_library.clone(),
             work_dir: self.work_dir.clone(),
             tool_config_watcher: self.tool_config_watcher.clone(),
+            // The validator registry is already scoped by `is_validator_tool()`;
+            // serve it verbatim rather than re-filtering by host/category, which
+            // would strip its `Agent`-category read-only file tools.
+            compose_per_client: false,
         }
     }
 
@@ -1573,6 +1587,23 @@ fn session_id_from_context(context: &RequestContext<RoleServer>) -> Option<Strin
     value.to_str().ok().map(|s| s.to_string())
 }
 
+/// Identify the connecting client's [`Host`] from a request context.
+///
+/// Reads the client `Implementation` captured at the `initialize` handshake —
+/// `rmcp` stores it on the peer, retrievable via [`Peer::peer_info`] — and maps
+/// its name through [`Host::from_client_info`]. Resolves to [`Host::Other`]
+/// (the conservative default) when no client info is available yet (e.g. a
+/// `tools/list` that somehow precedes `initialize`).
+///
+/// [`Peer::peer_info`]: rmcp::Peer::peer_info
+fn connecting_host_from_context(context: &RequestContext<RoleServer>) -> Host {
+    context
+        .peer
+        .peer_info()
+        .map(|client| Host::from_client_info(&client.client_info))
+        .unwrap_or(Host::Other)
+}
+
 /// Render a [`CallToolResult`] for diagnostic preview.
 ///
 /// Joins all text content blocks; non-text blocks (images, audio, etc.) are
@@ -1771,7 +1802,19 @@ impl ServerHandler for McpServer {
             let mut watcher = self.tool_config_watcher.lock().await;
             watcher.check_and_reload(&mut registry);
         }
-        let tools = registry.list_tools();
+
+        // Compose the advertised set per connecting client. The full server
+        // filters by the client's host identity (from the `initialize`
+        // handshake's client `Implementation`) and each tool's `category()`:
+        // Claude gets `Shared` + `Replacement`; llama and unknown clients get
+        // `Shared` only. The validator server (`compose_per_client == false`)
+        // serves its already-scoped registry verbatim.
+        let host = connecting_host_from_context(&context);
+        let tools = if self.compose_per_client {
+            registry.list_tools_for_host(host)
+        } else {
+            registry.list_tools()
+        };
 
         // Per-session log of which tools were advertised — answers the
         // grep-able question "which tools were exposed to the validator
@@ -1783,6 +1826,8 @@ impl ServerHandler for McpServer {
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
         tracing::info!(
             session_id = session_id.as_deref().unwrap_or("<stdio>"),
+            host = ?host,
+            compose_per_client = self.compose_per_client,
             tool_count = tools.len(),
             tools = %tool_names.join(","),
             event = "tools_listed",

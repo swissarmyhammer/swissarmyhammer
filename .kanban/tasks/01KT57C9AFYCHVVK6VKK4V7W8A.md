@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KT57BTE05BAFGYEJHGC7MBR8
-position_column: todo
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffd380
 project: agent-builtins
 title: 'tools: per-client served-set composition at the serve boundary'
 ---
