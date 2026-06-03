@@ -618,9 +618,9 @@ impl AppState {
         // `WindowShell` / `AppShell` seams) exists.
         //
         // Plugin discovery is INTENTIONALLY deferred too: `discover_and_load_all`
-        // is atomic, and four of the seven builtin command plugins activate the
+        // is atomic, and four of the eight builtin command plugins activate the
         // `window` / `app` backends at `ensureServices` time — discovering here
-        // (before those backends are exposed) would fail ALL seven. Discovery
+        // (before those backends are exposed) would fail ALL eight. Discovery
         // is driven once from `setup_app` after the shells are wired. A failure
         // to wire degrades to running without the new dispatch path.
         if let Err(e) = platform
@@ -688,7 +688,7 @@ impl AppState {
         // then expose `window` / `app` from SPY shells, then discover — so the
         // bundled command plugins (which `ensureServices` against those modules
         // at `load()`) find every backend already exposed and the atomic
-        // `discover_and_load_all` loads ALL 7 builtin command plugins. Spy
+        // `discover_and_load_all` loads ALL 8 builtin command plugins. Spy
         // shells stand in for the Tauri-`AppHandle`-backed production shells,
         // which can't be built in a headless test.
         let window_shell: Arc<dyn swissarmyhammer_window_service::WindowShell> =
@@ -742,7 +742,7 @@ impl AppState {
             ui_state,
             // Stage 4 cut-over: the YAML-driven registry is now empty by
             // construction — every `builtin_yaml_sources()` returns `Vec::new()`
-            // because `CommandService` (fed by the 7 builtin command plugins
+            // because `CommandService` (fed by the 8 builtin command plugins
             // at app startup) is the sole source of command metadata. The
             // registry is retained as a synchronous façade for legacy menu /
             // scope-resolution callers while they migrate to the MCP path.
@@ -769,7 +769,7 @@ impl AppState {
     /// when each per-board host is built at board-open time) and before
     /// [`Self::start_plugin_watcher`].
     ///
-    /// This is where the global fallback host finally loads all 7 builtin
+    /// This is where the global fallback host finally loads all 8 builtin
     /// command plugins: `AppState::new` deferred discovery because four of them
     /// need the `window` / `app` backends, which only exist now. Idempotent on
     /// the shell storage (the `OnceLock`s only accept the first write); a

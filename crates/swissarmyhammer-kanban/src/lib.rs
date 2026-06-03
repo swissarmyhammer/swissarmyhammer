@@ -86,7 +86,7 @@ pub mod commands;
 // Generic Command trait, registry, and dispatch context — inlined into
 // this crate during the Stage 4 cut-over after the standalone
 // `swissarmyhammer-commands` crate was deleted. The CommandService
-// (registered from the 7 builtin command plugins at app startup) is now
+// (registered from the 8 builtin command plugins at app startup) is now
 // the sole source of command metadata; the YAML-driven `CommandsRegistry`
 // only survives as a snapshot the app populates from
 // `CommandService::list_command`.
@@ -130,7 +130,7 @@ pub use swissarmyhammer_entity::EntityContext;
 ///
 /// Always empty as of the Stage 4 cut-over: the 7 kanban YAMLs under
 /// `builtin/commands/` were deleted because `CommandService` (the new
-/// sole dispatch path, fed by the 7 builtin command plugins at app
+/// sole dispatch path, fed by the 8 builtin command plugins at app
 /// startup) is the source of every command's metadata. The function is
 /// retained so legacy callers — and the `compose_yaml_sources!` macro —
 /// continue to compile while the `CommandsRegistry` is repopulated from
@@ -208,7 +208,7 @@ mod builtin_commands_tests {
 
     /// Stage 4 of the kanban cut-over deleted the 7 builtin command YAMLs
     /// under `swissarmyhammer-kanban/builtin/commands/` because
-    /// `CommandService` (fed by the 7 builtin command plugins at app
+    /// `CommandService` (fed by the 8 builtin command plugins at app
     /// startup) is now the sole source of command metadata. This test
     /// pins that decision so a future regression cannot silently re-embed
     /// YAML sources here and reintroduce the two-source confusion.

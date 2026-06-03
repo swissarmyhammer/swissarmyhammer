@@ -1336,7 +1336,7 @@ mod tests {
     // The `scope_commands` test suite that lived here drove `commands_for_scope`
     // against the YAML-driven `CommandsRegistry` composed from the (now
     // deleted) 12 builtin command YAMLs. Stage 4 of the kanban cut-over
-    // retired both — `CommandService` (fed by the 7 builtin command plugins
+    // retired both — `CommandService` (fed by the 8 builtin command plugins
     // at app startup) is now the sole source of command metadata, so the
     // scope-resolution surface those tests exercised has moved out of this
     // module. The end-to-end coverage now lives in the per-plugin e2e tests

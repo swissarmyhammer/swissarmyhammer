@@ -2258,7 +2258,8 @@ mod tests {
     #[test]
     fn set_ai_streaming_round_trips() {
         // `set_ai_streaming` is the transient flag the webview keeps in sync
-        // with the ACP turn status; `AiCancelCmd::available()` reads it.
+        // with the ACP turn status; the frontend `ai.cancel` command builder
+        // reads it to gate the "Stop AI Generation" entry to streaming turns.
         let state = UIState::new();
         state.set_ai_streaming(true);
         assert!(state.ai_streaming());

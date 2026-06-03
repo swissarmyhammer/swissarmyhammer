@@ -1,7 +1,7 @@
 //! Macros for composing builtin command sources at the app layer.
 //!
-//! Each contributor crate (e.g. `swissarmyhammer-commands`,
-//! `swissarmyhammer-kanban`, `swissarmyhammer-focus`) ships its own
+//! Each contributor crate (e.g. `swissarmyhammer-kanban`,
+//! `swissarmyhammer-focus`) ships its own
 //! `builtin/commands/` directory and exposes a
 //! `pub fn builtin_yaml_sources() -> Vec<(&'static str, &'static str)>`
 //! function that returns the embedded YAML sources for that crate.
@@ -29,16 +29,16 @@
 /// override earlier ones by command id.
 ///
 /// Each entry is a `::`-separated path of one or more identifiers
-/// (e.g. `swissarmyhammer_commands` or `crate::macros::tests::stub_a`).
+/// (e.g. `swissarmyhammer_kanban` or `crate::macros::tests::stub_a`).
 ///
 /// # Example
 ///
 /// ```ignore
-/// use swissarmyhammer_commands::compose_registry;
+/// use swissarmyhammer_kanban::compose_registry;
 ///
 /// let registry = compose_registry![
-///     swissarmyhammer_commands,  // generic UI commands
-///     swissarmyhammer_kanban,    // domain commands (overrides allowed)
+///     swissarmyhammer_focus,   // spatial-nav commands
+///     swissarmyhammer_kanban,  // domain commands (overrides allowed)
 /// ];
 /// ```
 ///
@@ -61,15 +61,16 @@ macro_rules! compose_registry {
 /// constructing a registry.
 ///
 /// Each entry is a `::`-separated path of one or more identifiers
-/// (e.g. `swissarmyhammer_commands` or `crate::macros::tests::stub_a`).
+/// (e.g. `swissarmyhammer_kanban` or `crate::macros::tests::stub_a`).
 ///
 /// # Example
 ///
 /// ```ignore
-/// use swissarmyhammer_commands::{compose_yaml_sources, CommandsRegistry};
+/// use swissarmyhammer_kanban::compose_yaml_sources;
+/// use swissarmyhammer_kanban::commands_core::CommandsRegistry;
 ///
 /// let mut sources = compose_yaml_sources![
-///     swissarmyhammer_commands,
+///     swissarmyhammer_focus,
 ///     swissarmyhammer_kanban,
 /// ];
 /// // Append user overrides — they apply last and override builtins.

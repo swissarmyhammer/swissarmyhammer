@@ -239,7 +239,7 @@ impl PluginPlatform {
     /// require a live `AppHandle`, which only exists at setup; exposing them
     /// here lets the `file-commands` / `ui-commands` / `kanban-misc-commands` /
     /// `app-shell-commands` builtin plugins satisfy `ensureServices` so the
-    /// atomic `discover_and_load_all` loads ALL 7 builtin command plugins.
+    /// atomic `discover_and_load_all` loads ALL 8 builtin command plugins.
     pub(crate) async fn expose_apphandle_modules(
         &self,
         window_shell: Option<std::sync::Arc<dyn swissarmyhammer_window_service::WindowShell>>,
@@ -639,7 +639,7 @@ mod tests {
     const BUILTIN_COMMAND_ID: &str = BUILTIN_COMMAND_BASELINE[0];
 
     /// One representative command id per builtin command plugin — proof that
-    /// ALL 7 plugins discovered and registered (each id comes from a distinct
+    /// ALL 8 plugins discovered and registered (each id comes from a distinct
     /// bundle, and the four after `entity.add` activate the `views` / `window` /
     /// `app` backends that previously failed `ensureServices`):
     ///
@@ -650,6 +650,7 @@ mod tests {
     /// - `ui.palette.open`  → ui-commands         (`commands`, ui_state, **window**, focus)
     /// - `view.set`         → kanban-misc-commands (`commands`, kanban, **window**, **views**)
     /// - `app.quit`         → app-shell-commands  (`commands`, **app**, ui_state, store)
+    /// - `ai.toggle`        → ai-commands         (`commands` only; webview-reactive no-op)
     const BUILTIN_COMMAND_BASELINE: &[&str] = &[
         "task.move",
         "entity.add",
@@ -658,9 +659,10 @@ mod tests {
         "ui.palette.open",
         "view.set",
         "app.quit",
+        "ai.toggle",
     ];
 
-    /// The 7 builtin command-plugin bundle ids under `builtin/plugins/`
+    /// The 8 builtin command-plugin bundle ids under `builtin/plugins/`
     /// (excluding the read-only `kanban-builtin-probe`).
     const BUILTIN_COMMAND_PLUGINS: &[&str] = &[
         "task-commands",
@@ -670,10 +672,11 @@ mod tests {
         "ui-commands",
         "kanban-misc-commands",
         "app-shell-commands",
+        "ai-commands",
     ];
 
     /// Assert a platform's host carries the full builtin command baseline — one
-    /// command from each of the 7 builtin command plugins.
+    /// command from each of the 8 builtin command plugins.
     async fn assert_builtin_baseline(platform: &super::PluginPlatform, ctx: &str) {
         let ids = list_command_ids(platform).await;
         for id in BUILTIN_COMMAND_BASELINE {
@@ -816,22 +819,22 @@ mod tests {
             "each board must own a distinct CommandService instance"
         );
 
-        // Each board carries the FULL builtin command baseline — all 7 plugins,
+        // Each board carries the FULL builtin command baseline — all 8 plugins,
         // including the four that need the `views` / `window` / `app` backends.
         assert_builtin_baseline(&*platform_a.lock().await, "board A").await;
         assert_builtin_baseline(&*platform_b.lock().await, "board B").await;
     }
 
-    /// The global host and every per-board host load ALL 7 builtin command
+    /// The global host and every per-board host load ALL 8 builtin command
     /// plugins and register the full builtin command baseline.
     ///
     /// This is the acceptance for the wiring card: `discover_and_load_all` is
     /// atomic, so a single unwired backend (`views` / `window` / `app`) would
-    /// roll back ALL 7 plugins and leave an empty command registry. A passing
+    /// roll back ALL 8 plugins and leave an empty command registry. A passing
     /// run proves every backend each plugin's `ensureServices` requires is
     /// exposed before discovery on both host kinds.
     #[tokio::test]
-    async fn all_seven_builtin_command_plugins_load_with_full_baseline() {
+    async fn all_eight_builtin_command_plugins_load_with_full_baseline() {
         let (_user_root, _builtin_cache, _global_dir, state) = app_state_with_plugin_roots().await;
 
         // The global fallback host: every builtin command plugin discovered

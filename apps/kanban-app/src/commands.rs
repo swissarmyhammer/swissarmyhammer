@@ -1262,7 +1262,7 @@ pub(crate) async fn dispatch_command_internal(
 /// Sole dispatch path: route the command through the `CommandService`.
 ///
 /// The Stage 4 cut-over retired the legacy `command_impls` fallback —
-/// `CommandService` (fed by the 7 builtin command plugins at app
+/// `CommandService` (fed by the 8 builtin command plugins at app
 /// startup) is now the sole source of command dispatch. The path scopes
 /// `CURRENT_STORE_CTX` and `CURRENT_ENTITY_BOARD_SERVICES` around
 /// `CommandService::dispatch` so the in-process `store`/`entity` MCP

@@ -13,10 +13,10 @@
 //!   [`crate::commands_core::register_command_resolvers`]
 //!
 //! In addition, kanban owns the `ai.models` resolver — the AI panel
-//! command scope (`ai.*` commands, declared in `builtin/commands/ai.yaml`)
-//! is a kanban-domain concept, so the resolver that backs the
-//! `ai.model` command's model picker lives here. It is registered via
-//! [`register_kanban_resolvers`].
+//! command scope (the `ai.*` commands, now provided by the `ai-commands`
+//! builtin command plugin) is a kanban-domain concept, so the resolver
+//! that backs the `ai.model` command's model picker lives here. It is
+//! registered via [`register_kanban_resolvers`].
 //!
 //! [`default_options_registry`] returns a fresh [`OptionsRegistry`]
 //! with every built-in pre-registered. Consumers (the kanban-app GUI,

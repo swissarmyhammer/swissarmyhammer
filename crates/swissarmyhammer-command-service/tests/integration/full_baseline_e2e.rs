@@ -1,12 +1,14 @@
-//! Full-baseline acceptance test for Stage 4 of the kanban cut-over.
+//! Full-baseline acceptance test for the kanban command cut-over.
 //!
 //! Stage 4 deleted the 12 builtin command YAMLs (`crates/swissarmyhammer-commands/builtin/commands/*.yaml`
 //! and `crates/swissarmyhammer-kanban/builtin/commands/*.yaml` except
-//! `ai.yaml`) and retired the legacy dispatch fallback —
-//! `CommandService` (fed by the 7 builtin command plugins at app
-//! startup) is now the sole source of every command's metadata. This
-//! test pins the "all 62 commands wire through the new path" gate the
-//! cut-over depends on.
+//! `ai.yaml`) and retired the legacy dispatch fallback; the follow-up
+//! card 01KT6WWYYWFQ2F4PGQ358SAHY7 then ported the final `ai.yaml`
+//! window-layer commands onto the `ai-commands` builtin plugin, retiring
+//! the last non-nav YAML command source. `CommandService` (fed by the 8
+//! builtin command plugins at app startup) is now the sole source of
+//! every command's metadata. This test pins the "all 67 commands wire
+//! through the new path" gate the cut-over depends on.
 //!
 //! Scope delivered: **registration coverage** end-to-end.
 //!
@@ -20,7 +22,7 @@
 //!    helper lands on the service.
 //! 4. Discover and load every plugin.
 //! 5. Assert the union of registered commands matches the locked
-//!    62-id baseline (set-equality with order-stable diff so missing,
+//!    67-id baseline (set-equality with order-stable diff so missing,
 //!    extra, or renamed ids surface explicitly).
 //!
 //! Dispatch coverage (per-command real effects against the matching
@@ -31,7 +33,7 @@
 //! one of its commands, the sort of drop the per-plugin tests cannot
 //! catch because each only stages one bundle in isolation.
 //!
-//! The 62 commands across the 7 builtin command plugins (matches each
+//! The 67 commands across the 8 builtin command plugins (matches each
 //! plugin's `registerCommands(...)` call set):
 //!
 //! - `app-shell-commands` (15): help, about, quit, command, search,
@@ -49,8 +51,11 @@
 //! - `ui-commands` (10): ui.inspect, ui.inspector.{close,close_all,set_width},
 //!   ui.palette.{open,close}, ui.entity.startRename, ui.mode.set, ui.setFocus,
 //!   window.new.
+//! - `ai-commands` (5): ai.{toggle,focus,newChat,model,cancel} — webview-
+//!   reactive no-ops; the metadata surfaces in the unified registry while the
+//!   AI panel React tree owns the live effect.
 //!
-//! TOTAL: 62 commands.
+//! TOTAL: 67 commands.
 
 #![allow(dead_code)]
 
@@ -76,9 +81,9 @@ use crate::support::call_command;
 /// rest of the suite.
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
-/// The 7 builtin command plugins, in the order the app loads them.
-/// The grand union of their `commands.yaml` registrations is the 62
-/// ids asserted below.
+/// The 8 builtin command plugins, in the order the app loads them.
+/// The grand union of their command registrations is the 67 ids asserted
+/// below.
 const BUILTIN_COMMAND_PLUGINS: &[&str] = &[
     "app-shell-commands",
     "entity-commands",
@@ -87,6 +92,7 @@ const BUILTIN_COMMAND_PLUGINS: &[&str] = &[
     "perspective-commands",
     "task-commands",
     "ui-commands",
+    "ai-commands",
 ];
 
 /// Backend modules every builtin command plugin's
@@ -282,19 +288,25 @@ fn expected_command_ids() -> BTreeSet<String> {
         "ui.palette.open",
         "ui.setFocus",
         "window.new",
+        // ai-commands (5)
+        "ai.cancel",
+        "ai.focus",
+        "ai.model",
+        "ai.newChat",
+        "ai.toggle",
     ]
     .iter()
     .map(|s| s.to_string())
     .collect()
 }
 
-/// Boot a real `PluginHost` against a temp builtin-layer with all 7
+/// Boot a real `PluginHost` against a temp builtin-layer with all 8
 /// committed builtin command plugins staged, install the commands
 /// module, stub every other backend the plugins reach for, load every
 /// plugin, and assert the union of registered commands equals the
 /// locked baseline.
 #[tokio::test]
-async fn all_seven_builtin_command_plugins_register_their_full_command_set() {
+async fn all_eight_builtin_command_plugins_register_their_full_command_set() {
     let user_root = TempDir::new().expect("user root temp dir");
     let builtin_root = TempDir::new().expect("builtin layer root temp dir");
 
@@ -357,7 +369,7 @@ async fn all_seven_builtin_command_plugins_register_their_full_command_set() {
 
     assert_eq!(
         got.len(),
-        62,
-        "the 7 builtin command plugins must collectively register exactly 62 commands"
+        67,
+        "the 8 builtin command plugins must collectively register exactly 67 commands"
     );
 }

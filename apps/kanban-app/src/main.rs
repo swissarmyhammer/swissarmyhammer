@@ -127,7 +127,7 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     // Build the AppHandle-backed `window` / `app` shells (impossible before the
     // AppHandle existed), store them on AppState, expose them on the global
     // plugin host, and run the global host's DEFERRED plugin discovery. This is
-    // where the global fallback host finally loads all 7 builtin command
+    // where the global fallback host finally loads all 8 builtin command
     // plugins: four of them activate the `window` / `app` backends, which only
     // exist now. Must run BEFORE `auto_open_board` so each per-board host built
     // at board-open time reads the stored shells and loads the same baseline.

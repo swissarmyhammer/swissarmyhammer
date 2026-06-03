@@ -5,7 +5,7 @@ use crate::commands_core::context::parse_moniker;
 use crate::commands_core::types::CommandDef;
 
 // The Stage 4 cut-over deleted every embedded `builtin/commands/*.yaml`
-// source. `CommandService` (registered from the 7 builtin command plugins
+// source. `CommandService` (registered from the 8 builtin command plugins
 // at app startup) is now the sole source of command metadata; the
 // YAML-driven `CommandsRegistry` only survives as a snapshot the app
 // populates from `CommandService::list_command` for use by menu / scope
