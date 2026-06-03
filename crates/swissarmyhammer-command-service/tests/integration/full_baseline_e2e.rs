@@ -304,6 +304,7 @@ async fn all_seven_builtin_command_plugins_register_their_full_command_set() {
         Some(builtin_root.path().to_path_buf()),
         user_root.path().to_path_buf(),
         None,
+        user_root.path().to_path_buf(),
         false,
         user_root.path().to_path_buf(),
     );

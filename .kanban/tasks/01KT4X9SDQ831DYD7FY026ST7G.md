@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ab80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffe580
 project: plugin-arch
 title: Per-isolate CWD for per-board plugin hosts (Deno.cwd → board dir; no process-CWD reliance)
 ---

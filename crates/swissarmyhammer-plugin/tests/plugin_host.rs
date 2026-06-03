@@ -296,14 +296,16 @@ async fn new_constructor_takes_explicit_layer_roots() {
     write_plugin(bundle.path(), "this.register('svc', { rust: 'svc-mod' });");
 
     // `new` takes the read-only builtin layer root, the writable layer roots,
-    // the generated-types dev-mode flag, and the types output directory; the
-    // platform hardcodes no host-specific directory config. `None` builtin
-    // root: this test exercises the explicit-`load` lifecycle, not discovery.
-    // Dev-mode off here: this test does not exercise the types emitter.
+    // the isolate cwd (reported as `Deno.cwd()`), the generated-types dev-mode
+    // flag, and the types output directory; the platform hardcodes no
+    // host-specific directory config. `None` builtin root: this test exercises
+    // the explicit-`load` lifecycle, not discovery. Dev-mode off here: this test
+    // does not exercise the types emitter.
     let host = PluginHost::new(
         None,
         user_root.path().to_path_buf(),
         None,
+        user_root.path().to_path_buf(),
         false,
         user_root.path().to_path_buf(),
     );
@@ -523,5 +525,88 @@ async fn unload_of_an_unknown_plugin_id_fails_with_unknown_plugin() {
     assert!(
         matches!(err, Error::UnknownPlugin),
         "unload of a stale plugin id must report UnknownPlugin, got {err:?}"
+    );
+}
+
+/// Two per-board hosts in one process each give their isolate its own
+/// `Deno.cwd()`.
+///
+/// This is the real-pipeline proof for per-isolate cwd: two `PluginHost`s are
+/// built with two DIFFERENT board directories, and a probe plugin is loaded into
+/// each. Each probe's `load()` reads `Deno.cwd()` and throws unless it equals the
+/// board dir the plugin was authored for — so a successful load is a genuine
+/// observation, by real plugin code in a real V8 isolate, that the isolate's
+/// `Deno.cwd()` is its own host's board dir. Both loads succeeding therefore
+/// proves the two isolates observe two different working directories even though
+/// they share one process (whose global CWD is the same for both).
+#[tokio::test]
+async fn two_per_board_hosts_each_observe_their_own_deno_cwd() {
+    // Build a probe whose `load()` asserts `Deno.cwd()` equals `expected_cwd`.
+    // The expected path is JSON-encoded so it crosses into the source as a
+    // correctly-escaped string literal regardless of path contents.
+    fn write_cwd_probe(dir: &std::path::Path, expected_cwd: &std::path::Path) {
+        let expected_json = serde_json::to_string(&expected_cwd.display().to_string())
+            .expect("a path string is serializable");
+        write_plugin(
+            dir,
+            &format!(
+                "const observed = (globalThis as any).Deno.cwd();\n\
+                 const expected = {expected_json};\n\
+                 if (observed !== expected) {{\n\
+                   throw new Error(`Deno.cwd() was ${{observed}}, expected ${{expected}}`);\n\
+                 }}",
+            ),
+        );
+    }
+
+    // Two distinct board directories, each with its own probe bundle. The
+    // bundle dir doubles as the host's configured isolate cwd (its "board dir").
+    let board_a = tempfile::TempDir::new().expect("board a temp dir");
+    let board_b = tempfile::TempDir::new().expect("board b temp dir");
+    write_cwd_probe(board_a.path(), board_a.path());
+    write_cwd_probe(board_b.path(), board_b.path());
+    assert_ne!(
+        board_a.path(),
+        board_b.path(),
+        "the two boards must be different directories for the test to be meaningful"
+    );
+
+    // A per-board host is built through `new` with its board dir as the isolate
+    // cwd. No builtin layer and dev-mode off: this test exercises the cwd seam,
+    // not discovery or the types emitter.
+    let host_for = |board: &std::path::Path| {
+        PluginHost::new(
+            None,
+            board.to_path_buf(),
+            None,
+            board.to_path_buf(),
+            false,
+            board.to_path_buf(),
+        )
+    };
+    let host_a = host_for(board_a.path());
+    let host_b = host_for(board_b.path());
+
+    // Each probe's `load()` throws unless its isolate's `Deno.cwd()` is its own
+    // board dir, so a successful load is the assertion.
+    tokio::time::timeout(TIMEOUT, host_a.load(board_a.path()))
+        .await
+        .expect("board A plugin load should not hang")
+        .expect("board A's isolate must observe board A as Deno.cwd()");
+    tokio::time::timeout(TIMEOUT, host_b.load(board_b.path()))
+        .await
+        .expect("board B plugin load should not hang")
+        .expect("board B's isolate must observe board B as Deno.cwd()");
+
+    // Cross-check: board A's probe baked board A's path, so loading it into
+    // host B (whose isolate reports board B) MUST fail — proving the two
+    // isolates genuinely differ and the assertion is not vacuous.
+    let mismatch = tokio::time::timeout(TIMEOUT, host_b.load(board_a.path()))
+        .await
+        .expect("the mismatched load should not hang");
+    assert!(
+        mismatch.is_err(),
+        "host B's isolate reports board B, so board A's probe (which expects \
+         board A) must fail to load on it; got {mismatch:?}"
     );
 }

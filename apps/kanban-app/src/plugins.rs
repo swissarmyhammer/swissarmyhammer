@@ -154,10 +154,16 @@ impl PluginPlatform {
         // shared builtin + user layers, so a per-board host's project plugins
         // shadow user/builtin copies of the same id for that board only.
         extract_builtin_plugins(&builtin_cache)?;
+        // The isolate cwd is `tool_working_dir` — the board dir for a per-board
+        // host, the process cwd for the boardless global host. A plugin's
+        // `Deno.cwd()` then resolves against the same board its exposed `kanban`
+        // tool does, so cwd-relative work is rooted at THIS host's board even
+        // though every per-board host shares one process.
         let host = PluginHost::new(
             Some(builtin_cache),
             user_root.clone(),
             project_root,
+            tool_working_dir.clone(),
             false,
             user_root.clone(),
         );

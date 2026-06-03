@@ -108,6 +108,18 @@ pub struct RuntimeConfig {
     /// `PluginHost` dispatcher is a later task; this seam lets tests — and
     /// eventually the host — bind a real handler.
     pub dispatcher: Option<Arc<dyn HostDispatcher>>,
+
+    /// The working directory this isolate reports to plugin code as
+    /// `Deno.cwd()`.
+    ///
+    /// `deno_core` has no per-isolate cwd of its own and the process CWD is
+    /// global, so a per-board plugin host sets this to its board directory and
+    /// the isolate's `op_cwd` returns it — letting two boards' plugins in one
+    /// process each resolve cwd-relative paths against their own board. When
+    /// left at the [`Default`] (an empty path), `Deno.cwd()` returns the empty
+    /// string; the boardless global host sets it to the process cwd or a temp
+    /// dir.
+    pub cwd: PathBuf,
 }
 
 /// `RuntimeConfig` holds an `Arc<dyn HostDispatcher>`, which is not `Debug`;
@@ -117,6 +129,7 @@ impl std::fmt::Debug for RuntimeConfig {
         f.debug_struct("RuntimeConfig")
             .field("inspect_port", &self.inspect_port)
             .field("dispatcher", &self.dispatcher.as_ref().map(|_| "<bound>"))
+            .field("cwd", &self.cwd)
             .finish()
     }
 }
@@ -759,10 +772,15 @@ fn worker_loop(
         .clone()
         .unwrap_or_else(|| Arc::new(UnboundHostDispatcher));
 
+    // The isolate's `op_cwd` reports this directory as `Deno.cwd()`. Each
+    // per-board host configures its board dir here, so isolates sharing the
+    // process still report per-board working directories.
+    let cwd = config.cwd.clone();
+
     let mut runtime = JsRuntime::new(RuntimeOptions {
         module_loader: Some(module_loader.clone()),
         create_params: Some(create_params),
-        extensions: vec![bridge::host_bridge::init(dispatcher)],
+        extensions: vec![bridge::host_bridge::init(dispatcher, cwd)],
         // Inspector support is gated to dev mode via `inspect_port`.
         inspector: config.inspect_port.is_some(),
         ..Default::default()

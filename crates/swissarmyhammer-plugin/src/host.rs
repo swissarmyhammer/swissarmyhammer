@@ -127,6 +127,7 @@ impl std::fmt::Debug for PluginHost {
             .field("builtin_root", &self.inner.builtin_root)
             .field("user_root", &self.inner.user_root)
             .field("project_root", &self.inner.project_root)
+            .field("cwd", &self.inner.cwd)
             .field("loaded_plugins", &state.plugins.len())
             .finish()
     }
@@ -156,6 +157,18 @@ struct HostInner {
 
     /// The writable project-layer plugin root, when the embedder has one.
     project_root: Option<PathBuf>,
+
+    /// The working directory every plugin isolate this host spawns reports to
+    /// plugin code as `Deno.cwd()`.
+    ///
+    /// The process CWD is global, so a single process cannot give each per-board
+    /// host its own working directory through it. Instead each host carries its
+    /// configured directory here — a per-board host its board dir, the boardless
+    /// global host the process cwd — and threads it into every
+    /// [`RuntimeConfig`] it builds (see [`load_resolved`](PluginHost::load_resolved)),
+    /// so a plugin's `Deno.cwd()` resolves against *this* host's board. It is
+    /// immutable after construction and so sits outside the mutex.
+    cwd: PathBuf,
 
     /// Source of stable, per-host-unique plugin ids.
     next_plugin_seq: AtomicU64,
@@ -536,7 +549,13 @@ impl PluginHost {
     ///   `None` when the test models a host with no project layer.
     pub fn for_tests(user_root: PathBuf, project_root: Option<PathBuf>) -> Self {
         let types_emitter = TypesEmitter::new(&user_root, false);
-        Self::with_roots(None, user_root, project_root, types_emitter)
+        Self::with_roots(
+            None,
+            user_root,
+            project_root,
+            default_isolate_cwd(),
+            types_emitter,
+        )
     }
 
     /// Record that a loaded plugin's isolate has crashed.
@@ -661,7 +680,13 @@ impl PluginHost {
         project_root: Option<PathBuf>,
     ) -> Self {
         let types_emitter = TypesEmitter::new(&user_root, false);
-        Self::with_roots(Some(builtin_root), user_root, project_root, types_emitter)
+        Self::with_roots(
+            Some(builtin_root),
+            user_root,
+            project_root,
+            default_isolate_cwd(),
+            types_emitter,
+        )
     }
 
     /// Creates a test host whose [`TypesEmitter`] writes to `types_dir`.
@@ -684,7 +709,13 @@ impl PluginHost {
         types_dir: PathBuf,
     ) -> Self {
         let types_emitter = TypesEmitter::new(&types_dir, true);
-        Self::with_roots(None, user_root, project_root, types_emitter)
+        Self::with_roots(
+            None,
+            user_root,
+            project_root,
+            default_isolate_cwd(),
+            types_emitter,
+        )
     }
 
     /// Creates a production host from the read-only builtin layer root and the
@@ -715,6 +746,11 @@ impl PluginHost {
     /// - `user_root` — the writable user-layer plugin directory.
     /// - `project_root` — the writable project-layer plugin directory, when the
     ///   embedder has a project layer.
+    /// - `cwd` — the working directory every plugin isolate this host spawns
+    ///   reports as `Deno.cwd()`. The process CWD is global, so a per-board
+    ///   embedder passes its board dir here to give that board's plugins their
+    ///   own working directory; the boardless embedder passes the process cwd.
+    ///   See [`HostInner::cwd`].
     /// - `dev_mode` — `true` to write the generated plugin-types `.d.ts` on
     ///   every registry change, `false` for the production posture (no file).
     /// - `types_dir` — the base directory the generated `.d.ts` is written
@@ -724,24 +760,31 @@ impl PluginHost {
         builtin_root: Option<PathBuf>,
         user_root: PathBuf,
         project_root: Option<PathBuf>,
+        cwd: PathBuf,
         dev_mode: bool,
         types_dir: PathBuf,
     ) -> Self {
         let types_emitter = TypesEmitter::new(&types_dir, dev_mode);
-        Self::with_roots(builtin_root, user_root, project_root, types_emitter)
+        Self::with_roots(builtin_root, user_root, project_root, cwd, types_emitter)
     }
 
-    /// Builds a host with the given roots, types emitter, and empty state.
+    /// Builds a host with the given roots, isolate cwd, types emitter, and empty
+    /// state.
     ///
     /// This is also where the host's one long-lived
     /// [`bridge_runtime`](HostInner::bridge_runtime) is created — once, here,
     /// for the host's whole lifetime — so every bridge call routes its
     /// host-async work onto the same persistent runtime and the `cli`/`url`
     /// transports' background service loops survive between calls.
+    ///
+    /// `cwd` is the working directory every plugin isolate this host spawns
+    /// reports as `Deno.cwd()` — a per-board host's board dir, the boardless
+    /// host's process cwd. See [`HostInner::cwd`].
     fn with_roots(
         builtin_root: Option<PathBuf>,
         user_root: PathBuf,
         project_root: Option<PathBuf>,
+        cwd: PathBuf,
         types_emitter: TypesEmitter,
     ) -> Self {
         let bridge_runtime = BridgeRuntime::new();
@@ -750,6 +793,7 @@ impl PluginHost {
                 builtin_root,
                 user_root,
                 project_root,
+                cwd,
                 next_plugin_seq: AtomicU64::new(0),
                 types_emitter,
                 bridge_runtime,
@@ -929,6 +973,10 @@ impl PluginHost {
         let bridge = Arc::new(HostBridge::new(self.clone(), plugin_id.clone()));
         let runtime = PluginRuntime::new(RuntimeConfig {
             dispatcher: Some(bridge),
+            // Every isolate this host spawns reports the host's configured
+            // working directory as `Deno.cwd()`, so a per-board host's plugins
+            // resolve cwd-relative paths against their own board.
+            cwd: self.inner.cwd.clone(),
             ..Default::default()
         })?;
 
@@ -2376,6 +2424,17 @@ fn collect_callback_ids(value: &Value, ids: &mut Vec<String>) {
             _ => {}
         }
     }
+}
+
+/// The isolate cwd for a host that does not serve a single board.
+///
+/// The test and dev-mode constructors model the boardless posture, where the
+/// process CWD *is* the right working directory; this returns it, falling back
+/// to the system temp dir if the process has no readable cwd. A per-board host
+/// never uses this — it is built through [`PluginHost::new`] with its board dir
+/// passed explicitly.
+fn default_isolate_cwd() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir())
 }
 
 /// Renders a [`FileSource`] as a short label for watcher log lines.

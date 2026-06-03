@@ -11,7 +11,19 @@
 //! `PluginHost` tasks — the slot holds [`UnboundHostDispatcher`], which rejects
 //! every call. Wiring a working dispatcher is a later task; the contract here
 //! is just "there is one clean extension point, and it is an op".
+//!
+//! # The per-isolate working directory
+//!
+//! A second op, [`op_cwd`], reports the isolate's configured working directory
+//! to plugin code as `Deno.cwd()`. Bare `deno_core` ships no `Deno.cwd`, so this
+//! is a host-*provided* value rather than an override: the directory is stored
+//! in the isolate's `OpState` at runtime construction and read back by the op.
+//! Because `OpState` is per-runtime — one isolate per [`PluginRuntime`] — each
+//! per-board plugin host can hand its own board directory to its isolates, so a
+//! plugin's `Deno.cwd()` resolves to *its* board even though every per-board
+//! host shares one process (whose global CWD is the same for all of them).
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use deno_core::op2;
@@ -80,14 +92,41 @@ pub fn op_host_dispatch(
     dispatcher.dispatch(payload).map_err(JsErrorBox::generic)
 }
 
+/// The `OpState` slot holding the isolate's configured working directory.
+///
+/// A newtype so it has a distinct `OpState` key and the per-isolate cwd cannot
+/// be confused with any other path slot. The directory is the one the host
+/// configured for this isolate (a per-board host sets its board dir); [`op_cwd`]
+/// reads it to answer `Deno.cwd()`.
+#[derive(Clone)]
+pub struct CwdSlot(pub PathBuf);
+
+/// The working-directory op: backs the SDK's `Deno.cwd()`.
+///
+/// Returns the isolate's configured working directory as a string. The value is
+/// the per-isolate [`CwdSlot`] put into `OpState` at runtime construction, so
+/// two isolates in the same process — built by two different per-board hosts —
+/// report two different directories. Bare `deno_core` provides no `Deno.cwd`, so
+/// this op *supplies* the value rather than overriding a built-in.
+///
+/// The path is rendered with [`Path::display`](std::path::Path::display), which
+/// is lossy for non-UTF-8 paths; plugin board directories are UTF-8 in practice,
+/// and a lossy rendering is preferable to failing the op.
+#[op2]
+#[string]
+pub fn op_cwd(state: &mut OpState) -> String {
+    state.borrow::<CwdSlot>().0.display().to_string()
+}
+
 deno_core::extension!(
     host_bridge,
-    ops = [op_host_dispatch],
-    options = { dispatcher: Arc<dyn HostDispatcher> },
+    ops = [op_host_dispatch, op_cwd],
+    options = { dispatcher: Arc<dyn HostDispatcher>, cwd: PathBuf },
     state = |state, options| {
         state.put(HostDispatcherSlot(options.dispatcher));
+        state.put(CwdSlot(options.cwd));
     },
-    docs = "Installs the SDK-to-host bridge op into a plugin isolate.",
+    docs = "Installs the SDK-to-host bridge op and the per-isolate `op_cwd` into a plugin isolate.",
 );
 
 #[cfg(test)]

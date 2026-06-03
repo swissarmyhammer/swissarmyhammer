@@ -23,13 +23,28 @@
 /**
  * The `deno_core` op-call surface exposed inside every plugin isolate.
  *
- * `op_host_dispatch` is the single synchronous seam plugin code uses to call
- * the host. It takes one JSON payload and returns the host's JSON response,
- * or throws if the host rejects the call.
+ * - `op_host_dispatch` is the single synchronous seam plugin code uses to call
+ *   the host. It takes one JSON payload and returns the host's JSON response,
+ *   or throws if the host rejects the call.
+ * - `op_cwd` returns the isolate's configured working directory; the SDK
+ *   installs it as `Deno.cwd()` (see below). It is host-provided — bare
+ *   `deno_core` ships no `Deno.cwd` — and is per-isolate, so a per-board host's
+ *   plugins read their own board directory.
+ *
+ * `Deno.cwd` is added by the SDK rather than the runtime, so it is declared
+ * here as optional (`?`) on the ambient `Deno` type.
  */
 declare const Deno: {
-  core: { ops: { op_host_dispatch(payload: unknown): unknown } };
+  core: { ops: { op_host_dispatch(payload: unknown): unknown; op_cwd(): string } };
+  cwd?(): string;
 };
+
+// Install `Deno.cwd()` for plugin code. The runtime supplies the per-isolate
+// directory through the `op_cwd` op; this shim is what makes it reachable as the
+// familiar `Deno.cwd()`. Each plugin runs in its own isolate, and `op_cwd` reads
+// that isolate's configured directory, so a per-board host's plugins see their
+// own board dir even though every per-board host shares one process.
+(Deno as { cwd?: () => string }).cwd = (): string => Deno.core.ops.op_cwd();
 
 // ---------------------------------------------------------------------------
 // Public types

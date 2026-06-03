@@ -286,6 +286,7 @@ async fn task_commands_plugin_registers_and_moves_a_task() {
         Some(builtin_root.path().to_path_buf()),
         user_root.path().to_path_buf(),
         None,
+        user_root.path().to_path_buf(),
         false,
         user_root.path().to_path_buf(),
     );
@@ -447,6 +448,7 @@ async fn boot_with_task_commands() -> BootedTaskCommands {
         Some(builtin_root.path().to_path_buf()),
         user_root.path().to_path_buf(),
         None,
+        user_root.path().to_path_buf(),
         false,
         user_root.path().to_path_buf(),
     );

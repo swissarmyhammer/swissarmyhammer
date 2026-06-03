@@ -285,6 +285,7 @@ async fn app_shell_commands_plugin_registers_and_executes() {
         Some(builtin_root.path().to_path_buf()),
         user_root.path().to_path_buf(),
         None,
+        user_root.path().to_path_buf(),
         false,
         user_root.path().to_path_buf(),
     );
