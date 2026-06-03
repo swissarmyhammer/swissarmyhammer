@@ -34,7 +34,6 @@ use swissarmyhammer_kanban::task_helpers::{
     enrich_all_task_entities, retain_filtered_tasks, EntitySlugRegistry,
 };
 use swissarmyhammer_kanban::virtual_tags::default_virtual_tag_registry;
-use tauri::menu::{ContextMenu, MenuBuilder};
 use tauri::webview::WebviewWindowBuilder;
 use tauri::{AppHandle, Emitter, Manager, State, Window};
 
@@ -2180,41 +2179,12 @@ pub struct ContextMenuItem {
     pub separator: bool,
 }
 
-/// Show a native context menu with the given items.
-///
-/// Each item carries its full dispatch info (cmd, target, scope_chain).
-/// When the user selects an item, `handle_menu_event` parses the JSON-encoded
-/// ID and emits a `context-menu-command` event so the frontend routes it
-/// through `useDispatchCommand` for busy tracking and scope resolution.
-#[tauri::command]
-pub async fn show_context_menu(
-    app: AppHandle,
-    window: Window,
-    items: Vec<ContextMenuItem>,
-) -> Result<(), String> {
-    if items.is_empty() {
-        return Ok(());
-    }
-
-    // Encode each item's dispatch info as JSON into the native menu item ID.
-    // When the user selects an item, handle_menu_event parses the JSON and
-    // dispatches directly — no lookup table needed.
-    let mut builder = MenuBuilder::new(&app);
-    for item in &items {
-        if item.separator {
-            builder = builder.separator();
-        } else {
-            let encoded = serde_json::to_string(&item).unwrap_or_default();
-            builder = builder.text(encoded, &item.name);
-        }
-    }
-
-    let menu = builder.build().map_err(|e| e.to_string())?;
-    menu.popup(window)
-        .map_err(|e: tauri::Error| e.to_string())?;
-
-    Ok(())
-}
+// The `show_context_menu` Tauri command was removed in the command cut-over:
+// the native context-menu render now rides the app-wide `window` MCP server
+// (`crates/swissarmyhammer-window-service`, op `show context menu`). The
+// `ContextMenuItem` struct above is retained because `menu::handle_menu_event`
+// still decodes the selected item's JSON-encoded menu id into it to emit the
+// `context-menu-command` event — selection delivery is unchanged.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Spatial-navigation commands.
@@ -3005,5 +2975,64 @@ mod tests {
             ui_state_change_kind(&serde_json::json!({ "some_other_key": 1 })),
             None
         );
+    }
+
+    // ── context-menu round-trip parity ────────────────────────────
+    //
+    // Two `ContextMenuItem` structs sit on opposite sides of the JSON menu-id
+    // wire: the window-service one is what the frontend serializes into each
+    // native menu item's id (the *encode* side), and the `commands.rs` one is
+    // what `menu::handle_menu_event` deserializes the selected item's id back
+    // into (the *decode* side). They are coupled only by hand, so this test
+    // pins the encode→decode contract: a fully-populated window-service item
+    // must deserialize into the decoder struct with every field intact. A
+    // rename or serde-attr drift on either side fails here instead of silently
+    // dropping a field at runtime.
+
+    #[test]
+    fn context_menu_item_encode_decode_round_trips_all_fields() {
+        let encoded = swissarmyhammer_window_service::ContextMenuItem {
+            name: "Copy".to_string(),
+            cmd: "entity.copy".to_string(),
+            target: Some("task:01ABC".to_string()),
+            scope_chain: vec!["task:01ABC".to_string(), "board:main".to_string()],
+            separator: false,
+        };
+
+        // Encode side: exactly what the shell writes into the native menu id.
+        let wire = serde_json::to_string(&encoded).expect("encode side serializes");
+
+        // Decode side: exactly what `handle_menu_event` reads back.
+        let decoded: super::ContextMenuItem =
+            serde_json::from_str(&wire).expect("decoder must accept the encoder's JSON");
+
+        assert_eq!(decoded.name, encoded.name);
+        assert_eq!(decoded.cmd, encoded.cmd);
+        assert_eq!(decoded.target, encoded.target);
+        assert_eq!(decoded.scope_chain, encoded.scope_chain);
+        assert_eq!(decoded.separator, encoded.separator);
+    }
+
+    #[test]
+    fn context_menu_item_separator_round_trips() {
+        // Separators carry empty dispatch fields; the `#[serde(default)]`
+        // attributes on both sides must let the sparse separator JSON the
+        // frontend emits decode without error.
+        let encoded = swissarmyhammer_window_service::ContextMenuItem {
+            name: String::new(),
+            cmd: String::new(),
+            target: None,
+            scope_chain: Vec::new(),
+            separator: true,
+        };
+
+        let wire = serde_json::to_string(&encoded).expect("encode side serializes");
+        let decoded: super::ContextMenuItem =
+            serde_json::from_str(&wire).expect("decoder must accept a separator item");
+
+        assert!(decoded.separator);
+        assert!(decoded.cmd.is_empty());
+        assert!(decoded.target.is_none());
+        assert!(decoded.scope_chain.is_empty());
     }
 }

@@ -277,12 +277,17 @@ describe("GridEmptyState", () => {
     });
 
     const showCall = mockInvoke.mock.calls.find(
-      (c) => c[0] === "show_context_menu",
+      (c) =>
+        c[0] === "command_tool_call" &&
+        (c[1] as { op?: string })?.op === "show context menu",
     );
     expect(showCall).toBeTruthy();
-    const items = (showCall?.[1] as { items: { scope_chain: string[] }[] })
-      .items;
+    const items = (
+      showCall?.[1] as { params: { items: { scope_chain: string[] }[] } }
+    ).params.items;
     // The scope chain must include the `view:<id>` moniker.
-    expect(items[0].scope_chain).toEqual(expect.arrayContaining(["view:v-tags"]));
+    expect(items[0].scope_chain).toEqual(
+      expect.arrayContaining(["view:v-tags"]),
+    );
   });
 });

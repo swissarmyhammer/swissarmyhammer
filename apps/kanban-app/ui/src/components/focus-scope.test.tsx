@@ -213,15 +213,22 @@ describe("FocusScope", () => {
     fireEvent.contextMenu(getByText("card"));
     expect(getByTestId("focus-reader").textContent).toBe("task:abc");
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("show_context_menu", {
-        items: [
-          expect.objectContaining({
-            cmd: "entity.inspect",
-            name: "Inspect",
-            separator: false,
-          }),
-        ],
-      });
+      expect(invoke).toHaveBeenCalledWith(
+        "command_tool_call",
+        expect.objectContaining({
+          tool: "window",
+          op: "show context menu",
+          params: {
+            items: [
+              expect.objectContaining({
+                cmd: "entity.inspect",
+                name: "Inspect",
+                separator: false,
+              }),
+            ],
+          },
+        }),
+      );
     });
   });
 
@@ -297,15 +304,18 @@ describe("FocusScope", () => {
       </FocusScope>,
     );
     fireEvent.contextMenu(getByText("tag"));
-    // show_context_menu should be called exactly once (inner scope handles it, stopPropagation prevents outer)
+    // show context menu should be called exactly once (inner scope handles it, stopPropagation prevents outer)
     await waitFor(() => {
       const ctxCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
-        (c: unknown[]) => c[0] === "show_context_menu",
+        (c: unknown[]) =>
+          c[0] === "command_tool_call" &&
+          (c[1] as { op?: string })?.op === "show context menu",
       );
       expect(ctxCalls).toHaveLength(1);
       const call = ctxCalls[0];
       // Inner scope should show both inner and outer commands (scope chain walks up on backend)
-      const items = call[1].items;
+      const items = (call[1] as { params: { items: { cmd: string }[] } }).params
+        .items;
       expect(
         items.find((i: { cmd: string }) => i.cmd === "inner.cmd"),
       ).toBeTruthy();
@@ -359,11 +369,13 @@ describe("FocusScope", () => {
     fireEvent.contextMenu(getByText("tag"));
     await waitFor(() => {
       const ctxCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
-        (c: unknown[]) => c[0] === "show_context_menu",
+        (c: unknown[]) =>
+          c[0] === "command_tool_call" &&
+          (c[1] as { op?: string })?.op === "show context menu",
       );
       expect(ctxCalls).toHaveLength(1);
       const call = ctxCalls[0];
-      const items = call[1].items;
+      const items = (call[1] as { params: { items: unknown[] } }).params.items;
       // No target -> shadow by id alone: inner "Inspect tag" shadows outer "Inspect task"
       expect(items).toHaveLength(1);
       expect(items[0]).toEqual(
@@ -431,21 +443,25 @@ describe("FocusScope", () => {
     fireEvent.contextMenu(getByText("tag"));
     await waitFor(() => {
       const ctxCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
-        (c: unknown[]) => c[0] === "show_context_menu",
+        (c: unknown[]) =>
+          c[0] === "command_tool_call" &&
+          (c[1] as { op?: string })?.op === "show context menu",
       );
       expect(ctxCalls).toHaveLength(1);
       const call = ctxCalls[0];
-      const items = call[1].items;
+      const items = (
+        call[1] as {
+          params: { items: { name: string; separator: boolean }[] };
+        }
+      ).params.items;
       // Different targets -> both accumulate
-      const commandItems = items.filter(
-        (i: { separator: boolean }) => !i.separator,
-      );
+      const commandItems = items.filter((i) => !i.separator);
       expect(commandItems).toHaveLength(2);
       expect(
-        commandItems.find((i: { name: string }) => i.name === "Inspect tag"),
+        commandItems.find((i) => i.name === "Inspect tag"),
       ).toBeTruthy();
       expect(
-        commandItems.find((i: { name: string }) => i.name === "Inspect task"),
+        commandItems.find((i) => i.name === "Inspect task"),
       ).toBeTruthy();
     });
   });
@@ -497,11 +513,14 @@ describe("FocusScope", () => {
     fireEvent.contextMenu(getByText("tag"));
     await waitFor(() => {
       const ctxCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
-        (c: unknown[]) => c[0] === "show_context_menu",
+        (c: unknown[]) =>
+          c[0] === "command_tool_call" &&
+          (c[1] as { op?: string })?.op === "show context menu",
       );
       expect(ctxCalls).toHaveLength(1);
       const call = ctxCalls[0];
-      const items = call[1].items;
+      const items = (call[1] as { params: { items: { name: string }[] } })
+        .params.items;
       // Same target -> shadow: inner wins
       expect(items).toHaveLength(1);
       expect(items[0].name).toBe("Inspect task inner");
@@ -544,10 +563,12 @@ describe("FocusScope", () => {
     // Registry returns no matching context-menu commands (inner blocks outer):
     // no menu is shown. Give the async right-click path a tick to settle.
     await new Promise((r) => setTimeout(r, 10));
-    expect(invoke).not.toHaveBeenCalledWith(
-      "show_context_menu",
-      expect.anything(),
+    const ctxCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c: unknown[]) =>
+        c[0] === "command_tool_call" &&
+        (c[1] as { op?: string })?.op === "show context menu",
     );
+    expect(ctxCalls).toHaveLength(0);
   });
 
   // Double-click → `ui.inspect` is no longer a `<FocusScope>` concern.
@@ -617,15 +638,22 @@ describe("FocusScope", () => {
     );
     fireEvent.contextMenu(getByText("card"));
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("show_context_menu", {
-        items: [
-          expect.objectContaining({
-            cmd: "entity.inspect",
-            name: "Inspect",
-            separator: false,
-          }),
-        ],
-      });
+      expect(invoke).toHaveBeenCalledWith(
+        "command_tool_call",
+        expect.objectContaining({
+          tool: "window",
+          op: "show context menu",
+          params: {
+            items: [
+              expect.objectContaining({
+                cmd: "entity.inspect",
+                name: "Inspect",
+                separator: false,
+              }),
+            ],
+          },
+        }),
+      );
     });
   });
 
@@ -691,14 +719,21 @@ describe("FocusScope", () => {
     );
     fireEvent.contextMenu(getByText("tag pill"));
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("show_context_menu", {
-        items: [
-          expect.objectContaining({
-            cmd: "tag.inspect",
-            name: "Inspect tag",
-          }),
-        ],
-      });
+      expect(invoke).toHaveBeenCalledWith(
+        "command_tool_call",
+        expect.objectContaining({
+          tool: "window",
+          op: "show context menu",
+          params: {
+            items: [
+              expect.objectContaining({
+                cmd: "tag.inspect",
+                name: "Inspect tag",
+              }),
+            ],
+          },
+        }),
+      );
     });
   });
 
@@ -733,10 +768,12 @@ describe("FocusScope", () => {
     fireEvent.contextMenu(getByText("tag pill"));
     // Give time for any async calls to settle
     await new Promise((r) => setTimeout(r, 50));
-    expect(invoke).not.toHaveBeenCalledWith(
-      "show_context_menu",
-      expect.anything(),
+    const ctxCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c: unknown[]) =>
+        c[0] === "command_tool_call" &&
+        (c[1] as { op?: string })?.op === "show context menu",
     );
+    expect(ctxCalls).toHaveLength(0);
   });
 
   describe("useParentFocusScope", () => {

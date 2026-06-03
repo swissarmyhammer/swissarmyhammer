@@ -34,7 +34,8 @@ use swissarmyhammer_operations_macros::operation_tool;
 
 use crate::operations::{
     operations, ActivateWindow, CloseBoard, CloseWindow, GetMonitors, GetWindowPosition, NewBoard,
-    OpenBoard, OpenNewWindow, OpenPath, RevealPath, SetWindowPosition, SwitchBoard,
+    OpenBoard, OpenNewWindow, OpenPath, RevealPath, SetWindowPosition, ShowContextMenu,
+    SwitchBoard,
 };
 use crate::shell::{WindowPosition, WindowShell};
 
@@ -92,7 +93,9 @@ impl WindowService {
 
     /// Handle an `ActivateWindow` call — focus the labeled window.
     fn handle_activate_window(&self, req: ActivateWindow) -> Result<Value, McpError> {
-        self.shell.activate_window(&req.label).map_err(shell_error)?;
+        self.shell
+            .activate_window(&req.label)
+            .map_err(shell_error)?;
         Ok(serde_json::json!({ "ok": true, "label": req.label }))
     }
 
@@ -180,6 +183,20 @@ impl WindowService {
             "opened": opened.is_some(),
             "path": opened.map(|b| b.path),
         }))
+    }
+
+    /// Handle a `ShowContextMenu` call — mount a native context menu via the
+    /// shell.
+    ///
+    /// Selection delivery happens out-of-band (the app's menu-event handler
+    /// emits `context-menu-command`), so the response only confirms the menu
+    /// was handed to the shell and echoes how many items it carried.
+    fn handle_show_context_menu(&self, req: ShowContextMenu) -> Result<Value, McpError> {
+        let count = req.items.len();
+        self.shell
+            .show_context_menu(req.items, req.window_label)
+            .map_err(shell_error)?;
+        Ok(serde_json::json!({ "ok": true, "count": count }))
     }
 }
 
@@ -296,6 +313,10 @@ impl ServerHandler for WindowService {
             "open board" => {
                 let req: OpenBoard = deserialize_op(arguments, &op)?;
                 self.handle_open_board(req)?
+            }
+            "show context menu" => {
+                let req: ShowContextMenu = deserialize_op(arguments, &op)?;
+                self.handle_show_context_menu(req)?
             }
             other => {
                 return Err(McpError::invalid_params(

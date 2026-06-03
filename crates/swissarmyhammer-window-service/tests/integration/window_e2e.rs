@@ -264,6 +264,98 @@ async fn reveal_path_invokes_shell_reveal() {
     assert_eq!(h.shell.calls(), vec!["reveal_path:/tmp/file.pdf"]);
 }
 
+/// `show context menu` routes the items (in order) AND the calling window's
+/// label to the shell, and reports the item count — the ported
+/// `show_context_menu` behavior on the MCP wire, with deterministic targeting.
+#[tokio::test]
+async fn show_context_menu_routes_items_to_shell() {
+    let h = Harness::new();
+    let service = h.service();
+
+    let res = call_tool(
+        &service,
+        "show context menu",
+        json!({
+            "op": "show context menu",
+            "window_label": "board-7",
+            "items": [
+                {
+                    "name": "Copy",
+                    "cmd": "entity.copy",
+                    "target": "task:abc",
+                    "scope_chain": ["task:abc", "window:main"],
+                    "separator": false
+                },
+                { "name": "", "cmd": "", "scope_chain": [], "separator": true },
+                {
+                    "name": "Delete",
+                    "cmd": "entity.delete",
+                    "target": "task:abc",
+                    "scope_chain": ["task:abc", "window:main"],
+                    "separator": false
+                }
+            ]
+        }),
+    )
+    .await
+    .expect("show context menu should succeed");
+
+    assert_eq!(res["ok"], json!(true));
+    assert_eq!(res["count"], json!(3));
+    assert_eq!(
+        h.shell.calls(),
+        vec!["show_context_menu:[entity.copy,,entity.delete]@board-7"],
+        "the service must route the exact items (in order) and the window label to the shell"
+    );
+}
+
+/// When the op omits `window_label`, the shell still receives the items and an
+/// absent label (recorded as `-`), preserving the focused-then-any fallback.
+#[tokio::test]
+async fn show_context_menu_without_label_forwards_none() {
+    let h = Harness::new();
+    let service = h.service();
+
+    call_tool(
+        &service,
+        "show context menu",
+        json!({
+            "op": "show context menu",
+            "items": [
+                { "name": "Copy", "cmd": "entity.copy", "separator": false }
+            ]
+        }),
+    )
+    .await
+    .expect("show context menu should succeed");
+
+    assert_eq!(
+        h.shell.calls(),
+        vec!["show_context_menu:[entity.copy]@-"],
+        "an absent window label must forward as None to the shell"
+    );
+}
+
+/// `show context menu` with no items is a no-op that still routes through the
+/// shell (mirroring the native handler's empty-list early return).
+#[tokio::test]
+async fn show_context_menu_empty_items_is_noop() {
+    let h = Harness::new();
+    let service = h.service();
+
+    let res = call_tool(
+        &service,
+        "show context menu",
+        json!({ "op": "show context menu", "items": [] }),
+    )
+    .await
+    .expect("show context menu should succeed");
+
+    assert_eq!(res["ok"], json!(true));
+    assert_eq!(res["count"], json!(0));
+    assert_eq!(h.shell.calls(), vec!["show_context_menu:[]@-"]);
+}
+
 /// An unknown op surfaces a structured `invalid_params` error and fires no
 /// shell call.
 #[tokio::test]

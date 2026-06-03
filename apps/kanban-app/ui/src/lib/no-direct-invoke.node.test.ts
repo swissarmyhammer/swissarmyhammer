@@ -55,7 +55,9 @@ const ALLOWED_INVOKE_HANDLERS = new Set<string>([
 
   // AppHandle-bound natives — these need an ambient Tauri AppHandle and
   // have no equivalent on the MCP wire today.
-  "show_context_menu", // native menu — needs AppHandle to mount NSMenu
+  // (`show_context_menu` migrated to the `window` MCP server's
+  // `show context menu` op — the native NSMenu now mounts behind the
+  // AppHandle-backed `WindowShell` seam, so it is no longer allow-listed.)
   "save_dropped_file", // HTML5-drop bytes → temp file → attachment path
   "ai_start_agent", // spawns the AI agent WebSocket bridge
   "ai_list_models", // queries the in-process AI agent registry

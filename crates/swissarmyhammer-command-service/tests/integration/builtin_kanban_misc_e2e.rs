@@ -51,7 +51,8 @@ use swissarmyhammer_tools::mcp::ToolHandlers;
 use swissarmyhammer_tools::{register_kanban_tools, ToolContext, ToolRegistry};
 use swissarmyhammer_views::{ViewStore, ViewsContext, ViewsServer};
 use swissarmyhammer_window_service::{
-    CreatedBoard, MonitorInfo, NewWindow, OpenedBoard, WindowPosition, WindowService, WindowShell,
+    ContextMenuItem, CreatedBoard, MonitorInfo, NewWindow, OpenedBoard, WindowPosition,
+    WindowService, WindowShell,
 };
 use tempfile::TempDir;
 use tokio::sync::{Mutex as TokioMutex, RwLock};
@@ -251,6 +252,14 @@ impl WindowShell for SpyShell {
 
     fn open_board(&self) -> Result<Option<OpenedBoard>, String> {
         Ok(None)
+    }
+
+    fn show_context_menu(
+        &self,
+        _items: Vec<ContextMenuItem>,
+        _window_label: Option<String>,
+    ) -> Result<(), String> {
+        Ok(())
     }
 }
 

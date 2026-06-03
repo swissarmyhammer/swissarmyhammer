@@ -56,7 +56,8 @@ use swissarmyhammer_plugin::{
 };
 use swissarmyhammer_ui_state::{UIState, UiStateServer};
 use swissarmyhammer_window_service::{
-    CreatedBoard, MonitorInfo, NewWindow, OpenedBoard, WindowPosition, WindowService, WindowShell,
+    ContextMenuItem, CreatedBoard, MonitorInfo, NewWindow, OpenedBoard, WindowPosition,
+    WindowService, WindowShell,
 };
 use tempfile::TempDir;
 use tokio::sync::Mutex as TokioMutex;
@@ -192,6 +193,14 @@ impl WindowShell for SpyShell {
 
     fn open_board(&self) -> Result<Option<OpenedBoard>, String> {
         Ok(None)
+    }
+
+    fn show_context_menu(
+        &self,
+        _items: Vec<ContextMenuItem>,
+        _window_label: Option<String>,
+    ) -> Result<(), String> {
+        Ok(())
     }
 }
 

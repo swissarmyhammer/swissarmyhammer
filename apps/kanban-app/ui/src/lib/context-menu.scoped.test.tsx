@@ -5,17 +5,22 @@
  * `useContextMenu` sources commands from `useCommandList` and, at right-click
  * time, surfaces only those flagged `context_menu: true` whose `scope` matches
  * the right-click point's scope chain. These tests mock the list seam and the
- * Tauri bridge and assert that exactly the `context_menu`-tagged, scope-matched
- * commands reach `show_context_menu` — global-scoped commands included,
- * non-context-menu and out-of-scope commands excluded.
+ * `window` MCP transport and assert that exactly the `context_menu`-tagged,
+ * scope-matched commands reach `show context menu` — global-scoped commands
+ * included, non-context-menu and out-of-scope commands excluded.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { invoke } from "@tauri-apps/api/core";
+import { callMcpTool } from "@/lib/mcp-transport";
 import type { CommandMetadata } from "@/hooks/use-command-list";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@/lib/mcp-transport", async (importActual) => ({
+  // Preserve the real module's other exports (e.g. `callCommandTool`, consumed
+  // transitively by `command-scope`); only `callMcpTool` is stubbed.
+  ...(await importActual<typeof import("@/lib/mcp-transport")>()),
+  callMcpTool: vi.fn(),
+}));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
 }));
@@ -23,14 +28,15 @@ vi.mock("@tauri-apps/api/window", () => ({
 // Drive the command source. The registry is set per-test via REGISTRY.
 let REGISTRY: CommandMetadata[] = [];
 vi.mock("@/hooks/use-command-list", () => ({
-  useCommandList: () => ({ commands: REGISTRY, loading: false, refresh: vi.fn() }),
+  useCommandList: () => ({
+    commands: REGISTRY,
+    loading: false,
+    refresh: vi.fn(),
+  }),
 }));
 
 import { useContextMenu } from "./context-menu";
-import {
-  CommandScopeContext,
-  type CommandScope,
-} from "./command-scope";
+import { CommandScopeContext, type CommandScope } from "./command-scope";
 
 /** Synthetic right-click event with spied handlers. */
 function fakeMouseEvent() {
@@ -54,13 +60,13 @@ function wrapperFor(moniker: string) {
   );
 }
 
-/** Pull the `cmd` ids of the items passed to `show_context_menu`. */
+/** Pull the `cmd` ids of the items passed to `show context menu`. */
 function shownItemCmds(): string[] {
-  const call = (invoke as ReturnType<typeof vi.fn>).mock.calls.find(
-    ([c]) => c === "show_context_menu",
+  const call = (callMcpTool as ReturnType<typeof vi.fn>).mock.calls.find(
+    ([tool, op]) => tool === "window" && op === "show context menu",
   );
   if (!call) return [];
-  const items = (call[1] as { items: { cmd: string; separator: boolean }[] })
+  const items = (call[2] as { items: { cmd: string; separator: boolean }[] })
     .items;
   return items.filter((i) => !i.separator).map((i) => i.cmd);
 }
@@ -68,7 +74,7 @@ function shownItemCmds(): string[] {
 describe("useContextMenu registry wiring", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (callMcpTool as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
   });
 
   it("shows only context_menu:true commands matching the task scope", async () => {
@@ -86,7 +92,12 @@ describe("useContextMenu registry wiring", () => {
         scope: ["entity:task"],
       },
       // context_menu false — must not appear.
-      { id: "task.move", name: "Move", context_menu: false, scope: ["entity:task"] },
+      {
+        id: "task.move",
+        name: "Move",
+        context_menu: false,
+        scope: ["entity:task"],
+      },
       // Wrong scope — must not appear.
       {
         id: "tag.rename",
@@ -113,7 +124,7 @@ describe("useContextMenu registry wiring", () => {
     expect(shownItemCmds()).not.toContain("tag.rename");
   });
 
-  it("does not call show_context_menu when nothing matches", async () => {
+  it("does not call show context menu when nothing matches", async () => {
     REGISTRY = [
       {
         id: "tag.rename",
@@ -132,8 +143,8 @@ describe("useContextMenu registry wiring", () => {
       await new Promise((r) => setTimeout(r, 10));
     });
 
-    const called = (invoke as ReturnType<typeof vi.fn>).mock.calls.some(
-      ([c]) => c === "show_context_menu",
+    const called = (callMcpTool as ReturnType<typeof vi.fn>).mock.calls.some(
+      ([tool, op]) => tool === "window" && op === "show context menu",
     );
     expect(called).toBe(false);
   });

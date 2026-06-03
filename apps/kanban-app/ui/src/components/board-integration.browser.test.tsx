@@ -526,14 +526,19 @@ describe("Board integration — real .kanban data", () => {
       // Wait for async invoke calls to complete
       await new Promise((r) => setTimeout(r, 200));
 
-      // Assert show_context_menu was called with task.doThisNext
+      // Assert the window `show context menu` op was called with
+      // task.doThisNext (it lowers onto `invoke("command_tool_call", …)`).
       const showCall = mockInvoke.mock.calls.find(
-        (c) => c[0] === "show_context_menu",
+        (c) =>
+          c[0] === "command_tool_call" &&
+          (c[1] as { op?: string })?.op === "show context menu",
       );
       expect(showCall).toBeTruthy();
       const items = (
-        showCall![1] as { items: { cmd: string; scope_chain: string[] }[] }
-      ).items;
+        showCall![1] as {
+          params: { items: { cmd: string; scope_chain: string[] }[] };
+        }
+      ).params.items;
       const doThisNext = items.find((i) => i.cmd === "task.doThisNext");
       expect(doThisNext).toBeTruthy();
       // Scope chain should contain a path whose trailing segment is the

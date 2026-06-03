@@ -305,19 +305,24 @@ describe("EntityCard", () => {
     const card = container.querySelector("[data-segment='task:task-1']")!;
     await act(async () => {
       fireEvent.contextMenu(card);
-      // Flush the promise chain (list_commands_for_scope → show_context_menu)
+      // Flush the promise chain (registry filter → window `show context menu`)
       await new Promise((r) => setTimeout(r, 50));
     });
-    // Context menu items carry cmd + target as separate fields
+    // The menu now mounts via the `window` server's `show context menu` op,
+    // which lowers onto `invoke("command_tool_call", { tool, op, params })`.
     const ctxCall = mockInvoke.mock.calls.find(
-      (c) => c[0] === "show_context_menu",
+      (c) =>
+        c[0] === "command_tool_call" &&
+        (c[1] as { op?: string })?.op === "show context menu",
     );
     expect(ctxCall).toBeTruthy();
-    const items = ctxCall![1].items as {
-      cmd: string;
-      target?: string;
-      name: string;
-    }[];
+    const items = (
+      ctxCall![1] as {
+        params: {
+          items: { cmd: string; target?: string; name: string }[];
+        };
+      }
+    ).params.items;
     expect(
       items.find((i) => i.cmd === "ui.inspect" && i.target === "task:task-1"),
     ).toBeTruthy();
@@ -759,7 +764,11 @@ describe("EntityCard", () => {
       fireEvent.click(card);
       // The primitive's click handler routes through `spatial_focus`.
       const focusCall = mockInvoke.mock.calls.find(
-        (c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")),
+        (c) =>
+          c[0] === "spatial_focus" ||
+          (c[0] === "command_tool_call" &&
+            (c[1] as any)?.tool === "focus" &&
+            (c[1] as any)?.op === "set focus"),
       );
       expect(focusCall).toBeTruthy();
       // Inspect is now a separate Space-bound command at app level —

@@ -2,18 +2,24 @@
  * `useContextMenu` sources commands from the metadata-driven Command registry
  * (`useCommandList`) and, at right-click time, surfaces only those flagged
  * `context_menu: true` whose `scope` matches the right-click point's scope
- * chain. These tests mock the list seam and the Tauri bridge and assert the
- * `show_context_menu` payload shape: self-contained items carrying the
+ * chain. These tests mock the list seam and the `window` MCP transport and
+ * assert the `show context menu` payload shape: self-contained items carrying the
  * click-time scope chain, separators between `context_menu_group` buckets, and
  * the reference-stable / read-at-click-time handler contract.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { invoke } from "@tauri-apps/api/core";
+import { callMcpTool } from "@/lib/mcp-transport";
 import type { CommandMetadata } from "@/hooks/use-command-list";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@/lib/mcp-transport", async (importActual) => ({
+  // Keep the real module's other exports (e.g. `callCommandTool`, consumed by
+  // `command-scope`) intact; only `callMcpTool` is stubbed so the test can
+  // assert the `show context menu` payload without a live transport.
+  ...(await importActual<typeof import("@/lib/mcp-transport")>()),
+  callMcpTool: vi.fn(),
+}));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
 }));
@@ -32,10 +38,7 @@ vi.mock("@/hooks/use-command-list", () => ({
 }));
 
 import { useContextMenu } from "./context-menu";
-import {
-  CommandScopeContext,
-  type CommandScope,
-} from "./command-scope";
+import { CommandScopeContext, type CommandScope } from "./command-scope";
 
 /** Synthetic right-click event with spied handlers. */
 function fakeMouseEvent() {
@@ -64,7 +67,7 @@ function wrapperFor(monikers: string[]) {
   );
 }
 
-/** One item in the `show_context_menu` payload. */
+/** One item in the `show context menu` payload. */
 interface ShownItem {
   name: string;
   cmd: string;
@@ -73,13 +76,18 @@ interface ShownItem {
   separator: boolean;
 }
 
-/** Items passed to `show_context_menu`, or null if it was not called. */
+/**
+ * Items handed to the `window` server's `show context menu` op, or null if it
+ * was not called. The hook calls
+ * `callMcpTool("window", "show context menu", { items, window_label })`, so the
+ * items ride in the third argument's `items` field.
+ */
 function shownItems(): ShownItem[] | null {
-  const call = (invoke as ReturnType<typeof vi.fn>).mock.calls.find(
-    ([c]) => c === "show_context_menu",
+  const call = (callMcpTool as ReturnType<typeof vi.fn>).mock.calls.find(
+    ([tool, op]) => tool === "window" && op === "show context menu",
   );
   if (!call) return null;
-  return (call[1] as { items: ShownItem[] }).items;
+  return (call[2] as { items: ShownItem[] }).items;
 }
 
 async function fireContextMenu(monikers: string[]) {
@@ -96,7 +104,7 @@ async function fireContextMenu(monikers: string[]) {
 describe("useContextMenu", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (callMcpTool as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
     REGISTRY = [];
   });
 
@@ -118,7 +126,10 @@ describe("useContextMenu", () => {
 
     await fireContextMenu(["entity:task"]);
 
-    expect(invoke).toHaveBeenCalledWith("show_context_menu", {
+    expect(callMcpTool).toHaveBeenCalledWith("window", "show context menu", {
+      // The calling window's label rides alongside the items so the shell can
+      // pop the menu on this window deterministically (mocked to "main").
+      window_label: "main",
       items: [
         {
           name: "Inspect Task",
@@ -150,11 +161,12 @@ describe("useContextMenu", () => {
     expect(event.stopPropagation).toHaveBeenCalled();
   });
 
-  it("does not call show_context_menu when nothing matches", async () => {
+  it("does not call show context menu when nothing matches", async () => {
     REGISTRY = [];
     await fireContextMenu(["entity:task"]);
-    expect(invoke).not.toHaveBeenCalledWith(
-      "show_context_menu",
+    expect(callMcpTool).not.toHaveBeenCalledWith(
+      "window",
+      "show context menu",
       expect.anything(),
     );
   });
@@ -243,7 +255,7 @@ describe("useContextMenu", () => {
 describe("useContextMenu per-entity-type rendering", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (callMcpTool as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
   });
 
   it('right-click on a task shows "New Task"', async () => {
@@ -299,7 +311,7 @@ describe("useContextMenu per-entity-type rendering", () => {
 describe("useContextMenu scope chain propagation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (callMcpTool as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
   });
 
   it("writes the click-time scope chain into every dispatch item", async () => {

@@ -1,12 +1,10 @@
 import { useCallback, useContext, useMemo, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { callMcpTool } from "@/lib/mcp-transport";
 import { CommandScopeContext, scopeChainFromScope } from "@/lib/command-scope";
-import {
-  useCommandList,
-  type CommandMetadata,
-} from "@/hooks/use-command-list";
+import { useCommandList, type CommandMetadata } from "@/hooks/use-command-list";
 
-/** Shape sent to the backend `show_context_menu`. Self-contained dispatch info. */
+/** Shape sent to the `window` server's `show context menu` op. Self-contained dispatch info. */
 interface ContextMenuItem {
   name: string;
   cmd: string;
@@ -133,11 +131,7 @@ export function useContextMenu(): (e: React.MouseEvent) => void {
     let lastGroup: number | undefined;
     for (const cmd of matching) {
       const group = cmd.context_menu_group;
-      if (
-        lastGroup !== undefined &&
-        group !== lastGroup &&
-        items.length > 0
-      ) {
+      if (lastGroup !== undefined && group !== lastGroup && items.length > 0) {
         items.push({ name: "", cmd: "", separator: true, scope_chain: [] });
       }
       items.push({
@@ -153,6 +147,18 @@ export function useContextMenu(): (e: React.MouseEvent) => void {
       lastGroup = group;
     }
 
-    invoke("show_context_menu", { items }).catch(console.error);
+    // Render the native context menu via the app-wide `window` MCP server.
+    // Pass our own window label so the shell pops the menu on the *calling*
+    // window (deterministic targeting; the MCP wire has no ambient "calling
+    // window" the old native command relied on). Selection delivery is
+    // unchanged: the Rust menu-event handler decodes the chosen item and emits
+    // `context-menu-command`, which `KeybindingHandler` dispatches — so this
+    // call is fire-and-forget, exactly as the prior `invoke("show_context_menu",
+    // …)` was.
+    const windowLabel = getCurrentWindow().label;
+    callMcpTool("window", "show context menu", {
+      items,
+      window_label: windowLabel,
+    }).catch(console.error);
   }, []);
 }

@@ -297,13 +297,16 @@ describe("ColumnView — Do This Next command", () => {
     expect(taskScope).toBeTruthy();
     fireEvent.contextMenu(taskScope!);
 
-    // Assert show_context_menu is called with task.doThisNext
+    // Assert the window `show context menu` op is called with task.doThisNext
     await waitFor(() => {
       const showCall = mockInvoke.mock.calls.find(
-        (c: unknown[]) => c[0] === "show_context_menu",
+        (c: unknown[]) =>
+          c[0] === "command_tool_call" &&
+          (c[1] as { op?: string })?.op === "show context menu",
       );
       expect(showCall).toBeTruthy();
-      const items = (showCall![1] as { items: { cmd: string }[] }).items;
+      const items = (showCall![1] as { params: { items: { cmd: string }[] } })
+        .params.items;
       const doThisNext = items.find(
         (i: { cmd: string }) => i.cmd === "task.doThisNext",
       );
@@ -348,12 +351,16 @@ describe("ColumnView — Do This Next command", () => {
 
     await waitFor(() => {
       const showCall = mockInvoke.mock.calls.find(
-        (c: unknown[]) => c[0] === "show_context_menu",
+        (c: unknown[]) =>
+          c[0] === "command_tool_call" &&
+          (c[1] as { op?: string })?.op === "show context menu",
       );
       expect(showCall).toBeTruthy();
       const items = (
-        showCall![1] as { items: { cmd: string; scope_chain: string[] }[] }
-      ).items;
+        showCall![1] as {
+          params: { items: { cmd: string; scope_chain: string[] }[] };
+        }
+      ).params.items;
       const doThisNext = items.find(
         (i: { cmd: string }) => i.cmd === "task.doThisNext",
       );

@@ -424,11 +424,14 @@ describe("MentionView — extraCommands", () => {
 
     await waitFor(() => {
       const call = mockInvoke.mock.calls.find(
-        (c: unknown[]) => c[0] === "show_context_menu",
+        (c: unknown[]) =>
+          c[0] === "command_tool_call" &&
+          (c[1] as { op?: string })?.op === "show context menu",
       );
       expect(call).toBeTruthy();
-      const items = (call![1] as { items: { cmd: string; name: string }[] })
-        .items;
+      const items = (
+        call![1] as { params: { items: { cmd: string; name: string }[] } }
+      ).params.items;
       expect(items.find((i) => i.cmd === "task.untag")).toBeTruthy();
     });
   });

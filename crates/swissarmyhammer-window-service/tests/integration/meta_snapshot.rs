@@ -11,9 +11,9 @@ use super::common::{request_context, Harness};
 
 /// The `_meta` tree under `io.swissarmyhammer/operations` enumerates every
 /// (noun, verb, op) tuple for the `window` tool. This snapshot pins the current
-/// set of twelve ops across three groups (window + OS-file actions + board
-/// lifecycle); a deliberate addition / rename should update this assertion in
-/// the same PR as the operation struct change.
+/// set of thirteen ops across four groups (window + OS-file actions + board
+/// lifecycle + app-wide window affordances); a deliberate addition / rename
+/// should update this assertion in the same PR as the operation struct change.
 #[tokio::test]
 async fn window_tool_meta_operations_tree_is_complete() {
     let h = Harness::new();
@@ -52,6 +52,8 @@ async fn window_tool_meta_operations_tree_is_complete() {
         ("board", "close", "close board"),
         ("board", "new", "new board"),
         ("board", "open", "open board"),
+        // app-wide window affordances group
+        ("context menu", "show", "show context menu"),
     ];
 
     for (noun, verb, op_str) in &expected {

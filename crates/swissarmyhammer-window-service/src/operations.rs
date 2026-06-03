@@ -27,6 +27,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 use swissarmyhammer_operations::{operation, Operation};
 
+use crate::shell::ContextMenuItem;
+
 // Window operations ─────────────────────────────────────────────────────
 
 /// Open a new application window.
@@ -258,6 +260,44 @@ pub struct NewBoard {}
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct OpenBoard {}
 
+// App-wide window affordances ────────────────────────────────────────────
+
+/// Show a native context menu for the given items at the current pointer.
+///
+/// Ports the original `show_context_menu` Tauri command. Context menus are an
+/// app-wide window affordance (the right-click target is the calling window,
+/// identified by `window_label`), so this rides the app-wide `window` server
+/// rather than any per-board wiring.
+/// Each item carries its own dispatch info (`cmd`, `target`, `scope_chain`); the
+/// shell encodes that into the native menu so the app's menu-event handler can
+/// emit `context-menu-command` on selection. Selection delivery is therefore
+/// unchanged — the op returns once the menu is shown and does not carry the
+/// chosen item back over the wire.
+///
+/// Returns `{ ok: true, count: <int> }` — the number of items handed to the
+/// shell.
+#[operation(
+    verb = "show",
+    noun = "context menu",
+    description = "Show a native context menu for the given items at the current pointer"
+)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ShowContextMenu {
+    /// The menu items to render, in display order. Each non-separator item
+    /// carries the dispatch info delivered back on selection.
+    #[serde(default)]
+    pub items: Vec<ContextMenuItem>,
+    /// Label of the webview window the right-click originated in.
+    ///
+    /// The frontend passes its own window label (`getCurrentWindow().label`)
+    /// so the shell can pop the menu on the *calling* window — deterministic
+    /// targeting that matches the original native command, which popped on its
+    /// calling `tauri::Window`. Optional for back-compat: when absent (or the
+    /// label no longer resolves), the shell falls back to focused-then-any.
+    #[serde(default)]
+    pub window_label: Option<String>,
+}
+
 /// All window operations — the canonical list used for schema generation.
 ///
 /// Both the wire-schema generator (`generate_mcp_schema`) and the discovery
@@ -278,6 +318,7 @@ static WINDOW_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(
         Box::leak(Box::<CloseBoard>::default()) as &dyn Operation,
         Box::leak(Box::<NewBoard>::default()) as &dyn Operation,
         Box::leak(Box::<OpenBoard>::default()) as &dyn Operation,
+        Box::leak(Box::<ShowContextMenu>::default()) as &dyn Operation,
     ]
 });
 

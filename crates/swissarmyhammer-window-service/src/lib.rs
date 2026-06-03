@@ -56,11 +56,12 @@ pub mod shell;
 
 pub use operations::{
     operations, ActivateWindow, CloseBoard, CloseWindow, GetMonitors, GetWindowPosition, NewBoard,
-    OpenBoard, OpenNewWindow, OpenPath, RevealPath, SetWindowPosition, SwitchBoard,
+    OpenBoard, OpenNewWindow, OpenPath, RevealPath, SetWindowPosition, ShowContextMenu,
+    SwitchBoard,
 };
 pub use service::WindowService;
 pub use shell::{
-    run_new_board, run_open_board, CloseBoardFn, CreatedBoard, InitBoardFn, MonitorInfo, NewWindow,
-    OpenedBoard, OpenWindowFn, PickFolderFn, SwitchBoardFn, TauriWindowShell, WindowPosition,
-    WindowShell,
+    run_new_board, run_open_board, CloseBoardFn, ContextMenuItem, CreatedBoard, InitBoardFn,
+    MonitorInfo, NewWindow, OpenWindowFn, OpenedBoard, PickFolderFn, SwitchBoardFn,
+    TauriWindowShell, WindowPosition, WindowShell,
 };

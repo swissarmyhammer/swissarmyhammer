@@ -1678,7 +1678,8 @@ mod tests {
 
     use swissarmyhammer_app_service::{AboutInfo, AppShell};
     use swissarmyhammer_window_service::{
-        CreatedBoard, MonitorInfo, NewWindow, OpenedBoard, WindowPosition, WindowShell,
+        ContextMenuItem, CreatedBoard, MonitorInfo, NewWindow, OpenedBoard, WindowPosition,
+        WindowShell,
     };
 
     /// A no-op [`WindowShell`] for the plugin-platform tests.
@@ -1731,6 +1732,13 @@ mod tests {
         }
         fn open_board(&self) -> Result<Option<OpenedBoard>, String> {
             Ok(None)
+        }
+        fn show_context_menu(
+            &self,
+            _items: Vec<ContextMenuItem>,
+            _window_label: Option<String>,
+        ) -> Result<(), String> {
+            Ok(())
         }
     }
 

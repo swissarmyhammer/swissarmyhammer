@@ -140,10 +140,14 @@ describe("LeftNav — right-click context menu", () => {
     await Promise.resolve();
 
     const showCall = mockInvoke.mock.calls.find(
-      ([cmd]) => cmd === "show_context_menu",
+      ([cmd, args]) =>
+        cmd === "command_tool_call" &&
+        (args as { op?: string })?.op === "show context menu",
     );
     expect(showCall).toBeDefined();
-    const items = (showCall![1] as { items: { scope_chain: string[] }[] }).items;
+    const items = (
+      showCall![1] as { params: { items: { scope_chain: string[] }[] } }
+    ).params.items;
     expect(items[0].scope_chain).toEqual(expect.arrayContaining(["view:v1"]));
   });
 
@@ -152,7 +156,7 @@ describe("LeftNav — right-click context menu", () => {
    * must never surface a `Switch to <ViewName>` entry. The backend no longer
    * returns `view.switch:*` commands when `contextMenu: true`, and whatever
    * other entries it does return (e.g. `entity.add:*` for views declaring an
-   * `entity_type`) must be forwarded to `show_context_menu` without any
+   * `entity_type`) must be forwarded to the `show context menu` op without any
    * `view.switch:*` items sneaking in.
    */
   it("right-click does not surface any view.switch:* entries", async () => {
@@ -173,17 +177,20 @@ describe("LeftNav — right-click context menu", () => {
     const buttons = screen.getAllByRole("button");
     fireEvent.contextMenu(buttons[0]);
 
-    // `useContextMenu` kicks off list_commands_for_scope then awaits the
-    // promise before calling show_context_menu; flush microtasks so the
-    // second invoke has happened by the time we assert.
+    // `useContextMenu` filters the registry then awaits the `show context
+    // menu` op call; flush microtasks so the invoke has happened by the time
+    // we assert.
     await Promise.resolve();
     await Promise.resolve();
 
     const showCall = mockInvoke.mock.calls.find(
-      ([cmd]) => cmd === "show_context_menu",
+      ([cmd, args]) =>
+        cmd === "command_tool_call" &&
+        (args as { op?: string })?.op === "show context menu",
     );
     expect(showCall).toBeDefined();
-    const items = (showCall![1] as { items: unknown[] }).items as Array<{
+    const items = (showCall![1] as { params: { items: unknown[] } }).params
+      .items as Array<{
       cmd: string;
       name: string;
       separator: boolean;

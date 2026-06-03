@@ -64,7 +64,6 @@ fn run_app(app_state: AppState) {
         .invoke_handler(tauri::generate_handler![
             commands::dispatch_command,
             commands::list_commands_for_scope,
-            commands::show_context_menu,
             commands::list_open_boards,
             commands::get_ui_state,
             commands::get_entity_schema,

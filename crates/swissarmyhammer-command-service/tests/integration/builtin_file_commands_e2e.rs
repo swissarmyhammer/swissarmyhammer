@@ -38,7 +38,8 @@ use swissarmyhammer_plugin::{
     CallerId, InProcessServer, McpServer as PluginMcpServer, PluginHost, PLUGINS_SUBDIR,
 };
 use swissarmyhammer_window_service::{
-    CreatedBoard, MonitorInfo, NewWindow, OpenedBoard, WindowPosition, WindowService, WindowShell,
+    ContextMenuItem, CreatedBoard, MonitorInfo, NewWindow, OpenedBoard, WindowPosition,
+    WindowService, WindowShell,
 };
 use tempfile::TempDir;
 
@@ -186,6 +187,14 @@ impl WindowShell for BoardShell {
         Ok(Some(OpenedBoard {
             path: "/tmp/file-commands-opened-board/.kanban".to_string(),
         }))
+    }
+
+    fn show_context_menu(
+        &self,
+        _items: Vec<ContextMenuItem>,
+        _window_label: Option<String>,
+    ) -> Result<(), String> {
+        Ok(())
     }
 }
 

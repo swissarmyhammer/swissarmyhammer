@@ -268,20 +268,27 @@ describe("AttachmentItem", () => {
     );
     fireEvent.contextMenu(container.querySelector(".cursor-pointer")!);
     await vi.waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith("show_context_menu", {
-        items: [
-          expect.objectContaining({
-            cmd: "attachment.open",
-            name: "Open",
-            separator: false,
-          }),
-          expect.objectContaining({
-            cmd: "attachment.reveal",
-            name: "Show in Finder",
-            separator: false,
-          }),
-        ],
-      });
+      expect(mockInvoke).toHaveBeenCalledWith(
+        "command_tool_call",
+        expect.objectContaining({
+          tool: "window",
+          op: "show context menu",
+          params: {
+            items: [
+              expect.objectContaining({
+                cmd: "attachment.open",
+                name: "Open",
+                separator: false,
+              }),
+              expect.objectContaining({
+                cmd: "attachment.reveal",
+                name: "Show in Finder",
+                separator: false,
+              }),
+            ],
+          },
+        }),
+      );
     });
     // Restore default mock
     mockInvoke.mockImplementation(() => Promise.resolve("ok"));
@@ -365,11 +372,14 @@ describe("AttachmentItem", () => {
     fireEvent.contextMenu(container.querySelector(".cursor-pointer")!);
     await vi.waitFor(() => {
       const call = mockInvoke.mock.calls.find(
-        (c: unknown[]) => c[0] === "show_context_menu",
+        (c: unknown[]) =>
+          c[0] === "command_tool_call" &&
+          (c[1] as { op?: string })?.op === "show context menu",
       );
       expect(call).toBeDefined();
-      const items = (call![1] as { items: { cmd: string; separator: boolean }[] })
-        .items;
+      const items = (
+        call![1] as { params: { items: { cmd: string; separator: boolean }[] } }
+      ).params.items;
       // `useContextMenu` interleaves dedicated separator rows
       // (`{cmd: "", separator: true}`) between adjacent commands whose
       // `group` strings differ. The full sequence the menu sees is:
@@ -427,12 +437,16 @@ describe("AttachmentItem", () => {
     fireEvent.contextMenu(container.querySelector(".cursor-pointer")!);
     await vi.waitFor(() => {
       const call = mockInvoke.mock.calls.find(
-        (c: unknown[]) => c[0] === "show_context_menu",
+        (c: unknown[]) =>
+          c[0] === "command_tool_call" &&
+          (c[1] as { op?: string })?.op === "show context menu",
       );
       expect(call).toBeDefined();
-      const { items } = call![1] as {
-        items: { scope_chain: string[]; separator: boolean }[];
-      };
+      const { items } = (
+        call![1] as {
+          params: { items: { scope_chain: string[]; separator: boolean }[] };
+        }
+      ).params;
       const first = items.find((i) => !i.separator)!;
       expect(first.scope_chain[0]).toBe(`attachment:${imageAttachment.path}`);
     });
@@ -462,13 +476,17 @@ describe("AttachmentItem", () => {
     fireEvent.contextMenu(container.querySelector(".cursor-pointer")!);
     await vi.waitFor(() => {
       const showCalls = mockInvoke.mock.calls.filter(
-        (c: unknown[]) => c[0] === "show_context_menu",
+        (c: unknown[]) =>
+          c[0] === "command_tool_call" &&
+          (c[1] as { op?: string })?.op === "show context menu",
       );
       // Exactly one menu — the attachment's, not the parent task's.
       expect(showCalls).toHaveLength(1);
-      const { items } = showCalls[0][1] as {
-        items: { scope_chain: string[]; separator: boolean }[];
-      };
+      const { items } = (
+        showCalls[0][1] as {
+          params: { items: { scope_chain: string[]; separator: boolean }[] };
+        }
+      ).params;
       const { scope_chain } = items.find((i) => !i.separator)!;
       // Attachment moniker is innermost, parent task moniker next.
       expect(scope_chain[0]).toBe(`attachment:${imageAttachment.path}`);
@@ -627,13 +645,9 @@ describe("AttachmentListDisplay", () => {
       "/tmp/dropped-file.png",
     ];
     expect(() => {
-      render(
-        <AttachmentListDisplay
-          value={mixed as unknown}
-          mode="full"
-        />,
-        { wrapper: Wrapper },
-      );
+      render(<AttachmentListDisplay value={mixed as unknown} mode="full" />, {
+        wrapper: Wrapper,
+      });
     }).not.toThrow();
     // Meta entry renders by name
     expect(screen.getByText("screenshot.png")).toBeTruthy();
@@ -662,9 +676,7 @@ describe("AttachmentListDisplay", () => {
     // `Math.max(lastIndexOf("/"), lastIndexOf("\\"))` lookup is caught.
     render(
       <AttachmentListDisplay
-        value={
-          ["C:\\Users\\me\\AppData\\Local\\Temp\\photo.jpg"] as unknown
-        }
+        value={["C:\\Users\\me\\AppData\\Local\\Temp\\photo.jpg"] as unknown}
         mode="full"
       />,
       { wrapper: Wrapper },

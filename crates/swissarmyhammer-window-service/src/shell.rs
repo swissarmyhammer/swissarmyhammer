@@ -24,6 +24,7 @@
 //! depend on), so — exactly as `open_new_window` does with [`OpenWindowFn`] —
 //! they are supplied as injected callbacks the app-shell bootstrap wires up.
 
+use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -100,6 +101,36 @@ pub struct CreatedBoard {
 pub struct OpenedBoard {
     /// The resolved `.kanban` board path that was opened.
     pub path: String,
+}
+
+/// A single item in a native context menu, surfaced by
+/// [`WindowShell::show_context_menu`].
+///
+/// Each item is self-contained: it carries the command id, target, and scope
+/// chain needed for dispatch. The frontend sends all dispatch info up front so
+/// that, when the user selects an item, the production shell can deliver the
+/// selection back to the frontend (via the app's menu-event handler emitting a
+/// `context-menu-command` Tauri event) without a server-side lookup table.
+///
+/// Behavior-preserving port of the `ContextMenuItem` the original
+/// `show_context_menu` Tauri command consumed; the field set and JSON shape are
+/// unchanged so the existing `handle_menu_event` decoder keeps working.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ContextMenuItem {
+    /// Display name shown in the menu.
+    pub name: String,
+    /// Command id to dispatch (e.g. `"entity.copy"`). Empty for separators.
+    #[serde(default)]
+    pub cmd: String,
+    /// Optional target moniker (e.g. `"task:01ABC"`).
+    #[serde(default)]
+    pub target: Option<String>,
+    /// Scope chain from the right-click point.
+    #[serde(default)]
+    pub scope_chain: Vec<String>,
+    /// Whether this item renders as a separator rather than a clickable entry.
+    #[serde(default)]
+    pub separator: bool,
 }
 
 /// The seam between `window` operations and the OS / GUI.
@@ -185,9 +216,34 @@ pub trait WindowShell: Send + Sync {
     /// picker and opens the chosen board. Returns `Some(OpenedBoard)` for the
     /// chosen board, or `None` when the user cancelled the dialog.
     fn open_board(&self) -> Result<Option<OpenedBoard>, String>;
+
+    /// Mount a native context menu for the given items at the current pointer.
+    ///
+    /// Backs the right-click context menu. Ports the original
+    /// `show_context_menu` Tauri command: build a native menu from `items`,
+    /// encoding each non-separator item's full dispatch info into its menu-item
+    /// id, then pop it up on the window the right-click originated in. An empty
+    /// `items` list is a no-op.
+    ///
+    /// `window_label` is the label of the calling webview window, passed up from
+    /// the frontend so targeting is deterministic — matching the native command,
+    /// which popped on its calling `tauri::Window`. When the label is absent (or
+    /// no longer resolves), the shell falls back to focused-then-any.
+    ///
+    /// Selection delivery is unchanged from the ported command: the app's
+    /// menu-event handler decodes the selected item's id and emits a
+    /// `context-menu-command` event the frontend dispatches. The op therefore
+    /// returns once the menu is shown; it does not carry the chosen item back
+    /// over the MCP wire.
+    fn show_context_menu(
+        &self,
+        items: Vec<ContextMenuItem>,
+        window_label: Option<String>,
+    ) -> Result<(), String>;
 }
 
 use std::sync::Arc;
+use tauri::menu::{ContextMenu, MenuBuilder};
 use tauri::{AppHandle, Manager, Runtime};
 
 /// A callback that opens a new window given the live `AppHandle` and the
@@ -224,8 +280,7 @@ pub type InitBoardFn = Arc<dyn Fn(&Path, &str) -> Result<(), String> + Send + Sy
 /// in the app bin crate this library cannot reach, mirroring why
 /// [`OpenWindowFn`] is injected. The bootstrap supplies this wired to the real
 /// `AppState`; it backs `switch_board`, `new_board`, and `open_board`.
-pub type SwitchBoardFn<R> =
-    Arc<dyn Fn(&AppHandle<R>, &Path) -> Result<(), String> + Send + Sync>;
+pub type SwitchBoardFn<R> = Arc<dyn Fn(&AppHandle<R>, &Path) -> Result<(), String> + Send + Sync>;
 
 /// A callback that closes the board at the given path via `AppState`.
 ///
@@ -277,6 +332,69 @@ impl<R: Runtime> TauriWindowShell<R> {
             close_board,
         }
     }
+
+    /// Resolve the `tauri::Window` to pop a context menu over.
+    ///
+    /// Targeting is deterministic when the frontend supplies the calling
+    /// window's `requested_label` (it knows it via `getCurrentWindow().label`):
+    /// the menu pops on *that* window, matching the native command which popped
+    /// on its calling `tauri::Window`. When the label is absent or no longer
+    /// resolves, it falls back to the focused window, then the single open
+    /// window, and errors only when there is no window at all.
+    ///
+    /// The selection *decision* lives in the pure [`select_menu_target_label`]
+    /// helper (unit-tested); this method only gathers the live runtime inputs
+    /// (available labels, which reports focus) and maps the chosen label back to
+    /// a `tauri::Window`.
+    fn target_window(&self, requested_label: Option<&str>) -> Result<tauri::Window<R>, String> {
+        let windows = self.app.webview_windows();
+        let available: Vec<&String> = windows.keys().collect();
+        let focused = windows
+            .iter()
+            .find(|(_, w)| w.is_focused().unwrap_or(false))
+            .map(|(label, _)| label.as_str());
+
+        let chosen = select_menu_target_label(
+            requested_label,
+            available.iter().map(|l| l.as_str()),
+            focused,
+        )
+        .ok_or_else(|| "no open window to show context menu on".to_string())?;
+
+        let window = windows
+            .get(chosen)
+            .ok_or_else(|| format!("no window with label {chosen:?}"))?;
+        Ok(window.as_ref().window())
+    }
+}
+
+/// Choose which window label a context menu should pop on, given the calling
+/// window the frontend named, the labels currently open, and which (if any)
+/// reports focus.
+///
+/// Precedence — deterministic first:
+///   1. the `requested` label, when present *and* still open (matches the
+///      native command popping on its calling `tauri::Window`);
+///   2. otherwise the `focused` label, when present and still open (the
+///      right-click happened in the focused window);
+///   3. otherwise any open window (stable: first in the supplied order);
+///   4. `None` when no window is open at all.
+///
+/// Pure over its inputs so the targeting decision — the focus of this change —
+/// is unit-testable without a live tauri runtime. Callers pass `available` in a
+/// stable order (e.g. sorted) when fallback determinism matters.
+fn select_menu_target_label<'a>(
+    requested: Option<&'a str>,
+    available: impl IntoIterator<Item = &'a str>,
+    focused: Option<&'a str>,
+) -> Option<&'a str> {
+    let available: Vec<&str> = available.into_iter().collect();
+    let is_open = |label: &str| available.iter().any(|l| *l == label);
+
+    requested
+        .filter(|l| is_open(l))
+        .or_else(|| focused.filter(|l| is_open(l)))
+        .or_else(|| available.first().copied())
 }
 
 impl<R: Runtime> WindowShell for TauriWindowShell<R> {
@@ -393,6 +511,57 @@ impl<R: Runtime> WindowShell for TauriWindowShell<R> {
             }
             None => Ok(None),
         }
+    }
+
+    /// Port of the `show_context_menu` Tauri command.
+    ///
+    /// Builds a native menu over the `AppHandle`, encoding each non-separator
+    /// item's dispatch info as JSON into the menu-item id (so the app's
+    /// `handle_menu_event` can decode it and emit `context-menu-command`), then
+    /// pops it up on the calling window named by `window_label` (falling back to
+    /// focused-then-any via [`Self::target_window`]). The frontend names its own
+    /// window so targeting is deterministic, matching the original command which
+    /// popped on its calling `tauri::Window`.
+    fn show_context_menu(
+        &self,
+        items: Vec<ContextMenuItem>,
+        window_label: Option<String>,
+    ) -> Result<(), String> {
+        if items.is_empty() {
+            return Ok(());
+        }
+
+        let mut builder = MenuBuilder::new(&self.app);
+        for item in &items {
+            if item.separator {
+                builder = builder.separator();
+            } else {
+                // Encode the item's dispatch info as the menu-item id; the
+                // app's menu-event handler decodes it on selection.
+                let encoded = match serde_json::to_string(item) {
+                    Ok(encoded) => encoded,
+                    // ContextMenuItem is plain data, so serialization cannot
+                    // realistically fail; surface the impossible case rather
+                    // than silently shipping an empty (undispatchable) id.
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            item = %item.name,
+                            "failed to serialize context-menu item id; using empty id"
+                        );
+                        String::new()
+                    }
+                };
+                builder = builder.text(encoded, &item.name);
+            }
+        }
+
+        let menu = builder
+            .build()
+            .map_err(|e| format!("failed to build context menu: {e}"))?;
+        let window = self.target_window(window_label.as_deref())?;
+        menu.popup(window)
+            .map_err(|e| format!("failed to show context menu: {e}"))
     }
 }
 
@@ -521,5 +690,55 @@ fn reveal_in_file_manager(path: &str) -> std::io::Result<std::process::ExitStatu
             std::io::ErrorKind::Unsupported,
             "reveal-in-file-manager is not supported on this platform".to_string(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::select_menu_target_label;
+
+    /// An explicit, still-open label wins outright — deterministic targeting on
+    /// the calling window, matching the native command. Focus is ignored even
+    /// when it points elsewhere.
+    #[test]
+    fn explicit_label_present_is_chosen() {
+        let chosen = select_menu_target_label(
+            Some("board-2"),
+            ["board-1", "board-2", "board-3"],
+            Some("board-1"),
+        );
+        assert_eq!(chosen, Some("board-2"));
+    }
+
+    /// With no label supplied, the focused window is the target — the legacy
+    /// fallback when the frontend cannot name its window.
+    #[test]
+    fn label_absent_falls_back_to_focused() {
+        let chosen = select_menu_target_label(None, ["board-1", "board-2"], Some("board-2"));
+        assert_eq!(chosen, Some("board-2"));
+    }
+
+    /// A supplied label that no longer resolves (window closed) also falls back
+    /// to focused, never erroring on a stale label.
+    #[test]
+    fn stale_label_falls_back_to_focused() {
+        let chosen =
+            select_menu_target_label(Some("gone"), ["board-1", "board-2"], Some("board-1"));
+        assert_eq!(chosen, Some("board-1"));
+    }
+
+    /// With neither a resolvable label nor a focused window, any open window is
+    /// targeted — deterministically the first in the supplied order.
+    #[test]
+    fn no_label_no_focus_falls_back_to_first_available() {
+        let chosen = select_menu_target_label(None, ["board-1", "board-2"], None);
+        assert_eq!(chosen, Some("board-1"));
+    }
+
+    /// No open windows at all yields `None`, which the caller maps to an error.
+    #[test]
+    fn no_windows_yields_none() {
+        let chosen = select_menu_target_label(Some("board-1"), [], Some("board-1"));
+        assert_eq!(chosen, None);
     }
 }

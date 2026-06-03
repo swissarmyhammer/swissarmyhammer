@@ -18,7 +18,8 @@ use rmcp::transport::Transport;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use serde_json::Value;
 use swissarmyhammer_window_service::{
-    CreatedBoard, MonitorInfo, NewWindow, OpenedBoard, WindowPosition, WindowService, WindowShell,
+    ContextMenuItem, CreatedBoard, MonitorInfo, NewWindow, OpenedBoard, WindowPosition,
+    WindowService, WindowShell,
 };
 
 /// A recording [`WindowShell`] used to assert which shell method the service
@@ -156,6 +157,23 @@ impl WindowShell for SpyShell {
     fn open_board(&self) -> Result<Option<OpenedBoard>, String> {
         self.record("open_board");
         Ok(self.open_board.clone())
+    }
+
+    fn show_context_menu(
+        &self,
+        items: Vec<ContextMenuItem>,
+        window_label: Option<String>,
+    ) -> Result<(), String> {
+        // Record the command ids (in order) and the forwarded window label, so
+        // tests can assert the service routed both the exact items and the
+        // calling window's label to the shell.
+        let cmds: Vec<&str> = items.iter().map(|i| i.cmd.as_str()).collect();
+        self.record(format!(
+            "show_context_menu:[{}]@{}",
+            cmds.join(","),
+            window_label.as_deref().unwrap_or("-")
+        ));
+        Ok(())
     }
 }
 
