@@ -5,10 +5,15 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 description = "kanban — a git-native task board for humans and AI coding agents; CLI + MCP server over versionable .kanban/ files"
 
+# No `formula = "..."` override: the Homebrew formula is named after the crate
+# (`kanban-cli`). The short `kanban` token belongs to the desktop app cask
+# (apps/kanban-app), which bundles this CLI as a sidecar. An override here would
+# recreate the formula/cask name collision that made `brew install kanban` pull
+# the CLI instead of the app.
 [package.metadata.dist]
-formula = "kanban"
 
 [[bin]]
 name = "kanban"
