@@ -1,6 +1,6 @@
 ---
-position_column: todo
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffdc80
 project: agent-builtins
 title: 'Fix test-isolation race: serve_time_bash_deny vs per_client_tool_composition share MIRDAN_AGENTS_CONFIG'
 ---

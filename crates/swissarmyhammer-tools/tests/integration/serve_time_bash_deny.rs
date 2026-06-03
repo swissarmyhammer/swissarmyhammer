@@ -14,8 +14,10 @@
 //! `MIRDAN_AGENTS_CONFIG` env var, so the test writes nowhere near a real
 //! `.claude/`.
 //!
-//! The env var is process-global, so these tests are `#[serial]` to avoid racing
-//! other tests that load mirdan's agents config.
+//! The env var is process-global, so these tests join the shared
+//! `#[serial(mirdan_env)]` group (see [`mirdan_test_support`]) to avoid racing
+//! any other test — in this binary — that reads or writes mirdan's agents
+//! config, including the Claude handshake in `per_client_tool_composition.rs`.
 
 use std::path::Path;
 
@@ -25,60 +27,7 @@ use swissarmyhammer_tools::mcp::{
     unified_server::{start_mcp_server_with_options, McpServerHandle, McpServerMode},
 };
 
-/// RAII guard that points `MIRDAN_AGENTS_CONFIG` at a temp agents config for the
-/// duration of a test, restoring the prior value (or unsetting it) on drop.
-struct MirdanConfigGuard {
-    original: Option<String>,
-}
-
-impl MirdanConfigGuard {
-    fn set(path: &Path) -> Self {
-        let original = std::env::var("MIRDAN_AGENTS_CONFIG").ok();
-        std::env::set_var("MIRDAN_AGENTS_CONFIG", path);
-        Self { original }
-    }
-}
-
-impl Drop for MirdanConfigGuard {
-    fn drop(&mut self) {
-        match &self.original {
-            Some(v) => std::env::set_var("MIRDAN_AGENTS_CONFIG", v),
-            None => std::env::remove_var("MIRDAN_AGENTS_CONFIG"),
-        }
-    }
-}
-
-/// Write an agents config whose only agent is a detected `claude-code` whose
-/// settings files live under `root`, and return its path.
-///
-/// `detect` points at `root` (which exists), so the agent is detected without
-/// the test touching a real `~/.claude`. `settings_path` is the absolute
-/// `.claude/settings.json` under `root`; the Local-scope deny writes its
-/// `settings.local.json` sibling.
-fn write_claude_agents_config(root: &Path) -> std::path::PathBuf {
-    let settings = root.join(".claude/settings.json");
-    let global_settings = root.join("global-settings.json");
-    let config = format!(
-        r#"
-agents:
-  - id: claude-code
-    name: Claude Code
-    project_path: .claude/skills
-    global_path: ~/.claude/skills
-    detect:
-      - dir: {root}
-    settings_path: {settings}
-    global_settings_path: {global_settings}
-    doctor: true
-"#,
-        root = root.display(),
-        settings = settings.display(),
-        global_settings = global_settings.display(),
-    );
-    let path = root.join("agents.yaml");
-    std::fs::write(&path, config).expect("write agents.yaml");
-    path
-}
+use super::mirdan_test_support::{write_claude_agents_config, MirdanConfigGuard};
 
 /// Start an in-process HTTP MCP server in an isolated tempdir.
 ///
@@ -127,7 +76,7 @@ fn deny_list(settings_path: &Path) -> Vec<String> {
 /// local settings (`.claude/settings.local.json`), derived from the served
 /// `Replacement{native:"Bash"}` shell tool.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[serial]
+#[serial(mirdan_env)]
 async fn claude_client_triggers_bash_deny() {
     let (mut server, temp) = start_isolated_server().await;
     let _guard = MirdanConfigGuard::set(&write_claude_agents_config(temp.path()));
@@ -152,7 +101,7 @@ async fn claude_client_triggers_bash_deny() {
 /// A llama client connecting at serve time triggers no deny — it mounts its own
 /// shell and has no native `Bash` to suppress.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[serial]
+#[serial(mirdan_env)]
 async fn llama_client_triggers_no_deny() {
     let (mut server, temp) = start_isolated_server().await;
     let _guard = MirdanConfigGuard::set(&write_claude_agents_config(temp.path()));
@@ -172,7 +121,7 @@ async fn llama_client_triggers_no_deny() {
 /// An unknown client connecting at serve time triggers no deny — only Claude
 /// hosts have their native tools suppressed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[serial]
+#[serial(mirdan_env)]
 async fn unknown_client_triggers_no_deny() {
     let (mut server, temp) = start_isolated_server().await;
     let _guard = MirdanConfigGuard::set(&write_claude_agents_config(temp.path()));

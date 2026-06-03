@@ -6,6 +6,7 @@ mod file_size_limits;
 mod file_tools_integrations;
 mod final_http;
 mod mcp_server_paritys;
+mod mirdan_test_support;
 mod per_client_tool_composition;
 mod rmcp_stdio_working;
 mod semantic_search_e2e;

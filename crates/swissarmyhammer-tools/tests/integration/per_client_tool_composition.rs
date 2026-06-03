@@ -18,10 +18,13 @@
 
 use std::collections::HashSet;
 
+use serial_test::serial;
 use swissarmyhammer_tools::mcp::{
     test_utils::create_test_client_named,
     unified_server::{start_mcp_server_with_options, McpServerHandle, McpServerMode},
 };
+
+use super::mirdan_test_support::{write_claude_agents_config, MirdanConfigGuard};
 
 /// `Replacement`-category tool: served only to Claude.
 const SHELL_TOOL: &str = "shell";
@@ -87,9 +90,18 @@ fn assert_all_present(names: &HashSet<String>, required: &[&str], context: &str)
 
 /// A Claude client (`"claude-code"`) is advertised `Shared` + `Replacement`:
 /// `shell` is present, every `Agent` tool is absent.
+///
+/// Connecting a Claude client triggers the serve-time native-deny path, which
+/// reads the process-global `MIRDAN_AGENTS_CONFIG`. This test therefore joins
+/// the shared `#[serial(mirdan_env)]` group and redirects that env var into its
+/// own isolated tempdir (via [`MirdanConfigGuard`]) so the handshake's deny can
+/// never leak into the real environment or another test's tempdir, regardless
+/// of run ordering.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(mirdan_env)]
 async fn claude_client_gets_shared_plus_shell_not_agent_tools() {
-    let (mut server, _temp) = start_isolated_server().await;
+    let (mut server, temp) = start_isolated_server().await;
+    let _guard = MirdanConfigGuard::set(&write_claude_agents_config(temp.path()));
 
     let names = advertised_tools(&server, "claude-code").await;
 
