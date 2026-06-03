@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KT45WX7DR10FVVZHQE0QT3JT
-position_column: todo
-position_ordinal: a980
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffe380
 project: plugin-arch
 title: Wire the project plugin layer per board (board_dir/.kanban/plugins) + un-ignore it in .kanban gitignore
 ---

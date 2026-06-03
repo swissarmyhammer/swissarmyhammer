@@ -108,8 +108,14 @@ impl PluginPlatform {
     /// read-only **builtin layer root** — the lowest-precedence discovery
     /// layer. The in-process `kanban` tool is exposed *before* any plugin is
     /// loaded, so a plugin that activates `{ rust: "kanban" }` always finds the
-    /// module already exposed. There is **no project layer** — the kanban
-    /// app has only the builtin and user layers.
+    /// module already exposed.
+    ///
+    /// The optional `project_root` is the host's writable **project layer**, the
+    /// highest-precedence discovery layer (project shadows user shadows
+    /// builtin). A per-board host passes the board's `.kanban` directory so its
+    /// project plugins resolve at `<board_dir>/.kanban/plugins/<id>/`; the
+    /// global fallback host passes `None`, so it carries only the builtin and
+    /// user layers shared process-wide.
     ///
     /// Plugins are NOT discovered here — call
     /// [`discover_plugins`](Self::discover_plugins) after any additional
@@ -121,6 +127,10 @@ impl PluginPlatform {
     /// - `user_root` — the writable user-layer root (`$XDG_CONFIG_HOME/kanban`).
     /// - `builtin_cache` — the directory the bundled builtin plugins are
     ///   extracted into; it becomes the host's builtin layer root.
+    /// - `project_root` — the writable project-layer root, or `None` for a host
+    ///   with no project layer. Discovery joins `plugins/` onto this root, so a
+    ///   per-board host passes `<board_dir>/.kanban` to resolve project plugins
+    ///   at `<board_dir>/.kanban/plugins/<id>/`.
     /// - `tool_working_dir` — the working directory the exposed `kanban` tool
     ///   resolves its `.kanban` board against.
     ///
@@ -131,18 +141,20 @@ impl PluginPlatform {
     pub(crate) async fn build(
         user_root: PathBuf,
         builtin_cache: PathBuf,
+        project_root: Option<PathBuf>,
         tool_working_dir: PathBuf,
     ) -> Result<Self, String> {
         // Extract the embedded builtin bundles into the cache, then build the
         // host with that cache as its builtin layer root. The builtin layer is
         // a first-class discovery layer: builtins are discovered, not loaded
-        // one by one. No project layer — the kanban app has only builtin +
-        // user.
+        // one by one. The project layer (when supplied) stacks on top of the
+        // shared builtin + user layers, so a per-board host's project plugins
+        // shadow user/builtin copies of the same id for that board only.
         extract_builtin_plugins(&builtin_cache)?;
         let host = PluginHost::new(
             Some(builtin_cache),
             user_root.clone(),
-            None,
+            project_root,
             false,
             user_root.clone(),
         );
@@ -957,6 +969,212 @@ mod tests {
             ids_b.contains(BUILTIN_COMMAND_ID),
             "board B must still carry the builtin baseline; got {ids_b:?}"
         );
+    }
+
+    // ── Project plugin layer (per-board) integration tests ──────────────────
+    //
+    // These prove the per-board PROJECT layer: a plugin bundle checked into a
+    // board's `<board_dir>/.kanban/plugins/<id>/` loads in THAT board's host
+    // only, stacked over the shared user + builtin layers, and a project copy
+    // shadows a user copy of the same id for that board. They drive the REAL
+    // pipeline — `open_board` builds each per-board host with its project layer
+    // rooted at the board's `.kanban` — not a fixture.
+
+    /// Write a project plugin bundle that registers a single command `command_id`
+    /// into the board's `commands` registry, at `<board_dir>/.kanban/plugins/<id>/`.
+    ///
+    /// The bundle is a real TS-only plugin: it `ensureServices(["commands"])`
+    /// then `registerCommands` one command, exactly the path the builtin command
+    /// plugins take. Seeing `command_id` in a host's `list command` is proof the
+    /// project plugin genuinely loaded and is functional in that host. The
+    /// `execute` callback only has to resolve at dispatch time, so a trivial
+    /// no-op body is enough to prove registration + listing.
+    ///
+    /// `board_dir` is the board's working directory (the parent of `.kanban`);
+    /// `id` is the bundle directory name and so the plugin's identity.
+    fn write_project_command_plugin(board_dir: &std::path::Path, id: &str, command_id: &str) {
+        let plugins_dir = board_dir.join(".kanban").join("plugins");
+        let plugin_dir = plugins_dir.join(id);
+        std::fs::create_dir_all(&plugin_dir).expect("project plugin directory");
+        let entry = format!(
+            "import {{ Plugin, ensureServices, registerCommands }} from '@swissarmyhammer/plugin';\n\
+             export default class P extends Plugin {{\n\
+               async load(): Promise<void> {{\n\
+                 await ensureServices(this, ['commands']);\n\
+                 await registerCommands(this, [{{\n\
+                   id: '{command_id}',\n\
+                   name: '{command_id}',\n\
+                   execute: async () => ({{ ok: true }}),\n\
+                 }}]);\n\
+                 this.log.info('{id} loaded');\n\
+               }}\n\
+             }}\n"
+        );
+        std::fs::write(plugin_dir.join("index.ts"), entry).expect("project plugin index.ts");
+    }
+
+    /// Open a board on `state` whose project plugin layer has been seeded BEFORE
+    /// open, so `open_board`'s per-board host discovers the project plugin.
+    ///
+    /// Returns the board temp dir (kept alive by the caller) and the canonical
+    /// `.kanban` path the board registered under. `seed` runs against the board
+    /// directory while the board is still on disk-only, before `open_board`
+    /// builds the per-board platform — that build is when project-layer discovery
+    /// runs, so the bundle must already exist.
+    async fn open_temp_board_seeded(
+        state: &AppState,
+        seed: impl FnOnce(&std::path::Path),
+    ) -> (TempDir, std::path::PathBuf) {
+        let dir = TempDir::new().expect("board temp dir");
+        seed(dir.path());
+        let canonical = state
+            .open_board(dir.path(), None)
+            .await
+            .expect("open_board should succeed");
+        (dir, canonical)
+    }
+
+    /// CROSS-BOARD ISOLATION: a project plugin checked into board A's
+    /// `<board_dir>/.kanban/plugins/<id>/` loads in board A's host ONLY — its
+    /// command is visible in board A's `list command` and absent from board B's.
+    ///
+    /// This is the per-board project-layer proof the per-window host card
+    /// deferred to this card: the project layer is rooted at each board's
+    /// `.kanban`, so a bundle dropped into board A's project layer cannot leak
+    /// into board B. Board B carries the shared builtin baseline (proving the
+    /// absence is isolation, not an empty registry).
+    #[tokio::test]
+    async fn a_project_plugin_loads_in_its_board_only() {
+        let (_user_root, _builtin_cache, _global_dir, state) = app_state_with_plugin_roots().await;
+
+        // A command id that is NOT part of the builtin baseline, so seeing it in
+        // a host's `list command` proves it came from board A's project plugin.
+        const PROJECT_COMMAND: &str = "project.probe.only-in-board-a";
+
+        // Board A is seeded with a project plugin BEFORE open, so its per-board
+        // host discovers the project layer at <board_a>/.kanban/plugins/.
+        let (_dir_a, path_a) = open_temp_board_seeded(&state, |board_dir| {
+            write_project_command_plugin(board_dir, "board-a-project-plugin", PROJECT_COMMAND);
+        })
+        .await;
+        // Board B has no project plugin.
+        let (_dir_b, path_b) = open_temp_board(&state).await;
+        assert_ne!(path_a, path_b, "the two boards must be distinct");
+
+        let (handle_a, handle_b) = {
+            let boards = state.boards.read().await;
+            (
+                boards.get(&path_a).expect("board A is open").clone(),
+                boards.get(&path_b).expect("board B is open").clone(),
+            )
+        };
+        let platform_a = handle_a
+            .platform()
+            .expect("board A has a per-board platform");
+        let platform_b = handle_b
+            .platform()
+            .expect("board B has a per-board platform");
+
+        let ids_a = list_command_ids(&*platform_a.lock().await).await;
+        let ids_b = list_command_ids(&*platform_b.lock().await).await;
+
+        assert!(
+            ids_a.contains(PROJECT_COMMAND),
+            "board A's host must load its project plugin and list its command \
+             (project layer rooted at <board_a>/.kanban); got {ids_a:?}"
+        );
+        assert!(
+            !ids_b.contains(PROJECT_COMMAND),
+            "board B's host must NOT see board A's project plugin command — the \
+             project layer is per-board; got {ids_b:?}"
+        );
+        // Sanity: board B still carries the shared builtin baseline, so the
+        // absence above is per-board project isolation, not an empty registry.
+        assert!(
+            ids_b.contains(BUILTIN_COMMAND_ID),
+            "board B must still carry the builtin baseline; got {ids_b:?}"
+        );
+    }
+
+    /// PROJECT SHADOWS USER: when a plugin id exists in BOTH the shared user
+    /// layer and a board's project layer, the project copy wins for that board.
+    ///
+    /// Both copies share the bundle id `shadowed-plugin` but register DIFFERENT
+    /// command ids. The board's host must list the PROJECT copy's command and
+    /// NOT the user copy's — proving project shadows user (the discovery
+    /// precedence) end-to-end through the per-board host.
+    #[tokio::test]
+    async fn a_project_plugin_shadows_a_user_plugin_with_the_same_id() {
+        const SHARED_ID: &str = "shadowed-plugin";
+        const USER_COMMAND: &str = "shadow.probe.user-copy";
+        const PROJECT_COMMAND: &str = "shadow.probe.project-copy";
+
+        // Seed the SHARED user layer with a copy of `shadowed-plugin` BEFORE the
+        // AppState (and so the per-board hosts) is built. Reuse the project-plugin
+        // writer by pointing it at a fake board dir whose `.kanban/plugins` IS the
+        // user root's `plugins/` — the bundle shape is identical across layers.
+        let user_root = TempDir::new().expect("user root temp dir");
+        let builtin_cache = TempDir::new().expect("builtin cache temp dir");
+        let global_board_dir = TempDir::new().expect("global tool working dir");
+        let user_plugins = user_root.path().join("plugins");
+        std::fs::create_dir_all(&user_plugins).expect("user plugins dir");
+        write_user_command_plugin(&user_plugins, SHARED_ID, USER_COMMAND);
+
+        let state = AppState::new_for_test_with_plugins(
+            user_root.path().to_path_buf(),
+            builtin_cache.path().to_path_buf(),
+            global_board_dir.path().to_path_buf(),
+        )
+        .await
+        .expect("AppState should build with the plugin platform");
+
+        // Board's project layer carries a SAME-ID copy registering a different
+        // command, so a win is observable by which command id is listed.
+        let (_dir, path) = open_temp_board_seeded(&state, |board_dir| {
+            write_project_command_plugin(board_dir, SHARED_ID, PROJECT_COMMAND);
+        })
+        .await;
+
+        let handle = {
+            let boards = state.boards.read().await;
+            boards.get(&path).expect("board is open").clone()
+        };
+        let platform = handle.platform().expect("board has a per-board platform");
+        let ids = list_command_ids(&*platform.lock().await).await;
+
+        assert!(
+            ids.contains(PROJECT_COMMAND),
+            "the project copy of {SHARED_ID:?} must win and register its command; got {ids:?}"
+        );
+        assert!(
+            !ids.contains(USER_COMMAND),
+            "the user copy of {SHARED_ID:?} must be shadowed by the project copy; got {ids:?}"
+        );
+    }
+
+    /// Write a user-layer plugin bundle that registers a single command, at
+    /// `<user_plugins>/<id>/`. Same bundle shape as
+    /// [`write_project_command_plugin`], just rooted at the user layer's
+    /// `plugins/` directory — used to stage a same-id copy the project layer
+    /// shadows.
+    fn write_user_command_plugin(user_plugins: &std::path::Path, id: &str, command_id: &str) {
+        let plugin_dir = user_plugins.join(id);
+        std::fs::create_dir_all(&plugin_dir).expect("user plugin directory");
+        let entry = format!(
+            "import {{ Plugin, ensureServices, registerCommands }} from '@swissarmyhammer/plugin';\n\
+             export default class P extends Plugin {{\n\
+               async load(): Promise<void> {{\n\
+                 await ensureServices(this, ['commands']);\n\
+                 await registerCommands(this, [{{\n\
+                   id: '{command_id}',\n\
+                   name: '{command_id}',\n\
+                   execute: async () => ({{ ok: true }}),\n\
+                 }}]);\n\
+                 this.log.info('{id} loaded');\n\
+               }}\n\
+             }}\n"
+        );
+        std::fs::write(plugin_dir.join("index.ts"), entry).expect("user plugin index.ts");
     }
 
     /// A boardless / unknown window falls back to the global platform: the

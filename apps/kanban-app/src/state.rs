@@ -342,9 +342,10 @@ impl BoardHandle {
         // shared builtin cache + user plugin layer. Mirrors the global platform
         // wiring (build → wire_command_services → expose window/app → discover),
         // so a per-board host carries the same builtin command baseline as the
-        // global one — only the registries are isolated. `project_root` is
-        // intentionally left `None` here (a follow-up card wires it to the board
-        // dir); the structure is the deliverable.
+        // global one — only the registries are isolated. The host's project
+        // layer is rooted at this board's `.kanban` directory, so this board's
+        // checked-in project plugins (`<board>/.kanban/plugins/<id>/`) load here
+        // and shadow user/builtin copies of the same id — for THIS board only.
         let platform = match plugin_roots {
             Some(roots) => build_board_platform(roots, &kanban_path, apphandle_shells).await,
             None => None,
@@ -670,9 +671,14 @@ impl AppState {
     ) -> Result<Self, String> {
         let path = std::env::temp_dir().join(format!("kanban-test-{}.yaml", ulid::Ulid::new()));
         let ui_state = Arc::new(UIState::load(path));
-        let mut platform =
-            PluginPlatform::build(user_root.clone(), builtin_cache.clone(), tool_working_dir)
-                .await?;
+        // The test global platform models a boardless host: no project layer.
+        let mut platform = PluginPlatform::build(
+            user_root.clone(),
+            builtin_cache.clone(),
+            None,
+            tool_working_dir,
+        )
+        .await?;
         // Mirror production: wire the non-AppHandle command-service modules,
         // then expose `window` / `app` from SPY shells, then discover — so the
         // bundled command plugins (which `ensureServices` against those modules
@@ -1219,9 +1225,12 @@ async fn build_plugin_platform(roots: Option<&PluginRoots>) -> PluginPlatform {
     };
     let tool_working_dir = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
 
+    // The global platform is the fallback for boardless windows; it has no
+    // project layer, so its plugins are the shared builtin + user layers only.
     match PluginPlatform::build(
         roots.user_root.clone(),
         roots.builtin_cache.clone(),
+        None,
         tool_working_dir,
     )
     .await
@@ -1251,12 +1260,15 @@ type ApphandleShells = Option<(
 ///
 /// Mirrors the global wiring: `build` → `wire_command_services` → expose
 /// `window` / `app` (from `apphandle_shells`) → `discover_plugins`. The host is
-/// therefore identical in capability to the global one; only its registries are
-/// isolated. `tool_working_dir` is the board dir (the parent of
-/// `<board>/.kanban`), so this host's exposed `kanban` tool resolves THIS board.
+/// therefore identical in capability to the global one; only its registries and
+/// its **project plugin layer** are isolated. `tool_working_dir` is the board
+/// dir (the parent of `<board>/.kanban`), so this host's exposed `kanban` tool
+/// resolves THIS board.
 ///
-/// `project_root` is intentionally NOT set to the board dir yet — that is the
-/// next card. Returns `None` (logged) on any failure so a broken plugin layer
+/// The host's project layer is rooted at `<board_dir>/.kanban`, so discovery
+/// resolves this board's project plugins at `<board_dir>/.kanban/plugins/<id>/`,
+/// stacked over the shared user + builtin layers (project shadows user shadows
+/// builtin). Returns `None` (logged) on any failure so a broken plugin layer
 /// never blocks opening the board; the caller then falls back to the global
 /// platform for this board's windows.
 async fn build_board_platform(
@@ -1319,9 +1331,16 @@ async fn build_board_platform_inner(
     board_dir: &Path,
     apphandle_shells: ApphandleShells,
 ) -> Option<PluginPlatform> {
+    // The project layer root is the board's `.kanban` directory: discovery joins
+    // `plugins/` onto it (`<board_dir>/.kanban/plugins/`), so this board's
+    // checked-in project plugins load here and shadow user/builtin copies of the
+    // same id — for THIS board only. `DIR_NAME` is the canonical `.kanban` name.
+    use swissarmyhammer_directory::{DirectoryConfig, KanbanConfig};
+    let project_root = board_dir.join(KanbanConfig::DIR_NAME);
     let mut platform = match PluginPlatform::build(
         roots.user_root.clone(),
         roots.builtin_cache.clone(),
+        Some(project_root),
         board_dir.to_path_buf(),
     )
     .await

@@ -208,19 +208,32 @@ impl DirectoryConfig for RalphConfig {
 /// The kanban desktop app uses this configuration to resolve its user-level
 /// config directory — `$XDG_CONFIG_HOME/kanban/` (i.e. `~/.config/kanban/`).
 /// The plugin platform's user layer is the `plugins/` subdirectory of that
-/// directory: `~/.config/kanban/plugins/<plugin-id>/`.
+/// directory: `~/.config/kanban/plugins/<plugin-id>/`. A board's `.kanban`
+/// directory also hosts the **project plugin layer** at `.kanban/plugins/`,
+/// whose bundles are meant to be checked into the repo and shared — so the
+/// `.gitignore` re-includes `plugins/` even though everything else in `.kanban`
+/// (board state, undo stack, runtime data) stays ignored.
 #[derive(Debug, Clone, Copy)]
 pub struct KanbanConfig;
 
 impl DirectoryConfig for KanbanConfig {
     const DIR_NAME: &'static str = ".kanban";
     const XDG_NAME: &'static str = "kanban";
+    // Ignore everything in `.kanban` except `.gitignore` and the project plugin
+    // layer. `plugins/` holds repo-shared, checked-in project plugins
+    // (`.kanban/plugins/<id>/index.ts`); un-ignoring both the directory and its
+    // contents (`!plugins/` then `!plugins/**`) is required because git will not
+    // descend into a directory excluded by `*`, so the directory itself must be
+    // re-included before any path under it can be.
     const GITIGNORE_CONTENT: &'static str = r#"# Kanban app runtime data
 # This file is automatically created by swissarmyhammer-directory
 
-# Ignore everything except this gitignore
+# Ignore everything except this gitignore and the project plugin layer
 *
 !.gitignore
+# Track checked-in project plugins (.kanban/plugins/<id>/...)
+!plugins/
+!plugins/**
 "#;
 
     fn init_subdirs() -> &'static [&'static str] {
@@ -286,6 +299,14 @@ mod tests {
         assert_eq!(KanbanConfig::DIR_NAME, ".kanban");
         assert_eq!(KanbanConfig::XDG_NAME, "kanban");
         assert!(KanbanConfig::GITIGNORE_CONTENT.contains("!.gitignore"));
+        // Runtime data is still ignored wholesale via `*`.
+        assert!(KanbanConfig::GITIGNORE_CONTENT.contains("\n*\n"));
+        // The project plugin layer is re-included so checked-in project plugins
+        // (`.kanban/plugins/<id>/...`) are tracked. Both the directory and its
+        // contents must be un-ignored, since git will not descend into a
+        // directory excluded by `*`.
+        assert!(KanbanConfig::GITIGNORE_CONTENT.contains("!plugins/"));
+        assert!(KanbanConfig::GITIGNORE_CONTENT.contains("!plugins/**"));
         assert!(KanbanConfig::init_subdirs().is_empty());
     }
 }
