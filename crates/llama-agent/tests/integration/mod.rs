@@ -9,6 +9,7 @@ mod acp_stdio_transport;
 mod acp_write_file;
 mod agent_cache_integration;
 mod agent_generate_path;
+mod agent_tools_mount;
 mod backward_compatibility;
 mod incremental_processing;
 mod long_conversation;

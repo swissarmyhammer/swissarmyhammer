@@ -85,8 +85,11 @@ mod acp_tests {
 
         let acp_config = llama_agent::acp::config::AcpConfig::default();
 
-        // Create the ACP server
-        let server = AcpServer::new(agent_server, acp_config).0;
+        // Create the ACP server with a real in-process Agent-tools mount.
+        let mount = Arc::new(llama_agent::InProcessMount::new(
+            llama_agent::echo::EchoService::new(),
+        ));
+        let server = AcpServer::new(agent_server, acp_config, mount).0;
         Ok(Arc::new(server))
     }
 
@@ -1030,7 +1033,10 @@ mod session_resume_tests {
             agent_config,
         ));
 
-        let (server, rx) = AcpServer::new(agent_server, AcpConfig::default());
+        let mount = Arc::new(llama_agent::InProcessMount::new(
+            llama_agent::echo::EchoService::new(),
+        ));
+        let (server, rx) = AcpServer::new(agent_server, AcpConfig::default(), mount);
         (Arc::new(server), rx)
     }
 

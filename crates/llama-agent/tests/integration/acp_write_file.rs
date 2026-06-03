@@ -98,8 +98,12 @@ mod acp_write_file_tests {
             ..Default::default()
         };
 
-        // Create the ACP server
-        let server = AcpServer::new(agent_server, acp_config).0;
+        // Create the ACP server with a real in-process Agent-tools mount
+        // (EchoService) to satisfy the required mount input.
+        let mount = Arc::new(llama_agent::InProcessMount::new(
+            llama_agent::echo::EchoService::new(),
+        ));
+        let server = AcpServer::new(agent_server, acp_config, mount).0;
         Ok(Arc::new(server))
     }
 

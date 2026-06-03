@@ -72,8 +72,21 @@ pub async fn handle_command(
         }
     };
 
+    // Build the always-on Agent-tools mount through the single cycle-free seam
+    // in `swissarmyhammer-agent`, then hand it to the ACP server so the llama
+    // agent is fully tooled (files, web, skill, subagent, shell) even with no
+    // external MCP servers configured.
+    let agent_tools_mount = match swissarmyhammer_agent::build_agent_tools_mount().await {
+        Ok(mount) => mount,
+        Err(e) => {
+            eprintln!("Failed to build agent-tools mount: {}", e);
+            return crate::exit_codes::EXIT_ERROR;
+        }
+    };
+
     // Create ACP server
-    let (acp_server, _notification_rx) = AcpServer::new(agent_server, acp_config);
+    let (acp_server, _notification_rx) =
+        AcpServer::new(agent_server, acp_config, agent_tools_mount);
     let acp_server = Arc::new(acp_server);
 
     // Run with stdio

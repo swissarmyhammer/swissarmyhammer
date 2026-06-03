@@ -139,7 +139,10 @@ fn build_unloaded_server(config: AgentConfig) -> (Arc<AcpServer>, Receiver<Notif
         config,
     ));
 
-    let (server, rx) = AcpServer::new(agent_server, AcpConfig::default());
+    let mount = Arc::new(llama_agent::InProcessMount::new(
+        llama_agent::echo::EchoService::new(),
+    ));
+    let (server, rx) = AcpServer::new(agent_server, AcpConfig::default(), mount);
     (Arc::new(server), rx)
 }
 
@@ -223,7 +226,10 @@ async fn build_real_model_server(
         }
     };
 
-    let (server, rx) = AcpServer::new(Arc::new(agent), AcpConfig::default());
+    let mount = Arc::new(llama_agent::InProcessMount::new(
+        llama_agent::echo::EchoService::new(),
+    ));
+    let (server, rx) = AcpServer::new(Arc::new(agent), AcpConfig::default(), mount);
     Some((Arc::new(server), rx))
 }
 

@@ -8084,6 +8084,8 @@ dependencies = [
  "serde_json",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
+ "swissarmyhammer-prompts",
+ "swissarmyhammer-tools",
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite",

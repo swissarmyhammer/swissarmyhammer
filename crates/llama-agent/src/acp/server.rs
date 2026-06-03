@@ -77,6 +77,15 @@ pub struct AcpServer {
     /// transparently reloads it from the store on the next request. Mirrors
     /// claude-agent's `SessionManager::max_session_age`.
     max_session_age: std::time::Duration,
+
+    /// Source of the agent's intrinsic Agent tools (files, web, skill, subagent,
+    /// shell).
+    ///
+    /// Required, never optional: every session mounts a fresh connection from it
+    /// during [`new_session`](Self::new_session), independent of the external
+    /// MCP server list. This is what makes a llama-agent fully tooled even when
+    /// the `session/new` request carries zero MCP servers.
+    agent_tools_mount: Arc<dyn crate::mcp::AgentToolsMount>,
 }
 
 /// Default interval between session-cache eviction sweeps (5 minutes).
@@ -100,6 +109,7 @@ impl AcpServer {
     pub fn new(
         agent_server: Arc<AgentServer>,
         config: AcpConfig,
+        agent_tools_mount: Arc<dyn crate::mcp::AgentToolsMount>,
     ) -> (
         Self,
         tokio::sync::broadcast::Receiver<agent_client_protocol::schema::SessionNotification>,
@@ -107,6 +117,7 @@ impl AcpServer {
         Self::with_cleanup_settings(
             agent_server,
             config,
+            agent_tools_mount,
             DEFAULT_CLEANUP_INTERVAL,
             DEFAULT_MAX_SESSION_AGE,
         )
@@ -127,6 +138,7 @@ impl AcpServer {
     pub fn with_cleanup_settings(
         agent_server: Arc<AgentServer>,
         config: AcpConfig,
+        agent_tools_mount: Arc<dyn crate::mcp::AgentToolsMount>,
         cleanup_interval: std::time::Duration,
         max_session_age: std::time::Duration,
     ) -> (
@@ -163,6 +175,7 @@ impl AcpServer {
             elicitation_endpoint: Arc::new(RwLock::new(None)),
             cleanup_interval,
             max_session_age,
+            agent_tools_mount,
         };
 
         (server, notification_rx)
@@ -1702,10 +1715,33 @@ impl AcpServer {
         let mut all_mcp_servers = self.config.default_mcp_servers.clone();
         all_mcp_servers.extend(request.mcp_servers.clone());
 
-        // Create and store per-session MCP clients
+        // Assemble the session's MCP clients. The Agent-tools mount comes first
+        // and is ALWAYS present — the agent's intrinsic tools (files, web,
+        // skill, subagent, shell) are mounted in-process regardless of how many
+        // external MCP servers the request lists. An empty external server list
+        // therefore still yields a fully-tooled agent.
+        let mut clients: Vec<Arc<dyn crate::mcp::MCPClient>> = Vec::new();
+
+        match self.agent_tools_mount.connect().await {
+            Ok(mount_client) => {
+                tracing::info!("Mounted in-process Agent-tools server for session");
+                clients.push(mount_client);
+            }
+            Err(e) => {
+                // The mount is intrinsic; failing to mount it leaves the agent
+                // without its base tools. Unlike an external MCP server (optional,
+                // log-and-continue below), the agent-tools mount is mandatory, so a
+                // connect failure must FAIL session creation rather than silently
+                // yield a tool-less agent. This enforces the load-bearing invariant
+                // that a llama-agent session always has its intrinsic Agent tools.
+                tracing::error!("Failed to mount in-process Agent-tools server: {}", e);
+                return Err(Self::convert_error(e));
+            }
+        }
+
         if !all_mcp_servers.is_empty() {
             tracing::info!(
-                "Creating {} MCP clients for session ({} from config, {} from request)",
+                "Creating {} external MCP clients for session ({} from config, {} from request)",
                 all_mcp_servers.len(),
                 self.config.default_mcp_servers.len(),
                 request.mcp_servers.len()
@@ -1724,7 +1760,6 @@ impl AcpServer {
                 ),
             );
 
-            let mut clients = Vec::new();
             for server in &all_mcp_servers {
                 match super::mcp_client_factory::create_mcp_client_from_acp(server, handler.clone())
                     .await
@@ -1740,60 +1775,65 @@ impl AcpServer {
                     }
                 }
             }
+        }
 
-            if !clients.is_empty() {
-                let client_count = clients.len();
+        if !clients.is_empty() {
+            let client_count = clients.len();
 
-                // Discover tools from all MCP clients, preserving each
-                // tool's full JSON Schema (description + parameters) so
-                // the chat-template renderer sees the real parameter
-                // contract rather than a placeholder empty object.
-                let mut all_tools = Vec::new();
-                for client in &clients {
-                    match client.list_tools_with_schemas().await {
-                        Ok(tools) => {
-                            tracing::info!("Discovered {} tools from MCP client", tools.len());
-                            all_tools.extend(tools);
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to list tools from MCP client: {}", e);
-                        }
+            // Discover tools from all MCP clients, preserving each
+            // tool's full JSON Schema (description + parameters) so
+            // the chat-template renderer sees the real parameter
+            // contract rather than a placeholder empty object.
+            // No cross-client name-collision dedup: this assumes tool names are
+            // unique across the mount and external servers. Holds today because
+            // llama gets shell only from the intrinsic mount and external servers
+            // serve `Shared`-only tools; a future external server exposing a
+            // duplicate name would silently double-register and must dedup here.
+            let mut all_tools = Vec::new();
+            for client in &clients {
+                match client.list_tools_with_schemas().await {
+                    Ok(tools) => {
+                        tracing::info!("Discovered {} tools from MCP client", tools.len());
+                        all_tools.extend(tools);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to list tools from MCP client: {}", e);
                     }
                 }
+            }
 
-                // Update session with discovered tools
-                if !all_tools.is_empty() {
-                    if let Ok(Some(mut session)) = self
+            // Update session with discovered tools
+            if !all_tools.is_empty() {
+                if let Ok(Some(mut session)) = self
+                    .agent_server
+                    .session_manager()
+                    .get_session(&llama_session.id)
+                    .await
+                {
+                    tracing::info!(
+                        "Adding {} MCP tools to session {}",
+                        all_tools.len(),
+                        llama_session.id
+                    );
+                    session.available_tools.extend(all_tools);
+                    let _ = self
                         .agent_server
                         .session_manager()
-                        .get_session(&llama_session.id)
-                        .await
-                    {
-                        tracing::info!(
-                            "Adding {} MCP tools to session {}",
-                            all_tools.len(),
-                            llama_session.id
-                        );
-                        session.available_tools.extend(all_tools);
-                        let _ = self
-                            .agent_server
-                            .session_manager()
-                            .update_session(session)
-                            .await;
-                    }
+                        .update_session(session)
+                        .await;
                 }
-
-                self.agent_server
-                    .session_mcp_clients
-                    .write()
-                    .await
-                    .insert(llama_session.id, clients);
-                tracing::info!(
-                    "Stored {} MCP clients for session {}",
-                    client_count,
-                    llama_session.id
-                );
             }
+
+            self.agent_server
+                .session_mcp_clients
+                .write()
+                .await
+                .insert(llama_session.id, clients);
+            tracing::info!(
+                "Stored {} MCP clients for session {}",
+                client_count,
+                llama_session.id
+            );
         }
 
         // Get stored client capabilities
@@ -3267,7 +3307,38 @@ mod tests {
     use serial_test::serial;
     use std::time::Duration;
 
+    /// A real in-process Agent-tools mount for tests, backed by the
+    /// `EchoService` rmcp server. Satisfies the required `AcpServer::new` input
+    /// without pulling in `swissarmyhammer-tools`.
+    fn test_agent_tools_mount() -> Arc<dyn crate::mcp::AgentToolsMount> {
+        Arc::new(crate::mcp::InProcessMount::new(
+            crate::echo::EchoService::new(),
+        ))
+    }
+
+    /// An [`AgentToolsMount`] whose `connect()` always fails, used to prove that
+    /// a mount failure fails session creation rather than yielding a tool-less
+    /// agent.
+    struct FailingAgentToolsMount;
+
+    #[async_trait::async_trait]
+    impl crate::mcp::AgentToolsMount for FailingAgentToolsMount {
+        async fn connect(
+            &self,
+        ) -> Result<Arc<dyn crate::mcp::MCPClient>, crate::types::errors::MCPError> {
+            Err(crate::types::errors::MCPError::Connection(
+                "simulated agent-tools mount failure".to_string(),
+            ))
+        }
+    }
+
     async fn create_test_server() -> AcpServer {
+        create_test_server_with_mount(test_agent_tools_mount()).await
+    }
+
+    async fn create_test_server_with_mount(
+        agent_tools_mount: Arc<dyn crate::mcp::AgentToolsMount>,
+    ) -> AcpServer {
         use crate::types::{
             AgentConfig, ModelConfig, ModelSource, ParallelConfig, QueueConfig, RetryConfig,
             SessionConfig,
@@ -3324,7 +3395,7 @@ mod tests {
         ));
 
         let config = AcpConfig::default();
-        let (server, _notification_rx) = AcpServer::new(agent_server, config);
+        let (server, _notification_rx) = AcpServer::new(agent_server, config, agent_tools_mount);
         server
     }
 
@@ -3457,7 +3528,8 @@ mod tests {
             test_config,
         ));
 
-        let (server, _notification_rx) = AcpServer::new(agent_server, config);
+        let (server, _notification_rx) =
+            AcpServer::new(agent_server, config, test_agent_tools_mount());
         server
     }
 
@@ -3526,6 +3598,7 @@ mod tests {
         let (server, _notification_rx) = AcpServer::with_cleanup_settings(
             agent_server,
             AcpConfig::default(),
+            test_agent_tools_mount(),
             cleanup_interval,
             max_session_age,
         );
@@ -3752,6 +3825,39 @@ mod tests {
         // Verify session has client capabilities (even if default)
         // Just verify we can access the capabilities without panicking
         let _caps = &session.client_capabilities;
+    }
+
+    /// The intrinsic Agent-tools mount is mandatory: if its `connect()` fails,
+    /// `new_session` MUST fail rather than silently create a tool-less session.
+    /// This guards the load-bearing invariant that every llama-agent session has
+    /// its intrinsic Agent tools.
+    #[tokio::test]
+    #[serial]
+    async fn new_session_fails_when_agent_tools_mount_connect_fails() {
+        let _state = StateDirGuard::new();
+        let server =
+            Arc::new(create_test_server_with_mount(Arc::new(FailingAgentToolsMount)).await);
+
+        let new_session_request =
+            agent_client_protocol::schema::NewSessionRequest::new(std::env::current_dir().unwrap());
+
+        let result = server.new_session(new_session_request).await;
+        assert!(
+            result.is_err(),
+            "new_session must fail when the mandatory agent-tools mount cannot connect, \
+             not yield a tool-less session"
+        );
+
+        // No session should have been stored from the failed creation.
+        let response = server
+            .list_sessions(agent_client_protocol::schema::ListSessionsRequest::new())
+            .await
+            .expect("list_sessions should succeed");
+        assert!(
+            response.sessions.is_empty(),
+            "a failed mount connect must not leave a session behind; got {:?}",
+            response.sessions
+        );
     }
 
     /// `session/list` returns nothing when no sessions have been created.
@@ -4096,7 +4202,8 @@ mod tests {
             ..Default::default()
         };
 
-        let (acp_server, _notification_rx) = AcpServer::new(agent_server, custom_acp_config);
+        let (acp_server, _notification_rx) =
+            AcpServer::new(agent_server, custom_acp_config, test_agent_tools_mount());
         let server = Arc::new(acp_server);
 
         let request = agent_client_protocol::schema::InitializeRequest::new(
@@ -4696,7 +4803,8 @@ mod tests {
             ..Default::default()
         };
 
-        let (server, _notification_rx) = AcpServer::new(agent_server, config);
+        let (server, _notification_rx) =
+            AcpServer::new(agent_server, config, test_agent_tools_mount());
         server
     }
 

@@ -105,8 +105,14 @@ pub struct McpServer {
     /// `true` for the full server: each connection's `tools/list` is filtered by
     /// the client's [`Host`](super::host::Host) identity and each tool's
     /// `category()` (Claude → `Shared` + `Replacement`; llama/unknown → `Shared`
-    /// only). `false` for the validator server, whose minimal registry is already
-    /// scoped by `is_validator_tool()` and must be served verbatim.
+    /// only). `false` for the registries that are pre-scoped and must be served
+    /// verbatim:
+    /// - the validator server, whose minimal registry is already scoped by
+    ///   `is_validator_tool()`; and
+    /// - the agent-tools server (`create_agent_tools_server`), whose registry is
+    ///   already scoped to the intrinsic Agent tools and must surface in full
+    ///   even though no [`Host`] reports `serves(Agent)`, so per-client filtering
+    ///   would serve zero tools.
     compose_per_client: bool,
 }
 
@@ -759,6 +765,90 @@ impl McpServer {
             // The validator registry is already scoped by `is_validator_tool()`;
             // serve it verbatim rather than re-filtering by host/category, which
             // would strip its `Agent`-category read-only file tools.
+            compose_per_client: false,
+        }
+    }
+
+    /// Create an agent-tools-only `McpServer` clone with a filtered registry.
+    ///
+    /// The returned server shares all state (ToolContext, prompt/skill/agent
+    /// libraries, etc.) but has a separate `ToolRegistry` containing only the
+    /// tools a base agent needs to be useful: the `Agent`-category tools
+    /// (file read/write/edit + the split `read_file`/`glob_files`/`grep_files`,
+    /// web, skill, subagent) plus the shell `Replacement` tool. This is the set
+    /// `llama-agent` mounts in-process as its own built-ins, so the agent is
+    /// fully tooled even when handed zero external MCP servers.
+    ///
+    /// Both the unified `files` tool (CLI-style `op` dispatch) and the three
+    /// split file tools are registered — the split forms match the names a
+    /// Hermes-trained model naturally emits, mirroring
+    /// [`create_validator_server`](Self::create_validator_server).
+    ///
+    /// # `compose_per_client = false` — load-bearing
+    ///
+    /// The full server filters its advertised tools per connecting client via
+    /// [`Host::serves`](super::host::Host::serves), which returns `false` for
+    /// every `Agent`-category tool for *every* host (off-the-shelf agents
+    /// provide those natively; llama mounts its own). Serving this instance with
+    /// per-client composition would therefore advertise **zero** tools to llama.
+    /// This registry is already exactly the set to serve, so it is served
+    /// verbatim — `compose_per_client` is `false`, just like the validator
+    /// server.
+    pub fn create_agent_tools_server(&self) -> McpServer {
+        // `register_file_tools`, `register_web_tools`, `register_shell_tools`,
+        // `register_agent_tools`, and `register_skill_tools` are imported at
+        // module scope; only the split-file helper needs a local `use`.
+        use super::tools::files::register_validator_file_tools;
+
+        let mut agent_registry = ToolRegistry::new();
+
+        // Files: both the unified `op`-dispatched tool and the split
+        // read_file/glob_files/grep_files tools models call by name.
+        register_file_tools(&mut agent_registry);
+        register_validator_file_tools(&mut agent_registry);
+        register_web_tools(&mut agent_registry);
+        // Shell is the `Replacement{native:"Bash"}` tool; llama always gets its
+        // shell from this mount (and only here), satisfying the "shell appears
+        // exactly once" invariant.
+        register_shell_tools(&mut agent_registry);
+        register_agent_tools(
+            &mut agent_registry,
+            self.agent_library.clone(),
+            self.library.clone(),
+        );
+        register_skill_tools(
+            &mut agent_registry,
+            self.skill_library.clone(),
+            self.library.clone(),
+        );
+
+        let tool_count = agent_registry.len();
+        let agent_registry_arc = Arc::new(RwLock::new(agent_registry));
+
+        tracing::debug!(
+            "Created agent-tools registry with {} tools (compose_per_client=false)",
+            tool_count
+        );
+
+        // Clone the tool context but point it at the agent-only registry so
+        // these tools dispatch among themselves, not into the full server.
+        let mut agent_context = (*self.tool_context).clone();
+        agent_context.tool_registry = Some(agent_registry_arc.clone());
+        let agent_context = Arc::new(agent_context);
+
+        McpServer {
+            library: self.library.clone(),
+            file_watcher: self.file_watcher.clone(),
+            file_watcher_task: self.file_watcher_task.clone(),
+            file_watch_stopped: self.file_watch_stopped.clone(),
+            tool_registry: agent_registry_arc,
+            tool_context: agent_context,
+            skill_library: self.skill_library.clone(),
+            agent_library: self.agent_library.clone(),
+            work_dir: self.work_dir.clone(),
+            tool_config_watcher: self.tool_config_watcher.clone(),
+            // This registry IS the set to serve; serve it verbatim rather than
+            // re-filtering by host/category (which strips all `Agent` tools).
             compose_per_client: false,
         }
     }

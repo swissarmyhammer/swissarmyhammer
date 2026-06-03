@@ -46,7 +46,10 @@ pub async fn create_acp_server(
     ));
 
     let acp_config = AcpConfig::default();
-    Ok(AcpServer::new(agent_server, acp_config))
+    let mount = Arc::new(crate::mcp::InProcessMount::new(
+        crate::echo::EchoService::new(),
+    ));
+    Ok(AcpServer::new(agent_server, acp_config, mount))
 }
 
 /// Create ACP server for testing with custom AgentConfig and AcpConfig
@@ -89,5 +92,8 @@ pub async fn create_acp_server_with_config(
         agent_config,
     ));
 
-    Ok(AcpServer::new(agent_server, acp_config))
+    let mount = Arc::new(crate::mcp::InProcessMount::new(
+        crate::echo::EchoService::new(),
+    ));
+    Ok(AcpServer::new(agent_server, acp_config, mount))
 }
