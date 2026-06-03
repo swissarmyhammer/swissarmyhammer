@@ -1,0 +1,22 @@
+---
+assignees:
+- claude-code
+position_column: todo
+position_ordinal: b080
+project: command-cutover
+title: Design board-management MCP server surface; migrate list_open_boards + get_board_data off Tauri
+---
+FOLLOW-UP from 01KT6R30JGKCFGW0WQWQHN2T1X (invoke audit). `list_open_boards` and `get_board_data` stay native-for-now because they have no MCP home: the `entity` MCP server is per-board-scoped (single resolved EntityContext), but these are multi-board-management reads.
+
+- `list_open_boards` (apps/kanban-app/src/commands.rs:154) enumerates `state.boards` (the open-board set) + `state.ui_state.most_recent_board()` to mark the active board.
+- `get_board_data` (apps/kanban-app/src/commands.rs:592) resolves a board handle via `resolve_handle(board_path)` across the open-set and projects a board-level aggregate summary (columns w/ counts, tags, virtual-tag meta, summary totals).
+
+Neither maps onto an existing exposed server: `entity` has no board-enumeration/board-summary op and its scope is one board. Migrating these is NOT a trivial op on an existing server — it requires designing a new board-management MCP server surface (open-board enumeration + per-board summary), which was explicitly out of scope for the audit card.
+
+## Work
+- Decide where board-management reads belong (new `board` server, or a multi-board op group on an app-wide server alongside `window`).
+- Add `list open boards` + `get board data` ops there; route the frontend (`apps/kanban-app/ui/src/lib/refresh.ts`, `components/quick-capture.tsx`, `components/window-container.tsx`) through `callMcpTool`.
+- Remove the `list_open_boards` / `get_board_data` Tauri handlers + `generate_handler!` entries + the two allow-list entries in `no-direct-invoke.node.test.ts`.
+
+## Acceptance
+- Both handlers removed; guardrail green; cargo check -p kanban-app + UI tests green.

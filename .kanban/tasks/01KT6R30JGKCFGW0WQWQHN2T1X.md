@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ac80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffe680
 project: command-cutover
 title: Audit + migrate remaining non-transport Tauri invokes to MCP (ai_*, board, file-drop)
 ---

@@ -41,46 +41,63 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-/** Handlers a production module under `src/` may legitimately invoke. */
+/**
+ * Handlers a production module under `src/` may legitimately invoke.
+ *
+ * Every entry is one of two things, and carries a one-line justification:
+ *   - a **transport bridge** (the MCP seam itself), or
+ *   - a **documented native exception** — a handler that genuinely cannot be
+ *     expressed on the MCP wire (an AppHandle / OS / process primitive, or a
+ *     surface that has no MCP server yet and whose migration is a tracked
+ *     follow-up, not a trivial op on an already-exposed server).
+ *
+ * The audit that produced these justifications is task
+ * `01KT6R30JGKCFGW0WQWQHN2T1X`; the board-read follow-up is
+ * `01KT777JCZBDJPETEXSPAGJDVE`.
+ */
 const ALLOWED_INVOKE_HANDLERS = new Set<string>([
-  // MCP transport bridges — the seam everything migrated onto.
-  "command_tool_call",
-  "mcp_subscribe",
+  // ── Transport bridges — the seam everything migrated onto. ──
+  "command_tool_call", // transport: generic `tools/call` MCP request bridge
+  "mcp_subscribe", // transport: MCP-notification → Tauri-event pump bootstrap
+  "dispatch_command", // transport: legacy unified dispatcher `callCommandTool` lowers `execute command` onto; other sites go through `useDispatchCommand`
 
-  // Legacy unified command dispatcher — used internally by
-  // `mcp-transport.ts`'s `callCommandTool` for the `execute command` verb
-  // (the in-process Command service still routes through it). Other call
-  // sites must use the `useDispatchCommand` hook, which funnels here.
-  "dispatch_command",
+  // ── AI panel (ai-panel project territory) — documented natives. ──
+  // The in-process ACP agent's lifecycle (registry, loopback WebSocket bridge,
+  // AppState-tracked teardown) and its transient availability flag have no
+  // clean MCP-wire equivalent; an `ai` MCP server is out of scope here.
+  "ai_list_models", // native: queries the in-process AI agent registry (ModelManager::list_agents) — ai-panel territory
+  "ai_start_agent", // native: spawns the in-process ACP agent's loopback WebSocket bridge + registers it in AppState for teardown — ai-panel territory
+  "ai_set_streaming", // native: flips the transient `#[serde(skip)]` UIState.ai_streaming availability-cache flag (parallel to set_undo_redo_state) — ai-panel territory
 
-  // AppHandle-bound natives — these need an ambient Tauri AppHandle and
-  // have no equivalent on the MCP wire today.
+  // ── OS / process primitives — documented natives. ──
   // (`show_context_menu` migrated to the `window` MCP server's
-  // `show context menu` op — the native NSMenu now mounts behind the
-  // AppHandle-backed `WindowShell` seam, so it is no longer allow-listed.)
-  "save_dropped_file", // HTML5-drop bytes → temp file → attachment path
-  "ai_start_agent", // spawns the AI agent WebSocket bridge
-  "ai_list_models", // queries the in-process AI agent registry
-  "ai_set_streaming", // toggles AI agent stream mode on the host
+  // `show context menu` op behind the AppHandle-backed `WindowShell` seam, so
+  // it is no longer allow-listed.)
+  "save_dropped_file", // native: receives raw HTML5-dropped bytes (possibly large binary) and writes a temp file — wrong payload for the MCP wire
 
-  // Multi-board data feeds — still board-resolving Tauri commands
-  // because each one threads through `resolve_handle(board_path)`. The
-  // entity MCP server is per-task-local-scoped; the board enumeration
-  // surface has no MCP equivalent yet. These migrate in a follow-up
-  // stage.
-  "list_open_boards",
-  "get_board_data",
-  "list_entities",
-  "list_entity_types",
-  "get_entity_schema",
-  "list_views",
-  "search_entities", // entity fuzzy search
-  "search_mentions", // mention autocomplete (kept separate from search)
+  // ── Board-management reads — documented natives, follow-up filed. ──
+  // Both enumerate / aggregate over the multi-board open set
+  // (`state.boards`, `resolve_handle(board_path)`); the `entity` MCP server is
+  // per-board-scoped and has no board-enumeration/summary op. Migrating them
+  // needs a new board-management server surface, not a trivial op on an
+  // exposed server — tracked as `01KT777JCZBDJPETEXSPAGJDVE`.
+  "list_open_boards", // native: enumerates the open-board set + active-board marker — needs board-management server (01KT777JCZBDJPETEXSPAGJDVE)
+  "get_board_data", // native: per-board aggregate summary across the open-set — needs board-management server (01KT777JCZBDJPETEXSPAGJDVE)
 
-  // UI-state + undo: served by Tauri commands that read the shared
-  // AppState fields without going through the MCP transport.
-  "get_ui_state",
-  "get_undo_state",
+  // ── Still-Tauri data feeds (out of this audit's scope) — natives pending a
+  // later migration stage. Each threads through `resolve_handle(board_path)`
+  // and has no MCP equivalent yet. ──
+  "list_entities", // native: board-resolving entity listing — later migration stage
+  "list_entity_types", // native: board-resolving entity-type listing — later migration stage
+  "get_entity_schema", // native: board-resolving field+entity schema read — later migration stage
+  "list_views", // native: board-resolving view-definition listing — later migration stage
+  "search_entities", // native: board-resolving entity fuzzy search — later migration stage
+  "search_mentions", // native: board-resolving mention autocomplete — later migration stage
+
+  // ── UI-state + undo — documented natives. ──
+  // Served by Tauri commands that read shared AppState fields directly.
+  "get_ui_state", // native: reads the shared AppState UIState snapshot on mount — later migration stage
+  "get_undo_state", // native: reads the shared AppState undo/redo availability — later migration stage
 ]);
 
 /** Files whose `invoke("name"` literals are documentation, not calls. */
