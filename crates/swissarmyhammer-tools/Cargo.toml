@@ -32,9 +32,6 @@ swissarmyhammer-web = { workspace = true }
 swissarmyhammer-code-context = { workspace = true }
 swissarmyhammer-treesitter = { workspace = true }
 swissarmyhammer-project-detection = { workspace = true }
-# ACP agents (direct usage, no executor wrapper)
-claude-agent = { workspace = true }
-llama-agent = { workspace = true }
 
 swissarmyhammer-mcp-proxy = { workspace = true }
 
