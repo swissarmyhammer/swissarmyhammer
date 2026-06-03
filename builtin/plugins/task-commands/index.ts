@@ -24,31 +24,8 @@ import {
   Plugin,
   ensureServices,
   registerCommands,
+  unwrapResult,
 } from "@swissarmyhammer/plugin";
-
-/**
- * Parse the JSON payload a kanban operation tool returns.
- *
- * The kanban tool answers `tools/call` with a `CallToolResult` whose single
- * text content item carries the operation's JSON payload as a string (it does
- * NOT populate `structuredContent`). To read `tasks` / `columns` arrays back,
- * the plugin must pull `content[0].text` and `JSON.parse` it — the same shape
- * the in-process `kanban` module returns to any caller.
- */
-function kanbanPayload(result: unknown): Record<string, unknown> {
-  const content = (result as { content?: unknown[] } | undefined)?.content;
-  const first = Array.isArray(content) ? content[0] : undefined;
-  const text = (first as { text?: unknown } | undefined)?.text;
-  if (typeof text !== "string") return {};
-  try {
-    const parsed = JSON.parse(text);
-    return parsed && typeof parsed === "object"
-      ? (parsed as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
-}
 
 /** A task as it appears in a `list tasks` payload (only the fields we read). */
 interface ListedTask {
@@ -72,7 +49,7 @@ async function sortedColumnTasks(
   excludeId: string | undefined,
 ): Promise<ListedTask[]> {
   const listed = await plugin.kanban.kanban.tasks.list({ column });
-  const tasks = kanbanPayload(listed).tasks;
+  const tasks = unwrapResult(listed).tasks;
   if (!Array.isArray(tasks)) return [];
   const out: ListedTask[] = [];
   for (const raw of tasks) {
@@ -269,7 +246,7 @@ export default class TaskCommandsPlugin extends Plugin {
           // regression this replaces.) Find the order-0 column, then move the
           // task before that column's current first task so it lands at the top.
           const listedColumns = await this.kanban.kanban.columns.list({});
-          const columns = kanbanPayload(listedColumns).columns;
+          const columns = unwrapResult(listedColumns).columns;
           if (!Array.isArray(columns) || columns.length === 0) {
             // No columns on the board — nothing to do (matches the legacy
             // "no columns on board" failure surface).

@@ -30,30 +30,8 @@ import {
   Plugin,
   ensureServices,
   registerCommands,
+  unwrapResult,
 } from "@swissarmyhammer/plugin";
-
-/**
- * Parse the JSON payload a kanban operation tool returns.
- *
- * The kanban tool answers `tools/call` with a `CallToolResult` whose single
- * text content item carries the operation's JSON payload as a string (it does
- * NOT populate `structuredContent`). To read the `columns` array back, the
- * plugin must pull `content[0].text` and `JSON.parse` it.
- */
-function kanbanPayload(result: unknown): Record<string, unknown> {
-  const content = (result as { content?: unknown[] } | undefined)?.content;
-  const first = Array.isArray(content) ? content[0] : undefined;
-  const text = (first as { text?: unknown } | undefined)?.text;
-  if (typeof text !== "string") return {};
-  try {
-    const parsed = JSON.parse(text);
-    return parsed && typeof parsed === "object"
-      ? (parsed as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
-}
 
 /**
  * Resolve the id of the first scope-chain moniker of `entityType`.
@@ -141,7 +119,7 @@ export default class KanbanMiscCommandsPlugin extends Plugin {
           }
 
           const listed = await this.kanban.kanban.columns.list({});
-          const rawColumns = kanbanPayload(listed).columns;
+          const rawColumns = unwrapResult(listed).columns;
           const columns = Array.isArray(rawColumns) ? rawColumns : [];
           // `list columns` already comes back sorted by `order` ascending, but
           // sort defensively so a future server change can't reorder us.

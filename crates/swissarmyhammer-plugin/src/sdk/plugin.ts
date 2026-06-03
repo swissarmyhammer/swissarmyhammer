@@ -772,6 +772,51 @@ export function makePluginThis<T extends Plugin>(base: T): PluginThis<T> {
 }
 
 // ---------------------------------------------------------------------------
+// Unwrapping inbound tool results
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse the JSON payload an MCP `CallToolResult` carries in its text content.
+ *
+ * The dispatch Proxy marshals callbacks *outbound*; this is its *inbound*
+ * counterpart. In-process operation tools (the `kanban` tool, the `files`
+ * tool, …) answer a `tools/call` with a `CallToolResult` whose single text
+ * content item carries the operation's JSON payload as a string — they do NOT
+ * populate `structuredContent`. To read e.g. a `tasks` / `columns` array back,
+ * a plugin must pull `content[0].text` and `JSON.parse` it. Every plugin that
+ * reads a tool result needs this, so it lives in the SDK rather than being
+ * reimplemented per bundle.
+ *
+ * The helper is deliberately **tolerant**, matching what the per-plugin helpers
+ * it replaces did: absent / non-array `content`, a missing or non-string
+ * `text`, a non-object parse, or invalid JSON all yield an empty object rather
+ * than throwing. A caller reading a field off the result therefore sees the
+ * field absent (and falls into its own empty-result branch) instead of having
+ * to guard the unwrap with a `try`.
+ *
+ * @typeParam T - the payload shape the caller expects, e.g.
+ *   `unwrapResult<{ tasks: Task[] }>(result)`. Defaults to a generic record.
+ *   The cast is unchecked — the helper guarantees only that it returns *an
+ *   object*, never that the object matches `T`.
+ * @param result - the value a dispatch leaf resolved to (a `CallToolResult`
+ *   shape), or any value — non-conforming input yields an empty object.
+ * @returns the parsed JSON payload, or an empty object on any missing /
+ *   unparseable / non-object content.
+ */
+export function unwrapResult<T = Record<string, unknown>>(result: unknown): T {
+  const content = (result as { content?: unknown[] } | undefined)?.content;
+  const first = Array.isArray(content) ? content[0] : undefined;
+  const text = (first as { text?: unknown } | undefined)?.text;
+  if (typeof text !== "string") return {} as T;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" ? (parsed as T) : ({} as T);
+  } catch {
+    return {} as T;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // The host-driven default-class lifecycle
 // ---------------------------------------------------------------------------
 

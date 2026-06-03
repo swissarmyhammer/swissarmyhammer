@@ -64,41 +64,13 @@
 // rather than dispatch a phantom call. When in doubt, the noun/verb pair is
 // whatever the tool's `_meta` tree publishes — the SDK is the source of truth.
 
-import { Plugin } from "@swissarmyhammer/plugin";
+import { Plugin, unwrapResult } from "@swissarmyhammer/plugin";
 
 // The two tasks this plugin seeds onto the board. The end-to-end test that
 // drives this bundle (`tests/kanban_tasks_e2e.rs`) asserts the board holds
 // exactly these two titles after load, so they are a fixed contract.
 const FIRST_TASK_TITLE = "Draft the plugin proposal";
 const SECOND_TASK_TITLE = "Review the plugin proposal";
-
-/**
- * Counts the tasks in a `kanban` `list tasks` result.
- *
- * A `list tasks` call returns a `CallToolResult` shape — an object with a
- * `content` array whose first entry's `text` is the listing JSON. The listing
- * is itself an object `{ tasks: [...], count: N }`. This walks that shape and
- * returns the task count, so `load()` can log it.
- *
- * @param result - the value returned by `this.board.kanban.tasks.list({})`.
- * @returns the number of tasks on the board.
- * @throws if the result is not the expected `CallToolResult`/listing shape.
- */
-function countTasks(result: unknown): number {
-  const content = (result as { content?: Array<{ text?: string }> }).content;
-  if (content === undefined || content.length === 0) {
-    throw new Error("list tasks result carried no content");
-  }
-  const text = content[0].text;
-  if (typeof text !== "string") {
-    throw new Error("list tasks content[0].text was not a string");
-  }
-  const listing = JSON.parse(text) as { tasks?: unknown };
-  if (!Array.isArray(listing.tasks)) {
-    throw new Error("list tasks content carried no `tasks` array");
-  }
-  return listing.tasks.length;
-}
 
 /**
  * The kanban-tasks example plugin.
@@ -148,8 +120,15 @@ export default class KanbanTasksPlugin extends Plugin {
     //     (plural) — the `kanban` tool declares its list operation under noun
     //     `tasks`, verb `list` (op `"list tasks"`). The path segments mirror
     //     the tool's `_meta` exactly; they are not guessed.
+    //
+    //     Unwrap the `CallToolResult` with the SDK's `unwrapResult` helper: a
+    //     `list tasks` call answers with a JSON payload string in
+    //     `content[0].text`, and `unwrapResult` pulls + parses it, typed to the
+    //     `{ tasks }` listing shape so the count read needs no hand-written
+    //     `content[0].text` walk.
     const listed = await this.board.kanban.tasks.list({});
-    this.log.info(`kanban-tasks: board now has ${countTasks(listed)} task(s)`);
+    const tasks = unwrapResult<{ tasks?: unknown[] }>(listed).tasks ?? [];
+    this.log.info(`kanban-tasks: board now has ${tasks.length} task(s)`);
   }
 }
 

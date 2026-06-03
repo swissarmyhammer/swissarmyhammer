@@ -90,6 +90,10 @@ mod tests {
             SDK_PLUGIN_SOURCE.contains("export function makePluginThis"),
             "the SDK must export makePluginThis"
         );
+        assert!(
+            SDK_PLUGIN_SOURCE.contains("export function unwrapResult"),
+            "the SDK must export the unwrapResult inbound-result helper"
+        );
     }
 
     /// The embedded SDK source carries the callback primitive: the host→isolate
