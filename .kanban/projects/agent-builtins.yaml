@@ -1,0 +1,3 @@
+color: 6E56CF
+description: Retire the is_agent_tool/remove_agent_tools/agent_mode subtraction model. Treat agent tools as always-present in-memory rmcp built-ins of llama-agent; categorize tools as Shared/Agent/Replacement; serve per-client off MCP initialize clientInfo; move Bash-deny from sah init to serve-time.
+name: Agent Tools as llama-agent Built-ins
