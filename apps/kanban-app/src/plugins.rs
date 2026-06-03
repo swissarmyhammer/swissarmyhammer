@@ -442,16 +442,11 @@ mod tests {
         let plugin_dir = plugins_dir.join(id);
         std::fs::create_dir_all(&plugin_dir).expect("probe plugin directory");
         let entry = format!(
-            "import {{ Plugin, makePluginThis }} from '@swissarmyhammer/plugin';\n\
-             class P extends Plugin {{\n\
+            "import {{ Plugin }} from '@swissarmyhammer/plugin';\n\
+             export default class P extends Plugin {{\n\
                async load(): Promise<void> {{\n\
                  this.log.info('{id} loaded');\n\
                }}\n\
-             }}\n\
-             export async function load(): Promise<unknown> {{\n\
-               const p = makePluginThis(new P()) as P;\n\
-               await p.load();\n\
-               return null;\n\
              }}\n"
         );
         std::fs::write(plugin_dir.join("index.ts"), entry).expect("probe index.ts");

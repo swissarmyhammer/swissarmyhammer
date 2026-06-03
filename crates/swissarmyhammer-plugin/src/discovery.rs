@@ -327,8 +327,12 @@ mod tests {
     fn write_bundle(layer_root: &Path, dir_name: &str, entry_file: &str) {
         let plugin_dir = layer_root.join(PLUGINS_SUBDIR).join(dir_name);
         std::fs::create_dir_all(&plugin_dir).expect("plugin dir");
-        std::fs::write(plugin_dir.join(entry_file), "export function load() {}")
-            .expect("index entry");
+        std::fs::write(
+            plugin_dir.join(entry_file),
+            "import { Plugin } from '@swissarmyhammer/plugin';\n\
+             export default class P extends Plugin {}\n",
+        )
+        .expect("index entry");
     }
 
     /// A single plugin in one layer is discovered, keyed by its directory name.

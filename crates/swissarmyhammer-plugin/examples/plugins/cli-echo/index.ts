@@ -46,21 +46,21 @@
 // controls — never a fixed absolute literal baked into the source.
 //
 // ───────────────────────────────────────────────────────────────────────────
-// The `load` / `unload` entry exports and the lifecycle hooks
+// The default-class entry and the `load` / `unload` lifecycle hooks
 // ───────────────────────────────────────────────────────────────────────────
 //
-// The host calls a module-level `load` export once when the plugin is
-// discovered, and a module-level `unload` export once when the plugin is
-// unloaded (on shutdown, or on a hot reload). Both run on the SAME isolate, so
-// this module keeps the one `Plugin` instance in a module-level variable: the
-// `load` export builds and stores it, and the `unload` export reaches the very
-// same instance to tear it down. A plugin that wants teardown MUST export an
-// `unload` function — without the export, the plugin's `unload()` hook is never
-// reached.
+// A bundle is authored as `export default class X extends Plugin { … }`. The
+// host reads that `default` export, instantiates it, wraps it with the SDK's
+// dispatch Proxy, and drives its lifecycle: it runs `load()` once when the
+// plugin is discovered, and `unload()` once when the plugin is unloaded (on
+// shutdown, or on a hot reload). Both run on the SAME isolate, against the SAME
+// host-built instance — so this example simply overrides `load()` and
+// `unload()` and writes no module-level entry boilerplate of its own.
 //
-// `load()` and `unload()` on the `Plugin` subclass are the lifecycle hooks the
-// two exports drive: `load()` is where a plugin acquires what it needs;
-// `unload()` is where it releases what it acquired — the symmetric teardown.
+// `load()` and `unload()` are the symmetric lifecycle hooks: `load()` is where a
+// plugin acquires what it needs; `unload()` is where it releases what it
+// acquired. A plugin that wants teardown overrides `unload()`; the host always
+// drives it, so there is no separate export to remember.
 //
 // The host ALSO disposes every registration a plugin made, automatically, on
 // unload — so overriding `unload()` is not required just to drop a registered
@@ -72,7 +72,7 @@
 // it unregisters the echo server. An override must call `super.unload()` so the
 // base class's `track`-disposable cleanup still runs.
 
-import { Plugin, makePluginThis } from "@swissarmyhammer/plugin";
+import { Plugin } from "@swissarmyhammer/plugin";
 
 // The command the `{ cli }` source spawns. This is a PLACEHOLDER — see the
 // "command path" section above. The end-to-end test rewrites this token in the
@@ -135,7 +135,7 @@ function echoedText(result: unknown): string {
  * unregisters the echo server — the teardown counterpart to the `load()`-time
  * `register`.
  */
-class CliEchoPlugin extends Plugin {
+export default class CliEchoPlugin extends Plugin {
   /** Human-readable name — descriptive metadata only, not plugin identity. */
   readonly name = "CLI Echo Example";
 
@@ -227,53 +227,4 @@ class CliEchoPlugin extends Plugin {
 
     this.log.info("cli-echo: recorded the unload sentinel and tore down");
   }
-}
-
-/**
- * The one plugin instance, shared between the `load` and `unload` exports.
- *
- * The host drives both exports on the same isolate, so the instance the `load`
- * export builds is still here when the `unload` export runs — letting `unload`
- * tear down the very same plugin `load` set up. It is `undefined` until `load`
- * runs and is cleared back to `undefined` by `unload`.
- */
-let instance: CliEchoPlugin | undefined;
-
-/**
- * The plugin's load entry point.
- *
- * The host calls this once when the bundle is discovered. It builds the
- * plugin, wraps it with `makePluginThis` so `this.<server>` dispatch works,
- * stores it for the `unload` export, and runs the plugin's `load()` hook.
- *
- * @returns `null` — this plugin exposes no value to the host beyond its
- *   load-time and unload-time effects.
- */
-export async function load(): Promise<unknown> {
-  const plugin = makePluginThis(new CliEchoPlugin()) as CliEchoPlugin;
-  instance = plugin;
-  await plugin.load();
-  return null;
-}
-
-/**
- * The plugin's unload entry point.
- *
- * The host calls this once when the plugin is unloaded. It runs the `unload()`
- * hook on the same instance the `load` export built — which records the unload
- * sentinel task, unregisters the `echo` server, and runs the base class
- * teardown — then clears the instance.
- *
- * Calling `unload` before `load` is a host error; the guard makes that fail
- * loudly rather than silently skipping teardown.
- *
- * @returns `null` — `unload` reports completion by returning normally.
- */
-export async function unload(): Promise<unknown> {
-  if (instance === undefined) {
-    throw new Error("cli-echo: unload called before load");
-  }
-  await instance.unload();
-  instance = undefined;
-  return null;
 }

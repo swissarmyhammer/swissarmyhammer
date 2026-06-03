@@ -14,7 +14,7 @@
 
 use std::time::Duration;
 
-use swissarmyhammer_plugin::{PluginRuntime, RuntimeConfig};
+use swissarmyhammer_plugin::{PluginLifecycle, PluginRuntime, RuntimeConfig};
 
 /// A generous upper bound on any single runtime interaction.
 ///
@@ -25,8 +25,8 @@ const TIMEOUT: Duration = Duration::from_secs(20);
 /// A relative import of a sibling module loads, transpiles, and is usable.
 ///
 /// The plugin entry imports `./helper.ts`; the helper exports a function whose
-/// result the entry's `activate` export returns. Observing that result proves
-/// the helper was resolved, read from disk, transpiled, and linked.
+/// result the entry's default-class `load()` returns. Observing that result
+/// proves the helper was resolved, read from disk, transpiled, and linked.
 #[tokio::test]
 async fn relative_import_inside_bundle_loads_and_runs() {
     let bundle = tempfile::TempDir::new().expect("temp dir should be created");
@@ -38,8 +38,11 @@ async fn relative_import_inside_bundle_loads_and_runs() {
     .expect("helper.ts should be written");
     std::fs::write(
         bundle.path().join("index.ts"),
-        "import { answer } from './helper.ts';\n\
-         export function activate(): number { return answer(); }",
+        "import { Plugin } from '@swissarmyhammer/plugin';\n\
+         import { answer } from './helper.ts';\n\
+         export default class P extends Plugin {\n\
+           async load(): Promise<unknown> { return answer(); }\n\
+         }",
     )
     .expect("index.ts should be written");
 
@@ -47,7 +50,7 @@ async fn relative_import_inside_bundle_loads_and_runs() {
 
     let result = tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", "activate"),
+        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", PluginLifecycle::Load),
     )
     .await
     .expect("loading a multi-file plugin should not hang")
@@ -79,8 +82,11 @@ async fn relative_import_escaping_bundle_is_rejected() {
     .expect("outside.ts should be written");
     std::fs::write(
         bundle.join("index.ts"),
-        "import { secret } from '../outside.ts';\n\
-         export function activate(): string { return secret; }",
+        "import { Plugin } from '@swissarmyhammer/plugin';\n\
+         import { secret } from '../outside.ts';\n\
+         export default class P extends Plugin {\n\
+           async load(): Promise<unknown> { return secret; }\n\
+         }",
     )
     .expect("index.ts should be written");
 
@@ -88,7 +94,7 @@ async fn relative_import_escaping_bundle_is_rejected() {
 
     let result = tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(&bundle, "index.ts", "activate"),
+        runtime.call_plugin_lifecycle(&bundle, "index.ts", PluginLifecycle::Load),
     )
     .await
     .expect("a rejected import should not hang");
@@ -112,8 +118,11 @@ async fn bare_import_fails_with_clear_error() {
     // import statement — the loader, not type erasure, must reject `lodash`.
     std::fs::write(
         bundle.path().join("index.ts"),
-        "import { merge } from 'lodash';\n\
-         export function activate(): unknown { return merge({}, {}); }",
+        "import { Plugin } from '@swissarmyhammer/plugin';\n\
+         import { merge } from 'lodash';\n\
+         export default class P extends Plugin {\n\
+           async load(): Promise<unknown> { return merge({}, {}); }\n\
+         }",
     )
     .expect("index.ts should be written");
 
@@ -121,7 +130,7 @@ async fn bare_import_fails_with_clear_error() {
 
     let result = tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", "activate"),
+        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", PluginLifecycle::Load),
     )
     .await
     .expect("a rejected bare import should not hang");
@@ -145,8 +154,11 @@ async fn swissarmyhammer_plugin_import_resolves_to_virtual_module() {
 
     std::fs::write(
         bundle.path().join("index.ts"),
-        "import * as sdk from '@swissarmyhammer/plugin';\n\
-         export function activate(): string { return typeof sdk; }",
+        "import { Plugin } from '@swissarmyhammer/plugin';\n\
+         import * as sdk from '@swissarmyhammer/plugin';\n\
+         export default class P extends Plugin {\n\
+           async load(): Promise<unknown> { return typeof sdk; }\n\
+         }",
     )
     .expect("index.ts should be written");
 
@@ -154,7 +166,7 @@ async fn swissarmyhammer_plugin_import_resolves_to_virtual_module() {
 
     let result = tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", "activate"),
+        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", PluginLifecycle::Load),
     )
     .await
     .expect("importing the SDK virtual module should not hang")
@@ -178,8 +190,11 @@ async fn swissarmyhammer_app_import_resolves_to_virtual_module() {
 
     std::fs::write(
         bundle.path().join("index.ts"),
-        "import * as app from '@swissarmyhammer/app';\n\
-         export function activate(): string { return typeof app; }",
+        "import { Plugin } from '@swissarmyhammer/plugin';\n\
+         import * as app from '@swissarmyhammer/app';\n\
+         export default class P extends Plugin {\n\
+           async load(): Promise<unknown> { return typeof app; }\n\
+         }",
     )
     .expect("index.ts should be written");
 
@@ -187,7 +202,7 @@ async fn swissarmyhammer_app_import_resolves_to_virtual_module() {
 
     let result = tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", "activate"),
+        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", PluginLifecycle::Load),
     )
     .await
     .expect("importing the app virtual module should not hang")

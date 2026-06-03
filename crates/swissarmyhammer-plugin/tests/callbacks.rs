@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use swissarmyhammer_plugin::{HostDispatcher, PluginRuntime, RuntimeConfig};
+use swissarmyhammer_plugin::{HostDispatcher, PluginLifecycle, PluginRuntime, RuntimeConfig};
 
 /// A generous upper bound on any single runtime interaction.
 const TIMEOUT: Duration = Duration::from_secs(20);
@@ -103,14 +103,9 @@ fn config_with(dispatcher: Arc<dyn HostDispatcher>) -> RuntimeConfig {
 /// subclass — wrapped in the SDK's plugin Proxy — and awaits its `load`.
 fn write_plugin(dir: &std::path::Path, body: &str) {
     let entry = format!(
-        "import {{ Plugin, makePluginThis }} from '@swissarmyhammer/plugin';\n\
-         class P extends Plugin {{\n\
+        "import {{ Plugin }} from '@swissarmyhammer/plugin';\n\
+         export default class P extends Plugin {{\n\
            async load(): Promise<void> {{\n{body}\n}}\n\
-         }}\n\
-         export async function load(): Promise<unknown> {{\n\
-           const p = makePluginThis(new P()) as P;\n\
-           await p.load();\n\
-           return null;\n\
          }}\n"
     );
     std::fs::write(dir.join("index.ts"), entry).expect("index.ts should be written");
@@ -144,7 +139,7 @@ async fn host_invokes_a_callback_and_receives_its_return_value() {
 
     tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", "load"),
+        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", PluginLifecycle::Load),
     )
     .await
     .expect("loading the plugin should not hang")
@@ -192,7 +187,7 @@ async fn void_and_value_callbacks_both_behave_correctly() {
 
     tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", "load"),
+        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", PluginLifecycle::Load),
     )
     .await
     .expect("loading the plugin should not hang")
@@ -263,7 +258,7 @@ async fn an_async_callback_is_awaited() {
 
     tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", "load"),
+        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", PluginLifecycle::Load),
     )
     .await
     .expect("loading the plugin should not hang")
@@ -308,7 +303,7 @@ async fn plain_tool_call_payloads_pass_through_unchanged() {
 
     tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", "load"),
+        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", PluginLifecycle::Load),
     )
     .await
     .expect("loading the plugin should not hang")
@@ -368,7 +363,7 @@ async fn a_cyclic_callback_payload_does_not_overflow_the_isolate() {
 
     let load = tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", "load"),
+        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", PluginLifecycle::Load),
     )
     .await
     .expect("the cyclic dispatch must not hang — the cycle guard must terminate the walk");
@@ -417,7 +412,7 @@ async fn a_shared_subtree_is_marshalled_once_and_its_function_is_caught() {
 
     tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", "load"),
+        runtime.call_plugin_lifecycle(bundle.path(), "index.ts", PluginLifecycle::Load),
     )
     .await
     .expect("loading the plugin should not hang")

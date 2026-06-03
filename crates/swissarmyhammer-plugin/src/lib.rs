@@ -58,8 +58,8 @@ pub use registry::{
 };
 pub use reload::ReloadStatus;
 pub use runtime::{
-    transpile_typescript, CallbackInvoker, HostDispatcher, PluginModuleLoader, PluginRuntime,
-    RuntimeConfig, TranspiledModule, UnboundHostDispatcher,
+    transpile_typescript, CallbackInvoker, HostDispatcher, PluginLifecycle, PluginModuleLoader,
+    PluginRuntime, RuntimeConfig, TranspiledModule, UnboundHostDispatcher,
 };
 pub use server::{
     CallerId, CliServer, InProcessServer, McpServer, PluginId, ToolMetadata, UrlServer,

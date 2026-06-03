@@ -66,23 +66,17 @@ fn rendered(value: &Value) -> String {
     serde_json::to_string(value).expect("a tools/call result is serializable")
 }
 
-/// Writes a one-file plugin bundle whose `load` export runs `body`.
+/// Writes a one-file plugin bundle whose default-class `load()` runs `body`.
 ///
-/// The entry is the bundle's `index.ts`: it imports the SDK, declares a
-/// `Plugin` subclass whose `load` contains `body`, and exports a `load`
-/// lifecycle function that constructs the subclass — wrapped in the SDK's
-/// plugin Proxy — and awaits its `load`. This matches the bundle shape the
-/// host's `load(plugin_dir)` expects.
+/// The entry is the bundle's `index.ts`: it imports the SDK and default-exports
+/// a `Plugin` subclass whose `load()` contains `body`. The host instantiates the
+/// default export, wraps it with the SDK's plugin Proxy, and runs its `load()` —
+/// this matches the bundle shape the host's `load(plugin_dir)` expects.
 fn write_plugin(dir: &std::path::Path, body: &str) {
     let entry = format!(
-        "import {{ Plugin, makePluginThis }} from '@swissarmyhammer/plugin';\n\
-         class P extends Plugin {{\n\
+        "import {{ Plugin }} from '@swissarmyhammer/plugin';\n\
+         export default class P extends Plugin {{\n\
            async load(): Promise<void> {{\n{body}\n}}\n\
-         }}\n\
-         export async function load(): Promise<unknown> {{\n\
-           const p = makePluginThis(new P()) as P;\n\
-           await p.load();\n\
-           return null;\n\
          }}\n"
     );
     std::fs::write(dir.join("index.ts"), entry).expect("index.ts should be written");

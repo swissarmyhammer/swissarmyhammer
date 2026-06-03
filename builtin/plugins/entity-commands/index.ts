@@ -41,7 +41,6 @@ import {
   Plugin,
   ensureServices,
   registerCommands,
-  makePluginThis,
 } from "@swissarmyhammer/plugin";
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -135,7 +134,7 @@ function requireTarget(ctx: CommandContext): Availability {
  * directory name (`entity-commands`); `name` / `description` are descriptive
  * metadata only.
  */
-class EntityCommandsPlugin extends Plugin {
+export default class EntityCommandsPlugin extends Plugin {
   /** Human-readable name — descriptive metadata only, not plugin identity. */
   readonly name = "Entity Commands";
 
@@ -352,19 +351,4 @@ class EntityCommandsPlugin extends Plugin {
       "entity-commands: registered entity.add, entity.update_field, entity.delete, entity.archive, entity.unarchive, entity.cut, entity.copy, entity.paste",
     );
   }
-}
-
-/**
- * The plugin entry point.
- *
- * The host calls this once when the bundle is discovered: build the plugin,
- * wrap it with `makePluginThis` so `this.<server>` dispatch works, and run
- * `load()`.
- *
- * @returns `null` — this plugin's only effect is its load-time registrations.
- */
-export async function load(): Promise<unknown> {
-  const plugin = makePluginThis(new EntityCommandsPlugin()) as EntityCommandsPlugin;
-  await plugin.load();
-  return null;
 }

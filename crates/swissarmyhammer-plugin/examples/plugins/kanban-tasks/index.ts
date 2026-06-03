@@ -64,7 +64,7 @@
 // rather than dispatch a phantom call. When in doubt, the noun/verb pair is
 // whatever the tool's `_meta` tree publishes — the SDK is the source of truth.
 
-import { Plugin, makePluginThis } from "@swissarmyhammer/plugin";
+import { Plugin } from "@swissarmyhammer/plugin";
 
 // The two tasks this plugin seeds onto the board. The end-to-end test that
 // drives this bundle (`tests/kanban_tasks_e2e.rs`) asserts the board holds
@@ -107,7 +107,7 @@ function countTasks(result: unknown): number {
  * and seeds two tasks onto the board, then lists the board back — all through
  * the SDK's operation-tool *path form*.
  */
-class KanbanTasksPlugin extends Plugin {
+export default class KanbanTasksPlugin extends Plugin {
   /** Human-readable name — descriptive metadata only, not plugin identity. */
   readonly name = "Kanban Tasks Example";
 
@@ -153,18 +153,3 @@ class KanbanTasksPlugin extends Plugin {
   }
 }
 
-/**
- * The plugin entry point.
- *
- * The host calls this once when the bundle is discovered. It builds the
- * plugin, wraps it with `makePluginThis` so `this.<server>` dispatch works,
- * and runs the plugin's `load()`.
- *
- * @returns `null` — this plugin exposes no value to the host beyond its
- *   load-time effects.
- */
-export async function load(): Promise<unknown> {
-  const plugin = makePluginThis(new KanbanTasksPlugin()) as KanbanTasksPlugin;
-  await plugin.load();
-  return null;
-}

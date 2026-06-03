@@ -22,7 +22,6 @@ import {
   Plugin,
   ensureServices,
   registerCommands,
-  makePluginThis,
 } from "@swissarmyhammer/plugin";
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -159,7 +158,7 @@ function targetId(ctx: CommandContext, entityType: string): string | undefined {
  * wired to the `kanban` MCP server. Identity is the bundle directory name
  * (`task-commands`); `name` / `description` are descriptive metadata only.
  */
-class TaskCommandsPlugin extends Plugin {
+export default class TaskCommandsPlugin extends Plugin {
   /** Human-readable name — descriptive metadata only, not plugin identity. */
   readonly name = "Task Commands";
 
@@ -330,19 +329,4 @@ class TaskCommandsPlugin extends Plugin {
 
     this.log.info("task-commands: registered task.move, task.untag, task.doThisNext");
   }
-}
-
-/**
- * The plugin entry point.
- *
- * The host calls this once when the bundle is discovered: build the plugin,
- * wrap it with `makePluginThis` so `this.<server>` dispatch works, and run
- * `load()`.
- *
- * @returns `null` — this plugin's only effect is its load-time registrations.
- */
-export async function load(): Promise<unknown> {
-  const plugin = makePluginThis(new TaskCommandsPlugin()) as TaskCommandsPlugin;
-  await plugin.load();
-  return null;
 }

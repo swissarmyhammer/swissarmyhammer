@@ -131,8 +131,8 @@ fn write_probe_plugin(layer_root: &Path) {
     // `load()` activates the real `weather` server and hands the host two
     // callback functions, so the ledger holds one server handle and two
     // callback handles when the plugin is loaded.
-    let entry = "import { Plugin, makePluginThis } from '@swissarmyhammer/plugin';\n\
-         class P extends Plugin {\n\
+    let entry = "import { Plugin } from '@swissarmyhammer/plugin';\n\
+         export default class P extends Plugin {\n\
            async load(): Promise<void> {\n\
              this.register('weather', { rust: 'weather-mod' });\n\
              this.__transport.callbackDispatch({\n\
@@ -140,11 +140,6 @@ fn write_probe_plugin(layer_root: &Path) {
                onAlert: () => 'alert',\n\
              });\n\
            }\n\
-         }\n\
-         export async function load(): Promise<unknown> {\n\
-           const p = makePluginThis(new P()) as P;\n\
-           await p.load();\n\
-           return null;\n\
          }\n";
     std::fs::write(plugin_dir.join("index.ts"), entry).expect("probe index.ts should be written");
 }

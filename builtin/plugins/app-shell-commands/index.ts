@@ -46,7 +46,6 @@ import {
   Plugin,
   ensureServices,
   registerCommands,
-  makePluginThis,
 } from "@swissarmyhammer/plugin";
 
 import {
@@ -66,7 +65,7 @@ import { dragCommands } from "./commands/drag.ts";
  * `ui_state` MCP servers. Identity is the bundle directory name
  * (`app-shell-commands`); `name` / `description` are descriptive metadata only.
  */
-class AppShellCommandsPlugin extends Plugin {
+export default class AppShellCommandsPlugin extends Plugin {
   /** Human-readable name — descriptive metadata only, not plugin identity. */
   readonly name = "App Shell Commands";
 
@@ -100,19 +99,4 @@ class AppShellCommandsPlugin extends Plugin {
       "app-shell-commands: registered 15 commands (app.* / settings.keymap.* / drag.*) across app / store / ui_state",
     );
   }
-}
-
-/**
- * The plugin entry point.
- *
- * The host calls this once when the bundle is discovered: build the plugin,
- * wrap it with `makePluginThis` so `this.<server>` dispatch works, and run
- * `load()`.
- *
- * @returns `null` — this plugin's only effect is its load-time registrations.
- */
-export async function load(): Promise<unknown> {
-  const plugin = makePluginThis(new AppShellCommandsPlugin()) as AppShellCommandsPlugin;
-  await plugin.load();
-  return null;
 }

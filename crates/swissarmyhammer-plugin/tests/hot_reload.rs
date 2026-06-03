@@ -103,14 +103,9 @@ fn write_bundle(layer_root: &Path, dir_name: &str, body: &str) {
 /// body — the "rewrite the source" half of a hot-reload test.
 fn write_entry(plugin_dir: &Path, body: &str) {
     let source = format!(
-        "import {{ Plugin, makePluginThis }} from '@swissarmyhammer/plugin';\n\
-         class P extends Plugin {{\n\
+        "import {{ Plugin }} from '@swissarmyhammer/plugin';\n\
+         export default class P extends Plugin {{\n\
            async load(): Promise<void> {{\n{body}\n}}\n\
-         }}\n\
-         export async function load(): Promise<unknown> {{\n\
-           const p = makePluginThis(new P()) as P;\n\
-           await p.load();\n\
-           return null;\n\
          }}\n"
     );
     std::fs::write(plugin_dir.join("index.ts"), source).expect("index.ts should be written");

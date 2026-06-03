@@ -7,7 +7,7 @@
 // already-live source from `shared-cli-a` and bumps its refcount instead of
 // rejecting with `ServerNameTaken`.
 
-import { Plugin, makePluginThis } from "@swissarmyhammer/plugin";
+import { Plugin } from "@swissarmyhammer/plugin";
 
 // The shared registered name. Must match `shared-cli-a`'s `SERVER_NAME`
 // literally — the dedup is on the (name, source) pair, and the name is the
@@ -28,7 +28,7 @@ const ECHO_COMMAND = "__CLI_ECHO_COMMAND__";
  * second registration shares it; when this bundle loads alone the source is
  * fresh and this registration spawns the subprocess.
  */
-class SharedCliBPlugin extends Plugin {
+export default class SharedCliBPlugin extends Plugin {
   /** Human-readable name — descriptive metadata only, not plugin identity. */
   readonly name = "Shared CLI B";
 
@@ -50,15 +50,4 @@ class SharedCliBPlugin extends Plugin {
     this.register(SERVER_NAME, { cli: [ECHO_COMMAND] });
     this.log.info(`shared-cli-b: registered '${SERVER_NAME}'`);
   }
-}
-
-/**
- * The plugin entry point.
- *
- * @returns `null` — this plugin's only effect is its load-time registration.
- */
-export async function load(): Promise<unknown> {
-  const plugin = makePluginThis(new SharedCliBPlugin()) as SharedCliBPlugin;
-  await plugin.load();
-  return null;
 }

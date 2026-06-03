@@ -217,16 +217,11 @@ pub fn write_noop_probe_plugin(plugins_dir: &Path, id: &str) -> PathBuf {
     let plugin_dir = plugins_dir.join(id);
     std::fs::create_dir_all(&plugin_dir).expect("plugin dir");
     let entry = format!(
-        "import {{ Plugin, makePluginThis }} from '@swissarmyhammer/plugin';\n\
-         class P extends Plugin {{\n\
+        "import {{ Plugin }} from '@swissarmyhammer/plugin';\n\
+         export default class P extends Plugin {{\n\
            async load(): Promise<void> {{\n\
              this.log.info('{id} loaded');\n\
            }}\n\
-         }}\n\
-         export async function load(): Promise<unknown> {{\n\
-           const p = makePluginThis(new P()) as P;\n\
-           await p.load();\n\
-           return null;\n\
          }}\n"
     );
     std::fs::write(plugin_dir.join("index.ts"), entry).expect("index.ts");
@@ -278,9 +273,8 @@ pub fn write_sentinel_probe_plugin(
            Plugin,\n\
            ensureServices,\n\
            registerCommands,\n\
-           makePluginThis,\n\
          }} from '@swissarmyhammer/plugin';\n\
-         class P extends Plugin {{\n\
+         export default class P extends Plugin {{\n\
            async load(): Promise<void> {{\n\
              await ensureServices(this, ['commands']);\n\
              await registerCommands(this, [{{\n\
@@ -290,11 +284,6 @@ pub fn write_sentinel_probe_plugin(
              }}]);\n\
              this.log.info('{id} registered {command_id} with sentinel {sentinel}');\n\
            }}\n\
-         }}\n\
-         export async function load(): Promise<unknown> {{\n\
-           const p = makePluginThis(new P()) as P;\n\
-           await p.load();\n\
-           return null;\n\
          }}\n"
     );
     std::fs::write(plugin_dir.join("index.ts"), entry).expect("index.ts");

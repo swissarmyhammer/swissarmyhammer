@@ -160,6 +160,41 @@ const _: fn() = || {
 /// another thread. On failure it carries a human-readable reason.
 type StartupResult = std::result::Result<v8::IsolateHandle, String>;
 
+/// Which lifecycle hook of a default-exported plugin class the host is driving.
+///
+/// A plugin bundle is authored Obsidian-style — `export default class X extends
+/// Plugin { … }` — with no module-level lifecycle functions. The host reads the
+/// bundle's `default` export and drives one of these two transitions; the SDK's
+/// `__sahLoadDefaultPlugin` / `__sahUnloadDefaultPlugin` globals do the JS-land
+/// `new` + `makePluginThis` wrap and run the matching instance method. See
+/// [`call_default_plugin_lifecycle`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginLifecycle {
+    /// Instantiate the default-exported class, wrap it, and run its `load()`.
+    Load,
+    /// Run the stored instance's `unload()` and clear it.
+    Unload,
+}
+
+impl PluginLifecycle {
+    /// The SDK `globalThis` function that drives this lifecycle transition.
+    fn sdk_global(self) -> &'static str {
+        match self {
+            PluginLifecycle::Load => LOAD_DEFAULT_PLUGIN_GLOBAL,
+            PluginLifecycle::Unload => UNLOAD_DEFAULT_PLUGIN_GLOBAL,
+        }
+    }
+}
+
+/// The SDK global that instantiates a bundle's default class and runs `load()`.
+const LOAD_DEFAULT_PLUGIN_GLOBAL: &str = "__sahLoadDefaultPlugin";
+
+/// The SDK global that runs the stored default-class instance's `unload()`.
+const UNLOAD_DEFAULT_PLUGIN_GLOBAL: &str = "__sahUnloadDefaultPlugin";
+
+/// The export name a plugin bundle's entry class is the `default` of.
+const DEFAULT_EXPORT: &str = "default";
+
 /// A unit of work sent to the worker thread.
 ///
 /// Every variant carries a [`oneshot`] sender so the worker can hand a result
@@ -190,18 +225,22 @@ enum Command {
     },
 
     /// Load a multi-file plugin from a bundle directory through the module
-    /// loader, then optionally call one of its exported lifecycle functions.
+    /// loader, then optionally drive one of its default class's lifecycle hooks.
     ///
     /// Unlike [`Command::LoadModule`], the entry module is loaded from disk via
     /// [`PluginModuleLoader`], so it — and any module it imports — is resolved,
-    /// sandboxed, and transpiled by the loader.
+    /// sandboxed, and transpiled by the loader. The bundle is authored as
+    /// `export default class X extends Plugin { … }`; when `lifecycle` is
+    /// `Some`, the host reads that `default` export and drives the named
+    /// transition through the SDK (see [`PluginLifecycle`]).
     LoadPlugin {
         /// The plugin's bundle directory; relative imports are sandboxed here.
         bundle_dir: PathBuf,
         /// The entry module's filename, relative to `bundle_dir`.
         entry_file: String,
-        /// Name of an exported function to call after evaluation, if any.
-        lifecycle_export: Option<String>,
+        /// The default-class lifecycle transition to drive after evaluation, if
+        /// any. `None` only evaluates the module.
+        lifecycle: Option<PluginLifecycle>,
         /// Where the lifecycle return value (or an error) is delivered.
         reply: oneshot::Sender<Result<serde_json::Value>>,
     },
@@ -405,43 +444,49 @@ impl PluginRuntime {
         self.send(Command::LoadPlugin {
             bundle_dir: bundle_dir.as_ref().to_path_buf(),
             entry_file: entry_file.into(),
-            lifecycle_export: None,
+            lifecycle: None,
             reply,
         })?;
         await_reply(response).await.map(|_| ())
     }
 
-    /// Load a multi-file plugin's entry module, then call one of its exports.
+    /// Load a multi-file plugin's entry module, then drive its default class's
+    /// lifecycle.
     ///
-    /// This is the multi-file counterpart of [`PluginRuntime::call_lifecycle`]:
-    /// the entry module is loaded from `bundle_dir` through
-    /// [`PluginModuleLoader`] — with relative and `@swissarmyhammer/*` imports
-    /// resolved — and the named export is then invoked. If the export returns a
-    /// promise, the event loop runs until it settles.
+    /// This is the multi-file counterpart of [`PluginRuntime::call_lifecycle`],
+    /// adapted to the default-class entry contract: the entry module is loaded
+    /// from `bundle_dir` through [`PluginModuleLoader`] — with relative and
+    /// `@swissarmyhammer/*` imports resolved — and then, rather than calling a
+    /// named function export, the host reads the bundle's `default` export (a
+    /// `Plugin` subclass) and drives `lifecycle` against it through the SDK: for
+    /// [`PluginLifecycle::Load`] the SDK instantiates the class, wraps it with
+    /// `makePluginThis`, and runs its `load()`; for [`PluginLifecycle::Unload`]
+    /// it runs the stored instance's `unload()`. If the hook returns a promise,
+    /// the event loop runs until it settles.
     ///
     /// # Arguments
     ///
     /// * `bundle_dir` - The plugin's bundle directory.
     /// * `entry_file` - The entry module's filename, relative to `bundle_dir`.
-    /// * `export` - Name of the exported function to call.
+    /// * `lifecycle` - Which default-class lifecycle hook to drive.
     ///
     /// # Errors
     ///
     /// Returns [`Error::Transpile`] for a syntax error, [`Error::Runtime`] if a
-    /// module or the lifecycle function throws, if the export is missing or not
-    /// a function, if an import cannot be resolved or escapes the bundle
-    /// directory, or a worker-communication error.
+    /// module or the lifecycle hook throws, if the bundle has no `default`
+    /// export or it is not a class, if an import cannot be resolved or escapes
+    /// the bundle directory, or a worker-communication error.
     pub async fn call_plugin_lifecycle(
         &self,
         bundle_dir: impl AsRef<Path>,
         entry_file: impl Into<String>,
-        export: impl Into<String>,
+        lifecycle: PluginLifecycle,
     ) -> Result<serde_json::Value> {
         let (reply, response) = oneshot::channel();
         self.send(Command::LoadPlugin {
             bundle_dir: bundle_dir.as_ref().to_path_buf(),
             entry_file: entry_file.into(),
-            lifecycle_export: Some(export.into()),
+            lifecycle: Some(lifecycle),
             reply,
         })?;
         await_reply(response).await
@@ -785,7 +830,7 @@ fn worker_loop(
             Command::LoadPlugin {
                 bundle_dir,
                 entry_file,
-                lifecycle_export,
+                lifecycle,
                 reply,
             } => {
                 let result = load_and_run_plugin(
@@ -794,7 +839,7 @@ fn worker_loop(
                     &module_loader,
                     &bundle_dir,
                     &entry_file,
-                    lifecycle_export.as_deref(),
+                    lifecycle,
                 );
                 let _ = reply.send(result);
             }
@@ -866,22 +911,23 @@ fn load_and_run_module(
     evaluate_and_call(runtime, tokio_rt, module_id, lifecycle_export)
 }
 
-/// Load a multi-file plugin through the module loader and optionally call an
-/// export.
+/// Load a multi-file plugin through the module loader and optionally drive its
+/// default class's lifecycle.
 ///
 /// The loader is pointed at `bundle_dir` so the plugin's relative imports are
 /// resolved against — and sandboxed to — that directory. The entry module is
 /// loaded as the isolate's main module *from disk through the loader*, which
 /// means the entry and every module it imports (relative or `@swissarmyhammer/*`)
-/// are resolved and transpiled uniformly. When `lifecycle_export` is `Some`, the
-/// named export is then called.
+/// are resolved and transpiled uniformly. When `lifecycle` is `Some`, the
+/// bundle's `default` export is then driven through the SDK — see
+/// [`call_default_plugin_lifecycle`].
 fn load_and_run_plugin(
     runtime: &mut JsRuntime,
     tokio_rt: &tokio::runtime::Runtime,
     module_loader: &module_loader::PluginModuleLoader,
     bundle_dir: &Path,
     entry_file: &str,
-    lifecycle_export: Option<&str>,
+    lifecycle: Option<PluginLifecycle>,
 ) -> Result<serde_json::Value> {
     // Point the loader at this plugin's bundle directory before any import is
     // resolved; relative imports are sandboxed to it.
@@ -905,33 +951,55 @@ fn load_and_run_plugin(
         .block_on(runtime.load_main_es_module(&entry_specifier))
         .map_err(|e| Error::Runtime(format!("failed to load plugin: {e}")))?;
 
-    evaluate_and_call(runtime, tokio_rt, module_id, lifecycle_export)
+    // Evaluate the module so its `default` export — the `Plugin` subclass — is
+    // available, then drive the requested lifecycle transition against it.
+    evaluate_module(runtime, tokio_rt, module_id)?;
+
+    match lifecycle {
+        None => Ok(serde_json::Value::Null),
+        Some(lifecycle) => call_default_plugin_lifecycle(runtime, tokio_rt, module_id, lifecycle),
+    }
 }
 
 /// Evaluate an already-loaded module and optionally call one of its exports.
 ///
 /// Runs the isolate's event loop so module-level promise jobs settle, awaits
 /// the module evaluation, and — when `lifecycle_export` is `Some` — invokes the
-/// named export. Shared by [`load_and_run_module`] and [`load_and_run_plugin`].
+/// named function export. Used by [`load_and_run_module`], the single-file path
+/// the runtime's own tests drive; multi-file plugins go through
+/// [`load_and_run_plugin`], which drives the default-class lifecycle instead.
 fn evaluate_and_call(
     runtime: &mut JsRuntime,
     tokio_rt: &tokio::runtime::Runtime,
     module_id: deno_core::ModuleId,
     lifecycle_export: Option<&str>,
 ) -> Result<serde_json::Value> {
-    let evaluation = runtime.mod_evaluate(module_id);
-    tokio_rt
-        .block_on(runtime.run_event_loop(PollEventLoopOptions::default()))
-        .map_err(|e| Error::Runtime(format!("module event loop error: {e}")))?;
-    tokio_rt
-        .block_on(evaluation)
-        .map_err(|e| Error::Runtime(format!("module evaluation failed: {e}")))?;
+    evaluate_module(runtime, tokio_rt, module_id)?;
 
     let Some(export) = lifecycle_export else {
         return Ok(serde_json::Value::Null);
     };
 
     call_module_export(runtime, tokio_rt, module_id, export)
+}
+
+/// Evaluate an already-loaded module: settle its top-level promise jobs.
+///
+/// Runs the isolate's event loop so module-level promise jobs settle and awaits
+/// the module evaluation, leaving the module's exports reachable through its
+/// namespace. Shared by [`evaluate_and_call`] and [`load_and_run_plugin`].
+fn evaluate_module(
+    runtime: &mut JsRuntime,
+    tokio_rt: &tokio::runtime::Runtime,
+    module_id: deno_core::ModuleId,
+) -> Result<()> {
+    let evaluation = runtime.mod_evaluate(module_id);
+    tokio_rt
+        .block_on(runtime.run_event_loop(PollEventLoopOptions::default()))
+        .map_err(|e| Error::Runtime(format!("module event loop error: {e}")))?;
+    tokio_rt
+        .block_on(evaluation)
+        .map_err(|e| Error::Runtime(format!("module evaluation failed: {e}")))
 }
 
 /// Fetch an exported function from an evaluated module and call it.
@@ -965,6 +1033,103 @@ fn call_module_export(
     let result = tokio_rt
         .block_on(runtime.with_event_loop_promise(call, PollEventLoopOptions::default()))
         .map_err(|e| Error::Runtime(format!("lifecycle function '{export}' failed: {e}")))?;
+
+    global_to_json(runtime, &result)
+}
+
+/// Drive a default-exported plugin class's lifecycle through the SDK.
+///
+/// This is the host side of the default-class entry contract. Rather than each
+/// bundle exporting `load`/`unload` *functions* that hand-roll `new` +
+/// `makePluginThis`, a bundle is authored as `export default class X extends
+/// Plugin { … }`. On [`PluginLifecycle::Load`] this reads the module's `default`
+/// export — the class — and hands it to the SDK's `__sahLoadDefaultPlugin`
+/// global, which instantiates it, wraps it with `makePluginThis`, stores it on
+/// the isolate, and runs its `load()`. On [`PluginLifecycle::Unload`] it calls
+/// the SDK's `__sahUnloadDefaultPlugin` global with no class argument; the SDK
+/// reaches the stored instance and runs its `unload()`.
+///
+/// The `new` + Proxy wrap is JS-land work the SDK owns; this function only
+/// resolves the constructor (on load) and drives the SDK global, running the
+/// event loop so the hook's returned promise settles.
+///
+/// # Errors
+///
+/// Returns [`Error::Runtime`] if the SDK lifecycle global is missing or not a
+/// function, if the bundle has no `default` export when loading, or if the
+/// plugin's `load()`/`unload()` hook throws.
+fn call_default_plugin_lifecycle(
+    runtime: &mut JsRuntime,
+    tokio_rt: &tokio::runtime::Runtime,
+    module_id: deno_core::ModuleId,
+    lifecycle: PluginLifecycle,
+) -> Result<serde_json::Value> {
+    let global_name = lifecycle.sdk_global();
+
+    // On load, the SDK needs the bundle's `default` export — the Plugin
+    // subclass constructor. Fetch the module namespace before opening a scope so
+    // the runtime is not borrowed twice.
+    let namespace = match lifecycle {
+        PluginLifecycle::Unload => None,
+        PluginLifecycle::Load => Some(
+            runtime
+                .get_module_namespace(module_id)
+                .map_err(|e| Error::Runtime(format!("cannot read module exports: {e}")))?,
+        ),
+    };
+
+    // Resolve the SDK lifecycle global and, on load, the constructor argument.
+    // Both are detached into `Global` handles so the scope is dropped before the
+    // async call below. Unload takes no class argument — the SDK reaches the
+    // instance `load` stored.
+    let (function, args) = {
+        deno_core::scope!(scope, runtime);
+        let context = scope.get_current_context();
+        let global = context.global(scope);
+        let key = v8::String::new(scope, global_name).ok_or_else(|| {
+            Error::Runtime(format!("cannot allocate global name '{global_name}'"))
+        })?;
+        let value = global.get(scope, key.into()).ok_or_else(|| {
+            Error::Runtime(format!("the isolate has no '{global_name}' SDK global"))
+        })?;
+        let function = v8::Local::<v8::Function>::try_from(value)
+            .map_err(|_| Error::Runtime(format!("SDK global '{global_name}' is not a function")))?;
+        let function = v8::Global::new(scope, function);
+
+        // On load, fetch the bundle's `default` export — the Plugin subclass —
+        // and pass it as the SDK global's one argument. A class is a function in
+        // V8; a non-callable `default` (or none) is a malformed bundle.
+        let args = match &namespace {
+            None => Vec::new(),
+            Some(namespace) => {
+                let namespace = v8::Local::new(scope, namespace);
+                let key = v8::String::new(scope, DEFAULT_EXPORT).ok_or_else(|| {
+                    Error::Runtime("cannot allocate 'default' export name".to_string())
+                })?;
+                let ctor = namespace.get(scope, key.into()).ok_or_else(|| {
+                    Error::Runtime(
+                        "plugin bundle has no `default` export — a bundle must \
+                         `export default class X extends Plugin { … }`"
+                            .to_string(),
+                    )
+                })?;
+                if !ctor.is_function() {
+                    return Err(Error::Runtime(
+                        "plugin bundle's `default` export is not a class — a bundle must \
+                         `export default class X extends Plugin { … }`"
+                            .to_string(),
+                    ));
+                }
+                vec![v8::Global::new(scope, ctor)]
+            }
+        };
+        (function, args)
+    };
+
+    let call = runtime.call_with_args(&function, &args);
+    let result = tokio_rt
+        .block_on(runtime.with_event_loop_promise(call, PollEventLoopOptions::default()))
+        .map_err(|e| Error::Runtime(format!("plugin {lifecycle:?} lifecycle failed: {e}")))?;
 
     global_to_json(runtime, &result)
 }
@@ -1368,5 +1533,89 @@ mod tests {
             .await
             .expect("runtime should still serve commands after a contained OOM");
         assert_eq!(after, serde_json::json!(2));
+    }
+
+    /// Write a single-file plugin bundle's `index.ts` and return its directory.
+    ///
+    /// The bundle is authored in the default-class entry shape the host drives:
+    /// it default-exports a `Plugin` subclass with the given `body` as its
+    /// methods, with no module-level lifecycle functions.
+    fn write_default_class_bundle(source: &str) -> tempfile::TempDir {
+        let dir = tempfile::TempDir::new().expect("temp bundle dir");
+        std::fs::write(dir.path().join("index.ts"), source).expect("index.ts written");
+        dir
+    }
+
+    /// A default-exported `Plugin` subclass loads and unloads through a real
+    /// isolate, with its `load()` return value flowing back to the host.
+    ///
+    /// This is the default-class entry contract end to end: the host reads the
+    /// bundle's `default` export, instantiates it, wraps it with the SDK's
+    /// dispatch Proxy, and runs `load()` — then later runs the same stored
+    /// instance's `unload()`. No module-level `load`/`unload` functions and no
+    /// hand-rolled `makePluginThis` appear in the bundle.
+    #[tokio::test]
+    async fn default_class_plugin_loads_and_unloads() {
+        let bundle = write_default_class_bundle(
+            "import { Plugin } from '@swissarmyhammer/plugin';\n\
+             export default class P extends Plugin {\n\
+               async load(): Promise<unknown> {\n\
+                 (globalThis as Record<string, unknown>).__loaded = true;\n\
+                 return 'loaded';\n\
+               }\n\
+               async unload(): Promise<void> {\n\
+                 (globalThis as Record<string, unknown>).__unloaded = true;\n\
+                 await super.unload();\n\
+               }\n\
+             }\n",
+        );
+        let runtime = PluginRuntime::new(RuntimeConfig::default()).expect("runtime should start");
+
+        // Load instantiates the default class and runs its `load()`, whose
+        // return value flows back as the lifecycle result.
+        let loaded = runtime
+            .call_plugin_lifecycle(bundle.path(), "index.ts", PluginLifecycle::Load)
+            .await
+            .expect("default-class load should succeed");
+        assert_eq!(loaded, serde_json::json!("loaded"));
+
+        // Unload reaches the *same* stored instance — its `unload()` runs and
+        // sets the global, proving the instance persisted between the two
+        // separate host calls on the one isolate.
+        runtime
+            .call_plugin_lifecycle(bundle.path(), "index.ts", PluginLifecycle::Unload)
+            .await
+            .expect("default-class unload should succeed");
+        let unloaded = runtime
+            .eval("globalThis.__unloaded === true")
+            .await
+            .expect("the isolate should answer after unload");
+        assert_eq!(unloaded, serde_json::json!(true));
+    }
+
+    /// A bundle with no `default` export fails the load with a clear error.
+    ///
+    /// The default-class entry contract requires a `default` export; a bundle
+    /// that only exports a named function no longer loads, and the error names
+    /// the missing `default` export so the author can fix it.
+    #[tokio::test]
+    async fn default_class_missing_default_export_is_reported() {
+        // The bundle imports and subclasses the SDK `Plugin` (so the SDK
+        // lifecycle globals are installed) but exports the class as a *named*
+        // export — the realistic "forgot to `export default`" mistake.
+        let bundle = write_default_class_bundle(
+            "import { Plugin } from '@swissarmyhammer/plugin';\n\
+             export class P extends Plugin {}\n",
+        );
+        let runtime = PluginRuntime::new(RuntimeConfig::default()).expect("runtime should start");
+
+        let error = runtime
+            .call_plugin_lifecycle(bundle.path(), "index.ts", PluginLifecycle::Load)
+            .await
+            .expect_err("a bundle without a default export must not load");
+        assert!(
+            matches!(&error, Error::Runtime(message) if message.contains("default")),
+            "the error should name the missing `default` export, got: {error:?}"
+        );
     }
 }

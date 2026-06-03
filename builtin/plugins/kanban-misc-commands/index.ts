@@ -28,7 +28,6 @@ import {
   Plugin,
   ensureServices,
   registerCommands,
-  makePluginThis,
 } from "@swissarmyhammer/plugin";
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -113,7 +112,7 @@ function scopeId(ctx: CommandContext, entityType: string): string | undefined {
  * directory name (`kanban-misc-commands`); `name` / `description` are
  * descriptive metadata only.
  */
-class KanbanMiscCommandsPlugin extends Plugin {
+export default class KanbanMiscCommandsPlugin extends Plugin {
   /** Human-readable name — descriptive metadata only, not plugin identity. */
   readonly name = "Kanban Misc Commands";
 
@@ -304,19 +303,4 @@ class KanbanMiscCommandsPlugin extends Plugin {
       "kanban-misc-commands: registered column.reorder, attachment.open, attachment.reveal, tag.update, view.set",
     );
   }
-}
-
-/**
- * The plugin entry point.
- *
- * The host calls this once when the bundle is discovered: build the plugin,
- * wrap it with `makePluginThis` so `this.<server>` dispatch works, and run
- * `load()`.
- *
- * @returns `null` — this plugin's only effect is its load-time registrations.
- */
-export async function load(): Promise<unknown> {
-  const plugin = makePluginThis(new KanbanMiscCommandsPlugin()) as KanbanMiscCommandsPlugin;
-  await plugin.load();
-  return null;
 }

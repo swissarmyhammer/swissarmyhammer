@@ -305,16 +305,11 @@ async fn rewriting_a_running_plugins_source_hot_reloads_it_in_the_same_host() {
 /// watcher's content-fingerprint guard observes a genuine modification.
 fn write_with_load_body(plugin_dir: &Path, body: &str) {
     let entry = format!(
-        "import {{ Plugin, makePluginThis }} from '@swissarmyhammer/plugin';\n\
-         class P extends Plugin {{\n\
+        "import {{ Plugin }} from '@swissarmyhammer/plugin';\n\
+         export default class P extends Plugin {{\n\
            async load(): Promise<void> {{\n\
              {body}\n\
            }}\n\
-         }}\n\
-         export async function load(): Promise<unknown> {{\n\
-           const p = makePluginThis(new P()) as P;\n\
-           await p.load();\n\
-           return null;\n\
          }}\n"
     );
     std::fs::write(plugin_dir.join("index.ts"), entry).expect("index.ts should be written");

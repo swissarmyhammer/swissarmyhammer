@@ -165,7 +165,7 @@ fn write_probe_plugin(project_root: &Path, output_dir: &Path) {
     // if return-value marshalling is broken, rather than silently writing an
     // empty second file.
     let entry = format!(
-        "import {{ Plugin, makePluginThis }} from '@swissarmyhammer/plugin';\n\
+        "import {{ Plugin }} from '@swissarmyhammer/plugin';\n\
          \n\
          /** Extracts the file text from a `files` `read file` result. */\n\
          function readBackText(result: unknown): string {{\n\
@@ -180,7 +180,7 @@ fn write_probe_plugin(project_root: &Path, output_dir: &Path) {
          \x20 return text;\n\
          }}\n\
          \n\
-         class ProbePlugin extends Plugin {{\n\
+         export default class ProbePlugin extends Plugin {{\n\
          \x20 async load(): Promise<void> {{\n\
          \x20   // Activate the host-exposed real `files` operation tool as `fs`.\n\
          \x20   this.register('fs', {{ rust: 'files' }});\n\
@@ -220,12 +220,6 @@ fn write_probe_plugin(project_root: &Path, output_dir: &Path) {
          \x20     content: unknownName,\n\
          \x20   }});\n\
          \x20 }}\n\
-         }}\n\
-         \n\
-         export async function load(): Promise<unknown> {{\n\
-         \x20 const p = makePluginThis(new ProbePlugin()) as ProbePlugin;\n\
-         \x20 await p.load();\n\
-         \x20 return null;\n\
          }}\n",
         path_form = json_string(&path_form_path.to_string_lossy()),
         direct_form = json_string(&direct_form_path.to_string_lossy()),

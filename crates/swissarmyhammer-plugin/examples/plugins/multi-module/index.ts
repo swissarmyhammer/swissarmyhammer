@@ -40,7 +40,7 @@
 // board state is what the end-to-end test (`tests/multi_module_e2e.rs`) asserts
 // on.
 
-import { Plugin, makePluginThis } from "@swissarmyhammer/plugin";
+import { Plugin } from "@swissarmyhammer/plugin";
 
 // The RELATIVE sibling-module import — the whole point of this example. The
 // loader resolves `./board-helpers.ts` against this bundle's directory and
@@ -65,7 +65,7 @@ const TASK_TAG = "multi-module";
  * imported from the sibling `./board-helpers.ts` module, not by driving the
  * board itself.
  */
-class MultiModulePlugin extends Plugin {
+export default class MultiModulePlugin extends Plugin {
   /** Human-readable name — descriptive metadata only, not plugin identity. */
   readonly name = "Multi-Module Example";
 
@@ -110,18 +110,3 @@ class MultiModulePlugin extends Plugin {
   }
 }
 
-/**
- * The plugin entry point.
- *
- * The host calls this once when the bundle is discovered. It builds the
- * plugin, wraps it with `makePluginThis` so `this.<server>` dispatch works,
- * and runs the plugin's `load()`.
- *
- * @returns `null` — this plugin exposes no value to the host beyond its
- *   load-time effects.
- */
-export async function load(): Promise<unknown> {
-  const plugin = makePluginThis(new MultiModulePlugin()) as MultiModulePlugin;
-  await plugin.load();
-  return null;
-}

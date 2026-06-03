@@ -16,12 +16,15 @@
 // under that SAME name shares the one live registration through the registry's
 // structural-source dedupe, so the probe and the command plugins co-load. (A
 // distinct name here would starve whichever plugin loaded second.)
-import { Plugin, makePluginThis } from "@swissarmyhammer/plugin";
+import { Plugin } from "@swissarmyhammer/plugin";
 
 /// The builtin probe plugin. Its `load()` registers the host's `kanban` Rust
 /// module under the canonical server name so it shares the single-activation
 /// module with the command plugins that also consume it.
-class KanbanBuiltinProbe extends Plugin {
+///
+/// The host instantiates this default-exported class, wraps it with the SDK's
+/// dispatch Proxy, and runs its `load()` — no module-level entry boilerplate.
+export default class KanbanBuiltinProbe extends Plugin {
   /// Human-readable name — descriptive metadata only, not plugin identity.
   readonly name = "Kanban Builtin Probe";
 
@@ -37,11 +40,4 @@ class KanbanBuiltinProbe extends Plugin {
   async load(): Promise<void> {
     this.register("kanban", { rust: "kanban" });
   }
-}
-
-/// Plugin entry point invoked by the platform runtime.
-export async function load(): Promise<unknown> {
-  const plugin = makePluginThis(new KanbanBuiltinProbe()) as KanbanBuiltinProbe;
-  await plugin.load();
-  return null;
 }

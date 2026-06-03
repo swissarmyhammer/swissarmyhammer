@@ -68,7 +68,8 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 use swissarmyhammer_plugin::{
-    CallerId, HostDispatcher, McpServer as PluginMcpServer, PluginRuntime, RuntimeConfig,
+    CallerId, HostDispatcher, McpServer as PluginMcpServer, PluginLifecycle, PluginRuntime,
+    RuntimeConfig,
 };
 use swissarmyhammer_prompts::PromptLibrary;
 use swissarmyhammer_tools::mcp::McpServer;
@@ -381,10 +382,10 @@ fn write_probe_plugin(bundle_dir: &Path, probe_path: &Path) {
     // hands the host the callback handler from the sibling module in a
     // callback-bearing dispatch — the SDK marshals the function into a
     // `{ $callback: id }` marker the test then drives.
-    let entry = "import { Plugin, makePluginThis } from '@swissarmyhammer/plugin';\n\
+    let entry = "import { Plugin } from '@swissarmyhammer/plugin';\n\
          import { makeCallbackHandler } from './probe.ts';\n\
          \n\
-         class ProbePlugin extends Plugin {\n\
+         export default class ProbePlugin extends Plugin {\n\
          \x20 async load(): Promise<void> {\n\
          \x20   // Activate the host-exposed real `files` tool under `fs`.\n\
          \x20   this.register('fs', { rust: 'files' });\n\
@@ -395,12 +396,6 @@ fn write_probe_plugin(bundle_dir: &Path, probe_path: &Path) {
          \x20   const handler = makeCallbackHandler(this.fs);\n\
          \x20   this.__transport.callbackDispatch({ handler });\n\
          \x20 }\n\
-         }\n\
-         \n\
-         export async function load(): Promise<unknown> {\n\
-         \x20 const p = makePluginThis(new ProbePlugin()) as ProbePlugin;\n\
-         \x20 await p.load();\n\
-         \x20 return null;\n\
          }\n";
     std::fs::write(bundle_dir.join("index.ts"), entry).expect("probe index.ts should be written");
 }
@@ -463,7 +458,7 @@ async fn host_invokes_a_real_plugins_callback_end_to_end() {
     // plugin hands the host its callback function.
     tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle_dir.path(), "index.ts", "load"),
+        runtime.call_plugin_lifecycle(bundle_dir.path(), "index.ts", PluginLifecycle::Load),
     )
     .await
     .expect("loading the multi-file probe bundle should not hang")

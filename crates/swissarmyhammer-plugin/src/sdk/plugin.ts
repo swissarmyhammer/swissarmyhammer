@@ -772,6 +772,93 @@ export function makePluginThis<T extends Plugin>(base: T): PluginThis<T> {
 }
 
 // ---------------------------------------------------------------------------
+// The host-driven default-class lifecycle
+// ---------------------------------------------------------------------------
+
+/**
+ * A `Plugin` subclass constructor — the bundle's `default` export.
+ *
+ * A plugin bundle is authored as `export default class X extends Plugin { … }`;
+ * the host reads that `default` export and hands the constructor here so the SDK
+ * can instantiate, wrap, and drive it. The constructor takes no arguments — the
+ * `Plugin` base sets everything up in its field initializers.
+ */
+type PluginConstructor = new () => Plugin;
+
+/**
+ * The one wrapped plugin instance the host's lifecycle globals share.
+ *
+ * The host instantiates a bundle's default-exported class through
+ * {@link hostLoadDefaultPlugin}, then later tears it down through
+ * {@link hostUnloadDefaultPlugin} — two separate host→isolate calls on the same
+ * isolate. This isolate-local slot is what lets the second call reach the very
+ * instance the first built, replacing the per-bundle `let instance` boilerplate
+ * the host used to require. Each plugin runs in its own isolate, so a single
+ * slot suffices. It is `undefined` until `load` runs and is cleared back to
+ * `undefined` by `unload`.
+ */
+let defaultPluginInstance: PluginThis<Plugin> | undefined;
+
+/**
+ * Instantiate, wrap, store, and run a default-exported plugin class's `load()`.
+ *
+ * This is the host's load entry point for a default-class bundle. The host reads
+ * the bundle's `default` export — a `Plugin` subclass constructor — and calls
+ * this global with it. The SDK does the JS-land work the host cannot: `new`s the
+ * class, wraps the instance with {@link makePluginThis} so `this.<server>...`
+ * dispatch works inside the plugin, stores it for a later `unload`, and awaits
+ * the instance's `load()` hook.
+ *
+ * @param ctor - the bundle's default-exported `Plugin` subclass constructor.
+ * @returns whatever the instance's `load()` hook resolves to — `undefined` for
+ *   the common void `load()`, which the host reads back as JSON `null`.
+ * @throws if `ctor` is not a constructor, or if the plugin's `load()` throws.
+ */
+async function hostLoadDefaultPlugin(ctor: PluginConstructor): Promise<unknown> {
+  if (typeof ctor !== "function") {
+    throw new TypeError(
+      "plugin bundle's default export is not a class — a bundle must " +
+        "`export default class X extends Plugin { … }`",
+    );
+  }
+  const instance = makePluginThis(new ctor());
+  defaultPluginInstance = instance;
+  return await instance.load();
+}
+
+/**
+ * Run the stored default-class plugin instance's `unload()` hook.
+ *
+ * This is the host's unload entry point for a default-class bundle. The host
+ * calls it on the same isolate the matching {@link hostLoadDefaultPlugin} ran
+ * on, so the stored instance is the one `load` built. It runs the instance's
+ * `unload()` hook — the teardown counterpart to `load()` — and clears the slot.
+ * Unloading with no stored instance (an `unload` the host drives before any
+ * `load`, or after a prior `unload`) is a no-op rather than an error, mirroring
+ * the host's best-effort unload contract.
+ *
+ * @returns `null` — `unload` reports completion by returning normally.
+ */
+async function hostUnloadDefaultPlugin(): Promise<unknown> {
+  const instance = defaultPluginInstance;
+  if (instance === undefined) {
+    return null;
+  }
+  defaultPluginInstance = undefined;
+  await instance.unload();
+  return null;
+}
+
+// Install the host→isolate default-class lifecycle entry points. The runtime
+// reads a bundle's `default` export and drives these globals to instantiate,
+// wrap, and run the plugin — so a bundle never writes the `new` +
+// `makePluginThis` + lifecycle-call boilerplate itself.
+(globalThis as Record<string, unknown>).__sahLoadDefaultPlugin =
+  hostLoadDefaultPlugin;
+(globalThis as Record<string, unknown>).__sahUnloadDefaultPlugin =
+  hostUnloadDefaultPlugin;
+
+// ---------------------------------------------------------------------------
 // The Plugin base class
 // ---------------------------------------------------------------------------
 

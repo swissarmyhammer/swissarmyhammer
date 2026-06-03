@@ -39,7 +39,7 @@
 // its own distinct `{ rust }` module — bundle B uses `collide-probe-b-mod` —
 // behind the shared registered name `"collide-probe"`.
 
-import { Plugin, makePluginThis } from "@swissarmyhammer/plugin";
+import { Plugin } from "@swissarmyhammer/plugin";
 
 // The shared registered name both `collide-probe-*` bundles target. Must
 // match `collide-probe-a`'s `SERVER_NAME` literally — the collision is on this
@@ -61,7 +61,7 @@ const RUST_MODULE_ID = "collide-probe-b-mod";
  * error so the load fails — which is the behavior the end-to-end test
  * observes.
  */
-class CollideProbeBPlugin extends Plugin {
+export default class CollideProbeBPlugin extends Plugin {
   /** Human-readable name — descriptive metadata only, not plugin identity. */
   readonly name = "Collide Probe B";
 
@@ -104,20 +104,3 @@ class CollideProbeBPlugin extends Plugin {
   }
 }
 
-/**
- * The plugin entry point.
- *
- * The host calls this once when the bundle is discovered. It builds the
- * plugin, wraps it with `makePluginThis` so `this.<server>` dispatch works,
- * and runs the plugin's `load()`. A thrown `ServerNameTaken` propagates out
- * through this function, becoming the `Err` the host's `load()` returns.
- *
- * @returns `null` on a successful load (no prior claim on the shared name).
- * @throws the platform's `ServerNameTaken` error when the shared name is
- *   already registered — which is the behavior the end-to-end test exercises.
- */
-export async function load(): Promise<unknown> {
-  const plugin = makePluginThis(new CollideProbeBPlugin()) as CollideProbeBPlugin;
-  await plugin.load();
-  return null;
-}

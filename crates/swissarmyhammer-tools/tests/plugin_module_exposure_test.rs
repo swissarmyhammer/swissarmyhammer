@@ -26,19 +26,14 @@ const OPERATIONS_META_KEY: &str = "io.swissarmyhammer/operations";
 
 /// Writes a one-file plugin bundle whose `load` export runs `body`.
 ///
-/// The entry is the bundle's `index.ts`: it imports the SDK, declares a
-/// `Plugin` subclass whose `load` contains `body`, and exports a `load`
-/// lifecycle function — the bundle shape the host's `load(plugin_dir)` expects.
+/// The entry is the bundle's `index.ts`: it imports the SDK and default-exports
+/// a `Plugin` subclass whose `load()` contains `body` — the bundle shape the
+/// host's `load(plugin_dir)` instantiates and runs.
 fn write_plugin(dir: &std::path::Path, body: &str) {
     let entry = format!(
-        "import {{ Plugin, makePluginThis }} from '@swissarmyhammer/plugin';\n\
-         class P extends Plugin {{\n\
+        "import {{ Plugin }} from '@swissarmyhammer/plugin';\n\
+         export default class P extends Plugin {{\n\
            async load(): Promise<void> {{\n{body}\n}}\n\
-         }}\n\
-         export async function load(): Promise<unknown> {{\n\
-           const p = makePluginThis(new P()) as P;\n\
-           await p.load();\n\
-           return null;\n\
          }}\n"
     );
     std::fs::write(dir.join("index.ts"), entry).expect("index.ts should be written");

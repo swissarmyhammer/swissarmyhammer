@@ -27,7 +27,6 @@ import {
   Plugin,
   ensureServices,
   registerCommands,
-  makePluginThis,
 } from "@swissarmyhammer/plugin";
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -61,7 +60,7 @@ interface CommandContext {
  * the bundle directory name (`file-commands`); `name` / `description` are
  * descriptive metadata only.
  */
-class FileCommandsPlugin extends Plugin {
+export default class FileCommandsPlugin extends Plugin {
   /** Human-readable name — descriptive metadata only, not plugin identity. */
   readonly name = "File Commands";
 
@@ -146,19 +145,4 @@ class FileCommandsPlugin extends Plugin {
       "file-commands: registered file.switchBoard, file.closeBoard, file.newBoard, file.openBoard",
     );
   }
-}
-
-/**
- * The plugin entry point.
- *
- * The host calls this once when the bundle is discovered: build the plugin,
- * wrap it with `makePluginThis` so `this.<server>` dispatch works, and run
- * `load()`.
- *
- * @returns `null` — this plugin's only effect is its load-time registrations.
- */
-export async function load(): Promise<unknown> {
-  const plugin = makePluginThis(new FileCommandsPlugin()) as FileCommandsPlugin;
-  await plugin.load();
-  return null;
 }

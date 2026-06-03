@@ -116,7 +116,7 @@ fn write_probe_plugin(project_root: &Path, fixture_binary: &str, probe_path: &Pa
     // to disk. The `indexOf` check makes the plugin fail loudly if the
     // `tools/call` return value is broken, rather than writing an empty file.
     let entry = format!(
-        "import {{ Plugin, makePluginThis }} from '@swissarmyhammer/plugin';\n\
+        "import {{ Plugin }} from '@swissarmyhammer/plugin';\n\
          \n\
          /** Extracts the echoed text from an `echo` `tools/call` result. */\n\
          function echoedText(result: unknown): string {{\n\
@@ -131,7 +131,7 @@ fn write_probe_plugin(project_root: &Path, fixture_binary: &str, probe_path: &Pa
          \x20 return text;\n\
          }}\n\
          \n\
-         class ProbePlugin extends Plugin {{\n\
+         export default class ProbePlugin extends Plugin {{\n\
          \x20 async load(): Promise<void> {{\n\
          \x20   // The transport under test: a stdio MCP server subprocess.\n\
          \x20   this.register('cli', {{ cli: [{fixture}] }});\n\
@@ -152,12 +152,6 @@ fn write_probe_plugin(project_root: &Path, fixture_binary: &str, probe_path: &Pa
          \x20     content: echoed,\n\
          \x20   }});\n\
          \x20 }}\n\
-         }}\n\
-         \n\
-         export async function load(): Promise<unknown> {{\n\
-         \x20 const p = makePluginThis(new ProbePlugin()) as ProbePlugin;\n\
-         \x20 await p.load();\n\
-         \x20 return null;\n\
          }}\n",
         fixture = json_string(fixture_binary),
         probe = json_string(&probe_path.to_string_lossy()),

@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: a480
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffdf80
 project: plugin-arch
 title: Host instantiates default-exported Plugin class (drop per-bundle load() boilerplate)
 ---
@@ -33,3 +33,29 @@ Host injects a tiny bootstrap shim that imports the bundle, reads the `default` 
 - e2e tests updated; full plugin test suite green.
 
 Note: consider keeping the function-export path supported transitionally so the migration stays green per-commit, then removing it.
+
+## Review Findings (2026-06-03 15:20)
+
+Scope: uncommitted working-tree delta for this task. Reviewed `src/sdk/plugin.ts`, `src/runtime/mod.rs`, `src/host.rs`, `src/discovery.rs`, `src/lib.rs`, all 20 migrated bundle `index.ts` files, and the test-fixture migrations.
+
+### Acceptance criteria
+- AC1 (default-class bundle loads/registers/unloads through a real isolate): MET. `runtime/mod.rs` test `default_class_plugin_loads_and_unloads` drives Load then Unload on a real isolate, asserts `load()`'s `'loaded'` return propagates and the stored instance's `unload()` runs (sets `__unloaded`), proving the isolate-local instance slot persists across the two separate host calls. `default_class_missing_default_export_is_reported` proves a missing `default` errors clearly naming `default`.
+- AC2 (all builtin + examples migrated; `export async function load()` deleted): MET. All 20 entry `index.ts` files (8 builtin + 11 examples + 1 test fixture) have `export default class`; repo-wide grep for `export async function load` / `export function load` / `makePluginThis` across `**/plugins/**/*.ts` and the test suite returns zero matches. Spot-checked cli-echo (keeps its `unload()` override + `super.unload()`), multi-module (sibling import preserved), ensure-services-a, command-sdk-direct, kanban-builtin-probe, builtin-probe — all logic preserved inside the class; old boilerplate did only new+wrap+load, so nothing was lost.
+- AC3 (`unload` still works via the instance method): MET. `host.rs::run_plugin_unload` drives `PluginLifecycle::Unload`; SDK `__sahUnloadDefaultPlugin` reaches the stored wrapped instance and runs its `unload()`, then clears the slot. Unload-without-load and double-unload are clean no-ops (slot `undefined` → returns `null`). `record_crashed` correctly skips the hook for a dead isolate.
+
+### Verification of scrutiny points
+- Wrap location: `hostLoadDefaultPlugin` runs `makePluginThis(new ctor())` and stores/awaits the WRAPPED instance, so `this.<server>` dispatch works inside `load()`/`unload()`. Correct.
+- Return propagation: `hostLoadDefaultPlugin` returns `await instance.load()`; host ignores the value (only checks `Ok`), matching old behavior.
+- Removed fallback: `LOAD_EXPORT`/`UNLOAD_EXPORT` fully removed; no remaining `"load"`-export resolution; no bundle/test still using the old form.
+- Pre-existing failure `committed_examples_coload_across_layers`: CONFIRMED independent of this change. The probe bundle's `register("kanban", { rust: "kanban" })` line is unchanged by this diff (it registers under `"kanban"` at HEAD and after), while the test (clean, no uncommitted changes) expects server name `kanban-builtin-probe`. The migration only converted the class to `export default` and dropped the boilerplate — the server-name mismatch is pre-existing, not newly broken here.
+
+### Blockers
+(none)
+
+### Warnings
+(none)
+
+### Nits
+(none)
+
+CLEAN — no blockers, warnings, or nits. All three acceptance criteria met.

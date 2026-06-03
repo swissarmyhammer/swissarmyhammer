@@ -276,7 +276,7 @@ fn write_probe_plugin(project_root: &Path, endpoint_url: &str, probe_path: &Path
     // the `tools/call` return value is broken, rather than writing an empty
     // file.
     let entry = format!(
-        "import {{ Plugin, makePluginThis }} from '@swissarmyhammer/plugin';\n\
+        "import {{ Plugin }} from '@swissarmyhammer/plugin';\n\
          \n\
          /** Extracts the echoed text from an `echo` `tools/call` result. */\n\
          function echoedText(result: unknown): string {{\n\
@@ -291,7 +291,7 @@ fn write_probe_plugin(project_root: &Path, endpoint_url: &str, probe_path: &Path
          \x20 return text;\n\
          }}\n\
          \n\
-         class ProbePlugin extends Plugin {{\n\
+         export default class ProbePlugin extends Plugin {{\n\
          \x20 async load(): Promise<void> {{\n\
          \x20   // The transport under test: an HTTP MCP endpoint, with auth.\n\
          \x20   this.register('url', {{\n\
@@ -315,12 +315,6 @@ fn write_probe_plugin(project_root: &Path, endpoint_url: &str, probe_path: &Path
          \x20     content: echoed,\n\
          \x20   }});\n\
          \x20 }}\n\
-         }}\n\
-         \n\
-         export async function load(): Promise<unknown> {{\n\
-         \x20 const p = makePluginThis(new ProbePlugin()) as ProbePlugin;\n\
-         \x20 await p.load();\n\
-         \x20 return null;\n\
          }}\n",
         url = json_string(endpoint_url),
         auth = json_string(TEST_AUTH_HEADER),

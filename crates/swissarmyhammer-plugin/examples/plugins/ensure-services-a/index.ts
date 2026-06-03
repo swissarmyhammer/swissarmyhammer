@@ -30,7 +30,6 @@ import {
   Plugin,
   ensureServices,
   registerCommands,
-  makePluginThis,
 } from "@swissarmyhammer/plugin";
 
 /** The unique command id this plugin contributes to the shared registry. */
@@ -44,7 +43,7 @@ const COMMAND_ID = "ensure-services-a.greet";
  * per-plugin ledger purges both this plugin's commands and its half of the
  * shared `commands` registration when the host unloads it.
  */
-class EnsureServicesAPlugin extends Plugin {
+export default class EnsureServicesAPlugin extends Plugin {
   /** Human-readable name — descriptive metadata only, not plugin identity. */
   readonly name = "Ensure Services A";
 
@@ -74,19 +73,4 @@ class EnsureServicesAPlugin extends Plugin {
     ]);
     this.log.info(`ensure-services-a: registered '${COMMAND_ID}'`);
   }
-}
-
-/**
- * The plugin entry point.
- *
- * The host calls this once when the bundle is discovered. It builds the
- * plugin, wraps it with `makePluginThis` so `this.<server>` dispatch works,
- * and runs the plugin's `load()`.
- *
- * @returns `null` — this plugin's only effect is its load-time registration.
- */
-export async function load(): Promise<unknown> {
-  const plugin = makePluginThis(new EnsureServicesAPlugin()) as EnsureServicesAPlugin;
-  await plugin.load();
-  return null;
 }

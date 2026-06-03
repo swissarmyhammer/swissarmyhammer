@@ -36,7 +36,7 @@
 // `{ rust }` modules through the shared test-support harness before loading
 // either bundle.
 
-import { Plugin, makePluginThis } from "@swissarmyhammer/plugin";
+import { Plugin } from "@swissarmyhammer/plugin";
 
 // The shared registered name both `collide-probe-*` bundles target. Held as a
 // constant so the test, the support helper, and both bundles all agree on the
@@ -84,7 +84,7 @@ function echoedText(result: unknown): string {
  * load proves the first registration succeeded; the companion `collide-probe-b`
  * bundle then attempts the colliding second registration.
  */
-class CollideProbeAPlugin extends Plugin {
+export default class CollideProbeAPlugin extends Plugin {
   /** Human-readable name — descriptive metadata only, not plugin identity. */
   readonly name = "Collide Probe A";
 
@@ -140,18 +140,3 @@ class CollideProbeAPlugin extends Plugin {
   }
 }
 
-/**
- * The plugin entry point.
- *
- * The host calls this once when the bundle is discovered. It builds the
- * plugin, wraps it with `makePluginThis` so `this.<server>` dispatch works,
- * and runs the plugin's `load()`.
- *
- * @returns `null` — this plugin exposes no value to the host beyond its
- *   load-time registration and the live server it leaves behind.
- */
-export async function load(): Promise<unknown> {
-  const plugin = makePluginThis(new CollideProbeAPlugin()) as CollideProbeAPlugin;
-  await plugin.load();
-  return null;
-}

@@ -49,7 +49,6 @@ import {
   Plugin,
   ensureServices,
   registerCommands,
-  makePluginThis,
 } from "@swissarmyhammer/plugin";
 
 import { type ViewsDispatch } from "./commands/context.ts";
@@ -67,7 +66,7 @@ import { lifecycleCommands } from "./commands/lifecycle.ts";
  * the bundle directory name (`perspective-commands`); `name` / `description`
  * are descriptive metadata only.
  */
-class PerspectiveCommandsPlugin extends Plugin {
+export default class PerspectiveCommandsPlugin extends Plugin {
   /** Human-readable name — descriptive metadata only, not plugin identity. */
   readonly name = "Perspective Commands";
 
@@ -99,19 +98,4 @@ class PerspectiveCommandsPlugin extends Plugin {
       "perspective-commands: registered 17 perspective.* commands (lifecycle / filter / group / sort / nav)",
     );
   }
-}
-
-/**
- * The plugin entry point.
- *
- * The host calls this once when the bundle is discovered: build the plugin,
- * wrap it with `makePluginThis` so `this.<server>` dispatch works, and run
- * `load()`.
- *
- * @returns `null` — this plugin's only effect is its load-time registrations.
- */
-export async function load(): Promise<unknown> {
-  const plugin = makePluginThis(new PerspectiveCommandsPlugin()) as PerspectiveCommandsPlugin;
-  await plugin.load();
-  return null;
 }

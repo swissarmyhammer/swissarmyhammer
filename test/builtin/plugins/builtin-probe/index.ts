@@ -11,11 +11,12 @@
 // a test can prove the builtin *layer* genuinely loads a plugin — discovered,
 // isolate created, lifecycle run — without contending for any exposed Rust
 // module.
-import { Plugin, makePluginThis } from "@swissarmyhammer/plugin";
+import { Plugin } from "@swissarmyhammer/plugin";
 
 /// The builtin probe plugin. Its `load()` runs real plugin code without
-/// registering a server.
-class BuiltinProbe extends Plugin {
+/// registering a server. The host instantiates this default-exported class,
+/// wraps it with the SDK's dispatch Proxy, and runs its `load()`.
+export default class BuiltinProbe extends Plugin {
   /// Human-readable name — descriptive metadata only, not plugin identity.
   readonly name = "Builtin Probe";
 
@@ -30,11 +31,4 @@ class BuiltinProbe extends Plugin {
   async load(): Promise<void> {
     this.log.info("builtin-probe loaded from the builtin layer");
   }
-}
-
-/// Plugin entry point invoked by the platform runtime.
-export async function load(): Promise<unknown> {
-  const plugin = makePluginThis(new BuiltinProbe()) as BuiltinProbe;
-  await plugin.load();
-  return null;
 }

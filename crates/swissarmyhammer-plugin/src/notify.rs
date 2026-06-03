@@ -657,7 +657,10 @@ mod tests {
         assert_eq!(bridge.subscriber_count(), 2);
 
         let reached = bridge.publish(McpNotification::tools_list_changed());
-        assert_eq!(reached, 2, "both subscribers should receive the notification");
+        assert_eq!(
+            reached, 2,
+            "both subscribers should receive the notification"
+        );
 
         let from_a = a.recv().await.unwrap();
         let from_b = b.recv().await.unwrap();

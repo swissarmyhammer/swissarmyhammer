@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use swissarmyhammer_plugin::{HostDispatcher, PluginRuntime, RuntimeConfig};
+use swissarmyhammer_plugin::{HostDispatcher, PluginLifecycle, PluginRuntime, RuntimeConfig};
 
 /// A generous upper bound on any single runtime interaction.
 const TIMEOUT: Duration = Duration::from_secs(20);
@@ -145,21 +145,20 @@ fn config_with(dispatcher: Arc<dyn HostDispatcher>) -> RuntimeConfig {
     }
 }
 
-/// Write a one-file plugin bundle whose `load` export runs `body`.
+/// Write a one-file plugin bundle whose default-class `load()` runs `body`.
 ///
-/// The entry imports the SDK, declares a `Plugin` subclass whose `load`
-/// contains `body`, and exports a `load` lifecycle function that constructs
-/// the subclass — wrapped in the SDK's plugin Proxy — and awaits its `load`.
+/// The entry imports the SDK and default-exports a `Plugin` subclass whose
+/// `load()` contains `body`. The host instantiates the default export, wraps it
+/// with the SDK's plugin Proxy, and runs its `load()`. The hook returns
+/// `globalThis.__result ?? null` so a test that records a value on
+/// `globalThis.__result` observes it as the lifecycle call's return value.
 fn write_plugin(dir: &std::path::Path, body: &str) {
     let entry = format!(
-        "import {{ Plugin, makePluginThis }} from '@swissarmyhammer/plugin';\n\
-         class P extends Plugin {{\n\
-           async load(): Promise<void> {{\n{body}\n}}\n\
-         }}\n\
-         export async function load(): Promise<unknown> {{\n\
-           const p = makePluginThis(new P()) as P;\n\
-           await p.load();\n\
-           return globalThis.__result ?? null;\n\
+        "import {{ Plugin }} from '@swissarmyhammer/plugin';\n\
+         export default class P extends Plugin {{\n\
+           async load(): Promise<unknown> {{\n{body}\n\
+             return globalThis.__result ?? null;\n\
+           }}\n\
          }}\n"
     );
     std::fs::write(dir.join("entry.ts"), entry).expect("entry.ts should be written");
@@ -183,7 +182,7 @@ async fn operation_path_call_produces_op_wire_shape() {
 
     tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", "load"),
+        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", PluginLifecycle::Load),
     )
     .await
     .expect("loading the plugin should not hang")
@@ -216,7 +215,7 @@ async fn flat_tool_call_produces_verbatim_wire_shape() {
 
     tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", "load"),
+        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", PluginLifecycle::Load),
     )
     .await
     .expect("loading the plugin should not hang")
@@ -248,7 +247,7 @@ async fn operation_direct_form_passes_op_through() {
 
     tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", "load"),
+        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", PluginLifecycle::Load),
     )
     .await
     .expect("loading the plugin should not hang")
@@ -287,7 +286,7 @@ async fn unknown_verb_raises_unknown_operation_listing_verbs() {
 
     let result = tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", "load"),
+        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", PluginLifecycle::Load),
     )
     .await
     .expect("loading the plugin should not hang")
@@ -328,7 +327,7 @@ async fn unknown_server_raises_unknown_server() {
 
     let result = tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", "load"),
+        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", PluginLifecycle::Load),
     )
     .await
     .expect("loading the plugin should not hang")
@@ -361,17 +360,19 @@ async fn plugin_subclass_exposes_metadata_props() {
            readonly description = 'a worked example plugin';\n\
          }\n\
          class Bare extends Plugin {}\n\
-         export async function load(): Promise<unknown> {\n\
-           const named = new Named();\n\
-           const bare = new Bare();\n\
-           return {\n\
-             namedName: named.name,\n\
-             namedVersion: named.version,\n\
-             namedDescription: named.description,\n\
-             bareName: bare.name,\n\
-             bareVersion: bare.version,\n\
-             bareDescription: bare.description,\n\
-           };\n\
+         export default class MetaProbe extends Plugin {\n\
+           async load(): Promise<unknown> {\n\
+             const named = new Named();\n\
+             const bare = new Bare();\n\
+             return {\n\
+               namedName: named.name,\n\
+               namedVersion: named.version,\n\
+               namedDescription: named.description,\n\
+               bareName: bare.name,\n\
+               bareVersion: bare.version,\n\
+               bareDescription: bare.description,\n\
+             };\n\
+           }\n\
          }\n";
     std::fs::write(bundle.path().join("entry.ts"), entry).expect("entry.ts should be written");
 
@@ -380,7 +381,7 @@ async fn plugin_subclass_exposes_metadata_props() {
 
     let result = tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", "load"),
+        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", PluginLifecycle::Load),
     )
     .await
     .expect("loading the plugin should not hang")
@@ -437,7 +438,7 @@ async fn reserved_names_are_not_path_segments() {
 
     let result = tokio::time::timeout(
         TIMEOUT,
-        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", "load"),
+        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", PluginLifecycle::Load),
     )
     .await
     .expect("loading the plugin should not hang")

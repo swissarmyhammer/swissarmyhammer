@@ -83,23 +83,8 @@ use crate::registry::{
     RegisterOutcome, ServerName, ServerRegistry, ServerSource, ServerStatus, UnregisterOutcome,
 };
 use crate::reload::ReloadStatus;
-use crate::runtime::{HostDispatcher, PluginRuntime, RuntimeConfig};
+use crate::runtime::{HostDispatcher, PluginLifecycle, PluginRuntime, RuntimeConfig};
 use crate::server::{CallerId, CliServer, McpServer, PluginId, ToolMetadata, UrlServer};
-
-/// The exported lifecycle function the host calls to load a plugin.
-///
-/// A plugin bundle's `index.ts` exports a `load` function that constructs the
-/// `Plugin` subclass — wrapped in the SDK's dispatch Proxy — and awaits its
-/// `load()` hook. The host invokes this export after evaluating the module.
-const LOAD_EXPORT: &str = "load";
-
-/// The exported lifecycle function the host calls to unload a plugin.
-///
-/// A plugin bundle's `index.ts` exports an `unload` function only when the
-/// author wrote one. The host calls it best-effort before disposing the
-/// plugin's registrations; a bundle that does not export it is the normal
-/// case, not an error.
-const UNLOAD_EXPORT: &str = "unload";
 
 /// How long the bridge waits for the host to answer one SDK call.
 ///
@@ -961,7 +946,7 @@ impl PluginHost {
         // later `unload` re-resolves the `unload` export against the identical
         // module URL the `load` export used.
         let load_result = runtime
-            .call_plugin_lifecycle(plugin_dir, entry_file.clone(), LOAD_EXPORT)
+            .call_plugin_lifecycle(plugin_dir, entry_file.clone(), PluginLifecycle::Load)
             .await;
 
         match load_result {
@@ -1582,31 +1567,33 @@ impl PluginHost {
 
     /// Runs the plugin's optional `unload` lifecycle hook, ignoring failures.
     ///
-    /// The bundle's entry module exports an `unload` function only when the
-    /// plugin author wrote one. A bundle with no such export surfaces as an
-    /// [`Error::Runtime`] from `call_plugin_lifecycle`, which is the expected
-    /// case and is logged at debug level rather than failing the unload —
-    /// `unload()` is optional by contract.
+    /// The host instantiated the bundle's default-exported `Plugin` subclass on
+    /// load and stored the wrapped instance on the isolate; this drives the
+    /// matching [`PluginLifecycle::Unload`] transition, which runs that stored
+    /// instance's `unload()` hook. A plugin that does not override `unload()`
+    /// inherits the base class's no-op-plus-`track`-cleanup default, so the call
+    /// succeeds either way — overriding `unload()` is optional by contract. Any
+    /// error the hook throws is logged at debug level rather than failing the
+    /// unload, since host-side disposal must still run.
     ///
-    /// The lifecycle call reuses the entry path the `load` export was driven
-    /// with — [`LoadedPlugin::entry_file`] — so the `unload` export resolves
-    /// against the *same* main module the isolate already loaded, rather than a
-    /// re-derived path the isolate's module map would reject as a duplicate
-    /// "main" module.
+    /// The lifecycle call reuses the entry path the load transition was driven
+    /// with — [`LoadedPlugin::entry_file`] — so the unload resolves against the
+    /// *same* main module the isolate already loaded, rather than a re-derived
+    /// path the isolate's module map would reject as a duplicate "main" module.
     async fn run_plugin_unload(&self, plugin_id: &PluginId, plugin: &LoadedPlugin) {
         let result = plugin
             .runtime
             .call_plugin_lifecycle(
                 &plugin.bundle_dir,
                 plugin.entry_file.as_str(),
-                UNLOAD_EXPORT,
+                PluginLifecycle::Unload,
             )
             .await;
         if let Err(error) = result {
             tracing::debug!(
                 plugin = %plugin_id.as_str(),
                 %error,
-                "plugin unload() hook absent or failed; continuing host-side disposal"
+                "plugin unload() hook failed; continuing host-side disposal"
             );
         }
     }

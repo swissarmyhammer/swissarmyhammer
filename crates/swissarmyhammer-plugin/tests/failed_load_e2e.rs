@@ -124,17 +124,12 @@ fn write_crashing_plugin(layer_root: &Path) {
     // `load()` registers a real server successfully, then throws. The host
     // must roll the registration back and surface the thrown message.
     let entry = format!(
-        "import {{ Plugin, makePluginThis }} from '@swissarmyhammer/plugin';\n\
-         class P extends Plugin {{\n\
+        "import {{ Plugin }} from '@swissarmyhammer/plugin';\n\
+         export default class P extends Plugin {{\n\
            async load(): Promise<void> {{\n\
              this.register('half-built', {{ rust: 'half-built-mod' }});\n\
              throw new Error({message});\n\
            }}\n\
-         }}\n\
-         export async function load(): Promise<unknown> {{\n\
-           const p = makePluginThis(new P()) as P;\n\
-           await p.load();\n\
-           return null;\n\
          }}\n",
         message = serde_json::to_string(THROW_MESSAGE).expect("a string always serializes to JSON"),
     );

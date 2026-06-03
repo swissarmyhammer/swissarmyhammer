@@ -36,7 +36,7 @@
 // crate's `cli_server_fixture` binary — a genuine stdio MCP server with a
 // flat `echo` tool.
 
-import { Plugin, makePluginThis } from "@swissarmyhammer/plugin";
+import { Plugin } from "@swissarmyhammer/plugin";
 
 // The shared registered name both `shared-cli-*` bundles target. Both bundles
 // register this name against the SAME `{ cli }` source, so the second call is
@@ -55,7 +55,7 @@ const ECHO_COMMAND = "__CLI_ECHO_COMMAND__";
  * of this `(name, source)` spawns the subprocess; a subsequent registration by
  * `shared-cli-b` recognizes the same source and joins the live subprocess.
  */
-class SharedCliAPlugin extends Plugin {
+export default class SharedCliAPlugin extends Plugin {
   /** Human-readable name — descriptive metadata only, not plugin identity. */
   readonly name = "Shared CLI A";
 
@@ -79,17 +79,3 @@ class SharedCliAPlugin extends Plugin {
   }
 }
 
-/**
- * The plugin entry point.
- *
- * The host calls this once when the bundle is discovered. It builds the
- * plugin, wraps it with `makePluginThis` so `this.<server>` dispatch works,
- * and runs the plugin's `load()`.
- *
- * @returns `null` — this plugin's only effect is its load-time registration.
- */
-export async function load(): Promise<unknown> {
-  const plugin = makePluginThis(new SharedCliAPlugin()) as SharedCliAPlugin;
-  await plugin.load();
-  return null;
-}

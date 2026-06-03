@@ -52,7 +52,7 @@
 // The `notes/` parent directory does not need to exist beforehand — the
 // `files` `write file` operation creates parent directories as needed.
 
-import { Plugin, makePluginThis } from "@swissarmyhammer/plugin";
+import { Plugin } from "@swissarmyhammer/plugin";
 
 // The two note paths this plugin writes, RELATIVE to the process working
 // directory (see the working-directory contract above). The end-to-end test
@@ -97,7 +97,7 @@ function readBackText(result: unknown): string {
  * relative paths resolved by the `files` tool against the process working
  * directory.
  */
-class FileNotesPlugin extends Plugin {
+export default class FileNotesPlugin extends Plugin {
   /** Human-readable name — descriptive metadata only, not plugin identity. */
   readonly name = "File Notes Example";
 
@@ -164,18 +164,3 @@ class FileNotesPlugin extends Plugin {
   }
 }
 
-/**
- * The plugin entry point.
- *
- * The host calls this once when the bundle is discovered. It builds the
- * plugin, wraps it with `makePluginThis` so `this.<server>` dispatch works,
- * and runs the plugin's `load()`.
- *
- * @returns `null` — this plugin exposes no value to the host beyond its
- *   load-time filesystem effects.
- */
-export async function load(): Promise<unknown> {
-  const plugin = makePluginThis(new FileNotesPlugin()) as FileNotesPlugin;
-  await plugin.load();
-  return null;
-}

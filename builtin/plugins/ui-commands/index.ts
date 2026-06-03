@@ -42,7 +42,6 @@ import {
   Plugin,
   ensureServices,
   registerCommands,
-  makePluginThis,
 } from "@swissarmyhammer/plugin";
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -160,7 +159,7 @@ function windowLabel(ctx: CommandContext): string {
  * directory name (`ui-commands`); `name` / `description` are descriptive
  * metadata only.
  */
-class UiCommandsPlugin extends Plugin {
+export default class UiCommandsPlugin extends Plugin {
   /** Human-readable name — descriptive metadata only, not plugin identity. */
   readonly name = "UI Commands";
 
@@ -360,19 +359,4 @@ class UiCommandsPlugin extends Plugin {
       "ui-commands: registered 10 commands (ui.inspect / ui.inspector.* / ui.palette.* / ui.entity.startRename / ui.mode.set / ui.setFocus / window.new) across ui_state / focus / window",
     );
   }
-}
-
-/**
- * The plugin entry point.
- *
- * The host calls this once when the bundle is discovered: build the plugin,
- * wrap it with `makePluginThis` so `this.<server>` dispatch works, and run
- * `load()`.
- *
- * @returns `null` — this plugin's only effect is its load-time registrations.
- */
-export async function load(): Promise<unknown> {
-  const plugin = makePluginThis(new UiCommandsPlugin()) as UiCommandsPlugin;
-  await plugin.load();
-  return null;
 }

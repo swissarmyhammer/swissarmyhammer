@@ -35,21 +35,27 @@ The `multi-module` example is exactly such a multi-file bundle. The one rule:
 a relative import may not escape the bundle directory, so the bundle stays a
 self-contained sandbox.
 
-## The `index.ts` module and the `load()` contract
+## The `index.ts` module and the default-class entry contract
 
 The entry module is `index.ts` by convention — discovery loads it as the
 bundle's entry point. It is TypeScript: the runtime transpiles it to
-JavaScript and runs it inside a fresh V8 isolate. The module must export an
-async function named `load`:
+JavaScript and runs it inside a fresh V8 isolate. The module must
+**default-export a `Plugin` subclass**:
 
 ```ts
-export async function load(): Promise<unknown> { /* ... */ }
+import { Plugin } from '@swissarmyhammer/plugin';
+
+export default class MyPlugin extends Plugin {
+  async load() { /* ... */ }
+}
 ```
 
-The host calls `load()` exactly once when the plugin is discovered. It is the
-plugin's one entry point — everything the plugin does at load time happens
-inside it (or inside code it calls). Returning normally signals a successful
-load; throwing fails the load.
+The host reads that `default` export, instantiates it, wraps it with the SDK's
+dispatch Proxy, and calls its `load()` exactly once when the plugin is
+discovered (and `unload()` once on teardown). A plugin writes no module-level
+entry boilerplate — the class *is* the entry point. Everything the plugin does
+at load time happens inside `load()` (or code it calls); returning normally
+signals a successful load, throwing fails it.
 
 ## The `@swissarmyhammer/plugin` SDK
 
@@ -85,17 +91,19 @@ A registered server's tools are reached through a dynamic dispatch index:
 plugin never describes a server's tools — the platform queries them from the
 server itself.
 
-### `makePluginThis`
+### The dispatch Proxy (`makePluginThis`)
 
-A bare `Plugin` instance does not yet have the dynamic `this.<server>` index.
-`makePluginThis(instance)` wraps an instance so unknown property reads become
-server dispatchers. The entry module's `load()` builds the plugin, wraps it,
-and runs the plugin's `load()`:
+A bare `Plugin` instance does not yet have the dynamic `this.<server>` index;
+the SDK's `makePluginThis` wraps an instance so unknown property reads become
+server dispatchers. **The host does this wrap for you** — it instantiates your
+default-exported class, wraps the instance with `makePluginThis`, and runs its
+`load()` — so a bundle never imports or calls `makePluginThis` itself. The whole
+authoring surface is the class:
 
 ```ts
-import { Plugin, makePluginThis } from '@swissarmyhammer/plugin';
+import { Plugin } from '@swissarmyhammer/plugin';
 
-class MyPlugin extends Plugin {
+export default class MyPlugin extends Plugin {
   readonly name = 'My Plugin';
   readonly version = '1.0.0';
   readonly description = 'What my plugin does in one line.';
@@ -104,12 +112,6 @@ class MyPlugin extends Plugin {
     this.register('my-server', { rust: 'files' });
     // this.my-server.<tool>(...) is now callable
   }
-}
-
-export async function load(): Promise<unknown> {
-  const plugin = makePluginThis(new MyPlugin()) as MyPlugin;
-  await plugin.load();
-  return null;
 }
 ```
 

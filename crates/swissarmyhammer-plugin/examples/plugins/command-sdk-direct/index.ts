@@ -21,7 +21,6 @@ import {
   Plugin,
   ensureServices,
   registerCommands,
-  makePluginThis,
 } from "@swissarmyhammer/plugin";
 
 /** The command id registered through the {@link registerCommands} convention. */
@@ -38,7 +37,7 @@ const DIRECT_COMMAND_ID = "command-sdk.direct";
  * assert the two forms produce the same observable state and that unload
  * purges both via the per-plugin ledger.
  */
-class CommandSdkDirectPlugin extends Plugin {
+export default class CommandSdkDirectPlugin extends Plugin {
   /** Human-readable name — descriptive metadata only, not plugin identity. */
   readonly name = "Command SDK Direct Form";
 
@@ -88,19 +87,4 @@ class CommandSdkDirectPlugin extends Plugin {
       `command-sdk-direct: registered '${CONVENTION_COMMAND_ID}' (convention) and '${DIRECT_COMMAND_ID}' (direct)`,
     );
   }
-}
-
-/**
- * The plugin entry point.
- *
- * The host calls this once when the bundle is discovered. It builds the
- * plugin, wraps it with `makePluginThis` so `this.<server>` dispatch works,
- * and runs the plugin's `load()`.
- *
- * @returns `null` — this plugin's only effect is its load-time registrations.
- */
-export async function load(): Promise<unknown> {
-  const plugin = makePluginThis(new CommandSdkDirectPlugin()) as CommandSdkDirectPlugin;
-  await plugin.load();
-  return null;
 }
