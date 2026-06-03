@@ -23,7 +23,7 @@ use swissarmyhammer_common::lifecycle::InitRegistry;
 /// | Priority | Component (display name)                       | User | Notes                                                |
 /// |---------:|-----------------------------------------------|:----:|------------------------------------------------------|
 /// | 10       | McpRegistration ("Register MCP server")       |  y   | Delegates to mirdan appliers (per-agent strategies)  |
-/// | 20       | DenyBash ("Permissions")                      |  y   | Delegates to mirdan appliers (per-agent strategies)  |
+/// | 20       | AllowBashCleanup ("Permissions")              |  y   | deinit-only: re-allows Bash (init is a no-op; serve owns the deny) |
 /// | 30       | Statusline ("Statusline")                     |  y   | Edits each agent's per-scope settings file           |
 /// | 40       | ProjectStructure ("Project workspace")        |  -   | Project-only — skipped in User scope (see below)     |
 /// | 50       | ClaudeMd ("Preamble")                         |  y   | Targets each agent's per-scope preamble file         |
