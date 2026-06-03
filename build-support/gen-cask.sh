@@ -95,7 +95,12 @@ if [ -n "$cli_binary" ]; then
     # `#{appdir}` is a Homebrew interpolation evaluated by Ruby at install
     # time, not a shell expansion — emit it literally.
     printf '  binary "#{appdir}/%s.app/%s"\n' "$product" "$cli_binary"
-    printf '  conflicts_with formula: "%s"\n' "$name"
+    # The standalone CLI ships as the `<name>-cli` formula (workspace
+    # convention: CLIs are `*-cli`, the short token is the app cask). Conflict
+    # against that real formula name, not the cask token "$name" -- a cask and a
+    # formula can share a token, so `conflicts_with formula: "$name"` would name
+    # a formula that does not exist and never guard the PATH symlink clash.
+    printf '  conflicts_with formula: "%s-cli"\n' "$name"
 fi
 
 printf 'end\n'
