@@ -10,7 +10,7 @@
 //! adding that crate here would create a dependency cycle.
 
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::{Skill, SkillResolver};
 
@@ -30,8 +30,14 @@ struct SkillFrontmatter<'a> {
     license: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     compatibility: Option<&'a str>,
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    metadata: HashMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent: Option<&'a str>,
+    // BTreeMap keeps metadata keys sorted so the generated SKILL.md is
+    // deterministic across runs (HashMap iteration order is not).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    metadata: BTreeMap<String, String>,
 }
 
 /// Resolve a builtin skill by name from the skill registry.
@@ -53,7 +59,8 @@ pub fn resolve_skill(name: &str) -> Result<Skill, String> {
 /// Format a skill as a complete SKILL.md file with YAML frontmatter.
 ///
 /// Combines the skill's frontmatter fields (`name`, `description`,
-/// `allowed_tools`, `license`, `metadata`) into YAML frontmatter and appends
+/// `allowed_tools`, `license`, `compatibility`, `context`, `agent`, `metadata`)
+/// into YAML frontmatter and appends
 /// the already-rendered `instructions` as the body. The `metadata` parameter
 /// is passed separately because it may have had template variables rendered.
 ///
@@ -82,7 +89,12 @@ pub fn format_skill_md(
         allowed_tools,
         license: skill.license.as_deref(),
         compatibility: skill.compatibility.as_deref(),
-        metadata: metadata.clone(),
+        context: skill.context.as_deref(),
+        agent: skill.agent.as_deref(),
+        metadata: metadata
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
     };
 
     let yaml = serde_yaml_ng::to_string(&frontmatter)
@@ -168,6 +180,8 @@ mod tests {
             description: "description with: colons, \"quotes\", and {braces}".to_string(),
             license: None,
             compatibility: None,
+            context: None,
+            agent: None,
             metadata: HashMap::new(),
             allowed_tools: vec!["tool-a".to_string(), "tool-b".to_string()],
             instructions: "body".to_string(),
@@ -200,6 +214,8 @@ mod tests {
             description: "a minimal skill".to_string(),
             license: None,
             compatibility: None,
+            context: None,
+            agent: None,
             metadata: HashMap::new(),
             allowed_tools: vec![],
             instructions: "body".to_string(),
@@ -232,6 +248,8 @@ mod tests {
             description: "a skill with metadata".to_string(),
             license: Some("MIT".to_string()),
             compatibility: None,
+            context: None,
+            agent: None,
             metadata: metadata.clone(),
             allowed_tools: vec![],
             instructions: "body".to_string(),
@@ -274,6 +292,8 @@ mod tests {
             description: "skill without metadata".to_string(),
             license: None,
             compatibility: None,
+            context: None,
+            agent: None,
             metadata: HashMap::new(),
             allowed_tools: vec![],
             instructions: "body".to_string(),
@@ -310,6 +330,8 @@ mod tests {
             description: "a skill that declares its tool prerequisites".to_string(),
             license: Some("MIT OR Apache-2.0".to_string()),
             compatibility: Some(compatibility.to_string()),
+            context: None,
+            agent: None,
             metadata: HashMap::new(),
             allowed_tools: vec![],
             instructions: "body".to_string(),
@@ -328,5 +350,39 @@ mod tests {
         let parsed = crate::skill_loader::parse_skill_md(&md, SkillSource::Builtin)
             .expect("output should parse as valid SKILL.md");
         assert_eq!(parsed.compatibility.as_deref(), Some(compatibility));
+    }
+
+    /// Regression: `context` and `agent` round-trip through `parse_skill_md` and
+    /// `format_skill_md` so `sah init` / deploy does not silently drop a skill's
+    /// execution strategy (e.g. `context: fork`) or its delegated agent
+    /// (e.g. `agent: explorer`) when it re-renders the SKILL.md.
+    #[test]
+    fn test_format_skill_md_round_trips_context_and_agent() {
+        let src = "---\n\
+            name: explore\n\
+            description: Understand how unfamiliar code works\n\
+            context: fork\n\
+            agent: explorer\n\
+            ---\n\n\
+            body";
+
+        let skill = crate::skill_loader::parse_skill_md(src, SkillSource::Builtin)
+            .expect("source SKILL.md should parse");
+
+        let md = format_skill_md(&skill, &skill.instructions, &skill.metadata);
+
+        assert!(
+            md.contains("context: fork"),
+            "context field should survive the deploy round-trip, got:\n{md}"
+        );
+        assert!(
+            md.contains("agent: explorer"),
+            "agent field should survive the deploy round-trip, got:\n{md}"
+        );
+
+        let reparsed = crate::skill_loader::parse_skill_md(&md, SkillSource::Builtin)
+            .expect("formatted output should parse as valid SKILL.md");
+        assert_eq!(reparsed.context.as_deref(), Some("fork"));
+        assert_eq!(reparsed.agent.as_deref(), Some("explorer"));
     }
 }

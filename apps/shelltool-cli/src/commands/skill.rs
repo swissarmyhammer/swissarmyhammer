@@ -291,6 +291,8 @@ mod tests {
             description: "skill with template metadata".to_string(),
             license: None,
             compatibility: None,
+            context: None,
+            agent: None,
             metadata,
             allowed_tools: vec![],
             instructions: "body with {{version}}".to_string(),

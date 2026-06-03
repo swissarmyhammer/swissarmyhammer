@@ -11,7 +11,6 @@ metadata:
 ---
 
 {% include "_partials/coding-standards" %}
-{% include "_partials/code-context-checkpoints" %}
 {% include "_partials/architecture-awareness" %}
 
 # Test

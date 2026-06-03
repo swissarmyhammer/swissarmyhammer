@@ -346,55 +346,16 @@ fn render_skill_instructions(
 
 /// Format a Skill back into SKILL.md content (frontmatter + body).
 ///
-/// Builds YAML frontmatter using `serde_yaml_ng` so values containing special
-/// characters (colons, quotes, newlines) are correctly escaped. The resulting
-/// document is compatible with `swissarmyhammer_skills::skill_loader::parse_skill_md`.
+/// Thin wrapper over [`swissarmyhammer_skills::deploy::format_skill_md`], the
+/// single shared serializer used by every deploy path (the kanban app's
+/// `swissarmyhammer-workspace-init`, the per-tool deploy CLIs, and `sah init`).
+/// Routing through it — rather than hand-rolling frontmatter here — guarantees a
+/// new SKILL.md field (e.g. `context`, `agent`) cannot be silently dropped by
+/// `sah init` while surviving elsewhere. `instructions` and `metadata` are
+/// already rendered on `skill` by [`render_skill_instructions`], so they are
+/// passed straight through.
 fn format_skill_md(skill: &swissarmyhammer_skills::Skill) -> String {
-    let frontmatter = build_skill_frontmatter(skill);
-    let yaml = serde_yaml_ng::to_string(&frontmatter).unwrap_or_default();
-    format!("---\n{}---\n\n{}\n", yaml, skill.instructions)
-}
-
-fn build_skill_frontmatter(skill: &swissarmyhammer_skills::Skill) -> serde_yaml_ng::Mapping {
-    let mut fm = serde_yaml_ng::Mapping::new();
-    insert_yaml_string(&mut fm, "name", skill.name.as_str());
-    insert_yaml_string(&mut fm, "description", &skill.description);
-
-    if !skill.allowed_tools.is_empty() {
-        insert_yaml_string(&mut fm, "allowed-tools", &skill.allowed_tools.join(" "));
-    }
-    if let Some(ref license) = skill.license {
-        insert_yaml_string(&mut fm, "license", license);
-    }
-    if let Some(ref compatibility) = skill.compatibility {
-        insert_yaml_string(&mut fm, "compatibility", compatibility);
-    }
-    if !skill.metadata.is_empty() {
-        fm.insert(
-            serde_yaml_ng::Value::String("metadata".to_string()),
-            build_metadata_mapping(&skill.metadata),
-        );
-    }
-    fm
-}
-
-fn insert_yaml_string(map: &mut serde_yaml_ng::Mapping, key: &str, value: &str) {
-    map.insert(
-        serde_yaml_ng::Value::String(key.to_string()),
-        serde_yaml_ng::Value::String(value.to_string()),
-    );
-}
-
-fn build_metadata_mapping(
-    metadata: &std::collections::HashMap<String, String>,
-) -> serde_yaml_ng::Value {
-    let mut meta_map = serde_yaml_ng::Mapping::new();
-    let mut keys: Vec<_> = metadata.keys().collect();
-    keys.sort();
-    for key in keys {
-        insert_yaml_string(&mut meta_map, key, &metadata[key]);
-    }
-    serde_yaml_ng::Value::Mapping(meta_map)
+    swissarmyhammer_skills::deploy::format_skill_md(skill, &skill.instructions, &skill.metadata)
 }
 
 #[cfg(test)]
@@ -474,6 +435,8 @@ mod tests {
             description: "skill with metadata".to_string(),
             license: Some("MIT".to_string()),
             compatibility: None,
+            context: None,
+            agent: None,
             metadata,
             allowed_tools: vec![],
             instructions: "body".to_string(),
@@ -520,6 +483,8 @@ mod tests {
             description: "minimal skill".to_string(),
             license: None,
             compatibility: None,
+            context: None,
+            agent: None,
             metadata: HashMap::new(),
             allowed_tools: vec![],
             instructions: "body".to_string(),
@@ -558,6 +523,8 @@ mod tests {
             description: "skill that declares tool prerequisites".to_string(),
             license: Some("MIT OR Apache-2.0".to_string()),
             compatibility: Some(compatibility.to_string()),
+            context: None,
+            agent: None,
             metadata: HashMap::new(),
             allowed_tools: vec![],
             instructions: "body".to_string(),
@@ -579,6 +546,48 @@ mod tests {
         assert_eq!(parsed.compatibility.as_deref(), Some(compatibility));
     }
 
+    /// Regression: `context` and `agent` survive the serialize/parse round-trip
+    /// that `sah init` performs, so a skill that declares `context: fork` /
+    /// `agent: explorer` in `builtin/` keeps them in the deployed `.skills/`
+    /// copy instead of having them silently dropped.
+    #[test]
+    fn test_format_skill_md_round_trips_context_and_agent() {
+        use std::collections::HashMap;
+        use swissarmyhammer_skills::{Skill, SkillName, SkillResources, SkillSource};
+
+        let skill = Skill {
+            name: SkillName::new("explore").unwrap(),
+            description: "understand unfamiliar code".to_string(),
+            license: None,
+            compatibility: None,
+            context: Some("fork".to_string()),
+            agent: Some("explorer".to_string()),
+            metadata: HashMap::new(),
+            allowed_tools: vec![],
+            instructions: "body".to_string(),
+            source_path: None,
+            source: SkillSource::Builtin,
+            resources: SkillResources::default(),
+        };
+
+        let md = format_skill_md(&skill);
+
+        assert!(
+            md.contains("context: fork"),
+            "frontmatter should contain context field, got:\n{md}"
+        );
+        assert!(
+            md.contains("agent: explorer"),
+            "frontmatter should contain agent field, got:\n{md}"
+        );
+
+        let parsed =
+            swissarmyhammer_skills::skill_loader::parse_skill_md(&md, SkillSource::Builtin)
+                .expect("output should parse as valid SKILL.md");
+        assert_eq!(parsed.context.as_deref(), Some("fork"));
+        assert_eq!(parsed.agent.as_deref(), Some("explorer"));
+    }
+
     #[test]
     fn test_render_skill_instructions_expands_version() {
         use std::collections::HashMap;
@@ -593,6 +602,8 @@ mod tests {
             description: "skill with templated metadata".to_string(),
             license: None,
             compatibility: None,
+            context: None,
+            agent: None,
             metadata,
             allowed_tools: vec![],
             instructions: "body with {{version}}".to_string(),
@@ -697,6 +708,8 @@ mod tests {
             description: "skill with a references/ resource".to_string(),
             license: None,
             compatibility: None,
+            context: None,
+            agent: None,
             metadata: HashMap::new(),
             allowed_tools: vec![],
             instructions: "See [helper](./references/helper.md).".to_string(),
@@ -746,6 +759,8 @@ mod tests {
             description: "skill with an unsafe resource path".to_string(),
             license: None,
             compatibility: None,
+            context: None,
+            agent: None,
             metadata: HashMap::new(),
             allowed_tools: vec![],
             instructions: "body".to_string(),

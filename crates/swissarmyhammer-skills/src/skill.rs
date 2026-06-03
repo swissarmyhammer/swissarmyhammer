@@ -79,6 +79,12 @@ pub struct Skill {
     pub license: Option<String>,
     /// Optional compatibility string
     pub compatibility: Option<String>,
+    /// Optional context strategy controlling how the skill runs (e.g. `fork`
+    /// to run it in a forked/subagent context). `None` runs the skill inline.
+    pub context: Option<String>,
+    /// Optional agent to delegate the skill to (e.g. `explorer`). `None` runs
+    /// the skill with the current agent.
+    pub agent: Option<String>,
     /// Arbitrary metadata key-value pairs
     pub metadata: HashMap<String, String>,
     /// Allowed MCP tools for this skill

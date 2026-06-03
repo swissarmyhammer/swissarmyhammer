@@ -12,7 +12,6 @@ metadata:
 
 {% include "_partials/coding-standards" %}
 {% include "_partials/review-column" %}
-{% include "_partials/code-context-checkpoints" %}
 
 # Code Review
 
