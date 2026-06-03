@@ -24,7 +24,7 @@ pub use glob_files::GlobFilesTool;
 pub use grep_files::GrepFilesTool;
 pub use read_file::ReadFileTool;
 
-use crate::mcp::tool_registry::{McpTool, ToolCategory, ToolContext, ToolRegistry, ValidatorTool};
+use crate::mcp::tool_registry::{McpTool, ToolCategory, ToolContext, ToolRegistry};
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use rmcp::model::CallToolResult;
@@ -129,14 +129,10 @@ impl McpTool for FilesTool {
 
     fn category(&self) -> ToolCategory {
         // File read/write/edit/glob/grep is a base agent capability. The
-        // read-only subset is still an agent capability; its availability to
-        // validators is governed independently by `is_validator_tool()`.
+        // validator surface does not serve this unified tool at all — it serves
+        // the split read-only `read_file`/`glob_files`/`grep_files` tools via
+        // the validator profile (`tools::register_validator_tools`).
         ToolCategory::Agent
-    }
-
-    fn is_validator_tool(&self) -> bool {
-        // Only the read-only variant is available to validators
-        self.operations == FileOperationSubset::ReadOnly
     }
 
     async fn execute(
@@ -226,8 +222,6 @@ impl McpTool for FilesTool {
         }
     }
 }
-
-impl ValidatorTool for FilesTool {}
 
 impl swissarmyhammer_common::lifecycle::Initializable for FilesTool {
     fn name(&self) -> &str {

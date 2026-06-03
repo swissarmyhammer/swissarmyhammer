@@ -1943,8 +1943,9 @@ mod tests {
     /// also catches reverting the split: if the unified `files` tool sneaks
     /// back onto the validator surface, the assertion fails.
     ///
-    /// Validator tool filtering is driven by `is_validator_tool()`; the full
-    /// server registering the maximal tool set must not leak onto this route.
+    /// The validator route serves exactly the validator profile
+    /// (`tools::register_validator_tools`); the full server registering the
+    /// maximal tool set must not leak onto this route.
     #[tokio::test]
     #[test_log::test]
     #[serial_test::serial(cwd)]
@@ -1955,7 +1956,7 @@ mod tests {
         // Bind an in-process HTTP MCP server in a clean tempdir so its
         // index does not walk the host monorepo.
         let temp = tempfile::TempDir::new().unwrap();
-        // The validator route filters by is_validator_tool(); the full server
+        // The validator route serves the validator profile; the full server
         // registers the maximal tool set, so this verifies the validator route
         // stays minimal regardless.
         let mut server = start_mcp_server_with_options(

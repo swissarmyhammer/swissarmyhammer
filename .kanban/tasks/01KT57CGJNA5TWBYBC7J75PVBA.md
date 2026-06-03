@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KT57BTE05BAFGYEJHGC7MBR8
-position_column: todo
-position_ordinal: '8380'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffda80
 project: agent-builtins
 title: 'tools: validator profile composes read-only file tools (retire is_validator_tool exemption)'
 ---

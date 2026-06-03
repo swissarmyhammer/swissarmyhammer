@@ -640,9 +640,9 @@ impl AvpContext {
     /// graceful shutdown of the spawned server task.
     ///
     /// The unified server registers the full tool union; the `/mcp/validator`
-    /// sub-route then exposes only the validator allowlist (filtered by
-    /// `is_validator_tool()`), so the validator surface is the same regardless
-    /// of the host model.
+    /// sub-route then exposes only the validator profile (composed by
+    /// `tools::register_validator_tools`), so the validator surface is the same
+    /// regardless of the host model.
     ///
     /// Working directory is set to the repo root (parent of `<AVP_DIR>/`) so
     /// the in-process tools see the project, not the AVP bookkeeping dir.

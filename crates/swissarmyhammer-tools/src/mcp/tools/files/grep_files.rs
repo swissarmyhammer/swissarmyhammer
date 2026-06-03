@@ -9,7 +9,7 @@
 //! validator endpoint needs tools whose **names** match what Hermes-style
 //! models naturally emit, rather than the CLI-friendly `op`-dispatched form.
 
-use crate::mcp::tool_registry::{McpTool, ToolCategory, ToolContext, ValidatorTool};
+use crate::mcp::tool_registry::{McpTool, ToolCategory, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
@@ -95,13 +95,9 @@ impl McpTool for GrepFilesTool {
         true
     }
 
-    fn is_validator_tool(&self) -> bool {
-        true
-    }
-
     fn category(&self) -> ToolCategory {
-        // Grepping files is a base agent capability. Validator availability is
-        // governed separately by `is_validator_tool()`.
+        // Grepping files is a base agent capability. Validators receive it via
+        // the validator profile (`tools::register_validator_tools`).
         ToolCategory::Agent
     }
 
@@ -113,8 +109,6 @@ impl McpTool for GrepFilesTool {
         grep::execute_grep(arguments, context).await
     }
 }
-
-impl ValidatorTool for GrepFilesTool {}
 
 impl swissarmyhammer_common::lifecycle::Initializable for GrepFilesTool {
     fn name(&self) -> &str {
@@ -154,12 +148,6 @@ mod tests {
     fn test_name_is_grep_files() {
         let tool = GrepFilesTool::new();
         assert_eq!(<GrepFilesTool as McpTool>::name(&tool), "grep_files");
-    }
-
-    #[test]
-    fn test_is_validator_tool() {
-        let tool = GrepFilesTool::new();
-        assert!(tool.is_validator_tool());
     }
 
     #[test]

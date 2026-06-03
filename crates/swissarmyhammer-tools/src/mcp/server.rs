@@ -107,8 +107,8 @@ pub struct McpServer {
     /// `category()` (Claude → `Shared` + `Replacement`; llama/unknown → `Shared`
     /// only). `false` for the registries that are pre-scoped and must be served
     /// verbatim:
-    /// - the validator server, whose minimal registry is already scoped by
-    ///   `is_validator_tool()`; and
+    /// - the validator server, whose minimal registry is already exactly the
+    ///   validator profile (`tools::register_validator_tools`); and
     /// - the agent-tools server (`create_agent_tools_server`), whose registry is
     ///   already scoped to the intrinsic Agent tools and must surface in full
     ///   even though no [`Host`] reports `serves(Agent)`, so per-client filtering
@@ -736,16 +736,12 @@ impl McpServer {
     /// [`super::tools::files::register_validator_file_tools`] for the
     /// per-tool details.
     pub fn create_validator_server(&self) -> McpServer {
-        // Build a filtered registry with only validator tools
+        // Build the validator registry from the single, data-driven validator
+        // profile (code_context + the split read-only file tools). The profile
+        // is defined once in `tools::register_validator_tools`; this is the only
+        // path that interprets it.
         let mut validator_registry = ToolRegistry::new();
-
-        // Register the validator tools directly: code_context and the split
-        // file tools (read_file, glob_files, grep_files).
-        use super::tools::code_context::CodeContextTool;
-        use super::tools::files::register_validator_file_tools;
-
-        validator_registry.register(CodeContextTool::new());
-        register_validator_file_tools(&mut validator_registry);
+        super::tools::register_validator_tools(&mut validator_registry);
 
         let tool_count = validator_registry.len();
         let validator_registry_arc = Arc::new(RwLock::new(validator_registry));
@@ -772,9 +768,10 @@ impl McpServer {
             agent_library: self.agent_library.clone(),
             work_dir: self.work_dir.clone(),
             tool_config_watcher: self.tool_config_watcher.clone(),
-            // The validator registry is already scoped by `is_validator_tool()`;
-            // serve it verbatim rather than re-filtering by host/category, which
-            // would strip its `Agent`-category read-only file tools.
+            // The validator registry is already exactly the validator profile
+            // (composed by `tools::register_validator_tools`); serve it verbatim
+            // rather than re-filtering by host/category, which would strip its
+            // `Agent`-category read-only file tools.
             compose_per_client: false,
             // Non-primary instance: the serve-time deny is gated on
             // `compose_per_client`, so this latch is never read. Its own flag.
@@ -2340,41 +2337,36 @@ mod tests {
         );
     }
 
-    /// Trait-level audit (#5 in task description).
+    /// Profile audit: the validator server serves *exactly* the validator
+    /// profile, no more, no less.
     ///
-    /// Defense in depth: every tool registered on the validator server must
-    /// return `is_validator_tool() == true`. If a non-validator tool sneaks
-    /// into the registry, this test catches it even if the registration
-    /// helper's static audit missed it. Conversely, if a validator tool
-    /// registers as such but its `is_validator_tool()` returns false, that's
-    /// a registration bug — this test fails fast on either direction.
+    /// The validator surface is security-sensitive — the locked-down AVP subset
+    /// must not drift. This pins the served tool names to the exact set composed
+    /// by `tools::register_validator_tools`. If anyone adds a tool to the
+    /// profile (or the validator server registers something extra), this test
+    /// fails at the registry boundary.
     #[tokio::test]
     #[serial_test::serial(cwd)]
-    async fn test_validator_server_all_tools_are_validator_tools() {
+    async fn test_validator_server_serves_exactly_the_profile() {
+        use std::collections::BTreeSet;
+
         let server = McpServer::new(PromptLibrary::default()).await.unwrap();
         let validator = server.create_validator_server();
 
         let registry = validator.tool_registry.read().await;
 
-        // Iterate every registered tool. None may report
-        // `is_validator_tool() == false` — that would mean either:
-        //  - a non-validator tool sneaked into the registry, OR
-        //  - a validator tool's trait answer disagrees with its registration.
-        // Both are bugs.
-        for tool in registry.iter_tools() {
-            assert!(
-                tool.is_validator_tool(),
-                "Tool '{}' is registered on the validator server but its \
-                 is_validator_tool() returns false. Either it should not be \
-                 registered, or its trait method should be updated.",
-                crate::mcp::tool_registry::McpTool::name(tool)
-            );
-        }
+        let actual: BTreeSet<&str> = registry
+            .iter_tools()
+            .map(crate::mcp::tool_registry::McpTool::name)
+            .collect();
+        let expected: BTreeSet<&str> = ["code_context", "read_file", "glob_files", "grep_files"]
+            .into_iter()
+            .collect();
 
-        // Sanity: the registry is non-empty (the loop above is vacuous on []).
-        assert!(
-            !registry.is_empty(),
-            "Validator registry must contain at least one tool"
+        assert_eq!(
+            actual, expected,
+            "Validator server must serve exactly the validator profile \
+             (code_context + read_file + glob_files + grep_files)"
         );
     }
 

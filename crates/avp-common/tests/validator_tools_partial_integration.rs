@@ -318,7 +318,7 @@ fn test_no_rule_body_advertises_claude_only_tools() {
 async fn test_validator_tools_partial_matches_runtime_tools_list() {
     // Bind an in-process HTTP MCP server in a clean tempdir so its index
     // does not walk the host monorepo.
-    // The validator route filters by `is_validator_tool()`; the full server
+    // The validator route serves the validator profile; the full server
     // registers the maximal tool union, so this verifies the validator route
     // stays minimal regardless.
     let temp = tempfile::TempDir::new().unwrap();
