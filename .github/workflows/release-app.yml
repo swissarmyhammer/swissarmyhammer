@@ -88,7 +88,7 @@ jobs:
         run: |
           rustup target add aarch64-apple-darwin
 
-      - name: Free the runner (kill stale build processes)
+      - name: Free the runner (kill stale build processes + stale bundle output)
         # This is a persistent self-hosted runner. Past hung runs were cancelled
         # without their cargo/rustc/cc children being reaped, so they kept
         # running and saturating RAM -- making the next build thrash too (a
@@ -98,6 +98,13 @@ jobs:
         run: |
           pkill -9 -f 'cargo-tauri|cargo|rustc|llama' 2>/dev/null || true
           sleep 2
+          # The matrix legs share this reused workspace and all write to the
+          # same bundle output dir. If a prior app's .dmg/.app lingers here, the
+          # later "find ... | head -1" steps can pick the WRONG app's artifact
+          # (this shipped a kanban cask carrying mirdan's DMG sha256, which made
+          # `brew install --cask kanban` fail checksum verification). Wipe the
+          # bundle output so each leg only ever sees its own freshly built one.
+          rm -rf target/aarch64-apple-darwin/release/bundle
           echo "Free memory before build:"; vm_stat | head -5 || true
 
       - name: Setup Node.js
@@ -289,7 +296,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ${{ matrix.app.name }}-app-dmg
-          path: dmg/
+          # Per-app download dir, NOT a shared `dmg/`. The publish legs run
+          # sequentially on the reused self-hosted workspace; a shared dir let a
+          # prior leg's DMG linger so `find dmg ... | head -1` hashed the wrong
+          # app's file (the kanban cask shipped mirdan's sha256). A unique path
+          # per leg guarantees this leg only ever sees its own DMG.
+          path: dmg-${{ matrix.app.name }}/
 
       - name: No DMG -- skipping this app
         if: ${{ steps.dl.outcome != 'success' }}
@@ -299,7 +311,7 @@ jobs:
         id: sha
         if: ${{ steps.dl.outcome == 'success' }}
         run: |
-          DMG=$(find dmg -name "*.dmg" | head -1)
+          DMG=$(find "dmg-${{ matrix.app.name }}" -name "*.dmg" | head -1)
           SHA=$(shasum -a 256 "$DMG" | cut -d' ' -f1)
           NAME=$(basename "$DMG")
           echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
