@@ -121,7 +121,7 @@ mod tests {
     #[tokio::test]
     async fn test_use_agent_response_has_all_fields() {
         let ctx = make_context();
-        let op = UseAgent::new("default");
+        let op = UseAgent::new("tester");
         let result = op.execute(&ctx).await;
 
         match result {

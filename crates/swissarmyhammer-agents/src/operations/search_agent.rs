@@ -117,8 +117,8 @@ mod tests {
     #[tokio::test]
     async fn test_search_is_case_insensitive() {
         let ctx = make_context();
-        // 'default' agent definitely exists; search with uppercase letters
-        let op = SearchAgent::new("DEFAULT");
+        // 'tester' agent definitely exists; search with uppercase letters
+        let op = SearchAgent::new("TESTER");
         let result = op.execute(&ctx).await;
 
         match result {
@@ -126,7 +126,7 @@ mod tests {
                 let arr = value.as_array().expect("result should be an array");
                 assert!(
                     !arr.is_empty(),
-                    "case-insensitive search for 'DEFAULT' should match 'default'"
+                    "case-insensitive search for 'TESTER' should match 'tester'"
                 );
             }
             other => panic!("expected Success result, got: {:?}", other),

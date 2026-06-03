@@ -182,7 +182,6 @@ mod tests {
         let resolver = AgentResolver::new();
         let agents = resolver.resolve_builtins();
 
-        assert!(agents.contains_key("default"), "should have default agent");
         assert!(agents.contains_key("tester"), "should have tester agent");
         assert!(agents.contains_key("planner"), "should have planner agent");
         assert!(
@@ -320,8 +319,8 @@ mod tests {
         let agents = resolver.resolve_all();
 
         // resolve_all should include all the same builtins
-        assert!(agents.contains_key("default"));
         assert!(agents.contains_key("tester"));
+        assert!(agents.contains_key("reviewer"));
     }
 
     #[test]
