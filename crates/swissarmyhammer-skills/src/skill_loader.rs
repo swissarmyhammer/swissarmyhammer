@@ -13,6 +13,8 @@ struct SkillFrontmatter {
     description: Option<String>,
     license: Option<String>,
     compatibility: Option<String>,
+    context: Option<String>,
+    agent: Option<String>,
     #[serde(default)]
     metadata: HashMap<String, String>,
     #[serde(default, rename = "allowed-tools")]
@@ -59,6 +61,8 @@ pub fn parse_skill_md_with_path(
         description: fm.description.unwrap_or_default(),
         license: fm.license,
         compatibility: fm.compatibility,
+        context: fm.context,
+        agent: fm.agent,
         metadata: fm.metadata,
         allowed_tools,
         profiles: fm.profiles,

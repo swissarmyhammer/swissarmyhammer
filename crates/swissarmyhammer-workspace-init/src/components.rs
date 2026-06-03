@@ -574,6 +574,8 @@ mod tests {
             description: "idempotent skill".to_string(),
             license: None,
             compatibility: None,
+            context: None,
+            agent: None,
             metadata: HashMap::new(),
             allowed_tools: vec![],
             profiles: vec![],

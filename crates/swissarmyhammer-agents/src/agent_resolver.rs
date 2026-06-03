@@ -192,7 +192,10 @@ mod tests {
             agents.contains_key("reviewer"),
             "should have reviewer agent"
         );
-        assert!(agents.contains_key("explore"), "should have explore agent");
+        assert!(
+            agents.contains_key("explorer"),
+            "should have explorer agent"
+        );
     }
 
     #[test]
