@@ -474,6 +474,41 @@ export interface Transport {
    * @returns the host's JSON response to the marshalled call.
    */
   callbackDispatch(payload: Record<string, unknown>): unknown;
+  /**
+   * Subscribe to host notifications of `method`, delivering each to `callback`.
+   *
+   * The callback-bearing subscribe path: `callback` is marshalled to a
+   * `{ "$callback": id }` marker (see {@link marshalCallbacks}) and the host
+   * records `(method → this plugin's callback)` so its event pump invokes the
+   * callback with the notification's `params` on every matching publish.
+   * Returns the assigned callback id so the caller can later
+   * {@link unsubscribe} it.
+   *
+   * This is the low-level wire primitive the ergonomic
+   * `this.<server>.on(event, cb)` surface is built on; plugin authors normally
+   * use `.on()` rather than calling this directly.
+   *
+   * @param method - the MCP notification method, e.g.
+   *   `"notifications/commands/executed"`.
+   * @param callback - invoked with the notification's `params` on each publish.
+   * @returns the SDK-assigned callback id (e.g. `"cb_42"`).
+   */
+  subscribe(
+    method: string,
+    callback: (...args: unknown[]) => unknown,
+  ): string;
+  /**
+   * Stop delivering host notifications of `method` to the callback `callbackId`.
+   *
+   * Tells the host to drop the `(method, this plugin, callbackId)` subscription
+   * so its event pump no longer invokes that callback. The isolate-local
+   * callback table entry is the caller's to dispose (the `.on()` surface's
+   * returned teardown does both).
+   *
+   * @param method - the method originally passed to {@link subscribe}.
+   * @param callbackId - the id {@link subscribe} returned.
+   */
+  unsubscribe(method: string, callbackId: string): void;
 }
 
 /**
@@ -643,6 +678,28 @@ class HostBridge implements Transport {
     // the host receives opaque handles, never function values.
     const marshalled = marshalCallbacks(payload);
     return this.dispatch({ kind: "callbackDispatch", payload: marshalled });
+  }
+
+  /** {@inheritDoc Transport.subscribe} */
+  subscribe(
+    method: string,
+    callback: (...args: unknown[]) => unknown,
+  ): string {
+    // Marshal the subscriber function to a `{ $callback: id }` marker and store
+    // it in the isolate-local callback table, exactly as the other
+    // callback-bearing paths do. The host records the marker id against
+    // `method` and its event pump invokes it on every matching notification.
+    const marshalled = marshalCallbacks({ callback }) as {
+      callback: CallbackMarker;
+    };
+    const marker = marshalled.callback;
+    this.dispatch({ kind: "subscribe", method, callback: marker });
+    return marker.$callback;
+  }
+
+  /** {@inheritDoc Transport.unsubscribe} */
+  unsubscribe(method: string, callbackId: string): void {
+    this.dispatch({ kind: "unsubscribe", method, callbackId });
   }
 }
 

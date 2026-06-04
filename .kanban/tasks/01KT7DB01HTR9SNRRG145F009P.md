@@ -1,6 +1,10 @@
 ---
 assignees:
 - claude-code
+depends_on:
+- 01KT9FY7SBW0MVVAZ4A1WZP4SS
+- 01KT9FYTVE2CMAGZQW29G1M6Q6
+- 01KT9FZ8GZWSPJTK04NEGC0WXQ
 position_column: todo
 position_ordinal: b180
 project: command-cutover

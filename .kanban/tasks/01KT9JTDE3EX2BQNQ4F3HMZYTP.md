@@ -1,0 +1,28 @@
+---
+assignees:
+- claude-code
+position_column: todo
+position_ordinal: b680
+project: plugin-arch
+title: 'Notification declaration macro: #[notification] + generate_notifications_meta + operation_tool! notifications field'
+---
+Make the events a plugin can subscribe to a DECLARED, typed vocabulary — derived from each MCP service the same way operations are, surfaced in the tool's `_meta`, consumed by the SDK. This is the macro/attribute infrastructure; declaring the actual notifications on services is a separate dependent card.
+
+Mirror the operation machinery exactly (verified map):
+- `#[operation(verb,noun,description)]` attribute → `crates/swissarmyhammer-operations-macros/src/lib.rs:31` (field→ParamType at lib.rs:199-230; doc-comments → descriptions).
+- `Operation` trait → `swissarmyhammer-operations/src/operation.rs:14-40` (`op_string` at :37).
+- `generate_operations_meta` → `swissarmyhammer-operations/src/schema.rs:165-185` builds noun→verb→{op,description,parameters}; `parameters_to_meta` at :198.
+- `operation_tool!` → `operations-macros/src/lib.rs:329-372`; expansion attaches `_meta["io.swissarmyhammer/operations"]` at :340-368.
+
+## Scope
+1. **`#[notification(method = "...", description = "...")]` attribute** in operations-macros (sibling of `#[operation]`). Decorates a payload struct; struct fields + doc-comments become the notification's params schema (reuse the operation field→param derivation). `method` is the full wire string (e.g. `notifications/commands/executed`); derive a short `event` = last `/`-segment (overridable via `event = "..."`).
+2. **`Notification` trait** in swissarmyhammer-operations (sibling of `Operation`): `method()`, `event()`, `description()`, `parameters()`.
+3. **`generate_notifications_meta(&[&dyn Notification]) -> Value`** in schema.rs (sibling of `generate_operations_meta`) → `event → { method, description, parameters }`.
+4. **Extend `operation_tool!`** with an OPTIONAL `notifications: <slice>` field; when present, attach `_meta["io.swissarmyhammer/notifications"]` alongside operations. A service with no notifications omits the field and is unchanged.
+5. **Meta-key consts**: add `NOTIFICATIONS_META_KEY`. While here, the explore flagged `"io.swissarmyhammer/operations"` is duplicated as a bare literal across 4 files (operations-macros lib.rs:361, tools/plugin_bridge.rs:40, plugin/codegen.rs:69, plugin/sdk/plugin.ts:431) — centralize both keys where practical (Rust side at least).
+
+## Tests
+- A test service declaring 1-2 notifications produces the expected `io.swissarmyhammer/notifications` `_meta` tree (event→method+description+params), and a service with none omits the key.
+
+## Acceptance
+A service can declare emitted notifications via `#[notification]` + `notifications:` and its `tools/list` tool carries a well-formed `io.swissarmyhammer/notifications` `_meta` map keyed by event name.

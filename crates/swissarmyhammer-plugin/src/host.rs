@@ -65,7 +65,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use serde_json::{Map, Value};
@@ -77,8 +77,9 @@ use crate::discovery::{
     discover_plugins, resolve_index_entry, DiscoveredPlugin, LayerRoot, PLUGINS_SUBDIR,
 };
 use crate::error::{Error, Result};
+use crate::events::EventSubscriptions;
 use crate::ledger::{CallbackId, PluginLedger, RegistrationHandle};
-use crate::notify::NotificationBridge;
+use crate::notify::{NotificationBridge, NotificationSubscription};
 use crate::registry::{
     RegisterOutcome, ServerName, ServerRegistry, ServerSource, ServerStatus, UnregisterOutcome,
 };
@@ -220,6 +221,28 @@ struct HostInner {
     /// subscribers is inert, so a host whose embedder never wires the bus
     /// adapters pays nothing.
     notification_bridge: NotificationBridge,
+
+    /// Per-host registry of plugin event subscriptions: notification `method` →
+    /// the plugin callbacks that asked to receive it.
+    ///
+    /// A plugin's `subscribe` envelope records `(method → {plugin, callback})`
+    /// here; the host's [event pump](run_event_pump) drains the
+    /// [`notification_bridge`](Self::notification_bridge) and invokes every
+    /// callback registered against each notification's method. Host-owned state
+    /// (not service-owned), so it is cleared per plugin on unload directly by
+    /// [`dispose_registrations`](PluginHost::dispose_registrations). Cloned into
+    /// the pump and the envelope handlers; sits outside the host mutex behind its
+    /// own internal lock.
+    event_subscriptions: EventSubscriptions,
+
+    /// One-shot guard ensuring the [event pump](run_event_pump) is spawned at
+    /// most once, lazily on the first plugin `subscribe`.
+    ///
+    /// A host whose plugins never subscribe to events never subscribes to its
+    /// own notification bridge, so the bridge stays inert and pays nothing — the
+    /// documented "no subscribers ⇒ inert" property of
+    /// [`NotificationBridge`](crate::notify::NotificationBridge) is preserved.
+    pump_started: std::sync::Once,
 
     /// The mutable host state guarded by one mutex.
     state: Mutex<HostState>,
@@ -798,6 +821,8 @@ impl PluginHost {
                 types_emitter,
                 bridge_runtime,
                 notification_bridge: NotificationBridge::new(),
+                event_subscriptions: EventSubscriptions::new(),
+                pump_started: std::sync::Once::new(),
                 state: Mutex::new(HostState {
                     registry: ServerRegistry::new(),
                     ledger: PluginLedger::new(),
@@ -1656,6 +1681,11 @@ impl PluginHost {
     /// caller's job; this method only undoes the host-side and isolate-side
     /// registration state.
     async fn dispose_registrations(&self, plugin_id: &PluginId, runtime: &PluginRuntime) {
+        // Drop the plugin's event subscriptions so the pump stops targeting its
+        // (about-to-be-torn-down) isolate. Host-owned state, cleaned directly —
+        // the ledger drain below still disposes the isolate-side callbacks.
+        self.inner.event_subscriptions.remove_plugin(plugin_id);
+
         let handles = self.lock().ledger.drain(plugin_id).unwrap_or_default();
 
         // Handles are already reversed by `PluginLedger::drain`: the last
@@ -1885,6 +1915,33 @@ impl PluginHost {
             .ok_or(Error::UnknownPlugin)?;
 
         invoker.invoke(callback_id, args).await
+    }
+
+    /// Ensures this host's event pump task is running.
+    ///
+    /// Called from the `subscribe` envelope handler. Spawned lazily — on the
+    /// first plugin subscription — and at most once (guarded by
+    /// [`pump_started`](HostInner::pump_started)), so a host whose plugins never
+    /// subscribe never subscribes to its own notification bridge and the bridge
+    /// stays inert.
+    ///
+    /// The pump runs for the host's lifetime on the long-lived
+    /// [`bridge_runtime`](HostInner::bridge_runtime). It holds only a [`Weak`]
+    /// reference to the host state, so it imposes no reference cycle: when the
+    /// last real [`PluginHost`] clone drops, the bridge runtime is torn down and
+    /// the pump task is reaped with it (and the `Weak` would fail to upgrade in
+    /// the meantime).
+    fn ensure_event_pump(&self) {
+        let inner = Arc::clone(&self.inner);
+        self.inner.pump_started.call_once(move || {
+            let weak = Arc::downgrade(&inner);
+            let subscriptions = inner.event_subscriptions.clone();
+            let subscription = inner.notification_bridge.subscribe();
+            inner
+                .bridge_runtime
+                .handle()
+                .spawn(run_event_pump(weak, subscriptions, subscription));
+        });
     }
 
     /// Mints a fresh, host-unique [`PluginId`].
@@ -2203,6 +2260,70 @@ impl HostBridge {
         }
         Ok(Value::Null)
     }
+
+    /// Handles a `subscribe` envelope: records a plugin's interest in a
+    /// notification method.
+    ///
+    /// The SDK marshalled the subscriber callback into a `{ "$callback": id }`
+    /// marker carried under `callback` (the same marshalling `toolsCall` and
+    /// `callbackDispatch` use). The handler:
+    ///
+    /// 1. records the callback id as a [`RegistrationHandle::Callback`] in the
+    ///    plugin's ledger, so [`PluginHost::unload`] disposes the stored
+    ///    function from the isolate's callback table;
+    /// 2. registers `(method → {plugin, callback})` in the host's
+    ///    [`EventSubscriptions`], so the [event pump](run_event_pump) delivers
+    ///    every matching notification's params to it;
+    /// 3. ensures the host's event pump is running.
+    ///
+    /// The registry entry itself is cleaned per plugin on unload directly by
+    /// [`dispose_registrations`](PluginHost::dispose_registrations); only the
+    /// isolate-side callback is ledger-disposed.
+    fn subscribe(&self, payload: &Value) -> std::result::Result<Value, String> {
+        let method = envelope_str(payload, "method")?;
+        let callback = payload
+            .get("callback")
+            .ok_or_else(|| "subscribe envelope missing 'callback'".to_string())?;
+        let mut ids = Vec::new();
+        collect_callback_ids(callback, &mut ids);
+        let callback_id = ids
+            .into_iter()
+            .next()
+            .ok_or_else(|| "subscribe envelope 'callback' is not a callback marker".to_string())?;
+
+        {
+            // The plugin is tracked from `load`, so this append cannot orphan.
+            let mut state = self.host.lock();
+            state.ledger.record(
+                &self.plugin_id,
+                RegistrationHandle::Callback(CallbackId::new(callback_id.clone())),
+            );
+        }
+        self.host
+            .inner
+            .event_subscriptions
+            .subscribe(method, self.plugin_id.clone(), callback_id);
+        self.host.ensure_event_pump();
+        Ok(Value::Object(Map::new()))
+    }
+
+    /// Handles an `unsubscribe` envelope: drops one of a plugin's method
+    /// subscriptions.
+    ///
+    /// Removes the `(method, plugin, callback)` entry from the host's
+    /// [`EventSubscriptions`] so the pump stops delivering. The isolate-side
+    /// callback is disposed by the SDK's `off()` locally and, as a backstop, by
+    /// the ledger drain on unload — so a stale ledger `Callback` handle here is
+    /// harmless (its disposal is idempotent against an already-gone id).
+    fn unsubscribe(&self, payload: &Value) -> std::result::Result<Value, String> {
+        let method = envelope_str(payload, "method")?;
+        let callback_id = envelope_str(payload, "callbackId")?;
+        self.host
+            .inner
+            .event_subscriptions
+            .unsubscribe(&method, &self.plugin_id, &callback_id);
+        Ok(Value::Object(Map::new()))
+    }
 }
 
 impl HostDispatcher for HostBridge {
@@ -2222,6 +2343,8 @@ impl HostDispatcher for HostBridge {
             "callbackDispatch" => self.callback_dispatch(&payload),
             "register" => self.register(&payload),
             "unregister" => self.unregister(&payload),
+            "subscribe" => self.subscribe(&payload),
+            "unsubscribe" => self.unsubscribe(&payload),
             "log" => self.log(&payload),
             other => Err(format!("unsupported bridge envelope kind '{other}'")),
         }
@@ -2422,6 +2545,73 @@ fn collect_callback_ids(value: &Value, ids: &mut Vec<String>) {
                 stack.extend(items.iter().rev());
             }
             _ => {}
+        }
+    }
+}
+
+/// Drains the host's notification bridge and invokes subscribed plugin
+/// callbacks.
+///
+/// One per host, spawned by [`PluginHost::ensure_event_pump`] on the long-lived
+/// bridge runtime. For each notification it looks up the method in the host's
+/// [`EventSubscriptions`] and fires every subscribed callback through
+/// [`PluginHost::invoke_plugin_callback`] — the same host→isolate path
+/// `execute`/`available` use — as a detached task, so a slow callback never
+/// blocks the pump and the callbacks for one notification run concurrently. The
+/// callback receives the notification's `params` as its single positional
+/// argument.
+///
+/// A `Lagged` is logged and the pump resyncs (the broadcast channel overwrote
+/// some notifications under a slow drain); a `Closed` (every bridge sender
+/// dropped) ends it, as does the host state being dropped — the [`Weak`] then
+/// fails to upgrade.
+async fn run_event_pump(
+    weak: Weak<HostInner>,
+    subscriptions: EventSubscriptions,
+    mut subscription: NotificationSubscription,
+) {
+    loop {
+        match subscription.recv().await {
+            Ok(notification) => {
+                let targets = subscriptions.subscribers(&notification.method);
+                if targets.is_empty() {
+                    continue;
+                }
+                // Upgrade once per notification; if the host is gone, stop.
+                let Some(inner) = weak.upgrade() else {
+                    return;
+                };
+                let host = PluginHost { inner };
+                let handle = host.inner.bridge_runtime.handle().clone();
+                for (plugin_id, callback_id) in targets {
+                    let host = host.clone();
+                    // The callback's single positional argument is the
+                    // notification's params object.
+                    let args = Value::Array(vec![notification.params.clone()]);
+                    handle.spawn(async move {
+                        if let Err(error) = host
+                            .invoke_plugin_callback(&plugin_id, callback_id.clone(), args)
+                            .await
+                        {
+                            // A delivery failure (plugin unloaded mid-flight, a
+                            // throwing callback) is not fatal to the pump.
+                            tracing::debug!(
+                                plugin = %plugin_id.as_str(),
+                                callback = %callback_id,
+                                %error,
+                                "plugin event-subscription callback delivery failed"
+                            );
+                        }
+                    });
+                }
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                tracing::warn!(
+                    skipped,
+                    "plugin event pump lagged; some notifications were dropped before delivery"
+                );
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
         }
     }
 }

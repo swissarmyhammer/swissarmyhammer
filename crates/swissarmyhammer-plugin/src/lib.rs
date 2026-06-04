@@ -35,6 +35,9 @@ pub mod codegen;
 pub mod discovery;
 pub mod dispatcher;
 pub mod error;
+/// Per-host registry of plugin event subscriptions (notification method →
+/// interested plugin callbacks). Internal to the host's event-delivery path.
+mod events;
 pub mod host;
 pub mod ledger;
 pub mod notify;
