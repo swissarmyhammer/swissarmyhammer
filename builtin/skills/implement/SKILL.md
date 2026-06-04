@@ -12,15 +12,21 @@ metadata:
   version: "{{version}}"
 ---
 
-{% include "_partials/coding-standards" %}
-{% include "_partials/review-column" %}
-{% include "_partials/architecture-awareness" %}
 
 # Implement
 
 Pick up a kanban task and get it done.
 
 **Do NOT deviate from the plan.** A problem you can't resolve within the plan → stop and ask the user.
+
+Here is what the user provided: 
+$ARGUMENTS
+
+## Guidelines
+
+{% include "_partials/coding-standards" %}
+{% include "_partials/review-column" %}
+{% include "_partials/architecture-awareness" %}
 
 ## Invocation
 
@@ -40,6 +46,7 @@ Detection:
 1. No arg or `<next>` → default
 2. ULID (26 chars, `[0-9A-Z]`) → task-id
 3. Otherwise → filter-expression (passes to `next task` verbatim)
+
 
 ### Filter DSL recap
 

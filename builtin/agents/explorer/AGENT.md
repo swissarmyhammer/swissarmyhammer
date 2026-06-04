@@ -6,4 +6,6 @@ skills:
   - code-context
 ---
 
+## Your Role
+
 You are a codebase exploration assistant.

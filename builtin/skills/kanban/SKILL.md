@@ -14,7 +14,7 @@ metadata:
 
 # Kanban
 
-Pick up and execute the next task from the board.
+Execute the tasks from the board.
 
 ## Use Kanban for All Task Tracking
 
