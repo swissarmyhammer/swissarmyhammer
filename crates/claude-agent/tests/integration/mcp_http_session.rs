@@ -243,7 +243,13 @@ async fn write_http_response(
 async fn http_mcp_server_in_new_session_is_connected_and_tools_exposed() {
     let mcp_server = TestHttpMcpServer::start().await;
 
-    let (agent, _notifications) = ClaudeAgent::new(AgentConfig::default())
+    // Skip spawning the real `claude` CLI: this test only exercises the
+    // MCP-connection side of `new_session`, which runs before the spawn.
+    let config = AgentConfig {
+        spawn_claude_on_new_session: false,
+        ..Default::default()
+    };
+    let (agent, _notifications) = ClaudeAgent::new(config)
         .await
         .expect("agent construction should succeed");
 

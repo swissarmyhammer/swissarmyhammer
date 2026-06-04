@@ -15,6 +15,13 @@ description = "Standalone MCP code-context tool CLI for AI coding agents"
 name = "code-context"
 path = "src/main.rs"
 
+[features]
+# Marker feature for tests that load a real embedding model (multi-GB download
+# on a cold cache). Off by default so the standard test run stays fast; enable
+# with `cargo nextest run --features embedding-models`. Mirrors the convention
+# in swissarmyhammer-embedding.
+embedding-models = []
+
 [dependencies]
 swissarmyhammer-tools = { workspace = true }
 swissarmyhammer-common = { workspace = true }

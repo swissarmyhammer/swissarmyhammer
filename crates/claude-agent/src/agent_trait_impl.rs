@@ -156,9 +156,13 @@ impl ClaudeAgent {
         // exposed to the agent before the Claude process is spawned.
         self.connect_new_session_mcp_servers(&request).await;
 
-        // Spawn Claude process and handle init
-        self.spawn_claude_for_new_session(&session_id, &protocol_session_id, &request)
-            .await;
+        // Spawn Claude process and handle init. Skipped when
+        // `spawn_claude_on_new_session` is disabled (test/headless seam); the
+        // MCP servers are already connected above.
+        if self.config.spawn_claude_on_new_session {
+            self.spawn_claude_for_new_session(&session_id, &protocol_session_id, &request)
+                .await;
+        }
 
         // Build response with modes if applicable
         let response = self

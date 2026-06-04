@@ -307,18 +307,81 @@ async fn reassign_ordinals_in_column(
     }
 }
 
+/// Toggles for the heavyweight side effects of opening a board.
+///
+/// Production opens a board with every side effect enabled (the [`Default`]).
+/// Tests that only need the board context / entity cache (e.g. map-membership
+/// and MRU assertions) can disable the slow, environment-touching steps — the
+/// per-board MCP server (binds a TCP port + builds the full SAH registry), the
+/// macOS FSEvents watcher (hundreds of ms to construct), and the on-disk skill
+/// deploy — without altering what the context itself contains.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BoardOpenOptions {
+    /// Deploy the board's kanban-profile skills to disk via
+    /// [`ensure_workspace_tools`]. Production: `true`.
+    deploy_workspace_tools: bool,
+    /// Spawn the macOS FSEvents filesystem watcher on the context.
+    /// Production: `true`.
+    start_filesystem_watcher: bool,
+    /// Start the in-process per-board SAH MCP server. Production: `true`.
+    start_mcp_server: bool,
+}
+
+impl Default for BoardOpenOptions {
+    /// Production defaults: every side effect enabled.
+    fn default() -> Self {
+        Self {
+            deploy_workspace_tools: true,
+            start_filesystem_watcher: true,
+            start_mcp_server: true,
+        }
+    }
+}
+
+impl BoardOpenOptions {
+    /// Lightweight options for tests: skip the MCP server, the FSEvents
+    /// watcher, and the on-disk skill deploy, while still building the board
+    /// context and entity cache.
+    #[cfg(test)]
+    fn lite() -> Self {
+        Self {
+            deploy_workspace_tools: false,
+            start_filesystem_watcher: false,
+            start_mcp_server: false,
+        }
+    }
+}
+
 impl BoardHandle {
     /// Create a handle with a fully-initialized context (views, fields, etc.).
     ///
     /// Does NOT start the bridge task — call `start_watcher` after the
     /// Tauri `AppHandle` is available so the bridge can emit events.
+    ///
+    /// Opens with all production side effects enabled; see
+    /// [`BoardHandle::open_with`] for the toggleable variant.
     pub async fn open(kanban_path: PathBuf) -> Result<Self, String> {
+        Self::open_with(kanban_path, BoardOpenOptions::default()).await
+    }
+
+    /// Open a board with explicit control over its heavyweight side effects.
+    ///
+    /// [`BoardHandle::open`] delegates here with [`BoardOpenOptions::default`]
+    /// (everything enabled), so production behavior is unchanged. Tests pass
+    /// [`BoardOpenOptions::lite`] to skip the MCP server, FSEvents watcher, and
+    /// skill deploy while still building the context and entity cache.
+    pub(crate) async fn open_with(
+        kanban_path: PathBuf,
+        opts: BoardOpenOptions,
+    ) -> Result<Self, String> {
         // Ensure the board workspace's tools synchronously BEFORE starting the
         // board MCP server below. The server's `skill` tool serves the builtin
         // skills embedded in the binary; this deploy materializes the same
         // kanban skills on disk (store + agent symlinks) for any external
         // coding agent that opens the board folder.
-        ensure_workspace_tools(&kanban_path);
+        if opts.deploy_workspace_tools {
+            ensure_workspace_tools(&kanban_path);
+        }
 
         let ctx = KanbanContext::open(&kanban_path)
             .await
@@ -350,13 +413,19 @@ impl BoardHandle {
         // want to see external edits propagate through the cache. One-shot
         // callers (MCP, CLI, tests) intentionally skip this because
         // building an FSEvents watcher on macOS costs hundreds of ms.
-        if let Err(e) = ctx.start_watcher() {
-            tracing::warn!(error = %e, "failed to spawn kanban filesystem watcher");
+        if opts.start_filesystem_watcher {
+            if let Err(e) = ctx.start_watcher() {
+                tracing::warn!(error = %e, "failed to spawn kanban filesystem watcher");
+            }
         }
 
         let search_index = Arc::new(RwLock::new(load_search_index(&ctx).await));
 
-        let mcp_server = start_board_mcp_server(&kanban_path).await;
+        let mcp_server = if opts.start_mcp_server {
+            start_board_mcp_server(&kanban_path).await
+        } else {
+            None
+        };
 
         Ok(Self {
             ctx: Arc::new(ctx),
@@ -618,6 +687,45 @@ impl AppState {
         path: &Path,
         app_handle: Option<tauri::AppHandle>,
     ) -> Result<PathBuf, String> {
+        self.open_board_with(path, app_handle, |kanban_path| {
+            BoardHandle::open(kanban_path)
+        })
+        .await
+    }
+
+    /// Open a board in tests without the slow side effects.
+    ///
+    /// Builds the board handle via [`BoardHandle::open_with`] +
+    /// [`BoardOpenOptions::lite`] so no MCP server is bound, no FSEvents
+    /// watcher is spawned, and no skills are deployed to disk — only the board
+    /// context and entity cache are built. For tests asserting board-map
+    /// membership and MRU ordering, which need none of those side effects.
+    #[cfg(test)]
+    pub async fn open_board_for_test(&self, path: &Path) -> Result<PathBuf, String> {
+        self.open_board_with(path, None, |kanban_path| {
+            BoardHandle::open_with(kanban_path, BoardOpenOptions::lite())
+        })
+        .await
+    }
+
+    /// Shared open path behind [`open_board`](Self::open_board) and
+    /// [`open_board_for_test`](Self::open_board_for_test).
+    ///
+    /// `build_handle` constructs the [`BoardHandle`] from the resolved `.kanban`
+    /// path; production passes [`BoardHandle::open`] (all side effects), tests
+    /// pass a [`BoardHandle::open_with`] closure with lite options. Everything
+    /// else — path resolution, already-open de-dup, watcher start, map insert,
+    /// MRU bookkeeping — is identical for both callers.
+    async fn open_board_with<F, Fut>(
+        &self,
+        path: &Path,
+        app_handle: Option<tauri::AppHandle>,
+        build_handle: F,
+    ) -> Result<PathBuf, String>
+    where
+        F: FnOnce(PathBuf) -> Fut,
+        Fut: std::future::Future<Output = Result<BoardHandle, String>>,
+    {
         tracing::info!("Opening board at {}", path.display());
         let kanban_path = resolve_kanban_path(path).map_err(|e| e.to_string())?;
 
@@ -629,7 +737,7 @@ impl AppState {
             return Ok(canonical);
         }
 
-        let mut handle = BoardHandle::open(kanban_path).await?;
+        let mut handle = build_handle(kanban_path).await?;
         handle.ensure_os_actor().await;
         let board_name = read_board_name(&handle, &canonical).await;
 
@@ -1445,7 +1553,7 @@ mod tests {
         assert_eq!(board_dir, Some(tmp.path().to_path_buf()));
 
         // Open it
-        let result = state.open_board(board_dir.as_ref().unwrap(), None).await;
+        let result = state.open_board_for_test(board_dir.as_ref().unwrap()).await;
         assert!(result.is_ok(), "open_board failed: {:?}", result.err());
 
         // Verify active board is set
@@ -1473,7 +1581,7 @@ mod tests {
         create_board_at(tmp.path(), "My Board");
 
         let state = AppState::new_for_test();
-        let result = state.open_board(tmp.path(), None).await;
+        let result = state.open_board_for_test(tmp.path()).await;
         assert!(result.is_ok());
 
         let canonical = result.unwrap();
@@ -1571,10 +1679,10 @@ mod tests {
         let state = AppState::new_for_test();
 
         // Open board A
-        let path_a = state.open_board(tmp_a.path(), None).await.unwrap();
+        let path_a = state.open_board_for_test(tmp_a.path()).await.unwrap();
 
         // Open board B
-        let path_b = state.open_board(tmp_b.path(), None).await.unwrap();
+        let path_b = state.open_board_for_test(tmp_b.path()).await.unwrap();
 
         // Both boards must be in the map
         let boards = state.boards.read().await;

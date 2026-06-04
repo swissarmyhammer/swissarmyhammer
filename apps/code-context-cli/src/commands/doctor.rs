@@ -688,6 +688,14 @@ mod tests {
     /// check short-circuits to `Warning` before reaching the search step,
     /// which is an acceptable outcome — the test only asserts `Ok` is not
     /// produced.
+    ///
+    /// Loads a real embedding model to produce the query embedding, so it is
+    /// gated behind the `embedding-models` feature (multi-GB download on a cold
+    /// cache). Skipped by default; run with `--features embedding-models`.
+    #[cfg_attr(
+        not(feature = "embedding-models"),
+        ignore = "requires embedding model; run with --features embedding-models"
+    )]
     #[tokio::test]
     async fn check_semantic_search_dimension_mismatch_is_not_ok() {
         let tmp = TempDir::new().expect("tempdir");
@@ -728,6 +736,14 @@ mod tests {
     /// embedding a probe string. If the embedder is unavailable on this
     /// machine, the test is skipped — the contract being tested is "no
     /// false-negative Error when dimensions agree".
+    ///
+    /// Requires a real embedding model, so it is gated behind the
+    /// `embedding-models` feature (multi-GB download on a cold cache). Skipped
+    /// by default; run with `--features embedding-models`.
+    #[cfg_attr(
+        not(feature = "embedding-models"),
+        ignore = "requires embedding model; run with --features embedding-models"
+    )]
     #[tokio::test]
     async fn check_semantic_search_with_matching_dimension_is_functional() {
         // Probe the embedder up front so we can size the stored embedding
