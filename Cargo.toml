@@ -369,5 +369,12 @@ split-debuginfo = "unpacked"
 
 [profile.dist]
 inherits = "release"
-lto = true
+# LTO disabled deliberately. Fat LTO link-time optimization of the full
+# llama.cpp/ggml + agent dependency tree blew past the GitHub runner's memory
+# on the cross-compiled aarch64-unknown-linux-gnu release build -- the "Build
+# artifacts" step was OS-killed mid-link with zero log output (the OOM
+# signature), which silently failed every release. Plain release optimization
+# (opt-level 3, codegen-units 16) builds fine on every target. Revisit `thin`
+# LTO only if a release runner with more headroom is available.
+lto = false
 strip = true
