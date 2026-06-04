@@ -132,7 +132,7 @@ this.commands.command({
 
 The palette evaluates every command's `available` on open; hotkey dispatch needs sub-ms response. The service contracts `available` as synchronous, returning `boolean | { ok: false, reason: string }`. The reason form powers tooltips for grayed-out entries.
 
-Async preconditions are handled by event-driven caching: the plugin subscribes to whatever changes the precondition, maintains a cached flag, returns it synchronously. The server enforces a soft latency budget (~5ms warn, ~50ms force-false) so misbehaving commands can't tank the palette.
+Async preconditions are handled by event-driven caching: the plugin subscribes to whatever changes the precondition via `this.<server>.on(event, …)` (the [event subscription API](./plugin-architecture.md#events)), maintains a cached flag, and returns it synchronously. The server enforces a soft latency budget (~5ms warn, ~50ms force-false) so misbehaving commands can't tank the palette.
 
 ## `execute` re-checks `available`
 

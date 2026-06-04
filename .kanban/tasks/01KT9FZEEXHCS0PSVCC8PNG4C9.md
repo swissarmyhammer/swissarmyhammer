@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KT9FYTVE2CMAGZQW29G1M6Q6
-position_column: todo
-position_ordinal: b580
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffff280
 project: plugin-arch
 title: 'Docs: document the SDK event-subscription API (.on); remove stale "inert/RESERVED" language'
 ---

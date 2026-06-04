@@ -378,9 +378,11 @@ definition for `path[0]` (the tool):
 Either way the wire call is a plain `tools/call`; `op` is just an
 argument. The platform never invents a noun/verb wire axis.
 
-`RESERVED` covers SDK-handled names (`on`, `off`, `once`, `subscribe`,
-`unsubscribe`) rather than forwarding them as tool, noun, or verb
-segments.
+A few names are SDK-handled rather than forwarded as tool/noun/verb
+segments: `on`/`subscribe`/`once` are the [event](#events) subscription
+surface, `off`/`unsubscribe` are inert (cancellation is the handle `on`
+returns), and `then` is intercepted so a dispatcher is never mistaken for a
+promise.
 
 ### Parameters are always passed as `{}`
 
@@ -931,6 +933,48 @@ calls cross to URL-sourced servers via HTTP and to CLI-sourced servers
 via stdio; both transports speak full MCP JSON-RPC, not the callback
 notification protocol. The callback primitive is purely for plugin →
 host function references, not server → tool dispatch.
+
+## Events
+
+Services declare the events they emit, and a plugin subscribes to them by
+name:
+
+```ts
+const off = this.commands.on("executed", (params) => {
+  // params is typed from the command service's declaration
+});
+off(); // stop receiving — optional; subscriptions also auto-clean on unload
+```
+
+`this.<server>.on(event, callback)` returns an unsubscribe handle. The set of
+events a server emits — and the shape of each callback's `params` — comes from
+what that service declares, the same way operations come from a service's `op`
+definitions. So events show up typed in the generated `.d.ts` (see
+[Codegen](#codegen)), and a misspelled event name is a clear error rather than
+silent silence. `once(event, cb)` is the same but fires at most once;
+`subscribe` is an alias of `on`. Calling the returned handle, or unloading the
+plugin, both tear the subscription down (host stops delivering and the stored
+callback is freed).
+
+A service declares an event in Rust with `#[notification]`, listing it in its
+`operation_tool!` alongside its operations; the decorated struct's fields are
+the callback's `params`, and the struct is also what the service publishes — so
+the declared shape and the delivered shape are one and the same. For example,
+the command service declares an `executed` event
+(`notifications/commands/executed`) and emits it after every successful command,
+so `this.commands.on("executed", …)` fires with `{ id, ctx, result }`.
+
+Internally, subscription reuses the [callback primitive](#callbacks): the
+callback crosses as an opaque id, and the host invokes it whenever the matching
+event is emitted.
+
+### Reactive `available()`
+
+A command's `available(ctx)` must answer synchronously (the palette checks every
+command on open), so an event subscription is how a command reacts to state that
+changes asynchronously: the plugin subscribes to the event that changes the
+precondition, caches a flag, and returns the flag from `available()`. See the
+[Command service](./command-service.md).
 
 ## Codegen
 
