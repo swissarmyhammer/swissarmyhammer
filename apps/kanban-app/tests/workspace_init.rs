@@ -1,23 +1,23 @@
 //! Integration tests for in-process board-workspace tool initialization on
 //! board open.
 //!
-//! A board's workspace is a *set of tools*; opening a board folder ensures that
-//! set by running each tool's `Initializable` rooted at the board folder. Today
-//! the set is exactly the kanban tool, whose init deploys the `kanban`-profile
-//! builtin skills under `<board>/.sah/skills/`. This must happen without ever
-//! shelling out to `sah init` and without mutating the process working
-//! directory. Running it again must be idempotent.
+//! A board's workspace is a *set of tools*; opening a board folder installs the
+//! board's `kanban` install profile rooted at the board folder. That deploys the
+//! `kanban`-profile builtin skills through mirdan's one store + symlink
+//! mechanism — the canonical copy of each skill lands in `<board>/.skills/`.
+//! This must happen without ever shelling out to `sah init` and without mutating
+//! the process working directory. Running it again must be idempotent.
 //!
-//! These tests exercise [`run_workspace_tools_init`], the exact path the kanban
-//! app uses on board open (`ensure_workspace_tools` → `run_workspace_tools_init`),
-//! not the deploy-all `run_workspace_init` and not the generic-structure
-//! `run_workspace_init_for_profile` the app no longer calls.
+//! These tests exercise [`mirdan::install::init_profile`] with the same
+//! `kanban`-profile selector and explicit board root the kanban app uses on
+//! board open (`ensure_workspace_tools` → `deploy_workspace_tools` →
+//! `init_profile`).
 
 use std::path::Path;
 
+use mirdan::install::{init_profile, Profile, Selector};
 use swissarmyhammer_common::lifecycle::{InitScope, InitStatus};
 use swissarmyhammer_common::reporter::NullReporter;
-use swissarmyhammer_workspace_init::run_workspace_tools_init;
 
 /// The six skills the kanban tool's init deploys (its profile cluster).
 const KANBAN_PROFILE_SKILLS: [&str; 6] =
@@ -26,6 +26,16 @@ const KANBAN_PROFILE_SKILLS: [&str; 6] =
 /// Skills that must NOT be deployed by the kanban tool: `explore` and
 /// `code-context` belong to the `code-context` profile; `commit` is untagged.
 const NON_KANBAN_SKILLS: [&str; 3] = ["explore", "code-context", "commit"];
+
+/// The board's install profile — the `kanban`-tagged builtin skills only,
+/// mirroring `state::kanban_profile`. Kept as a test-local copy because the
+/// production helper is private to the `kanban-app` binary.
+fn kanban_profile() -> Profile {
+    Profile {
+        skills: Some(Selector::Profile("kanban".to_string())),
+        ..Default::default()
+    }
+}
 
 /// Create a minimal `.kanban` board structure under `root` that the kanban
 /// entity system can load. Mirrors the helper used by `state.rs` tests.
@@ -39,16 +49,21 @@ fn create_board_at(root: &Path) {
     }
 }
 
-/// Opening a fresh board folder runs the workspace's tool inits — currently the
-/// kanban tool — which deploy exactly the `kanban`-profile skills under
-/// `.sah/skills/`. No generic SAH workspace step runs, so `.prompts/` is never
-/// created: the workspace is just its tools.
+/// Opening a fresh board folder installs the board's `kanban` profile, which
+/// deploys exactly the `kanban`-profile skills into the `<board>/.skills/`
+/// store. No generic SAH workspace step runs, so `.prompts/` is never created:
+/// the workspace is just its tools.
 #[test]
 fn opening_a_board_deploys_the_kanban_tool_skills() {
     let tmp = tempfile::TempDir::new().unwrap();
     create_board_at(tmp.path());
 
-    let results = run_workspace_tools_init(tmp.path(), &InitScope::Project, &NullReporter);
+    let results = init_profile(
+        &kanban_profile(),
+        InitScope::Project,
+        Some(tmp.path()),
+        &NullReporter,
+    );
 
     // No component may error.
     assert!(
@@ -61,14 +76,15 @@ fn opening_a_board_deploys_the_kanban_tool_skills() {
             .collect::<Vec<_>>()
     );
 
-    // The kanban tool's skills land under `.sah/skills/`, beside `.kanban/`.
-    let skills_dir = tmp.path().join(".sah").join("skills");
-    assert!(skills_dir.is_dir(), ".sah/skills/ must exist");
+    // The kanban tool's skills land in the `<board>/.skills/` store, beside
+    // `.kanban/`.
+    let store_dir = tmp.path().join(".skills");
+    assert!(store_dir.is_dir(), ".skills/ store must exist");
     for skill in KANBAN_PROFILE_SKILLS {
         assert!(
-            skills_dir.join(skill).join("SKILL.md").is_file(),
+            store_dir.join(skill).join("SKILL.md").is_file(),
             "kanban-tool skill `{skill}` must be deployed at {}",
-            skills_dir.join(skill).join("SKILL.md").display()
+            store_dir.join(skill).join("SKILL.md").display()
         );
     }
 
@@ -76,12 +92,12 @@ fn opening_a_board_deploys_the_kanban_tool_skills() {
     // builtins (`commit`) are not part of the kanban tool.
     for skill in NON_KANBAN_SKILLS {
         assert!(
-            !skills_dir.join(skill).exists(),
+            !store_dir.join(skill).exists(),
             "skill `{skill}` is not in the kanban tool and must not be deployed"
         );
     }
 
-    // No generic `ProjectStructure` step runs on the tool path, so `.prompts/`
+    // No generic project-structure step runs on this path, so `.prompts/`
     // is never created — the workspace is exactly its tools.
     assert!(
         !tmp.path().join(".prompts").exists(),
@@ -106,8 +122,18 @@ fn repeated_board_open_is_idempotent() {
     let tmp = tempfile::TempDir::new().unwrap();
     create_board_at(tmp.path());
 
-    let first = run_workspace_tools_init(tmp.path(), &InitScope::Project, &NullReporter);
-    let second = run_workspace_tools_init(tmp.path(), &InitScope::Project, &NullReporter);
+    let first = init_profile(
+        &kanban_profile(),
+        InitScope::Project,
+        Some(tmp.path()),
+        &NullReporter,
+    );
+    let second = init_profile(
+        &kanban_profile(),
+        InitScope::Project,
+        Some(tmp.path()),
+        &NullReporter,
+    );
 
     assert!(
         first.iter().all(|r| r.status != InitStatus::Error),
@@ -119,12 +145,7 @@ fn repeated_board_open_is_idempotent() {
     );
 
     // The deployed skill must not be duplicated or corrupted by the re-run.
-    let plan_skill = tmp
-        .path()
-        .join(".sah")
-        .join("skills")
-        .join("plan")
-        .join("SKILL.md");
+    let plan_skill = tmp.path().join(".skills").join("plan").join("SKILL.md");
     assert!(plan_skill.is_file(), "plan/SKILL.md must still exist");
     let content = std::fs::read_to_string(&plan_skill).unwrap();
     assert_eq!(
@@ -142,7 +163,12 @@ fn workspace_tools_init_does_not_mutate_process_cwd() {
     create_board_at(tmp.path());
 
     let cwd_before = std::env::current_dir().unwrap();
-    let _ = run_workspace_tools_init(tmp.path(), &InitScope::Project, &NullReporter);
+    let _ = init_profile(
+        &kanban_profile(),
+        InitScope::Project,
+        Some(tmp.path()),
+        &NullReporter,
+    );
     let cwd_after = std::env::current_dir().unwrap();
 
     assert_eq!(

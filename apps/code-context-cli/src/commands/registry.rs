@@ -1,228 +1,186 @@
-//! Code-context init/deinit component registry.
+//! Code-context init/deinit profile + component registry.
 //!
-//! Defines the `Initializable` components for `code-context init` and
-//! `code-context deinit`, and exposes `register_all` to populate an
-//! `InitRegistry` with them.
+//! `code-context init` / `code-context deinit` install two kinds of thing:
+//!
+//! 1. **Profile artifacts** — the `code-context` MCP server registration and the
+//!    builtin `code-context` + `explore` + `lsp` + `detected-projects` skills.
+//!    These are declared once as a
+//!    [`mirdan::install::Profile`] and applied by
+//!    [`mirdan::install::init_profile`] / `deinit_profile`, the single
+//!    data-driven installer shared across the tool CLIs and sah. Routing MCP
+//!    registration through the profile's strategy-aware applier also fixes the
+//!    Claude local-scope (`InitScope::Local`) handling the old hand-rolled
+//!    per-agent loop silently dropped.
+//! 2. **Genuine tool lifecycle** — the `.code-context/` directory and its
+//!    `.gitignore` entry. These are not install-of-an-agent concerns, so they
+//!    stay on [`CodeContextTool`]'s own `Initializable` impl, run via the
+//!    [`InitRegistry`].
 
-use std::collections::BTreeMap;
-
-use swissarmyhammer_common::lifecycle::{InitRegistry, InitResult, InitScope, Initializable};
-use swissarmyhammer_common::reporter::{InitEvent, InitReporter};
+use swissarmyhammer_common::lifecycle::{InitRegistry, InitScope};
 use swissarmyhammer_tools::mcp::tools::code_context::CodeContextTool;
 
-/// Register all code-context init/deinit components into the given registry.
+/// The MCP server name registered under each agent's config.
+const SERVER_NAME: &str = "code-context";
+
+/// The builtin skills code-context deploys, in deployment order: the
+/// `code-context` tool skill, `explore` (the structural investigation workflow
+/// it powers), `lsp` (LSP server diagnostics/install), and `detected-projects`
+/// (project-type/build-command discovery).
+pub const SKILL_NAMES: &[&str] = &["code-context", "explore", "lsp", "detected-projects"];
+
+/// The declarative manifest of what `code-context init`/`deinit` install through
+/// mirdan's profile installer: the `code-context serve` MCP server and the
+/// builtin [`SKILL_NAMES`] skills. No agents.
 ///
-/// Components are registered in priority order:
-/// - priority 10: `CodeContextMcpRegistration` (MCP server config for detected agents)
-/// - priority 22: `CodeContextTool` (`.code-context/` directory and `.gitignore` management)
+/// Skills deploy at every scope, including `User` — a global install lands every
+/// declared skill in the global store (`~/.skills` + the agent's global skill
+/// dir), so `init user` is a full configuration. This matches sah's
+/// `Selector::All`, which already deploys at every scope. The `scope` parameter
+/// is retained for signature parity with the other consumers (and forwarded to
+/// the installer by the caller), but no longer gates skill selection.
+pub fn profile(_scope: InitScope) -> mirdan::install::Profile {
+    mirdan::install::Profile {
+        mcp_server: Some(mirdan::install::ProfileMcpServer::serve(SERVER_NAME)),
+        skills: Some(skills_selector()),
+        agents: None,
+        statusline: false,
+        preamble: false,
+    }
+}
+
+/// The skills-only selector ([`SKILL_NAMES`]), shared by [`profile`] and the
+/// `code-context skill` subcommand.
+pub fn skills_selector() -> mirdan::install::Selector {
+    mirdan::install::Selector::Named(SKILL_NAMES.iter().map(|s| s.to_string()).collect())
+}
+
+/// Register the genuine tool-lifecycle components into `registry`.
+///
+/// Only [`CodeContextTool`] is registered — for its `.code-context/` directory
+/// and `.gitignore` lifecycle. MCP registration is owned by the profile (see
+/// [`profile`]), not a bespoke component.
 pub fn register_all(registry: &mut InitRegistry) {
-    registry.register(CodeContextMcpRegistration);
     registry.register(CodeContextTool::new());
-}
-
-// ── CodeContextMcpRegistration (priority 10) ─────────────────────────────────
-
-/// Resolved agent MCP config path with its servers key and entry extras.
-struct AgentMcpTarget {
-    config_path: std::path::PathBuf,
-    servers_key: String,
-    entry_extras: BTreeMap<String, serde_json::Value>,
-}
-
-/// Load detected agents and resolve their MCP config paths for the given scope.
-fn resolve_agent_targets(scope: &InitScope) -> Result<Vec<AgentMcpTarget>, String> {
-    let config = mirdan::agents::load_agents_config()
-        .map_err(|e| format!("Failed to load agents config: {e}"))?;
-    let agents = mirdan::agents::get_detected_agents(&config);
-    let global = matches!(scope, InitScope::User);
-
-    Ok(agents
-        .iter()
-        .filter_map(|agent| {
-            let mcp_path = if global {
-                mirdan::agents::agent_global_mcp_config(&agent.def)
-            } else {
-                mirdan::agents::agent_project_mcp_config(&agent.def)
-            };
-            let config_path = mcp_path?;
-            let servers_key = agent
-                .def
-                .mcp_config
-                .as_ref()
-                .map(|c| c.servers_key.clone())
-                .unwrap_or_else(|| "mcpServers".to_string());
-            let entry_extras = agent
-                .def
-                .mcp_config
-                .as_ref()
-                .map(|c| c.entry_extras.clone())
-                .unwrap_or_default();
-            Some(AgentMcpTarget {
-                config_path,
-                servers_key,
-                entry_extras,
-            })
-        })
-        .collect())
-}
-
-/// Registers/unregisters the `code-context serve` MCP server entry in all
-/// detected agent config files (e.g. `.mcp.json`, `~/.claude.json`).
-pub struct CodeContextMcpRegistration;
-
-impl Initializable for CodeContextMcpRegistration {
-    /// The component name shown in init/deinit output.
-    fn name(&self) -> &str {
-        "code-context-mcp-registration"
-    }
-
-    /// Component category: configuration.
-    fn category(&self) -> &str {
-        "configuration"
-    }
-
-    /// Priority 10 — runs before CodeContextTool (priority 22).
-    fn priority(&self) -> i32 {
-        10
-    }
-
-    fn init(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        let targets = match resolve_agent_targets(scope) {
-            Ok(t) => t,
-            Err(e) => return vec![InitResult::error(self.name(), e)],
-        };
-        let entry = mirdan::mcp_config::McpServerEntry {
-            command: "code-context".to_string(),
-            args: vec!["serve".to_string()],
-            env: BTreeMap::new(),
-        };
-        let mut count = 0;
-        for t in &targets {
-            match mirdan::mcp_config::register_mcp_server(
-                &t.config_path,
-                &t.servers_key,
-                "code-context",
-                &entry,
-                &t.entry_extras,
-            ) {
-                Ok(()) => {
-                    reporter.emit(&InitEvent::Action {
-                        verb: "Registered".to_string(),
-                        message: format!("code-context MCP server in {}", t.config_path.display()),
-                    });
-                    count += 1;
-                }
-                Err(e) => reporter.emit(&InitEvent::Warning {
-                    message: format!("Failed to register in {}: {e}", t.config_path.display()),
-                }),
-            }
-        }
-        vec![InitResult::ok(
-            self.name(),
-            format!("MCP server registered for {count} agent(s)"),
-        )]
-    }
-
-    fn deinit(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        let targets = match resolve_agent_targets(scope) {
-            Ok(t) => t,
-            Err(e) => return vec![InitResult::error(self.name(), e)],
-        };
-        let mut count = 0;
-        for t in &targets {
-            match mirdan::mcp_config::unregister_mcp_server(
-                &t.config_path,
-                &t.servers_key,
-                "code-context",
-            ) {
-                Ok(true) => {
-                    reporter.emit(&InitEvent::Action {
-                        verb: "Removed".to_string(),
-                        message: format!(
-                            "code-context MCP server from {}",
-                            t.config_path.display()
-                        ),
-                    });
-                    count += 1;
-                }
-                Ok(false) => {} // not present — idempotent
-                Err(e) => reporter.emit(&InitEvent::Warning {
-                    message: format!("Failed to unregister from {}: {e}", t.config_path.display()),
-                }),
-            }
-        }
-        vec![InitResult::ok(
-            self.name(),
-            format!("MCP server removed from {count} agent config(s)"),
-        )]
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mirdan::install::init_profile;
+    use mirdan::test_support::{
+        assert_no_init_error, write_single_agent_config, MirdanConfigGuard, ProjectScopeDeploy,
+        UserScopeDeploy,
+    };
     use swissarmyhammer_common::reporter::NullReporter;
     use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
 
-    /// Isolate a test from the real source tree before it runs `init`/`deinit`.
-    ///
-    /// `CodeContextMcpRegistration::init`/`deinit` resolve each detected
-    /// agent's MCP config from a CWD-relative path (e.g. `.mcp.json`) and the
-    /// global config from a HOME-relative path. During `cargo test` the CWD is
-    /// the crate manifest dir, which contains a committed
-    /// `apps/code-context-cli/.mcp.json` — so an unisolated `deinit` would
-    /// strip the `code-context` entry straight out of that tracked file.
-    ///
-    /// This helper pins HOME to a fresh isolated env and chdir's into that
-    /// env's temp dir, so both project- and global-scope writes land in a
-    /// throwaway location. Callers must also carry `#[serial_test::serial(cwd)]`
-    /// so the CWD change is mutually exclusive with every other CWD-touching
-    /// test in this crate (`ops.rs`, `skill.rs`, `logging.rs`).
-    fn isolated_init_env() -> (IsolatedTestEnvironment, CurrentDirGuard) {
-        let env = IsolatedTestEnvironment::new().expect("create isolated test env");
-        let guard = CurrentDirGuard::new(env.temp_dir()).expect("chdir into isolated temp dir");
-        (env, guard)
+    /// The exact four-skill set code-context deploys at every scope.
+    const EXPECTED_SKILLS: &[&str] = &["code-context", "explore", "lsp", "detected-projects"];
+
+    #[test]
+    fn test_profile_declares_mcp_and_skills_in_project_scope() {
+        let profile = profile(InitScope::Project);
+        let server = profile.mcp_server.expect("profile declares an MCP server");
+        assert_eq!(server.name, "code-context");
+        assert_eq!(server.command, "code-context");
+        assert_eq!(server.args, vec!["serve".to_string()]);
+        assert_eq!(profile.skills, Some(skills_selector()));
+        assert!(profile.agents.is_none());
+        assert!(!profile.statusline);
+        assert!(!profile.preamble);
     }
 
     #[test]
-    fn test_code_context_mcp_registration_name_and_priority() {
-        let component = CodeContextMcpRegistration;
-        assert_eq!(component.name(), "code-context-mcp-registration");
-        assert_eq!(component.category(), "configuration");
-        assert_eq!(component.priority(), 10);
+    fn test_user_scope_selects_skills() {
+        // Regression: `init user` must deploy the full skill set too.
+        let profile = profile(InitScope::User);
+        assert!(profile.mcp_server.is_some());
+        assert_eq!(
+            profile.skills,
+            Some(skills_selector()),
+            "user scope must select the full code-context skill set"
+        );
     }
 
-    #[tokio::test]
-    async fn test_register_all_populates_registry() {
+    #[test]
+    fn test_local_scope_deploys_skills() {
+        assert!(profile(InitScope::Local).skills.is_some());
+    }
+
+    /// Regression for Bug 2 — the selector names exactly
+    /// `code-context` + `explore` + `lsp` + `detected-projects`.
+    #[test]
+    fn test_skills_selector_names_the_four_skills() {
+        assert_eq!(
+            skills_selector(),
+            mirdan::install::Selector::Named(
+                EXPECTED_SKILLS.iter().map(|s| s.to_string()).collect()
+            )
+        );
+    }
+
+    #[test]
+    fn test_register_all_registers_only_tool_lifecycle() {
+        // Just the tool (`.code-context/` directory). MCP registration moved to
+        // the profile installer.
         let mut registry = InitRegistry::new();
         register_all(&mut registry);
-        assert_eq!(registry.len(), 2);
+        assert_eq!(registry.len(), 1);
     }
 
+    /// Regression for Bugs 1 + 2 — `init user` deploys exactly the four declared
+    /// skills (store + symlink, `explore` and `detected-projects` included) and
+    /// registers the MCP server in the agent's global config. Drives the REAL
+    /// `profile(InitScope::User)`.
     #[test]
     #[serial_test::serial(cwd)]
-    fn test_init_returns_ok_result() {
-        // `init` writes each detected agent's project `.mcp.json` relative to
-        // CWD — isolate CWD (and HOME) to a temp dir so it cannot strip or
-        // rewrite the committed `apps/code-context-cli/.mcp.json`.
-        let (_env, _cwd) = isolated_init_env();
-        let component = CodeContextMcpRegistration;
-        let reporter = NullReporter;
-        let results = component.init(&InitScope::Project, &reporter);
-        // Should return exactly one result (Ok or Error depending on env)
-        assert_eq!(results.len(), 1);
+    fn user_scope_deploys_four_skills_and_registers_mcp() {
+        let env = IsolatedTestEnvironment::new().unwrap();
+        let work = env.temp_dir().canonicalize().unwrap();
+        let _cwd = CurrentDirGuard::new(&work).unwrap();
+        let config_path = write_single_agent_config(&work, &env.home_path());
+        let _mirdan = MirdanConfigGuard::set(&config_path);
+
+        let results = init_profile(
+            &profile(InitScope::User),
+            InitScope::User,
+            None,
+            &NullReporter,
+        );
+        assert_no_init_error("code-context user init", &results);
+
+        UserScopeDeploy {
+            home: &env.home_path(),
+            server: "code-context",
+            skills: EXPECTED_SKILLS,
+        }
+        .assert();
     }
 
+    /// Project-scope deploy rooted at an explicit `<root>` — the same exact
+    /// four-skill set lands in the project store.
     #[test]
     #[serial_test::serial(cwd)]
-    fn test_deinit_returns_ok_result() {
-        // `deinit` removes the `code-context` entry from each detected agent's
-        // CWD-relative `.mcp.json`. Without isolation this strips the entry
-        // from the tracked `apps/code-context-cli/.mcp.json` — isolate CWD here.
-        let (_env, _cwd) = isolated_init_env();
-        let component = CodeContextMcpRegistration;
-        let reporter = NullReporter;
-        let results = component.deinit(&InitScope::Project, &reporter);
-        assert_eq!(results.len(), 1);
+    fn project_scope_deploys_four_skills_rooted() {
+        let env = IsolatedTestEnvironment::new().unwrap();
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path().canonicalize().unwrap();
+        let config_path = write_single_agent_config(&root, &env.home_path());
+        let _mirdan = MirdanConfigGuard::set(&config_path);
+
+        let results = init_profile(
+            &profile(InitScope::Project),
+            InitScope::Project,
+            Some(&root),
+            &NullReporter,
+        );
+        assert_no_init_error("code-context project init", &results);
+
+        ProjectScopeDeploy {
+            root: &root,
+            server: "code-context",
+            skills: EXPECTED_SKILLS,
+        }
+        .assert();
     }
 }

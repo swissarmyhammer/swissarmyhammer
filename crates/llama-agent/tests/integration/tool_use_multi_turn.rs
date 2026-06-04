@@ -212,8 +212,14 @@ async fn test_multi_turn_tool_use_round_trip_with_real_model() {
     let fixture_str = fixture.to_string_lossy();
     info!("Multi-turn fixture path: {}", fixture_str);
 
+    // The leading `/no_think` directive disables Qwen3's thinking mode so the
+    // small test model spends its turn budget on the tool call rather than on an
+    // unbounded `<think>` block — without it, Qwen3-0.6B exhausts the 2048-token
+    // turn reasoning and never reaches the tool. This is the same proven prompt
+    // shape the sibling ACP test (`acp_multi_turn_dispatches_tool_and_threads_result`)
+    // relies on.
     let user_prompt = format!(
-        "Use the read_file tool to read the file at {}. After you receive the tool \
+        "/no_think Use the read_file tool to read the file at {}. After you receive the tool \
          result, tell me the name of the function defined in that file in one short sentence.",
         fixture_str
     );

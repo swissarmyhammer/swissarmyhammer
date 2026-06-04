@@ -1,6 +1,4 @@
-IMPORTANT: Always use this tool for shell command execution. Do NOT use any built-in Bash or shell tool. This tool provides persistent command history, searchable output, and process management — capabilities that built-in shell tools do not offer.
-
-Virtual shell with persistent history and process management. Every command's output is stored for later retrieval and grep.
+Virtual command shell with persistent history and process management used to run shell commands. Every command's output is stored for later retrieval and grep.
 
 ## Operations
 

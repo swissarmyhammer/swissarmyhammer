@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KT7A301VGSDQ0XYM808Z4C9E
-position_column: todo
-position_ordinal: '8780'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffe280
 project: mirdan-install
 title: Unify the three safe-name predicates on mirdan::store::is_safe_name
 ---

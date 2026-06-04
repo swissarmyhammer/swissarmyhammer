@@ -159,3 +159,4 @@ ane-embedding/convert/output/
 **/.shell/
 .claude/worktrees
 .swissarmyhammer
+.code-context/

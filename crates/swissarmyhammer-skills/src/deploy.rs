@@ -1,11 +1,13 @@
-//! Skill deployment helpers shared across CLI tools.
+//! Pure skill-content helpers shared across CLI tools.
 //!
-//! Provides the common pipeline for resolving a builtin skill, formatting a
-//! SKILL.md file with YAML frontmatter, and deploying it to agent `.skills/`
-//! directories via mirdan.
+//! Provides the common pipeline for resolving a builtin skill and formatting a
+//! SKILL.md file with YAML frontmatter. This crate is deployment-free: the
+//! filesystem staging + agent deployment step lives in
+//! `mirdan::install::stage_and_deploy_skill`, so the dependency edge runs
+//! mirdan → skills (not the other way around).
 //!
-//! Used by both `shelltool-cli` and `code-context-cli` to avoid duplicating
-//! the resolve → format → deploy logic. Template rendering (which depends on
+//! Used by `shelltool-cli`, `code-context-cli`, and `kanban-cli` to avoid
+//! duplicating the resolve → format logic. Template rendering (which depends on
 //! `swissarmyhammer-templating`) is left to each CLI's thin wrapper because
 //! adding that crate here would create a dependency cycle.
 
@@ -117,47 +119,6 @@ pub fn format_skill_md(
     format!("---\n{yaml}---\n\n{instructions}\n")
 }
 
-/// Validate that a skill name is a safe filesystem identifier.
-///
-/// Accepts only alphanumeric characters, hyphens, and underscores.
-/// Rejects path traversal sequences, absolute paths, and empty names.
-pub fn validate_skill_name(name: &str) -> Result<(), String> {
-    if name.is_empty() {
-        return Err("skill name must not be empty".to_string());
-    }
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
-        return Err(format!(
-            "skill name '{name}' contains invalid characters (only alphanumeric, hyphens, underscores allowed)"
-        ));
-    }
-    Ok(())
-}
-
-/// Write a skill's rendered SKILL.md to a temp directory and deploy it.
-///
-/// Creates a temporary directory structure `<tmpdir>/<name>/SKILL.md` containing
-/// `skill_content`, then delegates to `mirdan::install::deploy_skill_to_agents`
-/// to copy it into every detected agent's `.skills/` directory.
-///
-/// # Errors
-///
-/// Returns an error if `name` fails validation, the temp directory cannot be
-/// created, the file cannot be written, or mirdan deployment fails.
-pub fn write_and_deploy(name: &str, skill_content: &str) -> Result<Vec<String>, String> {
-    validate_skill_name(name)?;
-    let temp_dir = tempfile::tempdir().map_err(|e| format!("failed to create temp dir: {e}"))?;
-    let skill_dir = temp_dir.path().join(name);
-    std::fs::create_dir_all(&skill_dir)
-        .map_err(|e| format!("failed to create temp skill dir: {e}"))?;
-    std::fs::write(skill_dir.join("SKILL.md"), skill_content)
-        .map_err(|e| format!("failed to write SKILL.md: {e}"))?;
-    mirdan::install::deploy_skill_to_agents(name, &skill_dir, None, false)
-        .map_err(|e| format!("deploying {name} skill: {e}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,23 +129,6 @@ mod tests {
         let result = resolve_skill("nonexistent-skill-that-does-not-exist");
         assert!(result.is_err(), "nonexistent skill should return Err");
         assert!(result.unwrap_err().contains("not found"));
-    }
-
-    #[test]
-    fn test_validate_skill_name_valid() {
-        assert!(validate_skill_name("shell").is_ok());
-        assert!(validate_skill_name("code-context").is_ok());
-        assert!(validate_skill_name("my_skill").is_ok());
-        assert!(validate_skill_name("skill123").is_ok());
-    }
-
-    #[test]
-    fn test_validate_skill_name_rejects_traversal() {
-        assert!(validate_skill_name("..").is_err());
-        assert!(validate_skill_name("../etc/passwd").is_err());
-        assert!(validate_skill_name("/absolute").is_err());
-        assert!(validate_skill_name("has spaces").is_err());
-        assert!(validate_skill_name("").is_err());
     }
 
     #[test]

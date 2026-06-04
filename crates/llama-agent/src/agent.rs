@@ -2084,6 +2084,46 @@ impl AgentServer {
         Ok(agent_client_protocol_extras::normalize_title(&raw))
     }
 
+    /// Resolve which of a session's MCP clients serves `tool_name`.
+    ///
+    /// A session may attach several MCP clients (the in-process Agent-tools
+    /// mount plus one external client per `mcpServers` entry), and any given
+    /// tool is served by exactly one of them. This queries each session client's
+    /// advertised tool list and returns the first whose list contains
+    /// `tool_name`, so the call is dispatched to the server that owns it.
+    ///
+    /// Returns `None` when the session has no MCP clients (the caller then falls
+    /// back to the agent-level client). When the session has clients but none
+    /// advertises the tool — e.g. a client whose `list_tools` errored — this
+    /// falls back to the first client so behavior degrades to the previous
+    /// best-effort routing rather than dropping the call.
+    async fn resolve_session_tool_client(
+        &self,
+        session_id: &crate::types::SessionId,
+        tool_name: &str,
+    ) -> Option<Arc<dyn MCPClient>> {
+        let session_clients = self.session_mcp_clients.read().await;
+        let clients = session_clients.get(session_id)?;
+
+        for client in clients {
+            match client.list_tools().await {
+                Ok(tools) => {
+                    if tools.iter().any(|t| t == tool_name) {
+                        return Some(Arc::clone(client));
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to list tools while routing '{}' to a session MCP client: {}",
+                        tool_name, e
+                    );
+                }
+            }
+        }
+
+        clients.first().cloned()
+    }
+
     /// Execute a tool call with retry logic for transient failures
     ///
     /// This method implements error recovery strategies including:
@@ -2149,18 +2189,17 @@ impl AgentServer {
         let tool_args = tool_call.arguments.clone();
         let call_id = tool_call.id;
 
-        // Get MCP client for this session (if any), otherwise use agent-level client
-        let mcp_client = {
-            let session_clients = self.session_mcp_clients.read().await;
-            if let Some(clients) = session_clients.get(&session.id) {
-                // Use first MCP client for this session
-                // TODO: Route to specific client based on tool name/server
-                clients.first().cloned()
-            } else {
-                None
-            }
-        }
-        .unwrap_or_else(|| Arc::clone(&self.mcp_client));
+        // Resolve the MCP client that actually serves `tool_name` for this
+        // session, falling back to the agent-level client when the session has
+        // none. A session can attach several MCP clients (e.g. the in-process
+        // Agent-tools mount plus one external server per `mcpServers` entry), and
+        // a tool lives on exactly one of them — so routing must select the client
+        // advertising the tool rather than blindly using the first, which would
+        // dispatch the call to the wrong server and fail with "tool not found".
+        let mcp_client = self
+            .resolve_session_tool_client(&session.id, &tool_name)
+            .await
+            .unwrap_or_else(|| Arc::clone(&self.mcp_client));
 
         // Execute with retry logic
         let result = retry_manager

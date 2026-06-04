@@ -26,8 +26,6 @@ swissarmyhammer-entity = { workspace = true }
 swissarmyhammer-merge = { workspace = true }
 swissarmyhammer-operations = { workspace = true }
 swissarmyhammer-common = { workspace = true }
-swissarmyhammer-skills = { workspace = true }
-swissarmyhammer-templating = { workspace = true }
 swissarmyhammer-doctor = { workspace = true }
 mirdan = { workspace = true }
 
@@ -49,6 +47,8 @@ once_cell = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
 swissarmyhammer-cli-completions = { workspace = true, features = ["test-helpers"] }
+# Enable mirdan's test-support helpers for the registry deploy tests.
+mirdan = { workspace = true, features = ["test-support"] }
 
 [build-dependencies]
 clap = { workspace = true }

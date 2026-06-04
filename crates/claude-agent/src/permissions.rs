@@ -1456,12 +1456,19 @@ mod tests {
         let storage = create_test_storage();
         let engine = PermissionPolicyEngine::new(Box::new(storage));
 
-        // Store a permission with very short expiration
+        // Store a permission with a short expiration.
+        //
+        // `current_timestamp()` has whole-second granularity and expiration is
+        // checked with `>=`, so a 1-second window is racy: if the wall clock
+        // crosses a second boundary between storing and the immediate check,
+        // the permission would already read as expired. Use a 2-second window
+        // (immediate check is at most milliseconds later, so `now < expires_at`
+        // reliably holds) and sleep past it for the expiry check.
         engine
             .store_permission_decision(
                 "test_tool",
                 PermissionDecision::AllowAlways,
-                Some(Duration::from_secs(1)),
+                Some(Duration::from_secs(2)),
             )
             .await
             .unwrap();
@@ -1474,7 +1481,7 @@ mod tests {
         assert!(matches!(result, PolicyEvaluation::Allowed));
 
         // Wait for expiration
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
 
         // Should now require consent again since cached decision expired
         let result = engine

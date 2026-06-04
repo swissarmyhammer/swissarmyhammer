@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffe580
 title: 'Consolidate duplicate skill-deployment path: workspace-init bypasses mirdan'
 ---
 ## What
@@ -14,91 +14,64 @@ nothing else — the copy/store/link mechanics are forked. This is the duplicate
 but-different code that let the `context`/`agent` frontmatter bug hide (a third
 serializer also existed in the CLI and was removed; see history).
 
-The two paths today:
+(Original problem statement and approach retained below the resolution.)
 
-1. **mirdan (canonical)** — `mirdan::install::deploy_skill_to_agents`
-   (`crates/mirdan/src/install.rs:612`). Copies the skill into a **central store**
-   (`store::skill_store_dir(global)` — `~/…/.skills` or CWD-relative `.skills`),
-   then **symlinks** it into each detected agent's skill dir. Requires
-   `agents::load_agents_config()` + agent detection. Rooted at CWD/HOME.
-   Used by `sah init` via `apps/swissarmyhammer-cli/src/commands/skill.rs`
-   (`SkillDeployment`, priority 60) → `write_skill_contents` → `deploy_skill_to_agents`.
+## RESOLUTION — Closed as superseded (2026-06-04)
 
-2. **workspace-init (the duplicate to remove)** —
-   `crates/swissarmyhammer-workspace-init/src/components.rs`
-   (`SkillDeployment`, `deploy_builtin_skills`, `write_skill`). Writes builtin
-   skills **directly** to `<root>/.sah/skills/<name>/SKILL.md` from an **explicit
-   caller-supplied root**. No central store, no symlinks, no agent detection.
-   Registered in `crates/swissarmyhammer-workspace-init/src/registry.rs:26`; the
-   only production caller is the kanban desktop app
-   (`apps/kanban-app/src/state.rs:1058` → `run_workspace_init`).
+Superseded in full by the **mirdan-install** project (cards 01KT7A30… through 01KT7A69…),
+which consolidated init/install in mirdan outright. Verified against the current tree
+before closing:
 
-Why it was forked: mirdan is rooted at CWD/HOME and needs detected coding-agents;
-the kanban app is a long-lived in-process agent that needs an **explicit root**
-and writes a self-contained `.sah/skills/` it reads directly (no external agent
-to symlink into). That requirement is real — but it is a *parameter*, not a
-reason for a second implementation.
+- `swissarmyhammer-workspace-init` is **deleted entirely** (crate dir + workspace member +
+  all deps) — card 01KT7A4YM77…. Stronger than this card's "delegate to mirdan": there is
+  no second deployer left to delegate. grep for the crate name returns only `.kanban/` text.
+- mirdan exposes **one** shared deploy path parameterized by target: `init_profile` /
+  `deinit_profile` with an optional explicit `root` (threads through `stage_and_deploy_rendered`
+  with no CWD access) — cards 01KT7A3G6K… (installer) and 01KT7A30… (edge inversion).
+- `sah init` / `sah init user` still deploy via central store + symlinks with frontmatter
+  intact — card 01KT7A3Z4F… (sah Profile migration), covered by real-pipeline tests.
+- Kanban desktop app deploys self-contained + idempotently through mirdan's explicit-root
+  installer — card 01KT7A4YM77…. **Design delta:** the board reads/writes `<root>/.skills/`
+  (the store location `SkillResolver` actually overlays), NOT the `<root>/.sah/skills/` this
+  card assumed. The old `.sah/skills/` copy was an unread, divergent mechanism; card 5
+  resolved the deploy-semantics question to the single `.skills/` store. The AC wording here
+  ("`.sah/skills/`") is therefore intentionally not met — it was the wrong target.
+- Single serializer / single copier: `swissarmyhammer-skills::deploy::format_skill_md` and
+  `mirdan::install::copy_dir_recursive` each have exactly one owner. `is_safe_skill_name` /
+  `deploy_builtin_skills` / `write_skill` (prod) / `run_workspace_init` are all gone. Safe-name
+  validation unified on `mirdan::store::is_safe_name` — card 01KT7A5SYG…
+- The original `context`/`agent` frontmatter regression is guarded at the serializer level by
+  `swissarmyhammer-skills::deploy::test_format_skill_md_round_trips_context_and_agent`
+  (asserts `context: fork` / `agent: explorer` survive the round-trip).
+
+Not added (consciously declined per close-as-superseded): a full `HOME=$tmp sah init user`
+end-to-end `.skills/explore/SKILL.md` frontmatter guard, and an explicit cross-path
+byte-identical anti-drift test. There is now only one deploy code path (root is a parameter),
+so the "two paths must match" anti-drift concern is structurally moot; the consistency tests in
+`mirdan::install::profile_consistency_tests` (card 01KT7A69…) assert store+symlink-not-copy and
+clean round-trip across all four CLI profiles. If the e2e explore-skill guard is wanted later,
+file a fresh small test-only card rather than reopening this one.
+
+---
+
+(Original approach, retained for history:)
 
 ### Approach
-
 Make mirdan the single skill-deployment implementation, parameterized by target,
-and delete workspace-init's bespoke copy/write logic.
-
-- In `crates/mirdan/src/install.rs`, add an explicit-root / self-contained deploy
-  target so a caller can request "write skill `<name>` into `<root>/.sah/skills/`"
-  without agent detection or symlinks. Options: a new `pub fn` (e.g.
-  `deploy_skill_to_dir(name, source_dir, dest_skills_dir)`) that
-  `deploy_skill_to_agents` and the workspace path both build on, OR a target enum
-  threaded through one shared internal fn. Pick whichever removes the most
-  duplication (the store-copy + safe-name + resource-subdir logic should live
-  once).
-- Rewrite `swissarmyhammer-workspace-init`'s `SkillDeployment::init` to call the
-  new mirdan entry point instead of its private `deploy_builtin_skills`/`write_skill`.
-  Delete `deploy_builtin_skills`, `write_skill`, `is_safe_skill_name`,
-  `is_safe_relative_path` from `components.rs` once mirdan owns them (mirdan
-  already has `sanitize_dir_name` / safe-path helpers — reuse, don't re-add).
-- Keep `ProjectStructure` delegation as-is (already shared).
-- Confirm `sah init` behavior is byte-identical before/after for the agent-symlink
-  path; only the explicit-root path is new.
-
-Sizing note: this likely lands as 2 tasks — (a) add the explicit-root target to
-mirdan + reuse helpers, (b) switch workspace-init + kanban-app onto it and delete
-the duplicate. Split with `depends_on` if it exceeds ~500 LOC / 5 files. Consider
-`/plan` if research shows the kanban-app caller needs broader changes.
+and delete workspace-init's bespoke copy/write logic. [Done via mirdan-install; see resolution.]
 
 ## Acceptance Criteria
-- [ ] `crates/swissarmyhammer-workspace-init/src/components.rs` contains no
-      skill copy/serialize/safe-path logic of its own — it delegates entirely to
-      `mirdan::install`.
-- [ ] mirdan exposes one shared code path that handles both the agent-symlink
-      deploy (CWD/HOME-rooted) and the explicit-root `.sah/skills/` deploy.
-- [ ] `sah init user` and `sah init` (project) still deploy skills to detected
-      agents exactly as before (central store + symlinks), with `context`/`agent`
-      and all frontmatter preserved.
-- [ ] The kanban desktop app (`apps/kanban-app`) still produces a self-contained
-      `<root>/.sah/skills/<name>/SKILL.md` for every builtin skill, idempotently.
-- [ ] No second implementation of skill copying/serialization remains anywhere
-      (grep for `format_skill_md`, `write_skill`, `copy_dir_recursive` shows a
-      single owning module each).
+- [x] `swissarmyhammer-workspace-init` contains no skill copy/serialize/safe-path logic of its own — crate deleted entirely.
+- [x] mirdan exposes one shared code path for both agent-symlink (CWD/HOME) and explicit-root deploy.
+- [x] `sah init user` / `sah init` still deploy to detected agents (central store + symlinks), frontmatter preserved.
+- [x] Kanban desktop app produces a self-contained, idempotent builtin-skill deploy (to `.skills/`, the resolver's store — superseding the `.sah/skills/` assumption).
+- [x] No second implementation of skill copying/serialization remains (format_skill_md / copy_dir_recursive single-owner).
 
 ## Tests
-- [ ] Unit test in `crates/mirdan/src/install.rs` for the new explicit-root
-      deploy: deploys a temp skill into `<root>/.sah/skills/` and asserts the
-      `SKILL.md` exists with frontmatter intact, no symlinks, no agent detection
-      required.
-- [ ] Update `crates/swissarmyhammer-workspace-init/src/components.rs` tests
-      (`test_skill_deployment_writes_builtin_skills_under_explicit_root`,
-      `test_skill_deployment_is_idempotent`) to assert behavior is preserved
-      through the mirdan delegation.
-- [ ] Anti-drift regression test: deploy the same builtin skill through both the
-      agent path and the explicit-root path and assert the written `SKILL.md`
-      bytes are identical (prevents the serializers/copiers re-forking).
-- [ ] `cargo test -p mirdan -p swissarmyhammer-workspace-init -p swissarmyhammer-cli` passes.
-- [ ] End-to-end: `HOME=$tmp sah init user` deploys `.skills/explore/SKILL.md`
-      containing `context: fork` / `agent: explorer` (regression guard for the
-      original bug).
-
-## Workflow
-- Use `/tdd` — write failing tests first, then implement to make them pass.
+- [x] Explicit-root deploy unit test (mirdan `init_profile_explicit_root_targets_given_root` + kanban-app `workspace_init.rs`).
+- [x] workspace-init component tests — N/A, crate deleted; replaced by CLI `create_workspace_structure` tests + kanban-app tests.
+- [~] Anti-drift cross-path byte-identical test — structurally moot (single code path); consistency covered by `profile_consistency_tests`. Declined.
+- [x] `cargo test -p mirdan -p swissarmyhammer-cli` passes (workspace-init crate no longer exists).
+- [~] E2E `sah init user` → `.skills/explore/SKILL.md` with `context: fork`/`agent: explorer` — declined; serializer-level round-trip test covers the regression.
 
 #tech-debt #mirdan #init

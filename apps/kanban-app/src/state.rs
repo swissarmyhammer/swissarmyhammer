@@ -99,8 +99,8 @@ pub(crate) struct BoardHandle {
     ///
     /// The server is rooted at the board folder, so its `kanban` tool operates
     /// on this board's `.kanban` and its skills/prompts resolve from the
-    /// board's `.sah/` workspace. It binds a random loopback HTTP port; the AI
-    /// backend reaches it via [`BoardHandle::mcp_url`].
+    /// board's `.skills/` deploy store. It binds a random loopback HTTP port; the
+    /// AI backend reaches it via [`BoardHandle::mcp_url`].
     ///
     /// `Option` so the handle can be taken in `Drop` to drive an async
     /// `shutdown()`. It is always `Some` for a board returned by
@@ -314,9 +314,10 @@ impl BoardHandle {
     /// Tauri `AppHandle` is available so the bridge can emit events.
     pub async fn open(kanban_path: PathBuf) -> Result<Self, String> {
         // Ensure the board workspace's tools synchronously BEFORE starting the
-        // board MCP server below: the `skill` tool resolves from `.sah/skills/`,
-        // so the kanban tool's skills must be on disk before the server can
-        // serve them.
+        // board MCP server below. The server's `skill` tool serves the builtin
+        // skills embedded in the binary; this deploy materializes the same
+        // kanban skills on disk (store + agent symlinks) for any external
+        // coding agent that opens the board folder.
         ensure_workspace_tools(&kanban_path);
 
         let ctx = KanbanContext::open(&kanban_path)
@@ -1032,22 +1033,39 @@ pub fn resolve_kanban_path(path: &Path) -> Result<PathBuf, std::io::Error> {
     Ok(child)
 }
 
+/// The kanban board's install [`Profile`](mirdan::install::Profile): the
+/// `kanban`-tagged builtin skills (the workflow cluster: `kanban`, `plan`,
+/// `task`, `finish`, `implement`, `review`), deployed through the one shared
+/// store + symlink mechanism.
+///
+/// A board's workspace is exactly its tools — currently just the kanban tool —
+/// so the profile declares no MCP server, no agents, and none of the sah-only
+/// statusline/preamble flags: just the `kanban` skill subset. This is the same
+/// data-driven `Profile` sah uses, restricted to one profile's cluster instead
+/// of [`Selector::All`](mirdan::install::Selector::All).
+fn kanban_profile() -> mirdan::install::Profile {
+    mirdan::install::Profile {
+        skills: Some(mirdan::install::Selector::Profile("kanban".to_string())),
+        ..Default::default()
+    }
+}
+
 /// Ensure the board workspace's tools via in-process init, **synchronously,
 /// before the board's MCP server starts**.
 ///
-/// A board's workspace is a *set of tools*; ensuring it means running each
-/// tool's `Initializable` rooted at the board folder (the parent of the
-/// `.kanban` directory), at project scope. Today that set is exactly the kanban
-/// tool, whose init deploys its profile's builtin skills (the workflow cluster:
-/// `kanban`, `plan`, `task`, `finish`, `implement`, `review`) under
-/// `<board>/.sah/skills/` — the directory the board MCP server's `skill` tool
-/// reads. There is no separate generic "SAH workspace" step (no
-/// `ProjectStructure` / `.prompts/` / `workflows/`); the workspace is just its
+/// A board's workspace is a *set of tools*; ensuring it means installing the
+/// board's [`kanban_profile`] rooted at the board folder (the parent of the
+/// `.kanban` directory), at project scope. That deploys the kanban tool's
+/// builtin skills (the workflow cluster: `kanban`, `plan`, `task`, `finish`,
+/// `implement`, `review`) through mirdan's store + symlink mechanism — the one
+/// deploy mechanism shared with `sah init`. There is no separate generic "SAH
+/// workspace" step (no `.prompts/` / `workflows/`); the workspace is just its
 /// tools.
 ///
 /// This never shells out to `sah` and never mutates the process working
-/// directory — [`run_workspace_tools_init`] is rooted at the explicit board
-/// path, which is essential in a multi-board desktop process.
+/// directory — [`mirdan::install::init_profile`] is rooted at the explicit
+/// board path (`Some(board_dir)`), which is essential in a multi-board desktop
+/// process.
 ///
 /// Two correctness/perf properties matter here:
 ///
@@ -1056,20 +1074,19 @@ pub fn resolve_kanban_path(path: &Path) -> Result<PathBuf, std::io::Error> {
 ///    cost (~19s × number of restored boards on cold start). Deploying just the
 ///    6 idempotent profile skills is fast enough to run inline.
 /// 2. **Blocks before the server.** This runs to completion before
-///    [`start_board_mcp_server`] is called, so the `skill` tool — which resolves
-///    from `.sah/skills/` — can never serve a board whose skills are not yet on
-///    disk. There is intentionally NO `spawn_blocking` / fire-and-forget here:
-///    backgrounding the deploy reintroduced a deploy-vs-server race.
+///    [`start_board_mcp_server`] is called. The board MCP server's `skill` tool
+///    serves the builtin skills embedded in the binary, so it is never blocked
+///    on this deploy; the deploy materializes the same skills on disk for any
+///    external coding agent (Claude Code, …) that opens the board folder. There
+///    is intentionally NO `spawn_blocking` / fire-and-forget here.
 ///
-/// The operation is idempotent (skills already current on disk are not
+/// The operation is idempotent (skills already current in the store are not
 /// rewritten), so it is safe to call on every board open. Failures are logged
 /// and swallowed: a board must still open even if tool init hits a filesystem
 /// problem.
-///
-/// [`run_workspace_tools_init`]: swissarmyhammer_workspace_init::run_workspace_tools_init
 fn ensure_workspace_tools(kanban_path: &Path) {
-    // The board folder is the parent of the `.kanban` directory; `.sah/` is
-    // created as its sibling.
+    // The board folder is the parent of the `.kanban` directory; the `.skills/`
+    // deploy store is created as its sibling.
     let Some(board_dir) = kanban_path.parent() else {
         tracing::warn!(
             path = %kanban_path.display(),
@@ -1085,20 +1102,21 @@ fn ensure_workspace_tools(kanban_path: &Path) {
     deploy_workspace_tools(board_dir);
 }
 
-/// Synchronously run the board workspace's tool inits into `board_dir`.
+/// Synchronously install the board workspace's [`kanban_profile`] into
+/// `board_dir`.
 ///
-/// Runs [`swissarmyhammer_workspace_init::run_workspace_tools_init`] — each
-/// workspace tool's `Initializable` (currently just the kanban tool's skill
-/// deployment) — and logs any component failures. Separated from
-/// [`ensure_workspace_tools`] so the blocking work is a plain function the
-/// integration tests can call deterministically.
+/// Runs [`mirdan::install::init_profile`] rooted at the explicit `board_dir`
+/// (so it never reads the process working directory) and logs any failures.
+/// Separated from [`ensure_workspace_tools`] so the blocking work is a plain
+/// function the integration tests can call deterministically.
 fn deploy_workspace_tools(board_dir: &Path) {
     use swissarmyhammer_common::lifecycle::{InitScope, InitStatus};
     use swissarmyhammer_common::reporter::NullReporter;
 
-    let results = swissarmyhammer_workspace_init::run_workspace_tools_init(
-        board_dir,
-        &InitScope::Project,
+    let results = mirdan::install::init_profile(
+        &kanban_profile(),
+        InitScope::Project,
+        Some(board_dir),
         &NullReporter,
     );
     for r in results.iter().filter(|r| r.status == InitStatus::Error) {
@@ -1123,22 +1141,24 @@ fn deploy_workspace_tools(board_dir: &Path) {
 /// `connection_url` literally at port `0`, so `None` is the variant that
 /// actually yields a usable `http://127.0.0.1:<port>/mcp` URL.
 ///
-/// The server registers the **full** tool union — the agent-category tools
-/// (`skill`, `web`, the full-access `files`) alongside the shared domain tools
-/// (`kanban`, `git`, `code_context`, `shell`, …). The task requires the full
-/// toolset — explicitly "kanban, skills/prompts, code-context, files, etc." —
-/// and the board-folder rooting (whose purpose is so "skills/prompts resolve
-/// from that board's SAH directory") relies on the `skill` tool that consumes
-/// it.
+/// The server registers the full tool union, but the serve boundary composes
+/// each client's advertised surface from tool [`ToolCategory`] (see
+/// [`Host::serves`](swissarmyhammer_tools::mcp::host::Host::serves)): every host
+/// is advertised the shared domain tools (`kanban`, `git`, `code_context`, …),
+/// while agent-category tools (`skill`, `web`, the full-access `files`) are not
+/// advertised over HTTP — the connecting agent mounts those as its own
+/// in-memory built-ins. The board-folder rooting (so skills/prompts resolve
+/// from that board's deployed `.skills/` store) still applies: the agent's
+/// in-memory `skill` tool resolves against this server's working directory.
 ///
 /// The server's working directory is the board folder — the parent of the
 /// `.kanban` directory — so its `kanban` tool operates on this board's
-/// `.kanban` and its skills/prompts resolve from the board's `.sah/`
-/// workspace. The board's workspace tools are ensured by
+/// `.kanban`. The board's workspace tools are ensured by
 /// [`ensure_workspace_tools`], which `BoardHandle::open` calls synchronously
-/// and to completion *before* this function, so the `.sah/skills/` are
-/// guaranteed on disk by the time the server begins serving the `skill` tool —
-/// there is no deploy-vs-server race.
+/// and to completion *before* this function. The in-memory `skill` tool serves
+/// the builtin skills embedded in the binary, so it is always ready; the
+/// pre-flight deploy materializes those same kanban skills on disk for any
+/// external coding agent that opens the board folder.
 ///
 /// Returns `None` when the `.kanban` path has no parent or the server fails
 /// to bind; failures are logged and swallowed so a filesystem or port problem
@@ -1473,17 +1493,24 @@ mod tests {
     async fn test_open_board_deploys_kanban_tool_skills_at_board_folder() {
         // Drives the real production entry point — `AppState::open_board`
         // delegates to `BoardHandle::open`, which calls `ensure_workspace_tools`
-        // with the resolved `.kanban` path and roots the workspace tool init at
-        // `kanban_path.parent()` (the board folder). The kanban tool's skill
-        // deployment is synchronous and completes before `open_board` returns,
-        // so the assertions read the filesystem directly with no polling.
+        // with the resolved `.kanban` path and installs the board's
+        // `kanban_profile` via `mirdan::install::init_profile` rooted at
+        // `kanban_path.parent()` (the board folder). The deploy is synchronous
+        // and completes before `open_board` returns, so the assertions read the
+        // filesystem directly with no polling.
+        //
+        // mirdan's one deploy mechanism is store + symlink: the canonical copy
+        // of each skill lives in `<board>/.skills/<name>/` (the project-scope
+        // store), rooted explicitly at the board folder. This is the single
+        // mechanism shared with `sah init` — there is no `.sah/skills/` copy
+        // fork.
         //
         // This test fails if either piece of the production wiring regresses:
         //   - if `ensure_workspace_tools` is removed from `BoardHandle::open`,
-        //     nothing creates `.sah/skills/` and the assertions below fail;
+        //     nothing creates `<board>/.skills/` and the assertions below fail;
         //   - if the `.parent()` board-folder math is wrong (e.g. rooting at
-        //     `.kanban/` itself), `.sah/` lands inside `.kanban/` rather than
-        //     beside it, so `<board>/.sah/skills/plan/SKILL.md` is absent.
+        //     `.kanban/` itself), `.skills/` lands inside `.kanban/` rather than
+        //     beside it, so `<board>/.skills/plan/SKILL.md` is absent.
         let tmp = TempDir::new().unwrap();
         create_board_at(tmp.path(), "Workspace Board");
 
@@ -1492,17 +1519,18 @@ mod tests {
         assert!(result.is_ok(), "open_board failed: {:?}", result.err());
 
         let board_dir = tmp.path().canonicalize().unwrap();
-        let skills_dir = board_dir.join(".sah").join("skills");
+        // mirdan's project-scope skill store is `<root>/.skills/`.
+        let store_dir = board_dir.join(".skills");
         assert!(
-            board_dir.join(".sah").is_dir(),
-            ".sah/ must be created at the board folder by BoardHandle::open"
+            store_dir.is_dir(),
+            ".skills/ store must be created at the board folder by BoardHandle::open"
         );
 
         // Exactly the 6 `kanban`-profile skills must be deployed by the
         // production open_board path — no more, no fewer.
         for skill in ["kanban", "plan", "task", "finish", "implement", "review"] {
             assert!(
-                skills_dir.join(skill).join("SKILL.md").is_file(),
+                store_dir.join(skill).join("SKILL.md").is_file(),
                 "kanban-profile skill `{skill}` must be deployed via the open_board production path"
             );
         }
@@ -1512,24 +1540,24 @@ mod tests {
         // app — it deploys only the `kanban` profile subset, not all ~22 skills.
         for skill in ["explore", "code-context", "commit"] {
             assert!(
-                !skills_dir.join(skill).exists(),
+                !store_dir.join(skill).exists(),
                 "skill `{skill}` is not in the kanban profile and must not be deployed by the kanban app"
             );
         }
 
         // The board-open path ensures only the workspace's *tools*; there is no
-        // generic SAH workspace step, so the `ProjectStructure` `.prompts/`
-        // directory must never be created here.
+        // generic SAH workspace step, so the `.prompts/` directory must never be
+        // created here.
         assert!(
             !board_dir.join(".prompts").exists(),
             ".prompts/ must not be created — the board open path ensures tools only, not a generic SAH workspace"
         );
 
-        // `.sah/` must be a sibling of `.kanban/`, never nested inside it —
+        // The store must be a sibling of `.kanban/`, never nested inside it —
         // this is what proves the `kanban_path.parent()` math is correct.
         assert!(
-            !board_dir.join(".kanban").join(".sah").exists(),
-            ".sah/ must not be created inside .kanban/ — board-folder math is wrong"
+            !board_dir.join(".kanban").join(".skills").exists(),
+            ".skills/ must not be created inside .kanban/ — board-folder math is wrong"
         );
     }
 
@@ -1741,23 +1769,24 @@ mod tests {
             "MCP URL must be a loopback /mcp endpoint, got {mcp_url}"
         );
 
-        // `tools/list` must carry the FULL SAH toolset — not just `kanban`.
-        // Assert the specific tools the task requires so a regression in tool
-        // registration is actually caught. The expected names are the
-        // `McpTool::name()` strings the server registers:
-        //   - `kanban`, `git`, `code_context` — shared domain tools
-        //   - `skill`, `files`, `web` — agent-category tools, always part of the
-        //     registered tool union
+        // `tools/list` must carry the shared SAH domain toolset — not just
+        // `kanban`. The serve boundary composes a per-client surface from each
+        // tool's `ToolCategory` (see `Host::serves`): every host gets the
+        // `Shared` domain tools, while `Agent`-category tools (`skill`, `files`,
+        // `web`) are never advertised over HTTP — the agent mounts those as its
+        // own in-memory built-ins. This client connects as an unrecognized host,
+        // so it sees exactly the `Shared` set. Assert the durable domain tools so
+        // a regression in shared-tool registration is actually caught.
         let client = swissarmyhammer_tools::mcp::test_utils::create_test_client(&mcp_url).await;
         let tools = client
             .list_tools(Default::default())
             .await
             .expect("tools/list should succeed");
         let tool_names: Vec<String> = tools.tools.iter().map(|t| t.name.to_string()).collect();
-        for expected in ["kanban", "git", "code_context", "skill", "files", "web"] {
+        for expected in ["kanban", "git", "code_context"] {
             assert!(
                 tool_names.iter().any(|n| n == expected),
-                "tools/list must include the full SAH tool `{expected}`, got {tool_names:?}"
+                "tools/list must include the shared SAH tool `{expected}`, got {tool_names:?}"
             );
         }
 

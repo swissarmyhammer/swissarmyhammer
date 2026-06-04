@@ -11,6 +11,12 @@ description = "Mirdan - Universal package manager for AI coding agents (core lib
 name = "mirdan"
 path = "src/lib.rs"
 
+[features]
+# Exposes `mirdan::test_support` — public helpers for driving the profile
+# installer in a hermetic environment. Enabled as a dev-dependency feature by
+# the app CLIs whose registry tests drive the real `profile(scope)`.
+test-support = []
+
 [dependencies]
 # Shared doctor infrastructure
 swissarmyhammer-doctor = { workspace = true }
@@ -20,6 +26,17 @@ swissarmyhammer-common = { workspace = true }
 
 # XDG directory helpers
 swissarmyhammer-directory = { workspace = true }
+
+# Builtin skill resolution + content formatting, and Liquid template rendering
+swissarmyhammer-skills = { workspace = true }
+swissarmyhammer-templating = { workspace = true }
+
+# Builtin agent resolution + AGENT.md serialization, Liquid+partial rendering,
+# and the template context type — the profile installer resolves, renders, and
+# deploys builtin skills and agents through these.
+swissarmyhammer-agents = { workspace = true }
+swissarmyhammer-prompts = { workspace = true }
+swissarmyhammer-config = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
@@ -75,3 +92,7 @@ url = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 serial_test = { workspace = true }
+# Enable the crate's own `test-support` helpers for its in-crate tests so the
+# installer test modules reuse the single public scaffolding (config writer,
+# error/deploy asserters) instead of maintaining drifting private copies.
+mirdan = { path = ".", features = ["test-support"] }

@@ -1,188 +1,167 @@
-//! Shelltool init/deinit component registry.
+//! Shelltool init/deinit profile + component registry.
 //!
-//! Defines the `Initializable` components for `shelltool init` and `shelltool deinit`,
-//! and exposes `register_all` to populate an `InitRegistry` with them.
+//! `shelltool init` / `shelltool deinit` install two kinds of thing:
 //!
-//! The MCP-server registration lifecycle is owned by [`ShellExecuteTool`]
-//! itself (in `swissarmyhammer-tools`) via the `with_mcp_server` builder; the
-//! CLI only injects the `shelltool serve` entry. Per-scope agent-config
-//! merging lives in `mirdan::mcp_config`, so neither the CLI nor the tool
-//! reimplements scope logic.
+//! 1. **Profile artifacts** — the `shelltool` MCP server registration and the
+//!    builtin `shell` skill. These are declared once as a [`mirdan::install::Profile`]
+//!    and applied by [`mirdan::install::init_profile`] / `deinit_profile`, the
+//!    single data-driven installer shared across the tool CLIs and sah.
+//! 2. **Genuine tool lifecycle** — the `Bash` tool denial and the
+//!    `.shell/config.yaml` template. These are not install-of-an-agent concerns,
+//!    so they stay on [`ShellExecuteTool`]'s own `Initializable` impl, run via the
+//!    [`InitRegistry`]. The tool is constructed *without* an injected MCP server,
+//!    because MCP registration now flows through the profile's `mcp_server`.
 
-use std::collections::BTreeMap;
-
-use mirdan::mcp_config::McpServerEntry;
-use swissarmyhammer_common::lifecycle::InitRegistry;
+use swissarmyhammer_common::lifecycle::{InitRegistry, InitScope};
 use swissarmyhammer_tools::mcp::tools::shell::ShellExecuteTool;
 
-/// The MCP server name the tool registers under each agent's config.
+/// The MCP server name registered under each agent's config.
 const SERVER_NAME: &str = "shelltool";
 
-/// Build the `shelltool serve` MCP server entry the CLI injects into the tool.
-fn shelltool_mcp_entry() -> McpServerEntry {
-    McpServerEntry {
-        command: SERVER_NAME.to_string(),
-        args: vec!["serve".to_string()],
-        env: BTreeMap::new(),
+/// The builtin skill shelltool deploys.
+const SKILL_NAME: &str = "shell";
+
+/// The declarative manifest of what `shelltool init`/`deinit` install through
+/// mirdan's profile installer: the `shelltool serve` MCP server and the single
+/// builtin `shell` skill. No agents.
+///
+/// Skills deploy at every scope, including `User` — a global install lands the
+/// `shell` skill in the global store (`~/.skills` + the agent's global skill
+/// dir), so `init user` is a full configuration. This matches sah's
+/// `Selector::All`, which already deploys at every scope. The `scope` parameter
+/// is retained for signature parity with the other consumers (and forwarded to
+/// the installer by the caller), but no longer gates skill selection.
+pub fn profile(_scope: InitScope) -> mirdan::install::Profile {
+    mirdan::install::Profile {
+        mcp_server: Some(mirdan::install::ProfileMcpServer::serve(SERVER_NAME)),
+        skills: Some(mirdan::install::Selector::Single(SKILL_NAME.to_string())),
+        agents: None,
+        statusline: false,
+        preamble: false,
     }
 }
 
-/// Register all shelltool init/deinit components into the given registry.
+/// Register the genuine tool-lifecycle components into `registry`.
 ///
-/// Components are registered; `InitRegistry` sorts them by priority at
-/// execution time. Actual execution order:
-/// - priority  0: `ShellExecuteTool` (MCP registration, Bash deny, config —
-///   owns its full lifecycle via the injected `shelltool serve` entry)
-/// - priority 30: `ShelltoolSkillDeployment` (shell skill to agent `.skills/` dirs)
+/// Only [`ShellExecuteTool`] is registered — for its `Bash` denial and
+/// `.shell/config.yaml` lifecycle. It is built *without* `with_mcp_server`: the
+/// `shelltool` MCP registration is owned by the profile (see [`profile`]), not
+/// the tool.
 pub fn register_all(registry: &mut InitRegistry) {
-    registry.register(ShellExecuteTool::new().with_mcp_server(SERVER_NAME, shelltool_mcp_entry()));
-    registry.register(super::skill::ShelltoolSkillDeployment);
+    registry.register(ShellExecuteTool::new());
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
-    use std::env;
-    use std::path::PathBuf;
-    use swissarmyhammer_common::lifecycle::{InitScope, Initializable};
+    use mirdan::install::init_profile;
+    use mirdan::test_support::{
+        assert_no_init_error, write_single_agent_config, MirdanConfigGuard, ProjectScopeDeploy,
+        UserScopeDeploy,
+    };
     use swissarmyhammer_common::reporter::NullReporter;
-    use tempfile::TempDir;
+    use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
 
-    /// RAII guard that restores `env::current_dir` on drop.
-    struct CwdGuard {
-        original: PathBuf,
+    #[test]
+    fn test_profile_declares_mcp_and_shell_skill_in_project_scope() {
+        let profile = profile(InitScope::Project);
+        let server = profile.mcp_server.expect("profile declares an MCP server");
+        assert_eq!(server.name, "shelltool");
+        assert_eq!(server.command, "shelltool");
+        assert_eq!(server.args, vec!["serve".to_string()]);
+        assert_eq!(
+            profile.skills,
+            Some(mirdan::install::Selector::Single("shell".to_string()))
+        );
+        assert!(profile.agents.is_none());
+        assert!(!profile.statusline);
+        assert!(!profile.preamble);
     }
 
-    impl CwdGuard {
-        /// Capture the current working directory so it can be restored later.
-        fn capture() -> Self {
-            Self {
-                original: env::current_dir().expect("current_dir must be readable"),
-            }
-        }
+    #[test]
+    fn test_user_scope_selects_skills() {
+        // Regression: `init user` must deploy skills too (into the global store),
+        // not just register the MCP server. The User-scope gate that returned
+        // `None` here was the bug.
+        let profile = profile(InitScope::User);
+        assert!(profile.mcp_server.is_some());
+        assert_eq!(
+            profile.skills,
+            Some(mirdan::install::Selector::Single("shell".to_string())),
+            "user scope must select the shell skill"
+        );
     }
 
-    impl Drop for CwdGuard {
-        fn drop(&mut self) {
-            // Best-effort restore; ignore errors during unwind.
-            let _ = env::set_current_dir(&self.original);
-        }
+    #[test]
+    fn test_local_scope_deploys_skills() {
+        assert!(profile(InitScope::Local).skills.is_some());
     }
 
-    /// RAII guard that restores the `MIRDAN_AGENTS_CONFIG` env var on drop.
-    struct MirdanConfigGuard {
-        original: Option<String>,
-    }
-
-    impl MirdanConfigGuard {
-        /// Capture the current `MIRDAN_AGENTS_CONFIG` value so it can be restored later.
-        fn capture() -> Self {
-            Self {
-                original: env::var("MIRDAN_AGENTS_CONFIG").ok(),
-            }
-        }
-    }
-
-    impl Drop for MirdanConfigGuard {
-        fn drop(&mut self) {
-            match &self.original {
-                Some(value) => env::set_var("MIRDAN_AGENTS_CONFIG", value),
-                None => env::remove_var("MIRDAN_AGENTS_CONFIG"),
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn test_register_all_populates_registry() {
-        // Two components now: the tool (owning MCP + Bash deny + config) and
-        // skill deployment. The former `shelltool-mcp-registration` component
-        // was folded into the tool's own lifecycle.
+    #[test]
+    fn test_register_all_registers_only_tool_lifecycle() {
+        // Just the tool (Bash deny + `.shell/config.yaml`). MCP registration and
+        // skill deployment moved to the profile installer.
         let mut registry = InitRegistry::new();
         register_all(&mut registry);
-        assert_eq!(registry.len(), 2);
+        assert_eq!(registry.len(), 1);
     }
 
-    /// Drives the tool's project-scope `init`/`deinit` (as `register_all`
-    /// wires it) and verifies a `.mcp.json` shelltool entry is created and
-    /// then removed.
+    /// Regression for Bug 1 — `init user` deploys the `shell` skill (store +
+    /// symlink) and registers the MCP server in the agent's global config.
     ///
-    /// Uses `MIRDAN_AGENTS_CONFIG` to inject a single detected agent pointing
-    /// at a relative `.mcp.json` path. With the cwd chdired into the tempdir,
-    /// `init` creates `.mcp.json`, and `deinit` removes the `shelltool` entry.
-    ///
-    /// This test mutates BOTH process-global CWD (`env::set_current_dir`) and
-    /// the `MIRDAN_AGENTS_CONFIG` env var, so it joins BOTH the crate-wide
-    /// `cwd` group (shared by every CWD-touching test in `skill.rs`,
-    /// `logging.rs`, `main.rs`, `doctor.rs`) and the `env` group.
-    #[tokio::test]
-    #[serial(cwd, env)]
-    async fn test_tool_init_and_deinit_register_success_path() {
-        let _cwd = CwdGuard::capture();
-        let _mirdan_env = MirdanConfigGuard::capture();
+    /// Drives the REAL `profile(InitScope::User)` through `mirdan::install::
+    /// init_profile`, so a missing skill in the production profile fails here
+    /// (no reconstruction to mirror the bug).
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn user_scope_deploys_shell_skill_and_registers_mcp() {
+        let env = IsolatedTestEnvironment::new().unwrap();
+        let work = env.temp_dir().canonicalize().unwrap();
+        let _cwd = CurrentDirGuard::new(&work).unwrap();
+        let config_path = write_single_agent_config(&work, &env.home_path());
+        let _mirdan = MirdanConfigGuard::set(&config_path);
 
-        let tmp = TempDir::new().expect("create tempdir");
-        let tmp_path = tmp
-            .path()
-            .canonicalize()
-            .expect("canonicalize tempdir path");
-
-        // Synthetic agents config: one agent, always-detected via the tempdir
-        // itself, with a relative project-level MCP config path.
-        let agents_yaml = format!(
-            r#"agents:
-  - id: fake-agent
-    name: Fake Agent
-    project_path: .fake/skills
-    global_path: "~/.fake/skills"
-    detect:
-      - dir: "{}"
-    mcp_config:
-      project_path: .mcp.json
-      servers_key: mcpServers
-"#,
-            tmp_path.display()
+        let results = init_profile(
+            &profile(InitScope::User),
+            InitScope::User,
+            None,
+            &NullReporter,
         );
-        let config_path = tmp_path.join("agents.yaml");
-        std::fs::write(&config_path, agents_yaml).expect("write agents.yaml");
+        assert_no_init_error("shelltool user init", &results);
 
-        env::set_var("MIRDAN_AGENTS_CONFIG", &config_path);
-        env::set_current_dir(&tmp_path).expect("set_current_dir to tempdir");
+        UserScopeDeploy {
+            home: &env.home_path(),
+            server: "shelltool",
+            skills: &["shell"],
+        }
+        .assert();
+    }
 
-        // Build the tool exactly as `register_all` does and drive its lifecycle.
-        let tool = ShellExecuteTool::new().with_mcp_server(SERVER_NAME, shelltool_mcp_entry());
-        let reporter = NullReporter;
-        let _ = tool.init(&InitScope::Project, &reporter);
+    /// Project-scope deploy rooted at an explicit `<root>` — skills land in
+    /// `<root>/.skills/` + the agent's project skill dir, MCP in the project
+    /// config. No CWD access.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn project_scope_deploys_shell_skill_rooted() {
+        let env = IsolatedTestEnvironment::new().unwrap();
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path().canonicalize().unwrap();
+        let config_path = write_single_agent_config(&root, &env.home_path());
+        let _mirdan = MirdanConfigGuard::set(&config_path);
 
-        let mcp_json_path = tmp_path.join(".mcp.json");
-        assert!(
-            mcp_json_path.exists(),
-            ".mcp.json should have been created by init"
+        let results = init_profile(
+            &profile(InitScope::Project),
+            InitScope::Project,
+            Some(&root),
+            &NullReporter,
         );
-        let contents = std::fs::read_to_string(&mcp_json_path).expect("read .mcp.json");
-        let parsed: serde_json::Value = serde_json::from_str(&contents).expect("parse .mcp.json");
-        assert!(
-            parsed
-                .get("mcpServers")
-                .and_then(|s| s.get("shelltool"))
-                .is_some(),
-            "shelltool entry missing from .mcp.json: {}",
-            contents
-        );
+        assert_no_init_error("shelltool project init", &results);
 
-        let _ = tool.deinit(&InitScope::Project, &reporter);
-
-        let contents_after =
-            std::fs::read_to_string(&mcp_json_path).expect("read .mcp.json after deinit");
-        let parsed_after: serde_json::Value =
-            serde_json::from_str(&contents_after).expect("parse .mcp.json after deinit");
-        assert!(
-            parsed_after
-                .get("mcpServers")
-                .and_then(|s| s.get("shelltool"))
-                .is_none(),
-            "shelltool entry should have been removed: {}",
-            contents_after
-        );
+        ProjectScopeDeploy {
+            root: &root,
+            server: "shelltool",
+            skills: &["shell"],
+        }
+        .assert();
     }
 }

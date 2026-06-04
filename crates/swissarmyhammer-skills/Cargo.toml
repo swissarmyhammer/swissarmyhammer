@@ -24,7 +24,6 @@ walkdir = { workspace = true }
 # Local workspace dependencies
 swissarmyhammer-common = { workspace = true }
 swissarmyhammer-operations = { workspace = true }
-mirdan = { workspace = true }
 
 [build-dependencies]
 swissarmyhammer-build = { workspace = true }
