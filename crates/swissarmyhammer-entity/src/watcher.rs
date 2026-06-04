@@ -887,9 +887,13 @@ mod tests {
         let mut rx = cache.subscribe();
         let _watcher = EntityWatcher::start(root, Arc::clone(&cache)).unwrap();
 
-        // Give the watcher a moment to register before we touch the filesystem.
-        tokio::time::sleep(Duration::from_millis(200)).await;
-
+        // The `notify` watcher does not expose a "ready" signal, so we cannot
+        // know exactly when the OS watch becomes active. Under heavy parallel
+        // load (e.g. the full workspace test run) a single write at a fixed
+        // warm-up offset can land before the watch is live and be missed
+        // entirely. Instead, re-write the trigger file on every poll iteration:
+        // once the watch is active, a fresh `Create`/`Modify` event for an
+        // existing file reliably yields `AttachmentChanged { removed: false }`.
         let path = att_dir.join("new.png");
         tokio::fs::write(&path, b"new").await.unwrap();
 
@@ -911,7 +915,11 @@ mod tests {
                     break;
                 }
                 Ok(Ok(_)) => continue, // ignore other events
-                Ok(Err(_)) | Err(_) => continue,
+                // No event yet (timeout or transient error): re-touch the file
+                // so a fresh event is queued once the watch becomes active.
+                Ok(Err(_)) | Err(_) => {
+                    let _ = tokio::fs::write(&path, b"new").await;
+                }
             }
         }
 
@@ -936,8 +944,11 @@ mod tests {
         let mut rx = cache.subscribe();
         let _watcher = EntityWatcher::start(root, Arc::clone(&cache)).unwrap();
 
-        tokio::time::sleep(Duration::from_millis(200)).await;
-
+        // The `notify` watcher exposes no "ready" signal; under heavy parallel
+        // load a single remove at a fixed warm-up offset can fire before the
+        // watch is live and be missed. On every poll iteration that produced no
+        // matching event, re-create then re-remove the file so a fresh remove
+        // event is queued once the watch becomes active.
         tokio::fs::remove_file(&path).await.unwrap();
 
         // The match guard filters on `removed` because the FSEvents backend on
@@ -957,7 +968,12 @@ mod tests {
                     break;
                 }
                 Ok(Ok(_)) => continue,
-                Ok(Err(_)) | Err(_) => continue,
+                // No matching event yet: re-create and re-remove so a fresh
+                // remove event is queued once the watch is active.
+                Ok(Err(_)) | Err(_) => {
+                    let _ = tokio::fs::write(&path, b"bye").await;
+                    let _ = tokio::fs::remove_file(&path).await;
+                }
             }
         }
 

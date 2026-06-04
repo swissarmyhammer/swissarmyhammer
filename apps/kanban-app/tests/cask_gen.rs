@@ -7,8 +7,8 @@
 //!
 //! * `kanban` — passes `--cli-binary Contents/MacOS/kanban`, so the rendered
 //!   cask must additionally carry a `binary` stanza (symlinking the bundled
-//!   CLI onto PATH) and a `conflicts_with formula: "kanban"` stanza (so the
-//!   standalone cargo-dist `kanban` formula and the cask never both own
+//!   CLI onto PATH) and a `conflicts_with formula: "kanban-cli"` stanza (so the
+//!   standalone cargo-dist `kanban-cli` formula and the cask never both own
 //!   `kanban` on PATH).
 //! * `mirdan` — no `--cli-binary`, so neither stanza may appear.
 //!
@@ -144,9 +144,12 @@ fn kanban_cask_has_binary_stanza() {
     );
 }
 
-/// The `kanban` invocation must render a `conflicts_with formula: "kanban"`
-/// stanza so the cask and the standalone cargo-dist formula never both own
-/// the `kanban` symlink on PATH.
+/// The `kanban` invocation must render a `conflicts_with formula: "kanban-cli"`
+/// stanza so the cask and the standalone cargo-dist formula never both own the
+/// `kanban` symlink on PATH. The formula is named `kanban-cli` (workspace
+/// convention: CLIs are `*-cli`, the short token is the app cask), so the
+/// conflict must name that formula -- not the cask token "kanban", which is a
+/// formula that does not exist.
 #[test]
 fn kanban_cask_has_conflicts_with_formula() {
     let mut args = kanban_args();
@@ -154,8 +157,8 @@ fn kanban_cask_has_conflicts_with_formula() {
     let cask = render_cask(&args);
 
     assert!(
-        cask.contains(r#"conflicts_with formula: "kanban""#),
-        "kanban cask must declare a conflict with the standalone kanban formula; got:\n{cask}",
+        cask.contains(r#"conflicts_with formula: "kanban-cli""#),
+        "kanban cask must declare a conflict with the standalone kanban-cli formula; got:\n{cask}",
     );
 }
 

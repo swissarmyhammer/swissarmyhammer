@@ -123,6 +123,11 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       BUILD_MANIFEST_NAME: target/distrib/${{ join(matrix.targets, '-') }}-dist-manifest.json
+      # Cap concurrent codegen units so peak compile memory stays under the
+      # runner's RAM. The aarch64-unknown-linux-gnu leg cross-compiles the
+      # heavy llama.cpp/ggml C++ stack and was OOM-killed at full parallelism
+      # (manually edited here; dist-workspace.toml sets allow-dirty = ["ci"]).
+      CARGO_BUILD_JOBS: "3"
     steps:
       - name: enable windows longpaths
         run: |

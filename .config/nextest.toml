@@ -19,6 +19,22 @@ max-threads = 4
 [test-groups.llama-embedding-serial]
 max-threads = 1
 
+# The swissarmyhammer-entity watcher tests that start a real `EntityWatcher`
+# hold a live macOS FSEvents stream. FSEvents event *delivery* and stream
+# *teardown* both serialize through the single OS FSEvents subsystem, which is
+# shared across every process in the run. Under full --workspace parallelism
+# (~16 cores busy compiling + running 14.9k tests) that subsystem is starved:
+# the create/remove tests miss their 10s event deadline and the drop test's
+# teardown crosses its promptness budget — intermittently, a different one each
+# run, while all pass in isolation. Capping concurrency for just these tests
+# keeps the real watcher under test without contending for FSEvents.
+#
+# This MUST be a nextest test-group, not `#[serial]`: the contention is at the
+# OS subsystem level across the whole run (all processes), whereas `#[serial]`
+# only coordinates within a single process.
+[test-groups.fsevents-watcher]
+max-threads = 1
+
 # Apply the group to acp-conformance package tests
 [[profile.default.overrides]]
 filter = "package(acp-conformance)"
@@ -102,6 +118,13 @@ filter = "package(llama-agent)"
 test-group = "llama-embedding-serial"
 slow-timeout = { period = "30s", terminate-after = 10 }
 
+# Serialise the swissarmyhammer-entity tests that start a live FSEvents watcher
+# (see the `fsevents-watcher` group above for the why). Only these four tests
+# open a real `EntityWatcher`; the rest of the watcher module exercises the
+# `parse_*`/`handle_*` helpers directly with no OS watcher and stays parallel.
+[[profile.default.overrides]]
+filter = "package(swissarmyhammer-entity) and (test(test_attachment_create_emits_event) or test(test_attachment_remove_emits_event) or test(entity_watcher_drop_returns_promptly) or test(entity_watcher_drop_sends_shutdown))"
+test-group = "fsevents-watcher"
 
 # Profile for running embedding integration tests (requires HF models on disk).
 # Usage: cargo nextest run --profile embedding-models

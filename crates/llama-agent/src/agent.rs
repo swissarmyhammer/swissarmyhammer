@@ -97,18 +97,78 @@ pub(crate) fn model_identifier_for_strategy(model: &crate::types::ModelConfig) -
     }
 }
 
+/// The MCP backends attached to one ACP session, with a precomputed
+/// tool-name -> client index for routing.
+///
+/// A session may have several MCP clients (the intrinsic agent-tools mount
+/// plus any per-session external servers from `session/new`'s `mcpServers`),
+/// each hosting a different tool set. The tool sets are discovered once at
+/// attach time, so the index is built then and reused for every dispatch —
+/// routing never re-issues a `tools/list` round-trip on the hot path.
+pub(crate) struct SessionMcpClients {
+    /// All clients attached to the session, in attachment order. The first is
+    /// the routing fallback when no client advertises a requested tool.
+    clients: Vec<Arc<dyn MCPClient>>,
+    /// Maps each advertised tool name to the index of its serving client in
+    /// `clients`. On a name collision the first-attached client wins, matching
+    /// the discovery order in `session/new`.
+    tool_index: std::collections::HashMap<String, usize>,
+}
+
+impl SessionMcpClients {
+    /// Build the routing index from tool names already discovered for each
+    /// client, with no further `tools/list` round-trip.
+    ///
+    /// The `session/new` path discovers each client's tools once (to populate
+    /// `session.available_tools`); passing that same discovery here makes the
+    /// routing index and the model-visible tool set share a single source of
+    /// truth — every tool advertised to the model is routable to the client
+    /// that advertised it — and removes the redundant second discovery and its
+    /// race window.
+    ///
+    /// On a tool-name collision across clients the first-listed client wins,
+    /// matching the discovery order in `session/new`.
+    pub(crate) fn from_discovered(discovered: Vec<(Arc<dyn MCPClient>, Vec<String>)>) -> Self {
+        let mut clients = Vec::with_capacity(discovered.len());
+        let mut tool_index = std::collections::HashMap::new();
+        for (idx, (client, tools)) in discovered.into_iter().enumerate() {
+            for tool in tools {
+                tool_index.entry(tool).or_insert(idx);
+            }
+            clients.push(client);
+        }
+        Self {
+            clients,
+            tool_index,
+        }
+    }
+
+    /// The clients attached to the session, in attachment order.
+    pub(crate) fn clients(&self) -> &[Arc<dyn MCPClient>] {
+        &self.clients
+    }
+
+    /// Resolve the client that advertises `tool_name`, falling back to the
+    /// first attached client when none does. Returns `None` only when the
+    /// session has no clients at all.
+    pub(crate) fn resolve(&self, tool_name: &str) -> Option<&Arc<dyn MCPClient>> {
+        self.tool_index
+            .get(tool_name)
+            .and_then(|&idx| self.clients.get(idx))
+            .or_else(|| self.clients.first())
+    }
+}
+
 pub struct AgentServer {
     model_manager: Arc<ModelManager>,
     request_queue: Arc<RequestQueue>,
     session_manager: Arc<SessionManager>,
     mcp_client: Arc<dyn MCPClient>,
     /// Per-session MCP clients for ACP sessions
-    /// Maps SessionId to a vector of MCP clients created from session/new mcpServers parameter
-    #[allow(clippy::type_complexity)]
+    /// Maps SessionId to the MCP backends created from the session/new
+    /// mcpServers parameter, with a precomputed tool-routing index.
     pub(crate) session_mcp_clients: Arc<
-        tokio::sync::RwLock<
-            std::collections::HashMap<crate::types::SessionId, Vec<Arc<dyn MCPClient>>>,
-        >,
+        tokio::sync::RwLock<std::collections::HashMap<crate::types::SessionId, SessionMcpClients>>,
     >,
     chat_template: Arc<ChatTemplateEngine>,
     dependency_analyzer: Arc<DependencyAnalyzer>,
@@ -2084,44 +2144,37 @@ impl AgentServer {
         Ok(agent_client_protocol_extras::normalize_title(&raw))
     }
 
-    /// Resolve which of a session's MCP clients serves `tool_name`.
+    /// Resolve which MCP backend should handle `tool_name` for `session`.
     ///
-    /// A session may attach several MCP clients (the in-process Agent-tools
-    /// mount plus one external client per `mcpServers` entry), and any given
-    /// tool is served by exactly one of them. This queries each session client's
-    /// advertised tool list and returns the first whose list contains
-    /// `tool_name`, so the call is dispatched to the server that owns it.
+    /// A session may have several MCP clients attached — the intrinsic
+    /// agent-tools mount plus any per-session external servers from
+    /// `session/new`'s `mcpServers`. Each hosts a different tool set, so the
+    /// dispatcher must route a call to the backend that actually advertises the
+    /// tool; otherwise the call lands on a server that returns -32602
+    /// "tool not found".
     ///
-    /// Returns `None` when the session has no MCP clients (the caller then falls
-    /// back to the agent-level client). When the session has clients but none
-    /// advertises the tool — e.g. a client whose `list_tools` errored — this
-    /// falls back to the first client so behavior degrades to the previous
-    /// best-effort routing rather than dropping the call.
-    async fn resolve_session_tool_client(
+    /// Resolution order:
+    /// 1. The session client whose precomputed index advertises `tool_name`.
+    /// 2. The first session client, if none advertises it (graceful degradation
+    ///    when discovery raced or a tool set is stale — preserves prior behavior).
+    /// 3. The agent-level client, if the session has no clients at all.
+    ///
+    /// The tool index is built once when clients are attached (see
+    /// [`SessionMcpClients::from_discovered`]), so this resolves from in-memory
+    /// state and never issues a `tools/list` round-trip on the dispatch hot path.
+    async fn resolve_mcp_client_for_tool(
         &self,
-        session_id: &crate::types::SessionId,
+        session: &Session,
         tool_name: &str,
-    ) -> Option<Arc<dyn MCPClient>> {
+    ) -> Arc<dyn MCPClient> {
         let session_clients = self.session_mcp_clients.read().await;
-        let clients = session_clients.get(session_id)?;
-
-        for client in clients {
-            match client.list_tools().await {
-                Ok(tools) => {
-                    if tools.iter().any(|t| t == tool_name) {
-                        return Some(Arc::clone(client));
-                    }
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to list tools while routing '{}' to a session MCP client: {}",
-                        tool_name, e
-                    );
-                }
-            }
+        if let Some(resolved) = session_clients
+            .get(&session.id)
+            .and_then(|clients| clients.resolve(tool_name))
+        {
+            return Arc::clone(resolved);
         }
-
-        clients.first().cloned()
+        Arc::clone(&self.mcp_client)
     }
 
     /// Execute a tool call with retry logic for transient failures
@@ -2189,17 +2242,13 @@ impl AgentServer {
         let tool_args = tool_call.arguments.clone();
         let call_id = tool_call.id;
 
-        // Resolve the MCP client that actually serves `tool_name` for this
-        // session, falling back to the agent-level client when the session has
-        // none. A session can attach several MCP clients (e.g. the in-process
-        // Agent-tools mount plus one external server per `mcpServers` entry), and
-        // a tool lives on exactly one of them — so routing must select the client
-        // advertising the tool rather than blindly using the first, which would
-        // dispatch the call to the wrong server and fail with "tool not found".
-        let mcp_client = self
-            .resolve_session_tool_client(&session.id, &tool_name)
-            .await
-            .unwrap_or_else(|| Arc::clone(&self.mcp_client));
+        // Resolve the MCP backend that actually serves this tool. A session can
+        // have several MCP clients (the intrinsic agent-tools mount plus any
+        // per-session external servers), so dispatching blindly to the first one
+        // sends the call to a backend that does not host the tool and gets back
+        // a -32602 "tool not found" — which previously sent the agentic loop into
+        // a runaway re-prompt hang.
+        let mcp_client = self.resolve_mcp_client_for_tool(session, &tool_name).await;
 
         // Execute with retry logic
         let result = retry_manager
@@ -2565,10 +2614,16 @@ mod tests {
         /// An `MCPClient` whose `call_tool` outcome is scripted by a closure of
         /// `(zero-based call index, tool name)`, recording every call so a test
         /// can assert how many attempts happened.
+        ///
+        /// The set of tool names this client advertises through `list_tools` is
+        /// configurable so routing tests can model a session with multiple MCP
+        /// backends, each exposing a different tool set.
         struct ScriptedMcpClient {
             calls: Mutex<Vec<String>>,
             index: AtomicUsize,
             behavior: CallBehavior,
+            advertised_tools: Vec<String>,
+            list_tools_calls: AtomicUsize,
         }
 
         impl ScriptedMcpClient {
@@ -2577,17 +2632,37 @@ mod tests {
                     calls: Mutex::new(Vec::new()),
                     index: AtomicUsize::new(0),
                     behavior,
+                    advertised_tools: Vec::new(),
+                    list_tools_calls: AtomicUsize::new(0),
+                })
+            }
+            /// Like [`new`], but the client advertises `tools` from `list_tools`
+            /// so tool-call routing can resolve it as the backend for them.
+            fn advertising(tools: &[&str], behavior: CallBehavior) -> Arc<Self> {
+                Arc::new(Self {
+                    calls: Mutex::new(Vec::new()),
+                    index: AtomicUsize::new(0),
+                    behavior,
+                    advertised_tools: tools.iter().map(|t| t.to_string()).collect(),
+                    list_tools_calls: AtomicUsize::new(0),
                 })
             }
             fn calls(&self) -> Vec<String> {
                 self.calls.lock().unwrap().clone()
+            }
+            /// How many times `list_tools` has been invoked on this client.
+            /// Lets routing tests assert the per-session tool index is built
+            /// once at attach time rather than re-queried on every dispatch.
+            fn list_tools_call_count(&self) -> usize {
+                self.list_tools_calls.load(Ordering::SeqCst)
             }
         }
 
         #[async_trait]
         impl MCPClient for ScriptedMcpClient {
             async fn list_tools(&self) -> Result<Vec<String>, MCPError> {
-                Ok(vec![])
+                self.list_tools_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(self.advertised_tools.clone())
             }
             async fn call_tool(
                 &self,
@@ -2785,6 +2860,310 @@ mod tests {
                 mock.calls().len(),
                 1,
                 "a non-retriable error must NOT be retried"
+            );
+        }
+
+        /// Attach `clients` as the per-session MCP backends for `session`,
+        /// discovering each client's tools exactly once (mirroring the
+        /// `session/new` path) before building the routing index via
+        /// [`SessionMcpClients::from_discovered`].
+        async fn attach_session_clients(
+            agent: &AgentServer,
+            session: &Session,
+            clients: Vec<Arc<dyn MCPClient>>,
+        ) {
+            let mut discovered = Vec::with_capacity(clients.len());
+            for client in clients {
+                let tools = client.list_tools().await.unwrap_or_default();
+                discovered.push((client, tools));
+            }
+            agent
+                .session_mcp_clients
+                .write()
+                .await
+                .insert(session.id, SessionMcpClients::from_discovered(discovered));
+        }
+
+        #[tokio::test]
+        async fn tool_call_routes_to_the_session_client_that_advertises_the_tool() {
+            // Two per-session MCP backends. The FIRST advertises only `echo` and
+            // would return "tool not found" for `read_file`; the SECOND is the
+            // backend that actually serves `read_file`. The dispatcher must route
+            // `read_file` to the second — not blindly to `clients.first()`. This
+            // is the regression behind the -32602 "tool not found" hang.
+            let wrong = ScriptedMcpClient::advertising(
+                &["echo"],
+                Box::new(|_idx, name| {
+                    Err(MCPError::ToolCallFailed(format!(
+                        "call_tool '{name}' failed: tool not found"
+                    )))
+                }),
+            );
+            let right = ScriptedMcpClient::advertising(
+                &["read_file"],
+                Box::new(|_idx, _name| Ok("file contents".to_string())),
+            );
+
+            // The agent-level client must never be reached when a session client
+            // serves the tool, so point it at a failing client too.
+            let agent_level = ScriptedMcpClient::new(Box::new(|_idx, name| {
+                Err(MCPError::ToolCallFailed(format!(
+                    "agent-level client wrongly invoked for '{name}'"
+                )))
+            }));
+            let agent = headless_agent(agent_level.clone());
+            let session = session_with_tools(&["echo", "read_file"]);
+            attach_session_clients(&agent, &session, vec![wrong.clone(), right.clone()]).await;
+
+            let result = agent
+                .execute_tool_with_retry(&tool_call("read_file"), &session)
+                .await;
+
+            assert!(
+                result.error.is_none(),
+                "read_file must be routed to the backend that serves it: {result:?}"
+            );
+            assert_eq!(
+                result.result,
+                serde_json::Value::String("file contents".into())
+            );
+            assert!(
+                right.calls().contains(&"read_file".to_string()),
+                "the read_file-serving backend must have been invoked"
+            );
+            assert!(
+                wrong.calls().is_empty(),
+                "the wrong backend (no read_file) must NOT be invoked; got {:?}",
+                wrong.calls()
+            );
+            assert!(
+                agent_level.calls().is_empty(),
+                "the agent-level client must not be reached when a session client serves the tool"
+            );
+        }
+
+        #[tokio::test]
+        async fn tool_call_falls_back_to_first_session_client_when_none_advertises_the_tool() {
+            // No session client advertises `read_file` (e.g. discovery raced or
+            // the tool set is stale). Routing degrades gracefully to the first
+            // session client rather than failing to dispatch at all.
+            let first = ScriptedMcpClient::advertising(
+                &["echo"],
+                Box::new(|_idx, _name| Ok("served by first".to_string())),
+            );
+            let second = ScriptedMcpClient::advertising(
+                &["other"],
+                Box::new(|_idx, _name| Ok("served by second".to_string())),
+            );
+            let agent = headless_agent(ScriptedMcpClient::new(Box::new(|_idx, name| {
+                Err(MCPError::ToolCallFailed(format!("unexpected '{name}'")))
+            })));
+            let session = session_with_tools(&["read_file"]);
+            attach_session_clients(&agent, &session, vec![first.clone(), second.clone()]).await;
+
+            let result = agent
+                .execute_tool_with_retry(&tool_call("read_file"), &session)
+                .await;
+
+            assert!(
+                result.error.is_none(),
+                "fallback dispatch must succeed: {result:?}"
+            );
+            assert_eq!(
+                result.result,
+                serde_json::Value::String("served by first".into())
+            );
+            assert!(
+                second.calls().is_empty(),
+                "fallback must use the first session client, not later ones"
+            );
+        }
+
+        #[tokio::test]
+        async fn tool_routing_does_not_re_query_list_tools_on_every_dispatch() {
+            // The per-session tool->client index is built once when clients are
+            // attached, so dispatching the same tool repeatedly must NOT issue a
+            // fresh `tools/list` round-trip per call. Each round-trip is real
+            // network I/O with a timeout, so re-querying on the hot path adds
+            // latency and failure surface.
+            let echo = ScriptedMcpClient::advertising(
+                &["echo"],
+                Box::new(|_idx, _name| Ok("echoed".to_string())),
+            );
+            let reader = ScriptedMcpClient::advertising(
+                &["read_file"],
+                Box::new(|_idx, _name| Ok("file contents".to_string())),
+            );
+            let agent = headless_agent(ScriptedMcpClient::new(Box::new(|_idx, name| {
+                Err(MCPError::ToolCallFailed(format!("unexpected '{name}'")))
+            })));
+            let session = session_with_tools(&["echo", "read_file"]);
+            attach_session_clients(&agent, &session, vec![echo.clone(), reader.clone()]).await;
+
+            for _ in 0..3 {
+                let result = agent
+                    .execute_tool_with_retry(&tool_call("read_file"), &session)
+                    .await;
+                assert!(result.error.is_none(), "dispatch must succeed: {result:?}");
+            }
+
+            assert!(
+                echo.list_tools_call_count() <= 1,
+                "list_tools must be queried at most once per client (index cached at \
+                 attach time), got {} on the echo client",
+                echo.list_tools_call_count()
+            );
+            assert!(
+                reader.list_tools_call_count() <= 1,
+                "list_tools must be queried at most once per client (index cached at \
+                 attach time), got {} on the reader client",
+                reader.list_tools_call_count()
+            );
+            assert_eq!(
+                reader.calls().len(),
+                3,
+                "all three dispatches must reach the read_file backend"
+            );
+        }
+
+        /// Attach `discovered` (client + already-discovered tool names) as the
+        /// per-session backends via [`SessionMcpClients::from_discovered`], the
+        /// constructor the `session/new` path uses.
+        async fn attach_discovered(
+            agent: &AgentServer,
+            session: &Session,
+            discovered: Vec<(Arc<dyn MCPClient>, Vec<String>)>,
+        ) {
+            agent
+                .session_mcp_clients
+                .write()
+                .await
+                .insert(session.id, SessionMcpClients::from_discovered(discovered));
+        }
+
+        #[tokio::test]
+        async fn from_discovered_routes_without_re_querying_list_tools() {
+            // `session/new` discovers each client's tools once to populate the
+            // model-visible tool set, then builds the routing index from that
+            // SAME discovery via `from_discovered`. Routing must therefore work
+            // without any additional `list_tools` round-trip — the second
+            // round-trip was a redundant discovery-race window that could
+            // mis-route a known tool to the wrong backend (-32602).
+            let echo = ScriptedMcpClient::advertising(
+                &["echo"],
+                Box::new(|_idx, name| {
+                    Err(MCPError::ToolCallFailed(format!(
+                        "call_tool '{name}' failed: tool not found"
+                    )))
+                }),
+            );
+            let reader = ScriptedMcpClient::advertising(
+                &["read_file"],
+                Box::new(|_idx, _name| Ok("file contents".to_string())),
+            );
+            let agent = headless_agent(ScriptedMcpClient::new(Box::new(|_idx, name| {
+                Err(MCPError::ToolCallFailed(format!("unexpected '{name}'")))
+            })));
+            let session = session_with_tools(&["echo", "read_file"]);
+
+            // Hand `from_discovered` the names directly (as `session/new` does),
+            // NOT via a `list_tools` call.
+            attach_discovered(
+                &agent,
+                &session,
+                vec![
+                    (echo.clone() as Arc<dyn MCPClient>, vec!["echo".to_string()]),
+                    (
+                        reader.clone() as Arc<dyn MCPClient>,
+                        vec!["read_file".to_string()],
+                    ),
+                ],
+            )
+            .await;
+
+            let result = agent
+                .execute_tool_with_retry(&tool_call("read_file"), &session)
+                .await;
+
+            assert!(
+                result.error.is_none(),
+                "read_file must route to its backend using the pre-discovered index: {result:?}"
+            );
+            assert_eq!(
+                result.result,
+                serde_json::Value::String("file contents".into())
+            );
+            assert_eq!(
+                echo.list_tools_call_count(),
+                0,
+                "from_discovered must NOT re-query list_tools on the echo client"
+            );
+            assert_eq!(
+                reader.list_tools_call_count(),
+                0,
+                "from_discovered must NOT re-query list_tools on the reader client"
+            );
+            assert!(
+                echo.calls().is_empty(),
+                "the wrong backend must not be invoked; got {:?}",
+                echo.calls()
+            );
+        }
+
+        #[tokio::test]
+        async fn from_discovered_attaches_a_client_whose_discovery_failed() {
+            // A client whose `list_tools` raced/failed at attach time contributes
+            // an EMPTY tool-name list. It must still attach (not be dropped), and
+            // a tool served by a *successfully* discovered sibling must route to
+            // that sibling rather than mis-routing to the empty client. This is
+            // the discovery-race shape behind the intermittent -32602 runaway.
+            let raced = ScriptedMcpClient::advertising(
+                &["read_file"], // would serve it, but discovery "failed" → empty names
+                Box::new(|_idx, name| {
+                    Err(MCPError::ToolCallFailed(format!(
+                        "call_tool '{name}' failed: tool not found"
+                    )))
+                }),
+            );
+            let healthy = ScriptedMcpClient::advertising(
+                &["other_tool"],
+                Box::new(|_idx, _name| Ok("served".to_string())),
+            );
+            let agent = headless_agent(ScriptedMcpClient::new(Box::new(|_idx, name| {
+                Err(MCPError::ToolCallFailed(format!("unexpected '{name}'")))
+            })));
+            let session = session_with_tools(&["other_tool"]);
+
+            attach_discovered(
+                &agent,
+                &session,
+                vec![
+                    // First client: discovery failed → no routed tools.
+                    (raced.clone() as Arc<dyn MCPClient>, Vec::new()),
+                    // Second client: discovered `other_tool`.
+                    (
+                        healthy.clone() as Arc<dyn MCPClient>,
+                        vec!["other_tool".to_string()],
+                    ),
+                ],
+            )
+            .await;
+
+            let result = agent
+                .execute_tool_with_retry(&tool_call("other_tool"), &session)
+                .await;
+
+            assert!(
+                result.error.is_none(),
+                "a tool from a healthy sibling must route correctly even when a \
+                 peer client's discovery failed: {result:?}"
+            );
+            assert_eq!(result.result, serde_json::Value::String("served".into()));
+            assert!(
+                raced.calls().is_empty(),
+                "the client with failed discovery must not be invoked for a tool it \
+                 never advertised; got {:?}",
+                raced.calls()
             );
         }
     }

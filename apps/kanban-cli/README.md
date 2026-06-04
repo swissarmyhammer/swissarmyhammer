@@ -88,7 +88,7 @@ No GUI — just the `kanban` binary (CLI + MCP server). The right choice for ser
 **macOS / Linux (Homebrew formula):**
 
 ```bash
-brew install swissarmyhammer/tap/kanban
+brew install swissarmyhammer/tap/kanban-cli
 ```
 
 **Linux (install script):**
@@ -103,7 +103,7 @@ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/swissarmyhammer/swissar
 cargo install --git https://github.com/swissarmyhammer/swissarmyhammer kanban-cli
 ```
 
-> On macOS the cask (Option A) and the formula (Option B) both provide a `kanban` command, so the cask declares `conflicts_with formula: "kanban"` — they never fight over your `PATH`. Pick the cask if you want the GUI, the formula if you only want the CLI.
+> On macOS the cask (Option A) and the `kanban-cli` formula (Option B) both provide a `kanban` command, so the cask declares `conflicts_with formula: "kanban-cli"` — they never fight over your `PATH`. Pick the cask if you want the GUI, the formula if you only want the CLI. (`brew install …/kanban` with no `--cask` resolves to the app cask, since the short `kanban` name belongs to the app.)
 
 ### Build the app from source
 

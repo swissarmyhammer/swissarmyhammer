@@ -14,7 +14,7 @@ Review recent work for correctness, completeness, and alignment with intent.
 
 ## Process
 
-1. **Gather context** — `git status`, `git get changes`, read the changed files, check active kanban tasks for the original requirements.
+1. **Gather context** — review recent changes, related files, and the original intent. Use the `code_context` MCP tool to look up relevant symbols, files, and blast radius of changes or the `git` tool to `get changes`.
 
 2. **Verify correctness** for each changed file:
    - Compiles/parses (run build or lint)
