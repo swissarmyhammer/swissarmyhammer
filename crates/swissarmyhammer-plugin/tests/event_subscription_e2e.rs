@@ -34,6 +34,7 @@ use rmcp::schemars::{self, JsonSchema};
 use rmcp::{tool, tool_handler, tool_router, ServerHandler};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use swissarmyhammer_command_service::bootstrap::install_commands_module;
 use swissarmyhammer_plugin::{InProcessServer, McpNotification, McpServer, PluginHost};
 
 /// A generous upper bound on any single host interaction.
@@ -256,5 +257,78 @@ async fn unload_purges_subscriptions() {
         seen.lock().expect("recorder mutex").is_empty(),
         "an unloaded plugin's callback must not be delivered to, got {:?}",
         seen.lock().expect("recorder mutex")
+    );
+}
+
+/// The ergonomic `this.<server>.on(event, cb)` surface, end to end against the
+/// REAL command tool: `.on("executed", …)` resolves the short event to
+/// `notifications/commands/executed` via the command service's declared
+/// `io.swissarmyhammer/notifications` `_meta`, subscribes, and delivers.
+#[tokio::test]
+async fn server_on_resolves_declared_event_and_delivers() {
+    let (host, bundle, seen) = host_with_recorder().await;
+    // Expose the real command service module so `commands` carries the declared
+    // `commands/executed` notification in its `_meta`.
+    tokio::time::timeout(TIMEOUT, install_commands_module(&host))
+        .await
+        .expect("installing the command module should not hang")
+        .expect("installing the command module should succeed");
+
+    // No raw transport access — the plugin uses the ergonomic `.on()`.
+    write_plugin(
+        bundle.path(),
+        "this.register('commands', { rust: 'commands' });\n\
+         this.register('rec', { rust: 'rec-mod' });\n\
+         const rec = this.rec;\n\
+         this.commands.on('executed', async (params) => {\n\
+           await rec.record({ message: JSON.stringify(params) });\n\
+         });",
+    );
+
+    tokio::time::timeout(TIMEOUT, host.load(bundle.path()))
+        .await
+        .expect("loading the plugin should not hang")
+        .expect("the plugin's load should succeed");
+
+    host.notification_bridge().publish(McpNotification::new(
+        METHOD,
+        json!({ "id": "task.move", "result": { "ok": true } }),
+    ));
+
+    let recordings = wait_for_recordings(&seen, 1).await;
+    let delivered: serde_json::Value =
+        serde_json::from_str(&recordings[0]).expect("the callback recorded the params as JSON");
+    assert_eq!(
+        delivered["id"], "task.move",
+        ".on(\"executed\") must resolve to commands/executed and deliver its params"
+    );
+}
+
+/// `.on()` for an event the server does not declare throws
+/// `UnknownNotification` — failing the plugin's load with a message that names
+/// the bad event and lists the valid ones.
+#[tokio::test]
+async fn server_on_unknown_event_throws() {
+    let bundle = tempfile::TempDir::new().expect("temp dir");
+    let host = PluginHost::for_tests(bundle.path().to_path_buf(), None);
+    tokio::time::timeout(TIMEOUT, install_commands_module(&host))
+        .await
+        .expect("installing the command module should not hang")
+        .expect("installing the command module should succeed");
+
+    write_plugin(
+        bundle.path(),
+        "this.register('commands', { rust: 'commands' });\n\
+         this.commands.on('nope', () => {});",
+    );
+
+    let err = tokio::time::timeout(TIMEOUT, host.load(bundle.path()))
+        .await
+        .expect("loading the plugin should not hang")
+        .expect_err("load should fail when .on names an undeclared event");
+    let message = err.to_string();
+    assert!(
+        message.contains("nope") && message.contains("executed"),
+        "error should name the bad event and list the valid ones, got: {message}"
     );
 }

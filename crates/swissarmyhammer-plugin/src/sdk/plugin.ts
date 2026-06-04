@@ -131,6 +131,25 @@ export class UnknownOperation extends Error {
   }
 }
 
+/**
+ * Raised when `this.<server>.on(event, …)` names an event the server's tools
+ * do not declare in their `io.swissarmyhammer/notifications` `_meta`.
+ *
+ * Mirrors {@link UnknownOperation}: the message lists the valid event names so
+ * the plugin author can see the correct spelling without leaving the error.
+ */
+export class UnknownNotification extends Error {
+  /** Construct an `UnknownNotification` for an undeclared `(server, event)`. */
+  constructor(server: string, event: string, validEvents: readonly string[]) {
+    const valid = [...validEvents].sort().join(", ");
+    super(
+      `server '${server}' declares no notification event '${event}'; ` +
+        `valid events: ${valid.length > 0 ? valid : "(none)"}`,
+    );
+    this.name = "UnknownNotification";
+  }
+}
+
 // ---------------------------------------------------------------------------
 // The callback primitive
 // ---------------------------------------------------------------------------
@@ -431,6 +450,26 @@ interface ToolDefinition {
 const OPERATIONS_META_KEY = "io.swissarmyhammer/operations";
 
 /**
+ * The `_meta` key under which a tool carries its notification tree: the
+ * `event → { method, description?, parameters? }` map of events a plugin can
+ * subscribe to via `this.<server>.on(event, …)`.
+ */
+const NOTIFICATIONS_META_KEY = "io.swissarmyhammer/notifications";
+
+/** One declared notification's `_meta` entry: its wire method and schema. */
+interface NotificationMeta {
+  /** The full MCP notification method, e.g. `"notifications/commands/executed"`. */
+  method: string;
+  /** Optional human-readable description. */
+  description?: string;
+  /** The notification's params schema, by parameter name. */
+  parameters?: Record<string, unknown>;
+}
+
+/** A tool's notification tree: short event name → notification metadata. */
+type NotificationsMeta = Record<string, NotificationMeta>;
+
+/**
  * The seam between the SDK and the host.
  *
  * Every method marshals a JSON envelope through `op_host_dispatch`. The
@@ -509,6 +548,23 @@ export interface Transport {
    * @param callbackId - the id {@link subscribe} returned.
    */
   unsubscribe(method: string, callbackId: string): void;
+  /**
+   * Resolve a server's short notification `event` name to its full wire method.
+   *
+   * Reads the `io.swissarmyhammer/notifications` `_meta` off `server`'s cached
+   * tool definitions (the same cache `callPath` uses for operations) and returns
+   * the declared `method` for `event`. This is the notification-side analogue of
+   * the operation `noun.verb → op` resolution, and is what backs the ergonomic
+   * `this.<server>.on(event, …)` surface.
+   *
+   * @param server - the server name the `.on()` was rooted at.
+   * @param event - the short event name (e.g. `"executed"`).
+   * @returns the full notification method (e.g.
+   *   `"notifications/commands/executed"`).
+   * @throws {UnknownServer} when `server` is not registered.
+   * @throws {UnknownNotification} when no tool on `server` declares `event`.
+   */
+  resolveNotificationMethod(server: string, event: string): string;
 }
 
 /**
@@ -701,6 +757,22 @@ class HostBridge implements Transport {
   unsubscribe(method: string, callbackId: string): void {
     this.dispatch({ kind: "unsubscribe", method, callbackId });
   }
+
+  /** {@inheritDoc Transport.resolveNotificationMethod} */
+  resolveNotificationMethod(server: string, event: string): string {
+    // `this.tools` throws `UnknownServer` for an unregistered server and caches
+    // the result, so resolution shares the dispatch path's tool cache.
+    const tools = this.tools(server);
+    for (const tool of tools) {
+      const method = notificationsOf(tool)?.[event]?.method;
+      if (typeof method === "string") return method;
+    }
+    // No tool on the server declares the event: list the valid ones.
+    const valid = tools.flatMap((tool) =>
+      Object.keys(notificationsOf(tool) ?? {})
+    );
+    throw new UnknownNotification(server, event, valid);
+  }
 }
 
 /**
@@ -714,6 +786,20 @@ function operationsOf(tool: ToolDefinition): OperationsMeta | undefined {
   const ops = meta[OPERATIONS_META_KEY];
   if (ops === undefined || ops === null) return undefined;
   return ops as OperationsMeta;
+}
+
+/**
+ * Read a tool's `io.swissarmyhammer/notifications` `_meta` tree, if it has one.
+ *
+ * Returns `undefined` for a tool that declares no notifications. The
+ * notification-side analogue of {@link operationsOf}.
+ */
+function notificationsOf(tool: ToolDefinition): NotificationsMeta | undefined {
+  const meta = tool._meta;
+  if (meta === undefined || meta === null) return undefined;
+  const notes = meta[NOTIFICATIONS_META_KEY];
+  if (notes === undefined || notes === null) return undefined;
+  return notes as NotificationsMeta;
 }
 
 /**
@@ -753,34 +839,55 @@ function lookupOp(
 // ---------------------------------------------------------------------------
 
 /**
- * SDK-handled property names that are never forwarded as path segments.
+ * The subscriber signature `this.<server>.on` / `.once` / `.subscribe` return.
  *
- * `on`/`off`/`once`/`subscribe`/`unsubscribe` are event-API names the SDK
- * reserves for itself. `then` is included so the dispatcher Proxy is never
- * mistaken for a thenable — without it, `await`ing a dispatcher would invoke
- * `.then` as if it extended the path.
+ * Takes a short event name and a callback; returns a one-shot teardown handle
+ * (an Obsidian-style `EventRef`). The callback receives the notification's
+ * params as its single argument.
  */
-const RESERVED = new Set<string>([
-  "on",
-  "off",
-  "once",
-  "subscribe",
-  "unsubscribe",
-  "then",
-]);
+type ServerSubscribe = (
+  event: string,
+  callback: (...args: unknown[]) => unknown,
+) => () => void;
 
 /**
- * The handler returned for a `RESERVED` name accessed on a dispatcher.
+ * Build the `(event, callback) => off` subscriber bound to `server`.
  *
- * The event surface (`on`, `subscribe`, …) is not part of this SDK task, so
- * the handler is an inert no-op: it exists only to keep a `RESERVED` name
- * from being treated as a tool/noun/verb segment. The callback primitive
- * itself is already wired (see {@link marshalCallbacks}); only the event API
- * that would be built on top of it is wired by a later task.
+ * Resolves the short `event` to its wire method via the server's declared
+ * notifications `_meta` ({@link Transport.resolveNotificationMethod} — which
+ * throws {@link UnknownNotification} for an undeclared event), subscribes the
+ * callback, and returns a teardown that BOTH tells the host to stop delivering
+ * AND disposes the isolate-local callback. The teardown is idempotent;
+ * subscriptions also auto-clean on plugin unload, so calling it is optional.
  */
-function reservedHandler(): () => void {
-  return () => {
-    /* event API not implemented in this SDK task — intentionally inert */
+function makeServerOn(transport: Transport, server: string): ServerSubscribe {
+  return (event, callback) => {
+    const method = transport.resolveNotificationMethod(server, event);
+    const id = transport.subscribe(method, callback);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      transport.unsubscribe(method, id);
+      disposeCallback(id);
+    };
+  };
+}
+
+/**
+ * Build the `once` subscriber bound to `server`: like {@link makeServerOn}, but
+ * the subscription tears itself down right before the first delivery runs.
+ */
+function makeServerOnce(transport: Transport, server: string): ServerSubscribe {
+  const on = makeServerOn(transport, server);
+  return (event, callback) => {
+    let off: () => void = () => {};
+    const wrapper = (...args: unknown[]): unknown => {
+      off();
+      return callback(...args);
+    };
+    off = on(event, wrapper);
+    return off;
   };
 }
 
@@ -789,9 +896,11 @@ function reservedHandler(): () => void {
  *
  * The Proxy wraps a function so the value is both *callable* (invoking the
  * leaf issues `transport.callPath`) and *indexable* (every property access
- * extends `path` and yields a fresh dispatcher). A `RESERVED` name yields the
- * reserved handler instead of extending the path; `then` additionally is
- * reported absent so the dispatcher is not treated as a thenable.
+ * extends `path` and yields a fresh dispatcher). The event-API names are
+ * handled directly: `on`/`subscribe`/`once` return a real subscriber, the
+ * cancellation-by-handle model leaves `off`/`unsubscribe` as inert no-ops, and
+ * `then` is reported absent so the dispatcher is not treated as a thenable.
+ * Every other name extends the dispatch path.
  */
 export function makeDispatcher(
   transport: Transport,
@@ -807,7 +916,17 @@ export function makeDispatcher(
       // `then` must read as absent: an `await` probes `.then`, and a present
       // `.then` would make the dispatcher look like a promise to resolve.
       if (prop === "then") return undefined;
-      if (RESERVED.has(prop)) return reservedHandler();
+      // The event API is server-scoped (resolved across the server's tools), so
+      // it binds to `server` regardless of the current path depth. `subscribe`
+      // is an alias of `on`.
+      if (prop === "on" || prop === "subscribe") {
+        return makeServerOn(transport, server);
+      }
+      if (prop === "once") return makeServerOnce(transport, server);
+      // Cancellation is the teardown `.on()` returns, so server-level
+      // `off`/`unsubscribe` have no meaning — kept inert only so they are not
+      // mistaken for dispatch path segments.
+      if (prop === "off" || prop === "unsubscribe") return () => {};
       return makeDispatcher(transport, server, [...path, prop]);
     },
   }) as unknown as ServerDispatcher;
