@@ -68,6 +68,15 @@ pub const DEFAULT_TYPES_PATH: &str = ".swissarmyhammer/types/app.d.ts";
 /// this key is a *flat tool*.
 const OPERATIONS_META_KEY: &str = "io.swissarmyhammer/operations";
 
+/// The `_meta` key carrying a tool's notification tree.
+///
+/// A [`Tool`](rmcp::model::Tool) whose `_meta` map contains this key declares
+/// notifications a plugin can subscribe to: its value is the
+/// `event → {method, description, parameters}` tree produced by
+/// `generate_notifications_meta`. The emitter renders each event as a typed
+/// `on(event, cb)` overload on the server namespace.
+const NOTIFICATIONS_META_KEY: &str = "io.swissarmyhammer/notifications";
+
 /// How long the emitter waits after the last registry event before it
 /// regenerates the declaration file.
 ///
@@ -543,7 +552,89 @@ fn render_server_namespace(out: &mut String, name: &str, tools: &[ToolMetadata])
             None => render_flat_tool(out, tool),
         }
     }
+    // The event surface is server-scoped: `.on()` resolves across all of the
+    // server's tools, so the notifications declared by every tool are emitted
+    // as `on`/`subscribe`/`once` overloads on the server namespace itself.
+    render_server_notifications(out, tools);
     out.push_str("  };\n");
+}
+
+/// Emits the typed event-subscription overloads for a server's declared
+/// notifications.
+///
+/// Collects the `event → {method, description, parameters}` entries across
+/// every tool on the server (the event API is server-scoped) and emits, for
+/// each of `on` / `subscribe` (its alias) / `once`, one overload per event:
+///
+/// ```ts
+/// on(event: "executed", cb: (params: { id: string; … }) => void): () => void;
+/// ```
+///
+/// The `(params: …)` type is built from the event's declared `parameters` the
+/// same way operation inputs are, and the `() => void` return is the
+/// unsubscribe handle. A server whose tools declare no notifications emits
+/// nothing, so its namespace is unchanged.
+///
+/// # Parameters
+///
+/// - `out` — the buffer the declaration text is appended to.
+/// - `tools` — the server's tools, scanned for notification `_meta`.
+fn render_server_notifications(out: &mut String, tools: &[ToolMetadata]) {
+    let events: Vec<(&String, &Value)> = tools
+        .iter()
+        .filter_map(notifications_meta)
+        .flat_map(|notes| notes.iter())
+        .collect();
+    if events.is_empty() {
+        return;
+    }
+
+    // `subscribe` is an alias of `on`; `once` shares the same shape. All three
+    // are real SDK surfaces, so all three are typed (the generated server type
+    // is closed — an un-emitted method would be a type error at the call site).
+    for method in ["on", "subscribe", "once"] {
+        for (event, leaf) in &events {
+            // Doc the event once, on the primary `on` overload.
+            if method == "on" {
+                if let Some(description) = leaf.get("description").and_then(Value::as_str) {
+                    if !description.is_empty() {
+                        render_doc_comment(out, 4, description);
+                    }
+                }
+            }
+            let parameters = leaf.get("parameters").and_then(Value::as_object);
+            let params = ts_object_from_parameters(parameters);
+            out.push_str(&format!(
+                "    {}(event: {}, cb: (params: {}) => void): () => void;\n",
+                method,
+                ts_string_literal(event),
+                params,
+            ));
+        }
+    }
+}
+
+/// Returns a tool's `io.swissarmyhammer/notifications` `_meta` tree, if any.
+///
+/// The notification-side analogue of [`operations_meta`]: a tool whose `_meta`
+/// carries [`NOTIFICATIONS_META_KEY`] declares events, and the value is the
+/// `event → {method, description, parameters}` tree. Returns `None` for a tool
+/// that declares no notifications.
+fn notifications_meta(tool: &ToolMetadata) -> Option<&Map<String, Value>> {
+    tool.as_tool()
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.get(NOTIFICATIONS_META_KEY))
+        .and_then(Value::as_object)
+}
+
+/// Renders a string as a TypeScript string-literal type (double-quoted, escaped).
+///
+/// Used for the `event: "<name>"` literal in an `on` overload. JSON string
+/// encoding matches TypeScript string-literal quoting, so a value with quotes
+/// or backslashes is escaped correctly.
+fn ts_string_literal(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| format!("\"{value}\""))
 }
 
 /// Returns a tool's `io.swissarmyhammer/operations` `_meta` tree, if it has one.
@@ -876,10 +967,90 @@ mod tests {
         })
     }
 
+    /// Builds a tool carrying an `io.swissarmyhammer/notifications` `_meta`
+    /// tree, exercising the real notification-emission path.
+    fn notification_tool(name: &str, notifications: Value) -> ToolMetadata {
+        let mut tool = Tool::new(
+            name.to_string(),
+            "a notification-declaring tool",
+            Map::new(),
+        );
+        let mut meta = Meta::new();
+        meta.insert(NOTIFICATIONS_META_KEY.to_string(), notifications);
+        tool.meta = Some(meta);
+        ToolMetadata::new(tool)
+    }
+
+    /// A real `io.swissarmyhammer/notifications` tree shaped as
+    /// `generate_notifications_meta` produces it: event → `{method, description,
+    /// parameters}`.
+    fn command_notifications() -> Value {
+        json!({
+            "executed": {
+                "method": "notifications/commands/executed",
+                "description": "A command executed.",
+                "parameters": {
+                    "id": { "type": "string", "required": true, "description": "The command id" },
+                    "result": { "type": "string", "required": false }
+                }
+            }
+        })
+    }
+
     /// Reads the declaration file at `path`, failing the test if it is absent.
     fn read_types(path: &Path) -> String {
         std::fs::read_to_string(path)
             .expect("declaration file should exist after a debounced write")
+    }
+
+    #[tokio::test]
+    async fn emits_typed_on_overloads_for_declared_notifications() {
+        let dir = tempdir().expect("temp dir");
+        let output = dir.path().join("app.d.ts");
+        let emitter = TypesEmitter::with_output_path(&output, true);
+
+        emitter.server_registered(
+            "commands",
+            vec![notification_tool("command", command_notifications())],
+        );
+        emitter.flush();
+
+        let text = read_types(&output);
+
+        // The declared event becomes a typed `on` overload: an event string
+        // literal, a params type built from the declaration (required vs
+        // optional honored), and the `() => void` off handle.
+        assert!(
+            text.contains(
+                "on(event: \"executed\", cb: (params: { id: string; result?: string }) => void): () => void;"
+            ),
+            "typed on() overload missing from:\n{text}"
+        );
+        // `subscribe` (alias) and `once` share the same typed overload.
+        assert!(
+            text.contains("subscribe(event: \"executed\", cb: (params: { id: string; result?: string }) => void): () => void;"),
+            "subscribe overload missing from:\n{text}"
+        );
+        assert!(
+            text.contains("once(event: \"executed\", cb: (params: { id: string; result?: string }) => void): () => void;"),
+            "once overload missing from:\n{text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn server_without_notifications_emits_no_on_overload() {
+        let dir = tempdir().expect("temp dir");
+        let output = dir.path().join("app.d.ts");
+        let emitter = TypesEmitter::with_output_path(&output, true);
+
+        emitter.server_registered("board", vec![operation_tool("kanban", kanban_operations())]);
+        emitter.flush();
+
+        let text = read_types(&output);
+        assert!(
+            !text.contains("on(event:"),
+            "a server with no declared notifications must not emit on() overloads:\n{text}"
+        );
     }
 
     /// Waits up to `DEBOUNCE_WAIT` for `predicate` to hold, polling briefly.

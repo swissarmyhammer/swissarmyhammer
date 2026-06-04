@@ -5,8 +5,8 @@ depends_on:
 - 01KT9JTDE3EX2BQNQ4F3HMZYTP
 - 01KT9JV0N1RF0MMEBRZV4A6F3J
 - 01KT9FYTVE2CMAGZQW29G1M6Q6
-position_column: todo
-position_ordinal: b880
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffff180
 project: plugin-arch
 title: 'Codegen: emit typed .on(event, cb) overloads in the .d.ts from notifications _meta'
 ---
