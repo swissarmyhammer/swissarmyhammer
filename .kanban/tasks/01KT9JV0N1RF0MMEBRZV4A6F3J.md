@@ -6,22 +6,20 @@ depends_on:
 position_column: todo
 position_ordinal: b780
 project: plugin-arch
-title: Declare emitted notifications on owning MCP services (commands, store, ui_state)
+title: 'Notification single-source-of-truth: payload struct = published payload + coverage guard + declare commands/executed'
 ---
-Populate the notification vocabulary by decorating the services that own each notification, using the #[notification] attribute + notifications() slice + operation_tool!{ notifications: ... } from the macro card. This is what makes concrete event names show up in each service's `_meta` for the SDK.
+The anti-drift foundation for the whole notification effort. Establishes the pattern every event-migration card follows, and declares the one event that genuinely fires on the bridge today.
 
-Owners (verified map of who constructs/publishes each McpNotification):
-- **swissarmyhammer-command-service** (`service.rs:285` build_tool_definition): declare `notifications/commands/executed` (LIVE publisher — BridgeActionSink, bootstrap.rs:154) and `notifications/commands/changed` (no publisher yet; declare anyway as the contract).
-- **swissarmyhammer-kanban** (owns notify_fanin.rs): declare `notifications/store/changed` and `notifications/store/undo_changed`. NOTE these are only published by `spawn_notification_fanin`, which is test-spawned and NOT app-wired today — declaration is still correct (vocabulary ≠ live publisher). The kanban operation tool is built in swissarmyhammer-kanban/src/schema.rs (KANBAN_OPERATIONS).
-- **swissarmyhammer-ui-state** (`service.rs:106`): declare `notifications/ui_state/changed` (no publisher yet).
-- `notifications/tools/list_changed` has NO service owner (it's a host/registry concern) — skip here; revisit if/when the host publishes it.
+PRINCIPLE (user): declared ⟺ raised. The `#[notification]` metadata must never mismatch what's actually published. Solve it structurally, not by vigilance.
 
-## Per declaration
-- Payload struct fields mirror the corresponding `McpNotification` constructor's params (notify.rs): executed → {id, ctx, result}; store_changed → {store, item, op, changes?}; undo_changed → {can_undo, can_redo, undo_label?, redo_label?}; ui_state_changed → {window?, key, value}. Fields give codegen a typed callback param.
-- DRIFT RISK: the declared struct duplicates the imperative constructor's shape. Acceptable for now; a future card may unify so the declared struct IS the publish payload (single source of truth). Note it in code comments.
+## Mechanism
+1. **Struct = payload.** A `#[notification]`-decorated struct (from card 01KT9JTDE3) ALSO `#[derive(Serialize)]` and IS the published payload. Publish via `McpNotification::new(payload.method(), serde_json::to_value(&payload)?)` (+ provenance stamp where applicable). The declared param schema (from struct fields) and the emitted params (serialized struct) come from the SAME fields → cannot drift. An unconstructed `#[notification]` struct is dead code (caught by clippy).
+2. **Coverage-guard test pattern.** A reusable test asserting, per owning service, that the set of declared notification methods (`io.swissarmyhammer/notifications` `_meta`) EQUALS the set of methods actually published by that service. Fails in either direction (declared-but-unpublished / published-but-undeclared). Document the pattern so each migration card adds its own.
 
-## Tests
-- For each touched service, `tools/list` carries `io.swissarmyhammer/notifications` with the expected event keys + methods.
+## Reference conversion
+- Convert `commands/executed` (the only app-wired bridge publisher today — `BridgeActionSink`, command-service/bootstrap.rs:154; built at txn.rs:129/service.rs:562) to the struct=payload form, and declare it on the command service's operation_tool! (`service.rs:285`). Add its coverage-guard test.
 
 ## Acceptance
-The commands, kanban, and ui_state operation tools advertise their notifications in `_meta`; `this.commands.on(...)` etc. can be resolved against real declarations.
+- The command service declares `commands/executed` in `_meta` and the coverage guard passes (declared == published).
+- The struct=payload + guard pattern is in place for migration cards to reuse.
+- Unblocks the SDK `.on()` card (one real declared notification now exists to resolve against).

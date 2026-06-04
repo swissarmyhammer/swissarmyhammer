@@ -39,14 +39,7 @@ pub fn operation(attr: TokenStream, item: TokenStream) -> TokenStream {
     let description = &args.description;
 
     // Extract field metadata (handle unit structs and named fields)
-    let param_metas: Vec<_> = match &input.data {
-        syn::Data::Struct(data) => match &data.fields {
-            syn::Fields::Named(fields) => fields.named.iter().map(generate_param_meta).collect(),
-            syn::Fields::Unit => Vec::new(), // Unit struct has no fields
-            syn::Fields::Unnamed(_) => panic!("operation macro does not support tuple structs"),
-        },
-        _ => panic!("operation macro only supports structs"),
-    };
+    let param_metas = struct_param_metas(&input, "operation");
 
     let num_params = param_metas.len();
 
@@ -124,6 +117,153 @@ impl Parse for OperationArgs {
             description: description
                 .ok_or_else(|| input.error("missing 'description' attribute"))?,
         })
+    }
+}
+
+/// Attribute macro for declaring a notification a service emits.
+///
+/// The notification-side sibling of [`macro@operation`]. It decorates a payload
+/// struct — whose fields ARE the notification's params, read exactly as
+/// `#[operation]` reads them — and implements
+/// `swissarmyhammer_operations::Notification` for it.
+///
+/// # Usage
+///
+/// ```ignore
+/// #[notification(
+///     method = "notifications/commands/executed",
+///     description = "A command executed."
+/// )]
+/// #[derive(Debug)]
+/// struct CommandsExecuted {
+///     /// The command id that executed.
+///     id: String,
+///     /// The command's return value.
+///     result: serde_json::Value,
+/// }
+/// ```
+///
+/// `method` is the full wire method (required); `description` is required. The
+/// short `event` name a plugin subscribes to (`this.<server>.on(event, …)`)
+/// defaults to the last `/`-separated segment of `method` (`"executed"` above)
+/// and can be overridden with `event = "…"`.
+#[proc_macro_attribute]
+pub fn notification(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(attr as NotificationArgs);
+    let input = parse_macro_input!(item as DeriveInput);
+
+    let name = &input.ident;
+    let method = &args.method;
+    let description = &args.description;
+
+    // Resolve the short event name at macro time: explicit override, else the
+    // last `/`-segment of the method (matching the trait's default).
+    let event = match &args.event {
+        Some(event) => event.clone(),
+        None => args
+            .method
+            .rsplit('/')
+            .next()
+            .unwrap_or(args.method.as_str())
+            .to_string(),
+    };
+
+    let param_metas = struct_param_metas(&input, "notification");
+    let num_params = param_metas.len();
+
+    let expanded = quote! {
+        #input
+
+        impl swissarmyhammer_operations::Notification for #name {
+            fn method(&self) -> &'static str {
+                #method
+            }
+
+            fn event(&self) -> &'static str {
+                #event
+            }
+
+            fn description(&self) -> &'static str {
+                #description
+            }
+
+            fn parameters(&self) -> &'static [swissarmyhammer_operations::ParamMeta] {
+                static PARAMS: [swissarmyhammer_operations::ParamMeta; #num_params] = [
+                    #(#param_metas),*
+                ];
+                &PARAMS
+            }
+        }
+    };
+
+    TokenStream::from(expanded)
+}
+
+/// Arguments for the `#[notification(...)]` attribute.
+struct NotificationArgs {
+    method: String,
+    description: String,
+    event: Option<String>,
+}
+
+impl Parse for NotificationArgs {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut method = None;
+        let mut description = None;
+        let mut event = None;
+
+        while !input.is_empty() {
+            let ident: Ident = input.parse()?;
+            input.parse::<Token![=]>()?;
+            let value: Lit = input.parse()?;
+
+            let value_str = match value {
+                Lit::Str(s) => s.value(),
+                _ => return Err(syn::Error::new_spanned(value, "expected string literal")),
+            };
+
+            match ident.to_string().as_str() {
+                "method" => method = Some(value_str),
+                "description" => description = Some(value_str),
+                "event" => event = Some(value_str),
+                other => {
+                    return Err(syn::Error::new_spanned(
+                        ident,
+                        format!("unknown attribute: {}", other),
+                    ))
+                }
+            }
+
+            if input.peek(Token![,]) {
+                input.parse::<Token![,]>()?;
+            }
+        }
+
+        Ok(NotificationArgs {
+            method: method.ok_or_else(|| input.error("missing 'method' attribute"))?,
+            description: description
+                .ok_or_else(|| input.error("missing 'description' attribute"))?,
+            event,
+        })
+    }
+}
+
+/// Extract the per-field `ParamMeta` token streams from a decorated struct.
+///
+/// Shared by [`macro@operation`] and [`macro@notification`]: both read a
+/// struct's named fields (or none, for a unit struct) into `ParamMeta`
+/// constructor expressions. `macro_name` is used only for the panic message on
+/// an unsupported shape (tuple struct / non-struct).
+fn struct_param_metas(input: &DeriveInput, macro_name: &str) -> Vec<proc_macro2::TokenStream> {
+    match &input.data {
+        syn::Data::Struct(data) => match &data.fields {
+            syn::Fields::Named(fields) => fields.named.iter().map(generate_param_meta).collect(),
+            syn::Fields::Unit => Vec::new(), // Unit struct has no fields
+            syn::Fields::Unnamed(_) => {
+                panic!("{macro_name} macro does not support tuple structs")
+            }
+        },
+        _ => panic!("{macro_name} macro only supports structs"),
     }
 }
 
@@ -334,6 +474,25 @@ pub fn operation_tool(input: TokenStream) -> TokenStream {
     let description = &args.description;
     let operations = &args.operations;
 
+    // Optional `notifications:` slice. When present, the event -> notification
+    // discovery tree is attached under the `io.swissarmyhammer/notifications`
+    // key alongside the operations tree, from the SAME slice — no second source
+    // of truth. When absent, no notifications `_meta` is attached at all, so a
+    // service that emits no events is byte-identical to before.
+    let notifications_meta = match &args.notifications {
+        Some(notifications) => quote! {
+            let __notifications: &[&dyn swissarmyhammer_operations::Notification] =
+                &#notifications;
+            let __notes_meta =
+                swissarmyhammer_operations::generate_notifications_meta(__notifications);
+            __meta.0.insert(
+                swissarmyhammer_operations::NOTIFICATIONS_META_KEY.to_string(),
+                __notes_meta,
+            );
+        },
+        None => quote! {},
+    };
+
     // The generated code references the runtime crates by path, exactly as the
     // `#[operation]` macro references `swissarmyhammer_operations::Operation`.
     // The proc-macro crate itself never links them.
@@ -358,9 +517,12 @@ pub fn operation_tool(input: TokenStream) -> TokenStream {
             let __ops_meta = swissarmyhammer_operations::generate_operations_meta(__operations);
             let mut __meta = ::rmcp::model::Meta::new();
             __meta.0.insert(
-                "io.swissarmyhammer/operations".to_string(),
+                swissarmyhammer_operations::OPERATIONS_META_KEY.to_string(),
                 __ops_meta,
             );
+
+            // Optional event -> notification discovery tree.
+            #notifications_meta
 
             let mut __tool = ::rmcp::model::Tool::new(#name, #description, __schema_map);
             __tool.meta = Some(__meta);
@@ -379,6 +541,9 @@ struct OperationToolArgs {
     name: LitStr,
     description: LitStr,
     operations: Expr,
+    /// Optional `notifications:` slice expression. Absent when the tool emits no
+    /// declared events.
+    notifications: Option<Expr>,
 }
 
 impl Parse for OperationToolArgs {
@@ -386,6 +551,7 @@ impl Parse for OperationToolArgs {
         let mut name = None;
         let mut description = None;
         let mut operations = None;
+        let mut notifications = None;
 
         while !input.is_empty() {
             let ident: Ident = input.parse()?;
@@ -395,11 +561,12 @@ impl Parse for OperationToolArgs {
                 "name" => name = Some(input.parse::<LitStr>()?),
                 "description" => description = Some(input.parse::<LitStr>()?),
                 "operations" => operations = Some(input.parse::<Expr>()?),
+                "notifications" => notifications = Some(input.parse::<Expr>()?),
                 other => {
                     return Err(syn::Error::new_spanned(
                         ident,
                         format!(
-                            "unknown field: {} (expected name, description, or operations)",
+                            "unknown field: {} (expected name, description, operations, or notifications)",
                             other
                         ),
                     ))
@@ -415,6 +582,7 @@ impl Parse for OperationToolArgs {
             name: name.ok_or_else(|| input.error("missing 'name' field"))?,
             description: description.ok_or_else(|| input.error("missing 'description' field"))?,
             operations: operations.ok_or_else(|| input.error("missing 'operations' field"))?,
+            notifications,
         })
     }
 }

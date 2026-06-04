@@ -9,8 +9,10 @@
 
 use rmcp::model::Tool;
 use serde_json::Value;
-use swissarmyhammer_operations::schema::generate_operations_meta;
-use swissarmyhammer_operations::{operation, operation_tool, Operation};
+use swissarmyhammer_operations::schema::{generate_notifications_meta, generate_operations_meta};
+use swissarmyhammer_operations::{
+    notification, operation, operation_tool, Notification, Operation,
+};
 use swissarmyhammer_operations_macros as _;
 
 /// A minimal "add task" operation declared with the existing `#[operation]`
@@ -46,6 +48,45 @@ fn demo_operations() -> Vec<&'static dyn Operation> {
             description: None,
         })) as &dyn Operation,
         Box::leak(Box::new(GetTask { id: String::new() })) as &dyn Operation,
+    ]
+}
+
+/// A notification declared with the `#[notification]` macro under test. Its
+/// event name defaults to the method's last segment (`"executed"`); its fields
+/// ARE the params, read exactly like an operation's.
+#[notification(
+    method = "notifications/commands/executed",
+    description = "A command executed."
+)]
+#[allow(dead_code)]
+struct CommandsExecuted {
+    /// The command id that executed.
+    id: String,
+    /// The command's return value.
+    result: Option<String>,
+}
+
+/// A notification with an explicit `event` override that differs from the
+/// method's last segment.
+#[notification(
+    method = "notifications/store/undo_changed",
+    description = "Undo stack changed.",
+    event = "undo"
+)]
+#[allow(dead_code)]
+struct UndoChanged {
+    /// Whether undo is currently possible.
+    can_undo: bool,
+}
+
+/// Build the canonical notification slice for the demo tool.
+fn demo_notifications() -> Vec<&'static dyn Notification> {
+    vec![
+        Box::leak(Box::new(CommandsExecuted {
+            id: String::new(),
+            result: None,
+        })) as &dyn Notification,
+        Box::leak(Box::new(UndoChanged { can_undo: false })) as &dyn Notification,
     ]
 }
 
@@ -146,4 +187,89 @@ fn flat_tool_is_not_mistagged_as_operation_tool() {
             "a flat tool must not be tagged with operations _meta",
         ),
     }
+}
+
+#[test]
+fn operation_tool_attaches_notifications_meta_when_declared() {
+    let tool: Tool = operation_tool! {
+        name: "demo",
+        description: "Demo operation tool",
+        operations: demo_operations(),
+        notifications: demo_notifications(),
+    };
+
+    let meta = tool.meta.expect("operation tool must have _meta");
+
+    // Operations meta is still present alongside notifications.
+    assert!(meta.0.contains_key("io.swissarmyhammer/operations"));
+
+    // Notifications meta is keyed by EVENT name.
+    let notes_meta = meta
+        .0
+        .get("io.swissarmyhammer/notifications")
+        .expect("_meta must carry io.swissarmyhammer/notifications");
+
+    // Derived event ("executed") carries the full method + typed params.
+    assert_eq!(
+        notes_meta["executed"]["method"],
+        "notifications/commands/executed"
+    );
+    assert_eq!(notes_meta["executed"]["description"], "A command executed.");
+    assert_eq!(notes_meta["executed"]["parameters"]["id"]["required"], true);
+    assert_eq!(
+        notes_meta["executed"]["parameters"]["result"]["required"],
+        false
+    );
+
+    // Explicit event override is keyed under "undo", not "undo_changed".
+    assert_eq!(
+        notes_meta["undo"]["method"],
+        "notifications/store/undo_changed"
+    );
+    assert!(notes_meta.get("undo_changed").is_none());
+}
+
+#[test]
+fn operation_tool_omits_notifications_meta_when_not_declared() {
+    // A tool that declares no notifications must not carry the notifications key
+    // at all, so consumers can distinguish "emits no events" from "emits some".
+    let tool: Tool = operation_tool! {
+        name: "demo",
+        description: "Demo operation tool",
+        operations: demo_operations(),
+    };
+
+    let meta = tool.meta.expect("operation tool must have _meta");
+    assert!(
+        !meta.0.contains_key("io.swissarmyhammer/notifications"),
+        "a tool with no declared notifications must omit the notifications _meta key",
+    );
+}
+
+#[test]
+fn operation_tool_notifications_meta_is_byte_identical_to_generator() {
+    // No second source of truth: the notifications `_meta` the macro emits must
+    // equal calling `generate_notifications_meta` over the same slice.
+    let tool: Tool = operation_tool! {
+        name: "demo",
+        description: "Demo operation tool",
+        operations: demo_operations(),
+        notifications: demo_notifications(),
+    };
+
+    let macro_meta = tool
+        .meta
+        .expect("operation tool must have _meta")
+        .0
+        .get("io.swissarmyhammer/notifications")
+        .expect("_meta must carry io.swissarmyhammer/notifications")
+        .clone();
+
+    let direct_meta = generate_notifications_meta(&demo_notifications());
+
+    assert_eq!(
+        serde_json::to_string(&macro_meta).unwrap(),
+        serde_json::to_string(&direct_meta).unwrap(),
+        "macro-generated notifications _meta must be byte-identical to generate_notifications_meta",
+    );
 }

@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: b680
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffee80
 project: plugin-arch
 title: 'Notification declaration macro: #[notification] + generate_notifications_meta + operation_tool! notifications field'
 ---

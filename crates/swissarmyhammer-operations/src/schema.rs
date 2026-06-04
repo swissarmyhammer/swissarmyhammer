@@ -7,7 +7,7 @@
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
-use crate::{Operation, ParamType};
+use crate::{Notification, Operation, ParamMeta, ParamType};
 
 /// Configuration for schema generation
 pub struct SchemaConfig {
@@ -169,7 +169,7 @@ pub fn generate_operations_meta(operations: &[&dyn Operation]) -> Value {
         let leaf = json!({
             "op": op.op_string(),
             "description": op.description(),
-            "parameters": parameters_to_meta(*op),
+            "parameters": params_to_meta(op.parameters()),
         });
 
         let noun_entry = tree
@@ -184,21 +184,57 @@ pub fn generate_operations_meta(operations: &[&dyn Operation]) -> Value {
     Value::Object(tree)
 }
 
-/// Build the `parameters` map for a single operation's `_meta` leaf
+/// Build the `io.swissarmyhammer/notifications` discovery `_meta` value.
 ///
-/// # Arguments
+/// The notification-side sibling of [`generate_operations_meta`]. A JSON object
+/// keyed by **event** name (from [`Notification::event`]). Each event maps to a
+/// leaf object with:
+/// - `method` - the full wire method from [`Notification::method`]
+/// - `description` - from [`Notification::description`]
+/// - `parameters` - the same param-name → `{ type, required, description?,
+///   items? }` shape the operations meta uses, from
+///   [`Notification::parameters`].
 ///
-/// * `op` - The operation whose parameters are described
+/// The SDK reads this tree off a server's tool `_meta` to resolve
+/// `this.<server>.on(event, …)` to the wire method, mirroring how it resolves
+/// `noun.verb` to an `op`.
+///
+/// # Example
+///
+/// ```ignore
+/// let meta = generate_notifications_meta(&MY_NOTIFICATIONS);
+/// // meta["executed"]["method"] == "notifications/commands/executed"
+/// ```
+pub fn generate_notifications_meta(notifications: &[&dyn Notification]) -> Value {
+    let mut tree: Map<String, Value> = Map::new();
+
+    for note in notifications {
+        let leaf = json!({
+            "method": note.method(),
+            "description": note.description(),
+            "parameters": params_to_meta(note.parameters()),
+        });
+        tree.insert(note.event().to_string(), leaf);
+    }
+
+    Value::Object(tree)
+}
+
+/// Build the `parameters` map for an operation's or notification's `_meta` leaf.
+///
+/// Shared by [`generate_operations_meta`] and [`generate_notifications_meta`]:
+/// both describe a param set identically. Takes the raw [`ParamMeta`] slice so
+/// either an [`Operation`] or a [`Notification`] can feed it.
 ///
 /// # Returns
 ///
 /// A JSON object keyed by parameter name. Each parameter carries `type`,
 /// `required` (bool), and — when non-empty — `description`. Array parameters
 /// additionally carry `items: {type: string}`.
-fn parameters_to_meta(op: &dyn Operation) -> Value {
-    let mut params = Map::new();
+fn params_to_meta(params: &[ParamMeta]) -> Value {
+    let mut out = Map::new();
 
-    for param in op.parameters() {
+    for param in params {
         let json_type = param_type_to_json_schema_type(param.param_type);
 
         let mut entry = Map::new();
@@ -213,10 +249,10 @@ fn parameters_to_meta(op: &dyn Operation) -> Value {
             entry.insert("items".to_string(), json!({"type": "string"}));
         }
 
-        params.insert(param.name.to_string(), Value::Object(entry));
+        out.insert(param.name.to_string(), Value::Object(entry));
     }
 
-    Value::Object(params)
+    Value::Object(out)
 }
 
 /// Collect all unique parameters across all operations
@@ -706,6 +742,81 @@ mod tests {
         assert!(!silent.contains_key("description"));
         assert_eq!(silent["type"], "boolean");
         assert_eq!(silent["required"], false);
+    }
+
+    // Mock notification: event derived from the method's last segment.
+    struct MockExecuted;
+
+    static MOCK_EXECUTED_PARAMS: &[ParamMeta] = &[
+        ParamMeta::new("id")
+            .description("The command id that executed")
+            .param_type(ParamType::String)
+            .required(),
+        ParamMeta::new("result")
+            .description("The command's return value")
+            .param_type(ParamType::String),
+    ];
+
+    impl Notification for MockExecuted {
+        fn method(&self) -> &'static str {
+            "notifications/commands/executed"
+        }
+        fn description(&self) -> &'static str {
+            "A command executed."
+        }
+        fn parameters(&self) -> &'static [ParamMeta] {
+            MOCK_EXECUTED_PARAMS
+        }
+    }
+
+    // Mock notification with an explicit event override.
+    struct MockUndo;
+
+    impl Notification for MockUndo {
+        fn method(&self) -> &'static str {
+            "notifications/store/undo_changed"
+        }
+        fn event(&self) -> &'static str {
+            "undo"
+        }
+        fn description(&self) -> &'static str {
+            "Undo stack changed."
+        }
+    }
+
+    #[test]
+    fn test_generate_notifications_meta_event_keyed_tree() {
+        let notes: Vec<&dyn Notification> = vec![&MockExecuted, &MockUndo];
+        let meta = generate_notifications_meta(&notes);
+
+        // Keyed by EVENT name: derived default and explicit override.
+        assert_eq!(
+            meta["executed"]["method"],
+            "notifications/commands/executed"
+        );
+        assert_eq!(meta["executed"]["description"], "A command executed.");
+        assert_eq!(meta["undo"]["method"], "notifications/store/undo_changed");
+        // The default-derived event name is NOT present for the overridden one.
+        assert!(meta.get("undo_changed").is_none());
+    }
+
+    #[test]
+    fn test_generate_notifications_meta_params_shape_matches_operations() {
+        let notes: Vec<&dyn Notification> = vec![&MockExecuted];
+        let meta = generate_notifications_meta(&notes);
+
+        let params = &meta["executed"]["parameters"];
+        assert_eq!(params["id"]["required"], true);
+        assert_eq!(params["id"]["type"], "string");
+        assert_eq!(params["id"]["description"], "The command id that executed");
+        assert_eq!(params["result"]["required"], false);
+    }
+
+    #[test]
+    fn test_generate_notifications_meta_empty_is_empty_object() {
+        let notes: Vec<&dyn Notification> = vec![];
+        let meta = generate_notifications_meta(&notes);
+        assert_eq!(meta, serde_json::json!({}));
     }
 
     #[test]
