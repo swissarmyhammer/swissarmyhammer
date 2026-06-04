@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KT9FY7SBW0MVVAZ4A1WZP4SS
 - 01KT9FYTVE2CMAGZQW29G1M6Q6
-position_column: todo
-position_ordinal: b480
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffff380
 project: plugin-arch
 title: 'Event API: real-pipeline integration test (plugin subscribes to commands/executed, real execute fires the callback)'
 ---

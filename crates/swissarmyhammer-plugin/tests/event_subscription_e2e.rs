@@ -35,7 +35,7 @@ use rmcp::{tool, tool_handler, tool_router, ServerHandler};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use swissarmyhammer_command_service::bootstrap::install_commands_module;
-use swissarmyhammer_plugin::{InProcessServer, McpNotification, McpServer, PluginHost};
+use swissarmyhammer_plugin::{CallerId, InProcessServer, McpNotification, McpServer, PluginHost};
 
 /// A generous upper bound on any single host interaction.
 const TIMEOUT: Duration = Duration::from_secs(20);
@@ -330,5 +330,62 @@ async fn server_on_unknown_event_throws() {
     assert!(
         message.contains("nope") && message.contains("executed"),
         "error should name the bad event and list the valid ones, got: {message}"
+    );
+}
+
+/// The full chain, end to end through a real isolate: a plugin registers a
+/// command AND subscribes via `.on("executed", …)`; executing that command
+/// runs its callback, the command service's production publisher emits
+/// `commands/executed`, and the subscriber's callback fires with the executed
+/// command's id. No manual bridge publish — a real `execute` drives it.
+#[tokio::test]
+async fn real_command_execute_fires_the_on_subscriber() {
+    let (host, bundle, seen) = host_with_recorder().await;
+    tokio::time::timeout(TIMEOUT, install_commands_module(&host))
+        .await
+        .expect("installing the command module should not hang")
+        .expect("installing the command module should succeed");
+
+    // The plugin registers a command with an `execute` callback, records every
+    // `executed` event via the recorder, then registers the command. When the
+    // test executes it, the command service publishes `commands/executed`, which
+    // the `.on()` subscription delivers back into the isolate.
+    write_plugin(
+        bundle.path(),
+        "this.register('commands', { rust: 'commands' });\n\
+         this.register('rec', { rust: 'rec-mod' });\n\
+         const rec = this.rec;\n\
+         this.commands.on('executed', async (p) => {\n\
+           await rec.record({ message: 'event:' + p.id });\n\
+         });\n\
+         await this.commands.command.command.register({\n\
+           id: 'test.ping', name: 'Ping', execute: async () => 'pong',\n\
+         });",
+    );
+
+    tokio::time::timeout(TIMEOUT, host.load(bundle.path()))
+        .await
+        .expect("loading the plugin should not hang")
+        .expect("the plugin's load should succeed");
+
+    // A real execute through the command service — runs the plugin's execute
+    // callback and emits the action event via the production BridgeActionSink.
+    tokio::time::timeout(
+        TIMEOUT,
+        host.call(
+            CallerId::HostInternal,
+            "commands",
+            "command",
+            json!({ "op": "execute command", "id": "test.ping", "ctx": {} }),
+        ),
+    )
+    .await
+    .expect("executing the command should not hang")
+    .expect("executing the registered command should succeed");
+
+    let recordings = wait_for_recordings(&seen, 1).await;
+    assert_eq!(
+        recordings[0], "event:test.ping",
+        "a real command execute must drive the .on(\"executed\") subscriber with the command id"
     );
 }
