@@ -1833,8 +1833,41 @@ pub async fn index_discovered_files_async(
 /// index is minutes-to-tens-of-minutes for large workspaces. We embed
 /// sequentially because the backends serialize internally; adding worker
 /// parallelism here invites contention without throughput gains.
+/// Returns whether the named environment variable is set to a truthy value.
+///
+/// Truthy means `1`, `true`, `yes`, or `on` (case-insensitive). Any other
+/// value — including unset, empty, or `0`/`false` — is false. Used for opt-in
+/// boolean toggles like `SAH_DISABLE_EMBEDDING`.
+fn env_flag_enabled(name: &str) -> bool {
+    std::env::var(name)
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
 async fn build_default_embedder() -> Option<std::sync::Arc<dyn model_embedding::TextEmbedder>> {
     use model_embedding::TextEmbedder as _;
+
+    // Escape hatch: skip chunk embeddings entirely when `SAH_DISABLE_EMBEDDING`
+    // is set to a truthy value. This selects the same `None`-embedder path the
+    // indexer already takes on model-load failure — chunks are written without
+    // an `embedding` blob and files keep `embedded=0`. It exists for two real
+    // use cases: CI/headless indexing where the multi-GB model is unwanted, and
+    // tests that exercise the indexing/progress contract without paying a cold
+    // model load (which on a clean machine downloads gigabytes from HuggingFace
+    // and otherwise dominates the run). Semantic `search code` is unavailable
+    // for chunks indexed in this mode until a later pass embeds them.
+    if env_flag_enabled("SAH_DISABLE_EMBEDDING") {
+        tracing::info!(
+            "code-context: SAH_DISABLE_EMBEDDING set — skipping chunk embeddings this pass"
+        );
+        return None;
+    }
+
     let embedder = match swissarmyhammer_embedding::Embedder::default().await {
         Ok(e) => e,
         Err(err) => {

@@ -166,6 +166,13 @@ impl BuiltinGenerator {
 
     /// Recursively collect files from a directory.
     fn collect_files(&self, dir: &Path, prefix: &str, code: &mut String) {
+        // Watch this directory so that adding or removing entries (at any nesting
+        // depth) re-runs the build script. `rerun-if-changed` on a directory only
+        // tracks that directory's own mtime — which updates on add/remove of its
+        // direct children but NOT on changes inside subdirectories — so every
+        // directory in the tree must be registered, not just the root.
+        println!("cargo:rerun-if-changed={}", dir.display());
+
         let Ok(entries) = fs::read_dir(dir) else {
             return;
         };

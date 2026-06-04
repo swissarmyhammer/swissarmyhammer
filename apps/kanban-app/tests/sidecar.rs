@@ -48,8 +48,18 @@ fn stage_cli_sidecar_produces_runnable_kanban_binary() {
     );
 
     // Run the staging script for the host triple (no --target argument).
+    //
+    // Build in the `dev` profile, not the default `release`. This test asserts
+    // the staging *contract* — the script places a runnable binary at the
+    // triple-suffixed path Tauri resolves, with the executable bit set — which
+    // is identical across profiles. A release build of the whole kanban-cli
+    // dependency tree took ~80s and dominated the suite; the dev build reuses
+    // the workspace's already-compiled debug artifacts. CI's real
+    // `cargo tauri build` still uses the release profile via before-build.sh.
     let status = Command::new("bash")
         .arg(&script)
+        .arg("--profile")
+        .arg("dev")
         .current_dir(&app_root)
         .status()
         .expect("stage-cli-sidecar.sh should be invocable via bash");

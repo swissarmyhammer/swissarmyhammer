@@ -58,6 +58,19 @@ pub struct AgentConfig {
     /// Defaults to empty, leaving the standard ask-on-unknown behaviour intact.
     #[serde(default)]
     pub auto_allow_tool_patterns: Vec<String>,
+    /// Whether `session/new` spawns the underlying `claude` CLI process.
+    ///
+    /// Defaults to `true`, matching production behavior. Set to `false` as a
+    /// test/headless seam to skip spawning the real `claude` process (and its
+    /// multi-second init handshake) when only the MCP-connection side of
+    /// `new_session` is under test.
+    #[serde(default = "default_spawn_claude_on_new_session")]
+    pub spawn_claude_on_new_session: bool,
+}
+
+/// Default value for spawn_claude_on_new_session (true — production spawns claude)
+fn default_spawn_claude_on_new_session() -> bool {
+    true
 }
 
 /// Mode for Claude agent operation
@@ -609,6 +622,7 @@ impl Default for AgentConfig {
             max_tokens_per_turn: default_max_tokens_per_turn(),
             max_turn_requests: default_max_turn_requests(),
             auto_allow_tool_patterns: vec![],
+            spawn_claude_on_new_session: default_spawn_claude_on_new_session(),
         }
     }
 }

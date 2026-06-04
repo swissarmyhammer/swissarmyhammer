@@ -95,6 +95,18 @@ slow-timeout = { period = "60s", terminate-after = 6 }
 # hang budget under that contention. Put them in the SAME global serial lane as
 # the llama-agent / llama-embedding real-model tests so at most one real-model
 # test drives the GPU at a time.
+# The kanban-app `sidecar` test shells out to `stage-cli-sidecar.sh`, which runs
+# `cargo build -p kanban-cli` to produce the real sidecar binary and verifies it
+# stages and runs. This is a build/packaging integration test, not a unit test:
+# even with everything cached it must link the kanban-cli binary, which takes a
+# few seconds. (It now builds in the `dev` profile against the shared target dir
+# rather than a fresh `--release --target` tree, down from ~80s to a few s.) Give
+# it a longer warn threshold so the expected build cost isn't flagged as slow,
+# while still hard-killing a genuine hang.
+[[profile.default.overrides]]
+filter = "package(kanban-app) and binary(sidecar)"
+slow-timeout = { period = "30s", terminate-after = 4 }
+
 [[profile.default.overrides]]
 filter = "package(kanban-app) and binary(ai_panel_e2e)"
 test-group = "llama-embedding-serial"
