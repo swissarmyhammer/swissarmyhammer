@@ -1,6 +1,0 @@
-[merge "kanban-jsonl"]
-	driver = kanban merge jsonl %O %A %B
-[merge "kanban-yaml"]
-	driver = kanban merge yaml %O %A %B
-[merge "kanban-md"]
-	driver = kanban merge md %O %A %B
