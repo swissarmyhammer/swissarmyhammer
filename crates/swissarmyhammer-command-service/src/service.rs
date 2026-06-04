@@ -44,8 +44,8 @@ use crate::latency::{
 use crate::lifecycle::{NoopCallerLifecycle, SharedCallerLifecycle};
 use crate::notifications::ChangeNotifier;
 use crate::operations::{
-    operations, AvailableCommand, ExecuteCommand, ListCommand, RegisterCommand, SchemaCommand,
-    UnregisterCommand,
+    command_notifications, operations, AvailableCommand, ExecuteCommand, ListCommand,
+    RegisterCommand, SchemaCommand, UnregisterCommand,
 };
 use crate::registry::{CommandRegistry, StackEntry};
 use crate::txn::{
@@ -287,6 +287,7 @@ impl CommandService {
             name: "command",
             description: "Register, execute, and discover user-invocable commands across host and plugin isolates.",
             operations: operations(),
+            notifications: command_notifications(),
         }
     }
 

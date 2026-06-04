@@ -34,7 +34,10 @@
 use std::sync::Arc;
 
 use serde_json::Value;
+use swissarmyhammer_operations::Notification;
 use swissarmyhammer_plugin::{CallerId, McpNotification, Provenance};
+
+use crate::operations::CommandsExecuted;
 
 /// Opens and closes the ambient transaction that brackets an `execute`.
 ///
@@ -134,5 +137,86 @@ pub(crate) fn build_commands_executed(
     txn: Option<String>,
 ) -> McpNotification {
     let prov = Provenance::for_caller(caller, txn);
-    McpNotification::commands_executed(id, ctx, result, prov)
+    // The declared `CommandsExecuted` struct IS the payload: serializing it
+    // produces the params, so the `_meta` schema and the wire payload share one
+    // source. Provenance is stamped on top by `from_declared`.
+    let payload = CommandsExecuted {
+        id: id.to_string(),
+        ctx,
+        result,
+    };
+    McpNotification::from_declared(payload.method(), &payload, prov)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::operations::command_notifications;
+    use std::collections::BTreeSet;
+    use swissarmyhammer_operations::generate_notifications_meta;
+
+    /// The set of notification methods this service DECLARES (the "declared"
+    /// side of the coverage guard), read from the `_meta` generator.
+    fn declared_methods() -> BTreeSet<String> {
+        generate_notifications_meta(command_notifications())
+            .as_object()
+            .expect("notifications meta is an object")
+            .values()
+            .map(|leaf| {
+                leaf["method"]
+                    .as_str()
+                    .expect("each notification leaf carries a method")
+                    .to_string()
+            })
+            .collect()
+    }
+
+    /// Coverage guard (declared ⟺ raised). The method the production emission
+    /// path actually publishes MUST be one the service declares — so
+    /// `commands/executed` can never be raised without appearing in `_meta`,
+    /// nor declared without this path producing it. Every notification-migration
+    /// card reuses this shape for its own service.
+    #[test]
+    fn emitted_method_is_declared() {
+        let note = build_commands_executed(
+            "task.move",
+            serde_json::json!({ "scope_chain": ["task:1"] }),
+            serde_json::json!({ "ok": true }),
+            &CallerId::HostInternal,
+            Some("txn-1".to_string()),
+        );
+        assert!(
+            declared_methods().contains(&note.method),
+            "emitted method {:?} is not declared in _meta ({:?})",
+            note.method,
+            declared_methods(),
+        );
+        // And the declared set is exactly the methods this service raises.
+        assert_eq!(
+            declared_methods(),
+            BTreeSet::from(["notifications/commands/executed".to_string()]),
+        );
+    }
+
+    /// The emitted payload carries the declared domain fields (id/ctx/result)
+    /// from the `CommandsExecuted` struct, plus universal provenance — proving
+    /// the struct=payload serialization path.
+    #[test]
+    fn emitted_payload_carries_declared_fields_plus_provenance() {
+        let note = build_commands_executed(
+            "task.move",
+            serde_json::json!({ "k": "v" }),
+            serde_json::json!(42),
+            &CallerId::HostInternal,
+            Some("txn-1".to_string()),
+        );
+        assert_eq!(note.method, "notifications/commands/executed");
+        let params = note.params.as_object().expect("params is an object");
+        assert_eq!(params["id"], "task.move");
+        assert_eq!(params["ctx"], serde_json::json!({ "k": "v" }));
+        assert_eq!(params["result"], serde_json::json!(42));
+        // Universal provenance stamped on top of the declared payload.
+        assert_eq!(params["txn"], "txn-1");
+        assert_eq!(params["origin"], "user");
+    }
 }

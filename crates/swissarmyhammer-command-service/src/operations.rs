@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::LazyLock;
-use swissarmyhammer_operations::{operation, Operation};
+use swissarmyhammer_operations::{notification, operation, Notification, Operation};
 
 /// Register a new command (or replace this caller's existing entry for the
 /// same id).
@@ -257,4 +257,43 @@ static COMMAND_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new
 /// Get the canonical slice of all command operations.
 pub fn operations() -> &'static [&'static dyn Operation] {
     &COMMAND_OPERATIONS
+}
+
+/// The `notifications/commands/executed` event payload.
+///
+/// This struct is the single source of truth for the event: it IS the published
+/// payload (it serializes to the notification's `params` via
+/// [`McpNotification::from_declared`](swissarmyhammer_plugin::McpNotification::from_declared))
+/// AND the declaration the SDK reads (its fields drive the
+/// `io.swissarmyhammer/notifications` `_meta`). The two cannot drift. Emitted
+/// after every successful command execution (see
+/// [`build_commands_executed`](crate::txn::build_commands_executed)).
+///
+/// Provenance (`txn`/`origin`) is universal cross-cutting metadata stamped on
+/// every notification at publish time; it is intentionally NOT a field here.
+#[notification(
+    method = "notifications/commands/executed",
+    description = "A command finished executing successfully."
+)]
+#[derive(Debug, Default, Serialize)]
+pub(crate) struct CommandsExecuted {
+    /// The id of the command that executed.
+    pub id: String,
+    /// The execution context the command ran with.
+    pub ctx: Value,
+    /// The command's return value.
+    pub result: Value,
+}
+
+/// The canonical slice of notifications the `command` tool emits.
+///
+/// Mirrors [`operations`]: a leaked `Default` instance per notification, used
+/// only for its static metadata. Fed to `operation_tool!`'s `notifications:`
+/// field so the tool advertises its events in `_meta`.
+static COMMAND_NOTIFICATIONS: LazyLock<Vec<&'static dyn Notification>> =
+    LazyLock::new(|| vec![Box::leak(Box::<CommandsExecuted>::default()) as &dyn Notification]);
+
+/// Get the canonical slice of all command notifications.
+pub fn command_notifications() -> &'static [&'static dyn Notification] {
+    &COMMAND_NOTIFICATIONS
 }

@@ -1,8 +1,8 @@
 //! Snapshot-style assertions on the `io.swissarmyhammer/operations` `_meta`
 //! tree the discovery generator produces for the six `command` operations.
 
-use swissarmyhammer_command_service::operations;
-use swissarmyhammer_operations::generate_operations_meta;
+use swissarmyhammer_command_service::{command_notifications, operations};
+use swissarmyhammer_operations::{generate_notifications_meta, generate_operations_meta};
 
 /// The meta tree groups every verb under the noun `command`.
 #[test]
@@ -130,4 +130,31 @@ fn meta_tree_register_exposes_full_registration_payload() {
             "register.{field} should be optional"
         );
     }
+}
+
+/// The command tool declares exactly one notification — `commands/executed` —
+/// keyed by its event name, carrying the full wire method and its domain
+/// params. (The emission↔declaration coverage guard lives in `txn.rs`'s unit
+/// tests, where the production builder is reachable.)
+#[test]
+fn notifications_meta_declares_commands_executed() {
+    let meta = generate_notifications_meta(command_notifications());
+    let obj = meta.as_object().expect("notifications meta is an object");
+
+    assert_eq!(
+        obj.keys().collect::<Vec<_>>(),
+        vec!["executed"],
+        "command tool should declare exactly the `executed` event"
+    );
+
+    let executed = &meta["executed"];
+    assert_eq!(executed["method"], "notifications/commands/executed");
+    assert!(executed["description"].is_string());
+
+    // Domain params come from the CommandsExecuted struct fields.
+    let params = &executed["parameters"];
+    assert_eq!(params["id"]["type"], "string");
+    assert_eq!(params["id"]["required"], true);
+    assert!(params["ctx"].is_object());
+    assert!(params["result"].is_object());
 }

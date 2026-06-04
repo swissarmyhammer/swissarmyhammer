@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KT9JTDE3EX2BQNQ4F3HMZYTP
-position_column: todo
-position_ordinal: b780
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffef80
 project: plugin-arch
 title: 'Notification single-source-of-truth: payload struct = published payload + coverage guard + declare commands/executed'
 ---

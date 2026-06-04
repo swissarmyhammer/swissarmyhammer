@@ -34,8 +34,8 @@ pub use latency::{
 pub use lifecycle::{CallerLifecycle, NoopCallerLifecycle, SharedCallerLifecycle, UnloadHook};
 pub use notifications::ChangeNotifier;
 pub use operations::{
-    operations, AvailableCommand, ExecuteCommand, ListCommand, RegisterCommand, SchemaCommand,
-    UnregisterCommand,
+    command_notifications, operations, AvailableCommand, ExecuteCommand, ListCommand,
+    RegisterCommand, SchemaCommand, UnregisterCommand,
 };
 pub use registry::{CommandRegistry, StackEntry};
 pub use service::{CommandService, DEFAULT_CHANGE_NOTIFICATION_DEBOUNCE};

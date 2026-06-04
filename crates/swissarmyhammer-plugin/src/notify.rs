@@ -225,6 +225,36 @@ impl McpNotification {
         }
     }
 
+    /// Build a notification from a declared payload struct + provenance — the
+    /// single-source-of-truth publish path.
+    ///
+    /// `payload` is a `#[notification]`-declared struct (its fields drive the
+    /// `io.swissarmyhammer/notifications` `_meta` the SDK reads). Serializing it
+    /// here produces the wire `params`, and `prov` stamps `txn`/`origin` on top.
+    /// Because the SAME struct both declares the notification's params and
+    /// produces them, the declared schema and the emitted payload cannot drift.
+    ///
+    /// `method` is taken explicitly (conventionally `payload.method()` from the
+    /// `Notification` trait) so this crate need not depend on the operations
+    /// crate. Provenance is universal cross-cutting metadata stamped on every
+    /// notification, not part of the per-event declared payload.
+    ///
+    /// A payload that does not serialize to a JSON object yields just the
+    /// provenance fields — declared notification structs are always objects, so
+    /// this is only a total fallback.
+    pub fn from_declared<T: Serialize>(
+        method: impl Into<String>,
+        payload: &T,
+        prov: Provenance,
+    ) -> Self {
+        let mut params = match serde_json::to_value(payload) {
+            Ok(Value::Object(map)) => map,
+            _ => Map::new(),
+        };
+        prov.stamp_into(&mut params);
+        Self::new(method, Value::Object(params))
+    }
+
     /// Plane 1 — `notifications/store/changed`.
     ///
     /// The one generic data-change schema for entities, views, and
@@ -250,28 +280,11 @@ impl McpNotification {
         Self::new("notifications/store/changed", Value::Object(params))
     }
 
-    /// Plane 2 — `notifications/commands/executed`.
+    /// Plane 2 — `notifications/commands/executed` is built via
+    /// [`from_declared`](Self::from_declared) from the command service's
+    /// `CommandsExecuted` payload struct (the single-source-of-truth path), so
+    /// there is no bespoke constructor here.
     ///
-    /// **Delivery only.** The command engine's txn task owns *emission*; this
-    /// constructor exists so that task (and the bridge's tests) can hand a
-    /// fully-formed action event to [`NotificationBridge::publish`]. `id` is
-    /// the command id, `ctx` the execution context, `result` the command's
-    /// return value. Shares the command's `txn` with the data changes it
-    /// produced.
-    pub fn commands_executed(
-        id: impl Into<String>,
-        ctx: Value,
-        result: Value,
-        prov: Provenance,
-    ) -> Self {
-        let mut params = Map::new();
-        params.insert("id".to_string(), json!(id.into()));
-        params.insert("ctx".to_string(), ctx);
-        params.insert("result".to_string(), result);
-        prov.stamp_into(&mut params);
-        Self::new("notifications/commands/executed", Value::Object(params))
-    }
-
     /// Plane 3 — `notifications/commands/changed` (command registry changed).
     ///
     /// Signals the palette to refresh; carries no per-item payload beyond the
