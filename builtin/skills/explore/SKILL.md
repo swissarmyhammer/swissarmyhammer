@@ -19,6 +19,8 @@ Understand code well enough to explain how it works and what a change would touc
 
 $ARGUMENTS
 
+{% include "_partials/delegate-to-subagent" %}
+
 ## Done Means
 
 Exploration is complete when you can explain:

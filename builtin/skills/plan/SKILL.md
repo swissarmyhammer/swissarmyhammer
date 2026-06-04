@@ -19,6 +19,8 @@ Use whenever you enter Plan Mode or the user asks you to plan work.
 
 $ARGUMENTS
 
+{% include "_partials/delegate-to-subagent" %}
+
 ## Interpreting the arguments
 
 The arguments above may be a free-form description of the work, a path to a file that is the basis for the plan, or both.

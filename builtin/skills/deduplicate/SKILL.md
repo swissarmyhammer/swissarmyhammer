@@ -1,6 +1,6 @@
 ---
 name: deduplicate
-description: Find and refactor duplicate code. Use this skill when the user wants to find near-duplicate code, check for copy-paste redundancy, or DRY up a codebase — optionally scoped to changed files. Automatically delegates to an implementer subagent.
+description: Find and refactor duplicate code. Use this skill when the user wants to find near-duplicate code, check for copy-paste redundancy, or DRY up a codebase — optionally scoped to changed files.
 agent: implementer
 license: MIT OR Apache-2.0
 compatibility: Requires the `code_context` MCP tool for `find duplicates` and symbol/blast-radius analysis, plus the `kanban` MCP tool for tracking refactor work.
@@ -13,6 +13,8 @@ metadata:
 # Deduplicate
 
 Find near-duplicates with tree-sitter semantic similarity, then refactor to remove redundancy.
+
+{% include "_partials/delegate-to-subagent" %}
 
 ## Process
 

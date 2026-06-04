@@ -2,7 +2,7 @@
 name: review
 profiles:
   - kanban
-description: Code review workflow. Use this skill whenever the user says "review", "code review", "review this PR", "review my changes", or otherwise wants a code review. Reviews produce verbose output — automatically delegates to a reviewer subagent.
+description: Code review workflow. Use this skill whenever the user says "review", "code review", "review this PR", "review my changes", or otherwise wants a code review.
 agent: reviewer
 license: MIT OR Apache-2.0
 compatibility: Requires the `code_context` MCP tool (for symbol lookup, callgraph, and blast-radius during review) and the `kanban` MCP tool (to drive tasks through the review column and capture follow-up findings). 
@@ -18,6 +18,8 @@ Perform a structured code review. Findings land as a GFM checklist on a kanban t
 
 Here is what the user provided: 
 $ARGUMENTS
+
+{% include "_partials/delegate-to-subagent" %}
 
 ## Guidelines
 

@@ -988,8 +988,17 @@ fn render_profile_skill(
     ctx: &TemplateContext,
     skill: &swissarmyhammer_skills::Skill,
 ) -> (String, std::collections::HashMap<String, String>) {
+    // Expose the skill's `agent` frontmatter as a template variable so shared
+    // partials (e.g. `_partials/delegate-to-subagent`) can render `{{ agent }}`
+    // without each skill hard-coding its delegate name. Cloned per skill because
+    // `ctx` is shared across the whole profile.
+    let mut skill_ctx = ctx.clone();
+    if let Some(agent) = skill.agent.as_deref() {
+        skill_ctx.set("agent".to_string(), serde_json::json!(agent));
+    }
+
     let instructions = library
-        .render_text(&skill.instructions, ctx)
+        .render_text(&skill.instructions, &skill_ctx)
         .unwrap_or_else(|err| {
             tracing::warn!(
                 skill = skill.name.as_str(),
@@ -1002,7 +1011,7 @@ fn render_profile_skill(
     let mut metadata = skill.metadata.clone();
     for value in metadata.values_mut() {
         if value.contains("{{") || value.contains("{%") {
-            if let Ok(rendered) = library.render_text(value, ctx) {
+            if let Ok(rendered) = library.render_text(value, &skill_ctx) {
                 *value = rendered;
             }
         }
