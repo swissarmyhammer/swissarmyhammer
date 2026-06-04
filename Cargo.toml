@@ -47,7 +47,6 @@ members = [
     "crates/swissarmyhammer-operations",
     "crates/swissarmyhammer-operations-macros",
     "crates/swissarmyhammer-skills",
-    "crates/swissarmyhammer-workspace-init",
     "crates/swissarmyhammer-agents",
     "crates/swissarmyhammer-web",
     "crates/mirdan",
@@ -80,7 +79,7 @@ tag-name = "v{{version}}"      # Single tag for workspace
 consolidate-commits = true     # One commit for all version bumps
 
 [workspace.package]
-version = "0.13.7"
+version = "0.13.10"
 edition = "2021"
 rust-version = "1.92"
 authors = ["SwissArmyHammer Team"]
@@ -305,7 +304,6 @@ swissarmyhammer-tools = { path = "crates/swissarmyhammer-tools" }
 swissarmyhammer-treesitter = { path = "crates/swissarmyhammer-treesitter" }
 swissarmyhammer-views = { path = "crates/swissarmyhammer-views" }
 swissarmyhammer-web = { path = "crates/swissarmyhammer-web" }
-swissarmyhammer-workspace-init = { path = "crates/swissarmyhammer-workspace-init" }
 swissarmyhammer = { path = "crates/swissarmyhammer" }
 num_cpus = "1.17"
 process-wrap = "8.2"
@@ -369,5 +367,12 @@ split-debuginfo = "unpacked"
 
 [profile.dist]
 inherits = "release"
-lto = true
+# LTO disabled deliberately. Fat LTO link-time optimization of the full
+# llama.cpp/ggml + agent dependency tree blew past the GitHub runner's memory
+# on the cross-compiled aarch64-unknown-linux-gnu release build -- the "Build
+# artifacts" step was OS-killed mid-link with zero log output (the OOM
+# signature), which silently failed every release. Plain release optimization
+# (opt-level 3, codegen-units 16) builds fine on every target. Revisit `thin`
+# LTO only if a release runner with more headroom is available.
+lto = false
 strip = true

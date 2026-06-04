@@ -1033,17 +1033,64 @@ async fn create_llama_agent(
         ..Default::default()
     };
 
+    // Build the always-on Agent-tools mount. This is the tier that legally sees
+    // both `swissarmyhammer-tools` and `llama-agent`; it constructs the
+    // agent-tools MCP server here and hands llama-agent an rmcp-only mount, so
+    // the dependency edge stays one-way (`swissarmyhammer-agent` → both) with no
+    // cycle. Every session llama-agent creates mounts a fresh in-process
+    // connection from it, so the agent is fully tooled even with zero external
+    // MCP servers.
+    let agent_tools_mount = build_agent_tools_mount().await?;
+
     // Create the ACP server (its inherent methods serve as the per-method
     // handlers wired into `Agent.builder()` by `wrap_llama_into_handle`).
     // Each connection gets its own AcpServer so notifications and session
     // lifecycle are per-connection — but the AgentServer Arc is shared with
     // every other connection on the same model config.
-    let (acp_server, notification_rx) = llama_agent::AcpServer::new(agent_server, acp_config);
+    let (acp_server, notification_rx) =
+        llama_agent::AcpServer::new(agent_server, acp_config, agent_tools_mount);
 
     Ok(wrap_llama_into_handle(
         Arc::new(acp_server),
         notification_rx,
     ))
+}
+
+/// Build the always-on Agent-tools mount handed to every llama-agent session.
+///
+/// This is the cycle-free seam: `swissarmyhammer-agent` is the only tier that
+/// depends on *both* `swissarmyhammer-tools` and `llama-agent`. It builds the
+/// full SAH [`McpServer`](swissarmyhammer_tools::McpServer), derives the
+/// agent-tools-only filtered server via
+/// [`create_agent_tools_server`](swissarmyhammer_tools::McpServer::create_agent_tools_server)
+/// (`compose_per_client = false`, so it serves its registry verbatim — files,
+/// web, skill, subagent, shell), and wraps it in a
+/// [`llama_agent::InProcessMount`]. The mount is an rmcp-only value from
+/// llama-agent's perspective; the tools crate is named only here, above both
+/// siblings, so no `tools → llama-agent` runtime edge is introduced.
+///
+/// This is also the entry point any other tier that constructs a llama-agent
+/// ACP server directly (e.g. the `sah agent acp` CLI command) must use, so the
+/// tools-crate dependency and the duplex wiring live in exactly one place.
+///
+/// # Errors
+///
+/// Returns [`AcpError::InitializationError`] if the underlying SAH
+/// [`McpServer`](swissarmyhammer_tools::McpServer) cannot be constructed.
+pub async fn build_agent_tools_mount() -> AcpResult<Arc<dyn llama_agent::AgentToolsMount>> {
+    use swissarmyhammer_prompts::PromptLibrary;
+    use swissarmyhammer_tools::McpServer;
+
+    let server = McpServer::new(PromptLibrary::default())
+        .await
+        .map_err(|e| {
+            AcpError::InitializationError(format!("failed to build agent-tools server: {e}"))
+        })?;
+
+    let agent_tools_server = server.create_agent_tools_server();
+    Ok(Arc::new(llama_agent::InProcessMount::new(
+        agent_tools_server,
+    )))
 }
 
 /// Look up an already-initialized [`llama_agent::AgentServer`] for this model

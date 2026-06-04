@@ -89,7 +89,7 @@ pub trait Initializable {
     /// Stable machine-readable identifier for this component.
     ///
     /// Used for log/test selectors and lockfile entries — kept as a slug
-    /// (`"deny-bash"`, `"skill-deployment"`, …) so external consumers do not
+    /// (`"statusline"`, `"skill-deployment"`, …) so external consumers do not
     /// break when the user-facing display label is reworded. For a
     /// human-readable label, override [`Initializable::display_name`].
     fn name(&self) -> &str;
@@ -451,16 +451,16 @@ mod tests {
     #[test]
     fn test_default_display_name_returns_name_slug() {
         // Components that do not override display_name fall back to name().
-        let c = TestComponent::new("deny-bash", 10);
-        assert_eq!(c.display_name(), "deny-bash");
+        let c = TestComponent::new("statusline", 10);
+        assert_eq!(c.display_name(), "statusline");
     }
 
     #[test]
     fn test_override_display_name_returns_label() {
         // Components that override display_name surface the human-readable
         // label, while the slug returned by name() is preserved.
-        let c = TestComponent::new("deny-bash", 10).with_display_name("Permissions");
-        assert_eq!(c.display_name(), "Permissions");
-        assert_eq!(c.name(), "deny-bash");
+        let c = TestComponent::new("statusline", 10).with_display_name("Statusline");
+        assert_eq!(c.display_name(), "Statusline");
+        assert_eq!(c.name(), "statusline");
     }
 }

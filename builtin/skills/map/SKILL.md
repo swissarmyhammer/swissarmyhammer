@@ -14,6 +14,8 @@ Generate a visual architecture overview and write `ARCHITECTURE.md` at the repo 
 
 ## Process
 
+Work with the `code_context` MCP tool to explore the codebase structure, key types, and call graphs. Use Mermaid syntax for diagrams that render on GitHub.
+
 ### 1. Check index status
 
 ```json

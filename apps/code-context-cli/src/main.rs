@@ -39,6 +39,70 @@ async fn main() {
     std::process::exit(exit_code);
 }
 
+/// Map an `InstallTarget` from the CLI to the corresponding lifecycle `InitScope`.
+fn install_target_to_scope(target: InstallTarget) -> InitScope {
+    match target {
+        InstallTarget::Project => InitScope::Project,
+        InstallTarget::Local => InitScope::Local,
+        InstallTarget::User => InitScope::User,
+    }
+}
+
+/// Return `true` if any `InitResult` has `Error` status.
+fn any_init_error(results: &[swissarmyhammer_common::lifecycle::InitResult]) -> bool {
+    results
+        .iter()
+        .any(|r| r.status == swissarmyhammer_common::lifecycle::InitStatus::Error)
+}
+
+/// Install code-context for the given scope and return the exit code.
+///
+/// Runs the mirdan profile installer (registers the `code-context` MCP server —
+/// strategy-aware, so it handles Claude local scope the old hand-rolled loop
+/// dropped — and deploys the `code-context` + `explore` + `lsp` +
+/// `detected-projects` skills) followed by the
+/// genuine tool-lifecycle components (the `.code-context/` directory +
+/// `.gitignore`). A single errored result from either phase demotes the run to
+/// exit code 1.
+fn run_init(target: InstallTarget) -> i32 {
+    let scope = install_target_to_scope(target);
+    let reporter = CliReporter;
+
+    let mut reg = InitRegistry::new();
+    commands::registry::register_all(&mut reg);
+    let results = mirdan::install::init_profile_with_registry(
+        &commands::registry::profile(scope),
+        &reg,
+        scope,
+        None,
+        &reporter,
+    );
+
+    i32::from(any_init_error(&results))
+}
+
+/// Remove code-context for the given scope and return the exit code.
+///
+/// Mirrors [`run_init`]: deinits the genuine tool-lifecycle components, then runs
+/// the mirdan profile deinstaller (unregisters the MCP server and removes the
+/// `code-context` + `explore` + `lsp` + `detected-projects` skills).
+fn run_deinit(target: InstallTarget) -> i32 {
+    let scope = install_target_to_scope(target);
+    let reporter = CliReporter;
+
+    let mut reg = InitRegistry::new();
+    commands::registry::register_all(&mut reg);
+    let results = mirdan::install::deinit_profile_with_registry(
+        &commands::registry::profile(scope),
+        &reg,
+        scope,
+        None,
+        &reporter,
+    );
+
+    i32::from(any_init_error(&results))
+}
+
 /// Dispatch the parsed CLI command to the appropriate handler.
 ///
 /// Returns an exit code: 0 for success, 1 for error.
@@ -54,36 +118,8 @@ async fn dispatch_command(cli: Cli) -> i32 {
                 1
             }
         },
-        Commands::Init { target } => {
-            let scope = match target {
-                InstallTarget::Project => InitScope::Project,
-                InstallTarget::Local => InitScope::Local,
-                InstallTarget::User => InitScope::User,
-            };
-            let mut reg = InitRegistry::new();
-            commands::registry::register_all(&mut reg);
-            let reporter = CliReporter;
-            let results = reg.run_all_init(&scope, &reporter);
-            let had_error = results
-                .iter()
-                .any(|r| r.status == swissarmyhammer_common::lifecycle::InitStatus::Error);
-            i32::from(had_error)
-        }
-        Commands::Deinit { target } => {
-            let scope = match target {
-                InstallTarget::Project => InitScope::Project,
-                InstallTarget::Local => InitScope::Local,
-                InstallTarget::User => InitScope::User,
-            };
-            let mut reg = InitRegistry::new();
-            commands::registry::register_all(&mut reg);
-            let reporter = CliReporter;
-            let results = reg.run_all_deinit(&scope, &reporter);
-            let had_error = results
-                .iter()
-                .any(|r| r.status == swissarmyhammer_common::lifecycle::InitStatus::Error);
-            i32::from(had_error)
-        }
+        Commands::Init { target } => run_init(target),
+        Commands::Deinit { target } => run_deinit(target),
         Commands::Doctor { verbose } => commands::doctor::run_doctor(verbose).await,
         Commands::Skill => commands::skill::run_skill(),
         Commands::Completion { shell } => match completions::print_completion(shell) {

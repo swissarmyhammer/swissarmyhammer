@@ -98,7 +98,7 @@ pub use glob_utils::{
 pub use prompt_visibility::{is_prompt_partial, is_prompt_visible};
 
 // Re-export reporter types for convenience
-pub use reporter::{CliReporter, InitEvent, InitReporter, NullReporter};
+pub use reporter::{CliReporter, InitEvent, InitReporter, NullReporter, TracingReporter};
 
 // Re-export the canonical slug function — mirrored by
 // `kanban-app/ui/src/lib/slugify.ts` and kept in lockstep via the parity

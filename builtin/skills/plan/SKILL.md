@@ -1,18 +1,24 @@
 ---
 name: plan
+profiles:
+  - kanban
 description: Plan Mode workflow. Use this skill when the user says "/plan", "help me plan", "break this into tasks", "design the approach", or otherwise wants to plan work, and also whenever you are in Plan Mode. Drives all planning activity — research, task decomposition, and creating kanban tasks as the plan artifact.
 license: MIT OR Apache-2.0
 compatibility: Requires the `code_context` MCP tool for pre-plan research (symbol search, callgraph, blast-radius) and the `kanban` MCP tool for persisting the plan as kanban tasks. 
+context: fork
+agent: planner
 metadata:
   author: swissarmyhammer
   version: "{{version}}"
 ---
 
-{% include "_partials/coding-standards" %}
+
 
 # Plan
 
 Use whenever you enter Plan Mode or the user asks you to plan work.
+
+$ARGUMENTS
 
 ## Goals
 
@@ -38,6 +44,8 @@ Use whenever you enter Plan Mode or the user asks you to plan work.
 The board IS the plan — no markdown plan file.
 
 ## Constraints
+
+{% include "_partials/architecture-awareness" %}
 
 ### Plans are kanban tasks — created as you go
 
@@ -69,7 +77,7 @@ Foundational changes (data models, types, config) → core logic → integration
 
 ## Autonomous Agent Mode
 
-No Plan Mode UI? Follow `references/PLANNING_GUIDE.md`.
+No Plan Mode UI or TUI? Follow `references/PLANNING_GUIDE.md`.
 
 ## Updating an Existing Plan
 

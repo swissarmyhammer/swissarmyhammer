@@ -1,0 +1,1 @@
+{"id":"01KT7375T83MTCJ461TSMGAQES","timestamp":"2026-06-03T15:56:46.280531Z","op":"create","item_id":"01KT7375T8ENNWSET51J4WH0KT","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: '5319e7'\n+tag_name: mirdan\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: '5319e7'\n-tag_name: mirdan\n","transaction_id":null}

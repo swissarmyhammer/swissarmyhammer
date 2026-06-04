@@ -24,7 +24,7 @@ pub use glob_files::GlobFilesTool;
 pub use grep_files::GrepFilesTool;
 pub use read_file::ReadFileTool;
 
-use crate::mcp::tool_registry::{AgentTool, McpTool, ToolContext, ToolRegistry, ValidatorTool};
+use crate::mcp::tool_registry::{McpTool, ToolCategory, ToolContext, ToolRegistry};
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use rmcp::model::CallToolResult;
@@ -127,14 +127,12 @@ impl McpTool for FilesTool {
         Some("files")
     }
 
-    fn is_agent_tool(&self) -> bool {
-        // Read-only variant is NOT agent-only — validators need it even without agent mode
-        self.operations == FileOperationSubset::All
-    }
-
-    fn is_validator_tool(&self) -> bool {
-        // Only the read-only variant is available to validators
-        self.operations == FileOperationSubset::ReadOnly
+    fn category(&self) -> ToolCategory {
+        // File read/write/edit/glob/grep is a base agent capability. The
+        // validator surface does not serve this unified tool at all — it serves
+        // the split read-only `read_file`/`glob_files`/`grep_files` tools via
+        // the validator profile (`tools::register_validator_tools`).
+        ToolCategory::Agent
     }
 
     async fn execute(
@@ -224,11 +222,6 @@ impl McpTool for FilesTool {
         }
     }
 }
-
-#[async_trait]
-impl AgentTool for FilesTool {}
-
-impl ValidatorTool for FilesTool {}
 
 impl swissarmyhammer_common::lifecycle::Initializable for FilesTool {
     fn name(&self) -> &str {
@@ -549,15 +542,17 @@ mod tests {
     }
 
     #[test]
-    fn test_read_only_is_not_agent_tool() {
+    fn test_read_only_category_is_agent() {
+        use crate::mcp::tool_registry::ToolCategory;
         let tool = FilesTool::read_only();
-        assert!(!tool.is_agent_tool());
+        assert_eq!(McpTool::category(&tool), ToolCategory::Agent);
     }
 
     #[test]
-    fn test_all_is_agent_tool() {
+    fn test_all_category_is_agent() {
+        use crate::mcp::tool_registry::ToolCategory;
         let tool = FilesTool::new();
-        assert!(tool.is_agent_tool());
+        assert_eq!(McpTool::category(&tool), ToolCategory::Agent);
     }
 
     #[tokio::test]

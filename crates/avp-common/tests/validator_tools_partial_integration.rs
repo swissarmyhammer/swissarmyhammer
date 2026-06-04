@@ -318,15 +318,15 @@ fn test_no_rule_body_advertises_claude_only_tools() {
 async fn test_validator_tools_partial_matches_runtime_tools_list() {
     // Bind an in-process HTTP MCP server in a clean tempdir so its index
     // does not walk the host monorepo.
+    // The validator route serves the validator profile; the full server
+    // registers the maximal tool union, so this verifies the validator route
+    // stays minimal regardless.
     let temp = tempfile::TempDir::new().unwrap();
     let mut server = start_mcp_server_with_options(
         McpServerMode::Http { port: None },
         None,
         None,
         Some(temp.path().to_path_buf()),
-        // agent_mode is irrelevant for the validator route — it filters
-        // by `is_validator_tool()`, not `is_agent_tool()`.
-        true,
     )
     .await
     .expect("Failed to start in-process MCP server");

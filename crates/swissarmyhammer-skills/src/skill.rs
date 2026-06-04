@@ -79,10 +79,21 @@ pub struct Skill {
     pub license: Option<String>,
     /// Optional compatibility string
     pub compatibility: Option<String>,
+    /// Optional context strategy controlling how the skill runs (e.g. `fork`
+    /// to run it in a forked/subagent context). `None` runs the skill inline.
+    pub context: Option<String>,
+    /// Optional agent to delegate the skill to (e.g. `explorer`). `None` runs
+    /// the skill with the current agent.
+    pub agent: Option<String>,
     /// Arbitrary metadata key-value pairs
     pub metadata: HashMap<String, String>,
     /// Allowed MCP tools for this skill
     pub allowed_tools: Vec<String>,
+    /// Init profiles this skill belongs to (e.g. `kanban`).
+    ///
+    /// A tool's init deploys only the skills tagged with its profile. Empty
+    /// means the skill belongs to no specific profile (full-workspace only).
+    pub profiles: Vec<String>,
     /// The full SKILL.md body (instructions)
     pub instructions: String,
     /// Source path on disk (None for builtin)

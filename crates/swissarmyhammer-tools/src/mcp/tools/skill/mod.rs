@@ -11,7 +11,7 @@ mod list;
 mod search;
 mod use_op;
 
-use crate::mcp::tool_registry::{AgentTool, BaseToolImpl, McpTool, ToolContext, ToolRegistry};
+use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolCategory, ToolContext, ToolRegistry};
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use rmcp::model::CallToolResult;
@@ -127,9 +127,6 @@ impl swissarmyhammer_common::lifecycle::Initializable for SkillTool {
 crate::impl_empty_doctorable!(SkillTool);
 
 #[async_trait]
-impl AgentTool for SkillTool {}
-
-#[async_trait]
 impl McpTool for SkillTool {
     fn name(&self) -> &'static str {
         "skill"
@@ -147,8 +144,8 @@ impl McpTool for SkillTool {
         *SKILL_OPERATIONS
     }
 
-    fn is_agent_tool(&self) -> bool {
-        true
+    fn category(&self) -> ToolCategory {
+        ToolCategory::Agent
     }
 
     async fn execute(
@@ -215,6 +212,13 @@ mod tests {
 
         let schema = tool.schema();
         assert_eq!(schema["type"], "object");
+    }
+
+    #[test]
+    fn test_category_is_agent() {
+        let library = Arc::new(RwLock::new(SkillLibrary::new()));
+        let tool = SkillTool::new(library, default_prompt_library());
+        assert_eq!(McpTool::category(&tool), ToolCategory::Agent);
     }
 
     #[tokio::test]

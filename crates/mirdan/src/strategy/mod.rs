@@ -220,7 +220,11 @@ impl AgentConfigStrategy for ClaudeCodeStrategy {
 ///
 /// Falls back to joining `settings.local.json` onto the parent when the path
 /// has no recognizable file name.
-fn local_settings_sibling(project_settings: PathBuf) -> PathBuf {
+///
+/// Public so that other install components (e.g. AVP hook install) can resolve
+/// the local-scope settings file with the same rule the Claude strategy uses,
+/// rather than hardcoding `.claude/settings.local.json`.
+pub fn local_settings_sibling(project_settings: PathBuf) -> PathBuf {
     let parent = project_settings.parent().map(Path::to_path_buf);
     match parent {
         Some(dir) => dir.join("settings.local.json"),

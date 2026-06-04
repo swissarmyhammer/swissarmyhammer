@@ -14,7 +14,7 @@ use crate::test_utils::setup_git_repo;
 
 /// Creates a fully isolated test context.
 ///
-/// No HTTP server, no env var mutation, all tools registered (agent_mode=true).
+/// No HTTP server, no env var mutation; the full tool union is registered.
 async fn setup_isolated_context() -> (tempfile::TempDir, CliToolContext) {
     let temp = tempfile::TempDir::new().unwrap();
     let temp_path = temp.path().to_path_buf();
@@ -27,20 +27,20 @@ async fn setup_isolated_context() -> (tempfile::TempDir, CliToolContext) {
     (temp, context)
 }
 
-/// Creates a test context with agent mode enabled.
+/// Creates a fully isolated test context backed by an `IsolatedTestEnvironment`.
 ///
-/// Agent mode registers additional tools (files, shell, skill) that are
-/// normally omitted when running alongside Claude Code.
-async fn setup_agent_mode_test_context() -> (IsolatedTestEnvironment, CliToolContext) {
+/// The full tool union is always registered, so agent-category tools (files,
+/// shell, skill) are available alongside the shared domain tools.
+async fn setup_agent_tool_test_context() -> (IsolatedTestEnvironment, CliToolContext) {
     let env = IsolatedTestEnvironment::new().unwrap();
     let temp_path = env.temp_dir();
 
     // Set up git repository for tests that need it
     setup_git_repo(&temp_path).expect("Failed to set up git repository");
 
-    let context = CliToolContext::new_with_agent_mode(&temp_path)
+    let context = CliToolContext::new_isolated(&temp_path)
         .await
-        .expect("Failed to create CliToolContext with agent mode");
+        .expect("Failed to create isolated CliToolContext");
     (env, context)
 }
 
@@ -76,8 +76,7 @@ async fn test_cli_can_call_mcp_tools() {
 
 #[tokio::test]
 async fn test_files_read_tool_integration() {
-    // The files tool is only registered in agent mode
-    let (env, context) = setup_agent_mode_test_context().await;
+    let (env, context) = setup_agent_tool_test_context().await;
 
     // Create a test file to read
     let test_file = env.temp_dir().join("test_file.txt");
@@ -129,8 +128,7 @@ async fn test_nonexistent_tool_error() {
 
 #[tokio::test]
 async fn test_invalid_arguments_error() {
-    // The files tool is only registered in agent mode
-    let (_env, context) = setup_agent_mode_test_context().await;
+    let (_env, context) = setup_agent_tool_test_context().await;
 
     // Test calling files with invalid arguments (missing required fields)
     let args = context.create_arguments(vec![("invalid_field", json!("invalid_value"))]);

@@ -1,0 +1,1 @@
+{"id":"01KT7375T6AXPYJKD1XYTBT0GQ","timestamp":"2026-06-03T15:56:46.278092Z","op":"create","item_id":"01KT7375T468PE35B87WY042DQ","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: 0e8a16\n+tag_name: init\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: 0e8a16\n-tag_name: init\n","transaction_id":null}

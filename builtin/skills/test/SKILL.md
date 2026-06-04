@@ -10,13 +10,15 @@ metadata:
   version: "{{version}}"
 ---
 
-{% include "_partials/coding-standards" %}
-{% include "_partials/code-context-checkpoints" %}
-{% include "_partials/architecture-awareness" %}
-
 # Test
 
 **Zero failures. Zero warnings. Zero skipped. The build is clean or it's broken.**
+
+
+## Guidelines
+
+{% include "_partials/coding-standards" %}
+{% include "_partials/architecture-awareness" %}
 
 ## Process
 

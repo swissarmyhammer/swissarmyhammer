@@ -22,12 +22,13 @@
 //!
 //! ## Scope
 //!
-//! - **Validator-only**: `is_validator_tool()` returns `true`. The full server
-//!   continues to expose the unified `files` tool for non-validator agents.
+//! - **Validator profile**: served to validators via the validator profile
+//!   (`tools::register_validator_tools`). The full server continues to expose
+//!   the unified `files` tool for non-validator agents.
 //! - **No write operations**: This tool wraps only the read handler — write
 //!   and edit operations are not reachable through it.
 
-use crate::mcp::tool_registry::{McpTool, ToolContext, ValidatorTool};
+use crate::mcp::tool_registry::{McpTool, ToolCategory, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
@@ -93,8 +94,10 @@ impl McpTool for ReadFileTool {
         true
     }
 
-    fn is_validator_tool(&self) -> bool {
-        true
+    fn category(&self) -> ToolCategory {
+        // Reading files is a base agent capability. Validators receive it via
+        // the validator profile (`tools::register_validator_tools`).
+        ToolCategory::Agent
     }
 
     async fn execute(
@@ -105,8 +108,6 @@ impl McpTool for ReadFileTool {
         read::execute_read(arguments, context).await
     }
 }
-
-impl ValidatorTool for ReadFileTool {}
 
 impl swissarmyhammer_common::lifecycle::Initializable for ReadFileTool {
     fn name(&self) -> &str {
@@ -149,16 +150,10 @@ mod tests {
     }
 
     #[test]
-    fn test_is_validator_tool() {
+    fn test_category_is_agent() {
         let tool = ReadFileTool::new();
-        assert!(tool.is_validator_tool());
-    }
-
-    #[test]
-    fn test_is_not_agent_tool() {
-        let tool = ReadFileTool::new();
-        // Read-only validator tools are not agent tools.
-        assert!(!tool.is_agent_tool());
+        // Reading files is a base agent capability.
+        assert_eq!(McpTool::category(&tool), ToolCategory::Agent);
     }
 
     #[test]

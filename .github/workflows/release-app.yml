@@ -21,16 +21,33 @@ on:
         description: "Release tag (e.g. v0.1.0)"
         required: true
 
+# Only one Release App run at a time on the single self-hosted runner. If a new
+# release starts while an old run is still grinding (or hung), cancel the old
+# one so it stops squatting the runner and leaving orphan cargo/rustc behind.
+concurrency:
+  group: release-app
+  cancel-in-progress: true
+
 jobs:
   build-macos:
     # Skip if workflow_run triggered by a failed/cancelled Release
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
     runs-on: self-hosted
-    # The build/sign/notarize phase has hung silently for 6+ hours on past
-    # runs (zero output after "Compiling <app>", then an external cancel),
-    # tying up the single self-hosted runner. Cap the job so a hung build
-    # fails fast and frees the runner instead of squatting on it.
-    timeout-minutes: 30
+    # Past kanban runs hung for 4-6h with zero output. Root cause (from the
+    # logs) is NOT code signing -- the build never reaches it. It thrashes in
+    # the *cargo compile* phase: the kanban app's dependency graph (Tauri's
+    # wry/webkit GUI stack + the swissarmyhammer-agent/llama.cpp stack, the
+    # latter built twice -- once for the CLI sidecar, once for the app) peaks
+    # past the runner's RAM and swaps to death. release.yml compiles the same
+    # llama stack for the CLI in ~14m, so the fix is to bound peak memory
+    # (CARGO_BUILD_JOBS on the build step) rather than touch signing.
+    #
+    # NOTE: this job-level timeout-minutes does NOT reliably fire on the
+    # self-hosted runner (past hangs ran 4-6h despite a 30m cap), so the build
+    # step additionally wraps cargo in an OS-level watchdog. This value is just
+    # a backstop; it is generous because a healthy app build legitimately takes
+    # ~40-70m at reduced parallelism.
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -70,6 +87,25 @@ jobs:
       - name: Install Rust toolchain
         run: |
           rustup target add aarch64-apple-darwin
+
+      - name: Free the runner (kill stale build processes + stale bundle output)
+        # This is a persistent self-hosted runner. Past hung runs were cancelled
+        # without their cargo/rustc/cc children being reaped, so they kept
+        # running and saturating RAM -- making the next build thrash too (a
+        # self-perpetuating doom loop). Reap any stragglers before we start.
+        # max-parallel:1 + the concurrency group guarantee no sibling build is
+        # legitimately running, so this is safe.
+        run: |
+          pkill -9 -f 'cargo-tauri|cargo|rustc|llama' 2>/dev/null || true
+          sleep 2
+          # The matrix legs share this reused workspace and all write to the
+          # same bundle output dir. If a prior app's .dmg/.app lingers here, the
+          # later "find ... | head -1" steps can pick the WRONG app's artifact
+          # (this shipped a kanban cask carrying mirdan's DMG sha256, which made
+          # `brew install --cask kanban` fail checksum verification). Wipe the
+          # bundle output so each leg only ever sees its own freshly built one.
+          rm -rf target/aarch64-apple-darwin/release/bundle
+          echo "Free memory before build:"; vm_stat | head -5 || true
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -113,12 +149,38 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # Bound peak memory: the kanban app graph (GUI + agent/llama, the
+          # llama stack compiled twice) OOM-thrashed the runner at full
+          # parallelism and hung for hours. Capping concurrent codegen units
+          # keeps the resident set under the runner's RAM. release.yml builds
+          # the same stack fine, so this only needs to be conservative, not
+          # tiny. Tune up if the runner gets more RAM.
+          CARGO_BUILD_JOBS: "4"
         working-directory: ${{ matrix.app.dir }}
         run: |
+          # OS-level watchdog: the job-level timeout-minutes does NOT fire on
+          # this self-hosted runner (past hangs ran 4-6h under a 30m cap), so a
+          # hung build would squat the runner indefinitely. Run the build in the
+          # background and hard-kill the whole cargo/rustc tree if it blows past
+          # the limit, so the step fails fast and frees the runner.
           # --verbose so the bundle/codesign/notarize phase emits progress.
-          # Without it Tauri prints nothing after compilation, which is why a
-          # hang here showed up as 6 hours of silence with no clue where.
+          WATCHDOG_SECONDS=5400  # 90 minutes
+          (
+            sleep "$WATCHDOG_SECONDS"
+            echo "::error::Tauri build exceeded ${WATCHDOG_SECONDS}s watchdog -- killing cargo/rustc (likely OOM/swap thrash)."
+            pkill -9 -f 'cargo-tauri|cargo|rustc|llama' 2>/dev/null || true
+          ) &
+          watchdog_pid=$!
+
+          set +e
           cargo tauri build --verbose --target aarch64-apple-darwin
+          status=$?
+          set -e
+
+          # Build finished (or was killed) -- stop the watchdog.
+          kill "$watchdog_pid" 2>/dev/null || true
+          wait "$watchdog_pid" 2>/dev/null || true
+          exit "$status"
 
       - name: Verify app bundle
         run: |
@@ -186,6 +248,14 @@ jobs:
 
   publish-homebrew-cask:
     needs: build-macos
+    # Run even when build-macos partially failed: each app is its own matrix
+    # leg here and downloads only its own DMG artifact, so a failed/hung build
+    # for one app (e.g. the kanban Tauri build) must not block publishing the
+    # cask for an app that built fine (e.g. mirdan). Previously `needs:
+    # build-macos` with the default `if` skipped this whole job whenever any
+    # build leg failed -- which is why BOTH casks were frozen for months while
+    # only kanban was actually broken. Skip only if build-macos never ran.
+    if: ${{ always() && needs.build-macos.result != 'skipped' }}
     runs-on: self-hosted
     timeout-minutes: 15
     strategy:
@@ -218,15 +288,30 @@ jobs:
           echo "value=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Download DMG artifact
+        id: dl
+        # The build leg only uploads this artifact on success. If that app's
+        # build failed, the download fails -- tolerate it so this leg skips
+        # cleanly instead of erroring, while other apps' legs still publish.
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: ${{ matrix.app.name }}-app-dmg
-          path: dmg/
+          # Per-app download dir, NOT a shared `dmg/`. The publish legs run
+          # sequentially on the reused self-hosted workspace; a shared dir let a
+          # prior leg's DMG linger so `find dmg ... | head -1` hashed the wrong
+          # app's file (the kanban cask shipped mirdan's sha256). A unique path
+          # per leg guarantees this leg only ever sees its own DMG.
+          path: dmg-${{ matrix.app.name }}/
+
+      - name: No DMG -- skipping this app
+        if: ${{ steps.dl.outcome != 'success' }}
+        run: echo "No DMG artifact for ${{ matrix.app.name }} (build failed or skipped); not publishing its cask."
 
       - name: Compute SHA256
         id: sha
+        if: ${{ steps.dl.outcome == 'success' }}
         run: |
-          DMG=$(find dmg -name "*.dmg" | head -1)
+          DMG=$(find "dmg-${{ matrix.app.name }}" -name "*.dmg" | head -1)
           SHA=$(shasum -a 256 "$DMG" | cut -d' ' -f1)
           NAME=$(basename "$DMG")
           echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
@@ -234,6 +319,7 @@ jobs:
           echo "SHA256: $SHA for $NAME"
 
       - name: Checkout swissarmyhammer
+        if: ${{ steps.dl.outcome == 'success' }}
         uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -241,6 +327,7 @@ jobs:
           path: swissarmyhammer
 
       - name: Checkout homebrew-tap
+        if: ${{ steps.dl.outcome == 'success' }}
         uses: actions/checkout@v4
         with:
           persist-credentials: true
@@ -249,6 +336,7 @@ jobs:
           path: homebrew-tap
 
       - name: Update cask
+        if: ${{ steps.dl.outcome == 'success' }}
         env:
           VERSION: ${{ steps.tag.outputs.value }}
           SHA256: ${{ steps.sha.outputs.sha256 }}
@@ -284,6 +372,7 @@ jobs:
             > homebrew-tap/Casks/${{ matrix.app.name }}.rb
 
       - name: Push cask
+        if: ${{ steps.dl.outcome == 'success' }}
         working-directory: homebrew-tap
         run: |
           git config user.name "mirdan bot"

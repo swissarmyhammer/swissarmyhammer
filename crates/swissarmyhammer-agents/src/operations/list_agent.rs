@@ -97,8 +97,8 @@ mod tests {
                     .filter_map(|v| v.get("name").and_then(|n| n.as_str()))
                     .collect();
                 assert!(
-                    names.contains(&"default"),
-                    "expected 'default' agent in list, got: {:?}",
+                    names.contains(&"tester"),
+                    "expected 'tester' agent in list, got: {:?}",
                     names
                 );
             }

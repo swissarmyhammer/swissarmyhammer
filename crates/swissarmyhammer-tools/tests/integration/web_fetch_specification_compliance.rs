@@ -344,21 +344,3 @@ async fn test_search_dispatch_results_count_above_max_returns_error() {
     let result = tool.execute(args, &ctx).await;
     assert!(result.is_err(), "results_count=51 should return an error");
 }
-
-/// Search with a valid query against a mocked Brave endpoint returns results.
-#[tokio::test]
-async fn test_search_dispatch_with_mock_server_returns_results() {
-    // This test uses wiremock to simulate a Brave Search HTML response so we
-    // can exercise the full execute_search() path without real network access.
-    //
-    // NOTE: BraveSearchClient::with_base_url() is only available when the
-    // *swissarmyhammer-web* crate is compiled under #[cfg(test)].  Because
-    // swissarmyhammer-tools is a *separate* crate, its test binary doesn't set
-    // cfg(test) for its dependencies — so the base_url override is not compiled
-    // in here.  We therefore skip this path and mark the test as #[ignore] so
-    // it can be run manually when desired.
-    //
-    // The BraveSearchClient integration is tested thoroughly in
-    // swissarmyhammer-web/src/search/brave.rs using wiremock directly.
-    eprintln!("NOTE: execute_search mock-server coverage is provided in swissarmyhammer-web tests");
-}

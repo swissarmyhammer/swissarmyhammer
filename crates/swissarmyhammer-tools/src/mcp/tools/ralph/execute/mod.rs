@@ -232,10 +232,6 @@ impl McpTool for RalphTool {
         "ralph"
     }
 
-    fn is_agent_tool(&self) -> bool {
-        false
-    }
-
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
@@ -499,9 +495,10 @@ mod tests {
     }
 
     #[test]
-    fn test_is_not_agent_tool() {
+    fn test_ralph_is_shared() {
+        use crate::mcp::tool_registry::ToolCategory;
         let tool = RalphTool::new();
-        assert!(!tool.is_agent_tool());
+        assert_eq!(McpTool::category(&tool), ToolCategory::Shared);
     }
 
     #[test]

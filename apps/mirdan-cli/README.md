@@ -14,8 +14,17 @@ Mirdan manages skills and validators for AI coding agents. Install community pac
 
 ### macOS (Homebrew)
 
+The CLI (this package manager):
+
 ```bash
-brew install swissarmyhammer/tap/mirdan
+brew install swissarmyhammer/tap/mirdan-cli
+```
+
+Prefer the menu-bar tray app? That's a separate cask (GUI only — it does **not**
+put the `mirdan` CLI on your `PATH`):
+
+```bash
+brew install --cask swissarmyhammer/tap/mirdan
 ```
 
 ### Linux

@@ -114,7 +114,13 @@ async fn main() -> Result<()> {
     // its own receiver, so the one returned here is intentionally dropped —
     // the channel stays alive because `notification_tx` is owned by the
     // server itself.
-    let (acp_server, _notification_rx) = AcpServer::new(agent_server, acp_config);
+    // The Agent-tools mount is a required input. This standalone example has no
+    // SwissArmyHammer tool server, so it mounts a minimal `EchoService` to
+    // satisfy the contract; production wiring supplies the real agent tools.
+    let mount = Arc::new(llama_agent::InProcessMount::new(
+        llama_agent::echo::EchoService::new(),
+    ));
+    let (acp_server, _notification_rx) = AcpServer::new(agent_server, acp_config, mount);
     let acp_server = Arc::new(acp_server);
 
     tracing::info!("Starting ACP protocol server on stdio...");

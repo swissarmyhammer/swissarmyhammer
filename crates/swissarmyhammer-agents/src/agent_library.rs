@@ -75,7 +75,6 @@ mod tests {
         library.load_defaults();
 
         assert!(!library.is_empty());
-        assert!(library.get("default").is_some());
         assert!(library.get("tester").is_some());
         assert!(library.get("nonexistent").is_none());
     }
@@ -102,7 +101,6 @@ mod tests {
         library.load_with_resolver(&resolver);
 
         assert!(!library.is_empty());
-        assert!(library.get("default").is_some());
         assert!(library.get("tester").is_some());
     }
 
@@ -129,8 +127,8 @@ mod tests {
         assert_eq!(names, sorted);
 
         // Should contain known agents
-        assert!(names.contains(&"default"));
         assert!(names.contains(&"tester"));
+        assert!(names.contains(&"reviewer"));
     }
 
     #[test]

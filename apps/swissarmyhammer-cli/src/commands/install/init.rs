@@ -1,24 +1,27 @@
-//! Set up sah for all detected AI coding agents (skills + MCP).
+//! Set up sah for all detected AI coding agents (skills + agents + MCP +
+//! statusline + preamble).
 //!
-//! Delegates to composable `Initializable` components registered via the
-//! top-level `commands::registry`. The `.sah/` + `.prompts/` workspace
-//! structure is created by the root-explicit
-//! [`swissarmyhammer_workspace_init`] crate (consumed via the
-//! `ProjectStructure` component), so the workspace-setup logic is shared with
-//! the kanban-app's in-process board init rather than forked.
+//! The MCP server, builtin skills, builtin agents, statusline, and CLAUDE.md
+//! preamble are all installed through sah's declarative [`Profile`] via
+//! [`mirdan::install::init_profile`] — sah is "just a bigger profile," not a
+//! special case. The two install concerns that are not expressible as profile
+//! data — the `.sah/` + `.prompts/` workspace structure and the `.kanban/`
+//! merge drivers — run as the `Initializable` components registered by
+//! [`crate::commands::registry::register_all`].
 
 use std::time::Instant;
 
 use crate::cli::InstallTarget;
-use swissarmyhammer_common::lifecycle::{InitRegistry, InitScope, InitStatus};
+use swissarmyhammer_common::lifecycle::{InitRegistry, InitScope};
 use swissarmyhammer_common::reporter::{CliReporter, InitEvent, InitReporter};
 
 /// Install sah for all detected AI coding agents.
 ///
-/// Creates an `InitRegistry`, registers all components via
-/// [`crate::commands::registry::register_all`], and runs `init` in
-/// priority order. Components that are not applicable to the given scope
-/// are automatically skipped.
+/// Runs sah's [`Profile`] through [`mirdan::install::init_profile`] (MCP,
+/// skills, agents, statusline, preamble) and then the non-profile
+/// `Initializable` components (project workspace, kanban merge drivers) in
+/// priority order. Components that are not applicable to the given scope are
+/// automatically skipped.
 pub fn install(target: InstallTarget) -> Result<(), String> {
     let reporter = CliReporter;
     let start = Instant::now();
@@ -29,28 +32,18 @@ pub fn install(target: InstallTarget) -> Result<(), String> {
         message: format!("Installing for {:?} scope", scope),
     });
 
+    let mut results = mirdan::install::init_profile(
+        &crate::commands::profile::sah_profile(),
+        scope,
+        None,
+        &reporter,
+    );
+
     let mut registry = InitRegistry::new();
     crate::commands::registry::register_all(&mut registry, false);
+    results.extend(registry.run_all_init(&scope, &reporter));
 
-    let results = registry.run_all_init(&scope, &reporter);
-
-    // Display results and check for errors
-    let mut has_errors = false;
-    for r in &results {
-        match r.status {
-            InitStatus::Ok => {} // component already emitted its messages
-            InitStatus::Warning => reporter.emit(&InitEvent::Warning {
-                message: r.message.clone(),
-            }),
-            InitStatus::Error => {
-                reporter.emit(&InitEvent::Error {
-                    message: r.message.clone(),
-                });
-                has_errors = true;
-            }
-            InitStatus::Skipped => {} // silent
-        }
-    }
+    let has_errors = super::report_results(&results, &reporter);
 
     reporter.emit(&InitEvent::Finished {
         message: "sah initialization".to_string(),

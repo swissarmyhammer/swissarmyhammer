@@ -277,17 +277,27 @@ fn run_serve() -> i32 {
     }
 }
 
-/// Run all registered init components for the given target scope.
+/// Install kanban for the given target scope.
 ///
-/// Builds a fresh [`InitRegistry`] via [`commands::registry::register_all`],
-/// runs every registered component, prints progress through [`CliReporter`],
-/// and returns 0 on full success or 1 if any component reported an error.
+/// Runs the mirdan profile installer (registers the `kanban` MCP server and
+/// deploys the `kanban`-profile builtin skills) followed by the genuine
+/// tool-lifecycle components (`.kanban/` git merge drivers). Prints progress
+/// through [`CliReporter`] and returns 0 on full success or 1 if any result
+/// reported an error.
 fn run_init(target: &str) -> i32 {
     let scope = target_to_scope(target);
+    let reporter = CliReporter;
+
     let mut reg = InitRegistry::new();
     commands::registry::register_all(&mut reg);
-    let reporter = CliReporter;
-    let results = reg.run_all_init(&scope, &reporter);
+    let results = mirdan::install::init_profile_with_registry(
+        &commands::registry::profile(scope),
+        &reg,
+        scope,
+        None,
+        &reporter,
+    );
+
     if any_init_error(&results) {
         1
     } else {
@@ -295,17 +305,25 @@ fn run_init(target: &str) -> i32 {
     }
 }
 
-/// Run all registered deinit components for the given target scope.
+/// Remove kanban for the given target scope.
 ///
-/// Mirrors [`run_init`] but drives the registry's deinit path — components
-/// run in reverse priority order so higher-priority steps (skill deployment)
-/// unwind before lower-priority ones (MCP registration).
+/// Mirrors [`run_init`]: deinits the genuine tool-lifecycle components, then
+/// runs the mirdan profile deinstaller (unregisters the MCP server and removes
+/// the `kanban`-profile skills).
 fn run_deinit(target: &str) -> i32 {
     let scope = target_to_scope(target);
+    let reporter = CliReporter;
+
     let mut reg = InitRegistry::new();
     commands::registry::register_all(&mut reg);
-    let reporter = CliReporter;
-    let results = reg.run_all_deinit(&scope, &reporter);
+    let results = mirdan::install::deinit_profile_with_registry(
+        &commands::registry::profile(scope),
+        &reg,
+        scope,
+        None,
+        &reporter,
+    );
+
     if any_init_error(&results) {
         1
     } else {

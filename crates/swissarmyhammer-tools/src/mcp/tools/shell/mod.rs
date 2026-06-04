@@ -54,7 +54,7 @@ pub use infrastructure::{
     ShellExecutionResult,
 };
 
-use crate::mcp::tool_registry::{McpTool, ToolContext};
+use crate::mcp::tool_registry::{McpTool, ToolCategory, ToolContext};
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use rmcp::model::CallToolResult;
@@ -323,7 +323,7 @@ impl Doctorable for ShellExecuteTool {
     /// Note: scope-aware checks for per-agent Bash denial and the deployed
     /// shell skill live in mirdan's install stack, not here.
     fn run_health_checks(&self) -> Vec<HealthCheck> {
-        let cat = self.category();
+        let cat = Doctorable::category(self);
         let mut checks = Vec::new();
 
         checks.extend(check_builtin_config(cat));
@@ -383,8 +383,10 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
     ///    own (non-agent) config, only for Project and Local scopes (a
     ///    User-scope install has no project dir).
     ///
-    /// Skill deployment is handled separately by `ShelltoolSkillDeployment`
-    /// in `shelltool-cli`.
+    /// The `shelltool` CLI no longer injects an MCP server entry here: MCP
+    /// registration and skill deployment now flow through the CLI's
+    /// `mirdan::install::Profile`. `with_mcp_server` is retained for other
+    /// embedders that still want the tool to own its registration.
     fn init(
         &self,
         scope: &swissarmyhammer_common::lifecycle::InitScope,
@@ -429,8 +431,8 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
     /// 2. Allow the `Bash` tool again via [`mirdan::install::allow_tool`].
     /// 3. Remove the `.shell/` config directory — only for Project and Local.
     ///
-    /// Skill removal is handled separately by `ShelltoolSkillDeployment`
-    /// in `shelltool-cli`.
+    /// As with `init`, the `shelltool` CLI drives MCP unregistration and skill
+    /// removal through its `mirdan::install::Profile`, not this tool.
     fn deinit(
         &self,
         scope: &swissarmyhammer_common::lifecycle::InitScope,
@@ -513,6 +515,12 @@ impl McpTool for ShellExecuteTool {
                 &'static [&'static dyn swissarmyhammer_operations::Operation],
             >(ops)
         }
+    }
+
+    fn category(&self) -> ToolCategory {
+        // The virtual shell is an agent capability that supersedes a host's
+        // native `Bash` tool.
+        ToolCategory::Replacement { native: "Bash" }
     }
 
     async fn execute(
@@ -710,6 +718,15 @@ mod tests {
             err_str.contains("execute command"),
             "Error should list valid operations: {}",
             err_str
+        );
+    }
+
+    #[test]
+    fn test_category_is_replacement_for_bash() {
+        let tool = ShellExecuteTool::new_isolated();
+        assert_eq!(
+            McpTool::category(&tool),
+            ToolCategory::Replacement { native: "Bash" }
         );
     }
 

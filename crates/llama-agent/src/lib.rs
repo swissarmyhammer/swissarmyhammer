@@ -179,7 +179,10 @@ pub use agent::AgentServer;
 pub use mcp::{HealthStatus as MCPHealthStatus, MCPClient, RetryConfig};
 
 // Re-export new unified MCP client functionality
-pub use mcp::{MCPClientBuilder, MCPClientError, ServerConnectionConfig, UnifiedMCPClient};
+pub use mcp::{
+    AgentToolsMount, InProcessMount, MCPClientBuilder, MCPClientError, ServerConnectionConfig,
+    UnifiedMCPClient,
+};
 
 // Re-export validation functionality
 pub use validation::{ValidationError, Validator};

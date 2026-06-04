@@ -910,75 +910,52 @@ pub trait McpTool:
         &[]
     }
 
-    /// Whether this tool is an agent-only tool.
+    /// Structural category describing the tool's relationship to a host agent.
     ///
-    /// Agent tools replicate capabilities that off-the-shelf agents already have
-    /// natively (file editing, shell, skills). They are filtered out when the
-    /// server runs alongside an existing agent like Claude Code.
+    /// The category is metadata about *what kind of capability* a tool provides,
+    /// independent of any particular host. It lets the serve boundary compose a
+    /// per-client tool surface (e.g. mounting agent capabilities for a host that
+    /// lacks them, or denying a native tool a [`ToolCategory::Replacement`]
+    /// supersedes) instead of subtracting from a single global registry.
     ///
-    /// # Default
-    ///
-    /// Returns false — most tools are always available.
-    fn is_agent_tool(&self) -> bool {
-        false
-    }
-
-    /// Whether this tool should be available to validator agents.
-    ///
-    /// Validator tools are served on the `/mcp/validator` endpoint, which
-    /// provides a locked-down subset for AVP validators. The validator
-    /// surface exposes `code_context` plus three split read-only file tools
-    /// — `read_file`, `glob_files`, `grep_files` — under their natural
-    /// names so Hermes-trained models can call them by name.
+    /// See [`ToolCategory`] for the meaning of each variant.
     ///
     /// # Default
     ///
-    /// Returns false — most tools are not available to validators.
-    fn is_validator_tool(&self) -> bool {
-        false
+    /// Returns [`ToolCategory::Shared`] — most tools are domain capabilities that
+    /// every host gets.
+    fn category(&self) -> ToolCategory {
+        ToolCategory::Shared
     }
 }
 
-/// Marker trait for tools that provide base agent behavior.
+/// Structural category of an [`McpTool`] relative to a host agent.
 ///
-/// Agent tools replicate capabilities that off-the-shelf agents (like Claude Code)
-/// already have natively — file editing, grep, skills, etc. These tools are
-/// filtered out (via `is_agent_tool()`) when the MCP server supplements an
-/// existing agent that already has these capabilities.
+/// Reported by [`McpTool::category`]. The category is composition metadata: the
+/// serve boundary reads it to build the tool surface for a given client, rather
+/// than registering everything and subtracting afterwards.
 ///
-/// To mark a tool as agent-only:
-/// 1. Implement this trait
-/// 2. Override `is_agent_tool()` to return `true` in the `McpTool` impl
-///
-/// Domain-specific tools (kanban, flow, git, shell, etc.)
-/// should NOT implement this trait — they are always available.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// impl AgentTool for FilesTool {}
-/// // and in the McpTool impl:
-/// fn is_agent_tool(&self) -> bool { true }
-/// ```
-pub trait AgentTool: McpTool {}
-
-/// Marker trait for tools available to validator agents.
-///
-/// Validator tools are the minimal, locked-down subset of tools that AVP
-/// validators can access. The current validator surface is `code_context`
-/// and the three split read-only file tools (`read_file`, `glob_files`,
-/// `grep_files`).
-///
-/// The `/mcp/validator` endpoint serves only tools tagged with this trait.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// impl ValidatorTool for CodeContextTool {}
-/// // and in the McpTool impl:
-/// fn is_validator_tool(&self) -> bool { true }
-/// ```
-pub trait ValidatorTool: McpTool {}
+/// - [`ToolCategory::Shared`] — a domain capability every host gets (kanban, git,
+///   code context, question, ralph). The default.
+/// - [`ToolCategory::Agent`] — a base agent capability that off-the-shelf agents
+///   (like Claude Code) already provide natively: file read/write/edit, glob,
+///   grep, web, skills, subagent delegation. Mounted for hosts that lack it.
+/// - [`ToolCategory::Replacement`] — an agent capability that also supersedes a
+///   named native host tool. `native` is the host tool it replaces (e.g. `shell`
+///   replaces `Bash`). A replacement is an agent capability *and* signals that the
+///   host's native tool of that name should defer to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolCategory {
+    /// Domain capability available to every host. The default.
+    Shared,
+    /// Base agent capability mounted for hosts that lack it natively.
+    Agent,
+    /// Agent capability that also supersedes a named native host tool.
+    Replacement {
+        /// The native host tool this capability replaces (e.g. `"Bash"`).
+        native: &'static str,
+    },
+}
 
 /// Macro to implement Doctorable for tools that don't have health checks
 ///
@@ -1109,14 +1086,6 @@ impl ToolRegistry {
         self.tools.insert(name, Box::new(tool));
     }
 
-    /// Remove all tools that are marked as agent-only.
-    ///
-    /// Call this after registering all tools when `agent_mode` is false.
-    /// Tools where `is_agent_tool()` returns true will be removed.
-    pub fn remove_agent_tools(&mut self) {
-        self.tools.retain(|_, tool| !tool.is_agent_tool());
-    }
-
     /// Get a tool by name.
     ///
     /// Returns `None` if the tool is not registered **or** if it is currently disabled.
@@ -1186,9 +1155,56 @@ impl ToolRegistry {
     /// with `"anthropic/alwaysLoad": true` so Claude Code loads them eagerly
     /// without requiring a ToolSearch round-trip.
     pub fn list_tools(&self) -> Vec<Tool> {
+        self.list_tools_filtered(|_| true)
+    }
+
+    /// Get registered tools for the MCP list_tools response, composed for a
+    /// specific connecting host.
+    ///
+    /// Like [`list_tools`](Self::list_tools), but additionally keeps only tools
+    /// the `host` is served per the `(Host, ToolCategory)` policy in
+    /// [`Host::serves`](crate::mcp::host::Host::serves). This is how the serve
+    /// boundary advertises a per-client tool surface (e.g. Claude gets the
+    /// `Shared` and `Replacement` tools; llama and unknown clients get `Shared`
+    /// only) without maintaining a separate registry per host.
+    pub fn list_tools_for_host(&self, host: crate::mcp::host::Host) -> Vec<Tool> {
+        self.list_tools_filtered(|tool| host.serves(McpTool::category(tool)))
+    }
+
+    /// Collect the native host tools superseded by the registry's
+    /// [`ToolCategory::Replacement`] tools.
+    ///
+    /// Each `Replacement { native }` tool declares the native host tool it
+    /// supersedes (e.g. `shell` supersedes `"Bash"`). This returns those
+    /// `native` names — the single source of truth for which native tools the
+    /// serve boundary should suppress on a host that receives the replacements.
+    /// Today that is exactly `["Bash"]` (from `shell`), but deriving it from the
+    /// category metadata keeps the suppression tied to the served set rather than
+    /// a hardcoded list. Names are deduplicated; order is unspecified.
+    pub fn replacement_natives(&self) -> Vec<&'static str> {
+        let mut natives: Vec<&'static str> = self
+            .iter_tools()
+            .filter_map(|tool| match McpTool::category(tool) {
+                ToolCategory::Replacement { native } => Some(native),
+                _ => None,
+            })
+            .collect();
+        natives.sort_unstable();
+        natives.dedup();
+        natives
+    }
+
+    /// Build the MCP `Tool` objects for every enabled tool that satisfies
+    /// `keep`, sharing the schema/meta construction across the unfiltered and
+    /// host-filtered entry points.
+    fn list_tools_filtered<F>(&self, keep: F) -> Vec<Tool>
+    where
+        F: Fn(&dyn McpTool) -> bool,
+    {
         self.tools
             .values()
             .filter(|tool| !self.disabled_tools.contains(McpTool::name(tool.as_ref())))
+            .filter(|tool| keep(tool.as_ref()))
             .map(|tool| {
                 let schema = tool.schema();
                 let schema_map = if let serde_json::Value::Object(map) = schema {
@@ -3121,9 +3137,9 @@ mod tests {
         );
     }
 
-    // --- remove_agent_tools tests ---
+    // --- category() tests ---
 
-    /// Mock agent tool that returns true for is_agent_tool
+    /// Mock tool that reports the `Agent` category.
     struct MockAgentTool;
     impl_empty_doctorable!(MockAgentTool);
     impl_empty_initializable!(MockAgentTool);
@@ -3146,33 +3162,124 @@ mod tests {
         ) -> std::result::Result<CallToolResult, McpError> {
             Ok(BaseToolImpl::create_success_response("agent"))
         }
-        fn is_agent_tool(&self) -> bool {
-            true
+        fn category(&self) -> ToolCategory {
+            ToolCategory::Agent
         }
     }
 
     #[test]
-    fn test_remove_agent_tools() {
-        let mut registry = ToolRegistry::new();
-        registry.register(MockAgentTool);
-        registry.register(MockTool {
-            name: "kanban",
-            description: "kanban tool",
-        });
+    fn test_category_override_reports_agent() {
+        let tool = MockAgentTool;
+        assert_eq!(McpTool::category(&tool), ToolCategory::Agent);
+    }
 
-        assert_eq!(registry.len(), 2);
-        registry.remove_agent_tools();
-        assert_eq!(registry.len(), 1);
-        // Agent tool should be removed, non-agent should remain
-        assert!(registry.get_tool("files").is_none());
-        assert!(registry.get_tool("kanban").is_some());
+    /// Covers the derived `PartialEq`/`Ne` equality semantics of `ToolCategory`:
+    /// two `Replacement` variants with the same native name compare equal, and a
+    /// `Replacement` is never equal to an `Agent`. The shell tool's actual
+    /// override is asserted in `shell::tests::test_category_is_replacement_for_bash`.
+    #[test]
+    fn test_tool_category_equality_semantics() {
+        assert_eq!(
+            ToolCategory::Replacement { native: "Bash" },
+            ToolCategory::Replacement { native: "Bash" }
+        );
+        assert_ne!(
+            ToolCategory::Replacement { native: "Bash" },
+            ToolCategory::Agent
+        );
+    }
+
+    /// Mock tool reporting a `Replacement` category for a configurable native.
+    struct MockReplacementTool {
+        name: &'static str,
+        native: &'static str,
+    }
+    impl swissarmyhammer_common::health::Doctorable for MockReplacementTool {
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn category(&self) -> &str {
+            "tools"
+        }
+        fn run_health_checks(&self) -> Vec<swissarmyhammer_common::health::HealthCheck> {
+            Vec::new()
+        }
+        fn is_applicable(&self) -> bool {
+            true
+        }
+    }
+    impl swissarmyhammer_common::lifecycle::Initializable for MockReplacementTool {
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn category(&self) -> &str {
+            "tools"
+        }
+    }
+    #[async_trait::async_trait]
+    impl McpTool for MockReplacementTool {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+        fn description(&self) -> &'static str {
+            "A replacement tool"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object", "properties": {}})
+        }
+        async fn execute(
+            &self,
+            _args: serde_json::Map<String, serde_json::Value>,
+            _ctx: &ToolContext,
+        ) -> std::result::Result<CallToolResult, McpError> {
+            Ok(BaseToolImpl::create_success_response("replacement"))
+        }
+        fn category(&self) -> ToolCategory {
+            ToolCategory::Replacement {
+                native: self.native,
+            }
+        }
     }
 
     #[test]
-    fn test_remove_agent_tools_empty_registry() {
+    fn test_replacement_natives_collects_only_replacement_natives() {
         let mut registry = ToolRegistry::new();
-        registry.remove_agent_tools(); // Should not panic
-        assert!(registry.is_empty());
+        // Shared and Agent tools contribute no natives.
+        registry.register(KanbanTool);
+        registry.register(MockAgentTool);
+        registry.register(MockReplacementTool {
+            name: "shell-mock",
+            native: "Bash",
+        });
+
+        assert_eq!(registry.replacement_natives(), vec!["Bash"]);
+    }
+
+    #[test]
+    fn test_replacement_natives_dedups_and_sorts() {
+        let mut registry = ToolRegistry::new();
+        registry.register(MockReplacementTool {
+            name: "z-tool",
+            native: "Zsh",
+        });
+        registry.register(MockReplacementTool {
+            name: "a-tool",
+            native: "Bash",
+        });
+        registry.register(MockReplacementTool {
+            name: "dup-tool",
+            native: "Bash",
+        });
+
+        // Sorted and deduplicated regardless of registration/name order.
+        assert_eq!(registry.replacement_natives(), vec!["Bash", "Zsh"]);
+    }
+
+    #[test]
+    fn test_replacement_natives_empty_when_no_replacements() {
+        let mut registry = ToolRegistry::new();
+        registry.register(KanbanTool);
+        assert!(registry.replacement_natives().is_empty());
     }
 
     // --- get_tool_by_cli_name tests ---
@@ -3286,24 +3393,15 @@ mod tests {
         assert!(tools.is_empty());
     }
 
-    // --- is_agent_tool / is_validator_tool default tests ---
+    // --- category default test ---
 
     #[test]
-    fn test_default_is_agent_tool() {
+    fn test_default_category_is_shared() {
         let tool = MockTool {
             name: "test",
             description: "test",
         };
-        assert!(!tool.is_agent_tool());
-    }
-
-    #[test]
-    fn test_default_is_validator_tool() {
-        let tool = MockTool {
-            name: "test",
-            description: "test",
-        };
-        assert!(!tool.is_validator_tool());
+        assert_eq!(McpTool::category(&tool), ToolCategory::Shared);
     }
 
     #[test]

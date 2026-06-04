@@ -158,6 +158,50 @@ impl UnifiedMCPClient {
         })
     }
 
+    /// Create a new client over an in-process [`tokio::io::DuplexStream`].
+    ///
+    /// This is the client half of the always-on **Agent-tools mount**: the tier
+    /// above (which sees both `swissarmyhammer-tools` and `llama-agent`) builds
+    /// the agent-tools MCP server, serves it on the *server* half of a
+    /// `tokio::io::duplex` pair, and hands the *client* half here. The
+    /// connection is purely in-memory — no subprocess, no socket, no port — yet
+    /// goes through the standard rmcp `initialize` / `tools/list` handshake like
+    /// any other MCP server.
+    ///
+    /// `client_half` is a valid `RoleClient` transport on its own (rmcp's
+    /// blanket `IntoTransport` impl splits it internally); it is served exactly
+    /// like the stdio transport in [`with_stdio`](Self::with_stdio). The server
+    /// half must already be serving (spawn its serve future before, or
+    /// concurrently with, this call) or the handshake will hang.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MCPError::Protocol`] if the rmcp handshake over the duplex
+    /// fails.
+    pub async fn with_duplex(
+        client_half: tokio::io::DuplexStream,
+        timeout_secs: Option<u64>,
+    ) -> Result<Self, MCPError> {
+        // Dummy handler: the mount is not an ACP-provided server, so it does not
+        // forward elicitations to a connected ACP client.
+        let (dummy_tx, _) = tokio::sync::broadcast::channel(1);
+        let handler = Arc::new(crate::mcp_client_handler::NotifyingClientHandler::new(
+            dummy_tx,
+        ));
+
+        let service = (*handler).clone().serve(client_half).await.map_err(|e| {
+            MCPError::Protocol(format!("Failed to create duplex MCP client: {:?}", e))
+        })?;
+
+        let default_timeout = Duration::from_secs(timeout_secs.unwrap_or(DEFAULT_MCP_TIMEOUT_SECS));
+
+        Ok(Self {
+            service,
+            default_timeout,
+            handler,
+        })
+    }
+
     /// Create a new client with SSE transport (deprecated - use with_streamable_http instead)
     #[deprecated(
         note = "SSE transport was removed in rmcp 0.11.0, use with_streamable_http instead"
@@ -497,6 +541,174 @@ impl MCPClient for UnifiedMCPClient {
 }
 
 // Note: MCPServer trait removed as unused in clean implementation
+
+/// Always-on source of a llama-agent's intrinsic Agent tools.
+///
+/// A llama-agent's Agent tools (files, web, skill, subagent, shell) are not
+/// "servers it connects to" — they are intrinsic to *being* a llama-agent. This
+/// trait is the required construction input that supplies them: every
+/// [`AcpServer`](crate::acp::AcpServer) is built with one, and every session it
+/// creates mounts a fresh connection from it, regardless of how many (or how
+/// few) external MCP servers the `session/new` request lists. An empty external
+/// server list therefore still yields a fully-tooled agent.
+///
+/// llama-agent depends only on rmcp/tokio here: [`connect`](Self::connect)
+/// returns an opaque [`MCPClient`] and the trait never names the concrete tool
+/// crate. The implementation lives in the tier above (which legally depends on
+/// both `swissarmyhammer-tools` and `llama-agent`); it serves the agent-tools
+/// MCP server over the *server* half of a `tokio::io::duplex` pair and returns a
+/// client built from the *client* half via [`UnifiedMCPClient::with_duplex`].
+/// Keeping the trait rmcp-only preserves the acyclic graph — `llama-agent`
+/// never gains a runtime dependency on the tools crate.
+#[async_trait]
+pub trait AgentToolsMount: Send + Sync {
+    /// Open a fresh in-process connection to the agent-tools server.
+    ///
+    /// Called once per session. The returned client is stored alongside the
+    /// session's external MCP clients and is cancelled when the session is torn
+    /// down, so the implementation should bundle any server-side serve handle
+    /// with the returned client to tie the server task's lifetime to it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`MCPError`] if the in-process MCP handshake fails.
+    async fn connect(&self) -> Result<Arc<dyn MCPClient>, MCPError>;
+}
+
+/// Duplex buffer size for in-process mounts (32 KiB).
+///
+/// Tool-call payloads (e.g. large file reads or grep output) can be sizeable;
+/// a 32 KiB buffer keeps backpressure rare. Backpressure is never a deadlock as
+/// long as both the server serve task and the client run concurrently.
+const MOUNT_DUPLEX_BUFFER: usize = 32 * 1024;
+
+/// A [`MCPClient`] that bundles an in-process server's serve handle with the
+/// duplex client connected to it.
+///
+/// Serving a [`RoleServer`] over a `tokio::io::duplex` pair produces a
+/// [`RunningService<RoleServer>`]; if that handle (or its task) is dropped, the
+/// transport closes and the client's `tools/list` / `call_tool` fail. Holding
+/// it here ties the server task's lifetime to the client's, so the in-process
+/// connection stays alive exactly as long as the session that owns this client.
+///
+/// All [`MCPClient`] methods delegate to the inner [`UnifiedMCPClient`]; the
+/// server handle is inert storage whose only job is to stay alive.
+struct MountedClient<S>
+where
+    S: rmcp::ServerHandler,
+{
+    client: UnifiedMCPClient,
+    /// Server-side serve handle kept alive for the connection's lifetime.
+    _server: rmcp::service::RunningService<rmcp::RoleServer, S>,
+}
+
+#[async_trait]
+impl<S> MCPClient for MountedClient<S>
+where
+    S: rmcp::ServerHandler + 'static,
+{
+    async fn list_tools(&self) -> Result<Vec<String>, MCPError> {
+        self.client.list_tools().await
+    }
+
+    async fn list_tools_with_schemas(&self) -> Result<Vec<ToolDefinition>, MCPError> {
+        self.client.list_tools_with_schemas().await
+    }
+
+    async fn call_tool(&self, name: &str, arguments: Value) -> Result<String, MCPError> {
+        self.client.call_tool(name, arguments).await
+    }
+
+    async fn list_prompts(&self) -> Result<Vec<Prompt>, MCPError> {
+        self.client.list_prompts().await
+    }
+
+    async fn get_prompt(
+        &self,
+        name: &str,
+        arguments: Option<HashMap<String, Value>>,
+    ) -> Result<Vec<String>, MCPError> {
+        self.client.get_prompt(name, arguments).await
+    }
+
+    async fn health_check(&self) -> Result<(), MCPError> {
+        self.client.health_check().await
+    }
+
+    async fn shutdown_all(&self) -> Result<(), MCPError> {
+        self.client.shutdown_all().await
+    }
+
+    async fn set_session(&self, session_id: agent_client_protocol::schema::SessionId) {
+        self.client.set_session(session_id).await
+    }
+
+    async fn clear_session(&self) {
+        self.client.clear_session().await
+    }
+}
+
+/// Generic [`AgentToolsMount`] that serves any rmcp [`ServerHandler`] in-process.
+///
+/// This is the one place the duplex serve/connect dance lives: it serves a
+/// cloned `handler` on the server half of a `tokio::io::duplex` pair and
+/// connects a [`UnifiedMCPClient`] to the client half on each
+/// [`connect`](AgentToolsMount::connect). Any crate that can produce an rmcp
+/// `ServerHandler` — `swissarmyhammer-tools` with its agent-tools `McpServer`,
+/// or tests with an `EchoService` — mounts it through this type without
+/// reimplementing the transport plumbing, and `llama-agent` stays rmcp-only.
+///
+/// `S` must be `Clone` so a fresh handler instance backs each session's
+/// connection.
+pub struct InProcessMount<S>
+where
+    S: rmcp::ServerHandler + Clone,
+{
+    handler: S,
+}
+
+impl<S> InProcessMount<S>
+where
+    S: rmcp::ServerHandler + Clone,
+{
+    /// Create a mount that serves clones of `handler` in-process.
+    pub fn new(handler: S) -> Self {
+        Self { handler }
+    }
+}
+
+#[async_trait]
+impl<S> AgentToolsMount for InProcessMount<S>
+where
+    S: rmcp::ServerHandler + Clone + 'static,
+{
+    async fn connect(&self) -> Result<Arc<dyn MCPClient>, MCPError> {
+        let (server_half, client_half) = tokio::io::duplex(MOUNT_DUPLEX_BUFFER);
+
+        // Both `serve_server` (server side) and `with_duplex` (client side)
+        // block on the rmcp `initialize` round-trip: the server waits for the
+        // client's request before returning. They must therefore make progress
+        // concurrently — `tokio::join!` drives both halves of the handshake at
+        // once. Awaiting either alone first would deadlock.
+        let (server_res, client_res) = tokio::join!(
+            rmcp::serve_server(self.handler.clone(), server_half),
+            UnifiedMCPClient::with_duplex(client_half, None),
+        );
+
+        let server = server_res.map_err(|e| {
+            MCPError::Protocol(format!(
+                "Failed to serve in-process Agent-tools server: {:?}",
+                e
+            ))
+        })?;
+        let client = client_res?;
+
+        Ok(Arc::new(MountedClient {
+            client,
+            _server: server,
+        }))
+    }
+}
 
 /// Client builder for creating unified MCP clients with different transports
 pub struct MCPClientBuilder {

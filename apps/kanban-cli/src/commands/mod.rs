@@ -9,13 +9,11 @@
 //! - `serve`: MCP server over stdio exposing the `kanban` operation tool.
 //! - `doctor`: Diagnostic checks (`kanban doctor`) — git repo, binary on
 //!   PATH, and `.kanban/board.yaml` initialization.
-//! - `skill`: Resolve, render, and deploy the builtin `kanban` skill to
-//!   detected agents (`KanbanSkillDeployment` — `Initializable` priority 20).
-//! - `registry`: `Initializable` component registry for `kanban init` /
-//!   `kanban deinit`. Exposes `register_all`, which wires up the
-//!   `KanbanTool` (MCP registration via mirdan) and `KanbanSkillDeployment`.
+//! - `registry`: Profile + `Initializable` component registry for `kanban init`
+//!   / `kanban deinit`. Exposes `profile` (the `kanban` MCP server + skills
+//!   manifest applied by mirdan's profile installer) and `register_all` (the
+//!   `KanbanTool` `.kanban/` merge-driver lifecycle).
 
 pub mod doctor;
 pub mod registry;
 pub mod serve;
-pub mod skill;
