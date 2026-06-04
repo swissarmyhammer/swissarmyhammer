@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: b280
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffec80
 title: Clean up pre-existing workspace test failures (get cargo test --workspace fully green)
 ---
 Standing list of pre-existing test failures observed during the plugin/cutover work (none introduced by it). Goal: `cargo test --workspace` fully green. Some are real bugs, some are test-isolation/env flakes — fix or correctly isolate each.

@@ -79,30 +79,37 @@ pub fn validate_working_directory(path: &Path) -> SessionSetupResult<()> {
 
 /// Validate directory permissions for session operations
 fn validate_directory_permissions(path: &Path) -> SessionSetupResult<()> {
-    // Try to read the directory
-    match fs::read_dir(path) {
-        Ok(_) => {
-            // Directory is readable, now check if we can access it (execute permission)
-            // On Unix systems, execute permission on a directory means we can traverse it
-            match std::env::set_current_dir(path) {
-                Ok(_) => {
-                    // Restore the original directory
-                    if let Ok(original_dir) = std::env::current_dir() {
-                        let _ = std::env::set_current_dir(&original_dir);
-                    }
-                    Ok(())
-                }
-                Err(_) => Err(SessionSetupError::WorkingDirectoryPermissionDenied {
-                    path: path.to_path_buf(),
-                    required_permissions: vec!["read".to_string(), "execute".to_string()],
-                }),
-            }
+    let denied = || SessionSetupError::WorkingDirectoryPermissionDenied {
+        path: path.to_path_buf(),
+        required_permissions: vec!["read".to_string(), "execute".to_string()],
+    };
+
+    // Readability: the directory must list its entries.
+    fs::read_dir(path).map_err(|_| denied())?;
+
+    // Traversability (the Unix execute bit). We must NOT probe this by
+    // `set_current_dir` — that mutates the *process-global* working directory,
+    // which races every other thread/test reading `current_dir()` (and left the
+    // process pointed at a since-deleted temp dir, surfacing as `Os NotFound`
+    // panics across the suite). Check the mode bits directly instead, leaving
+    // global state untouched.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(path)
+            .map_err(|_| denied())?
+            .permissions()
+            .mode();
+        // Any of owner/group/other execute (0o111) implies traverse access.
+        // This mirrors the previous `set_current_dir` probe without the
+        // root-bypasses-permissions caveat, which is irrelevant for a check
+        // whose only job is a fast, non-mutating sanity gate.
+        if mode & 0o111 == 0 {
+            return Err(denied());
         }
-        Err(_) => Err(SessionSetupError::WorkingDirectoryPermissionDenied {
-            path: path.to_path_buf(),
-            required_permissions: vec!["read".to_string(), "execute".to_string()],
-        }),
     }
+
+    Ok(())
 }
 
 /// Find invalid characters in a path string
@@ -238,6 +245,29 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let result = validate_working_directory(temp_dir.path());
         assert!(result.is_ok());
+    }
+
+    /// The validator must not mutate the process-global working directory.
+    ///
+    /// Regression for the cross-test `Os NotFound` storm: the old
+    /// `validate_directory_permissions` probed traverse access with
+    /// `set_current_dir(path)` and a broken restore, permanently leaving the
+    /// process CWD pointed at the validated temp dir. Once that temp dir was
+    /// dropped, every concurrent `std::env::current_dir()` in the suite
+    /// panicked with `Os NotFound`. Validation is now non-mutating, so the
+    /// CWD is unchanged before and after the call.
+    #[test]
+    fn test_validate_working_directory_does_not_change_process_cwd() {
+        let before = std::env::current_dir().unwrap();
+        let temp_dir = TempDir::new().unwrap();
+
+        validate_working_directory(temp_dir.path()).unwrap();
+
+        let after = std::env::current_dir().unwrap();
+        assert_eq!(
+            before, after,
+            "validate_working_directory must not mutate the process CWD",
+        );
     }
 
     #[test]

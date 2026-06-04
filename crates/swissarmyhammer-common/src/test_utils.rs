@@ -109,6 +109,18 @@ impl CurrentDirGuard {
             _lock_guard: lock_guard,
         })
     }
+
+    /// The directory captured at guard creation, to which the process CWD is
+    /// restored on drop.
+    ///
+    /// This is the *only* trustworthy notion of "the original directory" for a
+    /// guard test: it is captured while holding `CURRENT_DIR_LOCK`, so unlike a
+    /// bare `std::env::current_dir()` read taken before the guard, it cannot be
+    /// polluted by another parallel `CurrentDirGuard` test that has the process
+    /// CWD pointed at its own temp dir.
+    pub fn original_dir(&self) -> &Path {
+        &self.original_dir
+    }
 }
 
 impl Drop for CurrentDirGuard {
@@ -509,7 +521,13 @@ pub fn create_temp_dir() -> TempDir {
 mod tests {
     use super::*;
 
+    // HOME-mutating tests share the `home_env` serial key. The runtime
+    // `HOME_ENV_LOCK` only serializes the guard's own set+restore; tests that
+    // read or mutate `HOME` directly (e.g. the sentinel/round-trip checks and
+    // `*_restores_home_none`) still race each other and a concurrent guard's
+    // restore. Serializing them deterministically removes that interposition.
     #[test]
+    #[serial_test::serial(home_env)]
     fn test_isolated_home_basic_functionality() {
         // Simple test that verifies IsolatedTestHome basic functionality without
         // testing restoration behavior which is complex in concurrent environments
@@ -566,20 +584,33 @@ mod tests {
         assert!(temp_dir.path().is_dir());
     }
 
+    // The "original" CWD must be read from the guard (captured under
+    // `CURRENT_DIR_LOCK`), never from a bare `std::env::current_dir()` taken
+    // before the guard: dozens of other `CurrentDirGuard` tests across this
+    // binary briefly point the process CWD at their own temp dirs, so a bare
+    // pre-read races them and observes a foreign temp path. `original_dir()` is
+    // immune because it was captured while the lock was held.
     #[test]
     fn test_current_dir_guard_basic() {
         let temp = create_temp_dir();
-        let original = std::env::current_dir().unwrap().canonicalize().unwrap();
         let temp_canonical = temp.path().canonicalize().unwrap();
 
-        {
-            let _guard = CurrentDirGuard::new(temp.path()).unwrap();
-            let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
-            assert_eq!(cwd, temp_canonical);
-        }
+        let guard = CurrentDirGuard::new(temp.path()).unwrap();
+        let original = guard.original_dir().canonicalize().unwrap();
+        let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
+        assert_eq!(cwd, temp_canonical);
 
-        // After drop, we should be back at the original directory
-        let restored = std::env::current_dir().unwrap().canonicalize().unwrap();
+        // Dropping the guard restores the CWD to `original` and releases
+        // `CURRENT_DIR_LOCK`. Re-acquire the lock before reading the restored
+        // CWD: that excludes the window in which a concurrent guard test holds
+        // the process CWD at its own temp dir. (Such a guard restores the CWD
+        // to `original` on its own drop, so once we hold the lock the value is
+        // deterministic.)
+        drop(guard);
+        let restored = {
+            let _lock = CURRENT_DIR_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            std::env::current_dir().unwrap().canonicalize().unwrap()
+        };
         assert_eq!(restored, original);
     }
 
@@ -751,6 +782,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(home_env)]
     fn test_isolated_test_home_default() {
         // Test that Default trait works
         let home = IsolatedTestHome::default();
@@ -758,6 +790,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(home_env)]
     fn test_isolated_test_home_swissarmyhammer_dir_structure() {
         let home = IsolatedTestHome::new();
         let sah_dir = home.swissarmyhammer_dir();
@@ -770,6 +803,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(home_env)]
     fn test_isolated_test_environment_new() {
         let env = IsolatedTestEnvironment::new().unwrap();
 
@@ -782,6 +816,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(home_env)]
     fn test_isolated_test_environment_paths_are_distinct() {
         let env = IsolatedTestEnvironment::new().unwrap();
 
@@ -796,6 +831,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(home_env)]
     fn test_isolated_test_environment_prompts_dir() {
         let env = IsolatedTestEnvironment::new().unwrap();
         let prompts = env.prompts_dir();
@@ -804,6 +840,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(home_env)]
     fn test_isolated_test_environment_issues_dir() {
         let env = IsolatedTestEnvironment::new().unwrap();
         let issues = env.issues_dir();
@@ -812,6 +849,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(home_env)]
     fn test_isolated_test_environment_complete_dir() {
         let env = IsolatedTestEnvironment::new().unwrap();
         let complete = env.complete_dir();
@@ -838,6 +876,7 @@ mod tests {
     /// We restore the *real* `HOME` before releasing so we don't leak the
     /// sentinel value into the rest of the suite.
     #[test]
+    #[serial_test::serial(home_env)]
     fn test_isolated_test_environment_drop_restores_home() {
         const SENTINEL: &str = "/swissarmyhammer-test-home-restoration-sentinel";
 
@@ -883,6 +922,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(home_env)]
     fn test_create_isolated_test_home_structure() {
         let (temp_dir, home_path) = create_isolated_test_home();
 
@@ -894,7 +934,11 @@ mod tests {
         assert!(home_path.join(".prompts").exists());
     }
 
+    // Mutates `HOME` directly (remove_var/set_var) *without* holding
+    // `HOME_ENV_LOCK`, so it must not run alongside the other `home_env` tests
+    // — otherwise its bare restore can overwrite their sentinel/baseline.
     #[test]
+    #[serial_test::serial(home_env)]
     fn test_isolated_test_home_drop_restores_home_none() {
         // Save current HOME
         let saved = std::env::var("HOME").ok();

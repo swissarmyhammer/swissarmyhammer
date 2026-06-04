@@ -1,7 +1,8 @@
 //! Parse `#tag` patterns from markdown text.
 //!
-//! Tags are `#word` tokens where `word` is one or more alphanumeric characters
-//! or hyphens (`[A-Za-z0-9-]`). The character immediately after `#` must be
+//! Tags are `#word` tokens where `word` is one or more alphanumeric characters,
+//! hyphens, underscores, or internal dots (`[A-Za-z0-9_-.]`, e.g. `#v2.0`). A
+//! trailing dot is trimmed as sentence punctuation. The character immediately after `#` must be
 //! ASCII alphanumeric, so `#[`, `#(`, `#!`, and a leading hyphen `#-x` are not
 //! tags. Trailing punctuation is trimmed: `#bug,` and `#bug.` both yield `bug`.
 //! The parser skips code blocks and inline code.
@@ -62,10 +63,32 @@ pub fn parse_tags(text: &str) -> Vec<String> {
                 if preceded_ok && first_ok {
                     let start = i + 1;
                     let mut end = start;
-                    // Slug runs over [A-Za-z0-9-]; stop at the first char outside it,
-                    // which naturally trims trailing punctuation ("#bug," -> "bug").
-                    while end < len && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'-') {
+                    // Slug runs over [A-Za-z0-9_-.]; stop at the first char
+                    // outside it, which naturally trims trailing punctuation
+                    // ("#bug," -> "bug").
+                    //
+                    // Underscore is included so a normalized slug — `normalize_slug`
+                    // maps spaces to `_`, e.g. "Bug Fix" -> "Bug_Fix" — round-trips
+                    // through `append_tag` + `parse_tags` intact instead of being
+                    // truncated at the first underscore.
+                    //
+                    // The dot is included so version-style tags like "#v2.0"
+                    // survive, matching the `swissarmyhammer-filter-expr` tag
+                    // grammar (a `#filter` of "v2.0" must find the task tagged
+                    // "v2.0"). A trailing dot is still treated as sentence
+                    // punctuation and trimmed below, so "#bug." -> "bug".
+                    while end < len
+                        && (bytes[end].is_ascii_alphanumeric()
+                            || bytes[end] == b'-'
+                            || bytes[end] == b'_'
+                            || bytes[end] == b'.')
+                    {
                         end += 1;
+                    }
+                    // Trim trailing dots so a tag at the end of a sentence
+                    // ("#bug.") does not absorb the period.
+                    while end > start && bytes[end - 1] == b'.' {
+                        end -= 1;
                     }
                     if end > start {
                         let slug = &line[start..end];

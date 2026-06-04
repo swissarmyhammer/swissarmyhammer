@@ -13,9 +13,9 @@ use super::common::request_context;
 
 /// The `_meta` tree under `io.swissarmyhammer/operations` enumerates every
 /// (noun, verb, op) tuple for the `focus` tool. This snapshot pins the current
-/// set of eight ops — one per `spatial_*` Tauri command — so a deliberate
-/// addition / rename updates this assertion in the same PR as the op struct
-/// change.
+/// set of nine ops — eight `spatial_*` Tauri-command ports plus the
+/// pure-compute `generate sneak_codes` op — so a deliberate addition / rename
+/// updates this assertion in the same PR as the op struct change.
 #[tokio::test]
 async fn focus_tool_meta_operations_tree_is_complete() {
     let server = FocusServer::new();
@@ -37,7 +37,8 @@ async fn focus_tool_meta_operations_tree_is_complete() {
         .get("io.swissarmyhammer/operations")
         .expect("_meta carries io.swissarmyhammer/operations");
 
-    // (noun, verb, op-string) — one row per spatial_* Tauri command.
+    // (noun, verb, op-string) — one row per spatial_* Tauri command, plus
+    // the pure-compute `generate sneak_codes` op (ports `generate_jump_codes`).
     let expected: Vec<(&str, &str, &str)> = vec![
         ("focus", "set", "set focus"),           // spatial_focus / ui.setFocus
         ("focus", "clear", "clear focus"),       // spatial_clear_focus
@@ -47,6 +48,7 @@ async fn focus_tool_meta_operations_tree_is_complete() {
         ("layer", "pop", "pop layer"),           // spatial_pop_layer
         ("layer", "drill_in", "drill_in layer"), // spatial_drill_in
         ("layer", "drill_out", "drill_out layer"), // spatial_drill_out
+        ("sneak_codes", "generate", "generate sneak_codes"), // generate_jump_codes
     ];
 
     for (noun, verb, op_str) in &expected {

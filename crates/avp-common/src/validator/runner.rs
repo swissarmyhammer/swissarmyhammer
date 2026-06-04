@@ -3268,6 +3268,12 @@ mod tests {
     struct SlowAgent {
         next_session: std::sync::atomic::AtomicUsize,
         sleep_ms: u64,
+        /// How many `prompt()` calls are currently mid-sleep.
+        in_flight: Arc<AtomicUsize>,
+        /// Highest `in_flight` value ever observed — the directly-measured
+        /// peak concurrency, which (unlike wall-clock timing) does not depend
+        /// on how loaded the host scheduler is.
+        peak_in_flight: Arc<AtomicUsize>,
     }
 
     impl SlowAgent {
@@ -3275,7 +3281,14 @@ mod tests {
             Self {
                 next_session: std::sync::atomic::AtomicUsize::new(0),
                 sleep_ms,
+                in_flight: Arc::new(AtomicUsize::new(0)),
+                peak_in_flight: Arc::new(AtomicUsize::new(0)),
             }
+        }
+
+        /// Handle to the peak-concurrency counter for assertions.
+        fn peak_in_flight(&self) -> Arc<AtomicUsize> {
+            Arc::clone(&self.peak_in_flight)
         }
 
         async fn new_session(
@@ -3297,7 +3310,13 @@ mod tests {
             &self,
             _request: agent_client_protocol::schema::PromptRequest,
         ) -> agent_client_protocol::Result<agent_client_protocol::schema::PromptResponse> {
+            // Track concurrency by bumping the in-flight count on entry and
+            // recording the running maximum, so a test can prove rules overlap
+            // without relying on flaky wall-clock arithmetic.
+            let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak_in_flight.fetch_max(now, Ordering::SeqCst);
             tokio::time::sleep(std::time::Duration::from_millis(self.sleep_ms)).await;
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
             Ok(agent_client_protocol::schema::PromptResponse::new(
                 agent_client_protocol::schema::StopReason::EndTurn,
             ))
@@ -3369,8 +3388,16 @@ mod tests {
     /// caller logs that result with `reason="timeout"`.
     #[tokio::test]
     async fn test_execute_ruleset_rule_timeout_passes_with_warning() {
-        // Agent sleeps for 5s; rule timeout is 1s. The timeout path must fire.
-        let agent = Arc::new(SlowAgent::new(5_000));
+        // Agent sleeps for 30s; rule timeout is 1s. The timeout path must fire.
+        //
+        // The agent sleep is deliberately far larger than the rule timeout so
+        // the wall-clock guard below has a wide, load-tolerant margin: a fired
+        // timeout returns at ~1s (plus scheduler overhead), while a call that
+        // wrongly blocked on the agent would take ~30s. Under the saturated
+        // `cargo test --workspace` run the timeout path was observed taking ~4s
+        // of real time purely from scheduler starvation, which tripped the old
+        // 5s-sleep / `< 4s` bound; the 30s-vs-1s gap removes that sensitivity.
+        let agent = Arc::new(SlowAgent::new(30_000));
         let (notifier, _) = claude_agent::NotificationSender::new(64);
         let notifier = Arc::new(notifier);
         let notifier_body = Arc::clone(&notifier);
@@ -3386,10 +3413,13 @@ mod tests {
                 .await;
             let elapsed = start.elapsed();
 
-            // The timeout must actually have fired — the call must return well
-            // before the agent's 5s sleep would have finished.
+            // The timeout must actually have fired — the call must return far
+            // before the agent's 30s sleep would have finished. The result-shape
+            // assertions below are the primary proof that the *timeout* (not some
+            // other early return) fired; this bound just rules out blocking on
+            // the agent, with enough headroom to survive a loaded CI host.
             assert!(
-                elapsed.as_secs() < 4,
+                elapsed.as_secs() < 15,
                 "execute_ruleset must return when the rule times out, not block on the agent (elapsed: {:?})",
                 elapsed,
             );
@@ -3413,13 +3443,21 @@ mod tests {
         .await;
     }
 
-    /// Multiple rules whose individual prompt sleeps would, in series, take
-    /// longer than the wall budget must still be evaluated in parallel. With
-    /// 3 rules sleeping 200ms each and an in-flight cap of at least 2, the
-    /// total wall time should be well under the 600ms serial sum.
+    /// Multiple rules in one ruleset must be evaluated concurrently rather than
+    /// one-after-another.
+    ///
+    /// Correctness is asserted on *directly observed* peak concurrency — the
+    /// `SlowAgent` records how many `prompt()` calls were simultaneously
+    /// mid-sleep — instead of on wall-clock arithmetic. A wall-time threshold
+    /// (the old `elapsed < 500ms`) is load-sensitive: under the saturated
+    /// `cargo test --workspace` run the three tasks still execute concurrently
+    /// but the starved scheduler can push real elapsed time past any fixed
+    /// bound, producing a false failure. Peak in-flight count is independent of
+    /// host load, so it is deterministic.
     #[tokio::test]
     async fn test_execute_ruleset_runs_rules_in_parallel() {
         let agent = Arc::new(SlowAgent::new(200));
+        let peak_in_flight = agent.peak_in_flight();
         let (notifier, _) = claude_agent::NotificationSender::new(64);
         let notifier = Arc::new(notifier);
         let notifier_body = Arc::clone(&notifier);
@@ -3434,20 +3472,17 @@ mod tests {
             let ruleset = create_ruleset_with_timeout(&["a", "b", "c"], 30);
             let context = serde_json::json!({"tool_name": "Write"});
 
-            let start = std::time::Instant::now();
             let (executed, _is_rate_limited) = runner
                 .execute_ruleset(&ruleset, HookType::Stop, &context, None)
                 .await;
-            let elapsed = start.elapsed();
 
             assert_eq!(executed.rule_results.len(), 3);
-            // 3 sequential rules at 200ms each would take ~600ms. With parallel
-            // execution we expect well under 600ms — give plenty of headroom for
-            // CI noise but still fail loudly if the loop went serial.
+            // If the loop went serial, peak would be 1. Any value >= 2 proves the
+            // rules genuinely overlapped.
+            let peak = peak_in_flight.load(Ordering::SeqCst);
             assert!(
-                elapsed.as_millis() < 500,
-                "rules must run in parallel (3x200ms in series = ~600ms), got {:?}",
-                elapsed,
+                peak >= 2,
+                "rules must run in parallel; peak concurrent prompts was {peak}, expected >= 2",
             );
         })
         .await;

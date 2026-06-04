@@ -550,8 +550,10 @@ metadata:
     #[serial]
     fn test_run_list_agent_filter_suppresses_validators() {
         let dir = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        // `CurrentDirGuard` over the shared `CURRENT_DIR_LOCK` rather than a raw
+        // `set_current_dir`, so this serializes against every CWD-mutating test
+        // in the binary regardless of `#[serial]` group.
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(dir.path()).unwrap();
 
         // Create a validator structure
         let val_dir = dir.path().join(".avp/validators/test-val");
@@ -567,8 +569,6 @@ metadata:
         // With agent filter, validators should be suppressed
         let result = run_list(false, false, false, false, Some("claude-code"), true);
         assert!(result.is_ok());
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 
     #[test]
@@ -649,8 +649,7 @@ metadata:
     #[serial]
     fn test_run_list_no_filter_shows_validators() {
         let dir = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(dir.path()).unwrap();
 
         // Create a validator structure
         let val_dir = dir.path().join(".avp/validators/test-val");
@@ -666,7 +665,5 @@ metadata:
         // Without agent filter, validators should appear
         let result = run_list(false, false, false, false, None, true);
         assert!(result.is_ok());
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 }
