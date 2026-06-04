@@ -1741,23 +1741,35 @@ mod tests {
             "MCP URL must be a loopback /mcp endpoint, got {mcp_url}"
         );
 
-        // `tools/list` must carry the FULL SAH toolset — not just `kanban`.
-        // Assert the specific tools the task requires so a regression in tool
-        // registration is actually caught. The expected names are the
-        // `McpTool::name()` strings the server registers:
-        //   - `kanban`, `git`, `code_context` — shared domain tools
-        //   - `skill`, `files`, `web` — agent-category tools, always part of the
-        //     registered tool union
+        // `tools/list` carries the per-client composed SAH toolset, not the raw
+        // registered union. The server filters its advertised tools per
+        // connecting client via `Host::serves` (see
+        // `swissarmyhammer-tools/tests/integration/per_client_tool_composition.rs`):
+        //   - `Shared` tools (`kanban`, `git`, `code_context`) — advertised to
+        //     every host.
+        //   - `Agent`-category tools (`skill`, `files`, `web`) — never advertised
+        //     to any host: off-the-shelf agents provide those natively and llama
+        //     mounts its own, so the board's AI-panel agent supplies them rather
+        //     than consuming them from this server.
+        // `create_test_client` connects under an unknown client identity, which
+        // gets the conservative `Shared`-only default.
         let client = swissarmyhammer_tools::mcp::test_utils::create_test_client(&mcp_url).await;
         let tools = client
             .list_tools(Default::default())
             .await
             .expect("tools/list should succeed");
         let tool_names: Vec<String> = tools.tools.iter().map(|t| t.name.to_string()).collect();
-        for expected in ["kanban", "git", "code_context", "skill", "files", "web"] {
+        for expected in ["kanban", "git", "code_context"] {
             assert!(
                 tool_names.iter().any(|n| n == expected),
-                "tools/list must include the full SAH tool `{expected}`, got {tool_names:?}"
+                "tools/list must include the Shared SAH tool `{expected}`, got {tool_names:?}"
+            );
+        }
+        for agent_tool in ["skill", "files", "web"] {
+            assert!(
+                !tool_names.iter().any(|n| n == agent_tool),
+                "tools/list must NOT advertise the Agent-category tool `{agent_tool}` \
+                 (the board's agent provides it natively), got {tool_names:?}"
             );
         }
 

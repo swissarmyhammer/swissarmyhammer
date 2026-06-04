@@ -100,6 +100,91 @@ const DEFAULT_CLEANUP_INTERVAL: std::time::Duration = std::time::Duration::from_
 /// in-memory session state on the same idle-time policy.
 const DEFAULT_MAX_SESSION_AGE: std::time::Duration = std::time::Duration::from_secs(3600);
 
+/// Observable result of one agentic-loop generation step: how many tool calls
+/// the model emitted and how many of them failed.
+///
+/// "Failed" means the tool produced an error result (a `ToolResult` with a
+/// non-empty `error`, or a hard `handle_tool_call` error) — e.g. the MCP server
+/// returned -32602 "tool not found". The runaway guard uses these two counts to
+/// decide whether the loop is still making progress.
+#[derive(Debug, Clone, Copy)]
+struct AgenticStep {
+    /// Number of tool calls the model emitted in this step.
+    tool_calls: usize,
+    /// How many of those tool calls failed.
+    failed_tool_calls: usize,
+}
+
+/// What the agentic loop should do after a generation step.
+#[derive(Debug)]
+enum AgenticLoopAction {
+    /// Keep looping: re-prompt the model with the tool results.
+    Continue,
+    /// Abort the turn with this human-readable reason. The loop has stopped
+    /// making progress (every tool call failed), a single step emitted an
+    /// absurd number of tool calls, or the per-turn iteration cap was hit —
+    /// continuing would only hang.
+    Abort(String),
+}
+
+/// Bounds that stop the agentic loop from running away.
+///
+/// The loop's normal exit is "the model emitted no tool calls" (it answered) or
+/// a hard `StopReason` (MaxTokens/Cancelled/Refusal). These limits are the
+/// backstop for the degenerate case the limits were added for: a model that
+/// emits a flood of tool calls that all fail (e.g. mis-routed to a backend that
+/// returns -32602 "tool not found"), where the loop would otherwise re-prompt
+/// with ever-growing context until the caller's timeout fires.
+struct AgenticLoopLimits {
+    /// Maximum number of generation steps (re-prompts) in a single turn.
+    max_iterations: usize,
+    /// Maximum number of tool calls accepted from a single generation step.
+    max_tool_calls_per_step: usize,
+}
+
+impl AgenticLoopLimits {
+    /// Decide what the loop should do after a step, given the 1-based
+    /// `iteration` that just ran and the step's observed tool-call stats.
+    ///
+    /// Abort when, in order: the iteration cap is exceeded; a single step
+    /// emitted more than `max_tool_calls_per_step` tool calls; or the step
+    /// emitted tool calls and *every* one failed (no forward progress).
+    /// Otherwise continue.
+    fn evaluate(&self, iteration: usize, step: &AgenticStep) -> AgenticLoopAction {
+        if iteration > self.max_iterations {
+            return AgenticLoopAction::Abort(format!(
+                "agentic loop exceeded the per-turn iteration cap ({} iterations)",
+                self.max_iterations
+            ));
+        }
+        if step.tool_calls > self.max_tool_calls_per_step {
+            return AgenticLoopAction::Abort(format!(
+                "a single generation step emitted {} tool calls, exceeding the per-step cap of {}",
+                step.tool_calls, self.max_tool_calls_per_step
+            ));
+        }
+        if step.tool_calls > 0 && step.failed_tool_calls == step.tool_calls {
+            return AgenticLoopAction::Abort(format!(
+                "every one of the {} tool call(s) in this step failed; the loop is not making \
+                 progress",
+                step.tool_calls
+            ));
+        }
+        AgenticLoopAction::Continue
+    }
+}
+
+/// Default runaway-loop bounds for the agentic turn loop.
+///
+/// `max_iterations` is generous — a healthy multi-step tool turn rarely needs
+/// more than a handful of re-prompts, but agentic plans can legitimately chain
+/// several tools. `max_tool_calls_per_step` catches the pathological single
+/// step (the production trace showed ~342 tool calls in one step).
+const AGENTIC_LOOP_LIMITS: AgenticLoopLimits = AgenticLoopLimits {
+    max_iterations: 32,
+    max_tool_calls_per_step: 16,
+};
+
 impl AcpServer {
     /// Create an ACP server with the default session-cache eviction policy.
     ///
@@ -765,12 +850,12 @@ impl AcpServer {
     async fn clear_mcp_session_context(&self, llama_session_id: &crate::types::SessionId) {
         let session_clients = self.agent_server.session_mcp_clients.read().await;
         if let Some(clients) = session_clients.get(llama_session_id) {
-            for client in clients {
+            for client in clients.clients() {
                 client.clear_session().await;
             }
             tracing::debug!(
                 "Cleared ACP session context on {} MCP clients",
-                clients.len()
+                clients.clients().len()
             );
         }
     }
@@ -1789,15 +1874,33 @@ impl AcpServer {
             // llama gets shell only from the intrinsic mount and external servers
             // serve `Shared`-only tools; a future external server exposing a
             // duplicate name would silently double-register and must dedup here.
+            // Discover each client's tools exactly once. The discovery is used
+            // for BOTH the model-visible `available_tools` set and the
+            // dispatch-routing index, so a tool advertised to the model is
+            // always routable to the client that advertised it. Discovering
+            // once (rather than re-querying when building the routing index)
+            // also closes the second discovery-race window where a transient
+            // list-tools failure could drop a client's tools from the index and
+            // mis-route its calls to the wrong backend (-32602 "tool not found"
+            // — the runaway-loop trigger).
             let mut all_tools = Vec::new();
-            for client in &clients {
+            let mut discovered: Vec<(Arc<dyn crate::mcp::MCPClient>, Vec<String>)> =
+                Vec::with_capacity(clients.len());
+            for client in clients {
                 match client.list_tools_with_schemas().await {
                     Ok(tools) => {
                         tracing::info!("Discovered {} tools from MCP client", tools.len());
+                        let names = tools.iter().map(|t| t.name.clone()).collect();
                         all_tools.extend(tools);
+                        discovered.push((client, names));
                     }
                     Err(e) => {
                         tracing::warn!("Failed to list tools from MCP client: {}", e);
+                        // Keep the client attached with no routed tools; a call
+                        // to one of its tools falls back to first-client routing
+                        // exactly as before, and the agentic-loop guard bounds
+                        // any resulting failures.
+                        discovered.push((client, Vec::new()));
                     }
                 }
             }
@@ -1824,11 +1927,10 @@ impl AcpServer {
                 }
             }
 
-            self.agent_server
-                .session_mcp_clients
-                .write()
-                .await
-                .insert(llama_session.id, clients);
+            self.agent_server.session_mcp_clients.write().await.insert(
+                llama_session.id,
+                crate::agent::SessionMcpClients::from_discovered(discovered),
+            );
             tracing::info!(
                 "Stored {} MCP clients for session {}",
                 client_count,
@@ -2035,10 +2137,13 @@ impl AcpServer {
         {
             let session_clients = self.agent_server.session_mcp_clients.read().await;
             if let Some(clients) = session_clients.get(&acp_session.llama_session_id) {
-                for client in clients {
+                for client in clients.clients() {
                     client.set_session(request.session_id.clone()).await;
                 }
-                tracing::debug!("Set ACP session context on {} MCP clients", clients.len());
+                tracing::debug!(
+                    "Set ACP session context on {} MCP clients",
+                    clients.clients().len()
+                );
             }
         }
 
@@ -2047,8 +2152,12 @@ impl AcpServer {
         let mut total_tool_calls = 0usize;
         let mut final_stop_reason = agent_client_protocol::schema::StopReason::EndTurn;
         let mut all_generated_text = String::new();
+        // 1-based count of generation steps in this turn, fed to the runaway
+        // guard so a turn that keeps re-prompting cannot loop forever.
+        let mut iteration = 0usize;
 
         loop {
+            iteration += 1;
             // Calculate max_tokens based on available context space
             let model_context_size = self.agent_server.get_context_size().await.unwrap_or(4096); // Default fallback
 
@@ -2233,6 +2342,11 @@ impl AcpServer {
                 tool_calls_count
             );
 
+            // Count how many of this step's tool calls failed so the runaway
+            // guard below can tell forward progress from a loop spinning on
+            // calls that never succeed.
+            let mut failed_tool_calls = 0usize;
+
             // Persist the assistant's own turn (the RAW generated text, including
             // the `<tool_call>` markup) BEFORE its tool results. This mirrors the
             // batch agentic loop (`AgentServer::generate`) and matters for two
@@ -2294,7 +2408,21 @@ impl AcpServer {
 
                 match tool_result {
                     Ok(result) => {
-                        tracing::info!("Tool call {} completed successfully", result.call_id);
+                        // A `ToolResult` carrying a non-empty `error` is a
+                        // tool-level failure surfaced as a value (e.g. the MCP
+                        // server returned -32602 "tool not found"), not a
+                        // success. Count it so the runaway guard can tell a step
+                        // that made no progress from one that did.
+                        if result.error.is_some() {
+                            failed_tool_calls += 1;
+                            tracing::warn!(
+                                "Tool call {} returned an error result: {}",
+                                result.call_id,
+                                result.error.as_deref().unwrap_or("")
+                            );
+                        } else {
+                            tracing::info!("Tool call {} completed successfully", result.call_id);
+                        }
 
                         // Convert tool result to ACP ToolCallUpdate and broadcast
                         let update = super::translation::tool_result_to_acp_update(result.clone());
@@ -2340,6 +2468,7 @@ impl AcpServer {
                         }
                     }
                     Err(e) => {
+                        failed_tool_calls += 1;
                         tracing::error!("Tool call execution failed: {}", e);
                         // Convert tool call error to ACP notification
                         let error_notification =
@@ -2358,6 +2487,26 @@ impl AcpServer {
                         // Continue with other tool calls even if one fails
                     }
                 }
+            }
+
+            // Runaway-loop guard: a turn that re-prompts forever, a single step
+            // that emits an absurd number of tool calls, or a step where every
+            // tool call failed (no forward progress — e.g. all dispatches return
+            // -32602 "tool not found") must terminate with an error rather than
+            // hang the caller until its timeout fires.
+            let step = AgenticStep {
+                tool_calls: tool_calls_count,
+                failed_tool_calls,
+            };
+            if let AgenticLoopAction::Abort(reason) = AGENTIC_LOOP_LIMITS.evaluate(iteration, &step)
+            {
+                tracing::error!(
+                    "Aborting agentic loop on iteration {}: {}",
+                    iteration,
+                    reason
+                );
+                return Err(agent_client_protocol::Error::internal_error()
+                    .data(serde_json::json!({ "agentic_loop_aborted": reason })));
             }
 
             // Only stop on hard limits - otherwise continue to let model respond to tool results
@@ -3397,6 +3546,83 @@ mod tests {
         let config = AcpConfig::default();
         let (server, _notification_rx) = AcpServer::new(agent_server, config, agent_tools_mount);
         server
+    }
+
+    mod agentic_loop_guard {
+        use super::super::{AgenticLoopAction, AgenticStep, AGENTIC_LOOP_LIMITS};
+
+        #[test]
+        fn a_step_whose_every_tool_call_failed_aborts_the_loop() {
+            // The exact production pathology: a step emitted many tool calls and
+            // every one failed (e.g. -32602 "tool not found"). The loop made no
+            // progress, so re-prompting would only repeat the failure — abort.
+            let step = AgenticStep {
+                tool_calls: 342,
+                failed_tool_calls: 342,
+            };
+            assert!(matches!(
+                AGENTIC_LOOP_LIMITS.evaluate(1, &step),
+                AgenticLoopAction::Abort(_)
+            ));
+        }
+
+        #[test]
+        fn a_step_with_some_successful_tool_calls_continues() {
+            // Partial failure is not runaway: at least one tool call succeeded, so
+            // the model has new information to act on. Continue the loop.
+            let step = AgenticStep {
+                tool_calls: 3,
+                failed_tool_calls: 2,
+            };
+            assert!(matches!(
+                AGENTIC_LOOP_LIMITS.evaluate(1, &step),
+                AgenticLoopAction::Continue
+            ));
+        }
+
+        #[test]
+        fn a_single_step_exceeding_the_per_step_tool_cap_aborts() {
+            // A single generation step that emits an absurd number of tool calls
+            // is degenerate output even if some "succeed" — cap it per step so one
+            // runaway step cannot blow the turn budget on its own.
+            let over_cap = AGENTIC_LOOP_LIMITS.max_tool_calls_per_step + 1;
+            let step = AgenticStep {
+                tool_calls: over_cap,
+                // Even with zero failures, the sheer count is the problem.
+                failed_tool_calls: 0,
+            };
+            assert!(matches!(
+                AGENTIC_LOOP_LIMITS.evaluate(1, &step),
+                AgenticLoopAction::Abort(_)
+            ));
+        }
+
+        #[test]
+        fn exceeding_the_iteration_cap_aborts() {
+            // Even with healthy per-step results, the loop must not iterate
+            // forever; the iteration cap is the final backstop.
+            let step = AgenticStep {
+                tool_calls: 1,
+                failed_tool_calls: 0,
+            };
+            let over_cap = AGENTIC_LOOP_LIMITS.max_iterations + 1;
+            assert!(matches!(
+                AGENTIC_LOOP_LIMITS.evaluate(over_cap, &step),
+                AgenticLoopAction::Abort(_)
+            ));
+        }
+
+        #[test]
+        fn a_normal_step_within_all_limits_continues() {
+            let step = AgenticStep {
+                tool_calls: 1,
+                failed_tool_calls: 0,
+            };
+            assert!(matches!(
+                AGENTIC_LOOP_LIMITS.evaluate(1, &step),
+                AgenticLoopAction::Continue
+            ));
+        }
     }
 
     /// Regression test for the llama client-wiring fix.
