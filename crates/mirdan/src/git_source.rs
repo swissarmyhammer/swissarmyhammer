@@ -196,13 +196,33 @@ pub fn parse_git_source(
 
 /// Clone a git repository into a temporary directory.
 ///
-/// Uses `git2::Repository::clone()` for a full clone. If `git_ref` is specified,
-/// checks out that branch/tag after cloning.
+/// Prefers a shallow (`depth = 1`) clone: the package scanner only reads the
+/// checked-out working tree, never history, so a single commit is sufficient.
+/// This cuts the transfer for large marketplace repos dramatically, speeding up
+/// both real installs and the integration tests that clone public repos.
+///
+/// Shallow cloning is used only when it is safe:
+///   * If a specific `git_ref` is pinned it may name a branch/tag/commit that a
+///     depth-1 clone of the default branch would not contain, so that (rare)
+///     case falls back to a full clone followed by [`checkout_ref`].
+///   * libgit2 does not support shallow clones of local (`file://`) remotes, so
+///     those also take the full-clone path (they are already fast).
 pub fn git_clone(source: &GitSource) -> Result<tempfile::TempDir, RegistryError> {
     let temp_dir = tempfile::tempdir()?;
 
-    let repo = git2::Repository::clone(&source.clone_url, temp_dir.path())
-        .map_err(|e| classify_git_error(e, &source.clone_url))?;
+    let shallow = source.git_ref.is_none() && !is_local_remote(&source.clone_url);
+
+    let repo = if shallow {
+        let mut fetch_options = git2::FetchOptions::new();
+        fetch_options.depth(1);
+        git2::build::RepoBuilder::new()
+            .fetch_options(fetch_options)
+            .clone(&source.clone_url, temp_dir.path())
+            .map_err(|e| classify_git_error(e, &source.clone_url))?
+    } else {
+        git2::Repository::clone(&source.clone_url, temp_dir.path())
+            .map_err(|e| classify_git_error(e, &source.clone_url))?
+    };
 
     // Checkout specific ref if requested
     if let Some(ref git_ref) = source.git_ref {
@@ -210,6 +230,14 @@ pub fn git_clone(source: &GitSource) -> Result<tempfile::TempDir, RegistryError>
     }
 
     Ok(temp_dir)
+}
+
+/// Whether `url` points at a local repository rather than a network remote.
+///
+/// libgit2 cannot perform shallow clones of local remotes, so [`git_clone`]
+/// uses these to decide whether `depth = 1` is safe to request.
+fn is_local_remote(url: &str) -> bool {
+    url.starts_with("file://") || url.starts_with('/') || url.starts_with('.')
 }
 
 /// Checkout a specific ref (branch, tag, or commit) in a cloned repo.
