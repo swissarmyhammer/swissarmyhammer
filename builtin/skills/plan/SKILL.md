@@ -20,6 +20,16 @@ Use whenever you enter Plan Mode or the user asks you to plan work.
 
 $ARGUMENTS
 
+## Interpreting the arguments
+
+The arguments above may be a free-form description of the work, a path to a file that is the basis for the plan, or both.
+
+- **If the arguments name or reference a file** (e.g. a path like `docs/spec.md`, an `@`-mention, or "plan from <file>"), read that file first with `Read` and treat its contents as the authoritative basis for the plan. Follow any further file references inside it that are relevant.
+- **If the arguments are a description**, plan from the description directly.
+- **If both are given**, the description refines or scopes what's in the file.
+
+Either way, still do the `code_context` research below before creating tasks — the basis file tells you *what* to build; research tells you *what's affected*.
+
 ## Goals
 
 1. **Understand the work** — research deeply enough to know what changes and what's affected.

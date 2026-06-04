@@ -2,6 +2,16 @@
 
 This guide describes how to create a high-quality implementation plan when operating as an autonomous coding agent without a host IDE's planning mode.
 
+## Basis for the plan
+
+The plan may be driven by a free-form description, a file, or both:
+
+- **A basis file** — if the request names or references a file (a path, an `@`-mention, or "plan from <file>"), read it first with `Read` and treat its contents as the authoritative basis. Follow relevant file references inside it.
+- **A description** — plan from it directly.
+- **Both** — the description refines or scopes the file.
+
+The basis tells you *what* to build; the research below tells you *what's affected*. Always do both.
+
 ## Goals
 
 1. **Understand the work** — research the codebase deeply enough to know what needs to change and what will be affected.
