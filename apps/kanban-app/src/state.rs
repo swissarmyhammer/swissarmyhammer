@@ -91,10 +91,19 @@ pub(crate) struct BoardHandle {
     pub(crate) entity_cache: Arc<EntityCache>,
     /// In-memory search index over all entities.
     pub(crate) search_index: Arc<RwLock<EntitySearchIndex>>,
-    /// Handle to the bridge task that subscribes to `entity_cache` and emits
-    /// Tauri events. Aborted when the handle is dropped so the bridge
-    /// doesn't outlive the board.
+    /// Handle to the bridge task that subscribes to `entity_cache` and keeps
+    /// the in-memory search index and filtered-window perspective snapshots in
+    /// sync. Aborted when the handle is dropped so the bridge doesn't outlive
+    /// the board.
     bridge_task: Option<tokio::task::JoinHandle<()>>,
+    /// Fan-in adapters that translate this board's in-process entity / view /
+    /// perspective / undo-stack buses into `notifications/store/*` on the
+    /// board's notification bridge, so plugins (`this.store.on("changed", …)`)
+    /// and the webview both consume the same stream. Held for the board
+    /// lifetime; its forwarder tasks are aborted in [`BoardHandle`]'s `Drop`
+    /// (the `NotificationFanin` `Drop` deliberately detaches, so we call its
+    /// `abort` explicitly there).
+    notification_fanin: Option<swissarmyhammer_kanban::notify_fanin::NotificationFanin>,
     /// In-process MCP server exposing the full SwissArmyHammer toolset
     /// (kanban, skills/prompts, code-context, files, …) for this board.
     ///
@@ -133,6 +142,13 @@ impl Drop for BoardHandle {
     fn drop(&mut self) {
         if let Some(task) = self.bridge_task.take() {
             task.abort();
+        }
+
+        // Abort the notification fan-in's forwarder tasks so they don't outlive
+        // the board (the `NotificationFanin` `Drop` deliberately detaches rather
+        // than aborting, so we abort explicitly here).
+        if let Some(fanin) = self.notification_fanin.take() {
+            fanin.abort();
         }
 
         // Drop the per-board plugin platform OFF the Tokio worker pool. Its
@@ -362,6 +378,7 @@ impl BoardHandle {
             entity_cache,
             search_index,
             bridge_task: None,
+            notification_fanin: None,
             mcp_server,
             platform: platform.map(TokioMutex::new),
         })
@@ -484,10 +501,77 @@ impl BoardHandle {
             app_handle,
             board_path_str,
             search_index,
-            perspective_rx,
-            view_rx,
         ));
         self.bridge_task = Some(handle);
+    }
+
+    /// Spawn the notification fan-in that publishes this board's entity / view
+    /// / perspective / undo-stack changes onto the board's notification bridge.
+    ///
+    /// The fan-in subscribes to the four in-process buses
+    /// ([`EntityCache`](swissarmyhammer_entity::EntityCache), the view and
+    /// perspective contexts, and the store's stack-state sender) and translates
+    /// each event into a `notifications/store/changed` /
+    /// `notifications/store/undo_changed` published on the bridge. The
+    /// per-window forwarder (`mcp_subscribe`) re-emits each as a Tauri event so
+    /// the webview re-renders, and any subscribing plugin
+    /// (`this.store.on("changed", …)`) receives the same stream.
+    ///
+    /// Publishes onto this board's per-board host bridge when it has one,
+    /// otherwise onto `global_bridge` — mirroring the bridge a window's
+    /// forwarder resolves to (see `resolve_window_bridge`), so the publisher and
+    /// every subscriber share one bridge.
+    ///
+    /// Idempotent: aborts any prior fan-in before installing a fresh one.
+    /// Call AFTER `wire_store_substrate` and the per-board platform are built
+    /// (so the perspective/view contexts and the host bridge exist).
+    pub async fn start_notification_fanin(
+        &mut self,
+        global_bridge: swissarmyhammer_plugin::notify::NotificationBridge,
+    ) {
+        use swissarmyhammer_kanban::notify_fanin::spawn_notification_fanin;
+
+        if let Some(fanin) = self.notification_fanin.take() {
+            fanin.abort();
+        }
+
+        // Publish onto the per-board host's bridge when present (the same bridge
+        // a window's forwarder subscribes to for this board), else the global
+        // host's bridge.
+        let bridge = match self.platform.as_ref() {
+            Some(per_board) => per_board.lock().await.host().notification_bridge(),
+            None => global_bridge,
+        };
+
+        let entity_rx = Some(self.entity_cache.subscribe());
+        let stack_state_rx = Some(self.store_context.subscribe_stack_state());
+        let perspective_rx = match self.ctx.perspective_context().await {
+            Ok(pctx) => Some(pctx.read().await.subscribe()),
+            Err(e) => {
+                tracing::warn!(error = %e, "fan-in: perspective context unavailable; perspective changes will not reach the bridge");
+                None
+            }
+        };
+        // `views()` is the non-initializing accessor: `None` means this board
+        // has no views sub-context yet (skip wiring it). When it exists, take a
+        // real `.read().await` — unlike `start_watcher` (a sync context that
+        // must `try_read`), this fan-in is async, so it waits out any transient
+        // writer instead of silently dropping the view stream.
+        let view_rx = match self.ctx.views() {
+            Some(views_lock) => Some(views_lock.read().await.subscribe()),
+            None => None,
+        };
+
+        tracing::info!(
+            path = %self.ctx.root().display(),
+            has_perspective_rx = perspective_rx.is_some(),
+            has_view_rx = view_rx.is_some(),
+            "notification fan-in starting for board"
+        );
+
+        let fanin =
+            spawn_notification_fanin(bridge, entity_rx, view_rx, perspective_rx, stack_state_rx);
+        self.notification_fanin = Some(fanin);
     }
 }
 
@@ -852,6 +936,19 @@ impl AppState {
         if let Some(ref app) = app_handle {
             handle.start_watcher(app.clone());
         }
+
+        // Spawn the notification fan-in so this board's entity / view /
+        // perspective / undo changes reach its notification bridge — the stream
+        // the per-window forwarder re-emits to the webview and any subscribing
+        // plugin reads. Always started (not gated on `app_handle`): the bridge
+        // and its subscribers exist independent of the Tauri event seam.
+        let global_bridge = self
+            .plugin_platform
+            .lock()
+            .await
+            .host()
+            .notification_bridge();
+        handle.start_notification_fanin(global_bridge).await;
 
         self.register_open_board(&canonical, handle, &board_name)
             .await;
@@ -1778,10 +1875,7 @@ mod tests {
         fn list_open_boards(&self) -> Result<serde_json::Value, String> {
             Ok(serde_json::json!([]))
         }
-        fn get_board_data(
-            &self,
-            _board_path: Option<String>,
-        ) -> Result<serde_json::Value, String> {
+        fn get_board_data(&self, _board_path: Option<String>) -> Result<serde_json::Value, String> {
             Ok(serde_json::json!({}))
         }
     }

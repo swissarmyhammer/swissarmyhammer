@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KT9JV0N1RF0MMEBRZV4A6F3J
-position_column: todo
-position_ordinal: b980
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffff480
 project: command-events
 title: Route entity/view/perspective + undo changes onto the bridge (store/changed, store/undo_changed)
 ---

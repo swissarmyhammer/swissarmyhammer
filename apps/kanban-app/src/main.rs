@@ -288,8 +288,9 @@ fn build_apphandle_shells(
     ));
 
     // The `app` shell is now a plain AppHandle wrapper (quit / about / help).
-    let app_shell: Arc<dyn swissarmyhammer_app_service::AppShell> =
-        Arc::new(swissarmyhammer_app_service::TauriAppShell::new(handle.clone()));
+    let app_shell: Arc<dyn swissarmyhammer_app_service::AppShell> = Arc::new(
+        swissarmyhammer_app_service::TauriAppShell::new(handle.clone()),
+    );
     (window_shell, app_shell)
 }
 

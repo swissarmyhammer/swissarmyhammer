@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use serde_json::json;
-use swissarmyhammer_store::{StoreContext, StoredItemId, StoreServer, UndoEntryId};
+use swissarmyhammer_store::{StoreContext, StoreServer, StoredItemId, UndoEntryId};
 use tempfile::TempDir;
 
 use super::common::{call_tool, make_mock_handle};
@@ -37,9 +37,13 @@ async fn begin_writes_two_stores_end_single_undo_reverts_both() {
     let server = StoreServer::new(Arc::clone(&ctx));
 
     // 1. Begin a transaction through the MCP face.
-    let begin = call_tool(&server, "begin transaction", json!({ "op": "begin transaction" }))
-        .await
-        .expect("begin transaction should succeed");
+    let begin = call_tool(
+        &server,
+        "begin transaction",
+        json!({ "op": "begin transaction" }),
+    )
+    .await
+    .expect("begin transaction should succeed");
     let txn_id = begin
         .get("id")
         .and_then(|v| v.as_str())
@@ -87,7 +91,11 @@ async fn begin_writes_two_stores_end_single_undo_reverts_both() {
     let depth = call_tool(&server, "depth stack", json!({ "op": "depth stack" }))
         .await
         .expect("depth probe");
-    assert_eq!(depth["depth"], json!(2), "stack has two entries — the group's two writes");
+    assert_eq!(
+        depth["depth"],
+        json!(2),
+        "stack has two entries — the group's two writes"
+    );
 
     // 4. A single `undo stack` should revert BOTH files.
     let undo = call_tool(&server, "undo stack", json!({ "op": "undo stack" }))
@@ -95,7 +103,11 @@ async fn begin_writes_two_stores_end_single_undo_reverts_both() {
         .expect("undo should succeed");
 
     let items = undo["items"].as_array().expect("undo returns items array");
-    assert_eq!(items.len(), 2, "single undo reverted both stores' writes as a group");
+    assert_eq!(
+        items.len(),
+        2,
+        "single undo reverted both stores' writes as a group"
+    );
 
     assert!(
         !store_a.join("alpha-1.txt").exists(),
@@ -189,18 +201,23 @@ async fn writes_without_transaction_are_independent_undo_entries() {
     // Two writes without a surrounding txn — each is its own undo step.
     let item1 = "w1\none".to_string();
     let id1 = handle.write(&item1).await.unwrap().unwrap();
-    ctx.push(id1, "w1".to_string(), StoredItemId::from("w1")).await;
+    ctx.push(id1, "w1".to_string(), StoredItemId::from("w1"))
+        .await;
 
     let item2 = "w2\ntwo".to_string();
     let id2 = handle.write(&item2).await.unwrap().unwrap();
-    ctx.push(id2, "w2".to_string(), StoredItemId::from("w2")).await;
+    ctx.push(id2, "w2".to_string(), StoredItemId::from("w2"))
+        .await;
 
     // First undo only reverts w2. Both files still need a second undo.
     let undo1 = call_tool(&server, "undo stack", json!({ "op": "undo stack" }))
         .await
         .unwrap();
     assert_eq!(undo1["items"].as_array().unwrap().len(), 1);
-    assert!(store_dir.join("w1.txt").exists(), "first undo only touches w2");
+    assert!(
+        store_dir.join("w1.txt").exists(),
+        "first undo only touches w2"
+    );
     assert!(!store_dir.join("w2.txt").exists());
 }
 
@@ -212,9 +229,13 @@ async fn end_transaction_with_mismatched_id_does_nothing() {
     let ctx = Arc::new(StoreContext::new(dir.path().to_path_buf()));
     let server = StoreServer::new(Arc::clone(&ctx));
 
-    let begin = call_tool(&server, "begin transaction", json!({ "op": "begin transaction" }))
-        .await
-        .unwrap();
+    let begin = call_tool(
+        &server,
+        "begin transaction",
+        json!({ "op": "begin transaction" }),
+    )
+    .await
+    .unwrap();
     let real_id = begin["id"].as_str().unwrap().to_string();
     assert!(ctx.current_transaction().is_some());
 

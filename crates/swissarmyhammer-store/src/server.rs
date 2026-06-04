@@ -39,8 +39,8 @@ use crate::context::StoreContext;
 use crate::error::StoreError;
 use crate::id::{StoredItemId, UndoEntryId};
 use crate::operations::{
-    operations, BeginTransaction, CanRedo, CanUndo, EndTransaction, GetItem, History, ListStores,
-    Redo, Undo, UndoDepth,
+    operations, store_notifications, BeginTransaction, CanRedo, CanUndo, EndTransaction, GetItem,
+    History, ListStores, Redo, Undo, UndoDepth,
 };
 
 /// Resolves the [`StoreContext`] to use for the current `tokio` task.
@@ -122,6 +122,7 @@ impl StoreServer {
             name: "store",
             description: "Undo, redo, transaction grouping, and per-item history over the shared StoreContext.",
             operations: operations(),
+            notifications: store_notifications(),
         }
     }
 

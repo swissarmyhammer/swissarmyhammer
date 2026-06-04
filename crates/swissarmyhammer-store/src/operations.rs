@@ -21,7 +21,8 @@
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
-use swissarmyhammer_operations::{operation, Operation};
+use swissarmyhammer_operations::{notification, operation, Notification, Operation};
+use swissarmyhammer_plugin::notify::FieldChange;
 
 // Stack-wide operations ─────────────────────────────────────────────────
 
@@ -209,4 +210,90 @@ static STORE_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(|
 /// Get the canonical slice of all store operations.
 pub fn operations() -> &'static [&'static dyn Operation] {
     &STORE_OPERATIONS
+}
+
+// Notifications ─────────────────────────────────────────────────────────
+
+/// The `notifications/store/changed` event payload.
+///
+/// The one generic data-change schema for entities, views, and perspectives.
+/// This struct is the single source of truth for the event: it IS the
+/// published payload (it serializes to the notification's `params` via
+/// [`McpNotification::from_declared`](swissarmyhammer_plugin::McpNotification::from_declared))
+/// AND the declaration the SDK reads (its fields drive the
+/// `io.swissarmyhammer/notifications` `_meta`). The two cannot drift.
+///
+/// `store` names the store (`"task"`, `"tag"`, `"view"`, `"perspective"`, …);
+/// `item` is the item id; `op` is the change kind (`"created"` / `"updated"` /
+/// `"removed"`). `changes` carries the field-level diff for entity stores and
+/// is omitted for views/perspectives (reload-item semantics).
+///
+/// Published by the kanban notification fan-in (`swissarmyhammer-kanban`'s
+/// `notify_fanin`), which translates the in-process entity / view / perspective
+/// buses into this shape. Provenance (`txn`/`origin`) is universal
+/// cross-cutting metadata stamped on every notification at publish time; it is
+/// intentionally NOT a field here.
+#[notification(
+    method = "notifications/store/changed",
+    description = "An entity, view, or perspective item was created, updated, or removed."
+)]
+#[derive(Debug, Default, Serialize)]
+pub struct StoreChanged {
+    /// The store the item belongs to (`"task"`, `"view"`, `"perspective"`, …).
+    pub store: String,
+    /// The item id within that store.
+    pub item: String,
+    /// The change kind: `"created"`, `"updated"`, or `"removed"`.
+    pub op: String,
+    /// Field-level diff for entity stores; omitted for views/perspectives.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub changes: Option<Vec<FieldChange>>,
+}
+
+/// The `notifications/store/undo_changed` event payload.
+///
+/// Reports whether undo/redo are currently possible and the labels of the
+/// entries at the top of each side of the unified undo stack. Like
+/// [`StoreChanged`], this struct IS the published payload and the declaration,
+/// so the `_meta` schema and the wire payload share one source.
+///
+/// Published by the kanban notification fan-in from the store's stack-state
+/// broadcast. Ephemeral undo-stack state is not itself a stored, undoable
+/// thing, so this notification carries no provenance.
+#[notification(
+    method = "notifications/store/undo_changed",
+    description = "The unified undo stack's undo/redo availability or labels changed."
+)]
+#[derive(Debug, Default, Serialize)]
+pub struct StoreUndoChanged {
+    /// Whether an undo would currently succeed.
+    pub can_undo: bool,
+    /// Whether a redo would currently succeed.
+    pub can_redo: bool,
+    /// Label of the entry an undo would revert, if any.
+    pub undo_label: Option<String>,
+    /// Label of the entry a redo would reapply, if any.
+    pub redo_label: Option<String>,
+}
+
+/// The canonical slice of notifications the `store` tool declares.
+///
+/// Mirrors [`operations`]: a leaked `Default` instance per notification, used
+/// only for its static metadata. Fed to `operation_tool!`'s `notifications:`
+/// field so the tool advertises its events in `_meta`.
+///
+/// Owner/publisher split: these events are DECLARED here (on the `store` tool)
+/// but PUBLISHED by the kanban fan-in. The namespace-based coverage guard keeps
+/// the two in lockstep — every `notifications/store/*` the fan-in publishes must
+/// appear here, and vice versa.
+static STORE_NOTIFICATIONS: LazyLock<Vec<&'static dyn Notification>> = LazyLock::new(|| {
+    vec![
+        Box::leak(Box::<StoreChanged>::default()) as &dyn Notification,
+        Box::leak(Box::<StoreUndoChanged>::default()) as &dyn Notification,
+    ]
+});
+
+/// Get the canonical slice of all store notifications.
+pub fn store_notifications() -> &'static [&'static dyn Notification] {
+    &STORE_NOTIFICATIONS
 }

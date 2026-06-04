@@ -1862,8 +1862,9 @@ async fn perform_cross_board_drag_transfer(
 
     let ok = transfer_result.is_ok();
     // Cross-board writes go through each board's `EntityCache`, which emits
-    // events synchronously. The bridge subscriber for each board already
-    // forwarded them to Tauri — no extra flush needed here.
+    // events synchronously. Each board's notification fan-in already published
+    // them as `notifications/store/changed` on the board's bridge — no extra
+    // flush needed here.
     let _ = (app, tgt, src);
     ok
 }
@@ -1953,11 +1954,12 @@ async fn maybe_rebuild_menu_after_cmd(app: &AppHandle, effective_cmd: &str, resu
 ///
 /// Entity changes no longer need an explicit "flush" step here: writes
 /// flow through `EntityCache::write`, which emits `EntityChanged` events
-/// on its broadcast channel synchronously. The bridge task (started in
-/// `BoardHandle::start_watcher`) already forwarded those to Tauri. The
-/// work that remains is app-level: undo/redo flags depend on the store
-/// context, and window titles reflect the (possibly just-renamed) board
-/// entity.
+/// on its broadcast channel synchronously. The notification fan-in (started
+/// in `BoardHandle::start_notification_fanin`) translates those into
+/// `notifications/store/changed` on the board's bridge, which the per-window
+/// forwarder re-emits to the webview. The work that remains here is
+/// app-level: undo/redo flags depend on the store context, and window titles
+/// reflect the (possibly just-renamed) board entity.
 ///
 /// Runs for undoable commands **and** for `app.undo`/`app.redo`: both
 /// mutate entities on disk but are themselves non-undoable, so they'd

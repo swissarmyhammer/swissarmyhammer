@@ -216,6 +216,10 @@ function WindowContainerInner({ children }: WindowContainerProps) {
     [refreshEntities, setEntitiesByType, setEngineActiveBoardPath],
   );
 
+  // Bind this window's MCP-notification forwarder before any data-change
+  // listener registers, so the `notifications/*` Tauri-event stream is live.
+  useMcpSubscribeBootstrap();
+
   const refresh = useWindowRefresh(deps);
   useRestoreWindowStateOnMount(deps, refresh);
   useBoardEventListeners(deps);
@@ -353,6 +357,30 @@ async function applyRestoredWindowState(
   } catch {
     // No saved state — caller falls through to refresh().
   }
+}
+
+/**
+ * Bootstrap the MCP-notification → Tauri-event pump for this window.
+ *
+ * Invokes the backend `mcp_subscribe` command once on mount, which binds this
+ * window's notification forwarder to its board's notification bridge. Until
+ * this runs, the host raises no `notifications/*` Tauri events for the window,
+ * so every `subscribe*` helper in `mcp-notifications.ts` /`mcp-transport.ts`
+ * (`store/changed`, `store/undo_changed`, `commands/changed`, `ui_state/changed`)
+ * would receive nothing. This is the single seam that turns the data-change
+ * plane on for the webview.
+ *
+ * Idempotent backend-side: a window already bound to its current board is a
+ * no-op, and a board switch re-binds the forwarder server-side, so this only
+ * needs to run on mount. Failures are logged and swallowed — a transport hiccup
+ * must not crash the window shell.
+ */
+function useMcpSubscribeBootstrap(): void {
+  useEffect(() => {
+    invoke("mcp_subscribe").catch((err) => {
+      console.error("[window-container] mcp_subscribe bootstrap failed:", err);
+    });
+  }, []);
 }
 
 /**

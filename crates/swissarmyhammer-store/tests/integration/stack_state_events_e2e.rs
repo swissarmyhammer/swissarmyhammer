@@ -41,8 +41,12 @@ async fn push_fires_stack_state_with_can_undo_true() {
 
     let item = "item1\ndata".to_string();
     let entry_id = handle.write(&item).await.unwrap().unwrap();
-    ctx.push(entry_id, "create item1".to_string(), StoredItemId::from("item1"))
-        .await;
+    ctx.push(
+        entry_id,
+        "create item1".to_string(),
+        StoredItemId::from("item1"),
+    )
+    .await;
 
     let state = drain_latest(&mut rx).expect("push must fire a stack-state event");
     assert!(state.can_undo, "after a push, undo must be available");
@@ -62,14 +66,21 @@ async fn undo_fires_stack_state_with_can_redo_true() {
 
     let item = "item1\ndata".to_string();
     let entry_id = handle.write(&item).await.unwrap().unwrap();
-    ctx.push(entry_id, "create item1".to_string(), StoredItemId::from("item1"))
-        .await;
+    ctx.push(
+        entry_id,
+        "create item1".to_string(),
+        StoredItemId::from("item1"),
+    )
+    .await;
 
     let mut rx = ctx.subscribe_stack_state();
     ctx.undo().await.unwrap();
 
     let state = drain_latest(&mut rx).expect("undo must fire a stack-state event");
-    assert!(!state.can_undo, "after undoing the only entry, nothing is left to undo");
+    assert!(
+        !state.can_undo,
+        "after undoing the only entry, nothing is left to undo"
+    );
     assert!(state.can_redo, "after an undo, redo must be available");
     assert_eq!(state.redo_label.as_deref(), Some("create item1"));
 }
@@ -86,16 +97,26 @@ async fn redo_fires_stack_state_with_can_redo_false() {
 
     let item = "item1\ndata".to_string();
     let entry_id = handle.write(&item).await.unwrap().unwrap();
-    ctx.push(entry_id, "create item1".to_string(), StoredItemId::from("item1"))
-        .await;
+    ctx.push(
+        entry_id,
+        "create item1".to_string(),
+        StoredItemId::from("item1"),
+    )
+    .await;
     ctx.undo().await.unwrap();
 
     let mut rx = ctx.subscribe_stack_state();
     ctx.redo().await.unwrap();
 
     let state = drain_latest(&mut rx).expect("redo must fire a stack-state event");
-    assert!(state.can_undo, "after a redo, the redone entry can be undone again");
-    assert!(!state.can_redo, "after redoing the only undone entry, nothing is left to redo");
+    assert!(
+        state.can_undo,
+        "after a redo, the redone entry can be undone again"
+    );
+    assert!(
+        !state.can_redo,
+        "after redoing the only undone entry, nothing is left to redo"
+    );
 }
 
 /// The non-symmetric case the card calls out: a plain edit after an undo
@@ -116,7 +137,10 @@ async fn fresh_edit_after_undo_fires_stack_state_with_can_redo_false() {
     ctx.push(id1, "create item1".to_string(), StoredItemId::from("item1"))
         .await;
     ctx.undo().await.unwrap();
-    assert!(ctx.can_redo().await, "precondition: redo available after undo");
+    assert!(
+        ctx.can_redo().await,
+        "precondition: redo available after undo"
+    );
 
     // A brand-new edit (a plain push) discards the redo tail.
     let mut rx = ctx.subscribe_stack_state();
@@ -125,7 +149,8 @@ async fn fresh_edit_after_undo_fires_stack_state_with_can_redo_false() {
     ctx.push(id2, "create item2".to_string(), StoredItemId::from("item2"))
         .await;
 
-    let state = drain_latest(&mut rx).expect("a fresh edit after undo must fire a stack-state event");
+    let state =
+        drain_latest(&mut rx).expect("a fresh edit after undo must fire a stack-state event");
     assert!(state.can_undo, "the new edit can be undone");
     assert!(
         !state.can_redo,

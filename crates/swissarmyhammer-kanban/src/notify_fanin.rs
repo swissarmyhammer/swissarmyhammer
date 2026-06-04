@@ -42,10 +42,12 @@ use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
 use swissarmyhammer_entity::EntityEvent;
+use swissarmyhammer_operations::Notification;
 use swissarmyhammer_perspectives::events::PerspectiveEvent;
 use swissarmyhammer_plugin::notify::{
     ChangeOp, FieldChange as NotifyFieldChange, McpNotification, NotificationBridge, Provenance,
 };
+use swissarmyhammer_store::operations::{StoreChanged, StoreUndoChanged};
 use swissarmyhammer_store::StackState;
 use swissarmyhammer_views::events::ViewEvent;
 
@@ -76,7 +78,7 @@ pub fn entity_event_to_notification(event: &EntityEvent) -> Option<McpNotificati
                     value: c.value.clone(),
                 })
                 .collect();
-            Some(McpNotification::store_changed(
+            Some(store_changed_notification(
                 entity_type.clone(),
                 id.clone(),
                 ChangeOp::Updated,
@@ -89,7 +91,7 @@ pub fn entity_event_to_notification(event: &EntityEvent) -> Option<McpNotificati
             id,
             txn,
             origin,
-        } => Some(McpNotification::store_changed(
+        } => Some(store_changed_notification(
             entity_type.clone(),
             id.clone(),
             ChangeOp::Removed,
@@ -98,6 +100,30 @@ pub fn entity_event_to_notification(event: &EntityEvent) -> Option<McpNotificati
         )),
         EntityEvent::AttachmentChanged { .. } => None,
     }
+}
+
+/// Build a `notifications/store/changed` notification from the declared
+/// [`StoreChanged`] payload struct — the single-source-of-truth publish path.
+///
+/// Serializing the struct produces the wire `params`; `prov` stamps
+/// `txn`/`origin` on top via
+/// [`McpNotification::from_declared`]. Because the SAME struct both declares the
+/// notification's params (on the `store` tool) and produces them here, the
+/// declared schema and the emitted payload cannot drift.
+fn store_changed_notification(
+    store: String,
+    item: String,
+    op: ChangeOp,
+    changes: Option<Vec<NotifyFieldChange>>,
+    prov: Provenance,
+) -> McpNotification {
+    let payload = StoreChanged {
+        store,
+        item,
+        op: op.as_str().to_string(),
+        changes,
+    };
+    McpNotification::from_declared(payload.method(), &payload, prov)
 }
 
 /// Translate a [`ViewEvent`] into a bridge [`McpNotification`] for the `view`
@@ -111,8 +137,8 @@ pub fn view_event_to_notification(event: &ViewEvent) -> McpNotification {
             txn,
             origin,
             ..
-        } => McpNotification::store_changed(
-            VIEW_STORE,
+        } => store_changed_notification(
+            VIEW_STORE.to_string(),
             id.clone(),
             if *is_create {
                 ChangeOp::Created
@@ -122,8 +148,8 @@ pub fn view_event_to_notification(event: &ViewEvent) -> McpNotification {
             None,
             Provenance::new(txn.clone(), origin.clone()),
         ),
-        ViewEvent::ViewDeleted { id, txn, origin } => McpNotification::store_changed(
-            VIEW_STORE,
+        ViewEvent::ViewDeleted { id, txn, origin } => store_changed_notification(
+            VIEW_STORE.to_string(),
             id.clone(),
             ChangeOp::Removed,
             None,
@@ -142,8 +168,8 @@ pub fn perspective_event_to_notification(event: &PerspectiveEvent) -> McpNotific
             txn,
             origin,
             ..
-        } => McpNotification::store_changed(
-            PERSPECTIVE_STORE,
+        } => store_changed_notification(
+            PERSPECTIVE_STORE.to_string(),
             id.clone(),
             if *is_create {
                 ChangeOp::Created
@@ -153,8 +179,8 @@ pub fn perspective_event_to_notification(event: &PerspectiveEvent) -> McpNotific
             None,
             Provenance::new(txn.clone(), origin.clone()),
         ),
-        PerspectiveEvent::PerspectiveDeleted { id, txn, origin } => McpNotification::store_changed(
-            PERSPECTIVE_STORE,
+        PerspectiveEvent::PerspectiveDeleted { id, txn, origin } => store_changed_notification(
+            PERSPECTIVE_STORE.to_string(),
             id.clone(),
             ChangeOp::Removed,
             None,
@@ -164,13 +190,20 @@ pub fn perspective_event_to_notification(event: &PerspectiveEvent) -> McpNotific
 }
 
 /// Translate a [`StackState`] into the `store/undo_changed` notification.
+///
+/// Built from the declared [`StoreUndoChanged`] payload struct so the wire
+/// `params` and the schema declared on the `store` tool share one source.
+/// Undo-stack state is ephemeral and not itself an undoable thing, so this
+/// plane carries no provenance — the struct is serialized directly.
 pub fn stack_state_to_notification(state: &StackState) -> McpNotification {
-    McpNotification::store_undo_changed(
-        state.can_undo,
-        state.can_redo,
-        state.undo_label.clone(),
-        state.redo_label.clone(),
-    )
+    let payload = StoreUndoChanged {
+        can_undo: state.can_undo,
+        can_redo: state.can_redo,
+        undo_label: state.undo_label.clone(),
+        redo_label: state.redo_label.clone(),
+    };
+    let params = serde_json::to_value(&payload).unwrap_or_else(|_| serde_json::json!({}));
+    McpNotification::new(payload.method(), params)
 }
 
 /// Handles to the forwarder tasks spawned by [`spawn_notification_fanin`].
@@ -283,7 +316,90 @@ pub type SharedFanin = Arc<NotificationFanin>;
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::BTreeSet;
     use swissarmyhammer_entity::events::FieldChange;
+    use swissarmyhammer_operations::generate_notifications_meta;
+    use swissarmyhammer_store::operations::store_notifications;
+
+    /// The set of `notifications/store/*` methods the `store` tool DECLARES,
+    /// read from the `_meta` generator.
+    fn declared_store_methods() -> BTreeSet<String> {
+        generate_notifications_meta(store_notifications())
+            .as_object()
+            .expect("notifications meta is an object")
+            .values()
+            .map(|leaf| {
+                leaf["method"]
+                    .as_str()
+                    .expect("each notification leaf carries a method")
+                    .to_string()
+            })
+            .collect()
+    }
+
+    /// The set of `notifications/store/*` methods the fan-in actually PUBLISHES,
+    /// gathered by exercising every translator with a representative event.
+    fn published_store_methods() -> BTreeSet<String> {
+        let entity = entity_event_to_notification(&EntityEvent::EntityChanged {
+            entity_type: "task".to_string(),
+            id: "t1".to_string(),
+            version: 1,
+            changes: vec![],
+            txn: None,
+            origin: "user".to_string(),
+        })
+        .expect("entity changed maps");
+        let view = view_event_to_notification(&ViewEvent::ViewChanged {
+            id: "v1".to_string(),
+            changed_fields: vec![],
+            is_create: true,
+            txn: None,
+            origin: "user".to_string(),
+        });
+        let perspective =
+            perspective_event_to_notification(&PerspectiveEvent::PerspectiveChanged {
+                id: "p1".to_string(),
+                changed_fields: vec![],
+                is_create: true,
+                txn: None,
+                origin: "user".to_string(),
+            });
+        let undo = stack_state_to_notification(&StackState {
+            can_undo: true,
+            can_redo: false,
+            undo_label: None,
+            redo_label: None,
+        });
+        [entity, view, perspective, undo]
+            .into_iter()
+            .map(|n| n.method)
+            .collect()
+    }
+
+    /// Coverage guard (declared ⟺ published), namespace-based. Every
+    /// `notifications/store/*` method the fan-in publishes MUST be declared on
+    /// the `store` tool, and every declared store method MUST be one the fan-in
+    /// publishes — so a store notification can never be raised without appearing
+    /// in `_meta`, nor declared without this fan-in producing it. The owner
+    /// (`store` tool) and the publisher (this fan-in) live in different crates;
+    /// this test is the seam that keeps them in lockstep.
+    #[test]
+    fn published_store_methods_equal_declared() {
+        let declared = declared_store_methods();
+        let published = published_store_methods();
+        assert_eq!(
+            published, declared,
+            "fan-in published store methods {published:?} must equal the methods \
+             declared on the store tool {declared:?}",
+        );
+        assert_eq!(
+            declared,
+            BTreeSet::from([
+                "notifications/store/changed".to_string(),
+                "notifications/store/undo_changed".to_string(),
+            ]),
+        );
+    }
 
     #[test]
     fn entity_changed_maps_to_store_changed_updated_with_changes_and_provenance() {

@@ -172,7 +172,7 @@ pub enum ChangeOp {
 
 impl ChangeOp {
     /// The wire string for this op (`"created"` / `"removed"` / `"updated"`).
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             ChangeOp::Created => "created",
             ChangeOp::Removed => "removed",

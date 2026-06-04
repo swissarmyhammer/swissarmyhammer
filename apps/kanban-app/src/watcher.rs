@@ -1,26 +1,27 @@
-//! Thin bridge between `swissarmyhammer_entity::EntityCache` and the Tauri
-//! frontend.
+//! Server-side bridge over `swissarmyhammer_entity::EntityCache`.
 //!
-//! This module used to re-implement entity caching, file watching, hash-based
-//! dedupe, and field-level diffing — all concerns that now belong to the
-//! `swissarmyhammer-entity` crate. After the `entity-cache` migration, the
-//! kanban-app owns no entity state and does no filesystem work. It only:
+//! Entity / view / perspective / undo data changes now reach the webview (and
+//! any subscribing plugin) over the MCP `notifications/store/*` plane, published
+//! by the kanban notification fan-in (`swissarmyhammer-kanban`'s `notify_fanin`,
+//! wired in by `BoardHandle::start_notification_fanin`). This bridge no longer
+//! emits Tauri `entity-*` events. It retains the two server-side concerns the
+//! fan-in does not cover:
 //!
-//! 1. Subscribes to `EntityCache::subscribe()`.
-//! 2. Enriches each `EntityEvent` with compute-derived fields by re-reading
+//! 1. **Search index sync.** It subscribes to `EntityCache::subscribe()`,
+//!    enriches each `EntityEvent` with compute-derived fields by re-reading
 //!    through `EntityContext::read` (which applies `ComputeEngine.derive_all`)
 //!    and, for task entities, running the kanban-layer cross-entity enrichment
-//!    (`enrich_task_entity`) so `virtual_tags`/`filter_tags`/`ready`/
-//!    `blocked_by`/`blocks` reflect the freshest state.
-//! 3. Fans out synthetic `EntityFieldChanged` events to dependent tasks when a
-//!    task's `position_column`, `depends_on`, or `completed` field changes —
-//!    their computed fields may have shifted even though their own files did
-//!    not.
-//! 4. Translates each resolved event to the matching Tauri payload shape and
-//!    tags it with a `board_path` so the frontend can route it to the correct
-//!    window.
+//!    (`enrich_task_entity`), then folds the resolved change into the in-memory
+//!    `EntitySearchIndex` so full-text search stays in lockstep.
+//! 2. **Filtered-window perspective recompute.** A task create / remove /
+//!    field-change can move tasks into or out of a filtered window's
+//!    perspective; the bridge recomputes each filtered window's
+//!    `filtered_task_ids` snapshot and emits `ui-state-changed` per window.
+//!
+//! The resolved `WatchEvent`s (and the per-task dependency fan-out the
+//! enrichment produces) feed only those two consumers; they are not serialized
+//! to the frontend.
 
-use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use swissarmyhammer_entity::events::EntityEvent;
@@ -29,10 +30,7 @@ use swissarmyhammer_entity_search::EntitySearchIndex;
 use swissarmyhammer_kanban::task_helpers::enrich_task_entity;
 use swissarmyhammer_kanban::virtual_tags::default_virtual_tag_registry;
 use swissarmyhammer_kanban::KanbanContext;
-use swissarmyhammer_perspectives::PerspectiveEvent;
-use swissarmyhammer_views::ViewEvent;
 use tauri::{Emitter, Manager};
-use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{Mutex, RwLock};
 
@@ -55,9 +53,10 @@ const TASK_COMPUTED_FIELDS: &[&str] = &[
     "blocks",
 ];
 
-/// Events emitted to the frontend when entity state changes.
+/// A resolved entity change, the internal currency this bridge folds into the
+/// search index and the perspective recompute.
 ///
-/// **Architecture rule (event-architecture):** Events are thin signals with
+/// **Architecture rule (event-architecture):** changes are thin signals with
 /// exactly two granularities:
 ///
 /// 1. **Entity-level** — `EntityCreated` and `EntityRemoved` carry
@@ -68,68 +67,36 @@ const TASK_COMPUTED_FIELDS: &[&str] = &[
 ///    one entry per changed field, each with the field name and new value.
 ///    Removals are encoded as `value: Null`.
 ///
-/// The frontend contract:
-/// - `entity-created`: add entity to store from payload fields.
-/// - `entity-field-changed`: patch individual fields from `changes`. ONE
-///   path, no branching, no re-fetch.
-/// - `entity-removed`: remove entity from store.
-/// - `attachment-changed`: refresh thumbnails/badges for the owning entity.
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind")]
+/// These are NOT serialized to the frontend — the webview consumes the
+/// equivalent `notifications/store/changed` plane from the notification fan-in.
+/// They feed only [`sync_search_index`] and the filtered-window perspective
+/// recompute.
+#[derive(Debug, Clone)]
 #[allow(clippy::enum_variant_names)]
 pub enum WatchEvent {
     /// A new entity file appeared.
-    #[serde(rename = "entity-created")]
     EntityCreated {
         entity_type: String,
         id: String,
         fields: HashMap<String, serde_json::Value>,
     },
     /// An entity file was deleted.
-    #[serde(rename = "entity-removed")]
     EntityRemoved { entity_type: String, id: String },
     /// One or more fields on an entity changed.
     ///
     /// Each `FieldChange` carries the field name and its new value.
-    /// The frontend patches individual fields in place.
-    #[serde(rename = "entity-field-changed")]
     EntityFieldChanged {
         entity_type: String,
         id: String,
         changes: Vec<FieldChange>,
     },
-    /// An attachment file was created, modified, or deleted.
-    ///
-    /// Emitted when files inside `.attachments/` subdirectories change,
-    /// allowing the frontend to update thumbnail previews and badge counts.
-    #[serde(rename = "attachment-changed")]
-    AttachmentChanged {
-        /// The entity type that owns the attachment (e.g. "task").
-        entity_type: String,
-        /// The stored filename (e.g. "01ABC-screenshot.png").
-        filename: String,
-        /// Whether the file was removed (true) or created/modified (false).
-        removed: bool,
-    },
-}
-
-/// Wrapper that pairs a `WatchEvent` with the board it belongs to.
-///
-/// When emitted to the frontend, the JSON includes all fields from the inner
-/// event (via `#[serde(flatten)]`) plus a `board_path` string so listeners
-/// can filter events for their active board.
-#[derive(Debug, Clone, Serialize)]
-pub struct BoardWatchEvent {
-    #[serde(flatten)]
-    pub event: WatchEvent,
-    pub board_path: String,
 }
 
 /// Apply a single `WatchEvent` to an `EntitySearchIndex`.
 ///
 /// Reconstructs an `Entity` from the event fields and calls `update` or
 /// `remove` on the index. Called from the bridge subscriber so the search
-/// index stays in lockstep with every event emitted to the frontend.
+/// index stays in lockstep with every resolved entity change.
 pub fn sync_search_index(idx: &mut EntitySearchIndex, evt: &WatchEvent) {
     match evt {
         WatchEvent::EntityCreated {
@@ -159,35 +126,6 @@ pub fn sync_search_index(idx: &mut EntitySearchIndex, evt: &WatchEvent) {
         WatchEvent::EntityRemoved { id, .. } => {
             idx.remove(id);
         }
-        WatchEvent::AttachmentChanged { .. } => {
-            // Attachment file changes don't affect the search index.
-            // They are forwarded to the frontend for UI updates only.
-        }
-    }
-}
-
-/// Emit one resolved `WatchEvent` to the frontend as the matching Tauri
-/// event, wrapped in a `BoardWatchEvent` so receivers can filter by board.
-///
-/// The Tauri event name matches the `#[serde(rename = ...)]` discriminant
-/// on `WatchEvent`, so the frontend listener keys stay stable.
-pub fn emit_watch_event<R: tauri::Runtime, E: Emitter<R>>(
-    emitter: &E,
-    board_path: &str,
-    evt: WatchEvent,
-) {
-    let event_name = match &evt {
-        WatchEvent::EntityCreated { .. } => "entity-created",
-        WatchEvent::EntityRemoved { .. } => "entity-removed",
-        WatchEvent::EntityFieldChanged { .. } => "entity-field-changed",
-        WatchEvent::AttachmentChanged { .. } => "attachment-changed",
-    };
-    let wrapped = BoardWatchEvent {
-        event: evt,
-        board_path: board_path.to_string(),
-    };
-    if let Err(e) = emitter.emit(event_name, &wrapped) {
-        tracing::warn!(event_name, board_path, error = %e, "failed to emit Tauri event");
     }
 }
 
@@ -462,15 +400,10 @@ async fn resolve_event(
         EntityEvent::EntityDeleted {
             entity_type, id, ..
         } => resolve_entity_deleted(ctx, state, entity_type, id).await,
-        EntityEvent::AttachmentChanged {
-            entity_type,
-            filename,
-            removed,
-        } => vec![WatchEvent::AttachmentChanged {
-            entity_type,
-            filename,
-            removed,
-        }],
+        // Attachment file changes are not store items: they neither update the
+        // search index nor move tasks in/out of a perspective, so this bridge
+        // produces no resolved change for them.
+        EntityEvent::AttachmentChanged { .. } => Vec::new(),
     }
 }
 
@@ -637,33 +570,37 @@ fn raw_changed_event(
     }
 }
 
-/// Subscribe to an `EntityCache` and forward every event to Tauri, scoped
-/// to a specific board.
+/// Subscribe to an `EntityCache` and keep the server-side search index and
+/// filtered-window perspectives in sync, scoped to a specific board.
 ///
-/// Runs until the broadcast channel closes — which happens when the cache
-/// (and therefore the surrounding `KanbanContext`) is dropped. The bridge:
+/// Entity data changes reach the webview over the MCP `notifications/store/*`
+/// plane (the notification fan-in, `BoardHandle::start_notification_fanin`);
+/// this bridge no longer emits `entity-*` Tauri events. It runs until the
+/// broadcast channel closes — which happens when the cache (and therefore the
+/// surrounding `KanbanContext`) is dropped. The bridge:
 ///
 /// - Pre-populates a "seen" set from the cache BEFORE subscribing so the
-///   first `EntityChanged` for an unknown `(entity_type, id)` surfaces as
-///   `entity-created` and repeat changes surface as `entity-field-changed`,
-///   matching the frontend's long-standing contract. The ordering is
-///   deliberate: subscribing first would leave a narrow window in which a
-///   write could land between `subscribe()` and the snapshot, causing the
-///   bridge to see the new entity in the cache snapshot AND on the
-///   receiver, then mis-classify it as a field-change because
-///   `seen.insert(...)` returns `false`.
+///   first `EntityChanged` for an unknown `(entity_type, id)` resolves to an
+///   `EntityCreated` `WatchEvent` and repeat changes resolve to
+///   `EntityFieldChanged`. The ordering is deliberate: subscribing first would
+///   leave a narrow window in which a write could land between `subscribe()`
+///   and the snapshot, causing the bridge to see the new entity in the cache
+///   snapshot AND on the receiver, then mis-classify it as a field-change
+///   because `seen.insert(...)` returns `false`.
 /// - Re-reads each changed entity through `EntityContext::read` and, for
 ///   tasks, runs the kanban-layer enrichment so ComputeEngine-derived
 ///   fields (`progress`, `tags`) and kanban graph fields (`virtual_tags`,
 ///   `filter_tags`, `ready`, `blocked_by`, `blocks`) are merged into the
-///   emitted payload.
+///   resolved `WatchEvent` the search index folds in.
 /// - Fans out synthetic `EntityFieldChanged` events to dependent tasks when
 ///   a task write touches `position_column` or `depends_on`.
-/// - Updates the shared `EntitySearchIndex` in lockstep with every emission
-///   so full-text search results don't drift behind the frontend store.
+/// - Updates the shared `EntitySearchIndex` in lockstep with every resolved
+///   change so full-text search results don't drift behind the data plane.
+/// - Recomputes each filtered window's `filtered_task_ids` and emits the
+///   `ui-state-changed` Tauri event (the one event seam this bridge keeps).
 /// - Logs and continues on `Lagged` — dropping events keeps the bridge
-///   alive at the cost of a momentary index/store drift, which self-heals
-///   on the next write.
+///   alive at the cost of a momentary index drift, which self-heals on the
+///   next write.
 ///
 /// Failure modes are logged but do not propagate: the bridge is a
 /// fire-and-forget observer, not a control plane.
@@ -673,8 +610,6 @@ pub async fn run_bridge(
     app: tauri::AppHandle,
     board_path: String,
     search_index: Arc<RwLock<EntitySearchIndex>>,
-    perspective_rx: Option<broadcast::Receiver<PerspectiveEvent>>,
-    view_rx: Option<broadcast::Receiver<ViewEvent>>,
 ) {
     // Pre-populate BEFORE subscribing so no event lands between the snapshot
     // and the receiver. A write that lands *before* subscribe will be
@@ -684,49 +619,22 @@ pub async fn run_bridge(
     let preloaded_entities = seen.len();
     let state = Arc::new(Mutex::new(BridgeState::new(seen)));
     let mut entity_rx = cache.subscribe();
-    let mut perspective_rx = perspective_rx;
-    let mut view_rx = view_rx;
     tracing::info!(
         board_path = %board_path,
         preloaded_entities,
-        has_perspective_rx = perspective_rx.is_some(),
-        has_view_rx = view_rx.is_some(),
         "entity-cache bridge started"
     );
 
     loop {
-        let action = recv_next_event(&mut entity_rx, &mut perspective_rx, &mut view_rx).await;
-        match action {
-            BridgeAction::Entity(evt) => {
-                process_cache_event(evt, &ctx, &state, &app, &board_path, &search_index).await;
+        match entity_rx.recv().await {
+            Ok(evt) => {
+                process_cache_event(evt, &ctx, &state, &app, &search_index).await;
             }
-            BridgeAction::EntityLagged(n) => {
+            Err(RecvError::Lagged(n)) => {
                 tracing::warn!(board_path = %board_path, skipped = n,
-                    "bridge lagged — search index and frontend may briefly drift");
+                    "bridge lagged — search index and filtered windows may briefly drift");
             }
-            BridgeAction::Perspective(evt) => {
-                process_perspective_event(evt, &app, &board_path);
-            }
-            BridgeAction::PerspectiveLagged(n) => {
-                tracing::warn!(board_path = %board_path, skipped = n,
-                    "perspective bridge lagged");
-            }
-            BridgeAction::PerspectiveClosed => {
-                tracing::info!(board_path = %board_path, "perspective event channel closed");
-                perspective_rx = None;
-            }
-            BridgeAction::View(evt) => {
-                process_view_event(evt, &app, &board_path);
-            }
-            BridgeAction::ViewLagged(n) => {
-                tracing::warn!(board_path = %board_path, skipped = n,
-                    "view bridge lagged");
-            }
-            BridgeAction::ViewClosed => {
-                tracing::info!(board_path = %board_path, "view event channel closed");
-                view_rx = None;
-            }
-            BridgeAction::Shutdown => {
+            Err(RecvError::Closed) => {
                 tracing::info!(board_path = %board_path, "entity-cache bridge stopped");
                 break;
             }
@@ -734,75 +642,21 @@ pub async fn run_bridge(
     }
 }
 
-/// Discriminant for the next event received by the bridge loop.
-enum BridgeAction {
-    Entity(EntityEvent),
-    EntityLagged(u64),
-    Perspective(PerspectiveEvent),
-    PerspectiveLagged(u64),
-    PerspectiveClosed,
-    View(ViewEvent),
-    ViewLagged(u64),
-    ViewClosed,
-    Shutdown,
-}
-
-/// Wait for the next event from any of the entity, perspective, or view channels.
+/// Resolve a single cache event to zero-or-more `WatchEvent`s, synchronise the
+/// search index, and recompute filtered-window perspectives.
 ///
-/// Uses `tokio::select!` to multiplex all receivers. The perspective and view
-/// channels are optional — when `None`, that arm pends forever so only the
-/// remaining streams are processed.
-async fn recv_next_event(
-    entity_rx: &mut broadcast::Receiver<EntityEvent>,
-    perspective_rx: &mut Option<broadcast::Receiver<PerspectiveEvent>>,
-    view_rx: &mut Option<broadcast::Receiver<ViewEvent>>,
-) -> BridgeAction {
-    tokio::select! {
-        entity_result = entity_rx.recv() => {
-            match entity_result {
-                Ok(evt) => BridgeAction::Entity(evt),
-                Err(RecvError::Lagged(n)) => BridgeAction::EntityLagged(n),
-                Err(RecvError::Closed) => BridgeAction::Shutdown,
-            }
-        }
-        perspective_result = async {
-            match perspective_rx.as_mut() {
-                Some(rx) => rx.recv().await,
-                None => std::future::pending().await,
-            }
-        } => {
-            match perspective_result {
-                Ok(evt) => BridgeAction::Perspective(evt),
-                Err(RecvError::Lagged(n)) => BridgeAction::PerspectiveLagged(n),
-                Err(RecvError::Closed) => BridgeAction::PerspectiveClosed,
-            }
-        }
-        view_result = async {
-            match view_rx.as_mut() {
-                Some(rx) => rx.recv().await,
-                None => std::future::pending().await,
-            }
-        } => {
-            match view_result {
-                Ok(evt) => BridgeAction::View(evt),
-                Err(RecvError::Lagged(n)) => BridgeAction::ViewLagged(n),
-                Err(RecvError::Closed) => BridgeAction::ViewClosed,
-            }
-        }
-    }
-}
-
-/// Resolve a single cache event to zero-or-more `WatchEvent`s, synchronise
-/// the search index, and emit the resulting events to the frontend.
-///
-/// Extracted from `run_bridge` so the outer loop only deals with receive
-/// error classification.
+/// The webview no longer consumes the resolved `WatchEvent`s directly: entity
+/// / view / perspective data changes reach the frontend over the MCP
+/// `notifications/store/changed` plane via the notification fan-in (see
+/// `BoardHandle::start_notification_fanin`). This bridge retains the two
+/// server-side concerns the fan-in does not cover — keeping the in-memory
+/// search index in lockstep with every entity change, and recomputing each
+/// filtered window's `filtered_task_ids` snapshot (emitted as `ui-state-changed`).
 async fn process_cache_event(
     evt: EntityEvent,
     ctx: &Arc<KanbanContext>,
     state: &Arc<Mutex<BridgeState>>,
     app: &tauri::AppHandle,
-    board_path: &str,
     search_index: &Arc<RwLock<EntitySearchIndex>>,
 ) {
     let resolved = {
@@ -815,16 +669,12 @@ async fn process_cache_event(
             sync_search_index(&mut idx, watch_event);
         }
     }
-    let touched_task = cache_event_touches_task(&resolved);
-    for watch_event in resolved {
-        emit_watch_event(app, board_path, watch_event);
-    }
 
     // A task create/remove/field-change can move tasks into or out of a
     // filtered window's perspective. `filtered_task_ids` is a snapshot taken
     // at `perspective.switch` time and nothing else refreshes it — so recompute
     // it here, server-side, and push a `ui-state-changed` event per window.
-    if touched_task {
+    if cache_event_touches_task(&resolved) {
         recompute_and_emit_perspective_filters(ctx, app).await;
     }
 }
@@ -841,10 +691,6 @@ fn cache_event_touches_task(resolved: &[WatchEvent]) -> bool {
 }
 
 /// Whether a resolved `WatchEvent` concerns a `task` entity.
-///
-/// `AttachmentChanged` carries the owning entity type too; a task attachment
-/// change does not move the task in or out of a filter, so only the three
-/// entity-shaped events count.
 fn watch_event_touches_task(evt: &WatchEvent) -> bool {
     matches!(
         evt,
@@ -989,133 +835,6 @@ async fn load_perspective_filters(
         }
     }
     Some(filters)
-}
-
-/// Translate a `PerspectiveEvent` into a Tauri event and emit it.
-///
-/// Perspectives are not entities, but the frontend's `PerspectiveProvider`
-/// already listens for `entity-field-changed` / `entity-created` /
-/// `entity-removed` with `entity_type === "perspective"`. We map perspective
-/// events into the same shape so the existing frontend refresh logic fires
-/// without any React changes.
-///
-/// Creates emit `entity-created`, updates emit `entity-field-changed`, and
-/// deletes emit `entity-removed` — matching the entity bridge's contract.
-fn process_perspective_event(evt: PerspectiveEvent, app: &tauri::AppHandle, board_path: &str) {
-    let watch_event = match evt {
-        PerspectiveEvent::PerspectiveChanged {
-            id,
-            changed_fields,
-            is_create,
-            ..
-        } => {
-            if is_create {
-                // The frontend only needs the event signal to trigger a
-                // perspective list refresh — field values are re-fetched
-                // from the backend via `perspective.list`.
-                let fields = changed_fields
-                    .into_iter()
-                    .map(|field| (field, serde_json::Value::Null))
-                    .collect();
-                WatchEvent::EntityCreated {
-                    entity_type: "perspective".to_string(),
-                    id,
-                    fields,
-                }
-            } else {
-                let changes = changed_fields
-                    .into_iter()
-                    .map(|field| FieldChange {
-                        field,
-                        // The frontend only needs to know *which* fields changed
-                        // to trigger a perspective list refresh — the actual value
-                        // is re-fetched from the backend via `perspective.list`.
-                        value: serde_json::Value::Null,
-                    })
-                    .collect();
-                WatchEvent::EntityFieldChanged {
-                    entity_type: "perspective".to_string(),
-                    id,
-                    changes,
-                }
-            }
-        }
-        PerspectiveEvent::PerspectiveDeleted { id, .. } => WatchEvent::EntityRemoved {
-            entity_type: "perspective".to_string(),
-            id,
-        },
-    };
-    emit_watch_event(app, board_path, watch_event);
-}
-
-/// Translate a `ViewEvent` into a Tauri event and emit it.
-///
-/// Views are not entities, but the frontend listens for
-/// `entity-created` / `entity-field-changed` / `entity-removed` with
-/// `entity_type === "view"` to refresh the view list. We map view events
-/// into the same shape so the existing frontend refresh logic fires without
-/// any React changes.
-///
-/// Creates emit `entity-created`, updates emit `entity-field-changed`, and
-/// deletes emit `entity-removed` — matching the entity bridge's contract.
-/// `is_create` on `ViewChanged` selects between the create / update cases;
-/// `reload_from_disk` always emits `is_create: false`, so undo-of-delete
-/// surfaces as `entity-field-changed` and the frontend re-fetches the view list.
-fn process_view_event(evt: ViewEvent, app: &tauri::AppHandle, board_path: &str) {
-    let watch_event = view_event_to_watch_event(evt);
-    emit_watch_event(app, board_path, watch_event);
-}
-
-/// Pure mapping from a `ViewEvent` to the matching `WatchEvent` payload.
-///
-/// Extracted from [`process_view_event`] so unit tests can verify the
-/// `is_create` → `EntityCreated` vs `EntityFieldChanged` branch without
-/// constructing a real Tauri `AppHandle`. The bridge contract is verified
-/// here: undo-of-delete (where `reload_from_disk` emits `is_create: false`)
-/// must map to `EntityFieldChanged`, not `EntityCreated`.
-fn view_event_to_watch_event(evt: ViewEvent) -> WatchEvent {
-    match evt {
-        ViewEvent::ViewChanged {
-            id,
-            changed_fields,
-            is_create,
-            ..
-        } => {
-            if is_create {
-                // The frontend only needs the event signal to trigger a view
-                // list refresh — field values are re-fetched from the backend.
-                let fields = changed_fields
-                    .into_iter()
-                    .map(|field| (field, serde_json::Value::Null))
-                    .collect();
-                WatchEvent::EntityCreated {
-                    entity_type: "view".to_string(),
-                    id,
-                    fields,
-                }
-            } else {
-                let changes = changed_fields
-                    .into_iter()
-                    .map(|field| FieldChange {
-                        field,
-                        // The frontend only needs to know *which* fields
-                        // changed to trigger a refresh — the actual value is
-                        // re-fetched from the backend.
-                        value: serde_json::Value::Null,
-                    })
-                    .collect();
-                WatchEvent::EntityFieldChanged {
-                    entity_type: "view".to_string(),
-                    id,
-                    changes,
-                }
-            }
-        }
-        ViewEvent::ViewDeleted { id, .. } => WatchEvent::EntityRemoved {
-            entity_type: "view".to_string(),
-            id,
-        },
-    }
 }
 
 #[cfg(test)]
@@ -1297,18 +1016,6 @@ mod tests {
         assert!(idx.get("bug").is_none());
     }
 
-    #[test]
-    fn sync_search_index_attachment_is_noop() {
-        let mut idx = EntitySearchIndex::default();
-        let evt = WatchEvent::AttachmentChanged {
-            entity_type: "task".into(),
-            filename: "foo.png".into(),
-            removed: false,
-        };
-        sync_search_index(&mut idx, &evt);
-        assert!(idx.get("foo.png").is_none());
-    }
-
     #[tokio::test]
     async fn pre_populate_seen_captures_cached_entities() {
         let (_dir, cache) = setup_cache().await;
@@ -1432,128 +1139,13 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // View event → WatchEvent mapping tests (the bridge contract for views).
-    //
-    // These exercise `view_event_to_watch_event` directly so we don't need a
-    // real `tauri::AppHandle`. They pin the contract from the task description:
-    // ViewChanged{is_create=true} → EntityCreated, ViewChanged{is_create=false}
-    // → EntityFieldChanged, ViewDeleted → EntityRemoved. All carry
-    // entity_type="view".
+    // View / perspective → notification mapping moved to the kanban
+    // notification fan-in (`swissarmyhammer-kanban`'s `notify_fanin`), which
+    // publishes `notifications/store/changed` for views and perspectives. The
+    // contract for those mappings (create→created, update→updated,
+    // delete→removed, including undo-of-delete) is tested there. This bridge no
+    // longer translates view/perspective events to Tauri payloads.
     // -----------------------------------------------------------------------
-
-    #[test]
-    fn view_event_to_watch_event_create_maps_to_entity_created() {
-        let evt = ViewEvent::ViewChanged {
-            id: "01VIEW".into(),
-            changed_fields: vec!["name".into(), "kind".into()],
-            is_create: true,
-            txn: None,
-            origin: "user".into(),
-        };
-        match view_event_to_watch_event(evt) {
-            WatchEvent::EntityCreated {
-                entity_type,
-                id,
-                fields,
-            } => {
-                assert_eq!(entity_type, "view");
-                assert_eq!(id, "01VIEW");
-                assert!(fields.contains_key("name"));
-                assert!(fields.contains_key("kind"));
-            }
-            other => panic!("expected EntityCreated, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn view_event_to_watch_event_update_maps_to_entity_field_changed() {
-        let evt = ViewEvent::ViewChanged {
-            id: "01VIEW".into(),
-            changed_fields: vec!["kind".into()],
-            is_create: false,
-            txn: None,
-            origin: "user".into(),
-        };
-        match view_event_to_watch_event(evt) {
-            WatchEvent::EntityFieldChanged {
-                entity_type,
-                id,
-                changes,
-            } => {
-                assert_eq!(entity_type, "view");
-                assert_eq!(id, "01VIEW");
-                assert_eq!(changes.len(), 1);
-                assert_eq!(changes[0].field, "kind");
-            }
-            other => panic!("expected EntityFieldChanged, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn view_event_to_watch_event_delete_maps_to_entity_removed() {
-        let evt = ViewEvent::ViewDeleted {
-            id: "01VIEW".into(),
-            txn: None,
-            origin: "user".into(),
-        };
-        match view_event_to_watch_event(evt) {
-            WatchEvent::EntityRemoved { entity_type, id } => {
-                assert_eq!(entity_type, "view");
-                assert_eq!(id, "01VIEW");
-            }
-            other => panic!("expected EntityRemoved, got {other:?}"),
-        }
-    }
-
-    /// End-to-end mapping for the full create → delete → undo-of-delete cycle
-    /// the views crate emits. Pins the bridge contract documented in the task:
-    /// the third event (undo-of-delete) is `EntityFieldChanged`, not
-    /// `EntityCreated`, because `reload_from_disk` always emits
-    /// `is_create: false`.
-    #[test]
-    fn bridge_routes_view_undo_of_delete() {
-        // Step 1: create — bridge must emit EntityCreated.
-        let create = view_event_to_watch_event(ViewEvent::ViewChanged {
-            id: "01VIEW".into(),
-            changed_fields: vec!["name".into()],
-            is_create: true,
-            txn: None,
-            origin: "user".into(),
-        });
-        assert!(matches!(
-            create,
-            WatchEvent::EntityCreated { ref entity_type, .. } if entity_type == "view"
-        ));
-
-        // Step 2: delete — bridge must emit EntityRemoved.
-        let delete = view_event_to_watch_event(ViewEvent::ViewDeleted {
-            id: "01VIEW".into(),
-            txn: None,
-            origin: "user".into(),
-        });
-        assert!(matches!(
-            delete,
-            WatchEvent::EntityRemoved { ref entity_type, .. } if entity_type == "view"
-        ));
-
-        // Step 3: undo-of-delete — `reload_from_disk` emits
-        // ViewChanged{is_create=false}, which must map to EntityFieldChanged
-        // (NOT EntityCreated). This is the key bridge contract for views.
-        let undo = view_event_to_watch_event(ViewEvent::ViewChanged {
-            id: "01VIEW".into(),
-            changed_fields: vec![],
-            is_create: false,
-            txn: None,
-            origin: "user".into(),
-        });
-        assert!(
-            matches!(
-                undo,
-                WatchEvent::EntityFieldChanged { ref entity_type, .. } if entity_type == "view"
-            ),
-            "undo-of-delete must surface as EntityFieldChanged, got {undo:?}"
-        );
-    }
 
     /// End-to-end through the bridge: write → delete → undo-of-delete. The
     /// bridge must emit `entity-created`, `entity-removed`, `entity-created`
@@ -1696,26 +1288,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bridge_end_to_end_attachment_emits_attachment_changed() {
-        let (_dir, cache) = setup_cache().await;
+    async fn bridge_drops_attachment_events() {
+        // The cache still broadcasts an `AttachmentChanged` `EntityEvent`, but
+        // attachments are not store items — the bridge resolves them to no
+        // `WatchEvent`, so they neither touch the search index nor trigger a
+        // perspective recompute.
+        let (_temp, ctx, cache) = setup_kanban_with_board().await;
         let _seen = pre_populate_seen(&cache).await;
+        let mut state = BridgeState::new(HashSet::new());
         let mut rx = cache.subscribe();
 
         cache.send_attachment_event("task", "01ABC-photo.png", false);
 
         let evt = rx.recv().await.unwrap();
-        match evt {
-            EntityEvent::AttachmentChanged {
-                entity_type,
-                filename,
-                removed,
-            } => {
-                assert_eq!(entity_type, "task");
-                assert_eq!(filename, "01ABC-photo.png");
-                assert!(!removed);
-            }
-            other => panic!("expected AttachmentChanged, got {other:?}"),
-        }
+        let resolved = resolve_event(evt, ctx.as_ref(), &mut state).await;
+        assert!(
+            resolved.is_empty(),
+            "attachment events must resolve to no WatchEvent, got {resolved:?}"
+        );
     }
 
     // ------------------------------------------------------------------------

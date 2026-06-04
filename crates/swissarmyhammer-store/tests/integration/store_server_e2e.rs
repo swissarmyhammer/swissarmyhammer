@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use serde_json::json;
-use swissarmyhammer_store::{StoreContext, StoredItemId, StoreServer};
+use swissarmyhammer_store::{StoreContext, StoreServer, StoredItemId};
 use tempfile::TempDir;
 
 use super::common::{call_tool, make_mock_handle};

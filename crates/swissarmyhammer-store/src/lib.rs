@@ -48,10 +48,10 @@ pub mod store;
 pub mod trash;
 
 pub use changelog::{ChangeOp, ChangelogEntry};
+pub use context::StackState;
 pub use context::{StoreContext, UndoOutcome};
 pub use error::StoreError;
 pub use event::ChangeEvent;
-pub use context::StackState;
 pub use handle::StoreHandle;
 pub use id::{StoredItemId, UndoEntryId};
 pub use provenance::EventProvenance;
