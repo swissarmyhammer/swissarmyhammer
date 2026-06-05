@@ -23,6 +23,7 @@
 use std::sync::{Arc, OnceLock};
 
 use swissarmyhammer_app_service::{AppService, AppShell};
+use swissarmyhammer_command_service::CommandMetadata;
 use swissarmyhammer_command_service::bootstrap::install_commands_module_with;
 use swissarmyhammer_command_service::CommandService;
 use swissarmyhammer_entity_mcp::server::{
@@ -252,4 +253,254 @@ pub async fn expose_apphandle_modules(
     }
 
     Ok(())
+}
+
+/// Project one [`CommandMetadata`] (the callback-free shape `CommandService`
+/// exposes) onto the synchronous [`CommandDef`] the legacy
+/// [`CommandsRegistry`] façade stores.
+///
+/// `CommandService` is the sole source of command metadata after the Stage 4
+/// cut-over, but three synchronous callers still read the `CommandsRegistry`
+/// snapshot: the dispatch undoable-gate (`lookup_undoable`), scope/keybinding
+/// listing (`list_commands_for_scope`), and the native menu builder. This
+/// conversion lets [`build_registry_from_metadata`] repopulate that façade
+/// from the live service after plugin discovery so those callers see every
+/// builtin-plugin command.
+///
+/// Field shapes differ between the two types and are bridged here:
+///
+/// - `scope: Option<Vec<String>>` → `Option<String>` (comma-joined; the
+///   `CommandsRegistry` scope grammar is comma-separated `entity:type`).
+/// - `keys: Option<HashMap<mode, key>>` → [`KeysDef`] (`vim` / `cua` /
+///   `emacs` picked out by mode name; unknown modes are dropped).
+/// - `menu` / `tab_button`: `Option<Value>` deserialized into their typed
+///   counterparts — the plugin-registered JSON already matches the
+///   [`MenuPlacement`] / [`TabButtonDef`] shape.
+/// - `undoable` / `context_menu` / `visible`: `Option<bool>` unwrapped to the
+///   `CommandDef` defaults (`false` / `false` / `true`) when absent.
+/// - `params`: re-serialized through serde — both crates' `ParamDef` types
+///   are structurally identical and share the same wire shape.
+///
+/// `description` / `category` carry no `CommandDef` field and are dropped.
+///
+/// Returns `None` when a sub-payload fails to deserialize (a malformed
+/// `menu` / `tab_button` / `params`); the caller logs and skips it rather
+/// than poisoning the whole snapshot.
+fn command_metadata_to_def(
+    meta: &CommandMetadata,
+) -> Option<swissarmyhammer_kanban::commands_core::CommandDef> {
+    use swissarmyhammer_kanban::commands_core::{
+        CommandDef, KeysDef, MenuPlacement, ParamDef, TabButtonDef,
+    };
+
+    let keys = meta.keys.as_ref().map(|map| KeysDef {
+        vim: map.get("vim").cloned(),
+        cua: map.get("cua").cloned(),
+        emacs: map.get("emacs").cloned(),
+    });
+
+    let scope = meta
+        .scope
+        .as_ref()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.join(","));
+
+    let menu: Option<MenuPlacement> = match &meta.menu {
+        Some(value) => Some(serde_json::from_value(value.clone()).ok()?),
+        None => None,
+    };
+
+    let tab_button: Option<TabButtonDef> = match &meta.tab_button {
+        Some(value) => Some(serde_json::from_value(value.clone()).ok()?),
+        None => None,
+    };
+
+    let params: Vec<ParamDef> = match &meta.params {
+        Some(list) => serde_json::from_value(serde_json::to_value(list).ok()?).ok()?,
+        None => Vec::new(),
+    };
+
+    Some(CommandDef {
+        id: meta.id.clone(),
+        name: meta.name.clone(),
+        menu_name: meta.menu_name.clone(),
+        scope,
+        visible: meta.visible.unwrap_or(true),
+        keys,
+        params,
+        undoable: meta.undoable.unwrap_or(false),
+        context_menu: meta.context_menu.unwrap_or(false),
+        context_menu_group: meta.context_menu_group,
+        context_menu_order: meta.context_menu_order,
+        menu,
+        view_kinds: meta.view_kinds.clone(),
+        tab_button,
+    })
+}
+
+/// Build a [`CommandsRegistry`] snapshot from a live [`CommandService`]'s
+/// command catalogue.
+///
+/// Each [`CommandMetadata`] is projected onto a [`CommandDef`] via
+/// [`command_metadata_to_def`]; entries whose sub-payloads fail to
+/// deserialize are logged and skipped so one malformed command never empties
+/// the snapshot. The result is the synchronous façade the menu / scope /
+/// undoable-gate callers read until they migrate to the MCP path.
+pub fn build_registry_from_metadata(
+    metadata: &[CommandMetadata],
+) -> swissarmyhammer_kanban::commands_core::CommandsRegistry {
+    let defs: Vec<swissarmyhammer_kanban::commands_core::CommandDef> = metadata
+        .iter()
+        .filter_map(|meta| {
+            let def = command_metadata_to_def(meta);
+            if def.is_none() {
+                tracing::warn!(id = %meta.id, "skipping command with un-mappable metadata");
+            }
+            def
+        })
+        .collect();
+    swissarmyhammer_kanban::commands_core::CommandsRegistry::from_defs(defs)
+}
+
+#[cfg(test)]
+mod registry_population_tests {
+    use super::*;
+    use std::collections::HashMap;
+    use swissarmyhammer_command_service::CommandMetadata;
+
+    /// A populated [`CommandMetadata`] maps every façade-relevant field onto
+    /// the [`CommandDef`] shape the synchronous callers read — the regression
+    /// guard for the command-dispatch bug where the registry was left empty
+    /// and `lookup_undoable` rejected every plugin-registered command.
+    #[test]
+    fn metadata_maps_onto_command_def() {
+        let mut keys = HashMap::new();
+        keys.insert("vim".to_string(), ":".to_string());
+        keys.insert("cua".to_string(), "Mod+Shift+P".to_string());
+
+        let meta = CommandMetadata {
+            id: "ui.setFocus".to_string(),
+            name: "Set Focus".to_string(),
+            menu_name: None,
+            description: Some("dropped".to_string()),
+            category: Some("dropped".to_string()),
+            scope: Some(vec!["entity:task".to_string(), "entity:column".to_string()]),
+            keys: Some(keys),
+            menu: Some(serde_json::json!({ "path": ["Edit"], "group": 0, "order": 2 })),
+            context_menu: Some(true),
+            context_menu_group: Some(1),
+            context_menu_order: Some(3),
+            tab_button: None,
+            view_kinds: Some(vec!["grid".to_string()]),
+            undoable: Some(true),
+            visible: Some(true),
+            params: None,
+        };
+
+        let def = command_metadata_to_def(&meta).expect("metadata should map");
+        assert_eq!(def.id, "ui.setFocus");
+        assert_eq!(def.name, "Set Focus");
+        // scope vec is comma-joined into the CommandsRegistry grammar.
+        assert_eq!(def.scope.as_deref(), Some("entity:task,entity:column"));
+        // keys are picked out by mode name.
+        let k = def.keys.expect("keys present");
+        assert_eq!(k.vim.as_deref(), Some(":"));
+        assert_eq!(k.cua.as_deref(), Some("Mod+Shift+P"));
+        assert!(k.emacs.is_none());
+        // menu deserializes into the typed placement.
+        let menu = def.menu.expect("menu present");
+        assert_eq!(menu.path, vec!["Edit".to_string()]);
+        assert_eq!(menu.order, 2);
+        assert!(def.undoable);
+        assert!(def.context_menu);
+        assert_eq!(def.context_menu_group, Some(1));
+        assert_eq!(def.context_menu_order, Some(3));
+        assert_eq!(def.view_kinds.as_deref(), Some(&["grid".to_string()][..]));
+    }
+
+    /// A minimal metadata (only id + name, all options `None`) maps with the
+    /// `CommandDef` serde defaults: `visible = true`, `undoable = false`,
+    /// `context_menu = false`, empty params, no scope.
+    #[test]
+    fn minimal_metadata_uses_command_def_defaults() {
+        let meta = CommandMetadata {
+            id: "app.quit".to_string(),
+            name: "Quit".to_string(),
+            menu_name: None,
+            description: None,
+            category: None,
+            scope: None,
+            keys: None,
+            menu: None,
+            context_menu: None,
+            context_menu_group: None,
+            context_menu_order: None,
+            tab_button: None,
+            view_kinds: None,
+            undoable: None,
+            visible: None,
+            params: None,
+        };
+
+        let def = command_metadata_to_def(&meta).expect("metadata should map");
+        assert!(def.scope.is_none());
+        assert!(def.keys.is_none());
+        assert!(def.visible);
+        assert!(!def.undoable);
+        assert!(!def.context_menu);
+        assert!(def.params.is_empty());
+    }
+
+    /// `build_registry_from_metadata` produces a registry whose `get` /
+    /// `undoable` lookups succeed for every mapped command — the exact path
+    /// `lookup_undoable` exercises at dispatch time.
+    #[test]
+    fn registry_population_makes_commands_resolvable() {
+        let meta = vec![
+            CommandMetadata {
+                id: "perspective.list".to_string(),
+                name: "List Perspectives".to_string(),
+                menu_name: None,
+                description: None,
+                category: None,
+                scope: None,
+                keys: None,
+                menu: None,
+                context_menu: None,
+                context_menu_group: None,
+                context_menu_order: None,
+                tab_button: None,
+                view_kinds: None,
+                undoable: Some(false),
+                visible: None,
+                params: None,
+            },
+            CommandMetadata {
+                id: "task.add".to_string(),
+                name: "Add Task".to_string(),
+                menu_name: None,
+                description: None,
+                category: None,
+                scope: Some(vec!["entity:column".to_string()]),
+                keys: None,
+                menu: None,
+                context_menu: None,
+                context_menu_group: None,
+                context_menu_order: None,
+                tab_button: None,
+                view_kinds: None,
+                undoable: Some(true),
+                visible: None,
+                params: None,
+            },
+        ];
+
+        let registry = build_registry_from_metadata(&meta);
+        // Both commands resolve — the dispatch gate would no longer reject them.
+        assert!(registry.get("perspective.list").is_some());
+        assert!(!registry.get("perspective.list").unwrap().undoable);
+        let task_add = registry.get("task.add").expect("task.add present");
+        assert!(task_add.undoable);
+        assert_eq!(task_add.scope.as_deref(), Some("entity:column"));
+    }
 }

@@ -964,6 +964,48 @@ impl AppState {
             tracing::warn!(error = %e, "global plugin discovery failed; \
                                         builtin and user-layer plugins are not loaded");
         }
+
+        // Discovery just registered the 8 builtin command plugins on the
+        // global `CommandService`. Snapshot that catalogue into the
+        // synchronous `commands_registry` façade so the three sync callers —
+        // the dispatch undoable-gate (`lookup_undoable`), scope/keybinding
+        // listing (`list_commands_for_scope`), and the native menu builder —
+        // see every command. Without this the façade stays empty (the
+        // embedded YAML sources were removed in the Stage 4 cut-over) and
+        // `lookup_undoable` rejects every plugin-registered command with
+        // "Unknown command", aborting dispatch before it reaches the service.
+        let metadata = platform
+            .command_service()
+            .map(|service| service.list_metadata());
+        drop(platform);
+        if let Some(metadata) = metadata {
+            self.sync_commands_registry_from_metadata(&metadata).await;
+        } else {
+            tracing::warn!(
+                "global CommandService not wired; commands_registry façade left empty \
+                 (palette / keybindings / native menu will not see commands)"
+            );
+        }
+    }
+
+    /// Replace the synchronous [`commands_registry`](Self::commands_registry)
+    /// façade with a snapshot of the live `CommandService` catalogue.
+    ///
+    /// Projects each [`swissarmyhammer_command_service::CommandMetadata`] onto
+    /// the legacy `CommandDef` shape (see
+    /// [`crate::command_services::build_registry_from_metadata`]) and swaps it
+    /// in wholesale. Called after global plugin discovery (which registers the
+    /// builtin command plugins) so the menu / scope / undoable-gate callers
+    /// resolve every command; user `.kanban/commands/` overrides are layered
+    /// on afterward by [`Self::reload_command_overrides`] at board-open time.
+    async fn sync_commands_registry_from_metadata(
+        &self,
+        metadata: &[swissarmyhammer_command_service::CommandMetadata],
+    ) {
+        let registry = crate::command_services::build_registry_from_metadata(metadata);
+        let count = registry.all_commands().len();
+        *self.commands_registry.write().await = registry;
+        tracing::info!(count, "populated commands_registry façade from CommandService");
     }
 
     /// The stored `AppHandle`-backed shells, if [`Self::install_apphandle_shells`]
@@ -1258,13 +1300,17 @@ impl AppState {
         try_mru_fallback(&self.ui_state)
     }
 
-    /// Rebuild the commands registry from builtins + user overrides from the
-    /// active board's `.kanban/commands/` directory.
+    /// Layer the active board's `.kanban/commands/` user overrides onto the
+    /// current commands registry.
     ///
-    /// Composes the builtin stack via
-    /// [`swissarmyhammer_kanban::compose_yaml_sources!`] (same crate
-    /// list and order as [`Self::with_ui_state`]) and appends the user
-    /// overrides last so they take precedence by command id.
+    /// The base façade is populated from the live `CommandService` after
+    /// plugin discovery (see [`Self::sync_commands_registry_from_metadata`]);
+    /// the Stage 4 cut-over emptied the embedded builtin YAML sources, so this
+    /// no longer rebuilds from `compose_yaml_sources!`. Instead it MERGES the
+    /// user YAML onto the existing registry in place — partial-merge-by-id,
+    /// user fields winning — preserving every CommandService-sourced command.
+    /// Rebuilding from scratch here would clobber that populated base with an
+    /// empty builtin layer and reintroduce the empty-registry dispatch bug.
     async fn reload_command_overrides(&self, kanban_path: &Path) {
         let commands_dir = kanban_path.join("commands");
         let user_sources = load_yaml_dir(&commands_dir);
@@ -1273,25 +1319,19 @@ impl AppState {
         }
 
         let count = user_sources.len();
-
-        let mut sources = swissarmyhammer_kanban::compose_yaml_sources![
-            swissarmyhammer_focus,
-            swissarmyhammer_kanban,
-        ];
-        // User overrides apply last with partial-merge-by-id semantics.
         let user_refs: Vec<(&str, &str)> = user_sources
             .iter()
             .map(|(n, c)| (n.as_str(), c.as_str()))
             .collect();
-        sources.extend(user_refs);
-        let registry =
-            swissarmyhammer_kanban::commands_core::CommandsRegistry::from_yaml_sources(&sources);
 
-        *self.commands_registry.write().await = registry;
+        self.commands_registry
+            .write()
+            .await
+            .merge_yaml_sources(&user_refs);
         tracing::info!(
             dir = %commands_dir.display(),
             count,
-            "loaded user command overrides",
+            "merged user command overrides onto commands_registry façade",
         );
     }
 

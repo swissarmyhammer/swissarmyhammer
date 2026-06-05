@@ -29,6 +29,22 @@ impl CommandsRegistry {
         }
     }
 
+    /// Build directly from already-parsed [`CommandDef`]s.
+    ///
+    /// Used by the kanban app to repopulate this synchronous façade from the
+    /// live `CommandService` catalogue after plugin discovery: the Stage 4
+    /// cut-over emptied the embedded YAML sources, so the registry is now a
+    /// snapshot of `CommandService::list_metadata` projected onto
+    /// [`CommandDef`]. Later ids override earlier ones wholesale (no partial
+    /// merge — the service already resolved each command's final shape).
+    pub fn from_defs(defs: impl IntoIterator<Item = CommandDef>) -> Self {
+        let mut registry = Self::new();
+        for def in defs {
+            registry.commands.insert(def.id.clone(), def);
+        }
+        registry
+    }
+
     /// Build from pre-resolved YAML sources.
     ///
     /// Each source is `(name, yaml_content)`. YAML files contain a list of
@@ -637,6 +653,81 @@ mod tests {
         assert_eq!(registry.all_commands().len(), 2);
         assert!(registry.get("app.quit").is_some());
         assert!(registry.get("custom.greet").is_some());
+    }
+
+    #[test]
+    fn from_defs_builds_registry_from_command_defs() {
+        // `from_defs` is the constructor the kanban app uses to repopulate the
+        // façade from the live `CommandService` catalogue after plugin
+        // discovery. Each def is keyed by id and resolvable via `get`.
+        let quit = CommandDef {
+            id: "app.quit".into(),
+            name: "Quit".into(),
+            menu_name: None,
+            scope: None,
+            visible: true,
+            keys: None,
+            params: vec![],
+            undoable: false,
+            context_menu: false,
+            context_menu_group: None,
+            context_menu_order: None,
+            menu: None,
+            view_kinds: None,
+            tab_button: None,
+        };
+        let add = CommandDef {
+            id: "foo.add".into(),
+            name: "Add Foo".into(),
+            menu_name: None,
+            scope: Some("entity:widget".into()),
+            visible: true,
+            keys: None,
+            params: vec![],
+            undoable: true,
+            context_menu: false,
+            context_menu_group: None,
+            context_menu_order: None,
+            menu: None,
+            view_kinds: None,
+            tab_button: None,
+        };
+        let registry = CommandsRegistry::from_defs([quit, add]);
+        assert_eq!(registry.all_commands().len(), 2);
+        assert!(!registry.get("app.quit").unwrap().undoable);
+        assert!(registry.get("foo.add").unwrap().undoable);
+        assert_eq!(
+            registry.get("foo.add").unwrap().scope.as_deref(),
+            Some("entity:widget")
+        );
+    }
+
+    #[test]
+    fn from_defs_later_id_overrides_earlier() {
+        // Duplicate ids resolve to the last def wins (wholesale replacement —
+        // the service already produced each command's final shape).
+        let first = CommandDef {
+            id: "dup.cmd".into(),
+            name: "First".into(),
+            menu_name: None,
+            scope: None,
+            visible: true,
+            keys: None,
+            params: vec![],
+            undoable: false,
+            context_menu: false,
+            context_menu_group: None,
+            context_menu_order: None,
+            menu: None,
+            view_kinds: None,
+            tab_button: None,
+        };
+        let second = CommandDef {
+            name: "Second".into(),
+            ..first.clone()
+        };
+        let registry = CommandsRegistry::from_defs([first, second]);
+        assert_eq!(registry.get("dup.cmd").unwrap().name, "Second");
     }
 
     #[test]

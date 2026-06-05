@@ -817,6 +817,28 @@ impl CommandService {
         f(&guard)
     }
 
+    /// Snapshot every active command's callback-free [`CommandMetadata`].
+    ///
+    /// The same projection `list command` returns, minus the verb plumbing
+    /// and JSON envelope: one [`CommandMetadata`] per active (top-of-stack)
+    /// command id, in unspecified order. In-process callers that need the
+    /// full command catalogue (the kanban app populates its synchronous
+    /// `CommandsRegistry` façade from this after plugin discovery) use this
+    /// instead of round-tripping through `dispatch`/`call_tool` and parsing
+    /// the JSON back out.
+    ///
+    /// Acquires the internal registry mutex; do not hold the returned data
+    /// across a re-entrant `dispatch` on the same service.
+    pub fn list_metadata(&self) -> Vec<CommandMetadata> {
+        self.with_registry(|registry| {
+            registry
+                .list()
+                .into_iter()
+                .map(|entry| CommandMetadata::from_registration(&entry.registration))
+                .collect()
+        })
+    }
+
     /// Dispatch one `execute` request directly from Rust, returning the
     /// callback's result value.
     ///
