@@ -1707,12 +1707,51 @@ impl PluginHost {
     ) {
         match handle {
             RegistrationHandle::Server(name) => {
-                let outcome = self.lock().registry.unregister(&name);
+                // Read the registration's source BEFORE unregistering it —
+                // `unregister` removes the live entry, taking the source with
+                // it — so a `{ rust }` activation can be returned to the
+                // available-modules table when its last holder is disposed.
+                // Held under one lock span with the unregister and the
+                // restore so a concurrent register cannot race the slot.
+                let (outcome, restored) = {
+                    let mut state = self.lock();
+                    let rust_id = match state.registry.source_for(&name) {
+                        Some(ServerSource::Rust { id }) => Some(id.clone()),
+                        _ => None,
+                    };
+                    let outcome = state.registry.unregister(&name);
+                    // Activating a `{ rust }` module MOVES it out of the
+                    // available-modules table (one-shot activation). When the
+                    // LAST holder unregisters, return that exact server handle
+                    // to the table under its module id so a later activation —
+                    // a hot reload, or another plugin loading after this one
+                    // unloads — can find it again. Without this the module is
+                    // gone forever and re-activation fails with
+                    // `UnknownServer`, leaving the registered name tombstoned
+                    // (callers into it then see `ServerUnavailable`).
+                    let restored = match (&outcome, rust_id) {
+                        (UnregisterOutcome::Removed(server), Some(id)) => {
+                            // The id was vacated at activation, so this insert
+                            // re-fills an empty slot rather than colliding.
+                            state.modules.insert(id, Arc::clone(server));
+                            true
+                        }
+                        _ => false,
+                    };
+                    (outcome, restored)
+                };
                 if matches!(outcome, UnregisterOutcome::NotRegistered) {
                     tracing::debug!(
                         plugin = %plugin_id.as_str(),
                         server = %name,
                         "ledger server handle had no live registration to dispose"
+                    );
+                }
+                if restored {
+                    tracing::debug!(
+                        plugin = %plugin_id.as_str(),
+                        server = %name,
+                        "restored disposed `{{ rust }}` module to the available-modules table"
                     );
                 }
                 // Disposing a ledger server handle drops one caller's hold on
