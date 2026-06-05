@@ -13,6 +13,12 @@ sections:
 search_display_field: title
 mention_prefix: "^"
 mention_display_field: title
+# The mention slug (inserted `^` token + pill label) is the derived 7-char
+# short id, NOT slugify(title) — task titles are long sentence-like strings.
+# `short_id` is a read-time enriched field (last 7 lowercased ULID chars); the
+# frontend keys the task mention metaMap on it and labels pills `^<short>`,
+# reserving the title for the autocomplete dropdown and the pill hover tooltip.
+mention_slug_field: short_id
 mention_color_field: color
 fields:
   - title

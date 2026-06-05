@@ -38,6 +38,7 @@ impl Execute<SkillContext, SkillError> for UseSkill {
                     "allowed_tools": skill.allowed_tools,
                     "agent": skill.agent,
                     "source": skill.source.to_string(),
+                    "agent": skill.agent,
                 });
 
                 ExecutionResult::Success { value: result }

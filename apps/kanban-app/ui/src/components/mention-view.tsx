@@ -96,6 +96,12 @@ interface ResolvedMention {
   prefix: string;
   /** Display-field name used for slug synthesis. */
   displayField: string;
+  /**
+   * Slug-field name (e.g. tasks → `short_id`) when the type keys its mention
+   * metaMap on a dedicated field rather than `slugify(displayField)`. Undefined
+   * for tags/actors whose ids are already slug-shaped.
+   */
+  slugField?: string;
   /** The slug appearing in the CM6 doc (after the prefix). */
   slug: string;
   /** The id used to build a FocusScope moniker. */
@@ -119,26 +125,17 @@ function resolveMention(
   );
   const prefix = config?.prefix ?? "";
   const displayField = config?.displayField ?? "name";
+  const slugField = config?.slugField;
 
   const entities = getEntities(item.entityType);
   let entity: Entity | undefined;
   if (item.id !== undefined) {
     entity = entities.find((e) => e.id === item.id);
   } else if (item.slug !== undefined) {
-    entity = entities.find((e) => {
-      const val = getStr(e, displayField);
-      return val !== "" && (val === item.slug || slugify(val) === item.slug);
-    });
+    entity = entities.find((e) => slugMatchesEntity(e, item.slug!, config));
   }
 
-  let slug: string;
-  if (entity) {
-    const raw = getStr(entity, displayField);
-    slug = raw ? slugify(raw) : (item.slug ?? item.id ?? "");
-  } else {
-    slug = item.slug ?? item.id ?? "";
-  }
-
+  const slug = mentionSlugFor(entity, item, displayField, slugField);
   const monikerId = entity?.id ?? item.id ?? item.slug ?? "";
 
   return {
@@ -146,9 +143,51 @@ function resolveMention(
     entity,
     prefix,
     displayField,
+    slugField,
     slug,
     monikerId,
   };
+}
+
+/**
+ * Test whether a slug reference matches an entity.
+ *
+ * When the type declares a dedicated slug field (tasks → `short_id`), match the
+ * field value verbatim. Otherwise fall back to the legacy display-field match
+ * (exact value or its slugified form) used by tags and actors.
+ */
+function slugMatchesEntity(
+  entity: Entity,
+  slug: string,
+  config: MentionableType | undefined,
+): boolean {
+  if (config?.slugField) {
+    return getStr(entity, config.slugField) === slug;
+  }
+  const val = getStr(entity, config?.displayField ?? "name");
+  return val !== "" && (val === slug || slugify(val) === slug);
+}
+
+/**
+ * Compute the slug that appears after the prefix in the CM6 doc.
+ *
+ * For a resolved entity with a dedicated slug field (tasks → `short_id`), use
+ * that field's value so the pill labels with `^<short>` and the inline
+ * shape-matcher recognizes it. Otherwise synthesize `slugify(displayField)`,
+ * the legacy form for tags/actors. Misses fall back to the raw reference so the
+ * widget pipeline renders the muted-mark fallback.
+ */
+function mentionSlugFor(
+  entity: Entity | undefined,
+  item: MentionItem,
+  displayField: string,
+  slugField: string | undefined,
+): string {
+  const fallback = item.slug ?? item.id ?? "";
+  if (!entity) return fallback;
+  if (slugField) return getStr(entity, slugField) || fallback;
+  const raw = getStr(entity, displayField);
+  return raw ? slugify(raw) : fallback;
 }
 
 /**
@@ -215,7 +254,7 @@ function buildScopedExtensions(
       colorVar,
     );
     const entities = getEntities(r.entityType);
-    const metaMap = buildMentionMetaMap(entities, r.displayField);
+    const metaMap = buildMentionMetaMap(entities, r.displayField, r.slugField);
     addUnresolvedPlaceholders(metaMap, unresolvedByType.get(r.entityType));
     exts.push(extension(metaMap));
   }

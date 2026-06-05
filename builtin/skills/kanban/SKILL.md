@@ -22,6 +22,8 @@ The kanban board is your todo list. **Never use TodoWrite, TaskCreate, or any ot
 
 **Subtasks are GFM checklists** (`- [ ]` / `- [x]`) inside the task's `description`. There is no separate subtask API — include them when creating the task, or `update task` to modify the description.
 
+{% include "_partials/short-ids" %}
+
 ## Process
 
 1. **Get next task**: `kanban` `op: "next task"` finds the next actionable task across all non-done columns.
