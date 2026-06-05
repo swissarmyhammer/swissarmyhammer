@@ -1,5 +1,6 @@
 //! Integration test modules for llama-agent
 
+mod acp_agentic_loop;
 mod acp_config_file;
 mod acp_error_propagation;
 mod acp_read_file;
@@ -7,12 +8,18 @@ mod acp_slash_command;
 mod acp_stdio_transport;
 mod acp_write_file;
 mod agent_cache_integration;
+mod agent_generate_path;
+mod agent_tools_mount;
 mod backward_compatibility;
+mod dual_source_shell_dedup;
 mod incremental_processing;
 mod long_conversation;
 mod long_conversation_unit;
+mod metal_gpu;
+mod mtp_streaming;
 mod read_file_mcp_server;
 mod session_state_preservation;
+mod streaming_generation;
 mod tool_call_round_trip;
 mod tool_call_round_trip_via_mcp;
 mod tool_use_multi_turn;

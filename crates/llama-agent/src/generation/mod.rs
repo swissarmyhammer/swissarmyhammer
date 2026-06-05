@@ -13,10 +13,20 @@
 //! - Manual batch management and decoding
 //! - Direct parameter validation for better error messages
 //!
+//! ## Canonical streaming loop
+//!
+//! [`GenerationHelper`] (in this module) is the single canonical text/streaming
+//! generation implementation. It works against borrowed model/context references
+//! within the `ModelManager::with_model()` pattern and is the path the production
+//! request queue drives. Do **not** reintroduce a parallel hand-copied streaming
+//! loop: an earlier duplicate (`LlamaCppGenerator` in `generator.rs`) drifted out
+//! of sync and silently carried token-accounting bugs that had already been fixed
+//! here, so it was deleted. Extend or fix [`GenerationHelper`] in place instead.
+//!
 //! ## Usage
 //!
 //! ```text
-//! use llama_agent::generation::{TextGenerator, GenerationConfig, LlamaCppGenerator};
+//! use llama_agent::generation::{GenerationConfig, GenerationHelper};
 //!
 //! let config = GenerationConfig {
 //!     max_tokens: 512,
@@ -26,27 +36,60 @@
 //!     ..Default::default()
 //! };
 //!
-//! let mut generator = LlamaCppGenerator::new(model, context);
-//! let response = generator.generate_text(request, cancellation_token).await?;
+//! // Generation runs through GenerationHelper against a borrowed model/context.
 //! ```
 
+pub mod budget;
 pub mod config;
 pub mod error;
-pub mod generator;
+pub mod mtp;
+
+/// Weight-free [`TextGenerator`] test double for deterministic generation tests.
+#[cfg(any(test, feature = "test-utils"))]
+pub mod scripted;
 
 #[cfg(test)]
 pub mod tests;
 
 pub use config::GenerationConfig;
 pub use error::GenerationError;
-pub use generator::LlamaCppGenerator;
 
-use tracing::{trace, warn};
+#[cfg(any(test, feature = "test-utils"))]
+pub use scripted::{ScriptToken, ScriptedModel};
+
+use tracing::warn;
 
 use crate::types::{GenerationRequest, GenerationResponse, StreamChunk};
 // Note: Not using async_trait due to Send requirements with LlamaContext raw pointers
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+
+/// Send a chunk onto the stream. The stream channel is unbounded so this
+/// never blocks; the only failure mode is a closed receiver (the consumer
+/// dropped its end of the channel), which is the one condition that
+/// genuinely should end generation early.
+///
+/// We previously used a bounded(100) channel with a `try_send` retry loop —
+/// that produced two distinct hangs in production:
+///   - When the consumer fell behind by 100 chunks, the producer hit Full
+///     and ended up sleeping in a tight retry loop on a tokio worker
+///     thread, blocking the runtime.
+///   - When a consumer task was suspended mid-stream (e.g., blocked on a
+///     dependent broadcast / disk-write subscriber), the channel filled
+///     and the producer spun forever — the live `sample`d MTP hang.
+///
+/// Switching to `unbounded_channel` removes both failure modes. Each
+/// `StreamChunk` is a few hundred bytes; even on a slow consumer the queue
+/// stays in single-digit MBs, and the producer is rate-limited by the
+/// model decode (~30 tok/s) anyway. The cost vs. the alternative (a much
+/// larger bounded channel) is the same on the happy path and bounded on
+/// the worst case, with no risk of producer wedging.
+pub(crate) fn send_with_backpressure(
+    stream_sender: &mpsc::UnboundedSender<Result<StreamChunk, crate::types::QueueError>>,
+    payload: Result<StreamChunk, crate::types::QueueError>,
+) -> Result<(), ()> {
+    stream_sender.send(payload).map_err(|_| ())
+}
 
 // Default constants for generation parameters
 const DEFAULT_GENERATION_SEED: u32 = 1234;
@@ -294,18 +337,31 @@ impl GenerationHelper {
 
     /// Generate text with streaming output using borrowed model and context references.
     ///
+    /// `on_prefill_complete` fires exactly once, right after the prompt is
+    /// fully prefilled into the context's KV cache but BEFORE any generation
+    /// token is sampled. The worker uses this hook to snapshot the
+    /// context state at the prompt boundary, so the next turn's longest-
+    /// common-prefix trim has zero rollback distance on the common path —
+    /// the saved state ends exactly where the prompt ends, never inside
+    /// the generated tail. This is what kept the `n_rs_seq` window from
+    /// being whacked every time a turn generated more than 64 tokens.
+    ///
     /// This consolidates the streaming generation logic from queue.rs while working
     /// within the existing ModelManager architecture.
     #[allow(clippy::too_many_arguments)]
-    pub fn generate_stream_with_borrowed_model(
+    pub fn generate_stream_with_borrowed_model<F>(
         model: &llama_cpp_2::model::LlamaModel,
         context: &mut llama_cpp_2::context::LlamaContext,
         prompt: &str,
         request: &GenerationRequest,
-        stream_sender: &mpsc::Sender<Result<StreamChunk, crate::types::QueueError>>,
+        stream_sender: &mpsc::UnboundedSender<Result<StreamChunk, crate::types::QueueError>>,
         cancellation_token: &CancellationToken,
         batch_size: usize,
-    ) -> Result<(), GenerationError> {
+        on_prefill_complete: F,
+    ) -> Result<(), GenerationError>
+    where
+        F: FnOnce(&llama_cpp_2::context::LlamaContext),
+    {
         use crate::types::{QueueError, StreamChunk};
         use llama_cpp_2::{
             llama_batch::LlamaBatch,
@@ -341,7 +397,7 @@ impl GenerationHelper {
                 batch
                     .add(*token, current_pos as i32, &[0], is_last_in_entire_sequence)
                     .map_err(|e| {
-                        let _ = stream_sender.try_send(Err(QueueError::WorkerError(format!(
+                        let _ = stream_sender.send(Err(QueueError::WorkerError(format!(
                             "Batch token add failed: {}",
                             e
                         ))));
@@ -350,7 +406,7 @@ impl GenerationHelper {
             }
 
             context.decode(&mut batch).map_err(|e| {
-                let _ = stream_sender.try_send(Err(QueueError::WorkerError(format!(
+                let _ = stream_sender.send(Err(QueueError::WorkerError(format!(
                     "Batch decode failed: {}",
                     e
                 ))));
@@ -362,21 +418,56 @@ impl GenerationHelper {
 
         debug!("Initial prompt processed for streaming, starting generation");
 
+        // Post-prefill checkpoint: the context's KV now ends EXACTLY at the
+        // prompt boundary. Hand control to the worker so it can snapshot the
+        // state here — saving now means the next turn's LCP rollback distance
+        // is 0 on the common path, and the n_rs_seq window never has to roll
+        // back over the upcoming generated tokens.
+        on_prefill_complete(context);
+
         // Create sampler for token generation
         let mut sampler = LlamaSampler::chain_simple([
             LlamaSampler::dist(DEFAULT_GENERATION_SEED),
             LlamaSampler::greedy(),
         ]);
 
-        let max_tokens = request.max_tokens.unwrap_or(512) as usize - tokens_list.len();
+        // The caller's `max_tokens` is the generation budget — the number of NEW
+        // tokens to produce — exactly as the batch path (`generate_common`)
+        // treats it. The ACP agentic loop already derives this from the
+        // remaining context window (`context_size - current_tokens`), so we must
+        // NOT subtract the prompt length again here. The previous
+        // `unwrap_or(512) - tokens_list.len()` did exactly that, which underflowed
+        // (usize) or collapsed to zero whenever the rendered prompt approached or
+        // exceeded the budget — producing the "0 tokens generated" turns seen in
+        // production. See bug 01KSNJ7CBK9333J0T9G4TCA7DH.
+        let max_tokens = budget::generation_budget(request.max_tokens);
+        let context_size = context.n_ctx() as usize;
+        let prompt_tokens = tokens_list.len();
         let mut generated_text = String::new();
         let mut tokens_generated = 0;
         let mut n_cur = tokens_list.len();
 
         // Generation loop with streaming
         while tokens_generated < max_tokens {
+            // Stop if we've reached the context window limit, mirroring the
+            // batch path's guard. Without this, a large prompt could drive
+            // generation past the context size and fail inside `decode`.
+            if budget::reached_context_limit(prompt_tokens, tokens_generated, context_size) {
+                debug!(
+                    "Reached context window limit in streaming (prompt={} + generated={} >= context_size={} - 1)",
+                    prompt_tokens, tokens_generated, context_size
+                );
+                return Self::handle_streaming_completion(
+                    &generated_text,
+                    tokens_generated,
+                    start_time,
+                    stream_sender,
+                    "ContextWindowFull",
+                );
+            }
+
             if cancellation_token.is_cancelled() {
-                let _ = stream_sender.try_send(Err(QueueError::WorkerError(
+                let _ = stream_sender.send(Err(QueueError::WorkerError(
                     "Request cancelled".to_string(),
                 )));
                 return Ok(());
@@ -395,47 +486,40 @@ impl GenerationHelper {
                 );
             }
 
-            // Always increment token count and advance model state, even if token can't be converted to string
-            let token_str = match token_to_str_lossy(model, token, Special::Tokenize) {
-                Ok(s) => s,
-                Err(e) => {
-                    trace!("Failed to convert token to string in streaming: {}", e);
-                    continue;
-                }
-            };
-
-            if generated_text.capacity() - generated_text.len() < token_str.len() {
-                generated_text.reserve(token_str.len() * STRING_CAPACITY_MULTIPLIER);
-            }
-            generated_text.push_str(&token_str);
+            // Count the token and advance model state, even if it cannot be
+            // converted to a display string (multi-token UTF-8 sequences, etc.).
             tokens_generated += 1;
 
-            // Log progress every batch_size tokens
-            if tokens_generated % batch_size == 0 {
-                debug!(
-                    "Generation progress: {} tokens generated ({} batches)\n{}",
-                    tokens_generated,
-                    tokens_generated / batch_size,
-                    generated_text
-                );
-            }
-
-            // Try to convert token to string and send if successful
-            if let Ok(token_str) = model.token_to_str(token, Special::Tokenize) {
+            // Try to convert the token to a string and stream it. We append to
+            // `generated_text` exactly once — the prior code pushed each token
+            // twice, duplicating the accumulated text.
+            if let Ok(token_str) = token_to_str_lossy(model, token, Special::Tokenize) {
                 if generated_text.capacity() - generated_text.len() < token_str.len() {
                     generated_text.reserve(token_str.len() * STRING_CAPACITY_MULTIPLIER);
                 }
                 generated_text.push_str(&token_str);
 
-                // Send the token as a stream chunk
+                // Log progress every batch_size tokens
+                if tokens_generated % batch_size == 0 {
+                    debug!(
+                        "Generation progress: {} tokens generated ({} batches)",
+                        tokens_generated,
+                        tokens_generated / batch_size,
+                    );
+                }
+
+                // Send the token as a stream chunk. `token_count` is the count of
+                // NEW tokens carried by this chunk (always 1 here) so that a
+                // consumer summing `token_count` across the stream arrives at the
+                // true total — the ACP agentic loop does exactly this.
                 let chunk = StreamChunk {
                     text: token_str.clone(),
                     is_complete: false,
-                    token_count: tokens_generated,
+                    token_count: 1,
                     finish_reason: None,
                 };
 
-                if stream_sender.try_send(Ok(chunk)).is_err() {
+                if send_with_backpressure(stream_sender, Ok(chunk)).is_err() {
                     warn!("Stream receiver disconnected, stopping generation");
                     return Ok(());
                 }
@@ -461,18 +545,24 @@ impl GenerationHelper {
             // Always update batch and decode to advance model state
             batch.clear();
             batch.add(token, n_cur as i32, &[0], true).map_err(|e| {
-                let _ = stream_sender.try_send(Err(QueueError::WorkerError(format!(
-                    "Failed to add continuation token: {}",
-                    e
-                ))));
+                let _ = send_with_backpressure(
+                    stream_sender,
+                    Err(QueueError::WorkerError(format!(
+                        "Failed to add continuation token: {}",
+                        e
+                    ))),
+                );
                 GenerationError::batch(e)
             })?;
 
             context.decode(&mut batch).map_err(|e| {
-                let _ = stream_sender.try_send(Err(QueueError::WorkerError(format!(
-                    "Failed to decode continuation batch: {}",
-                    e
-                ))));
+                let _ = send_with_backpressure(
+                    stream_sender,
+                    Err(QueueError::WorkerError(format!(
+                        "Failed to decode continuation batch: {}",
+                        e
+                    ))),
+                );
                 GenerationError::decoding(e)
             })?;
 
@@ -493,20 +583,23 @@ impl GenerationHelper {
         _generated_text: &str,
         tokens_generated: usize,
         start_time: std::time::Instant,
-        stream_sender: &mpsc::Sender<Result<StreamChunk, crate::types::QueueError>>,
+        stream_sender: &mpsc::UnboundedSender<Result<StreamChunk, crate::types::QueueError>>,
         reason: &str,
     ) -> Result<(), GenerationError> {
         use crate::types::StreamChunk;
         use tracing::debug;
 
-        // Send final completion chunk
+        // Send final completion chunk. `token_count` is 0 because this chunk
+        // carries no new tokens — it only signals completion. Per-token chunks
+        // already accounted for every generated token with `token_count: 1`, so a
+        // consumer summing `token_count` across the stream gets the true total.
         let final_chunk = StreamChunk {
             text: String::new(),
             is_complete: true,
-            token_count: tokens_generated,
+            token_count: 0,
             finish_reason: Some(crate::types::FinishReason::Stopped(reason.to_string())),
         };
-        let _ = stream_sender.try_send(Ok(final_chunk));
+        let _ = send_with_backpressure(stream_sender, Ok(final_chunk));
 
         let generation_time = start_time.elapsed();
         debug!(
@@ -617,7 +710,7 @@ impl GenerationHelper {
         );
 
         // Validate that offset doesn't exceed token count
-        if template_offset >= total_token_count {
+        if budget::template_offset_exhausted(template_offset, total_token_count) {
             warn!(
                 "Template offset ({}) >= total tokens ({}), no new tokens to process. Session may have no new messages.",
                 template_offset, total_token_count
@@ -676,7 +769,7 @@ impl GenerationHelper {
             LlamaSampler::greedy(),
         ]);
 
-        let max_tokens = request.max_tokens.unwrap_or(512) as usize;
+        let max_tokens = budget::generation_budget(request.max_tokens);
         let mut generated_text = String::new();
         let mut tokens_generated = 0usize;
         let mut n_cur = total_token_count;
@@ -819,16 +912,20 @@ impl GenerationHelper {
     /// - Stream channel send fails
     /// - Request is cancelled
     #[allow(clippy::too_many_arguments)]
-    pub fn generate_stream_with_borrowed_model_and_template_offset(
+    pub fn generate_stream_with_borrowed_model_and_template_offset<F>(
         model: &llama_cpp_2::model::LlamaModel,
         context: &mut llama_cpp_2::context::LlamaContext,
         prompt: &str,
         request: &GenerationRequest,
-        stream_sender: &mpsc::Sender<Result<StreamChunk, crate::types::QueueError>>,
+        stream_sender: &mpsc::UnboundedSender<Result<StreamChunk, crate::types::QueueError>>,
         cancellation_token: &CancellationToken,
         batch_size: usize,
         template_token_count: Option<usize>,
-    ) -> Result<(), GenerationError> {
+        on_prefill_complete: F,
+    ) -> Result<(), GenerationError>
+    where
+        F: FnOnce(&llama_cpp_2::context::LlamaContext),
+    {
         // If no template offset, use the regular method
         if template_token_count.is_none() {
             return Self::generate_stream_with_borrowed_model(
@@ -839,6 +936,7 @@ impl GenerationHelper {
                 stream_sender,
                 cancellation_token,
                 batch_size,
+                on_prefill_complete,
             );
         }
 
@@ -871,7 +969,7 @@ impl GenerationHelper {
         );
 
         // Validate that offset doesn't exceed token count
-        if template_offset >= total_token_count {
+        if budget::template_offset_exhausted(template_offset, total_token_count) {
             warn!(
                 "Template offset ({}) >= total tokens ({}), no new tokens to process. Session may have no new messages.",
                 template_offset, total_token_count
@@ -885,7 +983,7 @@ impl GenerationHelper {
                     "No new tokens to process".to_string(),
                 )),
             };
-            let _ = stream_sender.try_send(Ok(final_chunk));
+            let _ = send_with_backpressure(stream_sender, Ok(final_chunk));
             return Ok(());
         }
 
@@ -904,7 +1002,7 @@ impl GenerationHelper {
 
         for chunk in tokens_to_process.chunks(batch_size) {
             if cancellation_token.is_cancelled() {
-                let _ = stream_sender.try_send(Err(QueueError::WorkerError(
+                let _ = stream_sender.send(Err(QueueError::WorkerError(
                     "Request cancelled".to_string(),
                 )));
                 return Ok(());
@@ -918,7 +1016,7 @@ impl GenerationHelper {
                 batch
                     .add(*token, current_pos as i32, &[0], is_last_in_entire_sequence)
                     .map_err(|e| {
-                        let _ = stream_sender.try_send(Err(QueueError::WorkerError(format!(
+                        let _ = stream_sender.send(Err(QueueError::WorkerError(format!(
                             "Batch token add failed: {}",
                             e
                         ))));
@@ -927,7 +1025,7 @@ impl GenerationHelper {
             }
 
             context.decode(&mut batch).map_err(|e| {
-                let _ = stream_sender.try_send(Err(QueueError::WorkerError(format!(
+                let _ = stream_sender.send(Err(QueueError::WorkerError(format!(
                     "Batch decode failed: {}",
                     e
                 ))));
@@ -939,21 +1037,53 @@ impl GenerationHelper {
 
         debug!("Prompt processed with template offset for streaming, starting generation");
 
+        // Post-prefill checkpoint — see the matching call in
+        // generate_stream_with_borrowed_model for why this fires here.
+        on_prefill_complete(context);
+
         // Create sampler for token generation
         let mut sampler = LlamaSampler::chain_simple([
             LlamaSampler::dist(DEFAULT_GENERATION_SEED),
             LlamaSampler::greedy(),
         ]);
 
-        let max_tokens = request.max_tokens.unwrap_or(512) as usize;
+        // The caller's `max_tokens` is the generation budget — the number of NEW
+        // tokens to produce. We must NOT subtract the prompt length again here;
+        // see the matching note in `generate_stream_with_borrowed_model` and bug
+        // 01KSNJ7CBK9333J0T9G4TCA7DH.
+        let max_tokens = budget::generation_budget(request.max_tokens);
+        let context_size = context.n_ctx() as usize;
+        // The full prompt — including the cached template prefix — occupies
+        // `total_token_count` slots in the KV cache; generation continues from
+        // `n_cur = total_token_count`. The context guard must therefore measure
+        // against the full prompt length, not the post-offset slice.
+        let prompt_tokens = total_token_count;
         let mut generated_text = String::new();
         let mut tokens_generated = 0usize;
         let mut n_cur = total_token_count;
 
         // Generation loop with streaming
         while tokens_generated < max_tokens {
+            // Stop if we've reached the context window limit, mirroring the
+            // batch path's guard and the non-offset streaming path. Without
+            // this, a large prompt could drive generation past the context
+            // size and fail inside `decode`.
+            if budget::reached_context_limit(prompt_tokens, tokens_generated, context_size) {
+                debug!(
+                    "Reached context window limit in streaming with template offset (prompt={} + generated={} >= context_size={} - 1)",
+                    prompt_tokens, tokens_generated, context_size
+                );
+                return Self::handle_streaming_completion(
+                    &generated_text,
+                    tokens_generated,
+                    start_time,
+                    stream_sender,
+                    "ContextWindowFull",
+                );
+            }
+
             if cancellation_token.is_cancelled() {
-                let _ = stream_sender.try_send(Err(QueueError::WorkerError(
+                let _ = stream_sender.send(Err(QueueError::WorkerError(
                     "Request cancelled".to_string(),
                 )));
                 return Ok(());
@@ -975,22 +1105,27 @@ impl GenerationHelper {
             // Always increment token count and advance model state, even if token can't be converted to string
             tokens_generated += 1;
 
-            // Try to convert token to string and send if successful
-            if let Ok(token_str) = model.token_to_str(token, Special::Tokenize) {
+            // Try to convert token to string and send if successful. We use the
+            // lossy decoder (consistent with the non-offset streaming path) so a
+            // partial multi-token UTF-8 sequence does not drop the token.
+            if let Ok(token_str) = token_to_str_lossy(model, token, Special::Tokenize) {
                 if generated_text.capacity() - generated_text.len() < token_str.len() {
                     generated_text.reserve(token_str.len() * STRING_CAPACITY_MULTIPLIER);
                 }
                 generated_text.push_str(&token_str);
 
-                // Send the token as a stream chunk
+                // Send the token as a stream chunk. `token_count` is the count of
+                // NEW tokens in this chunk (always 1) — consistent with the
+                // non-offset streaming path — so summing across the stream yields
+                // the true total.
                 let chunk = StreamChunk {
                     text: token_str.clone(),
                     is_complete: false,
-                    token_count: tokens_generated,
+                    token_count: 1,
                     finish_reason: None,
                 };
 
-                if stream_sender.try_send(Ok(chunk)).is_err() {
+                if send_with_backpressure(stream_sender, Ok(chunk)).is_err() {
                     warn!("Stream receiver disconnected, stopping generation");
                     return Ok(());
                 }
@@ -1016,18 +1151,24 @@ impl GenerationHelper {
             // Always update batch and decode to advance model state
             batch.clear();
             batch.add(token, n_cur as i32, &[0], true).map_err(|e| {
-                let _ = stream_sender.try_send(Err(QueueError::WorkerError(format!(
-                    "Failed to add continuation token: {}",
-                    e
-                ))));
+                let _ = send_with_backpressure(
+                    stream_sender,
+                    Err(QueueError::WorkerError(format!(
+                        "Failed to add continuation token: {}",
+                        e
+                    ))),
+                );
                 GenerationError::batch(e)
             })?;
 
             context.decode(&mut batch).map_err(|e| {
-                let _ = stream_sender.try_send(Err(QueueError::WorkerError(format!(
-                    "Failed to decode continuation batch: {}",
-                    e
-                ))));
+                let _ = send_with_backpressure(
+                    stream_sender,
+                    Err(QueueError::WorkerError(format!(
+                        "Failed to decode continuation batch: {}",
+                        e
+                    ))),
+                );
                 GenerationError::decoding(e)
             })?;
 
@@ -1102,7 +1243,7 @@ impl GenerationHelper {
             LlamaSampler::greedy(),
         ]);
 
-        let max_tokens = request.max_tokens.unwrap_or(512) as usize;
+        let max_tokens = budget::generation_budget(request.max_tokens);
         tracing::debug!("generate_common: max_tokens set to {}", max_tokens);
         let mut generated_text = String::new();
         let mut tokens_generated = 0usize;
@@ -1119,7 +1260,7 @@ impl GenerationHelper {
 
         while tokens_generated < max_tokens {
             // Stop if we've reached context window limit
-            if prompt_tokens + tokens_generated >= context_size - 1 {
+            if budget::reached_context_limit(prompt_tokens, tokens_generated, context_size) {
                 tracing::debug!(
                     "generate_common: Reached context window limit (prompt={} + generated={} >= context_size={} - 1)",
                     prompt_tokens,

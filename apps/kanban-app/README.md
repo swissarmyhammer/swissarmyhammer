@@ -6,7 +6,7 @@ use.
 
 This README is for **contributors**. End-user install instructions (Homebrew
 cask, DMG, building from source) live in the [kanban CLI
-README](../kanban-cli/README.md#desktop-app).
+README](../kanban-cli/README.md#install).
 
 ## The bundled CLI sidecar
 

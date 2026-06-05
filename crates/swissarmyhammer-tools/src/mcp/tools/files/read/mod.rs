@@ -54,7 +54,6 @@
 //! ```
 
 use crate::mcp::tool_registry::{BaseToolImpl, ToolContext};
-use crate::mcp::tools::files::shared_utils::FilePathValidator;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
@@ -121,7 +120,7 @@ impl Operation for ReadFile {
 /// * `limit`: Optional maximum lines to read (1-100,000 lines)
 pub async fn execute_read(
     arguments: serde_json::Map<String, serde_json::Value>,
-    _context: &ToolContext,
+    context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
     use crate::mcp::tools::files::shared_utils::SecureFileAccess;
     use serde::Deserialize;
@@ -200,28 +199,26 @@ pub async fn execute_read(
         ));
     }
 
-    // Validate path using consistent validator approach
-    let validator = FilePathValidator::default();
-    let validated_path = validator.validate_path(&request.path)?;
+    // Resolve relative paths against the session working directory (the board
+    // dir), never the process CWD.
+    let session_root = context.session_root();
 
-    // Create secure file access with enhanced security validation
-    let secure_access = SecureFileAccess::default_secure();
+    // Create secure file access with enhanced security validation. It performs
+    // the full path validation (absolute/relative resolution against the session
+    // root, traversal and boundary checks) internally, so the request path is
+    // passed through directly rather than validated a second time here.
+    let secure_access = SecureFileAccess::default_secure(session_root);
 
     // Log file access attempt for security auditing
     info!(
         path = %request.path,
-        validated_path = %validated_path.display(),
         offset = request.offset,
         limit = request.limit,
         "Attempting to read file"
     );
 
     // Perform secure read operation
-    let content = secure_access.read(
-        &validated_path.to_string_lossy(),
-        request.offset,
-        request.limit,
-    )?;
+    let content = secure_access.read(&request.path, request.offset, request.limit)?;
 
     debug!(
         path = %request.path,

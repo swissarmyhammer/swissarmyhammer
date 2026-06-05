@@ -134,6 +134,43 @@ impl InitReporter for NullReporter {
     fn emit(&self, _event: &InitEvent) {}
 }
 
+/// Tracing reporter: forwards lifecycle events to the `tracing` crate.
+///
+/// For contexts where stderr is unavailable — notably the MCP serve path, where
+/// the transport swallows stdout/stderr — `CliReporter`'s `eprintln!` output is
+/// lost. This reporter routes the same events through `tracing` so they land in
+/// the structured logs instead: `Action` at info, `Warning` at warn, `Error` at
+/// error, and the remaining (header/skipped/finished) framing events at debug.
+pub struct TracingReporter;
+
+impl InitReporter for TracingReporter {
+    fn emit(&self, event: &InitEvent) {
+        match event {
+            InitEvent::Action { verb, message } => {
+                tracing::info!(verb = %verb, "{message}");
+            }
+            InitEvent::Warning { message } => {
+                tracing::warn!("{message}");
+            }
+            InitEvent::Error { message } => {
+                tracing::error!("{message}");
+            }
+            InitEvent::Header { message } => {
+                tracing::debug!("{message}");
+            }
+            InitEvent::Skipped { component, reason } => {
+                tracing::debug!(component = %component, reason = %reason, "skipped");
+            }
+            InitEvent::Finished {
+                message,
+                elapsed_ms,
+            } => {
+                tracing::debug!(elapsed_ms, "{message}");
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,6 +249,17 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"kind\":\"Action\""));
         assert!(json.contains("\"verb\":\"Installed\""));
+    }
+
+    #[test]
+    fn tracing_reporter_emits_all_variants_without_panic() {
+        // Routes every variant through `tracing`; with no subscriber installed
+        // the macros are no-ops, so this verifies the match is exhaustive and
+        // never panics. Mirrors `cli_reporter_does_not_panic`.
+        let reporter = TracingReporter;
+        for event in all_event_variants() {
+            reporter.emit(&event);
+        }
     }
 
     #[test]

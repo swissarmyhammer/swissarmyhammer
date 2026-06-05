@@ -92,18 +92,35 @@ pub fn symlink_name(sanitized_name: &str, policy: &SymlinkPolicy) -> String {
 ///
 /// On Unix, creates a symlink. On Windows, tries a junction first, then
 /// falls back to copying the directory.
+///
+/// The relative target is computed against the *canonical* (symlink-resolved)
+/// physical paths of both the link's parent directory and the store entry.
+/// This matters because the OS resolves `..` in a symlink target against the
+/// link's real on-disk location, not its lexical path: if an intermediate
+/// directory is itself a symlink (e.g. `~/.claude` pointing into an iCloud
+/// dotfiles folder), a lexically-computed `../../.skills/<name>` would traverse
+/// the symlink's physical parent and dangle. Diffing canonical paths makes the
+/// `..` count match the real directory layout so the link resolves correctly.
 pub fn create_skill_link(store_path: &Path, link_path: &Path) -> Result<(), RegistryError> {
     // Ensure the link's parent directory exists
     if let Some(parent) = link_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
-    // Compute relative path from link_path's parent to store_path
+    // Compute relative path from link_path's parent to store_path, using
+    // canonical paths so `..` traversal matches the physical directory layout
+    // even when an intermediate directory is a symlink. Both paths exist at
+    // this point (the store was copied and the link parent was just created),
+    // so canonicalize should succeed; fall back to the lexical path if not.
     let link_parent = link_path.parent().unwrap_or_else(|| Path::new("."));
+    let canonical_parent =
+        std::fs::canonicalize(link_parent).unwrap_or_else(|_| link_parent.to_path_buf());
+    let canonical_store =
+        std::fs::canonicalize(store_path).unwrap_or_else(|_| store_path.to_path_buf());
 
-    let relative = pathdiff::diff_paths(store_path, link_parent).unwrap_or_else(|| {
-        // Fallback: use absolute path
-        store_path.to_path_buf()
+    let relative = pathdiff::diff_paths(&canonical_store, &canonical_parent).unwrap_or_else(|| {
+        // Fallback: use the (canonical) absolute path
+        canonical_store.clone()
     });
 
     #[cfg(unix)]
@@ -517,6 +534,45 @@ mod tests {
             target.to_string_lossy().starts_with(".."),
             "symlink target should be relative: {}",
             target.display()
+        );
+    }
+
+    /// Regression: when an intermediate directory in the link's path is itself
+    /// a symlink (e.g. `~/.claude` → an iCloud dotfiles folder), a lexically
+    /// computed relative target dangles because the OS resolves `..` against
+    /// the link's *physical* location. `create_skill_link` must canonicalize
+    /// both ends so the link resolves to the real store entry.
+    #[cfg(unix)]
+    #[test]
+    fn test_create_skill_link_through_symlinked_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Real store entry under the (real) home root.
+        let store = root.join(".skills/my-skill");
+        std::fs::create_dir_all(&store).unwrap();
+        std::fs::write(store.join("SKILL.md"), "# test").unwrap();
+
+        // Physical agent location lives in a *different* subtree, reached via a
+        // symlink `<root>/.claude` -> `<root>/elsewhere/.claude` — mirroring a
+        // home dir whose `.claude` is symlinked into iCloud.
+        let physical_claude = root.join("elsewhere/.claude");
+        std::fs::create_dir_all(&physical_claude).unwrap();
+        std::os::unix::fs::symlink(&physical_claude, root.join(".claude")).unwrap();
+
+        // Link path goes through the symlinked `.claude`.
+        let link = root.join(".claude/skills/my-skill");
+        create_skill_link(&store, &link).unwrap();
+
+        // The link must resolve to the real store entry, not dangle.
+        assert!(
+            link.exists(),
+            "symlink through a symlinked parent must resolve: target {}",
+            std::fs::read_link(&link).unwrap().display()
+        );
+        assert!(
+            link.join("SKILL.md").exists(),
+            "SKILL.md must be reachable through the link"
         );
     }
 

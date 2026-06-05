@@ -77,6 +77,15 @@ pub struct AcpServer {
     /// transparently reloads it from the store on the next request. Mirrors
     /// claude-agent's `SessionManager::max_session_age`.
     max_session_age: std::time::Duration,
+
+    /// Source of the agent's intrinsic Agent tools (files, web, skill, subagent,
+    /// shell).
+    ///
+    /// Required, never optional: every session mounts a fresh connection from it
+    /// during [`new_session`](Self::new_session), independent of the external
+    /// MCP server list. This is what makes a llama-agent fully tooled even when
+    /// the `session/new` request carries zero MCP servers.
+    agent_tools_mount: Arc<dyn crate::mcp::AgentToolsMount>,
 }
 
 /// Default interval between session-cache eviction sweeps (5 minutes).
@@ -91,6 +100,91 @@ const DEFAULT_CLEANUP_INTERVAL: std::time::Duration = std::time::Duration::from_
 /// in-memory session state on the same idle-time policy.
 const DEFAULT_MAX_SESSION_AGE: std::time::Duration = std::time::Duration::from_secs(3600);
 
+/// Observable result of one agentic-loop generation step: how many tool calls
+/// the model emitted and how many of them failed.
+///
+/// "Failed" means the tool produced an error result (a `ToolResult` with a
+/// non-empty `error`, or a hard `handle_tool_call` error) — e.g. the MCP server
+/// returned -32602 "tool not found". The runaway guard uses these two counts to
+/// decide whether the loop is still making progress.
+#[derive(Debug, Clone, Copy)]
+struct AgenticStep {
+    /// Number of tool calls the model emitted in this step.
+    tool_calls: usize,
+    /// How many of those tool calls failed.
+    failed_tool_calls: usize,
+}
+
+/// What the agentic loop should do after a generation step.
+#[derive(Debug)]
+enum AgenticLoopAction {
+    /// Keep looping: re-prompt the model with the tool results.
+    Continue,
+    /// Abort the turn with this human-readable reason. The loop has stopped
+    /// making progress (every tool call failed), a single step emitted an
+    /// absurd number of tool calls, or the per-turn iteration cap was hit —
+    /// continuing would only hang.
+    Abort(String),
+}
+
+/// Bounds that stop the agentic loop from running away.
+///
+/// The loop's normal exit is "the model emitted no tool calls" (it answered) or
+/// a hard `StopReason` (MaxTokens/Cancelled/Refusal). These limits are the
+/// backstop for the degenerate case the limits were added for: a model that
+/// emits a flood of tool calls that all fail (e.g. mis-routed to a backend that
+/// returns -32602 "tool not found"), where the loop would otherwise re-prompt
+/// with ever-growing context until the caller's timeout fires.
+struct AgenticLoopLimits {
+    /// Maximum number of generation steps (re-prompts) in a single turn.
+    max_iterations: usize,
+    /// Maximum number of tool calls accepted from a single generation step.
+    max_tool_calls_per_step: usize,
+}
+
+impl AgenticLoopLimits {
+    /// Decide what the loop should do after a step, given the 1-based
+    /// `iteration` that just ran and the step's observed tool-call stats.
+    ///
+    /// Abort when, in order: the iteration cap is exceeded; a single step
+    /// emitted more than `max_tool_calls_per_step` tool calls; or the step
+    /// emitted tool calls and *every* one failed (no forward progress).
+    /// Otherwise continue.
+    fn evaluate(&self, iteration: usize, step: &AgenticStep) -> AgenticLoopAction {
+        if iteration > self.max_iterations {
+            return AgenticLoopAction::Abort(format!(
+                "agentic loop exceeded the per-turn iteration cap ({} iterations)",
+                self.max_iterations
+            ));
+        }
+        if step.tool_calls > self.max_tool_calls_per_step {
+            return AgenticLoopAction::Abort(format!(
+                "a single generation step emitted {} tool calls, exceeding the per-step cap of {}",
+                step.tool_calls, self.max_tool_calls_per_step
+            ));
+        }
+        if step.tool_calls > 0 && step.failed_tool_calls == step.tool_calls {
+            return AgenticLoopAction::Abort(format!(
+                "every one of the {} tool call(s) in this step failed; the loop is not making \
+                 progress",
+                step.tool_calls
+            ));
+        }
+        AgenticLoopAction::Continue
+    }
+}
+
+/// Default runaway-loop bounds for the agentic turn loop.
+///
+/// `max_iterations` is generous — a healthy multi-step tool turn rarely needs
+/// more than a handful of re-prompts, but agentic plans can legitimately chain
+/// several tools. `max_tool_calls_per_step` catches the pathological single
+/// step (the production trace showed ~342 tool calls in one step).
+const AGENTIC_LOOP_LIMITS: AgenticLoopLimits = AgenticLoopLimits {
+    max_iterations: 32,
+    max_tool_calls_per_step: 16,
+};
+
 impl AcpServer {
     /// Create an ACP server with the default session-cache eviction policy.
     ///
@@ -100,6 +194,7 @@ impl AcpServer {
     pub fn new(
         agent_server: Arc<AgentServer>,
         config: AcpConfig,
+        agent_tools_mount: Arc<dyn crate::mcp::AgentToolsMount>,
     ) -> (
         Self,
         tokio::sync::broadcast::Receiver<agent_client_protocol::schema::SessionNotification>,
@@ -107,6 +202,7 @@ impl AcpServer {
         Self::with_cleanup_settings(
             agent_server,
             config,
+            agent_tools_mount,
             DEFAULT_CLEANUP_INTERVAL,
             DEFAULT_MAX_SESSION_AGE,
         )
@@ -127,6 +223,7 @@ impl AcpServer {
     pub fn with_cleanup_settings(
         agent_server: Arc<AgentServer>,
         config: AcpConfig,
+        agent_tools_mount: Arc<dyn crate::mcp::AgentToolsMount>,
         cleanup_interval: std::time::Duration,
         max_session_age: std::time::Duration,
     ) -> (
@@ -163,6 +260,7 @@ impl AcpServer {
             elicitation_endpoint: Arc::new(RwLock::new(None)),
             cleanup_interval,
             max_session_age,
+            agent_tools_mount,
         };
 
         (server, notification_rx)
@@ -752,12 +850,12 @@ impl AcpServer {
     async fn clear_mcp_session_context(&self, llama_session_id: &crate::types::SessionId) {
         let session_clients = self.agent_server.session_mcp_clients.read().await;
         if let Some(clients) = session_clients.get(llama_session_id) {
-            for client in clients {
+            for client in clients.clients() {
                 client.clear_session().await;
             }
             tracing::debug!(
                 "Cleared ACP session context on {} MCP clients",
-                clients.len()
+                clients.clients().len()
             );
         }
     }
@@ -792,6 +890,31 @@ impl AcpServer {
             }
             Err(e) => {
                 tracing::warn!("Failed to create raw message recorder: {}", e);
+            }
+        }
+    }
+
+    /// Broadcast one [`super::visible_text::FilterSegment`] as its matching
+    /// ACP notification kind. Centralised here so the prompt loop just
+    /// iterates a segment list in source order without re-implementing the
+    /// segment → notification mapping.
+    fn broadcast_segment(
+        &self,
+        session_id: &agent_client_protocol::schema::SessionId,
+        segment: super::visible_text::FilterSegment,
+    ) {
+        match segment {
+            super::visible_text::FilterSegment::Visible(text) => {
+                self.broadcast_notification(super::translation::agent_message_notification(
+                    session_id.clone(),
+                    text,
+                ));
+            }
+            super::visible_text::FilterSegment::Thought(text) => {
+                self.broadcast_notification(super::translation::agent_thought_notification(
+                    session_id.clone(),
+                    text,
+                ));
             }
         }
     }
@@ -1678,10 +1801,33 @@ impl AcpServer {
         let mut all_mcp_servers = self.config.default_mcp_servers.clone();
         all_mcp_servers.extend(request.mcp_servers.clone());
 
-        // Create and store per-session MCP clients
+        // Assemble the session's MCP clients. The Agent-tools mount comes first
+        // and is ALWAYS present — the agent's intrinsic tools (files, web,
+        // skill, subagent, shell) are mounted in-process regardless of how many
+        // external MCP servers the request lists. An empty external server list
+        // therefore still yields a fully-tooled agent.
+        let mut clients: Vec<Arc<dyn crate::mcp::MCPClient>> = Vec::new();
+
+        match self.agent_tools_mount.connect().await {
+            Ok(mount_client) => {
+                tracing::info!("Mounted in-process Agent-tools server for session");
+                clients.push(mount_client);
+            }
+            Err(e) => {
+                // The mount is intrinsic; failing to mount it leaves the agent
+                // without its base tools. Unlike an external MCP server (optional,
+                // log-and-continue below), the agent-tools mount is mandatory, so a
+                // connect failure must FAIL session creation rather than silently
+                // yield a tool-less agent. This enforces the load-bearing invariant
+                // that a llama-agent session always has its intrinsic Agent tools.
+                tracing::error!("Failed to mount in-process Agent-tools server: {}", e);
+                return Err(Self::convert_error(e));
+            }
+        }
+
         if !all_mcp_servers.is_empty() {
             tracing::info!(
-                "Creating {} MCP clients for session ({} from config, {} from request)",
+                "Creating {} external MCP clients for session ({} from config, {} from request)",
                 all_mcp_servers.len(),
                 self.config.default_mcp_servers.len(),
                 request.mcp_servers.len()
@@ -1700,7 +1846,6 @@ impl AcpServer {
                 ),
             );
 
-            let mut clients = Vec::new();
             for server in &all_mcp_servers {
                 match super::mcp_client_factory::create_mcp_client_from_acp(server, handler.clone())
                     .await
@@ -1716,60 +1861,82 @@ impl AcpServer {
                     }
                 }
             }
+        }
 
-            if !clients.is_empty() {
-                let client_count = clients.len();
+        if !clients.is_empty() {
+            let client_count = clients.len();
 
-                // Discover tools from all MCP clients, preserving each
-                // tool's full JSON Schema (description + parameters) so
-                // the chat-template renderer sees the real parameter
-                // contract rather than a placeholder empty object.
-                let mut all_tools = Vec::new();
-                for client in &clients {
-                    match client.list_tools_with_schemas().await {
-                        Ok(tools) => {
-                            tracing::info!("Discovered {} tools from MCP client", tools.len());
-                            all_tools.extend(tools);
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to list tools from MCP client: {}", e);
-                        }
+            // Discover tools from all MCP clients, preserving each
+            // tool's full JSON Schema (description + parameters) so
+            // the chat-template renderer sees the real parameter
+            // contract rather than a placeholder empty object.
+            // No cross-client name-collision dedup: this assumes tool names are
+            // unique across the mount and external servers. Holds today because
+            // llama gets shell only from the intrinsic mount and external servers
+            // serve `Shared`-only tools; a future external server exposing a
+            // duplicate name would silently double-register and must dedup here.
+            // Discover each client's tools exactly once. The discovery is used
+            // for BOTH the model-visible `available_tools` set and the
+            // dispatch-routing index, so a tool advertised to the model is
+            // always routable to the client that advertised it. Discovering
+            // once (rather than re-querying when building the routing index)
+            // also closes the second discovery-race window where a transient
+            // list-tools failure could drop a client's tools from the index and
+            // mis-route its calls to the wrong backend (-32602 "tool not found"
+            // — the runaway-loop trigger).
+            let mut all_tools = Vec::new();
+            let mut discovered: Vec<(Arc<dyn crate::mcp::MCPClient>, Vec<String>)> =
+                Vec::with_capacity(clients.len());
+            for client in clients {
+                match client.list_tools_with_schemas().await {
+                    Ok(tools) => {
+                        tracing::info!("Discovered {} tools from MCP client", tools.len());
+                        let names = tools.iter().map(|t| t.name.clone()).collect();
+                        all_tools.extend(tools);
+                        discovered.push((client, names));
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to list tools from MCP client: {}", e);
+                        // Keep the client attached with no routed tools; a call
+                        // to one of its tools falls back to first-client routing
+                        // exactly as before, and the agentic-loop guard bounds
+                        // any resulting failures.
+                        discovered.push((client, Vec::new()));
                     }
                 }
+            }
 
-                // Update session with discovered tools
-                if !all_tools.is_empty() {
-                    if let Ok(Some(mut session)) = self
+            // Update session with discovered tools
+            if !all_tools.is_empty() {
+                if let Ok(Some(mut session)) = self
+                    .agent_server
+                    .session_manager()
+                    .get_session(&llama_session.id)
+                    .await
+                {
+                    tracing::info!(
+                        "Adding {} MCP tools to session {}",
+                        all_tools.len(),
+                        llama_session.id
+                    );
+                    session.available_tools.extend(all_tools);
+                    let _ = self
                         .agent_server
                         .session_manager()
-                        .get_session(&llama_session.id)
-                        .await
-                    {
-                        tracing::info!(
-                            "Adding {} MCP tools to session {}",
-                            all_tools.len(),
-                            llama_session.id
-                        );
-                        session.available_tools.extend(all_tools);
-                        let _ = self
-                            .agent_server
-                            .session_manager()
-                            .update_session(session)
-                            .await;
-                    }
+                        .update_session(session)
+                        .await;
                 }
-
-                self.agent_server
-                    .session_mcp_clients
-                    .write()
-                    .await
-                    .insert(llama_session.id, clients);
-                tracing::info!(
-                    "Stored {} MCP clients for session {}",
-                    client_count,
-                    llama_session.id
-                );
             }
+
+            self.agent_server.session_mcp_clients.write().await.insert(
+                llama_session.id,
+                crate::agent::SessionMcpClients::from_discovered(discovered),
+            );
+            tracing::info!(
+                "Stored {} MCP clients for session {}",
+                client_count,
+                llama_session.id
+            );
         }
 
         // Get stored client capabilities
@@ -1971,10 +2138,13 @@ impl AcpServer {
         {
             let session_clients = self.agent_server.session_mcp_clients.read().await;
             if let Some(clients) = session_clients.get(&acp_session.llama_session_id) {
-                for client in clients {
+                for client in clients.clients() {
                     client.set_session(request.session_id.clone()).await;
                 }
-                tracing::debug!("Set ACP session context on {} MCP clients", clients.len());
+                tracing::debug!(
+                    "Set ACP session context on {} MCP clients",
+                    clients.clients().len()
+                );
             }
         }
 
@@ -1983,8 +2153,12 @@ impl AcpServer {
         let mut total_tool_calls = 0usize;
         let mut final_stop_reason = agent_client_protocol::schema::StopReason::EndTurn;
         let mut all_generated_text = String::new();
+        // 1-based count of generation steps in this turn, fed to the runaway
+        // guard so a turn that keeps re-prompting cannot loop forever.
+        let mut iteration = 0usize;
 
         loop {
+            iteration += 1;
             // Calculate max_tokens based on available context space
             let model_context_size = self.agent_server.get_context_size().await.unwrap_or(4096); // Default fallback
 
@@ -2054,10 +2228,25 @@ impl AcpServer {
                     Self::convert_error(e)
                 })?;
 
-            // Stream chunks and convert each to ACP notification
+            // Stream chunks and convert each to ACP notification.
+            //
+            // `generated_text` accumulates the FULL raw output (needed by
+            // `extract_tool_calls` below and the response meta), but the text
+            // streams to the client through `VisibleTextFilter`, which
+            // partitions it into two ACP channels:
+            //
+            // - `visible` text → `AgentMessageChunk`s (assistant reply).
+            // - `<think>` content → `AgentThoughtChunk`s (reasoning the UI
+            //   renders distinctly; per card 01KSXAVM5Y2B0PMXQ4BR656NDR a
+            //   truncated-mid-think turn now surfaces here instead of going
+            //   silent).
+            //
+            // `<tool_call>` content is dropped from both — the structured
+            // `ToolCall` notification is the only representation a client sees.
             let mut generated_text = String::new();
             let mut llama_finish_reason: Option<crate::types::FinishReason> = None;
             let mut turn_tokens = 0;
+            let mut visible = super::visible_text::VisibleTextFilter::default();
             while let Some(chunk_result) = stream.next().await {
                 match chunk_result {
                     Ok(chunk) => {
@@ -2069,20 +2258,31 @@ impl AcpServer {
                             llama_finish_reason = chunk.finish_reason.clone();
                         }
 
-                        // Convert chunk to ACP notification
-                        let notification = super::translation::llama_chunk_to_acp_notification(
-                            request.session_id.clone(),
-                            chunk,
-                        );
-
-                        // Broadcast the notification
-                        self.broadcast_notification(notification);
+                        // Segments come back IN SOURCE ORDER — visible runs
+                        // and thought runs interleaved as the model wrote
+                        // them. Broadcasting them in order is what makes the
+                        // UI render `<think>` ahead of the visible text that
+                        // followed it (and ahead of any tool call extracted
+                        // from this turn). Aggregating into two flat fields
+                        // per push lost that ordering and surfaced thinking
+                        // after the surrounding text.
+                        for segment in visible.push(&chunk.text) {
+                            self.broadcast_segment(&request.session_id, segment);
+                        }
                     }
                     Err(e) => {
                         tracing::error!("Stream chunk error: {}", e);
                         return Err(Self::convert_error(e));
                     }
                 }
+            }
+
+            // Flush any text held back at the stream's end. Outside-a-span
+            // tail goes to visible; an unterminated `<think>` tail goes to
+            // thought (so a turn that ran out of budget mid-reasoning still
+            // shows the user what the model was thinking about).
+            for segment in visible.finish() {
+                self.broadcast_segment(&request.session_id, segment);
             }
 
             total_tokens += turn_tokens;
@@ -2110,8 +2310,29 @@ impl AcpServer {
             }
 
             if tool_calls.is_empty() {
-                // No tool calls - agent is done
+                // No tool calls - agent is done. Persist this final assistant
+                // turn so (1) the conversation history is complete — the model's
+                // own last reply is available on the NEXT user prompt — and (2)
+                // the cached KV (which ends with exactly these tokens) stays a
+                // valid prefix of the next prompt, preserving cross-prompt cache
+                // reuse instead of forcing a cold full reprocess. Mirrors the
+                // per-turn assistant-message persistence below and the batch
+                // loop in `AgentServer::generate`.
                 tracing::info!("No tool calls detected, ending agentic loop");
+                let final_assistant_message = crate::types::Message {
+                    role: crate::types::MessageRole::Assistant,
+                    content: generated_text.clone(),
+                    tool_call_id: None,
+                    tool_name: None,
+                    timestamp: std::time::SystemTime::now(),
+                };
+                self.agent_server
+                    .add_message(&acp_session.llama_session_id, final_assistant_message)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Failed to add final assistant message to session: {}", e);
+                        Self::convert_error(e)
+                    })?;
                 break;
             }
 
@@ -2121,6 +2342,38 @@ impl AcpServer {
                 "Detected {} tool calls in generated text, executing them",
                 tool_calls_count
             );
+
+            // Count how many of this step's tool calls failed so the runaway
+            // guard below can tell forward progress from a loop spinning on
+            // calls that never succeed.
+            let mut failed_tool_calls = 0usize;
+
+            // Persist the assistant's own turn (the RAW generated text, including
+            // the `<tool_call>` markup) BEFORE its tool results. This mirrors the
+            // batch agentic loop (`AgentServer::generate`) and matters for two
+            // reasons:
+            //   1. Correctness — the rendered conversation stays well-formed
+            //      (user → assistant(tool_call) → tool(result)); without it the
+            //      model never sees the call it is about to receive results for.
+            //   2. KV-cache reuse — the next turn's prompt must EXTEND, not
+            //      diverge from, the tokens already cached from this turn. The
+            //      cached KV ends with these assistant tokens, so the re-rendered
+            //      prompt must contain them at the same positions for the cached
+            //      prefix to remain valid.
+            let assistant_message = crate::types::Message {
+                role: crate::types::MessageRole::Assistant,
+                content: generated_text.clone(),
+                tool_call_id: None,
+                tool_name: None,
+                timestamp: std::time::SystemTime::now(),
+            };
+            self.agent_server
+                .add_message(&acp_session.llama_session_id, assistant_message)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Failed to add assistant message to session: {}", e);
+                    Self::convert_error(e)
+                })?;
 
             // Execute each tool call
             for tool_call in tool_calls {
@@ -2156,7 +2409,21 @@ impl AcpServer {
 
                 match tool_result {
                     Ok(result) => {
-                        tracing::info!("Tool call {} completed successfully", result.call_id);
+                        // A `ToolResult` carrying a non-empty `error` is a
+                        // tool-level failure surfaced as a value (e.g. the MCP
+                        // server returned -32602 "tool not found"), not a
+                        // success. Count it so the runaway guard can tell a step
+                        // that made no progress from one that did.
+                        if result.error.is_some() {
+                            failed_tool_calls += 1;
+                            tracing::warn!(
+                                "Tool call {} returned an error result: {}",
+                                result.call_id,
+                                result.error.as_deref().unwrap_or("")
+                            );
+                        } else {
+                            tracing::info!("Tool call {} completed successfully", result.call_id);
+                        }
 
                         // Convert tool result to ACP ToolCallUpdate and broadcast
                         let update = super::translation::tool_result_to_acp_update(result.clone());
@@ -2202,6 +2469,7 @@ impl AcpServer {
                         }
                     }
                     Err(e) => {
+                        failed_tool_calls += 1;
                         tracing::error!("Tool call execution failed: {}", e);
                         // Convert tool call error to ACP notification
                         let error_notification =
@@ -2220,6 +2488,26 @@ impl AcpServer {
                         // Continue with other tool calls even if one fails
                     }
                 }
+            }
+
+            // Runaway-loop guard: a turn that re-prompts forever, a single step
+            // that emits an absurd number of tool calls, or a step where every
+            // tool call failed (no forward progress — e.g. all dispatches return
+            // -32602 "tool not found") must terminate with an error rather than
+            // hang the caller until its timeout fires.
+            let step = AgenticStep {
+                tool_calls: tool_calls_count,
+                failed_tool_calls,
+            };
+            if let AgenticLoopAction::Abort(reason) = AGENTIC_LOOP_LIMITS.evaluate(iteration, &step)
+            {
+                tracing::error!(
+                    "Aborting agentic loop on iteration {}: {}",
+                    iteration,
+                    reason
+                );
+                return Err(agent_client_protocol::Error::internal_error()
+                    .data(serde_json::json!({ "agentic_loop_aborted": reason })));
             }
 
             // Only stop on hard limits - otherwise continue to let model respond to tool results
@@ -3169,7 +3457,38 @@ mod tests {
     use serial_test::serial;
     use std::time::Duration;
 
+    /// A real in-process Agent-tools mount for tests, backed by the
+    /// `EchoService` rmcp server. Satisfies the required `AcpServer::new` input
+    /// without pulling in `swissarmyhammer-tools`.
+    fn test_agent_tools_mount() -> Arc<dyn crate::mcp::AgentToolsMount> {
+        Arc::new(crate::mcp::InProcessMount::new(
+            crate::echo::EchoService::new(),
+        ))
+    }
+
+    /// An [`AgentToolsMount`] whose `connect()` always fails, used to prove that
+    /// a mount failure fails session creation rather than yielding a tool-less
+    /// agent.
+    struct FailingAgentToolsMount;
+
+    #[async_trait::async_trait]
+    impl crate::mcp::AgentToolsMount for FailingAgentToolsMount {
+        async fn connect(
+            &self,
+        ) -> Result<Arc<dyn crate::mcp::MCPClient>, crate::types::errors::MCPError> {
+            Err(crate::types::errors::MCPError::Connection(
+                "simulated agent-tools mount failure".to_string(),
+            ))
+        }
+    }
+
     async fn create_test_server() -> AcpServer {
+        create_test_server_with_mount(test_agent_tools_mount()).await
+    }
+
+    async fn create_test_server_with_mount(
+        agent_tools_mount: Arc<dyn crate::mcp::AgentToolsMount>,
+    ) -> AcpServer {
         use crate::types::{
             AgentConfig, ModelConfig, ModelSource, ParallelConfig, QueueConfig, RetryConfig,
             SessionConfig,
@@ -3195,6 +3514,7 @@ mod tests {
             mcp_servers: Vec::new(),
             session_config: SessionConfig::default(),
             parallel_execution_config: ParallelConfig::default(),
+            tool_execution_config: Default::default(),
         };
 
         // For testing, we'll create a minimal AgentServer without actually loading a model
@@ -3226,8 +3546,85 @@ mod tests {
         ));
 
         let config = AcpConfig::default();
-        let (server, _notification_rx) = AcpServer::new(agent_server, config);
+        let (server, _notification_rx) = AcpServer::new(agent_server, config, agent_tools_mount);
         server
+    }
+
+    mod agentic_loop_guard {
+        use super::super::{AgenticLoopAction, AgenticStep, AGENTIC_LOOP_LIMITS};
+
+        #[test]
+        fn a_step_whose_every_tool_call_failed_aborts_the_loop() {
+            // The exact production pathology: a step emitted many tool calls and
+            // every one failed (e.g. -32602 "tool not found"). The loop made no
+            // progress, so re-prompting would only repeat the failure — abort.
+            let step = AgenticStep {
+                tool_calls: 342,
+                failed_tool_calls: 342,
+            };
+            assert!(matches!(
+                AGENTIC_LOOP_LIMITS.evaluate(1, &step),
+                AgenticLoopAction::Abort(_)
+            ));
+        }
+
+        #[test]
+        fn a_step_with_some_successful_tool_calls_continues() {
+            // Partial failure is not runaway: at least one tool call succeeded, so
+            // the model has new information to act on. Continue the loop.
+            let step = AgenticStep {
+                tool_calls: 3,
+                failed_tool_calls: 2,
+            };
+            assert!(matches!(
+                AGENTIC_LOOP_LIMITS.evaluate(1, &step),
+                AgenticLoopAction::Continue
+            ));
+        }
+
+        #[test]
+        fn a_single_step_exceeding_the_per_step_tool_cap_aborts() {
+            // A single generation step that emits an absurd number of tool calls
+            // is degenerate output even if some "succeed" — cap it per step so one
+            // runaway step cannot blow the turn budget on its own.
+            let over_cap = AGENTIC_LOOP_LIMITS.max_tool_calls_per_step + 1;
+            let step = AgenticStep {
+                tool_calls: over_cap,
+                // Even with zero failures, the sheer count is the problem.
+                failed_tool_calls: 0,
+            };
+            assert!(matches!(
+                AGENTIC_LOOP_LIMITS.evaluate(1, &step),
+                AgenticLoopAction::Abort(_)
+            ));
+        }
+
+        #[test]
+        fn exceeding_the_iteration_cap_aborts() {
+            // Even with healthy per-step results, the loop must not iterate
+            // forever; the iteration cap is the final backstop.
+            let step = AgenticStep {
+                tool_calls: 1,
+                failed_tool_calls: 0,
+            };
+            let over_cap = AGENTIC_LOOP_LIMITS.max_iterations + 1;
+            assert!(matches!(
+                AGENTIC_LOOP_LIMITS.evaluate(over_cap, &step),
+                AgenticLoopAction::Abort(_)
+            ));
+        }
+
+        #[test]
+        fn a_normal_step_within_all_limits_continues() {
+            let step = AgenticStep {
+                tool_calls: 1,
+                failed_tool_calls: 0,
+            };
+            assert!(matches!(
+                AGENTIC_LOOP_LIMITS.evaluate(1, &step),
+                AgenticLoopAction::Continue
+            ));
+        }
     }
 
     /// Regression test for the llama client-wiring fix.
@@ -3331,6 +3728,7 @@ mod tests {
             mcp_servers: Vec::new(),
             session_config: SessionConfig::default(),
             parallel_execution_config: ParallelConfig::default(),
+            tool_execution_config: Default::default(),
         };
 
         let model_manager =
@@ -3359,7 +3757,8 @@ mod tests {
             test_config,
         ));
 
-        let (server, _notification_rx) = AcpServer::new(agent_server, config);
+        let (server, _notification_rx) =
+            AcpServer::new(agent_server, config, test_agent_tools_mount());
         server
     }
 
@@ -3397,6 +3796,7 @@ mod tests {
             mcp_servers: Vec::new(),
             session_config: SessionConfig::default(),
             parallel_execution_config: ParallelConfig::default(),
+            tool_execution_config: Default::default(),
         };
 
         let model_manager =
@@ -3428,6 +3828,7 @@ mod tests {
         let (server, _notification_rx) = AcpServer::with_cleanup_settings(
             agent_server,
             AcpConfig::default(),
+            test_agent_tools_mount(),
             cleanup_interval,
             max_session_age,
         );
@@ -3654,6 +4055,39 @@ mod tests {
         // Verify session has client capabilities (even if default)
         // Just verify we can access the capabilities without panicking
         let _caps = &session.client_capabilities;
+    }
+
+    /// The intrinsic Agent-tools mount is mandatory: if its `connect()` fails,
+    /// `new_session` MUST fail rather than silently create a tool-less session.
+    /// This guards the load-bearing invariant that every llama-agent session has
+    /// its intrinsic Agent tools.
+    #[tokio::test]
+    #[serial]
+    async fn new_session_fails_when_agent_tools_mount_connect_fails() {
+        let _state = StateDirGuard::new();
+        let server =
+            Arc::new(create_test_server_with_mount(Arc::new(FailingAgentToolsMount)).await);
+
+        let new_session_request =
+            agent_client_protocol::schema::NewSessionRequest::new(std::env::current_dir().unwrap());
+
+        let result = server.new_session(new_session_request).await;
+        assert!(
+            result.is_err(),
+            "new_session must fail when the mandatory agent-tools mount cannot connect, \
+             not yield a tool-less session"
+        );
+
+        // No session should have been stored from the failed creation.
+        let response = server
+            .list_sessions(agent_client_protocol::schema::ListSessionsRequest::new())
+            .await
+            .expect("list_sessions should succeed");
+        assert!(
+            response.sessions.is_empty(),
+            "a failed mount connect must not leave a session behind; got {:?}",
+            response.sessions
+        );
     }
 
     /// `session/list` returns nothing when no sessions have been created.
@@ -3953,6 +4387,7 @@ mod tests {
             mcp_servers: Vec::new(),
             session_config: SessionConfig::default(),
             parallel_execution_config: ParallelConfig::default(),
+            tool_execution_config: Default::default(),
         };
 
         let model_manager =
@@ -3998,7 +4433,8 @@ mod tests {
             ..Default::default()
         };
 
-        let (acp_server, _notification_rx) = AcpServer::new(agent_server, custom_acp_config);
+        let (acp_server, _notification_rx) =
+            AcpServer::new(agent_server, custom_acp_config, test_agent_tools_mount());
         let server = Arc::new(acp_server);
 
         let request = agent_client_protocol::schema::InitializeRequest::new(
@@ -4548,6 +4984,7 @@ mod tests {
             mcp_servers: Vec::new(),
             session_config: SessionConfig::default(),
             parallel_execution_config: ParallelConfig::default(),
+            tool_execution_config: Default::default(),
         };
 
         let model_manager =
@@ -4598,7 +5035,8 @@ mod tests {
             ..Default::default()
         };
 
-        let (server, _notification_rx) = AcpServer::new(agent_server, config);
+        let (server, _notification_rx) =
+            AcpServer::new(agent_server, config, test_agent_tools_mount());
         server
     }
 

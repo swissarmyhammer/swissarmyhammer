@@ -40,3 +40,8 @@ pub mod store;
 pub mod strategy;
 pub mod sync;
 pub mod table;
+
+/// Public test-support helpers for driving the profile installer in a hermetic
+/// environment. Compiled only when the `test-support` feature is enabled.
+#[cfg(feature = "test-support")]
+pub mod test_support;

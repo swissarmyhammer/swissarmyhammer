@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Tauri desktop app for SwissArmyHammer Kanban board"
+description = "Desktop GUI for the git-native kanban board — watch and drive AI agents (ACP) over your versionable .kanban/ files"
 
 [package.metadata.dist]
 dist = false
@@ -33,10 +33,10 @@ swissarmyhammer-entity-mcp = { workspace = true }
 rmcp = { workspace = true }
 swissarmyhammer-window-service = { workspace = true }
 swissarmyhammer-app-service = { workspace = true }
+mirdan = { workspace = true }
 swissarmyhammer-tools = { workspace = true }
 swissarmyhammer-git = { workspace = true }
 include_dir = { workspace = true }
-swissarmyhammer-workspace-init = { workspace = true }
 tauri = { version = "2", features = ["macos-private-api", "devtools"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-log = { version = "2", features = ["tracing"] }
@@ -77,6 +77,7 @@ tauri-build = { version = "2", features = [] }
 [dev-dependencies]
 tempfile = { workspace = true }
 swissarmyhammer-entity = { workspace = true, features = ["test-support"] }
+swissarmyhammer-operations = { workspace = true }
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
 serde_json = { workspace = true }

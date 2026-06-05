@@ -56,6 +56,9 @@ async fn execute_board_operation(
             if let Some(desc) = op.get_string("description") {
                 cmd = cmd.with_description(desc);
             }
+            if let Some(model) = op.get_string("model") {
+                cmd = cmd.with_model(model);
+            }
             processor.process(&cmd, ctx).await
         }
         _ => Err(KanbanError::parse(format!(
@@ -405,6 +408,19 @@ async fn execute_task_query_operation(
             }
             if let Some(filter) = op.get_string("filter") {
                 cmd = cmd.with_filter(filter);
+            }
+            // Pagination — MCP callers pass `page` / `page_size` directly.
+            // Anything that doesn't fit in `usize` is treated as unset (the
+            // default of 10/1 kicks in inside ListTasks::execute), which
+            // matches the clamp behaviour described in the tool docs.
+            if let Some(page) = op.get_u64("page").and_then(|n| usize::try_from(n).ok()) {
+                cmd = cmd.with_page(page);
+            }
+            if let Some(page_size) = op
+                .get_u64("page_size")
+                .and_then(|n| usize::try_from(n).ok())
+            {
+                cmd = cmd.with_page_size(page_size);
             }
             processor.process(&cmd, ctx).await
         }

@@ -98,6 +98,14 @@ impl WebFetcher {
             0
         };
 
+        // Tighten the retry policy. markdowndown defaults to 3 retries with a
+        // 1s base delay and exponential backoff (1s + 2s + 4s of sleeps), so a
+        // genuinely dead host reports failure only after ~11s — far too long
+        // for an interactive fetch. One retry with a short base delay still
+        // absorbs a single transient blip without the long tail.
+        config.http.max_retries = 1;
+        config.http.retry_delay = std::time::Duration::from_millis(250);
+
         config
     }
 

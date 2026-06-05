@@ -20,6 +20,7 @@ use crate::mcp_config;
 use crate::package_type::{self, PackageType};
 use crate::registry::{RegistryClient, RegistryError};
 use crate::store;
+use crate::{settings, status};
 
 /// Sanitize a package name for use as a filesystem directory name.
 ///
@@ -609,11 +610,34 @@ fn record_install(
 /// Deploy a skill to the central store, then symlink into each agent's skill directory.
 ///
 /// This is the public, synchronous API. All filesystem operations are sync.
+///
+/// In project scope the store directory (`.skills/`) and each agent's skill
+/// directory are resolved relative to the current working directory. Use
+/// [`deploy_skill_to_agents_at`] to root them at an explicit directory instead
+/// (e.g. for a long-running process that must not depend on CWD).
 pub fn deploy_skill_to_agents(
     name: &str,
     source_dir: &Path,
     agent_filter: Option<&str>,
     global: bool,
+) -> Result<Vec<String>, RegistryError> {
+    deploy_skill_to_agents_at(name, source_dir, agent_filter, global, None)
+}
+
+/// Root-explicit variant of [`deploy_skill_to_agents`].
+///
+/// When `root` is `Some`, project-scope relative paths (the `.skills/` store and
+/// each agent's project skill directory) are joined onto `root` instead of being
+/// resolved against the process working directory. When `root` is `None`,
+/// behavior is identical to [`deploy_skill_to_agents`]. Global scope ignores
+/// `root` because its paths are absolute (`~/.skills`, the agent's
+/// tilde-expanded global directory).
+pub fn deploy_skill_to_agents_at(
+    name: &str,
+    source_dir: &Path,
+    agent_filter: Option<&str>,
+    global: bool,
+    root: Option<&Path>,
 ) -> Result<Vec<String>, RegistryError> {
     let config = agents::load_agents_config()?;
     let agents = agents::resolve_target_agents(&config, agent_filter)?;
@@ -626,7 +650,7 @@ pub fn deploy_skill_to_agents(
 
     // 1. Copy source into the central store
     let sanitized = sanitize_dir_name(name);
-    let store_path = store::skill_store_dir(global).join(&sanitized);
+    let store_path = rooted(root, global, store::skill_store_dir(global)).join(&sanitized);
 
     // Remove existing store entry
     store::remove_if_exists(&store_path)?;
@@ -642,7 +666,7 @@ pub fn deploy_skill_to_agents(
         let agent_skill_dir = if global {
             agent_global_skill_dir(&agent.def)
         } else {
-            agent_project_skill_dir(&agent.def)
+            rooted(root, global, agent_project_skill_dir(&agent.def))
         };
         let link_path = agent_skill_dir.join(&link_name);
 
@@ -660,6 +684,53 @@ pub fn deploy_skill_to_agents(
     }
 
     Ok(targets)
+}
+
+/// Resolve a project-scope relative path against an explicit `root`.
+///
+/// Returns `path` unchanged in global scope (its paths are already absolute) or
+/// when no `root` is supplied (CWD-relative behavior). Otherwise joins the
+/// relative `path` onto `root`, so deployment never reads `current_dir()`.
+fn rooted(root: Option<&Path>, global: bool, path: PathBuf) -> PathBuf {
+    match root {
+        Some(root) if !global => root.join(path),
+        _ => path,
+    }
+}
+
+/// Write a rendered SKILL.md to a temp directory and deploy it to all agents.
+///
+/// Stages `skill_content` as `<tmpdir>/<name>/SKILL.md`, then delegates to
+/// [`deploy_skill_to_agents`] to store it centrally and symlink it into every
+/// detected agent's skill directory. This is the deployment step that callers
+/// reach for after rendering a skill's content with their own template engine;
+/// mirdan owns the filesystem staging so `swissarmyhammer-skills` stays
+/// deployment-free.
+///
+/// # Errors
+///
+/// Returns an error if `name` is not a safe filesystem identifier, the temp
+/// directory cannot be created, the file cannot be written, or deployment
+/// fails.
+pub fn stage_and_deploy_skill(
+    name: &str,
+    skill_content: &str,
+) -> Result<Vec<String>, RegistryError> {
+    if !store::is_safe_name(name) {
+        return Err(RegistryError::Validation(format!(
+            "unsafe skill name: {name:?}"
+        )));
+    }
+
+    let temp_dir = tempfile::tempdir()
+        .map_err(|e| RegistryError::Validation(format!("failed to create temp dir: {e}")))?;
+    let skill_dir = temp_dir.path().join(name);
+    std::fs::create_dir_all(&skill_dir)
+        .map_err(|e| RegistryError::Validation(format!("failed to create temp skill dir: {e}")))?;
+    std::fs::write(skill_dir.join("SKILL.md"), skill_content)
+        .map_err(|e| RegistryError::Validation(format!("failed to write SKILL.md: {e}")))?;
+
+    deploy_skill_to_agents(name, &skill_dir, None, false)
 }
 
 /// Async wrapper around [`deploy_skill_to_agents`] for use in async install paths.
@@ -682,6 +753,22 @@ pub fn deploy_agent_to_agents(
     agent_filter: Option<&str>,
     global: bool,
 ) -> Result<Vec<String>, RegistryError> {
+    deploy_agent_to_agents_at(name, source_dir, agent_filter, global, None)
+}
+
+/// Root-explicit variant of [`deploy_agent_to_agents`].
+///
+/// Mirrors [`deploy_skill_to_agents_at`]: when `root` is `Some`, project-scope
+/// relative paths (the `.agents/` store and each agent's project agent
+/// directory) are joined onto `root` instead of the process working directory.
+/// `None` preserves CWD-relative behavior; global scope ignores `root`.
+pub fn deploy_agent_to_agents_at(
+    name: &str,
+    source_dir: &Path,
+    agent_filter: Option<&str>,
+    global: bool,
+    root: Option<&Path>,
+) -> Result<Vec<String>, RegistryError> {
     let config = agents::load_agents_config()?;
     let agents = agents::resolve_target_agents(&config, agent_filter)?;
 
@@ -693,7 +780,7 @@ pub fn deploy_agent_to_agents(
 
     // 1. Copy source into the central agent store
     let sanitized = sanitize_dir_name(name);
-    let store_path = store::agent_store_dir(global).join(&sanitized);
+    let store_path = rooted(root, global, store::agent_store_dir(global)).join(&sanitized);
 
     // Remove existing store entry
     store::remove_if_exists(&store_path)?;
@@ -708,7 +795,7 @@ pub fn deploy_agent_to_agents(
         let agent_dir = if global {
             agent_global_agent_dir(&agent.def)
         } else {
-            agent_project_agent_dir(&agent.def)
+            agent_project_agent_dir(&agent.def).map(|d| rooted(root, global, d))
         };
 
         if let Some(base_dir) = agent_dir {
@@ -745,6 +832,946 @@ async fn deploy_agent(
     global: bool,
 ) -> Result<Vec<String>, RegistryError> {
     deploy_agent_to_agents(name, source_dir, agent_filter, global)
+}
+
+// ── Profile installer (the single, data-driven init/deinit) ──────────────────
+//
+// A `Profile` is the *only* thing that differs between consumers (sah, the tool
+// CLIs, the kanban desktop app): a declarative manifest of what to install — an
+// MCP server, a selection of builtin skills, a selection of builtin agents, and
+// the sah-only statusline/preamble flags. `init_profile`/`deinit_profile` are
+// the single code path that interprets that data; there are no per-consumer
+// branches. Builtin skills and agents are rendered once through the prompt
+// library's Liquid engine (so `{% include "_partials/..." %}` references expand)
+// and deployed via the store + symlink mechanism — the same one
+// `deploy_skill_to_agents` / `deploy_agent_to_agents` already use.
+
+use swissarmyhammer_agents::AgentResolver;
+use swissarmyhammer_config::TemplateContext;
+use swissarmyhammer_prompts::PromptLibrary;
+use swissarmyhammer_skills::SkillResolver;
+
+/// Selects which builtin items (skills or agents) a profile installs.
+///
+/// The same shape serves both skills and agents. `Profile` matches against an
+/// item's profile-membership tags; builtin agents carry no profile tags, so
+/// `Profile` selects nothing for them — use `Named`/`Single`/`All` there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Selector {
+    /// Every builtin item.
+    All,
+    /// Items tagged with the given init profile (skills only — agents have no
+    /// profile tags).
+    Profile(String),
+    /// The named items, in the given order. Unknown names are skipped.
+    Named(Vec<String>),
+    /// A single named item.
+    Single(String),
+}
+
+impl Selector {
+    /// Resolve this selector against a `name → membership-tags` view of the
+    /// available builtins, returning the selected names (deduplicated, sorted
+    /// for `All`/`Profile`, source-ordered for `Named`/`Single`).
+    ///
+    /// `membership(name)` returns the item's profile tags so `Profile` can match
+    /// them; for items without profile tags (agents) it returns an empty slice.
+    fn select(&self, available: &std::collections::HashMap<String, Vec<String>>) -> Vec<String> {
+        match self {
+            Selector::All => {
+                let mut names: Vec<String> = available.keys().cloned().collect();
+                names.sort();
+                names
+            }
+            Selector::Profile(profile) => {
+                let mut names: Vec<String> = available
+                    .iter()
+                    .filter(|(_, tags)| tags.iter().any(|t| t == profile))
+                    .map(|(name, _)| name.clone())
+                    .collect();
+                names.sort();
+                names
+            }
+            Selector::Named(names) => names
+                .iter()
+                .filter(|n| available.contains_key(*n))
+                .cloned()
+                .collect(),
+            Selector::Single(name) => {
+                if available.contains_key(name) {
+                    vec![name.clone()]
+                } else {
+                    Vec::new()
+                }
+            }
+        }
+    }
+}
+
+/// The MCP server a profile registers across detected agents.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileMcpServer {
+    /// The server name (the key under which it is registered, e.g. `sah`).
+    pub name: String,
+    /// The command to launch the server (e.g. `sah`).
+    pub command: String,
+    /// Arguments passed to the command (e.g. `["serve"]`).
+    pub args: Vec<String>,
+}
+
+impl ProfileMcpServer {
+    /// A server whose binary name *is* the launch command, started with the
+    /// single `serve` argument: `{ name, command: name, args: ["serve"] }`.
+    ///
+    /// This is the shape every tool CLI and sah register — the binary registers
+    /// itself under its own name and runs `<name> serve` — so they declare it
+    /// with one value instead of repeating the verbatim triple.
+    pub fn serve(name: impl Into<String>) -> Self {
+        let name = name.into();
+        Self {
+            command: name.clone(),
+            name,
+            args: vec!["serve".to_string()],
+        }
+    }
+}
+
+/// A declarative manifest of what a CLI or app installs.
+///
+/// This is the single value that differs per consumer; [`init_profile`] /
+/// [`deinit_profile`] interpret it with no per-consumer branching. The sah-only
+/// concerns (`statusline`, `preamble`) are plain declarative flags so that sah
+/// is "just a bigger profile" rather than a special case.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Profile {
+    /// The MCP server to register across detected agents, if any.
+    pub mcp_server: Option<ProfileMcpServer>,
+    /// Which builtin skills to render and deploy, if any.
+    pub skills: Option<Selector>,
+    /// Which builtin agents to render and deploy, if any.
+    pub agents: Option<Selector>,
+    /// Whether to install the Claude Code statusline (`sah statusline`).
+    pub statusline: bool,
+    /// Whether to ensure the CLAUDE.md preamble is present.
+    pub preamble: bool,
+}
+
+/// Map an [`InitScope`] to the boolean `global` flag the deploy/store helpers
+/// expect: only `User` scope is global; `Project`/`Local` are project-scoped.
+fn scope_is_global(scope: InitScope) -> bool {
+    matches!(scope, InitScope::User)
+}
+
+/// Build the template context used to render builtin skill/agent bodies.
+///
+/// Exposes `{{version}}` (this crate's package version) so skill/agent metadata
+/// and instructions that reference it expand. `PromptLibrary::render_text`
+/// additionally injects default variables and environment variables.
+fn profile_template_context() -> TemplateContext {
+    let mut ctx = TemplateContext::new();
+    ctx.set(
+        "version".to_string(),
+        serde_json::json!(env!("CARGO_PKG_VERSION")),
+    );
+    ctx
+}
+
+/// Render a builtin skill's instructions and metadata through the prompt
+/// library's Liquid engine, expanding `{% include "_partials/..." %}` and
+/// `{{version}}`.
+///
+/// Falls back to the raw instructions when rendering fails (logging a warning),
+/// matching the per-CLI deploy behavior so a partial-resolution failure degrades
+/// instead of aborting the whole install.
+fn render_profile_skill(
+    library: &PromptLibrary,
+    ctx: &TemplateContext,
+    skill: &swissarmyhammer_skills::Skill,
+) -> (String, std::collections::HashMap<String, String>) {
+    // Expose the skill's `agent` frontmatter as a template variable so shared
+    // partials (e.g. `_partials/delegate-to-subagent`) can render `{{ agent }}`
+    // without each skill hard-coding its delegate name. Cloned per skill because
+    // `ctx` is shared across the whole profile.
+    let mut skill_ctx = ctx.clone();
+    if let Some(agent) = skill.agent.as_deref() {
+        skill_ctx.set("agent".to_string(), serde_json::json!(agent));
+    }
+
+    let instructions = library
+        .render_text(&skill.instructions, &skill_ctx)
+        .unwrap_or_else(|err| {
+            tracing::warn!(
+                skill = skill.name.as_str(),
+                error = %err,
+                "skill template rendering failed, falling back to raw instructions"
+            );
+            skill.instructions.clone()
+        });
+
+    let mut metadata = skill.metadata.clone();
+    for value in metadata.values_mut() {
+        if value.contains("{{") || value.contains("{%") {
+            if let Ok(rendered) = library.render_text(value, &skill_ctx) {
+                *value = rendered;
+            }
+        }
+    }
+
+    (instructions, metadata)
+}
+
+/// The known set of init profiles a builtin skill may declare in its `profiles`
+/// frontmatter list. This is the single profile registry [`Selector::Profile`]
+/// matches against.
+///
+/// Profile matching is an exact `==` comparison with no normalization, so a typo
+/// or case-mismatch (`Kanban`, a trailing space) would silently exclude a skill
+/// from every profile rather than fail. [`install_profile_skills`] validates each
+/// builtin's `profiles` against this set with a `debug_assert!`, turning that
+/// silent drop into a loud development-time failure. Update this set whenever a
+/// new profile is introduced.
+pub const KNOWN_PROFILES: &[&str] = &["kanban", "code-context"];
+
+/// Resolve, render, and deploy the profile's selected builtin skills.
+///
+/// Returns the deduplicated list of agent targets the skills were deployed to.
+fn install_profile_skills(
+    selector: &Selector,
+    scope: InitScope,
+    root: Option<&Path>,
+    reporter: &dyn InitReporter,
+) -> Result<Vec<String>, RegistryError> {
+    let resolver = SkillResolver::new();
+    let builtins = resolver.resolve_builtins();
+
+    // Catch a mistagged builtin (`Kanban`, trailing space, unknown profile name)
+    // loudly during development rather than letting it silently fall out of every
+    // `Selector::Profile` filter. Matching is exact `==`, so an out-of-set entry
+    // would otherwise just be dropped.
+    debug_assert!(
+        builtins.values().all(|skill| skill
+            .profiles
+            .iter()
+            .all(|p| KNOWN_PROFILES.contains(&p.as_str()))),
+        "a builtin skill declares an unknown profile; known profiles are \
+         {KNOWN_PROFILES:?} (exact match, no normalization). Offenders: {:?}",
+        builtins
+            .values()
+            .filter(|skill| skill
+                .profiles
+                .iter()
+                .any(|p| !KNOWN_PROFILES.contains(&p.as_str())))
+            .map(|skill| (skill.name.as_str(), &skill.profiles))
+            .collect::<Vec<_>>()
+    );
+
+    let available: std::collections::HashMap<String, Vec<String>> = builtins
+        .iter()
+        .map(|(name, skill)| (name.clone(), skill.profiles.clone()))
+        .collect();
+
+    let library = PromptLibrary::default();
+    let ctx = profile_template_context();
+
+    let selected = selector.select(&available);
+    let skill_count = selected.len();
+    let mut targets: Vec<String> = Vec::new();
+    for name in selected {
+        let skill = &builtins[&name];
+        let (instructions, metadata) = render_profile_skill(&library, &ctx, skill);
+        let content =
+            swissarmyhammer_skills::deploy::format_skill_md(skill, &instructions, &metadata);
+        let deployed = stage_and_deploy_rendered(&name, &content, "SKILL.md", scope, root, true)?;
+        merge_targets(&mut targets, deployed);
+    }
+
+    if !targets.is_empty() {
+        reporter.emit(&InitEvent::Action {
+            verb: "Deployed".to_string(),
+            message: format!("{} skill(s) to {}", skill_count, targets.join(", ")),
+        });
+    }
+    Ok(targets)
+}
+
+/// Resolve, render, and deploy the profile's selected builtin agents.
+///
+/// Returns the deduplicated list of agent targets the agents were deployed to.
+fn install_profile_agents(
+    selector: &Selector,
+    scope: InitScope,
+    root: Option<&Path>,
+    reporter: &dyn InitReporter,
+) -> Result<Vec<String>, RegistryError> {
+    let resolver = AgentResolver::new();
+    let builtins = resolver.resolve_builtins();
+    // Agents carry no profile tags; expose an empty tag list for each.
+    let available: std::collections::HashMap<String, Vec<String>> = builtins
+        .keys()
+        .map(|name| (name.clone(), Vec::new()))
+        .collect();
+
+    let library = PromptLibrary::default();
+    let ctx = profile_template_context();
+
+    let selected = selector.select(&available);
+    let agent_count = selected.len();
+    let mut targets: Vec<String> = Vec::new();
+    for name in selected {
+        let agent = &builtins[&name];
+        let rendered_body = library
+            .render_text(&agent.instructions, &ctx)
+            .unwrap_or_else(|err| {
+                tracing::warn!(
+                    agent = name.as_str(),
+                    error = %err,
+                    "agent template rendering failed, falling back to raw instructions"
+                );
+                agent.instructions.clone()
+            });
+        let mut rendered_agent = agent.clone();
+        for value in rendered_agent.metadata.values_mut() {
+            if value.contains("{{") || value.contains("{%") {
+                if let Ok(rendered) = library.render_text(value, &ctx) {
+                    *value = rendered;
+                }
+            }
+        }
+        let content = rendered_agent.to_agent_md(&rendered_body);
+        let deployed = stage_and_deploy_rendered(&name, &content, "AGENT.md", scope, root, false)?;
+        merge_targets(&mut targets, deployed);
+    }
+
+    if !targets.is_empty() {
+        reporter.emit(&InitEvent::Action {
+            verb: "Deployed".to_string(),
+            message: format!("{} agent(s) to {}", agent_count, targets.join(", ")),
+        });
+    }
+    Ok(targets)
+}
+
+/// Stage `content` as `<tmp>/<name>/<file_name>` and deploy it via the store +
+/// symlink mechanism, rooting at `root` when supplied so deployment never reads
+/// `current_dir()`.
+///
+/// `is_skill` selects the skill store/dirs vs. the agent store/dirs.
+fn stage_and_deploy_rendered(
+    name: &str,
+    content: &str,
+    file_name: &str,
+    scope: InitScope,
+    root: Option<&Path>,
+    is_skill: bool,
+) -> Result<Vec<String>, RegistryError> {
+    if !store::is_safe_name(name) {
+        return Err(RegistryError::Validation(format!("unsafe name: {name:?}")));
+    }
+    let temp_dir = tempfile::tempdir()
+        .map_err(|e| RegistryError::Validation(format!("failed to create temp dir: {e}")))?;
+    let item_dir = temp_dir.path().join(name);
+    std::fs::create_dir_all(&item_dir)
+        .map_err(|e| RegistryError::Validation(format!("failed to create temp dir: {e}")))?;
+    std::fs::write(item_dir.join(file_name), content)
+        .map_err(|e| RegistryError::Validation(format!("failed to write {file_name}: {e}")))?;
+
+    let global = scope_is_global(scope);
+    if is_skill {
+        deploy_skill_to_agents_at(name, &item_dir, None, global, root)
+    } else {
+        deploy_agent_to_agents_at(name, &item_dir, None, global, root)
+    }
+}
+
+/// Append `new` targets to `targets`, skipping duplicates (preserving order).
+fn merge_targets(targets: &mut Vec<String>, new: Vec<String>) {
+    for target in new {
+        if !targets.contains(&target) {
+            targets.push(target);
+        }
+    }
+}
+
+/// Top-level key for Claude Code's statusline configuration block.
+const STATUSLINE_KEY: &str = "statusLine";
+
+/// The statusline configuration value a profile installs.
+///
+/// Mirrors the Claude-conventional `{type: "command", command: "sah statusline"}`
+/// block the CLI previously wrote by hand, so the `statusline` flag installs
+/// exactly the same configuration through the data-driven profile path.
+fn desired_statusline_value() -> serde_json::Value {
+    serde_json::json!({
+        "type": "command",
+        "command": "sah statusline"
+    })
+}
+
+/// Resolve a detected agent's settings/instructions file for `scope`, rooting
+/// project-scope relative paths against `root` so the operation is CWD-free.
+///
+/// `global_resolve` returns the agent's absolute global path (user scope);
+/// `project_resolve` returns the agent's project-relative path (project/local
+/// scope), which is joined onto `root` via [`rooted`]. Returns `None` when the
+/// agent declares no path for the scope.
+fn resolve_agent_file(
+    agent: &AgentDef,
+    global: bool,
+    root: Option<&Path>,
+    global_resolve: impl Fn(&AgentDef) -> Option<PathBuf>,
+    project_resolve: impl Fn(&AgentDef) -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    if global {
+        global_resolve(agent)
+    } else {
+        project_resolve(agent).map(|relative| rooted(root, global, relative))
+    }
+}
+
+/// Write the statusline block into every detected agent's settings file, or
+/// remove it when `install` is false. Root-aware so project-scope settings
+/// files resolve against `root` instead of `current_dir()`.
+fn apply_profile_statusline(
+    install: bool,
+    scope: InitScope,
+    root: Option<&Path>,
+    reporter: &dyn InitReporter,
+) -> Vec<InitResult> {
+    let verb = if install { "Installed" } else { "Removed" };
+    for_each_detected_agent(
+        scope,
+        reporter,
+        |agent, global| {
+            let Some(path) = resolve_agent_file(
+                agent,
+                global,
+                root,
+                agents::agent_global_settings_file,
+                agents::agent_project_settings_file,
+            ) else {
+                return Ok(None);
+            };
+            Ok(apply_statusline_at(&path, install)?.then(|| AgentAction {
+                verb: verb.to_string(),
+                message: format!("statusline for {} ({})", agent.name, path.display()),
+            }))
+        },
+        |changed| {
+            InitResult::ok(
+                "profile-statusline",
+                format!("{verb} statusline for {changed} agent(s)"),
+            )
+        },
+    )
+}
+
+/// Set or remove the `statusLine` block in the settings file at `path`.
+///
+/// On install, missing files are created. On removal, a missing file is a no-op.
+/// Returns `Ok(true)` when the file changed, `Ok(false)` when already in the
+/// desired state.
+fn apply_statusline_at(path: &Path, install: bool) -> Result<bool, RegistryError> {
+    if !install && !path.exists() {
+        return Ok(false);
+    }
+    let mut settings = settings::read_json(path)?;
+    let changed = if install {
+        settings::set_object(&mut settings, STATUSLINE_KEY, desired_statusline_value())
+    } else {
+        settings::remove_key(&mut settings, STATUSLINE_KEY)
+    };
+    if changed {
+        settings::write_json(path, &settings)?;
+    }
+    Ok(changed)
+}
+
+/// Ensure the CLAUDE.md preamble is present in every detected agent's
+/// instructions file, or strip it when `install` is false. Root-aware so
+/// project-scope instructions files resolve against `root`.
+fn apply_profile_preamble(
+    install: bool,
+    scope: InitScope,
+    root: Option<&Path>,
+    reporter: &dyn InitReporter,
+) -> Vec<InitResult> {
+    let verb = if install { "Installed" } else { "Removed" };
+    for_each_detected_agent(
+        scope,
+        reporter,
+        |agent, global| {
+            let Some(path) = resolve_agent_file(
+                agent,
+                global,
+                root,
+                agents::agent_global_instructions_file,
+                agents::agent_project_instructions_file,
+            ) else {
+                return Ok(None);
+            };
+            let outcome = if install {
+                ensure_preamble(&path)?
+            } else {
+                remove_preamble(&path)?
+            };
+            Ok(outcome.changed().then(|| AgentAction {
+                verb: outcome.verb().to_string(),
+                message: format!("preamble for {} ({})", agent.name, path.display()),
+            }))
+        },
+        |changed| {
+            InitResult::ok(
+                "profile-preamble",
+                format!("{verb} preamble for {changed} agent(s)"),
+            )
+        },
+    )
+}
+
+/// The outcome of an `ensure_preamble` / `remove_preamble` operation, carrying
+/// both a human-readable verb and whether the file actually changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PreambleOutcome {
+    /// The file was created with the preamble.
+    Created,
+    /// The preamble was prepended to existing content.
+    Prepended,
+    /// The preamble was already present; no change.
+    AlreadyPresent,
+    /// The preamble was stripped from existing content.
+    Removed,
+    /// The file contained only the preamble and was deleted.
+    Deleted,
+    /// No file existed, or it had no preamble; no change.
+    Absent,
+}
+
+impl PreambleOutcome {
+    /// A stable verb for the reporter Action event.
+    fn verb(self) -> &'static str {
+        match self {
+            PreambleOutcome::Created => "Created",
+            PreambleOutcome::Prepended => "Prepended",
+            PreambleOutcome::AlreadyPresent => "Present",
+            PreambleOutcome::Removed => "Removed",
+            PreambleOutcome::Deleted => "Deleted",
+            PreambleOutcome::Absent => "Absent",
+        }
+    }
+
+    /// Whether the file changed on disk.
+    fn changed(self) -> bool {
+        matches!(
+            self,
+            PreambleOutcome::Created
+                | PreambleOutcome::Prepended
+                | PreambleOutcome::Removed
+                | PreambleOutcome::Deleted
+        )
+    }
+}
+
+/// Ensure the instructions file at `path` opens with the required preamble,
+/// creating the file (and parents) when missing and prepending the marker when
+/// present-but-missing. Delegates the "is it there?" check to
+/// [`status::preamble_present_in`] so install and `mirdan status` stay in lockstep.
+fn ensure_preamble(path: &Path) -> Result<PreambleOutcome, RegistryError> {
+    let marker = status::PREAMBLE_MARKER;
+    if !path.exists() {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                RegistryError::Validation(format!("failed to create {}: {e}", parent.display()))
+            })?;
+        }
+        std::fs::write(path, format!("{marker}\n")).map_err(|e| {
+            RegistryError::Validation(format!("failed to create {}: {e}", path.display()))
+        })?;
+        return Ok(PreambleOutcome::Created);
+    }
+    let content = std::fs::read_to_string(path).map_err(|e| {
+        RegistryError::Validation(format!("failed to read {}: {e}", path.display()))
+    })?;
+    if status::preamble_present_in(&content) {
+        return Ok(PreambleOutcome::AlreadyPresent);
+    }
+    std::fs::write(path, format!("{marker}\n\n{content}")).map_err(|e| {
+        RegistryError::Validation(format!("failed to update {}: {e}", path.display()))
+    })?;
+    Ok(PreambleOutcome::Prepended)
+}
+
+/// Strip the preamble (and any blank lines immediately after it) from the
+/// instructions file at `path`, deleting the file when only the preamble
+/// remained. A missing file or one without the preamble is a no-op.
+fn remove_preamble(path: &Path) -> Result<PreambleOutcome, RegistryError> {
+    if !path.exists() {
+        return Ok(PreambleOutcome::Absent);
+    }
+    let content = std::fs::read_to_string(path).map_err(|e| {
+        RegistryError::Validation(format!("failed to read {}: {e}", path.display()))
+    })?;
+    if !status::preamble_present_in(&content) {
+        return Ok(PreambleOutcome::Absent);
+    }
+    let mut after_preamble: Vec<&str> = Vec::new();
+    let mut found = false;
+    for line in content.lines() {
+        if !found && line.contains(status::PREAMBLE_MARKER) {
+            found = true;
+            continue;
+        }
+        if found {
+            after_preamble.push(line);
+        }
+    }
+    while after_preamble.first().is_some_and(|l| l.trim().is_empty()) {
+        after_preamble.remove(0);
+    }
+    if after_preamble.is_empty() {
+        std::fs::remove_file(path).map_err(|e| {
+            RegistryError::Validation(format!("failed to delete {}: {e}", path.display()))
+        })?;
+        return Ok(PreambleOutcome::Deleted);
+    }
+    let new_content = after_preamble.join("\n") + "\n";
+    std::fs::write(path, new_content).map_err(|e| {
+        RegistryError::Validation(format!("failed to update {}: {e}", path.display()))
+    })?;
+    Ok(PreambleOutcome::Removed)
+}
+
+/// Register the profile's MCP server across detected agents.
+///
+/// With no explicit `root`, dispatches through the strategy-aware
+/// [`register_mcp_server`] applier (handling Claude local scope, generic JSON
+/// agents, etc.). With an explicit `root`, registers directly into each agent's
+/// root-relative MCP config so the operation never reads `current_dir()`.
+fn install_profile_mcp(
+    server: &ProfileMcpServer,
+    scope: InitScope,
+    root: Option<&Path>,
+    reporter: &dyn InitReporter,
+) -> Vec<InitResult> {
+    let entry = McpServerEntry {
+        command: server.command.clone(),
+        args: server.args.clone(),
+        env: std::collections::BTreeMap::new(),
+    };
+    match root {
+        None => register_mcp_server(scope, &server.name, &entry, reporter),
+        Some(root) => register_mcp_server_at(root, &server.name, &entry, scope, reporter),
+    }
+}
+
+/// Resolve a detected agent's MCP config and its root-relative config-file path.
+///
+/// Returns the agent's [`McpConfigDef`] paired with the file to write: the
+/// absolute global config under `User` scope (`global`), or the project config
+/// joined onto `root` otherwise. `None` when the agent declares no MCP config or
+/// no config path for the scope, signalling the caller to skip it.
+fn resolve_agent_mcp_config<'a>(
+    agent: &'a AgentDef,
+    global: bool,
+    root: &Path,
+) -> Option<(&'a agents::McpConfigDef, PathBuf)> {
+    let mcp_cfg = agent.mcp_config.as_ref()?;
+    let config_path = if global {
+        agents::agent_global_mcp_config(agent)
+    } else {
+        agents::agent_project_mcp_config(agent).map(|p| root.join(p))
+    }?;
+    Some((mcp_cfg, config_path))
+}
+
+/// Root-explicit MCP registration: write the server entry into each detected
+/// agent's project MCP config resolved against `root`.
+///
+/// Only project/local scope is rooted; user scope uses the agent's absolute
+/// global MCP config. Agents without an MCP config for the scope are skipped.
+fn register_mcp_server_at(
+    root: &Path,
+    server_name: &str,
+    entry: &McpServerEntry,
+    scope: InitScope,
+    reporter: &dyn InitReporter,
+) -> Vec<InitResult> {
+    for_each_detected_agent(
+        scope,
+        reporter,
+        |agent, global| {
+            let Some((mcp_cfg, config_path)) = resolve_agent_mcp_config(agent, global, root) else {
+                return Ok(None);
+            };
+            mcp_config::register_mcp_server(
+                &config_path,
+                &mcp_cfg.servers_key,
+                server_name,
+                entry,
+                &mcp_cfg.entry_extras,
+            )?;
+            Ok(Some(AgentAction {
+                verb: "Registered".to_string(),
+                message: format!("{server_name} MCP server for {}", agent.name),
+            }))
+        },
+        |changed| {
+            InitResult::ok(
+                APPLIER_COMPONENT,
+                format!("Registered applied to {changed} agent(s)"),
+            )
+        },
+    )
+}
+
+/// Root-explicit MCP unregistration mirroring [`register_mcp_server_at`].
+fn unregister_mcp_server_at(
+    root: &Path,
+    server_name: &str,
+    scope: InitScope,
+    reporter: &dyn InitReporter,
+) -> Vec<InitResult> {
+    for_each_detected_agent(
+        scope,
+        reporter,
+        |agent, global| {
+            let Some((mcp_cfg, config_path)) = resolve_agent_mcp_config(agent, global, root) else {
+                return Ok(None);
+            };
+            Ok(
+                mcp_config::unregister_mcp_server(&config_path, &mcp_cfg.servers_key, server_name)?
+                    .then(|| AgentAction {
+                        verb: "Removed".to_string(),
+                        message: format!("{server_name} MCP server from {}", agent.name),
+                    }),
+            )
+        },
+        |changed| {
+            InitResult::ok(
+                APPLIER_COMPONENT,
+                format!("Removed applied to {changed} agent(s)"),
+            )
+        },
+    )
+}
+
+/// Install everything a [`Profile`] declares, in priority order.
+///
+/// Steps, each a no-op when the profile does not declare it:
+/// 1. register the `mcp_server` across detected agents (strategy-aware, or
+///    root-explicit when `root` is `Some`),
+/// 2. render the selected builtin skills with Liquid + the partial library and
+///    deploy them via store + symlink,
+/// 3. render and deploy the selected builtin agents the same way,
+/// 4. apply the statusline / preamble when the profile sets those flags.
+///
+/// `root` makes the whole operation CWD-free: project-scope skill/agent stores,
+/// agent directories, and MCP configs are resolved against `root` instead of the
+/// process working directory. Pass `None` for the conventional CWD-rooted
+/// behavior.
+///
+/// # Lockfile
+///
+/// Builtin skills/agents deployed here are deliberately *not* recorded in
+/// `mirdan-lock.json`. That lockfile tracks registry-installed packages (download
+/// URL + integrity hash) so they can be updated/reinstalled; builtins are shipped
+/// in the binary and have no such identity. All builtin lifecycle — `mirdan
+/// status`/`list` (filesystem scan of the skill/agent stores) and deinit (profile
+/// selector) — is path- and profile-driven, never lockfile-driven, so the absent
+/// entries are inert. This is an intentional simplification over the prior
+/// per-component installers, which wrote inert `resolved: "builtin"` rows.
+pub fn init_profile(
+    profile: &Profile,
+    scope: InitScope,
+    root: Option<&Path>,
+    reporter: &dyn InitReporter,
+) -> Vec<InitResult> {
+    let mut results = Vec::new();
+
+    if let Some(ref server) = profile.mcp_server {
+        results.extend(install_profile_mcp(server, scope, root, reporter));
+    }
+
+    if let Some(ref selector) = profile.skills {
+        match install_profile_skills(selector, scope, root, reporter) {
+            Ok(targets) if !targets.is_empty() => results.push(InitResult::ok(
+                "profile-skills",
+                format!("Deployed skills to {}", targets.join(", ")),
+            )),
+            Ok(_) => {}
+            Err(e) => results.push(InitResult::error("profile-skills", e.to_string())),
+        }
+    }
+
+    if let Some(ref selector) = profile.agents {
+        match install_profile_agents(selector, scope, root, reporter) {
+            Ok(targets) if !targets.is_empty() => results.push(InitResult::ok(
+                "profile-agents",
+                format!("Deployed agents to {}", targets.join(", ")),
+            )),
+            Ok(_) => {}
+            Err(e) => results.push(InitResult::error("profile-agents", e.to_string())),
+        }
+    }
+
+    if profile.statusline {
+        results.extend(apply_profile_statusline(true, scope, root, reporter));
+    }
+
+    if profile.preamble {
+        results.extend(apply_profile_preamble(true, scope, root, reporter));
+    }
+
+    results
+}
+
+/// Remove everything a [`Profile`] declares, mirroring [`init_profile`].
+///
+/// Unregisters the MCP server, removes the selected skills/agents from detected
+/// agents, and strips the statusline block / CLAUDE.md preamble when the profile
+/// declared them. `root` roots project-scope paths so deinit is CWD-free.
+///
+/// # Version coupling
+///
+/// The profile is the single source of truth, so deinit removes exactly the
+/// builtin skills/agents the *current* binary's selector resolves to — not a
+/// recorded record of what a past install wrote. If the builtin set drifts
+/// between the version that installed and the version that deinits (a skill is
+/// renamed or dropped), a now-absent name will not be swept, leaving an orphaned
+/// symlink + store entry. This is inherent to the data-driven design (there is
+/// no per-install manifest to consult); callers that must deinit across such a
+/// drift should run deinit with the same binary version that installed.
+pub fn deinit_profile(
+    profile: &Profile,
+    scope: InitScope,
+    root: Option<&Path>,
+    reporter: &dyn InitReporter,
+) -> Vec<InitResult> {
+    let mut results = Vec::new();
+    let global = scope_is_global(scope);
+
+    if let Some(ref server) = profile.mcp_server {
+        match root {
+            None => results.extend(unregister_mcp_server(scope, &server.name, reporter)),
+            Some(root) => results.extend(unregister_mcp_server_at(
+                root,
+                &server.name,
+                scope,
+                reporter,
+            )),
+        }
+    }
+
+    if let Some(ref selector) = profile.skills {
+        let names = resolved_skill_names(selector);
+        for name in &names {
+            if let Err(e) = uninstall_skill_at(name, None, global, root) {
+                reporter.emit(&InitEvent::Warning {
+                    message: format!("Failed to uninstall {name} skill: {e}"),
+                });
+            }
+        }
+        if !names.is_empty() {
+            results.push(InitResult::ok(
+                "profile-skills",
+                format!("Removed {} skill(s)", names.len()),
+            ));
+        }
+    }
+
+    if let Some(ref selector) = profile.agents {
+        let names = resolved_agent_names(selector);
+        for name in &names {
+            if let Err(e) = uninstall_agent_at(name, None, global, root) {
+                reporter.emit(&InitEvent::Warning {
+                    message: format!("Failed to uninstall {name} agent: {e}"),
+                });
+            }
+        }
+        if !names.is_empty() {
+            results.push(InitResult::ok(
+                "profile-agents",
+                format!("Removed {} agent(s)", names.len()),
+            ));
+        }
+    }
+
+    if profile.statusline {
+        results.extend(apply_profile_statusline(false, scope, root, reporter));
+    }
+
+    if profile.preamble {
+        results.extend(apply_profile_preamble(false, scope, root, reporter));
+    }
+
+    results
+}
+
+/// Install a [`Profile`] and then run a registry of genuine tool-lifecycle
+/// components, returning the combined results.
+///
+/// This is the single shared glue every profile consumer needs: the profile
+/// installer ([`init_profile`]) followed by the tool's own `Initializable`
+/// components (e.g. a `.code-context/` directory, `.kanban/` merge drivers, a
+/// `Bash` denial). Each tool CLI and sah build their `Profile`, register their
+/// tool-lifecycle components, and call this — instead of re-spelling the
+/// "profile then registry, concatenate results" sequence in four places.
+///
+/// Results are ordered profile-first (matching every prior consumer): the MCP
+/// server, skills, agents, statusline/preamble, then the registry components in
+/// priority order. `root` is forwarded to [`init_profile`] for CWD-free
+/// installs. Compute the exit code from the returned results' `status` fields.
+pub fn init_profile_with_registry(
+    profile: &Profile,
+    registry: &InitRegistry,
+    scope: InitScope,
+    root: Option<&Path>,
+    reporter: &dyn InitReporter,
+) -> Vec<InitResult> {
+    let mut results = init_profile(profile, scope, root, reporter);
+    results.extend(registry.run_all_init(&scope, reporter));
+    results
+}
+
+/// Deinstall a [`Profile`] after deinitializing a registry of tool-lifecycle
+/// components, returning the combined results.
+///
+/// The mirror of [`init_profile_with_registry`]: tool-lifecycle teardown runs
+/// first (reverse priority, via [`InitRegistry::run_all_deinit`]), then the
+/// profile deinstaller ([`deinit_profile`]) unregisters the MCP server and
+/// removes the selected skills/agents. This ordering matches every prior
+/// consumer so a tool's directory is removed before its MCP registration.
+pub fn deinit_profile_with_registry(
+    profile: &Profile,
+    registry: &InitRegistry,
+    scope: InitScope,
+    root: Option<&Path>,
+    reporter: &dyn InitReporter,
+) -> Vec<InitResult> {
+    let mut results = registry.run_all_deinit(&scope, reporter);
+    results.extend(deinit_profile(profile, scope, root, reporter));
+    results
+}
+
+/// Resolve the builtin skill names a selector picks (for deinit).
+fn resolved_skill_names(selector: &Selector) -> Vec<String> {
+    let resolver = SkillResolver::new();
+    let available: std::collections::HashMap<String, Vec<String>> = resolver
+        .resolve_builtins()
+        .iter()
+        .map(|(name, skill)| (name.clone(), skill.profiles.clone()))
+        .collect();
+    selector.select(&available)
+}
+
+/// Resolve the builtin agent names a selector picks (for deinit).
+fn resolved_agent_names(selector: &Selector) -> Vec<String> {
+    let resolver = AgentResolver::new();
+    let available: std::collections::HashMap<String, Vec<String>> = resolver
+        .resolve_builtins()
+        .keys()
+        .map(|name| (name.clone(), Vec::new()))
+        .collect();
+    selector.select(&available)
 }
 
 /// Deploy a validator to .avp/validators/.
@@ -885,6 +1912,21 @@ pub fn uninstall_skill(
     agent_filter: Option<&str>,
     global: bool,
 ) -> Result<(), RegistryError> {
+    uninstall_skill_at(name, agent_filter, global, None)
+}
+
+/// Root-explicit variant of [`uninstall_skill`].
+///
+/// When `root` is `Some`, project-scope relative paths (the `.skills/` store and
+/// each agent's project skill directory) are joined onto `root` instead of being
+/// resolved against the process working directory. `None` preserves CWD-relative
+/// behavior; global scope ignores `root`.
+pub fn uninstall_skill_at(
+    name: &str,
+    agent_filter: Option<&str>,
+    global: bool,
+    root: Option<&Path>,
+) -> Result<(), RegistryError> {
     let config = agents::load_agents_config()?;
     let agents = agents::resolve_target_agents(&config, agent_filter)?;
 
@@ -897,7 +1939,7 @@ pub fn uninstall_skill(
         let agent_skill_dir = if global {
             agent_global_skill_dir(&agent.def)
         } else {
-            agent_project_skill_dir(&agent.def)
+            rooted(root, global, agent_project_skill_dir(&agent.def))
         };
         let link_path = agent_skill_dir.join(&link_name);
 
@@ -917,7 +1959,7 @@ pub fn uninstall_skill(
     // Skills can exist at both flat paths (e.g. ~/.skills/explain/) and
     // nested paths (e.g. ~/.skills/owner/repo/explain/) depending on
     // how they were installed (git vs registry). Remove all of them.
-    let store_root = store::skill_store_dir(global);
+    let store_root = rooted(root, global, store::skill_store_dir(global));
     let flat_path = store_root.join(&sanitized);
     if flat_path.exists() {
         std::fs::remove_dir_all(&flat_path)?;
@@ -1443,6 +2485,31 @@ fn uninstall_agent(
     agent_filter: Option<&str>,
     global: bool,
 ) -> Result<(), RegistryError> {
+    let removed = uninstall_agent_at(name, agent_filter, global, None)?;
+    if removed == 0 {
+        let scope = if global { "global" } else { "project" };
+        return Err(RegistryError::NotFound(format!(
+            "Agent '{}' not found in any coding agent ({} scope)",
+            name, scope
+        )));
+    }
+    Ok(())
+}
+
+/// Root-explicit agent uninstall shared by [`uninstall_agent`] and
+/// [`deinit_profile`].
+///
+/// Removes the agent's symlink from each coding agent's directory and cleans up
+/// the `.agents/` store entry when no symlink still references it. When `root`
+/// is `Some`, project-scope relative paths are joined onto `root`. Returns the
+/// number of symlinks removed so callers can decide whether "not found" is an
+/// error (single uninstall) or a benign no-op (profile deinit).
+fn uninstall_agent_at(
+    name: &str,
+    agent_filter: Option<&str>,
+    global: bool,
+    root: Option<&Path>,
+) -> Result<usize, RegistryError> {
     let config = agents::load_agents_config()?;
     let target_agents = agents::resolve_target_agents(&config, agent_filter)?;
 
@@ -1454,7 +2521,7 @@ fn uninstall_agent(
         let agent_dir = if global {
             agent_global_agent_dir(&agent.def)
         } else {
-            agent_project_agent_dir(&agent.def)
+            agent_project_agent_dir(&agent.def).map(|d| rooted(root, global, d))
         };
 
         if let Some(base_dir) = agent_dir {
@@ -1473,16 +2540,8 @@ fn uninstall_agent(
         }
     }
 
-    if removed == 0 {
-        let scope = if global { "global" } else { "project" };
-        return Err(RegistryError::NotFound(format!(
-            "Agent '{}' not found in any coding agent ({} scope)",
-            name, scope
-        )));
-    }
-
     // 2. Remove store entry if no remaining symlinks reference it
-    let store_path = store::agent_store_dir(global).join(&sanitized);
+    let store_path = rooted(root, global, store::agent_store_dir(global)).join(&sanitized);
     if store_path.exists() {
         let all_agents = agents::get_detected_agents(&config);
         let all_agent_dirs: Vec<PathBuf> = all_agents
@@ -1491,7 +2550,7 @@ fn uninstall_agent(
                 if global {
                     agent_global_agent_dir(&a.def)
                 } else {
-                    agent_project_agent_dir(&a.def)
+                    agent_project_agent_dir(&a.def).map(|d| rooted(root, global, d))
                 }
             })
             .collect();
@@ -1502,7 +2561,7 @@ fn uninstall_agent(
         }
     }
 
-    Ok(())
+    Ok(removed)
 }
 
 /// Install a specific package version (used by update command).
@@ -1614,7 +2673,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), RegistryError> {
 // events. They take a `swissarmyhammer_common` [`InitScope`] + [`InitReporter`]
 // so the same implementation serves the shell tool, `sah`, and `shelltool`.
 
-use swissarmyhammer_common::lifecycle::{InitResult, InitScope};
+use swissarmyhammer_common::lifecycle::{InitRegistry, InitResult, InitScope};
 use swissarmyhammer_common::reporter::{InitEvent, InitReporter};
 
 use crate::agents::AgentDef;
@@ -1676,6 +2735,59 @@ fn for_each_agent_strategy(
         APPLIER_COMPONENT,
         format!("{verb} applied to {changed} agent(s)"),
     )]
+}
+
+/// A per-agent change produced by a [`for_each_detected_agent`] closure: the
+/// reporter `verb` and human-readable `message` describing what changed.
+struct AgentAction {
+    /// Reporter Action verb (e.g. `"Installed"`, `"Removed"`, `"Registered"`).
+    verb: String,
+    /// Reporter Action message describing the agent and what was applied.
+    message: String,
+}
+
+/// Drive an applier over every detected agent for the root-explicit init path.
+///
+/// Owns the structural skeleton shared by the statusline, preamble, and MCP
+/// register/unregister appliers: load detected agents (short-circuiting to an
+/// error `InitResult` on failure), compute the `global` scope flag, run `apply`
+/// per agent, emit an Action event for each `Ok(Some(_))` change, emit a Warning
+/// (labelled with `scope`) for each `Err`, count the changes, and aggregate into
+/// a single `InitResult` built by `summary` from the change count.
+///
+/// `apply` receives each [`AgentDef`] plus the resolved `global` flag and returns
+/// `Ok(Some(action))` when the agent changed, `Ok(None)` when it was already in
+/// the desired state or skipped, or `Err` on failure.
+fn for_each_detected_agent(
+    scope: InitScope,
+    reporter: &dyn InitReporter,
+    apply: impl Fn(&AgentDef, bool) -> Result<Option<AgentAction>, RegistryError>,
+    summary: impl Fn(usize) -> InitResult,
+) -> Vec<InitResult> {
+    let agents = match detected_agents_or_error() {
+        Ok(a) => a,
+        Err(results) => return results,
+    };
+    let global = scope_is_global(scope);
+
+    let mut changed = 0usize;
+    for agent in &agents {
+        match apply(&agent.def, global) {
+            Ok(Some(action)) => {
+                reporter.emit(&InitEvent::Action {
+                    verb: action.verb,
+                    message: action.message,
+                });
+                changed += 1;
+            }
+            Ok(None) => {}
+            Err(e) => reporter.emit(&InitEvent::Warning {
+                message: format!("{} ({}): {e}", agent.def.name, scope_label(scope)),
+            }),
+        }
+    }
+
+    vec![summary(changed)]
 }
 
 /// Short scope label for reporter/warning messages.
@@ -1755,27 +2867,7 @@ mod applier_tests {
     use serial_test::serial;
     use swissarmyhammer_common::reporter::NullReporter;
 
-    /// RAII guard restoring `MIRDAN_AGENTS_CONFIG` on drop.
-    struct MirdanConfigGuard {
-        original: Option<String>,
-    }
-
-    impl MirdanConfigGuard {
-        fn set(path: &Path) -> Self {
-            let original = std::env::var("MIRDAN_AGENTS_CONFIG").ok();
-            std::env::set_var("MIRDAN_AGENTS_CONFIG", path);
-            Self { original }
-        }
-    }
-
-    impl Drop for MirdanConfigGuard {
-        fn drop(&mut self) {
-            match &self.original {
-                Some(v) => std::env::set_var("MIRDAN_AGENTS_CONFIG", v),
-                None => std::env::remove_var("MIRDAN_AGENTS_CONFIG"),
-            }
-        }
-    }
+    use crate::test_support::MirdanConfigGuard;
 
     /// Write a synthetic single-agent (generic) config whose detect dir is the
     /// project dir (so detection always fires) and whose MCP config is a
@@ -1809,7 +2901,7 @@ mod applier_tests {
     }
 
     #[test]
-    #[serial(cwd, env)]
+    #[serial]
     fn register_mcp_server_iterates_detected_agent_and_dispatches() {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().canonicalize().unwrap();
@@ -1839,7 +2931,7 @@ mod applier_tests {
     }
 
     #[test]
-    #[serial(cwd, env)]
+    #[serial]
     fn deny_tool_noop_for_agent_without_permission_mechanism() {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().canonicalize().unwrap();
@@ -1985,6 +3077,12 @@ mod tests {
         std::fs::write(&md, "# Just markdown\nNo frontmatter here.\n").unwrap();
 
         assert!(read_frontmatter(&md).is_err());
+    }
+
+    #[test]
+    fn test_stage_and_deploy_skill_rejects_traversal() {
+        let err = stage_and_deploy_skill("../escape", "# Skill\n").unwrap_err();
+        assert!(matches!(err, RegistryError::Validation(_)));
     }
 
     #[test]
@@ -3497,5 +4595,848 @@ mcp:
         assert!(detail.size.is_none());
         assert!(detail.mcp.is_none());
         assert!(detail.tool_md.is_none());
+    }
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+    use serial_test::serial;
+    use swissarmyhammer_common::reporter::NullReporter;
+    use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
+    use crate::test_support::MirdanConfigGuard;
+
+    /// Write a synthetic single-agent config that detects `project_dir` and
+    /// declares a relative skill dir (`.fake/skills`), agent dir (`.fake/agents`),
+    /// `.mcp.json` MCP config, settings file (`.fake/settings.json`), and
+    /// instructions file (`.fake/CLAUDE.md`) — the artifact kinds a profile
+    /// installs (skills/agents/mcp + statusline/preamble).
+    fn write_profile_agents_config(project_dir: &Path) -> PathBuf {
+        let agents_yaml = format!(
+            r#"agents:
+  - id: fake-agent
+    name: Fake Agent
+    project_path: .fake/skills
+    global_path: "~/.fake/skills"
+    agent_path: .fake/agents
+    settings_path: .fake/settings.json
+    instructions_path: .fake/CLAUDE.md
+    detect:
+      - dir: "{detect}"
+    mcp_config:
+      project_path: .mcp.json
+      servers_key: mcpServers
+"#,
+            detect = project_dir.display(),
+        );
+        let config_path = project_dir.join("agents.yaml");
+        std::fs::write(&config_path, agents_yaml).unwrap();
+        config_path
+    }
+
+    /// A sample profile: register an MCP server, deploy one builtin skill that
+    /// uses `{% include %}` partials (`commit`) and one builtin agent
+    /// (`reviewer`).
+    fn sample_profile() -> Profile {
+        Profile {
+            mcp_server: Some(ProfileMcpServer::serve("sample")),
+            skills: Some(Selector::Single("commit".to_string())),
+            agents: Some(Selector::Single("reviewer".to_string())),
+            statusline: false,
+            preamble: false,
+        }
+    }
+
+    /// `init_profile` with `root: None` installs skills (symlinked + rendered),
+    /// the MCP server, and agents into CWD-relative locations; `deinit_profile`
+    /// removes them.
+    #[test]
+    #[serial]
+    fn init_profile_installs_and_deinit_removes_cwd_rooted() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().canonicalize().unwrap();
+        let _cwd = CurrentDirGuard::new(&project).unwrap();
+        let config_path = write_profile_agents_config(&project);
+        let _mirdan = MirdanConfigGuard::set(&config_path);
+
+        let profile = sample_profile();
+        let reporter = NullReporter;
+        let results = init_profile(&profile, InitScope::Project, None, &reporter);
+        assert!(
+            results
+                .iter()
+                .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error),
+            "init_profile must not error: {results:?}"
+        );
+
+        // Skill: stored centrally and symlinked into the agent's skill dir.
+        let skill_store = project.join(".skills/commit/SKILL.md");
+        assert!(
+            skill_store.exists(),
+            "skill should be stored: {skill_store:?}"
+        );
+        let skill_link = project.join(".fake/skills/commit");
+        assert!(
+            std::fs::symlink_metadata(&skill_link).is_ok(),
+            "skill should be symlinked into agent dir: {skill_link:?}"
+        );
+
+        // The deployed SKILL.md was rendered with Liquid + the partial library,
+        // so no `{% include %}` references survive.
+        let rendered = std::fs::read_to_string(&skill_store).unwrap();
+        assert!(
+            !rendered.contains("{% include"),
+            "partials must be expanded in the deployed SKILL.md"
+        );
+
+        // Agent: stored and symlinked into the agent's agent dir.
+        assert!(
+            project.join(".agents/reviewer/AGENT.md").exists(),
+            "agent should be stored"
+        );
+        assert!(
+            std::fs::symlink_metadata(project.join(".fake/agents/reviewer")).is_ok(),
+            "agent should be symlinked into agent dir"
+        );
+
+        // MCP server registered in the agent's .mcp.json.
+        let mcp: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(project.join(".mcp.json")).unwrap())
+                .unwrap();
+        assert_eq!(mcp["mcpServers"]["sample"]["command"], "sample");
+
+        // Deinit removes everything.
+        let results = deinit_profile(&profile, InitScope::Project, None, &reporter);
+        assert!(results
+            .iter()
+            .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error));
+        assert!(
+            std::fs::symlink_metadata(&skill_link).is_err(),
+            "skill symlink should be removed on deinit"
+        );
+        assert!(
+            std::fs::symlink_metadata(project.join(".fake/agents/reviewer")).is_err(),
+            "agent symlink should be removed on deinit"
+        );
+        let mcp: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(project.join(".mcp.json")).unwrap())
+                .unwrap();
+        assert!(
+            mcp["mcpServers"]["sample"].is_null(),
+            "MCP server should be unregistered on deinit"
+        );
+    }
+
+    /// `init_profile` with an explicit `root` targets that root for every
+    /// project-scope artifact and never reads the process working directory.
+    #[test]
+    #[serial]
+    fn init_profile_explicit_root_targets_given_root() {
+        // The install root is a temp dir distinct from the (arbitrary) CWD.
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path().canonicalize().unwrap();
+
+        // CWD points somewhere else entirely; nothing must land here.
+        let cwd_dir = tempfile::tempdir().unwrap();
+        let cwd = cwd_dir.path().canonicalize().unwrap();
+        let _cwd = CurrentDirGuard::new(&cwd).unwrap();
+
+        // Detection keys off the absolute root dir, independent of CWD.
+        let config_path = write_profile_agents_config(&root);
+        let _mirdan = MirdanConfigGuard::set(&config_path);
+
+        let profile = sample_profile();
+        let reporter = NullReporter;
+        let results = init_profile(&profile, InitScope::Project, Some(&root), &reporter);
+        assert!(
+            results
+                .iter()
+                .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error),
+            "explicit-root init must not error: {results:?}"
+        );
+
+        // Artifacts land under the explicit root.
+        assert!(root.join(".skills/commit/SKILL.md").exists());
+        assert!(std::fs::symlink_metadata(root.join(".fake/skills/commit")).is_ok());
+        assert!(root.join(".agents/reviewer/AGENT.md").exists());
+        let mcp: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join(".mcp.json")).unwrap())
+                .unwrap();
+        assert_eq!(mcp["mcpServers"]["sample"]["command"], "sample");
+
+        // Nothing was written to the CWD.
+        assert!(
+            !cwd.join(".skills").exists(),
+            "explicit-root install must not touch CWD"
+        );
+        assert!(!cwd.join(".mcp.json").exists());
+
+        // Explicit-root deinit cleans the root.
+        deinit_profile(&profile, InitScope::Project, Some(&root), &reporter);
+        assert!(std::fs::symlink_metadata(root.join(".fake/skills/commit")).is_err());
+    }
+
+    /// A profile that declares `statusline`/`preamble` writes the `statusLine`
+    /// block and the CLAUDE.md preamble into the detected agent's files, and
+    /// `deinit_profile` removes both. Exercised with an explicit `root` to prove
+    /// step 4 is CWD-free.
+    #[test]
+    #[serial]
+    fn init_profile_statusline_and_preamble_install_and_deinit() {
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path().canonicalize().unwrap();
+
+        // CWD elsewhere: nothing must land in it.
+        let cwd_dir = tempfile::tempdir().unwrap();
+        let cwd = cwd_dir.path().canonicalize().unwrap();
+        let _cwd = CurrentDirGuard::new(&cwd).unwrap();
+
+        let config_path = write_profile_agents_config(&root);
+        let _mirdan = MirdanConfigGuard::set(&config_path);
+
+        let profile = Profile {
+            statusline: true,
+            preamble: true,
+            ..Profile::default()
+        };
+        let reporter = NullReporter;
+        let results = init_profile(&profile, InitScope::Project, Some(&root), &reporter);
+        assert!(
+            results
+                .iter()
+                .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error),
+            "statusline/preamble init must not error: {results:?}"
+        );
+
+        // Statusline block written to the agent's settings file under root.
+        let settings_path = root.join(".fake/settings.json");
+        let settings: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        assert_eq!(settings["statusLine"]["type"], "command");
+        assert_eq!(settings["statusLine"]["command"], "sah statusline");
+
+        // Preamble prepended to the agent's instructions file under root.
+        let claude_md = root.join(".fake/CLAUDE.md");
+        let body = std::fs::read_to_string(&claude_md).unwrap();
+        assert!(
+            status::preamble_present_in(&body),
+            "preamble must be present: {body:?}"
+        );
+
+        // Nothing leaked into the CWD.
+        assert!(!cwd.join(".fake").exists(), "step 4 must not touch CWD");
+
+        // Deinit strips both.
+        let results = deinit_profile(&profile, InitScope::Project, Some(&root), &reporter);
+        assert!(results
+            .iter()
+            .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error));
+        let settings: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        assert!(
+            settings.get("statusLine").is_none(),
+            "statusLine must be removed on deinit"
+        );
+        // The instructions file held only the preamble, so deinit deletes it.
+        assert!(
+            !claude_md.exists(),
+            "preamble-only instructions file should be deleted on deinit"
+        );
+    }
+
+    /// The skill `Selector::Profile` variant matches the builtin profile tags.
+    #[test]
+    fn selector_profile_matches_tagged_skills() {
+        let names = resolved_skill_names(&Selector::Profile("kanban".to_string()));
+        assert!(
+            names.contains(&"kanban".to_string()) && names.contains(&"implement".to_string()),
+            "kanban-profile selector should pick the tagged skills, got {names:?}"
+        );
+        assert!(
+            !names.contains(&"commit".to_string()),
+            "untagged 'commit' must not be selected by the kanban profile"
+        );
+    }
+
+    /// `Selector::Named` resolves in source order, skipping unknown names.
+    #[test]
+    fn selector_named_resolves_known_and_skips_unknown() {
+        let available: std::collections::HashMap<String, Vec<String>> =
+            [("a", vec![]), ("b", vec![]), ("c", vec![])]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect();
+        let got = Selector::Named(vec![
+            "b".to_string(),
+            "missing".to_string(),
+            "a".to_string(),
+        ])
+        .select(&available);
+        assert_eq!(got, vec!["b".to_string(), "a".to_string()]);
+    }
+
+    /// `Selector::Single` for an unknown name selects nothing.
+    #[test]
+    fn selector_single_unknown_is_empty() {
+        let available: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        assert!(Selector::Single("nope".to_string())
+            .select(&available)
+            .is_empty());
+    }
+
+    /// `ProfileMcpServer::serve` builds the canonical self-launching triple:
+    /// the binary registers under its own name and runs `<name> serve`.
+    #[test]
+    fn profile_mcp_server_serve_builds_self_launching_triple() {
+        let server = ProfileMcpServer::serve("shelltool");
+        assert_eq!(server.name, "shelltool");
+        assert_eq!(server.command, "shelltool");
+        assert_eq!(server.args, vec!["serve".to_string()]);
+    }
+
+    /// A test `Initializable` that records the lifecycle method invoked, so the
+    /// `*_with_registry` helpers can be checked for both result aggregation and
+    /// the profile-vs-registry ordering.
+    struct RecordingComponent;
+
+    impl swissarmyhammer_common::lifecycle::Initializable for RecordingComponent {
+        fn name(&self) -> &str {
+            "recording-component"
+        }
+        fn category(&self) -> &str {
+            "test"
+        }
+        fn init(&self, _scope: &InitScope, _reporter: &dyn InitReporter) -> Vec<InitResult> {
+            vec![InitResult::ok("recording-component", "init ran")]
+        }
+        fn deinit(&self, _scope: &InitScope, _reporter: &dyn InitReporter) -> Vec<InitResult> {
+            vec![InitResult::ok("recording-component", "deinit ran")]
+        }
+    }
+
+    /// `init_profile_with_registry` returns the profile install results followed
+    /// by the registry components' init results (profile-first ordering), and
+    /// `deinit_profile_with_registry` runs the registry teardown first.
+    #[test]
+    #[serial]
+    fn with_registry_helpers_aggregate_profile_then_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().canonicalize().unwrap();
+        let _cwd = CurrentDirGuard::new(&project).unwrap();
+        let config_path = write_profile_agents_config(&project);
+        let _mirdan = MirdanConfigGuard::set(&config_path);
+
+        let profile = sample_profile();
+        let reporter = NullReporter;
+
+        let mut registry = InitRegistry::new();
+        registry.register(RecordingComponent);
+        let init_results =
+            init_profile_with_registry(&profile, &registry, InitScope::Project, None, &reporter);
+        // The registry's init result is present and trails the profile results.
+        let recorded = init_results
+            .iter()
+            .position(|r| r.name == "recording-component" && r.message == "init ran")
+            .expect("registry init result present");
+        let last_profile = init_results
+            .iter()
+            .rposition(|r| r.name != "recording-component")
+            .expect("profile results present");
+        assert!(
+            recorded > last_profile,
+            "registry init must run after profile install: {init_results:?}"
+        );
+
+        let deinit_results =
+            deinit_profile_with_registry(&profile, &registry, InitScope::Project, None, &reporter);
+        // The registry's deinit result leads the profile teardown.
+        let recorded = deinit_results
+            .iter()
+            .position(|r| r.name == "recording-component" && r.message == "deinit ran")
+            .expect("registry deinit result present");
+        let first_profile = deinit_results
+            .iter()
+            .position(|r| r.name != "recording-component")
+            .expect("profile teardown results present");
+        assert!(
+            recorded < first_profile,
+            "registry deinit must run before profile teardown: {deinit_results:?}"
+        );
+    }
+
+    /// A profile with no skills/agents/mcp_server is a clean no-op.
+    #[test]
+    #[serial]
+    fn empty_profile_is_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().canonicalize().unwrap();
+        let _cwd = CurrentDirGuard::new(&project).unwrap();
+        let config_path = write_profile_agents_config(&project);
+        let _mirdan = MirdanConfigGuard::set(&config_path);
+
+        let reporter = NullReporter;
+        let results = init_profile(&Profile::default(), InitScope::Project, None, &reporter);
+        assert!(results.is_empty(), "empty profile should do nothing");
+        assert!(!project.join(".skills").exists());
+    }
+}
+
+/// Production-path consistency tests for the four real CLI profiles.
+///
+/// Card "Real-path tests: every profile init/deinit is consistent and
+/// round-trips". Where [`profile_tests`] exercises the installer with a
+/// synthetic `sample_profile`, this module reconstructs the *actual* profiles
+/// declared by the four consumers — sah ([`apps/swissarmyhammer-cli`]),
+/// shelltool, kanban-cli, and code-context — from the same public mirdan
+/// primitives (`ProfileMcpServer::serve`, `Selector::*`) those CLIs use, then
+/// drives them all through the single [`init_profile`] / [`deinit_profile`]
+/// path. The point is the "one mechanism, no drift" guarantee: every profile
+/// installs the same way (store + symlink, never copied files), registers its
+/// MCP server in the right place, and round-trips clean — and a regression that
+/// reintroduced a per-app installer or a copy-vs-symlink fork would fail here.
+///
+/// Scope note: these reconstructions cover the install *mechanism* across the
+/// four profile *shapes*; they deliberately do **not** enumerate each profile's
+/// real skill set. That authority — "which skills does this CLI actually
+/// deploy" — lives in each app's own `commands::registry` test, which drives the
+/// real `profile(scope)` through [`init_profile`] via the shared
+/// [`crate::test_support`] asserters and so can never silently mirror a bug in
+/// the real profile. mirdan cannot import the app crates, so the mechanism
+/// coverage lives here while the skill-set authority lives there.
+///
+/// Tests are HOME/tempdir-isolated (mirroring the `MIRDAN_AGENTS_CONFIG`
+/// isolation in [`profile_tests`]) and `#[serial]` because they mutate the
+/// process CWD and shared env; nothing leaks into the repo. They reuse the
+/// public [`crate::test_support`] scaffolding (`write_single_agent_config`,
+/// `assert_no_init_error`, `read_json`) so the in-crate and app-crate tests
+/// share one config writer and one set of asserters.
+#[cfg(test)]
+mod profile_consistency_tests {
+    use super::*;
+    use crate::test_support::{
+        assert_no_init_error, read_json, write_single_agent_config, MirdanConfigGuard,
+    };
+    use serial_test::serial;
+    use swissarmyhammer_common::reporter::NullReporter;
+    use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
+
+    /// One CLI consumer's real install profile, reconstructed from the same
+    /// public mirdan primitives the consumer's `registry.rs`/`profile.rs` uses.
+    ///
+    /// These reconstructions exist only to exercise the shared install
+    /// *mechanism* (store + symlink, MCP registration, round-trip, scope matrix)
+    /// across the four profile *shapes* — the coverage that legitimately must
+    /// live in mirdan, which cannot import the app crates. They deliberately do
+    /// **not** enumerate each profile's real skill set: the authoritative,
+    /// drift-proof check of "which skills does this CLI actually deploy" lives in
+    /// each app's own `commands::registry` test, which drives the real
+    /// `profile(scope)` through [`init_profile`] (see
+    /// `apps/*/src/commands/registry.rs`). Enumerating the set here too would
+    /// only re-introduce the mirror-the-bug drift this card set out to remove.
+    struct CliProfile {
+        /// Consumer label, for assertion messages.
+        label: &'static str,
+        /// The registered MCP server name (`<name> serve`).
+        server: &'static str,
+        /// A single representative skill the profile is known to select, used to
+        /// probe the store+symlink deploy mechanism. The mechanism is identical
+        /// regardless of which builtin we probe, so one name suffices — this is
+        /// not an assertion about the profile's full skill set (owned by the
+        /// per-CLI registry tests).
+        probe_skill: &'static str,
+        /// Build the profile for `scope`, mirroring the consumer's `profile(scope)`.
+        build: fn(InitScope) -> Profile,
+    }
+
+    /// sah's profile — the "bigger profile": all builtin skills + all builtin
+    /// agents + statusline + preamble (`apps/swissarmyhammer-cli/.../profile.rs`).
+    fn sah_profile(_scope: InitScope) -> Profile {
+        Profile {
+            mcp_server: Some(ProfileMcpServer::serve("sah")),
+            skills: Some(Selector::All),
+            agents: Some(Selector::All),
+            statusline: true,
+            preamble: true,
+        }
+    }
+
+    /// shelltool's profile — `shelltool serve` + the single `shell` skill,
+    /// deployed at every scope (`apps/shelltool-cli/.../registry.rs`).
+    fn shelltool_profile(_scope: InitScope) -> Profile {
+        Profile {
+            mcp_server: Some(ProfileMcpServer::serve("shelltool")),
+            skills: Some(Selector::Single("shell".to_string())),
+            ..Default::default()
+        }
+    }
+
+    /// kanban-cli's profile — `kanban serve` + the `kanban`-profile skill
+    /// cluster, deployed at every scope (`apps/kanban-cli/.../registry.rs`).
+    fn kanban_profile(_scope: InitScope) -> Profile {
+        Profile {
+            mcp_server: Some(ProfileMcpServer::serve("kanban")),
+            skills: Some(Selector::Profile("kanban".to_string())),
+            ..Default::default()
+        }
+    }
+
+    /// code-context's profile — `code-context serve` + the named
+    /// `code-context` + `explore` + `lsp` + `detected-projects` skills, deployed
+    /// at every scope (`apps/code-context-cli/.../registry.rs`).
+    fn code_context_profile(_scope: InitScope) -> Profile {
+        Profile {
+            mcp_server: Some(ProfileMcpServer::serve("code-context")),
+            skills: Some(Selector::Named(vec![
+                "code-context".to_string(),
+                "explore".to_string(),
+                "lsp".to_string(),
+                "detected-projects".to_string(),
+            ])),
+            ..Default::default()
+        }
+    }
+
+    /// The four real CLI profiles, in the order their cards migrated them. Each
+    /// carries a single `probe_skill` to exercise the deploy mechanism — not the
+    /// full skill set, which the per-CLI registry tests own (see [`CliProfile`]).
+    fn cli_profiles() -> [CliProfile; 4] {
+        [
+            CliProfile {
+                label: "sah",
+                server: "sah",
+                probe_skill: "commit",
+                build: sah_profile,
+            },
+            CliProfile {
+                label: "shelltool",
+                server: "shelltool",
+                probe_skill: "shell",
+                build: shelltool_profile,
+            },
+            CliProfile {
+                label: "kanban",
+                server: "kanban",
+                probe_skill: "kanban",
+                build: kanban_profile,
+            },
+            CliProfile {
+                label: "code-context",
+                server: "code-context",
+                probe_skill: "code-context",
+                build: code_context_profile,
+            },
+        ]
+    }
+
+    /// Assert no result is an error, with a profile-labelled message. Wraps the
+    /// shared [`assert_no_init_error`] with a combined `<label> <phase>` label.
+    fn assert_no_error(label: &str, phase: &str, results: &[InitResult]) {
+        assert_no_init_error(&format!("{label} {phase}"), results);
+    }
+
+    /// Case 1 + 2 + 5: every real CLI profile installs through the *identical*
+    /// mechanism — each selected skill is a central store entry **symlinked**
+    /// (never copied) into the agent's skill dir, the MCP server lands in the
+    /// agent's `.mcp.json`, and `deinit_profile` round-trips every artifact away.
+    /// Driven with an explicit root so the four runs are independent tempdirs.
+    ///
+    /// Round-trip here is asserted at `Project` scope only; `Local`-scope
+    /// round-trip is exercised by the code-context regression test
+    /// ([`code_context_local_scope_registers_in_claude_json_projects_map`]), and
+    /// per-scope landing is covered by [`scope_matrix_lands_artifacts_in_the_right_place`].
+    #[test]
+    #[serial]
+    fn every_cli_profile_installs_by_store_symlink_and_round_trips() {
+        // CWD points somewhere neutral; explicit roots isolate each profile.
+        let cwd_dir = tempfile::tempdir().unwrap();
+        let _cwd = CurrentDirGuard::new(cwd_dir.path().canonicalize().unwrap()).unwrap();
+        let reporter = NullReporter;
+
+        for cli in cli_profiles() {
+            let root_dir = tempfile::tempdir().unwrap();
+            let root = root_dir.path().canonicalize().unwrap();
+            // Root and home coincide so the generic agent's project and global
+            // dirs both live under this tempdir — `Project` scope only touches
+            // the project dirs anyway.
+            let config_path = write_single_agent_config(&root, &root);
+            let _mirdan = MirdanConfigGuard::set(&config_path);
+
+            let profile = (cli.build)(InitScope::Project);
+            let results = init_profile(&profile, InitScope::Project, Some(&root), &reporter);
+            assert_no_error(cli.label, "init", &results);
+
+            // Probe skill: central store entry + a *symlink* (not a copy) in the
+            // agent dir — the single deploy mechanism, identical for all four.
+            // (The full per-profile skill set is asserted by the per-CLI registry
+            // tests; here we only prove the mechanism.)
+            let skill = cli.probe_skill;
+            let store = root.join(".skills").join(skill).join("SKILL.md");
+            assert!(
+                store.is_file(),
+                "{}: skill `{skill}` must be in the .skills store: {store:?}",
+                cli.label
+            );
+            let link = root.join(".fake/skills").join(skill);
+            let meta = std::fs::symlink_metadata(&link).unwrap_or_else(|e| {
+                panic!(
+                    "{}: skill `{skill}` link must exist ({link:?}): {e}",
+                    cli.label
+                )
+            });
+            assert!(
+                meta.file_type().is_symlink(),
+                "{}: skill `{skill}` must be a SYMLINK, not a copied dir — store+symlink is the one mechanism",
+                cli.label
+            );
+
+            // MCP server registered in the agent's project `.mcp.json`, launched
+            // via `<name> serve`.
+            let mcp = read_json(&root.join(".mcp.json"));
+            assert_eq!(
+                mcp["mcpServers"][cli.server]["command"], cli.server,
+                "{}: MCP server `{}` must be registered",
+                cli.label, cli.server
+            );
+            assert_eq!(mcp["mcpServers"][cli.server]["args"][0], "serve");
+
+            // Round-trip: deinit removes the symlink and unregisters the MCP
+            // server, leaving the agent config clean.
+            let results = deinit_profile(&profile, InitScope::Project, Some(&root), &reporter);
+            assert_no_error(cli.label, "deinit", &results);
+            let link = root.join(".fake/skills").join(skill);
+            assert!(
+                std::fs::symlink_metadata(&link).is_err(),
+                "{}: skill `{skill}` symlink must be removed on deinit",
+                cli.label
+            );
+            let mcp = read_json(&root.join(".mcp.json"));
+            assert!(
+                mcp["mcpServers"][cli.server].is_null(),
+                "{}: MCP server must be unregistered on deinit",
+                cli.label
+            );
+        }
+    }
+
+    /// Case 3: an explicit-root install targets exactly that root and never
+    /// reads or writes the process working directory — for every CLI profile.
+    /// This is the property the kanban-app's long-running process relies on.
+    #[test]
+    #[serial]
+    fn explicit_root_install_never_touches_cwd_for_any_profile() {
+        let cwd_dir = tempfile::tempdir().unwrap();
+        let cwd = cwd_dir.path().canonicalize().unwrap();
+        let _cwd = CurrentDirGuard::new(&cwd).unwrap();
+        let reporter = NullReporter;
+
+        for cli in cli_profiles() {
+            let root_dir = tempfile::tempdir().unwrap();
+            let root = root_dir.path().canonicalize().unwrap();
+            let config_path = write_single_agent_config(&root, &root);
+            let _mirdan = MirdanConfigGuard::set(&config_path);
+
+            let profile = (cli.build)(InitScope::Project);
+            let results = init_profile(&profile, InitScope::Project, Some(&root), &reporter);
+            assert_no_error(cli.label, "explicit-root init", &results);
+
+            // Artifacts land under the explicit root.
+            assert!(
+                root.join(".skills").is_dir(),
+                "{}: .skills store must be under the explicit root",
+                cli.label
+            );
+            // Nothing was written into the CWD.
+            assert!(
+                !cwd.join(".skills").exists() && !cwd.join(".mcp.json").exists(),
+                "{}: explicit-root install must not touch CWD",
+                cli.label
+            );
+        }
+    }
+
+    /// Case 4: the scope matrix. For a representative profile (shelltool), each
+    /// scope lands in the correct location: `Project`/`Local` deploy skills under
+    /// the project store; `User` deploys skills into the *global* store and
+    /// registers the MCP server in the agent's global config. The MCP target file
+    /// differs by scope (project `.mcp.json` vs the agent's global config).
+    #[test]
+    #[serial]
+    fn scope_matrix_lands_artifacts_in_the_right_place() {
+        let reporter = NullReporter;
+
+        // Project scope: skills + project `.mcp.json`.
+        {
+            let root_dir = tempfile::tempdir().unwrap();
+            let root = root_dir.path().canonicalize().unwrap();
+            let _cwd = CurrentDirGuard::new(&root).unwrap();
+            let config_path = write_single_agent_config(&root, &root);
+            let _mirdan = MirdanConfigGuard::set(&config_path);
+
+            let results = init_profile(
+                &shelltool_profile(InitScope::Project),
+                InitScope::Project,
+                None,
+                &reporter,
+            );
+            assert_no_error("shelltool", "project init", &results);
+            assert!(
+                root.join(".skills/shell/SKILL.md").is_file(),
+                "project scope must deploy the shell skill"
+            );
+            assert!(
+                read_json(&root.join(".mcp.json"))["mcpServers"]["shelltool"]["command"]
+                    == "shelltool",
+                "project scope must register MCP in project .mcp.json"
+            );
+        }
+
+        // Local scope: skills still deploy; MCP target is scope-specific (the
+        // generic agent still uses its project `.mcp.json` here — the Claude
+        // local-scope special case is covered separately).
+        {
+            let root_dir = tempfile::tempdir().unwrap();
+            let root = root_dir.path().canonicalize().unwrap();
+            let _cwd = CurrentDirGuard::new(&root).unwrap();
+            let config_path = write_single_agent_config(&root, &root);
+            let _mirdan = MirdanConfigGuard::set(&config_path);
+
+            let results = init_profile(
+                &shelltool_profile(InitScope::Local),
+                InitScope::Local,
+                None,
+                &reporter,
+            );
+            assert_no_error("shelltool", "local init", &results);
+            assert!(
+                root.join(".skills/shell/SKILL.md").is_file(),
+                "local scope must deploy the shell skill"
+            );
+        }
+
+        // User scope: skills deploy into the *global* store (`~/.skills` + the
+        // agent's global skill dir), and the MCP server registers in the agent's
+        // *global* config file, not a project `.mcp.json`.
+        {
+            let env = IsolatedTestEnvironment::new().unwrap();
+            let work = env.temp_dir().canonicalize().unwrap();
+            let _cwd = CurrentDirGuard::new(&work).unwrap();
+            let config_path = write_single_agent_config(&work, &work);
+            let _mirdan = MirdanConfigGuard::set(&config_path);
+
+            let results = init_profile(
+                &shelltool_profile(InitScope::User),
+                InitScope::User,
+                None,
+                &reporter,
+            );
+            assert_no_error("shelltool", "user init", &results);
+            // The global store is `~/.skills` (HOME-rooted, via `dirs`); the
+            // agent's global skill dir is its config's `global_path`
+            // (`<work>/.fake/skills`, since `write_single_agent_config` roots
+            // globals at its `home` argument, here `work`), which holds the symlink.
+            assert!(
+                env.home_path().join(".skills/shell/SKILL.md").is_file(),
+                "user scope must deploy the shell skill into the global ~/.skills store"
+            );
+            let link = work.join(".fake/skills/shell");
+            assert!(
+                std::fs::symlink_metadata(&link).is_ok_and(|m| m.file_type().is_symlink()),
+                "user scope must symlink the shell skill into the agent's global skill dir"
+            );
+            assert!(
+                !work.join(".skills").exists(),
+                "user scope must NOT write a project .skills store"
+            );
+            // The agent's global mcp config (`<work>/.fake/mcp.json`) holds the
+            // registration; the project `.mcp.json` must be untouched.
+            let global_mcp = work.join(".fake/mcp.json");
+            assert!(
+                global_mcp.is_file()
+                    && read_json(&global_mcp)["mcpServers"]["shelltool"]["command"] == "shelltool",
+                "user scope must register MCP in the agent's global config"
+            );
+            assert!(
+                !work.join(".mcp.json").exists(),
+                "user scope must not write a project .mcp.json"
+            );
+        }
+    }
+
+    /// Case 6: the code-context local-scope MCP regression. Routing MCP
+    /// registration through the profile's strategy-aware applier means a real
+    /// `claude-code` agent at `Local` scope registers in `~/.claude.json` under
+    /// `projects.<root>.mcpServers` — the location the old hand-rolled
+    /// code-context loop silently dropped. HOME is isolated so `~/.claude.json`
+    /// is the tempdir's.
+    #[test]
+    #[serial]
+    fn code_context_local_scope_registers_in_claude_json_projects_map() {
+        let env = IsolatedTestEnvironment::new().unwrap();
+        // CWD is the project root; `project_key()` falls back to it (the tempdir
+        // is not inside a git repo), giving a deterministic projects-map key.
+        let work = env.temp_dir().canonicalize().unwrap();
+        let _cwd = CurrentDirGuard::new(&work).unwrap();
+
+        // A real `claude-code` agent so `strategy_for` selects ClaudeCodeStrategy
+        // (its Local scope writes `~/.claude.json`, not a project `.mcp.json`).
+        let agents_yaml = format!(
+            r#"agents:
+  - id: claude-code
+    name: Claude Code
+    project_path: .claude/skills
+    global_path: "{home}/.claude/skills"
+    settings_path: .claude/settings.json
+    global_settings_path: "{home}/.claude/settings.json"
+    detect:
+      - dir: "{detect}"
+    mcp_config:
+      project_path: .mcp.json
+      global_path: "{home}/.claude.json"
+      servers_key: mcpServers
+"#,
+            detect = work.display(),
+            home = env.home_path().display(),
+        );
+        let config_path = work.join("agents.yaml");
+        std::fs::write(&config_path, &agents_yaml).unwrap();
+        let _mirdan = MirdanConfigGuard::set(&config_path);
+
+        let reporter = NullReporter;
+        // root: None so registration flows through the strategy-aware applier
+        // (the explicit-root path bypasses the Claude local special case).
+        let profile = code_context_profile(InitScope::Local);
+        let results = init_profile(&profile, InitScope::Local, None, &reporter);
+        assert_no_error("code-context", "local init", &results);
+
+        // The MCP server lands in `~/.claude.json` under the project entry —
+        // NOT in a project `.mcp.json`. This is the regression the migration fixed.
+        let claude_json = env.home_path().join(".claude.json");
+        assert!(
+            claude_json.is_file(),
+            "Claude local scope must write ~/.claude.json"
+        );
+        let json = read_json(&claude_json);
+        let key = work.to_string_lossy().to_string();
+        assert_eq!(
+            json["projects"][&key]["mcpServers"]["code-context"]["command"], "code-context",
+            "code-context MCP must register in ~/.claude.json projects.<root>.mcpServers (local scope), got: {json}"
+        );
+        assert!(
+            !work.join(".mcp.json").exists(),
+            "Claude local scope must NOT write a project .mcp.json"
+        );
+
+        // Round-trip: deinit prunes the local-scope registration.
+        let results = deinit_profile(&profile, InitScope::Local, None, &reporter);
+        assert_no_error("code-context", "local deinit", &results);
+        let json = read_json(&claude_json);
+        assert!(
+            json["projects"][&key]["mcpServers"]
+                .get("code-context")
+                .is_none(),
+            "deinit must remove the local-scope MCP registration"
+        );
     }
 }

@@ -1,7 +1,8 @@
 ---
 name: implement
-description: Kanban task executor. Use this skill when the user says "/implement", "implement task", "implement the next task", "work the next task", "pick up a task", or "implement" followed by a task id. Picks up one kanban task and drives it from ready through doing to review. Produces verbose output — automatically delegates to an implementer subagent. Do NOT use this skill for free-form edits, typo fixes, refactors, or any coding work that is not tied to a specific kanban task — those are not "implementation" in this skill sense. If there is no kanban task yet, use the `task` or `plan` skill to create one first.
-context: fork
+profiles:
+  - kanban
+description: Kanban task executor. Use this skill when the user says "/implement", "implement task", "implement the next task", "work the next task", "pick up a task", or "implement" followed by a task id. Picks up one kanban task and drives it from ready through doing to review. Do NOT use this skill for free-form edits, typo fixes, refactors, or any coding work that is not tied to a specific kanban task — those are not "implementation" in this skill sense. If there is no kanban task yet, use the `task` or `plan` skill to create one first.
 agent: implementer
 license: MIT OR Apache-2.0
 compatibility: Requires the `kanban` MCP tool (to read, move, and complete tasks) and the `code_context` MCP tool (to research symbols and blast-radius before coding). 
@@ -10,16 +11,23 @@ metadata:
   version: "{{version}}"
 ---
 
-{% include "_partials/coding-standards" %}
-{% include "_partials/review-column" %}
-{% include "_partials/code-context-checkpoints" %}
-{% include "_partials/architecture-awareness" %}
 
 # Implement
 
 Pick up a kanban task and get it done.
 
 **Do NOT deviate from the plan.** A problem you can't resolve within the plan → stop and ask the user.
+
+Here is what the user provided: 
+$ARGUMENTS
+
+{% include "_partials/delegate-to-subagent" %}
+
+## Guidelines
+
+{% include "_partials/coding-standards" %}
+{% include "_partials/review-column" %}
+{% include "_partials/architecture-awareness" %}
 
 ## Invocation
 
@@ -39,6 +47,7 @@ Detection:
 1. No arg or `<next>` → default
 2. ULID (26 chars, `[0-9A-Z]`) → task-id
 3. Otherwise → filter-expression (passes to `next task` verbatim)
+
 
 ### Filter DSL recap
 

@@ -130,7 +130,7 @@
 //! quiet: false
 //! ```
 //!
-//! ## qwen-coder
+//! ## qwen
 //!
 //! Local execution with Qwen3-Coder model:
 //! ```yaml
@@ -1821,7 +1821,7 @@ impl ModelManager {
     ///
     /// use swissarmyhammer_config::model::ModelPaths;
     /// ModelManager::use_agent("claude-code", &ModelPaths::sah())?;
-    /// ModelManager::use_agent("qwen-coder", &ModelPaths::sah())?;
+    /// ModelManager::use_agent("qwen", &ModelPaths::sah())?;
     /// # Ok::<(), swissarmyhammer_config::model::ModelError>(())
     /// ```
     pub fn use_agent(agent_name: &str, paths: &ModelPaths) -> Result<(), ModelError> {
@@ -2682,29 +2682,33 @@ executor:
     }
 
     #[test]
-    fn test_load_builtin_models_only_claude_code_carries_kanban_tag() {
+    fn test_load_builtin_models_kanban_tag_membership() {
         let models = ModelManager::load_builtin_models().expect("builtin models must load");
 
-        let claude = models
-            .iter()
-            .find(|m| m.name == "claude-code")
-            .expect("the built-in `claude-code` model must exist");
-        assert!(
-            claude.tags.iter().any(|t| t == "kanban"),
-            "`claude-code` must carry the `kanban` tag, got {:?}",
-            claude.tags
-        );
+        // `claude-code` and `qwen` are the kanban-tagged chat models that
+        // surface in the kanban panel.
+        for name in ["claude-code", "qwen"] {
+            let model = models
+                .iter()
+                .find(|m| m.name == name)
+                .unwrap_or_else(|| panic!("the built-in `{name}` model must exist"));
+            assert!(
+                model.tags.iter().any(|t| t == "kanban"),
+                "`{name}` must carry the `kanban` tag, got {:?}",
+                model.tags
+            );
+        }
 
-        // For now only Claude Code surfaces in the kanban panel — the llama
-        // chat models and the embedding model must not carry the `kanban` tag.
-        for name in ["qwen", "qwen-embedding"] {
+        // The embedding model and the other untagged llama chat variants must
+        // not carry the `kanban` tag — they should not surface in the panel.
+        for name in ["qwen-embedding", "qwen-0.6b-test", "qwen-0.8b-mtp-test"] {
             let model = models
                 .iter()
                 .find(|m| m.name == name)
                 .unwrap_or_else(|| panic!("the built-in `{name}` model must exist"));
             assert!(
                 !model.tags.iter().any(|t| t == "kanban"),
-                "`{name}` must not carry the `kanban` tag for now, got {:?}",
+                "`{name}` must not carry the `kanban` tag, got {:?}",
                 model.tags
             );
         }
@@ -2791,10 +2795,7 @@ quiet: true"#;
             agent_names.contains(&"claude-code"),
             "Should contain claude-code agent"
         );
-        assert!(
-            agent_names.contains(&"qwen-coder"),
-            "Should contain qwen-coder agent"
-        );
+        assert!(agent_names.contains(&"qwen"), "Should contain qwen agent");
     }
 
     #[test]
@@ -2971,10 +2972,7 @@ quiet: false"#;
             agent_names.contains(&"claude-code"),
             "Should contain claude-code agent"
         );
-        assert!(
-            agent_names.contains(&"qwen-coder"),
-            "Should contain qwen-coder agent"
-        );
+        assert!(agent_names.contains(&"qwen"), "Should contain qwen agent");
     }
 
     #[test]
@@ -3267,11 +3265,11 @@ quiet: false"#;
     fn test_agent_manager_find_agent_by_name_precedence() {
         // This test will pass the existing agent names from builtin agents
         // Test with known builtin agent
-        let result = ModelManager::find_agent_by_name("qwen-coder");
-        assert!(result.is_ok(), "Should find qwen-coder agent");
+        let result = ModelManager::find_agent_by_name("qwen");
+        assert!(result.is_ok(), "Should find qwen agent");
 
         let agent = result.unwrap();
-        assert_eq!(agent.name, "qwen-coder");
+        assert_eq!(agent.name, "qwen");
         // Should be builtin unless overridden by project or user agents
         assert_eq!(agent.source, ModelConfigSource::Builtin);
     }
@@ -3553,7 +3551,7 @@ other_section:
         let existing_config = r#"# Config with existing model
 other_section:
   value: "preserved"
-model: qwen-coder
+model: qwen
 "#;
         let (_temp_dir, config_path, _guard) =
             setup_config_test_env("sah.yaml", Some(existing_config));
@@ -3576,10 +3574,7 @@ model: qwen-coder
             updated_config.contains("claude-code"),
             "Should contain new model name"
         );
-        assert!(
-            !updated_config.contains("qwen-coder"),
-            "Should replace old model"
-        );
+        assert!(!updated_config.contains("qwen"), "Should replace old model");
     }
 
     #[test]

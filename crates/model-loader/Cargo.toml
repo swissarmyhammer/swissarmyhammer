@@ -21,6 +21,11 @@ dirs = { workspace = true }
 sha2 = { workspace = true }
 serde_json = { workspace = true }
 
+# `libc::kill(pid, 0)` for cross-platform liveness detection of a download
+# lock's owning process (stale-lock recovery).
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 tracing-test = { workspace = true }

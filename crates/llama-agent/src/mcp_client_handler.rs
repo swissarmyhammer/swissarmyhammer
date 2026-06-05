@@ -143,7 +143,11 @@ impl NotifyingClientHandler {
                 tracing::debug!("Forwarded MCP notification as ACP to {} subscribers", count);
             }
             Err(e) => {
-                tracing::warn!("Failed to forward MCP notification: {}", e);
+                // `broadcast::Sender::send` only errors when there are no live
+                // subscribers — a benign "nobody is listening" case (e.g. no ACP
+                // client is currently attached), not a transport failure. Logged
+                // at debug to avoid spamming warnings during normal operation.
+                tracing::debug!("No subscribers for MCP notification (dropped): {}", e);
             }
         }
     }

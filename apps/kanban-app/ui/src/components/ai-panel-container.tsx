@@ -9,24 +9,35 @@
  *
  * - **Model enumeration.** Fetches `ai_list_models` once on mount and feeds
  *   the result to `AiPanel` as the `models` prop.
- * - **Per-board persistence.** `AiPanel` reports the user's model choice via
- *   `onSelectModel`; this Container persists it — together with the panel's
- *   open-state and draggable width — per board (see below).
+ * - **Model selection.** `AiPanel` reports the user's model choice via
+ *   `onSelectModel`; this Container writes it back to the board entity via
+ *   the `update.board` command so the `board.model` field — the same source
+ *   of truth the agent reads at `ai_start_agent` time — stays current.
+ * - **Per-board geometry persistence.** The panel's open-state and draggable
+ *   width persist in `localStorage` per board (see below).
  * - **Layout.** Renders the right-docked, collapsible, resizable shell that
  *   hosts the View, a sibling of `ViewsContainer` inside `WindowContainer` and
  *   outside the inspector stack (see `App.tsx`).
  *
- * # Per-board UI state — `localStorage` keyed by board path
+ * # Per-board UI state — split between `localStorage` and `board.model`
  *
- * The panel's open-state, width, and selected model are per-board UI state.
- * They persist in `localStorage` under a key derived from the active board
- * path — the same plain `localStorage`-backed per-board mechanism
- * `quick-capture.tsx` uses to remember its last board. This is webview-local
- * persistence only: there is no backend `UIState`/YAML store or event-sync
- * plumbing involved. The app shows one board per window, so a fresh window
- * reopening a board restores exactly the panel geometry and model it had last
- * time. The conversation transcript is deliberately NOT persisted — the chat
- * is stateless (see `ideas/kanban/ai_panel.md`).
+ * The panel splits its per-board state across two stores by purpose:
+ *
+ *   - **UI geometry** — open-state and width — is pure webview-local layout
+ *     choice with no agent-side meaning. It persists in `localStorage`
+ *     keyed by the active board path, the same plain `localStorage`-backed
+ *     per-board mechanism `quick-capture.tsx` uses to remember its last
+ *     board. There is no backend `UIState`/YAML store or event-sync
+ *     plumbing involved for these fields.
+ *   - **Selected model** is board metadata that the agent needs to know
+ *     how to start. It lives on the board entity as `board.model` and is
+ *     mutated via the `update.board` command, just like `board.name` or
+ *     `board.description`. That keeps the UI and the agent in lockstep and
+ *     lets an MCP `kanban_update_board` from outside the app reach the
+ *     picker.
+ *
+ * The conversation transcript is deliberately NOT persisted — the chat is
+ * stateless (see `ideas/kanban/ai_panel.md`).
  *
  * # Collapsible — driven by the `ai.toggle` window-layer command
  *
@@ -57,7 +68,9 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { SparklesIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useActiveBoardPath } from "@/lib/command-scope";
+import { useActiveBoardPath, useDispatchCommand } from "@/lib/command-scope";
+import { useBoardData } from "@/components/window-container";
+import { getStr } from "@/types/kanban";
 import {
   AiPanel,
   aiPanelConnectFactory,
@@ -109,17 +122,25 @@ function clampWidth(n: number, viewportWidth: number): number {
 }
 
 /**
- * The persisted per-board AI panel state — open-state, width, and the
- * selected model id. Each field is optional so a partial or legacy snapshot
- * degrades gracefully to the defaults.
+ * The persisted per-board AI panel UI geometry — open-state and width. Each
+ * field is optional so a partial or legacy snapshot degrades gracefully to
+ * the defaults.
+ *
+ * # Why no `modelId` here
+ *
+ * The selected model is NOT UI geometry — it is board metadata that the agent
+ * needs to know how to start. It lives on the board entity as `board.model`
+ * and is mutated via the `update.board` command, just like `board.name` or
+ * `board.description`. Persisting it in `localStorage` would split the source
+ * of truth and stay webview-local, so an MCP `kanban_update_board` from
+ * outside the app would never reach the picker. Only the panel's open-state
+ * and width — pure webview-local layout choices — stay in `localStorage`.
  */
 export interface AiPanelState {
   /** Whether the panel is expanded. Absent → expanded (the default). */
   open?: boolean;
   /** The user-dragged panel width in CSS pixels. Absent → the default. */
   width?: number;
-  /** The per-board selected model id. Absent → no model chosen yet. */
-  modelId?: string;
 }
 
 /**
@@ -255,24 +276,51 @@ function AiPanelContainerBody({
   createConnect,
 }: AiPanelContainerBodyProps): ReactNode {
   const boardPath = useActiveBoardPath();
+  const boardData = useBoardData();
+  const dispatchUpdateBoard = useDispatchCommand("update.board");
 
-  // Per-board state, seeded once from this board's persisted `localStorage`
+  // Per-board geometry, seeded once from this board's persisted `localStorage`
   // snapshot. Re-seeded whenever the active board changes so switching boards
-  // swaps in that board's own panel geometry and model.
+  // swaps in that board's own panel geometry.
   const persisted = useMemo(() => loadAiPanelState(boardPath), [boardPath]);
   const [open, setOpen] = useState<boolean>(persisted.open ?? true);
   const [width, setWidth] = useState<number>(
     persisted.width ?? AI_PANEL_DEFAULT_WIDTH,
   );
-  const [modelId, setModelId] = useState<string | null>(
-    persisted.modelId ?? null,
-  );
   useEffect(() => {
     const next = loadAiPanelState(boardPath);
     setOpen(next.open ?? true);
     setWidth(next.width ?? AI_PANEL_DEFAULT_WIDTH);
-    setModelId(next.modelId ?? null);
   }, [boardPath]);
+
+  // The selected model id is sourced from the active board entity — it lives
+  // on `board.model` and is the same source of truth the agent uses when it
+  // starts. `useBoardData()` exposes the parsed entity bag; `getStr(...,
+  // "model")` reads its `model` field, falling back to `""` when unset.
+  //
+  // Optimistic overlay: dispatching `update.board` is async — backend write
+  // → `entity-field-changed` → `useBoardDataSync` patches `BoardData` →
+  // `useBoardData()` re-renders. Without an optimistic value the picker would
+  // briefly snap back to the old model between the click and the patch, and
+  // the auto-default-selection effect (below) could re-fire and dispatch a
+  // second `update.board` while the first is still in flight. The optimistic
+  // local state wins until the board entity catches up; it is cleared on
+  // board switch so the new board's `model` is read from the new entity.
+  const boardModelId = boardData?.board ? getStr(boardData.board, "model") : "";
+  const [optimisticModelId, setOptimisticModelId] = useState<string | null>(
+    null,
+  );
+  useEffect(() => {
+    // New board → drop the previous board's optimistic overlay.
+    setOptimisticModelId(null);
+  }, [boardPath]);
+  useEffect(() => {
+    // Board entity caught up with our optimistic pick → release the overlay.
+    if (optimisticModelId !== null && boardModelId === optimisticModelId) {
+      setOptimisticModelId(null);
+    }
+  }, [boardModelId, optimisticModelId]);
+  const modelId = optimisticModelId ?? (boardModelId ? boardModelId : null);
 
   // Model list — the Container's one fetch seam. `undefined` while in flight.
   const [models, setModels] = useState<AiModel[] | undefined>(undefined);
@@ -291,34 +339,44 @@ function AiPanelContainerBody({
     };
   }, []);
 
-  /** Persist the user's model choice per board, then feed it back to the View. */
+  /**
+   * Persist the user's model choice on the board entity via `update.board`.
+   *
+   * The board's `model` field is the same source of truth the agent reads at
+   * `ai_start_agent` time, so writing it through `update.board` keeps the UI
+   * and the backend in lockstep — no separate `localStorage` shadow. The
+   * optimistic overlay above gives the picker instant feedback while the
+   * `entity-field-changed` event is in flight.
+   */
   const handleSelectModel = useCallback(
     (id: string) => {
-      setModelId(id);
-      saveAiPanelState(boardPath, { modelId: id });
+      setOptimisticModelId(id);
+      dispatchUpdateBoard({ args: { model: id } }).catch((err) => {
+        console.error("update.board failed:", err);
+      });
     },
-    [boardPath],
+    [dispatchUpdateBoard],
   );
 
   /**
-   * Auto-select a sensible default model when none is persisted for the board.
+   * Auto-select a sensible default model when none is set on the board.
    *
    * The panel can otherwise land in the dead-end `NoModelState` whenever a
-   * board has no persisted `modelId` (every fresh board, or any board whose
-   * `localStorage` snapshot was cleared) even though `ai_list_models` has
-   * already returned a usable model. To avoid that, once the model list has
-   * resolved and the per-board `modelId` is still `null`, pick the first
-   * `available: true` entry and route it through `handleSelectModel` — the
-   * same path a user click takes, so the choice is persisted via
-   * `saveAiPanelState` and a remount reads it back from `localStorage`.
+   * board has no `model` set on its entity (every fresh board) even though
+   * `ai_list_models` has already returned a usable model. To avoid that,
+   * once the model list has resolved and the per-board `modelId` is still
+   * `null`, pick the first `available: true` entry and route it through
+   * `handleSelectModel` — the same path a user click takes, so the choice
+   * is persisted via `update.board` and a remount reads it back from the
+   * board entity.
    *
    * Rules:
    *
    *   - Runs when no model is selected (`modelId === null`) *or* when the
-   *     persisted id is no longer offered (e.g. a model that lost its `kanban`
-   *     tag dropped out of `ai_list_models`). A persisted id that is still in
-   *     the list is never overwritten — even if that model is
-   *     `available: false`, the user's explicit prior choice wins.
+   *     board's stored id is no longer offered (e.g. a model that lost its
+   *     `kanban` tag dropped out of `ai_list_models`). A board-stored id
+   *     that is still in the list is never overwritten — even if that model
+   *     is `available: false`, the user's explicit prior choice wins.
    *   - Prefers the first `available: true` model. The backend orders Claude
    *     Code first when its CLI is detected, then local llamas (see
    *     `apps/kanban-app/src/ai/models.rs::ai_list_models`), so the default

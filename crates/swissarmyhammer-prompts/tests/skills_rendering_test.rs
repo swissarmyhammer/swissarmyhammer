@@ -141,7 +141,7 @@ fn test_skills_partial_hidden_when_no_skills() {
 }
 
 #[test]
-fn test_default_system_prompt_includes_skills_section() {
+fn test_agent_system_prompt_includes_skills_section() {
     // Create a template context with available skills (simulating set_default_variables)
     let mut context = TemplateContext::new();
     context.set(
@@ -155,15 +155,15 @@ fn test_default_system_prompt_includes_skills_section() {
     context.set("project_types".to_string(), json!([]));
     context.set("unique_project_types".to_string(), json!([]));
 
-    // Load the default agent's instructions (system prompt content moved from .system/default)
+    // Load a builtin agent that embeds the skills partial in its instructions.
     let agent_md_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .parent()
         .unwrap()
-        .join("builtin/agents/default/AGENT.md");
+        .join("builtin/agents/planner/AGENT.md");
     let agent_content =
-        std::fs::read_to_string(&agent_md_path).expect("Failed to read default agent AGENT.md");
+        std::fs::read_to_string(&agent_md_path).expect("Failed to read planner agent AGENT.md");
     // Extract body after frontmatter
     let instructions = agent_content
         .strip_prefix("---")
@@ -186,21 +186,21 @@ fn test_default_system_prompt_includes_skills_section() {
         .render_with_context(&context)
         .expect("Failed to render template");
 
-    println!("=== Rendered default agent instructions ===");
+    println!("=== Rendered agent instructions ===");
     println!("{}", rendered);
     println!("=== End ===");
 
-    // The default agent instructions should include the skills section
+    // The agent instructions should include the skills section
     assert!(
         rendered.contains("## Skills"),
-        "Default agent instructions should contain Skills section"
+        "Agent instructions should contain Skills section"
     );
     assert!(
         rendered.contains("**plan**"),
-        "Default agent instructions should list plan skill"
+        "Agent instructions should list plan skill"
     );
     assert!(
         rendered.contains("**commit**"),
-        "Default agent instructions should list commit skill"
+        "Agent instructions should list commit skill"
     );
 }

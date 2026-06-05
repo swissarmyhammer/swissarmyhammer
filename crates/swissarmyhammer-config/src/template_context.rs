@@ -1386,13 +1386,13 @@ Generated for {{app.name}} by liquid templating engine.
         let mut context = TemplateContext::new();
 
         // Pre-set model to a custom value (as would happen with --model flag)
-        context.set("model".to_string(), json!("qwen-coder"));
+        context.set("model".to_string(), json!("qwen"));
 
         // Set default variables
         context.set_default_variables();
 
         // Should keep the pre-set model value
-        assert_eq!(context.get("model"), Some(&json!("qwen-coder")));
+        assert_eq!(context.get("model"), Some(&json!("qwen")));
 
         // Should still set working directory variables
         assert!(context.get("working_directory").is_some());

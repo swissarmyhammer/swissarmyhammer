@@ -41,7 +41,7 @@ _arguments "${_arguments_options[@]}" : \
 '--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-":: :_sah__serve_commands" \
+":: :_sah__subcmd__serve_commands" \
 "*::: :->serve" \
 && ret=0
 
@@ -64,7 +64,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_sah__serve__help_commands" \
+":: :_sah__subcmd__serve__subcmd__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -150,7 +150,7 @@ _arguments "${_arguments_options[@]}" : \
 '--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-":: :_sah__model_commands" \
+":: :_sah__subcmd__model_commands" \
 "*::: :->model" \
 && ret=0
 
@@ -186,7 +186,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_sah__model__help_commands" \
+":: :_sah__subcmd__model__subcmd__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -225,7 +225,7 @@ _arguments "${_arguments_options[@]}" : \
 '--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-":: :_sah__agent_commands" \
+":: :_sah__subcmd__agent_commands" \
 "*::: :->agent" \
 && ret=0
 
@@ -252,7 +252,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_sah__agent__help_commands" \
+":: :_sah__subcmd__agent__subcmd__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -284,7 +284,7 @@ _arguments "${_arguments_options[@]}" : \
 '--global[Write to global config (~/.sah/tools.yaml) instead of project]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-":: :_sah__tools_commands" \
+":: :_sah__subcmd__tools_commands" \
 "*::: :->tools" \
 && ret=0
 
@@ -312,7 +312,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_sah__tools__help_commands" \
+":: :_sah__subcmd__tools__subcmd__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -347,7 +347,7 @@ _arguments "${_arguments_options[@]}" : \
 '--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-":: :_sah__statusline_commands" \
+":: :_sah__subcmd__statusline_commands" \
 "*::: :->statusline" \
 && ret=0
 
@@ -366,7 +366,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_sah__statusline__help_commands" \
+":: :_sah__subcmd__statusline__subcmd__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -394,7 +394,7 @@ esac
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_sah__help_commands" \
+":: :_sah__subcmd__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -406,7 +406,7 @@ _arguments "${_arguments_options[@]}" : \
         case $line[1] in
             (serve)
 _arguments "${_arguments_options[@]}" : \
-":: :_sah__help__serve_commands" \
+":: :_sah__subcmd__help__subcmd__serve_commands" \
 "*::: :->serve" \
 && ret=0
 
@@ -450,7 +450,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (model)
 _arguments "${_arguments_options[@]}" : \
-":: :_sah__help__model_commands" \
+":: :_sah__subcmd__help__subcmd__model_commands" \
 "*::: :->model" \
 && ret=0
 
@@ -478,7 +478,7 @@ esac
 ;;
 (agent)
 _arguments "${_arguments_options[@]}" : \
-":: :_sah__help__agent_commands" \
+":: :_sah__subcmd__help__subcmd__agent_commands" \
 "*::: :->agent" \
 && ret=0
 
@@ -498,7 +498,7 @@ esac
 ;;
 (tools)
 _arguments "${_arguments_options[@]}" : \
-":: :_sah__help__tools_commands" \
+":: :_sah__subcmd__help__subcmd__tools_commands" \
 "*::: :->tools" \
 && ret=0
 
@@ -522,7 +522,7 @@ esac
 ;;
 (statusline)
 _arguments "${_arguments_options[@]}" : \
-":: :_sah__help__statusline_commands" \
+":: :_sah__subcmd__help__subcmd__statusline_commands" \
 "*::: :->statusline" \
 && ret=0
 
@@ -571,54 +571,54 @@ _sah_commands() {
     )
     _describe -t commands 'sah commands' commands "$@"
 }
-(( $+functions[_sah__agent_commands] )) ||
-_sah__agent_commands() {
+(( $+functions[_sah__subcmd__agent_commands] )) ||
+_sah__subcmd__agent_commands() {
     local commands; commands=(
 'acp:Start ACP server over stdio' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'sah agent commands' commands "$@"
 }
-(( $+functions[_sah__agent__acp_commands] )) ||
-_sah__agent__acp_commands() {
+(( $+functions[_sah__subcmd__agent__subcmd__acp_commands] )) ||
+_sah__subcmd__agent__subcmd__acp_commands() {
     local commands; commands=()
     _describe -t commands 'sah agent acp commands' commands "$@"
 }
-(( $+functions[_sah__agent__help_commands] )) ||
-_sah__agent__help_commands() {
+(( $+functions[_sah__subcmd__agent__subcmd__help_commands] )) ||
+_sah__subcmd__agent__subcmd__help_commands() {
     local commands; commands=(
 'acp:Start ACP server over stdio' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'sah agent help commands' commands "$@"
 }
-(( $+functions[_sah__agent__help__acp_commands] )) ||
-_sah__agent__help__acp_commands() {
+(( $+functions[_sah__subcmd__agent__subcmd__help__subcmd__acp_commands] )) ||
+_sah__subcmd__agent__subcmd__help__subcmd__acp_commands() {
     local commands; commands=()
     _describe -t commands 'sah agent help acp commands' commands "$@"
 }
-(( $+functions[_sah__agent__help__help_commands] )) ||
-_sah__agent__help__help_commands() {
+(( $+functions[_sah__subcmd__agent__subcmd__help__subcmd__help_commands] )) ||
+_sah__subcmd__agent__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'sah agent help help commands' commands "$@"
 }
-(( $+functions[_sah__completion_commands] )) ||
-_sah__completion_commands() {
+(( $+functions[_sah__subcmd__completion_commands] )) ||
+_sah__subcmd__completion_commands() {
     local commands; commands=()
     _describe -t commands 'sah completion commands' commands "$@"
 }
-(( $+functions[_sah__deinit_commands] )) ||
-_sah__deinit_commands() {
+(( $+functions[_sah__subcmd__deinit_commands] )) ||
+_sah__subcmd__deinit_commands() {
     local commands; commands=()
     _describe -t commands 'sah deinit commands' commands "$@"
 }
-(( $+functions[_sah__doctor_commands] )) ||
-_sah__doctor_commands() {
+(( $+functions[_sah__subcmd__doctor_commands] )) ||
+_sah__subcmd__doctor_commands() {
     local commands; commands=()
     _describe -t commands 'sah doctor commands' commands "$@"
 }
-(( $+functions[_sah__help_commands] )) ||
-_sah__help_commands() {
+(( $+functions[_sah__subcmd__help_commands] )) ||
+_sah__subcmd__help_commands() {
     local commands; commands=(
 'serve:Run as MCP server (default when invoked via stdio)' \
 'init:Set up sah for all detected AI coding agents (skills + MCP)' \
@@ -635,45 +635,45 @@ _sah__help_commands() {
     )
     _describe -t commands 'sah help commands' commands "$@"
 }
-(( $+functions[_sah__help__agent_commands] )) ||
-_sah__help__agent_commands() {
+(( $+functions[_sah__subcmd__help__subcmd__agent_commands] )) ||
+_sah__subcmd__help__subcmd__agent_commands() {
     local commands; commands=(
 'acp:Start ACP server over stdio' \
     )
     _describe -t commands 'sah help agent commands' commands "$@"
 }
-(( $+functions[_sah__help__agent__acp_commands] )) ||
-_sah__help__agent__acp_commands() {
+(( $+functions[_sah__subcmd__help__subcmd__agent__subcmd__acp_commands] )) ||
+_sah__subcmd__help__subcmd__agent__subcmd__acp_commands() {
     local commands; commands=()
     _describe -t commands 'sah help agent acp commands' commands "$@"
 }
-(( $+functions[_sah__help__completion_commands] )) ||
-_sah__help__completion_commands() {
+(( $+functions[_sah__subcmd__help__subcmd__completion_commands] )) ||
+_sah__subcmd__help__subcmd__completion_commands() {
     local commands; commands=()
     _describe -t commands 'sah help completion commands' commands "$@"
 }
-(( $+functions[_sah__help__deinit_commands] )) ||
-_sah__help__deinit_commands() {
+(( $+functions[_sah__subcmd__help__subcmd__deinit_commands] )) ||
+_sah__subcmd__help__subcmd__deinit_commands() {
     local commands; commands=()
     _describe -t commands 'sah help deinit commands' commands "$@"
 }
-(( $+functions[_sah__help__doctor_commands] )) ||
-_sah__help__doctor_commands() {
+(( $+functions[_sah__subcmd__help__subcmd__doctor_commands] )) ||
+_sah__subcmd__help__subcmd__doctor_commands() {
     local commands; commands=()
     _describe -t commands 'sah help doctor commands' commands "$@"
 }
-(( $+functions[_sah__help__help_commands] )) ||
-_sah__help__help_commands() {
+(( $+functions[_sah__subcmd__help__subcmd__help_commands] )) ||
+_sah__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'sah help help commands' commands "$@"
 }
-(( $+functions[_sah__help__init_commands] )) ||
-_sah__help__init_commands() {
+(( $+functions[_sah__subcmd__help__subcmd__init_commands] )) ||
+_sah__subcmd__help__subcmd__init_commands() {
     local commands; commands=()
     _describe -t commands 'sah help init commands' commands "$@"
 }
-(( $+functions[_sah__help__model_commands] )) ||
-_sah__help__model_commands() {
+(( $+functions[_sah__subcmd__help__subcmd__model_commands] )) ||
+_sah__subcmd__help__subcmd__model_commands() {
     local commands; commands=(
 'list:List available models' \
 'show:Show current model configuration' \
@@ -681,80 +681,80 @@ _sah__help__model_commands() {
     )
     _describe -t commands 'sah help model commands' commands "$@"
 }
-(( $+functions[_sah__help__model__list_commands] )) ||
-_sah__help__model__list_commands() {
+(( $+functions[_sah__subcmd__help__subcmd__model__subcmd__list_commands] )) ||
+_sah__subcmd__help__subcmd__model__subcmd__list_commands() {
     local commands; commands=()
     _describe -t commands 'sah help model list commands' commands "$@"
 }
-(( $+functions[_sah__help__model__show_commands] )) ||
-_sah__help__model__show_commands() {
+(( $+functions[_sah__subcmd__help__subcmd__model__subcmd__show_commands] )) ||
+_sah__subcmd__help__subcmd__model__subcmd__show_commands() {
     local commands; commands=()
     _describe -t commands 'sah help model show commands' commands "$@"
 }
-(( $+functions[_sah__help__model__use_commands] )) ||
-_sah__help__model__use_commands() {
+(( $+functions[_sah__subcmd__help__subcmd__model__subcmd__use_commands] )) ||
+_sah__subcmd__help__subcmd__model__subcmd__use_commands() {
     local commands; commands=()
     _describe -t commands 'sah help model use commands' commands "$@"
 }
-(( $+functions[_sah__help__prompt_commands] )) ||
-_sah__help__prompt_commands() {
+(( $+functions[_sah__subcmd__help__subcmd__prompt_commands] )) ||
+_sah__subcmd__help__subcmd__prompt_commands() {
     local commands; commands=()
     _describe -t commands 'sah help prompt commands' commands "$@"
 }
-(( $+functions[_sah__help__serve_commands] )) ||
-_sah__help__serve_commands() {
+(( $+functions[_sah__subcmd__help__subcmd__serve_commands] )) ||
+_sah__subcmd__help__subcmd__serve_commands() {
     local commands; commands=(
 'http:Start HTTP MCP server' \
     )
     _describe -t commands 'sah help serve commands' commands "$@"
 }
-(( $+functions[_sah__help__serve__http_commands] )) ||
-_sah__help__serve__http_commands() {
+(( $+functions[_sah__subcmd__help__subcmd__serve__subcmd__http_commands] )) ||
+_sah__subcmd__help__subcmd__serve__subcmd__http_commands() {
     local commands; commands=()
     _describe -t commands 'sah help serve http commands' commands "$@"
 }
-(( $+functions[_sah__help__statusline_commands] )) ||
-_sah__help__statusline_commands() {
+(( $+functions[_sah__subcmd__help__subcmd__statusline_commands] )) ||
+_sah__subcmd__help__subcmd__statusline_commands() {
     local commands; commands=(
 'config:Dump the full annotated builtin config to stdout' \
     )
     _describe -t commands 'sah help statusline commands' commands "$@"
 }
-(( $+functions[_sah__help__statusline__config_commands] )) ||
-_sah__help__statusline__config_commands() {
+(( $+functions[_sah__subcmd__help__subcmd__statusline__subcmd__config_commands] )) ||
+_sah__subcmd__help__subcmd__statusline__subcmd__config_commands() {
     local commands; commands=()
     _describe -t commands 'sah help statusline config commands' commands "$@"
 }
-(( $+functions[_sah__help__tools_commands] )) ||
-_sah__help__tools_commands() {
+(( $+functions[_sah__subcmd__help__subcmd__tools_commands] )) ||
+_sah__subcmd__help__subcmd__tools_commands() {
     local commands; commands=(
 'enable:Enable tools (all if no names given)' \
 'disable:Disable tools (all if no names given)' \
     )
     _describe -t commands 'sah help tools commands' commands "$@"
 }
-(( $+functions[_sah__help__tools__disable_commands] )) ||
-_sah__help__tools__disable_commands() {
+(( $+functions[_sah__subcmd__help__subcmd__tools__subcmd__disable_commands] )) ||
+_sah__subcmd__help__subcmd__tools__subcmd__disable_commands() {
     local commands; commands=()
     _describe -t commands 'sah help tools disable commands' commands "$@"
 }
-(( $+functions[_sah__help__tools__enable_commands] )) ||
-_sah__help__tools__enable_commands() {
+(( $+functions[_sah__subcmd__help__subcmd__tools__subcmd__enable_commands] )) ||
+_sah__subcmd__help__subcmd__tools__subcmd__enable_commands() {
     local commands; commands=()
     _describe -t commands 'sah help tools enable commands' commands "$@"
 }
-(( $+functions[_sah__help__validate_commands] )) ||
-_sah__help__validate_commands() {
+(( $+functions[_sah__subcmd__help__subcmd__validate_commands] )) ||
+_sah__subcmd__help__subcmd__validate_commands() {
     local commands; commands=()
     _describe -t commands 'sah help validate commands' commands "$@"
 }
-(( $+functions[_sah__init_commands] )) ||
-_sah__init_commands() {
+(( $+functions[_sah__subcmd__init_commands] )) ||
+_sah__subcmd__init_commands() {
     local commands; commands=()
     _describe -t commands 'sah init commands' commands "$@"
 }
-(( $+functions[_sah__model_commands] )) ||
-_sah__model_commands() {
+(( $+functions[_sah__subcmd__model_commands] )) ||
+_sah__subcmd__model_commands() {
     local commands; commands=(
 'list:List available models' \
 'show:Show current model configuration' \
@@ -763,8 +763,8 @@ _sah__model_commands() {
     )
     _describe -t commands 'sah model commands' commands "$@"
 }
-(( $+functions[_sah__model__help_commands] )) ||
-_sah__model__help_commands() {
+(( $+functions[_sah__subcmd__model__subcmd__help_commands] )) ||
+_sah__subcmd__model__subcmd__help_commands() {
     local commands; commands=(
 'list:List available models' \
 'show:Show current model configuration' \
@@ -773,110 +773,110 @@ _sah__model__help_commands() {
     )
     _describe -t commands 'sah model help commands' commands "$@"
 }
-(( $+functions[_sah__model__help__help_commands] )) ||
-_sah__model__help__help_commands() {
+(( $+functions[_sah__subcmd__model__subcmd__help__subcmd__help_commands] )) ||
+_sah__subcmd__model__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'sah model help help commands' commands "$@"
 }
-(( $+functions[_sah__model__help__list_commands] )) ||
-_sah__model__help__list_commands() {
+(( $+functions[_sah__subcmd__model__subcmd__help__subcmd__list_commands] )) ||
+_sah__subcmd__model__subcmd__help__subcmd__list_commands() {
     local commands; commands=()
     _describe -t commands 'sah model help list commands' commands "$@"
 }
-(( $+functions[_sah__model__help__show_commands] )) ||
-_sah__model__help__show_commands() {
+(( $+functions[_sah__subcmd__model__subcmd__help__subcmd__show_commands] )) ||
+_sah__subcmd__model__subcmd__help__subcmd__show_commands() {
     local commands; commands=()
     _describe -t commands 'sah model help show commands' commands "$@"
 }
-(( $+functions[_sah__model__help__use_commands] )) ||
-_sah__model__help__use_commands() {
+(( $+functions[_sah__subcmd__model__subcmd__help__subcmd__use_commands] )) ||
+_sah__subcmd__model__subcmd__help__subcmd__use_commands() {
     local commands; commands=()
     _describe -t commands 'sah model help use commands' commands "$@"
 }
-(( $+functions[_sah__model__list_commands] )) ||
-_sah__model__list_commands() {
+(( $+functions[_sah__subcmd__model__subcmd__list_commands] )) ||
+_sah__subcmd__model__subcmd__list_commands() {
     local commands; commands=()
     _describe -t commands 'sah model list commands' commands "$@"
 }
-(( $+functions[_sah__model__show_commands] )) ||
-_sah__model__show_commands() {
+(( $+functions[_sah__subcmd__model__subcmd__show_commands] )) ||
+_sah__subcmd__model__subcmd__show_commands() {
     local commands; commands=()
     _describe -t commands 'sah model show commands' commands "$@"
 }
-(( $+functions[_sah__model__use_commands] )) ||
-_sah__model__use_commands() {
+(( $+functions[_sah__subcmd__model__subcmd__use_commands] )) ||
+_sah__subcmd__model__subcmd__use_commands() {
     local commands; commands=()
     _describe -t commands 'sah model use commands' commands "$@"
 }
-(( $+functions[_sah__prompt_commands] )) ||
-_sah__prompt_commands() {
+(( $+functions[_sah__subcmd__prompt_commands] )) ||
+_sah__subcmd__prompt_commands() {
     local commands; commands=()
     _describe -t commands 'sah prompt commands' commands "$@"
 }
-(( $+functions[_sah__serve_commands] )) ||
-_sah__serve_commands() {
+(( $+functions[_sah__subcmd__serve_commands] )) ||
+_sah__subcmd__serve_commands() {
     local commands; commands=(
 'http:Start HTTP MCP server' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'sah serve commands' commands "$@"
 }
-(( $+functions[_sah__serve__help_commands] )) ||
-_sah__serve__help_commands() {
+(( $+functions[_sah__subcmd__serve__subcmd__help_commands] )) ||
+_sah__subcmd__serve__subcmd__help_commands() {
     local commands; commands=(
 'http:Start HTTP MCP server' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'sah serve help commands' commands "$@"
 }
-(( $+functions[_sah__serve__help__help_commands] )) ||
-_sah__serve__help__help_commands() {
+(( $+functions[_sah__subcmd__serve__subcmd__help__subcmd__help_commands] )) ||
+_sah__subcmd__serve__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'sah serve help help commands' commands "$@"
 }
-(( $+functions[_sah__serve__help__http_commands] )) ||
-_sah__serve__help__http_commands() {
+(( $+functions[_sah__subcmd__serve__subcmd__help__subcmd__http_commands] )) ||
+_sah__subcmd__serve__subcmd__help__subcmd__http_commands() {
     local commands; commands=()
     _describe -t commands 'sah serve help http commands' commands "$@"
 }
-(( $+functions[_sah__serve__http_commands] )) ||
-_sah__serve__http_commands() {
+(( $+functions[_sah__subcmd__serve__subcmd__http_commands] )) ||
+_sah__subcmd__serve__subcmd__http_commands() {
     local commands; commands=()
     _describe -t commands 'sah serve http commands' commands "$@"
 }
-(( $+functions[_sah__statusline_commands] )) ||
-_sah__statusline_commands() {
+(( $+functions[_sah__subcmd__statusline_commands] )) ||
+_sah__subcmd__statusline_commands() {
     local commands; commands=(
 'config:Dump the full annotated builtin config to stdout' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'sah statusline commands' commands "$@"
 }
-(( $+functions[_sah__statusline__config_commands] )) ||
-_sah__statusline__config_commands() {
+(( $+functions[_sah__subcmd__statusline__subcmd__config_commands] )) ||
+_sah__subcmd__statusline__subcmd__config_commands() {
     local commands; commands=()
     _describe -t commands 'sah statusline config commands' commands "$@"
 }
-(( $+functions[_sah__statusline__help_commands] )) ||
-_sah__statusline__help_commands() {
+(( $+functions[_sah__subcmd__statusline__subcmd__help_commands] )) ||
+_sah__subcmd__statusline__subcmd__help_commands() {
     local commands; commands=(
 'config:Dump the full annotated builtin config to stdout' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'sah statusline help commands' commands "$@"
 }
-(( $+functions[_sah__statusline__help__config_commands] )) ||
-_sah__statusline__help__config_commands() {
+(( $+functions[_sah__subcmd__statusline__subcmd__help__subcmd__config_commands] )) ||
+_sah__subcmd__statusline__subcmd__help__subcmd__config_commands() {
     local commands; commands=()
     _describe -t commands 'sah statusline help config commands' commands "$@"
 }
-(( $+functions[_sah__statusline__help__help_commands] )) ||
-_sah__statusline__help__help_commands() {
+(( $+functions[_sah__subcmd__statusline__subcmd__help__subcmd__help_commands] )) ||
+_sah__subcmd__statusline__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'sah statusline help help commands' commands "$@"
 }
-(( $+functions[_sah__tools_commands] )) ||
-_sah__tools_commands() {
+(( $+functions[_sah__subcmd__tools_commands] )) ||
+_sah__subcmd__tools_commands() {
     local commands; commands=(
 'enable:Enable tools (all if no names given)' \
 'disable:Disable tools (all if no names given)' \
@@ -884,18 +884,18 @@ _sah__tools_commands() {
     )
     _describe -t commands 'sah tools commands' commands "$@"
 }
-(( $+functions[_sah__tools__disable_commands] )) ||
-_sah__tools__disable_commands() {
+(( $+functions[_sah__subcmd__tools__subcmd__disable_commands] )) ||
+_sah__subcmd__tools__subcmd__disable_commands() {
     local commands; commands=()
     _describe -t commands 'sah tools disable commands' commands "$@"
 }
-(( $+functions[_sah__tools__enable_commands] )) ||
-_sah__tools__enable_commands() {
+(( $+functions[_sah__subcmd__tools__subcmd__enable_commands] )) ||
+_sah__subcmd__tools__subcmd__enable_commands() {
     local commands; commands=()
     _describe -t commands 'sah tools enable commands' commands "$@"
 }
-(( $+functions[_sah__tools__help_commands] )) ||
-_sah__tools__help_commands() {
+(( $+functions[_sah__subcmd__tools__subcmd__help_commands] )) ||
+_sah__subcmd__tools__subcmd__help_commands() {
     local commands; commands=(
 'enable:Enable tools (all if no names given)' \
 'disable:Disable tools (all if no names given)' \
@@ -903,23 +903,23 @@ _sah__tools__help_commands() {
     )
     _describe -t commands 'sah tools help commands' commands "$@"
 }
-(( $+functions[_sah__tools__help__disable_commands] )) ||
-_sah__tools__help__disable_commands() {
+(( $+functions[_sah__subcmd__tools__subcmd__help__subcmd__disable_commands] )) ||
+_sah__subcmd__tools__subcmd__help__subcmd__disable_commands() {
     local commands; commands=()
     _describe -t commands 'sah tools help disable commands' commands "$@"
 }
-(( $+functions[_sah__tools__help__enable_commands] )) ||
-_sah__tools__help__enable_commands() {
+(( $+functions[_sah__subcmd__tools__subcmd__help__subcmd__enable_commands] )) ||
+_sah__subcmd__tools__subcmd__help__subcmd__enable_commands() {
     local commands; commands=()
     _describe -t commands 'sah tools help enable commands' commands "$@"
 }
-(( $+functions[_sah__tools__help__help_commands] )) ||
-_sah__tools__help__help_commands() {
+(( $+functions[_sah__subcmd__tools__subcmd__help__subcmd__help_commands] )) ||
+_sah__subcmd__tools__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'sah tools help help commands' commands "$@"
 }
-(( $+functions[_sah__validate_commands] )) ||
-_sah__validate_commands() {
+(( $+functions[_sah__subcmd__validate_commands] )) ||
+_sah__subcmd__validate_commands() {
     local commands; commands=()
     _describe -t commands 'sah validate commands' commands "$@"
 }

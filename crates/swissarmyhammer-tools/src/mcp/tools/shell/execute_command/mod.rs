@@ -73,13 +73,17 @@ impl Operation for ExecuteCommand {
 pub async fn run(
     args: serde_json::Map<String, serde_json::Value>,
     state: Arc<Mutex<ShellState>>,
-    _context: &ToolContext,
+    context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
     let request: ShellExecuteRequest = BaseToolImpl::parse_arguments(args)?;
     tracing::info!("Executing shell command: {}", Pretty(&request.command));
     validate_shell_request(&request)?;
 
-    let (cmd_id, mut process_guard, work_dir) = prepare_command(&request, &state).await?;
+    // Commands without an explicit working_directory run in the session working
+    // directory (the board dir), never the process CWD.
+    let default_dir = context.session_root();
+    let (cmd_id, mut process_guard, work_dir) =
+        prepare_command(&request, &state, default_dir).await?;
 
     let result = match run_with_optional_timeout(
         request.timeout,
@@ -107,6 +111,7 @@ pub async fn run(
 async fn prepare_command(
     request: &ShellExecuteRequest,
     state: &Arc<Mutex<ShellState>>,
+    default_dir: PathBuf,
 ) -> Result<(usize, super::process::AsyncProcessGuard, PathBuf), McpError> {
     let parsed_environment = parse_environment_variables(request.environment.as_deref())?;
     let working_directory = request.working_directory.clone().map(PathBuf::from);
@@ -119,6 +124,7 @@ async fn prepare_command(
     let (mut process_guard, work_dir) = spawn_shell_command(
         &request.command,
         working_directory,
+        default_dir,
         parsed_environment.as_ref(),
     )
     .map_err(|e| McpError::internal_error(format!("Failed to spawn command: {}", e), None))?;

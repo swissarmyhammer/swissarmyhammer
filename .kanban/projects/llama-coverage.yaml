@@ -1,0 +1,3 @@
+color: '5319e7'
+description: 'Drive llama-agent and its ACP implementation to near-complete behavioral coverage so the kanban AI panel "just works" without works-at-all manual testing. Keystone: isolate the model FFI behind an inference trait and drive every generation/streaming/queue/ACP-loop path with a deterministic scripted fake model (no GPU, no weights). Pure-logic modules (stopper, chat_template, ACP translation) are already model-free and covered directly. Motivated by the streaming token-budget 0-token bug (kanban 01KSNJ7CBK9333J0T9G4TCA7DH) that shipped green because the production streaming path had zero real coverage.'
+name: llama-agent + ACP coverage

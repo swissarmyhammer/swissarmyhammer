@@ -13,6 +13,7 @@ agent-client-protocol-extras = { workspace = true }
 
 # Core inference
 llama-cpp-2 = { workspace = true }
+llama-cpp-sys-2 = { workspace = true }
 
 # MCP integration  
 rmcp = { workspace = true }
@@ -79,10 +80,8 @@ agent-client-protocol-schema = { workspace = true }
 swissarmyhammer-common = { workspace = true }
 swissarmyhammer-kanban = { workspace = true }
 
-# Modes system for ACP session modes
-swissarmyhammer-modes = { workspace = true }
-
-# Agents (subagents) for mode system prompt resolution
+# Agents (subagents) — one per ACP session mode. The agent library is the
+# single source of truth; modes are synthesized from agents.
 swissarmyhammer-agents = { workspace = true }
 
 # Prompt library for Liquid template rendering
@@ -115,6 +114,7 @@ futures = { workspace = true }
 tokio-stream = { workspace = true }
 serde_json = { workspace = true }
 serial_test = { workspace = true }
+libc = { workspace = true }
 
 # Validator MCP server for end-to-end tool-fetch integration tests.
 # This is a dev-only dependency: `swissarmyhammer-tools` declares
@@ -127,6 +127,10 @@ swissarmyhammer-tools = { workspace = true }
 
 rstest = { workspace = true }
 criterion = { workspace = true }
+
+[[example]]
+name = "mtp_smoke"
+path = "examples/mtp_smoke.rs"
 
 [[example]]
 name = "streaming"

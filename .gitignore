@@ -143,6 +143,7 @@ ane-embedding/convert/output/
 
 # Claude Code local settings
 .claude/settings.local.json
+**/.claude/settings.local.json
 .claude/plans/
 .claude/scheduled_tasks.lock
 
@@ -158,3 +159,4 @@ ane-embedding/convert/output/
 **/.shell/
 .claude/worktrees
 .swissarmyhammer
+.code-context/

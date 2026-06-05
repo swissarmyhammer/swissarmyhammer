@@ -64,13 +64,26 @@ fn any_init_error(results: &[swissarmyhammer_common::lifecycle::InitResult]) -> 
         .any(|r| r.status == swissarmyhammer_common::lifecycle::InitStatus::Error)
 }
 
-/// Run all registered init components for the given scope and return the exit code.
+/// Install shelltool for the given scope and return the exit code.
+///
+/// Runs the mirdan profile installer (registers the `shelltool` MCP server and
+/// deploys the builtin `shell` skill) followed by the genuine tool-lifecycle
+/// components (`Bash` deny + `.shell/config.yaml`). A single errored result from
+/// either phase demotes the run to exit code 1.
 fn run_init(target: InstallTarget) -> i32 {
     let scope = install_target_to_scope(target);
+    let reporter = CliReporter;
+
     let mut reg = InitRegistry::new();
     commands::registry::register_all(&mut reg);
-    let reporter = CliReporter;
-    let results = reg.run_all_init(&scope, &reporter);
+    let results = mirdan::install::init_profile_with_registry(
+        &commands::registry::profile(scope),
+        &reg,
+        scope,
+        None,
+        &reporter,
+    );
+
     if any_init_error(&results) {
         1
     } else {
@@ -78,13 +91,25 @@ fn run_init(target: InstallTarget) -> i32 {
     }
 }
 
-/// Run all registered deinit components for the given scope and return the exit code.
+/// Remove shelltool for the given scope and return the exit code.
+///
+/// Mirrors [`run_init`]: deinits the genuine tool-lifecycle components, then runs
+/// the mirdan profile deinstaller (unregisters the MCP server and removes the
+/// `shell` skill).
 fn run_deinit(target: InstallTarget) -> i32 {
     let scope = install_target_to_scope(target);
+    let reporter = CliReporter;
+
     let mut reg = InitRegistry::new();
     commands::registry::register_all(&mut reg);
-    let reporter = CliReporter;
-    let results = reg.run_all_deinit(&scope, &reporter);
+    let results = mirdan::install::deinit_profile_with_registry(
+        &commands::registry::profile(scope),
+        &reg,
+        scope,
+        None,
+        &reporter,
+    );
+
     if any_init_error(&results) {
         1
     } else {

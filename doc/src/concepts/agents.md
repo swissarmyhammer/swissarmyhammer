@@ -24,7 +24,6 @@ Agent modes aren't just system prompts — they're behavioral contracts that ens
 | **committer** | Clean git commit creation | `/commit` |
 | **Explore** | Fast codebase exploration and discovery | `/code-context` |
 | **Plan** | Plan mode for interactive planning | `/plan` (interactive) |
-| **default** | General-purpose coding assistant | Fallback |
 | **general-purpose** | Research and multi-step tasks | Ad-hoc delegation |
 
 ## The Subagent Pattern

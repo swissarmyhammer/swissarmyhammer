@@ -1,18 +1,35 @@
 ---
 name: plan
+profiles:
+  - kanban
 description: Plan Mode workflow. Use this skill when the user says "/plan", "help me plan", "break this into tasks", "design the approach", or otherwise wants to plan work, and also whenever you are in Plan Mode. Drives all planning activity — research, task decomposition, and creating kanban tasks as the plan artifact.
 license: MIT OR Apache-2.0
 compatibility: Requires the `code_context` MCP tool for pre-plan research (symbol search, callgraph, blast-radius) and the `kanban` MCP tool for persisting the plan as kanban tasks. 
+agent: planner
 metadata:
   author: swissarmyhammer
   version: "{{version}}"
 ---
 
-{% include "_partials/coding-standards" %}
+
 
 # Plan
 
 Use whenever you enter Plan Mode or the user asks you to plan work.
+
+$ARGUMENTS
+
+{% include "_partials/delegate-to-subagent" %}
+
+## Interpreting the arguments
+
+The arguments above may be a free-form description of the work, a path to a file that is the basis for the plan, or both.
+
+- **If the arguments name or reference a file** (e.g. a path like `docs/spec.md`, an `@`-mention, or "plan from <file>"), read that file first with `Read` and treat its contents as the authoritative basis for the plan. Follow any further file references inside it that are relevant.
+- **If the arguments are a description**, plan from the description directly.
+- **If both are given**, the description refines or scopes what's in the file.
+
+Either way, still do the `code_context` research below before creating tasks — the basis file tells you *what* to build; research tells you *what's affected*.
 
 ## Goals
 
@@ -27,17 +44,20 @@ Use whenever you enter Plan Mode or the user asks you to plan work.
 **Feature request → decomposed board:** User says "I want to add authentication to the app".
 
 1. Research with `code_context`: `search symbol "user"`, `search symbol "session"`, `get blastradius src/server.rs max_hops 3` to find boundaries and callers.
-2. As design crystallizes in conversation, create tasks one at a time — not as an end-of-discussion batch:
-   - `add task "Design auth architecture"` — design task, no code tests
-   - `add task "Add User model and migration"` — model + migration
-   - `add task "Implement POST /api/login"` with `depends_on: [<user-model-id>]`
-3. Encode ordering with `depends_on` so foundational tasks precede integration.
-4. Present the board, iterate.
-5. User approves → remind: `/finish` (autonomous) or `/implement` (one at a time). Do NOT call `ExitPlanMode`, do NOT start implementing.
+2. Ensure a board exists: `kanban` `{"op": "init board", "name": "<repo name>"}` (`add task` auto-creates one, but name it).
+3. As design crystallizes in conversation, create tasks one at a time with the `kanban` tool — not as an end-of-discussion batch. Each `description` follows the Task Standards template (What / Acceptance Criteria / Tests):
+   - `{"op": "add task", "title": "Design auth architecture", "description": "## What\n…\n## Acceptance Criteria\n- [ ] …\n## Tests\n- [ ] …"}`
+   - `{"op": "add task", "title": "Add User model and migration", "description": "## What\n…"}`
+   - `{"op": "add task", "title": "Implement POST /api/login", "description": "…", "depends_on": ["<user-model-task-id>"]}`
+4. Encode ordering with `depends_on` so foundational tasks precede integration.
+5. Verify with `{"op": "list tasks"}`, present the board, iterate.
+6. User approves → remind: `/finish` (autonomous) or `/implement` (one at a time). Do NOT call `ExitPlanMode`, do NOT start implementing.
 
-The board IS the plan — no markdown plan file.
+The board IS the plan. **Never write a markdown plan file** (`PLAN.md`, `DRAFT_PLAN.md`, scratch files) — `/finish` and `/implement` read kanban, not prose. If the `kanban` tool is unavailable or its calls fail, STOP and tell the user; do not substitute markdown and do not claim tasks exist without a `list tasks` read-back.
 
 ## Constraints
+
+{% include "_partials/architecture-awareness" %}
 
 ### Plans are kanban tasks — created as you go
 
@@ -69,7 +89,7 @@ Foundational changes (data models, types, config) → core logic → integration
 
 ## Autonomous Agent Mode
 
-No Plan Mode UI? Follow `references/PLANNING_GUIDE.md`.
+No Plan Mode UI or TUI (e.g. headless `-p`)? The procedure above is unchanged: research, then create kanban tasks one at a time with the `kanban` tool, and verify with `list tasks`. Do not wait for a UI and do not write a markdown plan file. (`references/PLANNING_GUIDE.md` has the long-form version when bundled, but everything required is in this file.)
 
 ## Updating an Existing Plan
 

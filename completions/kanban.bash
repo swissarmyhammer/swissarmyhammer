@@ -17,40 +17,40 @@ _kanban() {
                 cmd="kanban"
                 ;;
             kanban,completion)
-                cmd="kanban__completion"
+                cmd="kanban__subcmd__completion"
                 ;;
             kanban,deinit)
-                cmd="kanban__deinit"
+                cmd="kanban__subcmd__deinit"
                 ;;
             kanban,doctor)
-                cmd="kanban__doctor"
+                cmd="kanban__subcmd__doctor"
                 ;;
             kanban,help)
-                cmd="kanban__help"
+                cmd="kanban__subcmd__help"
                 ;;
             kanban,init)
-                cmd="kanban__init"
+                cmd="kanban__subcmd__init"
                 ;;
             kanban,serve)
-                cmd="kanban__serve"
+                cmd="kanban__subcmd__serve"
                 ;;
-            kanban__help,completion)
-                cmd="kanban__help__completion"
+            kanban__subcmd__help,completion)
+                cmd="kanban__subcmd__help__subcmd__completion"
                 ;;
-            kanban__help,deinit)
-                cmd="kanban__help__deinit"
+            kanban__subcmd__help,deinit)
+                cmd="kanban__subcmd__help__subcmd__deinit"
                 ;;
-            kanban__help,doctor)
-                cmd="kanban__help__doctor"
+            kanban__subcmd__help,doctor)
+                cmd="kanban__subcmd__help__subcmd__doctor"
                 ;;
-            kanban__help,help)
-                cmd="kanban__help__help"
+            kanban__subcmd__help,help)
+                cmd="kanban__subcmd__help__subcmd__help"
                 ;;
-            kanban__help,init)
-                cmd="kanban__help__init"
+            kanban__subcmd__help,init)
+                cmd="kanban__subcmd__help__subcmd__init"
                 ;;
-            kanban__help,serve)
-                cmd="kanban__help__serve"
+            kanban__subcmd__help,serve)
+                cmd="kanban__subcmd__help__subcmd__serve"
                 ;;
             *)
                 ;;
@@ -72,7 +72,7 @@ _kanban() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        kanban__completion)
+        kanban__subcmd__completion)
             opts="-d -h --debug --help bash elvish fish powershell zsh"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -86,7 +86,7 @@ _kanban() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        kanban__deinit)
+        kanban__subcmd__deinit)
             opts="-d -h --debug --help project local user"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -100,7 +100,7 @@ _kanban() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        kanban__doctor)
+        kanban__subcmd__doctor)
             opts="-v -d -h --verbose --debug --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -114,7 +114,7 @@ _kanban() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        kanban__help)
+        kanban__subcmd__help)
             opts="serve init deinit doctor completion help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -128,7 +128,7 @@ _kanban() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        kanban__help__completion)
+        kanban__subcmd__help__subcmd__completion)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -142,7 +142,7 @@ _kanban() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        kanban__help__deinit)
+        kanban__subcmd__help__subcmd__deinit)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -156,7 +156,7 @@ _kanban() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        kanban__help__doctor)
+        kanban__subcmd__help__subcmd__doctor)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -170,7 +170,7 @@ _kanban() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        kanban__help__help)
+        kanban__subcmd__help__subcmd__help)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -184,7 +184,7 @@ _kanban() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        kanban__help__init)
+        kanban__subcmd__help__subcmd__init)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -198,7 +198,7 @@ _kanban() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        kanban__help__serve)
+        kanban__subcmd__help__subcmd__serve)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -212,7 +212,7 @@ _kanban() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        kanban__init)
+        kanban__subcmd__init)
             opts="-d -h --debug --help project local user"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -226,7 +226,7 @@ _kanban() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        kanban__serve)
+        kanban__subcmd__serve)
             opts="-d -h --debug --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )

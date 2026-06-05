@@ -7,12 +7,20 @@ repository.workspace = true
 homepage.workspace = true
 description = "Standalone MCP code-context tool CLI for AI coding agents"
 
+# No `formula = "..."` override: the formula is named after the crate
+# (`code-context-cli`), consistent with every other CLI in the workspace.
 [package.metadata.dist]
-formula = "code-context"
 
 [[bin]]
 name = "code-context"
 path = "src/main.rs"
+
+[features]
+# Marker feature for tests that load a real embedding model (multi-GB download
+# on a cold cache). Off by default so the standard test run stays fast; enable
+# with `cargo nextest run --features embedding-models`. Mirrors the convention
+# in swissarmyhammer-embedding.
+embedding-models = []
 
 [dependencies]
 swissarmyhammer-tools = { workspace = true }
@@ -22,8 +30,6 @@ swissarmyhammer-doctor = { workspace = true }
 swissarmyhammer-config = { workspace = true }
 swissarmyhammer-code-context = { workspace = true }
 swissarmyhammer-embedding = { workspace = true }
-swissarmyhammer-skills = { workspace = true }
-swissarmyhammer-templating = { workspace = true }
 model-embedding = { workspace = true }
 rusqlite = { workspace = true }
 mirdan = { workspace = true }
@@ -45,7 +51,10 @@ uuid = { workspace = true }
 [dev-dependencies]
 serial_test = { workspace = true }
 assert_cmd = { workspace = true }
+swissarmyhammer-skills = { workspace = true }
 swissarmyhammer-cli-completions = { workspace = true, features = ["test-helpers"] }
+# Enable mirdan's test-support helpers for the registry deploy tests.
+mirdan = { workspace = true, features = ["test-support"] }
 
 [build-dependencies]
 clap = { workspace = true }

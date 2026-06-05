@@ -1,0 +1,26 @@
+# Board-metadata commands.
+#
+# `update.board` is the dispatch-layer wrapper around the headless
+# `crate::board::UpdateBoard` operation. The AI panel (and any future
+# board-metadata editor) dispatches this command with whichever of `name`,
+# `description`, and `model` it needs to change; the Rust impl forwards each
+# present arg onto the operation so untouched fields survive.
+#
+# The command is not user-visible — there is no palette entry, keybinding, or
+# context-menu surface. Frontend callers reach it through
+# `useDispatchCommand("update.board")` only. Listing it here keeps the
+# YAML ↔ Rust completeness guard (`test_all_yaml_commands_have_rust_implementations`
+# / `test_no_orphan_rust_commands_without_yaml`) green for the matching
+# `UpdateBoardCmd` registration.
+
+- id: update.board
+  name: Update Board
+  visible: false
+  undoable: true
+  params:
+    - name: name
+      from: args
+    - name: description
+      from: args
+    - name: model
+      from: args

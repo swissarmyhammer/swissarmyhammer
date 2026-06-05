@@ -17,7 +17,7 @@ metadata:
 
 # LSP
 
-Diagnose LSP server health and install missing servers. When live LSP ops (`get_hover`, `get_completions`, `go_to_definition`) return tree-sitter results instead of LSP, the most likely cause is a missing server.
+Diagnose LSP server health and install missing servers for the `code_context` MCP tool. When live LSP ops (`get_hover`, `get_completions`, `go_to_definition`) return tree-sitter results instead of LSP, the most likely cause is a missing server.
 
 ## Process
 

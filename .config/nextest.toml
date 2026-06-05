@@ -19,6 +19,22 @@ max-threads = 4
 [test-groups.llama-embedding-serial]
 max-threads = 1
 
+# The swissarmyhammer-entity watcher tests that start a real `EntityWatcher`
+# hold a live macOS FSEvents stream. FSEvents event *delivery* and stream
+# *teardown* both serialize through the single OS FSEvents subsystem, which is
+# shared across every process in the run. Under full --workspace parallelism
+# (~16 cores busy compiling + running 14.9k tests) that subsystem is starved:
+# the create/remove tests miss their 10s event deadline and the drop test's
+# teardown crosses its promptness budget — intermittently, a different one each
+# run, while all pass in isolation. Capping concurrency for just these tests
+# keeps the real watcher under test without contending for FSEvents.
+#
+# This MUST be a nextest test-group, not `#[serial]`: the contention is at the
+# OS subsystem level across the whole run (all processes), whereas `#[serial]`
+# only coordinates within a single process.
+[test-groups.fsevents-watcher]
+max-threads = 1
+
 # Apply the group to acp-conformance package tests
 [[profile.default.overrides]]
 filter = "package(acp-conformance)"
@@ -68,6 +84,51 @@ filter = "package(swissarmyhammer-tools) and test(/^mcp::tools::code_context::te
 test-group = "treesitter-embedding"
 slow-timeout = { period = "60s", terminate-after = 6 }
 
+# Same root cause again, but for the code_context END-TO-END tests, which live
+# in *separate test binaries* (not the in-crate unit module matched above):
+#   - the `code_context_mcp_e2e_test` binary (rebuild/detect tests), and
+#   - the `tools_tests` `qwen_embedding_*` / `semantic_search` integration tests.
+# Each calls the real indexer (qwen-embedding model load) plus LSP indexing and
+# file-watching. Run in parallel, N cold model loads contend and the rebuild/
+# detect/qwen tests hang until the slow-timeout kills them at 300s; they all
+# pass under `--test-threads=1`. Serialise them into the shared embedding group.
+# This MUST be a nextest test-group, not `#[serial]`: the tests span two test
+# binaries (= two processes), and `#[serial]` only coordinates within a single
+# process, whereas a test-group caps concurrency across the whole run.
+[[profile.default.overrides]]
+filter = "package(swissarmyhammer-tools) and (binary(code_context_mcp_e2e_test) or test(/qwen_embedding/) or test(/semantic_search/))"
+test-group = "treesitter-embedding"
+slow-timeout = { period = "60s", terminate-after = 6 }
+
+# The kanban-app AI-panel E2E tests each spin up an in-process llama-agent and
+# load the qwen-0.6B model, then run several real agentic generation rounds.
+# These run on the GPU in CI (the Test job no longer forces CPU), where the Metal
+# GPU's COMPUTE is time-sliced across processes. They were previously a separate
+# max-threads=1 group so they wouldn't wait behind the whole llama-agent suite —
+# fine on CPU, but on the GPU it let an e2e turn run concurrently with a
+# llama-agent real-model test, and the heaviest op (`session/prompt`) blew its
+# hang budget under that contention. Put them in the SAME global serial lane as
+# the llama-agent / llama-embedding real-model tests so at most one real-model
+# test drives the GPU at a time.
+# The kanban-app `sidecar` test shells out to `stage-cli-sidecar.sh`, which runs
+# `cargo build -p kanban-cli` to produce the real sidecar binary and verifies it
+# stages and runs. This is a build/packaging integration test, not a unit test:
+# even with everything cached it must link the kanban-cli binary, which takes a
+# few seconds. (It now builds in the `dev` profile against the shared target dir
+# rather than a fresh `--release --target` tree, down from ~80s to a few s.) Give
+# it a longer warn threshold so the expected build cost isn't flagged as slow,
+# while still hard-killing a genuine hang.
+[[profile.default.overrides]]
+filter = "package(kanban-app) and binary(sidecar)"
+slow-timeout = { period = "30s", terminate-after = 4 }
+
+[[profile.default.overrides]]
+filter = "package(kanban-app) and binary(ai_panel_e2e)"
+test-group = "llama-embedding-serial"
+# The MCP tool-loop test runs several real agentic generation rounds; warn every
+# 60s, hard-kill after 6 periods (6 minutes).
+slow-timeout = { period = "60s", terminate-after = 6 }
+
 # Apply serial execution to llama-embedding tests
 [[profile.default.overrides]]
 filter = "package(llama-embedding)"
@@ -84,6 +145,13 @@ filter = "package(llama-agent)"
 test-group = "llama-embedding-serial"
 slow-timeout = { period = "30s", terminate-after = 10 }
 
+# Serialise the swissarmyhammer-entity tests that start a live FSEvents watcher
+# (see the `fsevents-watcher` group above for the why). Only these four tests
+# open a real `EntityWatcher`; the rest of the watcher module exercises the
+# `parse_*`/`handle_*` helpers directly with no OS watcher and stays parallel.
+[[profile.default.overrides]]
+filter = "package(swissarmyhammer-entity) and (test(test_attachment_create_emits_event) or test(test_attachment_remove_emits_event) or test(entity_watcher_drop_returns_promptly) or test(entity_watcher_drop_sends_shutdown))"
+test-group = "fsevents-watcher"
 
 # Profile for running embedding integration tests (requires HF models on disk).
 # Usage: cargo nextest run --profile embedding-models

@@ -124,6 +124,51 @@ impl EosStopper {
     pub fn eos_token_id(&self) -> u32 {
         self.eos_token_id
     }
+
+    /// Evaluate the model-independent portion of the EOS stop decision.
+    ///
+    /// This isolates the logic that does not depend on a `LlamaContext` so it
+    /// can be unit-tested without loading a model. Actual EOS detection is
+    /// performed in the generation loop via the model's `is_eog_token`, so this
+    /// stopper never reports a stop on its own and always returns `None`. The
+    /// only observable behavior here is a warning when the configured token ID
+    /// is the sentinel `u32::MAX`, which is almost certainly a misconfiguration.
+    ///
+    /// # Returns
+    ///
+    /// Always `None` — EOS detection is owned by the sampling loop, not by this
+    /// stopper.
+    fn evaluate(&self) -> Option<FinishReason> {
+        // Verify the stopper is properly initialized
+        if self.eos_token_id == u32::MAX {
+            warn!(
+                "EOS stopper configured with maximum token ID ({}), which may be invalid",
+                self.eos_token_id
+            );
+        }
+
+        // The stopper maintains its interface contract but defers to the
+        // generation system for actual EOS detection. This ensures optimal
+        // performance and compatibility with llama.cpp's token handling.
+        //
+        // Integration points in the generation system:
+        // 1. Token sampling loop checks model.is_eog_token(sampled_token)
+        // 2. Direct comparison: sampled_token == self.eos_token_id
+        // 3. Immediate termination when EOS is detected
+        None
+    }
+}
+
+impl EosStopper {
+    /// Test-only accessor for the model-independent decision core.
+    ///
+    /// Lets sibling test modules (e.g. the composite-precedence tests in
+    /// `stopper/mod.rs`) observe the exact decision `should_stop` makes without
+    /// a `LlamaContext`. Not part of the public API.
+    #[cfg(test)]
+    pub(crate) fn evaluate_for_test(&self) -> Option<FinishReason> {
+        self.evaluate()
+    }
 }
 
 impl Stopper for EosStopper {
@@ -140,33 +185,14 @@ impl Stopper for EosStopper {
         // from the batch, since EOS tokens are typically generated as individual tokens
         // and are immediately detectable after sampling.
 
-        // Validate that we have access to the model context
+        // Validate that we have access to the model context. EOS detection is
+        // owned by the sampling loop (see `evaluate`), so the context is only
+        // touched to honor the trait contract.
         let _model = &context.model;
 
-        // Verify the stopper is properly initialized
-        if self.eos_token_id == u32::MAX {
-            warn!(
-                "EOS stopper configured with maximum token ID ({}), which may be invalid",
-                self.eos_token_id
-            );
-        }
-
-        // The stopper maintains its interface contract but defers to the generation
-        // system for actual EOS detection. This ensures optimal performance and
-        // compatibility with llama.cpp's token handling.
-        //
-        // Integration points in the generation system:
-        // 1. Token sampling loop checks model.is_eog_token(sampled_token)
-        // 2. Direct comparison: sampled_token == self.eos_token_id
-        // 3. Immediate termination when EOS is detected
-        //
-        // This design provides the best balance of:
-        // - Performance: No duplicate token processing
-        // - Reliability: Uses model's authoritative EOS classification
-        // - Maintainability: Clear separation of concerns
-
-        // Always return None - EOS detection handled in sampling loop
-        None
+        // Defer to the model-independent core so the decision logic stays
+        // testable without loading a model.
+        self.evaluate()
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
@@ -257,10 +283,68 @@ mod tests {
         }
     }
 
-    // Note: Integration tests with actual LlamaContext and LlamaBatch
-    // are implemented in the integration_tests.rs file to avoid
-    // requiring model loading in unit tests.
+    // ---------------------------------------------------------------------
+    // Decision tests for the model-independent core (`evaluate`).
     //
-    // The should_stop method implementation with batch token checking
-    // is tested there with real model data.
+    // `should_stop` only borrows `context.model` (a no-op) and then delegates
+    // to `evaluate`. Exercising `evaluate` therefore covers the stopper's
+    // entire decision behavior without constructing a `LlamaContext`. By design
+    // this stopper never reports a stop itself — real EOS detection lives in the
+    // sampling loop via `model.is_eog_token` — so `evaluate` must always return
+    // `None`, regardless of the configured token ID.
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn eos_token_id_getter_returns_configured_value() {
+        // Pin the public getter independently of the doctest so it is covered by
+        // the library test suite.
+        let stopper = EosStopper::new(50256);
+        assert_eq!(stopper.eos_token_id(), 50256);
+    }
+
+    #[test]
+    fn evaluate_never_stops_for_the_eos_token_id() {
+        // The "EOS" id itself does not make this stopper fire: detection is
+        // delegated to the sampling loop.
+        let stopper = EosStopper::new(2);
+        assert!(stopper.evaluate().is_none());
+    }
+
+    #[test]
+    fn evaluate_never_stops_for_a_non_eos_token_id() {
+        // An ordinary, non-EOS id likewise never fires.
+        let stopper = EosStopper::new(12345);
+        assert!(stopper.evaluate().is_none());
+    }
+
+    #[test]
+    fn evaluate_never_stops_for_alternate_end_token_ids() {
+        // Model-specific alternate end tokens (LLaMA 2, GPT-2, extended
+        // vocabularies) are all treated identically: no stop is reported here.
+        for token_id in [2u32, 50256, 128001, 128009] {
+            let stopper = EosStopper::new(token_id);
+            assert!(
+                stopper.evaluate().is_none(),
+                "token id {token_id} should not cause a stop"
+            );
+        }
+    }
+
+    #[test]
+    fn evaluate_handles_boundary_token_ids_without_stopping() {
+        // Including the sentinel `u32::MAX`, which logs a warning but must still
+        // return `None` (it does not stop generation).
+        for token_id in [0u32, 1, u32::MAX] {
+            let stopper = EosStopper::new(token_id);
+            assert!(
+                stopper.evaluate().is_none(),
+                "boundary token id {token_id} should not cause a stop"
+            );
+        }
+    }
+
+    // Note: Integration tests with an actual LlamaContext and LlamaBatch are
+    // implemented in the integration tests to avoid requiring model loading in
+    // unit tests. The `should_stop` wrapper only borrows `context.model` and
+    // forwards to `evaluate`, which is covered exhaustively above.
 }

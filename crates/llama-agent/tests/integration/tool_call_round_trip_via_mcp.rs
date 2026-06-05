@@ -90,6 +90,7 @@ fn create_agent_config(mcp_url: String) -> AgentConfig {
         })],
         session_config: SessionConfig::default(),
         parallel_execution_config: ParallelConfig::default(),
+        tool_execution_config: Default::default(),
         queue_config: QueueConfig::default(),
     }
 }
@@ -114,9 +115,6 @@ async fn start_validator_server() -> (McpServerHandle, String) {
         None,
         None,
         Some(project_root),
-        // agent_mode = true matches the LlamaAgent validator path
-        // (`Context::agent_mode_for_validator` returns true for Llama).
-        true,
     )
     .await
     .expect("validator MCP server must start");

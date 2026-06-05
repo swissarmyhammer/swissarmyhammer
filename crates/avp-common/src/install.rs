@@ -6,20 +6,66 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use mirdan::agents::{
+    agent_global_settings_file, agent_project_settings_file, load_agents_config, AgentDef,
+};
+use mirdan::strategy::local_settings_sibling;
 use serde_json::{json, Map, Value};
 use swissarmyhammer_common::lifecycle::InitScope;
 
+/// Resolve the Claude Code agent definition from the mirdan agents config.
+///
+/// AVP hooks only target Claude Code, so its settings paths come from the
+/// `claude-code` entry in mirdan's agents config rather than from hardcoded
+/// strings. Returns an error if the config cannot be loaded or the entry is
+/// absent (which should not happen for the embedded default config).
+fn claude_agent() -> Result<AgentDef, String> {
+    let config = load_agents_config().map_err(|e| e.to_string())?;
+    config
+        .agents
+        .into_iter()
+        .find(|a| a.id == "claude-code")
+        .ok_or_else(|| "claude-code agent not found in agents config".to_string())
+}
+
 /// Map an `InitScope` to the Claude Code settings file path.
 ///
-/// Returns an error if `scope` is `User` and the home directory cannot be determined.
+/// Paths are resolved from mirdan's `claude-code` agent definition, so they
+/// stay in sync with the rest of the install tooling instead of duplicating
+/// `.claude/settings*.json` literals:
+///
+/// - `Project` → the agent's project settings file (`.claude/settings.json`).
+/// - `Local`   → that project file's `settings.local.json` sibling.
+/// - `User`    → the agent's global settings file (`~/.claude/settings.json`).
+///
+/// Returns an error if the agents config cannot be loaded or the `claude-code`
+/// entry declares no settings path.
 pub fn settings_path(scope: InitScope) -> Result<PathBuf, String> {
+    let agent = claude_agent()?;
+    let project = || {
+        agent_project_settings_file(&agent)
+            .ok_or_else(|| "claude-code agent has no project settings path".to_string())
+    };
     match scope {
-        InitScope::Project => Ok(PathBuf::from(".claude/settings.json")),
-        InitScope::Local => Ok(PathBuf::from(".claude/settings.local.json")),
-        InitScope::User => dirs::home_dir()
-            .map(|h| h.join(".claude/settings.json"))
-            .ok_or_else(|| "Could not find home directory".to_string()),
+        InitScope::Project => project(),
+        InitScope::Local => project().map(local_settings_sibling),
+        InitScope::User => agent_global_settings_file(&agent)
+            .ok_or_else(|| "claude-code agent has no global settings path".to_string()),
     }
+}
+
+/// Resolve the on-disk settings path for `scope`, rooting project/local
+/// (relative) paths under `base_dir`.
+///
+/// `User` scope already resolves to an absolute `~/.claude/settings.json`, so
+/// `base_dir` is ignored for it.
+fn resolve_settings_path(scope: InitScope, base_dir: &Path) -> Result<PathBuf, String> {
+    let path = settings_path(scope)?;
+    Ok(if matches!(scope, InitScope::User) {
+        path
+    } else {
+        base_dir.join(path)
+    })
 }
 
 /// Generate the AVP hooks configuration for all Claude Code hook events.
@@ -157,37 +203,22 @@ pub fn remove_hooks(settings: &mut Value) {
 /// This is the core install logic shared by both `avp init` and `sah init`.
 /// Pass a `base_dir` to control where relative paths resolve (for project/local scopes).
 pub fn install(scope: InitScope, base_dir: &Path) -> Result<(), String> {
-    let path = if matches!(scope, InitScope::User) {
-        settings_path(scope)?
-    } else {
-        base_dir.join(settings_path(scope)?)
-    };
+    let path = resolve_settings_path(scope, base_dir)?;
 
-    // Create parent directory first so both read and write have a valid path.
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create directory {}: {}", parent.display(), e))?;
+    // `mirdan::settings::read_json` is JSONC-tolerant (comments + trailing
+    // commas), so AVP installs no longer error against Zed/VS Code settings
+    // files that ship as JSONC even with a `.json` extension. A missing or
+    // empty file yields an empty object.
+    let mut settings = mirdan::settings::read_json(&path).map_err(|e| e.to_string())?;
+    if !settings.is_object() {
+        return Err(format!("{} is not a JSON object", path.display()));
     }
-
-    let mut settings: Value = if path.exists() {
-        let content = fs::read_to_string(&path)
-            .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-        let parsed: Value = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))?;
-        if !parsed.is_object() {
-            return Err(format!("{} is not a JSON object", path.display()));
-        }
-        parsed
-    } else {
-        json!({})
-    };
 
     let avp_hooks = avp_hooks_config();
     merge_hooks(&mut settings, avp_hooks);
 
-    let content = serde_json::to_string_pretty(&settings)
-        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-    fs::write(&path, content).map_err(|e| format!("Failed to write {}: {}", path.display(), e))?;
+    // `write_json` creates parent directories and writes strict pretty JSON.
+    mirdan::settings::write_json(&path, &settings).map_err(|e| e.to_string())?;
 
     tracing::info!("AVP hooks installed to {}", path.display());
 
@@ -201,7 +232,10 @@ pub fn install(scope: InitScope, base_dir: &Path) -> Result<(), String> {
 /// Create the .avp project directory with README.
 pub fn create_avp_project_structure(base_dir: &Path) -> Result<(), String> {
     let avp_dir = base_dir.join(".avp");
-    let validators_dir = avp_dir.join("validators");
+    // `validators_dir(false)` yields the relative `.avp/validators` layout that
+    // mirdan deploys validators into; rooting it under `base_dir` keeps the AVP
+    // install and mirdan deploys pointing at the same directory.
+    let validators_dir = base_dir.join(mirdan::install::validators_dir(false));
 
     fs::create_dir_all(&validators_dir)
         .map_err(|e| format!("Failed to create .avp/validators: {}", e))?;
@@ -218,11 +252,7 @@ pub fn create_avp_project_structure(base_dir: &Path) -> Result<(), String> {
 
 /// Uninstall AVP hooks from the settings file for the given scope.
 pub fn uninstall(scope: InitScope, base_dir: &Path) -> Result<(), String> {
-    let path = if matches!(scope, InitScope::User) {
-        settings_path(scope)?
-    } else {
-        base_dir.join(settings_path(scope)?)
-    };
+    let path = resolve_settings_path(scope, base_dir)?;
 
     if !path.exists() {
         tracing::info!(
@@ -230,10 +260,9 @@ pub fn uninstall(scope: InitScope, base_dir: &Path) -> Result<(), String> {
             path.display()
         );
     } else {
-        let content = fs::read_to_string(&path)
-            .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-        let mut settings: Value = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))?;
+        // JSONC-tolerant read so uninstalling against a commented settings file
+        // succeeds the same way install does.
+        let mut settings = mirdan::settings::read_json(&path).map_err(|e| e.to_string())?;
 
         remove_hooks(&mut settings);
 
@@ -248,10 +277,7 @@ pub fn uninstall(scope: InitScope, base_dir: &Path) -> Result<(), String> {
                 .map_err(|e| format!("Failed to remove {}: {}", path.display(), e))?;
             tracing::info!("AVP hooks uninstalled, removed empty {}", path.display());
         } else {
-            let content = serde_json::to_string_pretty(&settings)
-                .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-            fs::write(&path, content)
-                .map_err(|e| format!("Failed to write {}: {}", path.display(), e))?;
+            mirdan::settings::write_json(&path, &settings).map_err(|e| e.to_string())?;
             tracing::info!("AVP hooks uninstalled from {}", path.display());
         }
     }
@@ -550,6 +576,33 @@ mod tests {
             "install should return Err for non-object settings JSON"
         );
         assert!(result.unwrap_err().contains("not a JSON object"));
+    }
+
+    #[test]
+    fn test_install_against_jsonc_settings_file_succeeds() {
+        // Agents like Zed/VS Code ship JSONC settings files (header comments,
+        // trailing commas) even with a `.json` extension. Strict parsing used
+        // to ERROR here; the JSONC-tolerant reader must accept it, merge hooks,
+        // and preserve the existing keys.
+        let temp = TempDir::new().unwrap();
+        let settings_file = temp.path().join(".claude/settings.json");
+        fs::create_dir_all(settings_file.parent().unwrap()).unwrap();
+        fs::write(
+            &settings_file,
+            "// Project settings\n{\n  \"theme\": \"dark\", // trailing comma below\n  \"editor\": { \"tabSize\": 2 },\n}",
+        )
+        .unwrap();
+
+        install(InitScope::Project, temp.path())
+            .expect("install must succeed against a JSONC settings file");
+
+        let content: Value =
+            serde_json::from_str(&fs::read_to_string(&settings_file).unwrap()).unwrap();
+        // Existing keys preserved...
+        assert_eq!(content.get("theme").unwrap(), "dark");
+        assert_eq!(content["editor"]["tabSize"], json!(2));
+        // ...and AVP hooks merged in.
+        assert!(content.get("hooks").is_some());
     }
 
     #[test]

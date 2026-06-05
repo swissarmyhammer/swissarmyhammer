@@ -10,7 +10,15 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  LLAMA_N_GPU_LAYERS: "0"
+  # NOTE: the self-hosted runner is a Mac WITH a Metal GPU, so the Test job runs
+  # on the GPU (llama-agent defaults to offloading all layers). This is required
+  # by the Metal-offload proof test and keeps the real-model tests fast enough to
+  # stay well under their hang-guards. Do NOT set LLAMA_N_GPU_LAYERS=0 here —
+  # CPU-forced real-model inference is dramatically slower.
+  #
+  # The llama-agent coverage gate is intentionally NOT here: instrumented
+  # real-model coverage is slow, so it lives in its own manually-triggered
+  # workflow (.github/workflows/coverage.yml).
 
 jobs:
   test:

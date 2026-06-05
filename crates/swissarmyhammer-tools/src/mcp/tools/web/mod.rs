@@ -10,7 +10,7 @@ pub mod fetch;
 pub mod schema;
 pub mod search;
 
-use crate::mcp::tool_registry::{McpTool, ToolContext, ToolRegistry};
+use crate::mcp::tool_registry::{McpTool, ToolCategory, ToolContext, ToolRegistry};
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use rmcp::model::CallToolResult;
@@ -60,8 +60,8 @@ impl McpTool for WebTool {
         Some("web")
     }
 
-    fn is_agent_tool(&self) -> bool {
-        true
+    fn category(&self) -> ToolCategory {
+        ToolCategory::Agent
     }
 
     fn operations(&self) -> &'static [&'static dyn swissarmyhammer_operations::Operation] {
@@ -135,7 +135,7 @@ impl Doctorable for WebTool {
         vec![HealthCheck::ok(
             "Brave Search",
             "Uses direct HTTP requests (no browser required)".to_string(),
-            self.category(),
+            Doctorable::category(self),
         )]
     }
 
@@ -172,6 +172,12 @@ mod tests {
 
         assert_eq!(registry.len(), 1);
         assert!(registry.get_tool("web").is_some());
+    }
+
+    #[test]
+    fn test_category_is_agent() {
+        let tool = WebTool::new();
+        assert_eq!(McpTool::category(&tool), ToolCategory::Agent);
     }
 
     #[test]

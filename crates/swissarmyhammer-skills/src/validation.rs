@@ -6,11 +6,6 @@ use crate::skill::SkillName;
 /// scalar values (chars). Matches the Anthropic Agent Skills guide requirement.
 pub const MAX_DESCRIPTION_CHARS: usize = 1024;
 
-/// Validate a skill name per Agent Skills spec
-pub fn validate_skill_name(name: &str) -> Result<SkillName, String> {
-    SkillName::new(name)
-}
-
 /// Validate a skill `description` against the Anthropic Agent Skills guide:
 ///
 /// - Length must not exceed [`MAX_DESCRIPTION_CHARS`] (1024) characters.
@@ -54,7 +49,7 @@ pub fn validate_frontmatter(
     }
 
     if let Some(name) = name {
-        if let Err(e) = validate_skill_name(name) {
+        if let Err(e) = SkillName::new(name.as_str()) {
             errors.push(e);
         }
     }
@@ -79,20 +74,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_valid_skill_names() {
-        assert!(validate_skill_name("plan").is_ok());
-        assert!(validate_skill_name("do").is_ok());
-        assert!(validate_skill_name("my-skill").is_ok());
-        assert!(validate_skill_name("skill123").is_ok());
-    }
-
-    #[test]
-    fn test_invalid_skill_names() {
-        assert!(validate_skill_name("").is_err());
-        assert!(validate_skill_name("My Skill").is_err());
-        assert!(validate_skill_name("UPPERCASE").is_err());
-        assert!(validate_skill_name("has_underscore").is_err());
-        assert!(validate_skill_name("has.dot").is_err());
+    fn test_validate_frontmatter_rejects_invalid_name_format() {
+        // The frontmatter validator surfaces SkillName format violations
+        // (lowercase-alphanumeric-hyphens spec) for the `name` field.
+        let result =
+            validate_frontmatter(&Some("Has Spaces".to_string()), &Some("desc".to_string()));
+        let errors = result.unwrap_err();
+        assert!(
+            errors.iter().any(|e| e.contains("lowercase alphanumeric")),
+            "expected skill-name format complaint, got: {:?}",
+            errors
+        );
     }
 
     #[test]

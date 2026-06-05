@@ -179,7 +179,10 @@ pub use agent::AgentServer;
 pub use mcp::{HealthStatus as MCPHealthStatus, MCPClient, RetryConfig};
 
 // Re-export new unified MCP client functionality
-pub use mcp::{MCPClientBuilder, MCPClientError, ServerConnectionConfig, UnifiedMCPClient};
+pub use mcp::{
+    AgentToolsMount, InProcessMount, MCPClientBuilder, MCPClientError, ServerConnectionConfig,
+    UnifiedMCPClient,
+};
 
 // Re-export validation functionality
 pub use validation::{ValidationError, Validator};
@@ -191,7 +194,12 @@ pub use stopper::{EosStopper, MaxTokensStopper, Stopper};
 pub use resources::{ResourceError, ResourceLoader};
 
 // Re-export generation functionality
-pub use generation::{GenerationConfig, GenerationError, LlamaCppGenerator, TextGenerator};
+pub use generation::{GenerationConfig, GenerationError, TextGenerator};
+
+// Re-export the weight-free scripted test double for deterministic generation
+// tests. Available in test builds and when the `test-utils` feature is enabled.
+#[cfg(any(test, feature = "test-utils"))]
+pub use generation::{ScriptToken, ScriptedModel};
 
 // Re-export session management and compaction functionality
 pub use session::{

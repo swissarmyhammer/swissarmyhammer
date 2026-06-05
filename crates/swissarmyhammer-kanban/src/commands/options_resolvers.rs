@@ -205,7 +205,7 @@ mod tests {
                     label: "Claude Code".into(),
                 },
                 AiModelInfo {
-                    id: "qwen-coder".into(),
+                    id: "qwen".into(),
                     label: "Qwen Coder".into(),
                 },
             ],
@@ -229,7 +229,7 @@ mod tests {
         assert_eq!(opts.len(), 2, "two models → two ParamOption entries");
         assert_eq!(opts[0].value, "claude-code");
         assert_eq!(opts[0].label, "Claude Code");
-        assert_eq!(opts[1].value, "qwen-coder");
+        assert_eq!(opts[1].value, "qwen");
         assert_eq!(opts[1].label, "Qwen Coder");
     }
 

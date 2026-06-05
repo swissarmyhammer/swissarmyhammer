@@ -2,6 +2,7 @@
 // sah rule ignore acp/capability-enforcement
 
 use crate::mcp::file_watcher::{FileWatcher, McpFileWatcherCallback};
+use crate::mcp::host::Host;
 use rmcp::model::*;
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
@@ -92,13 +93,36 @@ pub struct McpServer {
     /// Skill library - kept alive to back the SkillTool's shared reference
     #[allow(dead_code)]
     skill_library: Arc<RwLock<SkillLibrary>>,
-    /// Agent library - kept alive to back the AgentTool's shared reference
+    /// Agent library - kept alive to back the agent tool's shared reference
     #[allow(dead_code)]
     agent_library: Arc<RwLock<AgentLibrary>>,
     /// Working directory — stored for deferred initialization (e.g. code-context)
     work_dir: Option<PathBuf>,
     /// Watches tools.yaml for changes, reloads on list_tools() calls
     tool_config_watcher: Arc<Mutex<super::tool_config::ToolConfigWatcher>>,
+    /// Whether `list_tools` composes its advertised set per connecting client.
+    ///
+    /// `true` for the full server: each connection's `tools/list` is filtered by
+    /// the client's [`Host`](super::host::Host) identity and each tool's
+    /// `category()` (Claude → `Shared` + `Replacement`; llama/unknown → `Shared`
+    /// only). `false` for the registries that are pre-scoped and must be served
+    /// verbatim:
+    /// - the validator server, whose minimal registry is already exactly the
+    ///   validator profile (`tools::register_validator_tools`); and
+    /// - the agent-tools server (`create_agent_tools_server`), whose registry is
+    ///   already scoped to the intrinsic Agent tools and must surface in full
+    ///   even though no [`Host`] reports `serves(Agent)`, so per-client filtering
+    ///   would serve zero tools.
+    compose_per_client: bool,
+    /// Latches once the serve-time native-tool deny has run for a Claude client.
+    ///
+    /// When a Claude client connects, the serve path denies the native host
+    /// tool(s) superseded by the served `Replacement` tools (e.g. `Bash`, since
+    /// `shell` replaces it) so the served tool truly supersedes Claude's native
+    /// rather than competing with it. The deny is idempotent, but this flag keeps
+    /// it from re-writing settings on every `initialize`; the first Claude
+    /// connection latches it. Shared across clones so all share the same latch.
+    bash_denied: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Determine if a retry should be attempted based on the error and attempt count.
@@ -227,7 +251,7 @@ impl McpServer {
             // Fallback to a temporary directory if current directory is not accessible
             std::env::temp_dir()
         });
-        Self::new_with_work_dir(library, work_dir, None, false).await
+        Self::new_with_work_dir(library, work_dir, None).await
     }
 
     /// Create a new MCP server with the provided prompt library and working directory.
@@ -237,7 +261,6 @@ impl McpServer {
     /// * `library` - The prompt library to serve via MCP
     /// * `work_dir` - The working directory to use for issue storage and git operations
     /// * `model_override` - Optional model name to override all use case model assignments
-    /// * `agent_mode` - Whether to register agent tools (true when powering a full agent)
     ///
     /// # Returns
     ///
@@ -249,7 +272,6 @@ impl McpServer {
         library: PromptLibrary,
         work_dir: PathBuf,
         model_override: Option<String>,
-        agent_mode: bool,
     ) -> Result<Self> {
         let git_ops_arc = Self::initialize_git_operations(work_dir.clone());
         let tool_handlers = ToolHandlers::new();
@@ -267,7 +289,6 @@ impl McpServer {
             skill_library.clone(),
             agent_library.clone(),
             prompt_library.clone(),
-            agent_mode,
         )
         .await;
 
@@ -282,6 +303,8 @@ impl McpServer {
             agent_library,
             work_dir: Some(work_dir),
             tool_config_watcher: Arc::new(Mutex::new(super::tool_config::ToolConfigWatcher::new())),
+            compose_per_client: true,
+            bash_denied: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
@@ -606,7 +629,6 @@ impl McpServer {
     /// * `agent_config` - Agent configuration
     /// * `working_dir` - Working directory for tool operations
     /// * `skill_library` - Shared skill library
-    /// * `agent_mode` - Whether to register agent tools
     ///
     /// # Returns
     ///
@@ -620,7 +642,6 @@ impl McpServer {
         skill_library: Arc<RwLock<SkillLibrary>>,
         agent_library: Arc<RwLock<AgentLibrary>>,
         prompt_library: Arc<RwLock<PromptLibrary>>,
-        agent_mode: bool,
     ) -> (Arc<RwLock<ToolRegistry>>, Arc<ToolContext>) {
         let mut tool_registry = ToolRegistry::new();
         Self::register_all_tools(
@@ -628,7 +649,6 @@ impl McpServer {
             skill_library,
             agent_library,
             prompt_library.clone(),
-            agent_mode,
         )
         .await;
 
@@ -647,16 +667,15 @@ impl McpServer {
 
     /// Register all available tools in the tool registry.
     ///
-    /// All tools are registered unconditionally. When `agent_mode` is false,
-    /// tools that implement `AgentTool` (and return `is_agent_tool() == true`)
-    /// are removed via `remove_agent_tools()`. This keeps the filtering
-    /// trait-driven rather than hardcoded in if statements.
+    /// All tools are registered unconditionally. Each tool carries a structural
+    /// [`category()`](crate::mcp::tool_registry::McpTool::category) describing its
+    /// relationship to a host agent; composing a per-client tool surface from
+    /// those categories happens at the serve boundary, not here.
     async fn register_all_tools(
         tool_registry: &mut ToolRegistry,
         skill_library: Arc<RwLock<SkillLibrary>>,
         agent_library: Arc<RwLock<AgentLibrary>>,
         prompt_library: Arc<RwLock<PromptLibrary>>,
-        agent_mode: bool,
     ) {
         register_git_tools(tool_registry);
         register_kanban_tools(tool_registry);
@@ -668,11 +687,6 @@ impl McpServer {
         register_agent_tools(tool_registry, agent_library, prompt_library.clone());
         register_file_tools(tool_registry);
         register_skill_tools(tool_registry, skill_library, prompt_library);
-
-        if !agent_mode {
-            tool_registry.remove_agent_tools();
-            tracing::debug!("Removed agent-only tools (agent_mode=false)");
-        }
 
         // Apply tool enable/disable config from tools.yaml (global + project layers)
         let tool_config = super::tool_config::load_merged_tool_config();
@@ -722,16 +736,12 @@ impl McpServer {
     /// [`super::tools::files::register_validator_file_tools`] for the
     /// per-tool details.
     pub fn create_validator_server(&self) -> McpServer {
-        // Build a filtered registry with only validator tools
+        // Build the validator registry from the single, data-driven validator
+        // profile (code_context + the split read-only file tools). The profile
+        // is defined once in `tools::register_validator_tools`; this is the only
+        // path that interprets it.
         let mut validator_registry = ToolRegistry::new();
-
-        // Register the validator tools directly: code_context and the split
-        // file tools (read_file, glob_files, grep_files).
-        use super::tools::code_context::CodeContextTool;
-        use super::tools::files::register_validator_file_tools;
-
-        validator_registry.register(CodeContextTool::new());
-        register_validator_file_tools(&mut validator_registry);
+        super::tools::register_validator_tools(&mut validator_registry);
 
         let tool_count = validator_registry.len();
         let validator_registry_arc = Arc::new(RwLock::new(validator_registry));
@@ -758,6 +768,174 @@ impl McpServer {
             agent_library: self.agent_library.clone(),
             work_dir: self.work_dir.clone(),
             tool_config_watcher: self.tool_config_watcher.clone(),
+            // The validator registry is already exactly the validator profile
+            // (composed by `tools::register_validator_tools`); serve it verbatim
+            // rather than re-filtering by host/category, which would strip its
+            // `Agent`-category read-only file tools.
+            compose_per_client: false,
+            // Non-primary instance: the serve-time deny is gated on
+            // `compose_per_client`, so this latch is never read. Its own flag.
+            bash_denied: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// Create an agent-tools-only `McpServer` clone with a filtered registry.
+    ///
+    /// The returned server shares all state (ToolContext, prompt/skill/agent
+    /// libraries, etc.) but has a separate `ToolRegistry` containing only the
+    /// tools a base agent needs to be useful: the `Agent`-category tools
+    /// (file read/write/edit + the split `read_file`/`glob_files`/`grep_files`,
+    /// web, skill, subagent) plus the shell `Replacement` tool. This is the set
+    /// `llama-agent` mounts in-process as its own built-ins, so the agent is
+    /// fully tooled even when handed zero external MCP servers.
+    ///
+    /// Both the unified `files` tool (CLI-style `op` dispatch) and the three
+    /// split file tools are registered — the split forms match the names a
+    /// Hermes-trained model naturally emits, mirroring
+    /// [`create_validator_server`](Self::create_validator_server).
+    ///
+    /// # `compose_per_client = false` — load-bearing
+    ///
+    /// The full server filters its advertised tools per connecting client via
+    /// [`Host::serves`](super::host::Host::serves), which returns `false` for
+    /// every `Agent`-category tool for *every* host (off-the-shelf agents
+    /// provide those natively; llama mounts its own). Serving this instance with
+    /// per-client composition would therefore advertise **zero** tools to llama.
+    /// This registry is already exactly the set to serve, so it is served
+    /// verbatim — `compose_per_client` is `false`, just like the validator
+    /// server.
+    pub fn create_agent_tools_server(&self) -> McpServer {
+        // `register_file_tools`, `register_web_tools`, `register_shell_tools`,
+        // `register_agent_tools`, and `register_skill_tools` are imported at
+        // module scope; only the split-file helper needs a local `use`.
+        use super::tools::files::register_validator_file_tools;
+
+        let mut agent_registry = ToolRegistry::new();
+
+        // Files: both the unified `op`-dispatched tool and the split
+        // read_file/glob_files/grep_files tools models call by name.
+        register_file_tools(&mut agent_registry);
+        register_validator_file_tools(&mut agent_registry);
+        register_web_tools(&mut agent_registry);
+        // Shell is the `Replacement{native:"Bash"}` tool; llama always gets its
+        // shell from this mount (and only here), satisfying the "shell appears
+        // exactly once" invariant.
+        register_shell_tools(&mut agent_registry);
+        register_agent_tools(
+            &mut agent_registry,
+            self.agent_library.clone(),
+            self.library.clone(),
+        );
+        register_skill_tools(
+            &mut agent_registry,
+            self.skill_library.clone(),
+            self.library.clone(),
+        );
+
+        let tool_count = agent_registry.len();
+        let agent_registry_arc = Arc::new(RwLock::new(agent_registry));
+
+        tracing::debug!(
+            "Created agent-tools registry with {} tools (compose_per_client=false)",
+            tool_count
+        );
+
+        // Clone the tool context but point it at the agent-only registry so
+        // these tools dispatch among themselves, not into the full server.
+        let mut agent_context = (*self.tool_context).clone();
+        agent_context.tool_registry = Some(agent_registry_arc.clone());
+        let agent_context = Arc::new(agent_context);
+
+        McpServer {
+            library: self.library.clone(),
+            file_watcher: self.file_watcher.clone(),
+            file_watcher_task: self.file_watcher_task.clone(),
+            file_watch_stopped: self.file_watch_stopped.clone(),
+            tool_registry: agent_registry_arc,
+            tool_context: agent_context,
+            skill_library: self.skill_library.clone(),
+            agent_library: self.agent_library.clone(),
+            work_dir: self.work_dir.clone(),
+            tool_config_watcher: self.tool_config_watcher.clone(),
+            // This registry IS the set to serve; serve it verbatim rather than
+            // re-filtering by host/category (which strips all `Agent` tools).
+            compose_per_client: false,
+            // Non-primary instance (the llama mount): never fires the serve-time
+            // deny (gated on `compose_per_client`, and llama is not Claude).
+            bash_denied: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// Suppress the native host tools the served `Replacement` tools supersede,
+    /// for a Claude client connecting at serve time.
+    ///
+    /// A `Replacement { native }` tool (today only `shell`, replacing `"Bash"`)
+    /// is served to Claude so it supersedes Claude's native tool of that name.
+    /// For the supersession to be real, Claude's native must also be *denied* —
+    /// otherwise the model sees both and may keep reaching for the native. This
+    /// writes that deny into Claude's local settings via the same idempotent
+    /// mirdan primitive `sah init` already uses ([`mirdan::install::deny_tool`]),
+    /// deriving the native names from the registry's `Replacement` categories
+    /// rather than hardcoding `"Bash"`, so the suppression tracks the served set.
+    ///
+    /// Gates:
+    /// - **Primary serve only.** Skips when `compose_per_client` is `false` (the
+    ///   validator and llama-mount instances), which never advertise the
+    ///   `Replacement` tools and so must not write denies.
+    /// - **Claude only.** llama and unknown clients keep their native tools;
+    ///   re-allowing is left to `deinit`, not self-corrected here.
+    /// - **Once.** Latches on first Claude connection so repeated `initialize`s
+    ///   don't rewrite settings; the underlying deny is idempotent regardless.
+    ///
+    /// Scope is [`InitScope::Local`] — Claude's `.claude/settings.local.json`,
+    /// resolved from the serve working directory — so the deny is a runtime/local
+    /// change, not a committed repo edit. Reports through a `tracing`-backed
+    /// reporter because serve-path stderr is swallowed by the MCP transport.
+    async fn apply_serve_time_native_deny(&self, client_info: &Implementation) {
+        use std::sync::atomic::Ordering;
+        use swissarmyhammer_common::lifecycle::InitScope;
+        use swissarmyhammer_common::reporter::TracingReporter;
+
+        // Only the primary per-client serve instance suppresses natives; the
+        // validator and llama-mount instances serve pre-scoped registries and
+        // must never write agent settings.
+        if !self.compose_per_client {
+            return;
+        }
+
+        if Host::from_client_info(client_info) != Host::Claude {
+            return;
+        }
+
+        // Latch: first Claude connection wins; later ones are no-ops.
+        if self.bash_denied.swap(true, Ordering::SeqCst) {
+            return;
+        }
+
+        let natives = {
+            let registry = self.tool_registry.read().await;
+            registry.replacement_natives()
+        };
+
+        let reporter = TracingReporter;
+        for native in natives {
+            let results = mirdan::install::deny_tool(InitScope::Local, native, &reporter);
+            for r in &results {
+                if r.status == swissarmyhammer_common::lifecycle::InitStatus::Error {
+                    tracing::warn!(
+                        native = native,
+                        "serve-time native deny error: {} — {}",
+                        r.name,
+                        r.message
+                    );
+                }
+            }
+            tracing::info!(
+                native = native,
+                client = %client_info.name,
+                event = "serve_native_denied",
+                "Denied native host tool for Claude (replaced by served tool)"
+            );
         }
     }
 
@@ -1638,6 +1816,23 @@ fn session_id_from_context(context: &RequestContext<RoleServer>) -> Option<Strin
     value.to_str().ok().map(|s| s.to_string())
 }
 
+/// Identify the connecting client's [`Host`] from a request context.
+///
+/// Reads the client `Implementation` captured at the `initialize` handshake —
+/// `rmcp` stores it on the peer, retrievable via [`Peer::peer_info`] — and maps
+/// its name through [`Host::from_client_info`]. Resolves to [`Host::Other`]
+/// (the conservative default) when no client info is available yet (e.g. a
+/// `tools/list` that somehow precedes `initialize`).
+///
+/// [`Peer::peer_info`]: rmcp::Peer::peer_info
+fn connecting_host_from_context(context: &RequestContext<RoleServer>) -> Host {
+    context
+        .peer
+        .peer_info()
+        .map(|client| Host::from_client_info(&client.client_info))
+        .unwrap_or(Host::Other)
+}
+
 /// Render a [`CallToolResult`] for diagnostic preview.
 ///
 /// Joins all text content blocks; non-text blocks (images, audio, etc.) are
@@ -1716,6 +1911,13 @@ impl ServerHandler for McpServer {
 
         // Auto-create agent actor for the connecting MCP client
         self.ensure_agent_actor(&request.client_info.name).await;
+
+        // Suppress the native host tool(s) the served `Replacement` tools
+        // supersede (e.g. Claude's `Bash`, replaced by `shell`) so the served
+        // tool truly replaces the native rather than competing with it. Gated on
+        // the connecting client being Claude.
+        self.apply_serve_time_native_deny(&request.client_info)
+            .await;
 
         // Start code-context background work (LSP, indexing, file watcher)
         // only when an MCP client actually connects — not in the constructor.
@@ -1836,7 +2038,19 @@ impl ServerHandler for McpServer {
             let mut watcher = self.tool_config_watcher.lock().await;
             watcher.check_and_reload(&mut registry);
         }
-        let tools = registry.list_tools();
+
+        // Compose the advertised set per connecting client. The full server
+        // filters by the client's host identity (from the `initialize`
+        // handshake's client `Implementation`) and each tool's `category()`:
+        // Claude gets `Shared` + `Replacement`; llama and unknown clients get
+        // `Shared` only. The validator server (`compose_per_client == false`)
+        // serves its already-scoped registry verbatim.
+        let host = connecting_host_from_context(&context);
+        let tools = if self.compose_per_client {
+            registry.list_tools_for_host(host)
+        } else {
+            registry.list_tools()
+        };
 
         // Per-session log of which tools were advertised — answers the
         // grep-able question "which tools were exposed to the validator
@@ -1848,6 +2062,8 @@ impl ServerHandler for McpServer {
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
         tracing::info!(
             session_id = session_id.as_deref().unwrap_or("<stdio>"),
+            host = ?host,
+            compose_per_client = self.compose_per_client,
             tool_count = tools.len(),
             tools = %tool_names.join(","),
             event = "tools_listed",
@@ -2174,41 +2390,36 @@ mod tests {
         );
     }
 
-    /// Trait-level audit (#5 in task description).
+    /// Profile audit: the validator server serves *exactly* the validator
+    /// profile, no more, no less.
     ///
-    /// Defense in depth: every tool registered on the validator server must
-    /// return `is_validator_tool() == true`. If a non-validator tool sneaks
-    /// into the registry, this test catches it even if the registration
-    /// helper's static audit missed it. Conversely, if a validator tool
-    /// registers as such but its `is_validator_tool()` returns false, that's
-    /// a registration bug — this test fails fast on either direction.
+    /// The validator surface is security-sensitive — the locked-down AVP subset
+    /// must not drift. This pins the served tool names to the exact set composed
+    /// by `tools::register_validator_tools`. If anyone adds a tool to the
+    /// profile (or the validator server registers something extra), this test
+    /// fails at the registry boundary.
     #[tokio::test]
     #[serial_test::serial(cwd)]
-    async fn test_validator_server_all_tools_are_validator_tools() {
+    async fn test_validator_server_serves_exactly_the_profile() {
+        use std::collections::BTreeSet;
+
         let server = McpServer::new(PromptLibrary::default()).await.unwrap();
         let validator = server.create_validator_server();
 
         let registry = validator.tool_registry.read().await;
 
-        // Iterate every registered tool. None may report
-        // `is_validator_tool() == false` — that would mean either:
-        //  - a non-validator tool sneaked into the registry, OR
-        //  - a validator tool's trait answer disagrees with its registration.
-        // Both are bugs.
-        for tool in registry.iter_tools() {
-            assert!(
-                tool.is_validator_tool(),
-                "Tool '{}' is registered on the validator server but its \
-                 is_validator_tool() returns false. Either it should not be \
-                 registered, or its trait method should be updated.",
-                crate::mcp::tool_registry::McpTool::name(tool)
-            );
-        }
+        let actual: BTreeSet<&str> = registry
+            .iter_tools()
+            .map(crate::mcp::tool_registry::McpTool::name)
+            .collect();
+        let expected: BTreeSet<&str> = ["code_context", "read_file", "glob_files", "grep_files"]
+            .into_iter()
+            .collect();
 
-        // Sanity: the registry is non-empty (the loop above is vacuous on []).
-        assert!(
-            !registry.is_empty(),
-            "Validator registry must contain at least one tool"
+        assert_eq!(
+            actual, expected,
+            "Validator server must serve exactly the validator profile \
+             (code_context + read_file + glob_files + grep_files)"
         );
     }
 
@@ -2233,14 +2444,10 @@ mod tests {
         let test_file = tmp.path().join("test.txt");
         std::fs::write(&test_file, "hello world").unwrap();
 
-        let server = McpServer::new_with_work_dir(
-            PromptLibrary::default(),
-            tmp.path().to_path_buf(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+        let server =
+            McpServer::new_with_work_dir(PromptLibrary::default(), tmp.path().to_path_buf(), None)
+                .await
+                .unwrap();
 
         let validator = server.create_validator_server();
 
@@ -2384,14 +2591,10 @@ mod tests {
     #[serial_test::serial(cwd)]
     async fn test_new_with_work_dir_creates_server() {
         let tmp = tempfile::tempdir().unwrap();
-        let server = McpServer::new_with_work_dir(
-            PromptLibrary::default(),
-            tmp.path().to_path_buf(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+        let server =
+            McpServer::new_with_work_dir(PromptLibrary::default(), tmp.path().to_path_buf(), None)
+                .await
+                .unwrap();
 
         // The server should store the working directory
         assert_eq!(server.work_dir, Some(tmp.path().to_path_buf()));
@@ -2399,37 +2602,25 @@ mod tests {
 
     #[tokio::test]
     #[serial_test::serial(cwd)]
-    async fn test_new_with_work_dir_agent_mode_registers_agent_tools() {
+    async fn test_new_with_work_dir_registers_agent_tools() {
         let tmp = tempfile::tempdir().unwrap();
-        let server_no_agent = McpServer::new_with_work_dir(
-            PromptLibrary::default(),
-            tmp.path().to_path_buf(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+        let server =
+            McpServer::new_with_work_dir(PromptLibrary::default(), tmp.path().to_path_buf(), None)
+                .await
+                .unwrap();
 
-        let server_agent = McpServer::new_with_work_dir(
-            PromptLibrary::default(),
-            tmp.path().to_path_buf(),
-            None,
-            true,
-        )
-        .await
-        .unwrap();
-
-        let tools_no_agent = server_no_agent.list_tools().await;
-        let tools_agent = server_agent.list_tools().await;
-
-        // Agent mode should have at least as many tools as non-agent mode
-        // (agent-only tools are added, not subtracted)
-        assert!(
-            tools_agent.len() >= tools_no_agent.len(),
-            "Agent mode should have >= tools: agent={}, non-agent={}",
-            tools_agent.len(),
-            tools_no_agent.len()
-        );
+        // The full tool union is always registered — agent capabilities
+        // (files, web, skill, agent) are present regardless of host. Per-client
+        // composition happens at the serve boundary, not here.
+        let tools = server.list_tools().await;
+        for expected in ["files", "web", "skill", "agent"] {
+            assert!(
+                tools.iter().any(|t| t.name == expected),
+                "expected agent tool '{}' to be registered; got: {:?}",
+                expected,
+                tools.iter().map(|t| &t.name).collect::<Vec<_>>()
+            );
+        }
     }
 
     // ---------------------------------------------------------------
@@ -2561,8 +2752,9 @@ mod tests {
             tools.len()
         );
 
-        // Verify some core non-agent tools are present (agent tools like
-        // "files" and "web" are removed when agent_mode=false)
+        // Verify some core shared tools are present. The full tool union is
+        // always registered; per-client composition happens at the serve
+        // boundary, not in registration.
         let tool_names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
         assert!(
             tool_names.contains(&"shell".to_string()),
@@ -2764,14 +2956,10 @@ mod tests {
     #[serial_test::serial(cwd)]
     async fn test_create_validator_server_shares_work_dir() {
         let tmp = tempfile::tempdir().unwrap();
-        let server = McpServer::new_with_work_dir(
-            PromptLibrary::default(),
-            tmp.path().to_path_buf(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+        let server =
+            McpServer::new_with_work_dir(PromptLibrary::default(), tmp.path().to_path_buf(), None)
+                .await
+                .unwrap();
 
         let validator = server.create_validator_server();
 
@@ -2788,14 +2976,10 @@ mod tests {
         let test_file = tmp.path().join("hello.txt");
         std::fs::write(&test_file, "hi").unwrap();
 
-        let server = McpServer::new_with_work_dir(
-            PromptLibrary::default(),
-            tmp.path().to_path_buf(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+        let server =
+            McpServer::new_with_work_dir(PromptLibrary::default(), tmp.path().to_path_buf(), None)
+                .await
+                .unwrap();
 
         let validator = server.create_validator_server();
 

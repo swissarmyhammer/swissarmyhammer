@@ -149,7 +149,7 @@ async fn test_model_show_command_no_config() -> Result<()> {
 async fn test_model_show_command_with_config() -> Result<()> {
     let ctx = TestContext::new()?;
 
-    let config_content = "model: qwen-coder\n";
+    let config_content = "model: qwen\n";
     ctx.create_config(config_content)?;
 
     let output = ctx.run_command(&["model", "show"]).await?;
@@ -160,7 +160,7 @@ async fn test_model_show_command_with_config() -> Result<()> {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_stdout_contains_model(&stdout, "qwen-coder");
+    assert_stdout_contains_model(&stdout, "qwen");
 
     Ok(())
 }
@@ -173,19 +173,16 @@ async fn test_model_show_command_with_config() -> Result<()> {
 async fn test_model_use_sets_model() -> Result<()> {
     let ctx = TestContext::new()?;
 
-    let output = ctx.run_command(&["model", "use", "qwen-coder"]).await?;
+    let output = ctx.run_command(&["model", "use", "qwen"]).await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         eprintln!("Command failed with stderr: {}", stderr);
     }
 
-    assert!(
-        output.status.success(),
-        "model use qwen-coder should succeed"
-    );
+    assert!(output.status.success(), "model use qwen should succeed");
 
-    ctx.assert_config_contains_model("qwen-coder")?;
+    ctx.assert_config_contains_model("qwen")?;
 
     Ok(())
 }
@@ -211,9 +208,9 @@ async fn test_model_use_replaces_previous() -> Result<()> {
     let ctx = TestContext::new()?;
 
     let _ = ctx.run_command(&["model", "use", "claude-code"]).await?;
-    let _ = ctx.run_command(&["model", "use", "qwen-coder"]).await?;
+    let _ = ctx.run_command(&["model", "use", "qwen"]).await?;
 
-    ctx.assert_config_contains_model("qwen-coder")?;
+    ctx.assert_config_contains_model("qwen")?;
 
     Ok(())
 }
@@ -252,7 +249,7 @@ async fn test_model_use_nonexistent_model() -> Result<()> {
 async fn test_global_model_override_flag() -> Result<()> {
     let ctx = TestContext::new()?;
 
-    let config_content = "model: qwen-coder\n";
+    let config_content = "model: qwen\n";
     ctx.create_config(config_content)?;
 
     let output = ctx
@@ -283,14 +280,14 @@ model: claude-code
 "#;
     ctx.create_config(existing_config)?;
 
-    let output = ctx.run_command(&["model", "use", "qwen-coder"]).await?;
+    let output = ctx.run_command(&["model", "use", "qwen"]).await?;
 
     assert!(
         output.status.success(),
         "model use should update existing config"
     );
 
-    let config = ctx.assert_config_contains_model("qwen-coder")?;
+    let config = ctx.assert_config_contains_model("qwen")?;
     assert!(
         config.contains("other_section:"),
         "Should preserve other_section"
@@ -311,7 +308,7 @@ model: claude-code
 async fn test_model_use_updates_existing_model() -> Result<()> {
     let ctx = TestContext::new()?;
 
-    let initial_config = "model: qwen-coder\n";
+    let initial_config = "model: qwen\n";
     ctx.create_config(initial_config)?;
 
     let output = ctx.run_command(&["model", "use", "claude-code"]).await?;
@@ -323,8 +320,8 @@ async fn test_model_use_updates_existing_model() -> Result<()> {
 
     let updated_config = ctx.assert_config_contains_model("claude-code")?;
     assert!(
-        !updated_config.contains("qwen-coder"),
-        "Should not have qwen-coder anymore"
+        !updated_config.contains("qwen"),
+        "Should not have qwen anymore"
     );
 
     Ok(())
@@ -392,7 +389,7 @@ async fn test_workflow_sequential_model_configuration() -> Result<()> {
     let use_output = ctx.run_command(&["model", "use", "claude-code"]).await?;
     assert!(use_output.status.success(), "Setting model should succeed");
 
-    let switch_output = ctx.run_command(&["model", "use", "qwen-coder"]).await?;
+    let switch_output = ctx.run_command(&["model", "use", "qwen"]).await?;
     assert!(
         switch_output.status.success(),
         "Switching model should succeed"
@@ -405,7 +402,7 @@ async fn test_workflow_sequential_model_configuration() -> Result<()> {
 async fn test_workflow_final_state_verification() -> Result<()> {
     let ctx = TestContext::new()?;
 
-    let _ = ctx.run_command(&["model", "use", "qwen-coder"]).await?;
+    let _ = ctx.run_command(&["model", "use", "qwen"]).await?;
 
     let final_show_output = ctx.run_command(&["model", "show"]).await?;
     assert!(
@@ -414,7 +411,7 @@ async fn test_workflow_final_state_verification() -> Result<()> {
     );
 
     let final_stdout = String::from_utf8_lossy(&final_show_output.stdout);
-    assert_stdout_contains_model(&final_stdout, "qwen-coder");
+    assert_stdout_contains_model(&final_stdout, "qwen");
 
     Ok(())
 }
@@ -423,9 +420,9 @@ async fn test_workflow_final_state_verification() -> Result<()> {
 async fn test_workflow_config_file_validation() -> Result<()> {
     let ctx = TestContext::new()?;
 
-    let _ = ctx.run_command(&["model", "use", "qwen-coder"]).await?;
+    let _ = ctx.run_command(&["model", "use", "qwen"]).await?;
 
-    ctx.assert_config_contains_model("qwen-coder")?;
+    ctx.assert_config_contains_model("qwen")?;
 
     Ok(())
 }
@@ -434,7 +431,7 @@ async fn test_workflow_config_file_validation() -> Result<()> {
 async fn test_model_configuration_persistence() -> Result<()> {
     let ctx = TestContext::new()?;
 
-    let _ = ctx.run_command(&["model", "use", "qwen-coder"]).await?;
+    let _ = ctx.run_command(&["model", "use", "qwen"]).await?;
 
     let config_path = ctx
         .project_root
@@ -455,7 +452,7 @@ async fn test_model_configuration_persistence() -> Result<()> {
         .as_str()
         .expect("model should be a string");
 
-    assert_eq!(model_value, "qwen-coder", "Should have model: qwen-coder");
+    assert_eq!(model_value, "qwen", "Should have model: qwen");
 
     Ok(())
 }

@@ -5,6 +5,7 @@
 //! trait objects, ready to be inserted into a `CommandsRegistry`.
 
 pub mod app_commands;
+pub mod board_commands;
 pub mod clipboard_commands;
 pub mod column_commands;
 pub mod drag_commands;
@@ -86,6 +87,20 @@ fn register_entity_and_tag(map: &mut CmdMap) {
         Arc::new(entity_commands::UnarchiveEntityCmd),
     );
     map.insert("tag.update".into(), Arc::new(entity_commands::TagUpdateCmd));
+}
+
+/// Register the `update.board` board-metadata command.
+///
+/// The frontend AI panel and any future board-metadata editor dispatch
+/// `update.board` with whichever of `name`, `description`, and `model` it
+/// needs to change. The Rust impl wraps the [`crate::board::UpdateBoard`]
+/// operation so the underlying read-modify-write contract (untouched fields
+/// survive) is preserved through the command surface.
+fn register_board(map: &mut CmdMap) {
+    map.insert(
+        "update.board".into(),
+        Arc::new(board_commands::UpdateBoardCmd),
+    );
 }
 
 fn register_attachment(map: &mut CmdMap) {
@@ -315,6 +330,7 @@ pub fn register_commands() -> CmdMap {
     register_task(&mut map);
     register_clipboard(&mut map);
     register_entity_and_tag(&mut map);
+    register_board(&mut map);
     register_attachment(&mut map);
     register_column(&mut map);
     register_ui(&mut map);
@@ -394,8 +410,12 @@ mod tests {
         // `ai-commands` builtin command plugin (the last non-nav YAML command
         // source retired in 01KT6WWYYWFQ2F4PGQ358SAHY7), so they are no longer
         // registered here.
-        // = 62.
-        assert_eq!(cmds.len(), 62);
+        // + 1 board (update.board) — wraps `crate::board::UpdateBoard` so the AI
+        //   panel can persist `name`/`description`/`model` through the unified
+        //   dispatcher (merged from main, 01KSNJ6AE18EQYDC2WSYFSSAY1; ported
+        //   onto `commands_core` after the command cutover).
+        // = 63.
+        assert_eq!(cmds.len(), 63);
     }
 
     // =========================================================================

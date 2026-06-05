@@ -38,6 +38,7 @@ fn create_test_config() -> AgentConfig {
         queue_config: QueueConfig::default(),
         mcp_servers: vec![],
         parallel_execution_config: ParallelConfig::default(),
+        tool_execution_config: Default::default(),
     }
 }
 

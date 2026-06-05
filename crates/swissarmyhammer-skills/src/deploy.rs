@@ -1,16 +1,18 @@
-//! Skill deployment helpers shared across CLI tools.
+//! Pure skill-content helpers shared across CLI tools.
 //!
-//! Provides the common pipeline for resolving a builtin skill, formatting a
-//! SKILL.md file with YAML frontmatter, and deploying it to agent `.skills/`
-//! directories via mirdan.
+//! Provides the common pipeline for resolving a builtin skill and formatting a
+//! SKILL.md file with YAML frontmatter. This crate is deployment-free: the
+//! filesystem staging + agent deployment step lives in
+//! `mirdan::install::stage_and_deploy_skill`, so the dependency edge runs
+//! mirdan → skills (not the other way around).
 //!
-//! Used by both `shelltool-cli` and `code-context-cli` to avoid duplicating
-//! the resolve → format → deploy logic. Template rendering (which depends on
+//! Used by `shelltool-cli`, `code-context-cli`, and `kanban-cli` to avoid
+//! duplicating the resolve → format logic. Template rendering (which depends on
 //! `swissarmyhammer-templating`) is left to each CLI's thin wrapper because
 //! adding that crate here would create a dependency cycle.
 
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::{Skill, SkillResolver};
 
@@ -30,8 +32,14 @@ struct SkillFrontmatter<'a> {
     license: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     compatibility: Option<&'a str>,
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    metadata: HashMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent: Option<&'a str>,
+    // BTreeMap keeps metadata keys sorted so the generated SKILL.md is
+    // deterministic across runs (HashMap iteration order is not).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    metadata: BTreeMap<String, String>,
 }
 
 /// Resolve a builtin skill by name from the skill registry.
@@ -50,10 +58,25 @@ pub fn resolve_skill(name: &str) -> Result<Skill, String> {
         .ok_or_else(|| format!("builtin '{name}' skill not found"))
 }
 
+/// Resolve all builtin skills tagged with the given init `profile`.
+///
+/// A skill belongs to a profile when its `profiles` frontmatter list contains
+/// `profile`. Returns the matching skills in arbitrary order. Skills without a
+/// `profiles` key (the default empty list) never match any profile.
+pub fn resolve_profile_skills(profile: &str) -> Vec<Skill> {
+    let resolver = SkillResolver::new();
+    resolver
+        .resolve_builtins()
+        .into_values()
+        .filter(|skill| skill.profiles.iter().any(|p| p == profile))
+        .collect()
+}
+
 /// Format a skill as a complete SKILL.md file with YAML frontmatter.
 ///
 /// Combines the skill's frontmatter fields (`name`, `description`,
-/// `allowed_tools`, `license`, `metadata`) into YAML frontmatter and appends
+/// `allowed_tools`, `license`, `compatibility`, `context`, `agent`, `metadata`)
+/// into YAML frontmatter and appends
 /// the already-rendered `instructions` as the body. The `metadata` parameter
 /// is passed separately because it may have had template variables rendered.
 ///
@@ -82,54 +105,18 @@ pub fn format_skill_md(
         allowed_tools,
         license: skill.license.as_deref(),
         compatibility: skill.compatibility.as_deref(),
-        metadata: metadata.clone(),
+        context: skill.context.as_deref(),
+        agent: skill.agent.as_deref(),
+        metadata: metadata
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
     };
 
     let yaml = serde_yaml_ng::to_string(&frontmatter)
         .expect("SkillFrontmatter serialization should not fail");
 
     format!("---\n{yaml}---\n\n{instructions}\n")
-}
-
-/// Validate that a skill name is a safe filesystem identifier.
-///
-/// Accepts only alphanumeric characters, hyphens, and underscores.
-/// Rejects path traversal sequences, absolute paths, and empty names.
-pub fn validate_skill_name(name: &str) -> Result<(), String> {
-    if name.is_empty() {
-        return Err("skill name must not be empty".to_string());
-    }
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
-        return Err(format!(
-            "skill name '{name}' contains invalid characters (only alphanumeric, hyphens, underscores allowed)"
-        ));
-    }
-    Ok(())
-}
-
-/// Write a skill's rendered SKILL.md to a temp directory and deploy it.
-///
-/// Creates a temporary directory structure `<tmpdir>/<name>/SKILL.md` containing
-/// `skill_content`, then delegates to `mirdan::install::deploy_skill_to_agents`
-/// to copy it into every detected agent's `.skills/` directory.
-///
-/// # Errors
-///
-/// Returns an error if `name` fails validation, the temp directory cannot be
-/// created, the file cannot be written, or mirdan deployment fails.
-pub fn write_and_deploy(name: &str, skill_content: &str) -> Result<Vec<String>, String> {
-    validate_skill_name(name)?;
-    let temp_dir = tempfile::tempdir().map_err(|e| format!("failed to create temp dir: {e}"))?;
-    let skill_dir = temp_dir.path().join(name);
-    std::fs::create_dir_all(&skill_dir)
-        .map_err(|e| format!("failed to create temp skill dir: {e}"))?;
-    std::fs::write(skill_dir.join("SKILL.md"), skill_content)
-        .map_err(|e| format!("failed to write SKILL.md: {e}"))?;
-    mirdan::install::deploy_skill_to_agents(name, &skill_dir, None, false)
-        .map_err(|e| format!("deploying {name} skill: {e}"))
 }
 
 #[cfg(test)]
@@ -145,31 +132,17 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_skill_name_valid() {
-        assert!(validate_skill_name("shell").is_ok());
-        assert!(validate_skill_name("code-context").is_ok());
-        assert!(validate_skill_name("my_skill").is_ok());
-        assert!(validate_skill_name("skill123").is_ok());
-    }
-
-    #[test]
-    fn test_validate_skill_name_rejects_traversal() {
-        assert!(validate_skill_name("..").is_err());
-        assert!(validate_skill_name("../etc/passwd").is_err());
-        assert!(validate_skill_name("/absolute").is_err());
-        assert!(validate_skill_name("has spaces").is_err());
-        assert!(validate_skill_name("").is_err());
-    }
-
-    #[test]
     fn test_format_skill_md_escapes_yaml_special_chars() {
         let skill = Skill {
             name: SkillName::new("test-skill").unwrap(),
             description: "description with: colons, \"quotes\", and {braces}".to_string(),
             license: None,
             compatibility: None,
+            context: None,
+            agent: None,
             metadata: HashMap::new(),
             allowed_tools: vec!["tool-a".to_string(), "tool-b".to_string()],
+            profiles: vec![],
             instructions: "body".to_string(),
             source_path: None,
             source: SkillSource::Builtin,
@@ -200,8 +173,11 @@ mod tests {
             description: "a minimal skill".to_string(),
             license: None,
             compatibility: None,
+            context: None,
+            agent: None,
             metadata: HashMap::new(),
             allowed_tools: vec![],
+            profiles: vec![],
             instructions: "body".to_string(),
             source_path: None,
             source: SkillSource::Builtin,
@@ -232,8 +208,11 @@ mod tests {
             description: "a skill with metadata".to_string(),
             license: Some("MIT".to_string()),
             compatibility: None,
+            context: None,
+            agent: None,
             metadata: metadata.clone(),
             allowed_tools: vec![],
+            profiles: vec![],
             instructions: "body".to_string(),
             source_path: None,
             source: SkillSource::Builtin,
@@ -274,8 +253,11 @@ mod tests {
             description: "skill without metadata".to_string(),
             license: None,
             compatibility: None,
+            context: None,
+            agent: None,
             metadata: HashMap::new(),
             allowed_tools: vec![],
+            profiles: vec![],
             instructions: "body".to_string(),
             source_path: None,
             source: SkillSource::Builtin,
@@ -310,8 +292,11 @@ mod tests {
             description: "a skill that declares its tool prerequisites".to_string(),
             license: Some("MIT OR Apache-2.0".to_string()),
             compatibility: Some(compatibility.to_string()),
+            context: None,
+            agent: None,
             metadata: HashMap::new(),
             allowed_tools: vec![],
+            profiles: vec![],
             instructions: "body".to_string(),
             source_path: None,
             source: SkillSource::Builtin,
@@ -328,5 +313,39 @@ mod tests {
         let parsed = crate::skill_loader::parse_skill_md(&md, SkillSource::Builtin)
             .expect("output should parse as valid SKILL.md");
         assert_eq!(parsed.compatibility.as_deref(), Some(compatibility));
+    }
+
+    /// Regression: `context` and `agent` round-trip through `parse_skill_md` and
+    /// `format_skill_md` so `sah init` / deploy does not silently drop a skill's
+    /// execution strategy (e.g. `context: fork`) or its delegated agent
+    /// (e.g. `agent: explorer`) when it re-renders the SKILL.md.
+    #[test]
+    fn test_format_skill_md_round_trips_context_and_agent() {
+        let src = "---\n\
+            name: explore\n\
+            description: Understand how unfamiliar code works\n\
+            context: fork\n\
+            agent: explorer\n\
+            ---\n\n\
+            body";
+
+        let skill = crate::skill_loader::parse_skill_md(src, SkillSource::Builtin)
+            .expect("source SKILL.md should parse");
+
+        let md = format_skill_md(&skill, &skill.instructions, &skill.metadata);
+
+        assert!(
+            md.contains("context: fork"),
+            "context field should survive the deploy round-trip, got:\n{md}"
+        );
+        assert!(
+            md.contains("agent: explorer"),
+            "agent field should survive the deploy round-trip, got:\n{md}"
+        );
+
+        let reparsed = crate::skill_loader::parse_skill_md(&md, SkillSource::Builtin)
+            .expect("formatted output should parse as valid SKILL.md");
+        assert_eq!(reparsed.context.as_deref(), Some("fork"));
+        assert_eq!(reparsed.agent.as_deref(), Some("explorer"));
     }
 }

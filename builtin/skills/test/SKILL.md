@@ -1,7 +1,6 @@
 ---
 name: test
-description: Run tests and analyze results. Use when the user wants to run the test suite or test specific functionality. Test runs produce verbose output — automatically delegates to a tester subagent.
-context: fork
+description: Run tests and analyze results. Use when the user wants to run the test suite or test specific functionality.
 agent: tester
 license: MIT OR Apache-2.0
 compatibility: Requires the `kanban` MCP tool  for recording test failures as tasks.
@@ -10,13 +9,16 @@ metadata:
   version: "{{version}}"
 ---
 
-{% include "_partials/coding-standards" %}
-{% include "_partials/code-context-checkpoints" %}
-{% include "_partials/architecture-awareness" %}
-
 # Test
 
 **Zero failures. Zero warnings. Zero skipped. The build is clean or it's broken.**
+
+{% include "_partials/delegate-to-subagent" %}
+
+## Guidelines
+
+{% include "_partials/coding-standards" %}
+{% include "_partials/architecture-awareness" %}
 
 ## Process
 

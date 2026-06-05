@@ -212,7 +212,7 @@ const MODELS: AiModel[] = [
     hint: "Claude Code CLI: /usr/local/bin/claude",
   },
   {
-    id: "qwen-coder",
+    id: "qwen",
     label: "Qwen Coder",
     kind: "local-llama",
     available: false,
@@ -346,6 +346,56 @@ describe("AiPanel: conversation rendering", () => {
     expect(harness.sessions()[0].prompts).toEqual([
       [textBlock("what is in progress?")],
     ]);
+  });
+
+  /// Qwen3-class reasoning models often emit `<think>\n\n</think>` —
+  /// empty think — for short / easy prompts. The captured reasoning text
+  /// is then whitespace-only and the AI Elements bubble would expand to
+  /// literally nothing. The renderer hides reasoning parts whose
+  /// finalized text has no non-whitespace content so the UI doesn't
+  /// surface a useless "Thought for 0 seconds" header.
+  it("hides a reasoning block whose finalized text is whitespace-only", async () => {
+    const harness = mockHarness({
+      updates: [
+        {
+          sessionUpdate: "agent_thought_chunk",
+          content: textBlock("\n\n"),
+        },
+        {
+          sessionUpdate: "agent_message_chunk",
+          content: textBlock("Here is the answer."),
+        },
+      ],
+    });
+
+    await renderInAct(
+      <AiPanel
+        boardDir="/tmp/board"
+        models={MODELS}
+        modelId="claude-code"
+        onSelectModel={() => {}}
+        onCollapse={() => {}}
+        createConnect={harness.createConnect}
+      />,
+    );
+
+    const textarea = screen.getByRole("textbox");
+    await act(async () => {
+      await userEvent.type(textarea, "ping");
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /submit/i }));
+    });
+
+    // The visible reply renders.
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("Here is the answer.");
+    });
+
+    // The empty reasoning header MUST NOT appear: it has no expandable
+    // content and would just confuse the reader.
+    expect(document.body.textContent).not.toContain("Thought for");
+    expect(document.body.textContent).not.toContain("Thinking");
   });
 
   it("renders an assistant tool-call card at the full assistant message width", async () => {
@@ -775,7 +825,7 @@ describe("AiPanel: model selector", () => {
     });
 
     // The panel reports the choice so the container can persist it per board.
-    expect(onSelectModel).toHaveBeenCalledWith("qwen-coder");
+    expect(onSelectModel).toHaveBeenCalledWith("qwen");
 
     // The container persists and feeds the new id back as a prop.
     await act(async () => {
@@ -783,7 +833,7 @@ describe("AiPanel: model selector", () => {
         <AiPanel
           boardDir="/tmp/board"
           models={bothAvailable}
-          modelId="qwen-coder"
+          modelId="qwen"
           onSelectModel={onSelectModel}
           onCollapse={() => {}}
           createConnect={harness.createConnect}
@@ -801,7 +851,7 @@ describe("AiPanel: model selector", () => {
     });
 
     await waitFor(() => {
-      expect(harness.connectedModels()).toContain("qwen-coder");
+      expect(harness.connectedModels()).toContain("qwen");
     });
   });
 

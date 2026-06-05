@@ -50,19 +50,33 @@ use std::path::{Path, PathBuf};
 /// - Symlink attacks that escape workspace boundaries
 /// - Invalid or malformed path exploitation
 ///
+/// # Session root
+///
+/// `base_dir` is the **session working directory** — the board directory the
+/// agent session is rooted at. Relative paths resolve against it. Tool handlers
+/// obtain it from [`ToolContext::session_root`](crate::mcp::tool_registry::ToolContext::session_root),
+/// never from the process current directory, because the bundled GUI app runs
+/// with CWD `/` and a single process hosts multiple board sessions.
+///
 /// # Examples
 ///
 /// ```rust,ignore
 /// use crate::mcp::tools::files::shared_utils;
+/// use std::path::Path;
 ///
-/// // Valid absolute path
-/// let path = shared_utils::validate_file_path("/home/user/project/src/main.rs")?;
+/// let base = Path::new("/home/user/project");
+///
+/// // Valid absolute path (base ignored for absolute inputs)
+/// let path = shared_utils::validate_file_path(base, "/home/user/project/src/main.rs")?;
+///
+/// // Relative path resolves against base, not the process CWD
+/// let path = shared_utils::validate_file_path(base, "src/main.rs")?;
 ///
 /// // Invalid relative path - will return error
-/// let result = shared_utils::validate_file_path("../../../etc/passwd");
+/// let result = shared_utils::validate_file_path(base, "../../../etc/passwd");
 /// assert!(result.is_err());
 /// ```
-pub fn validate_file_path(path: &str) -> Result<PathBuf, McpError> {
+pub fn validate_file_path(base_dir: &Path, path: &str) -> Result<PathBuf, McpError> {
     // Ensure path is not empty
     if path.trim().is_empty() {
         return Err(McpError::invalid_request(
@@ -87,18 +101,13 @@ pub fn validate_file_path(path: &str) -> Result<PathBuf, McpError> {
 
     let path_buf = PathBuf::from(path);
 
-    // Resolve relative paths to absolute paths before canonicalization
+    // Resolve relative paths against the session working directory before
+    // canonicalization. Never fall back to the process CWD — see the module
+    // and `ToolContext::session_root` docs for why.
     let resolved_path = if path_buf.is_absolute() {
         path_buf
     } else {
-        std::env::current_dir()
-            .map_err(|e| {
-                McpError::invalid_request(
-                    format!("Failed to get current working directory: {}", e),
-                    None,
-                )
-            })?
-            .join(path_buf)
+        base_dir.join(path_buf)
     };
 
     // Canonicalize path to resolve symlinks and relative components
@@ -143,6 +152,61 @@ pub fn validate_file_path(path: &str) -> Result<PathBuf, McpError> {
             }
         }
     }
+}
+
+/// Refuse a search root that would walk the entire filesystem or the process CWD.
+///
+/// An unscoped `grep`/`glob` defaults its search root to the session working
+/// directory ([`ToolContext::session_root`](crate::mcp::tool_registry::ToolContext::session_root)).
+/// Two pathological roots must never be walked:
+///
+/// 1. **The filesystem root** (`/`). For the bundled GUI app the process CWD is
+///    `/`, and an unscoped walk rooted there visits every file on the machine —
+///    the original "grep hung forever" failure.
+/// 2. **A bare relative `.` (or empty path).** This is the last-resort fallback
+///    `session_root` returns when neither a working dir nor the process current
+///    directory is available. Walking it means walking the very process CWD this
+///    whole change exists to avoid, and — being relative — it silently slips past
+///    a plain `parent().is_none()` root check (`Path::new(".").parent()` is
+///    `Some("")`, not `None`).
+///
+/// Returns an error in either case; otherwise `Ok(())`. File tools call this on
+/// their resolved search directory before handing it to the walker.
+///
+/// # Arguments
+///
+/// * `search_dir` - The resolved search root (from a `path` argument or the
+///   session working directory).
+pub fn reject_filesystem_root(search_dir: &Path) -> Result<(), McpError> {
+    // A relative root (bare `.`, empty, or anything not anchored at an absolute
+    // base) means the session working directory could not be resolved. Walking it
+    // would root the search at the process CWD — exactly what this guard prevents.
+    if !search_dir.is_absolute() {
+        return Err(McpError::invalid_request(
+            format!(
+                "Refusing to search '{}': the session working directory could not be \
+                 resolved to an absolute path. Provide a `path`, or run with a session \
+                 working directory set.",
+                search_dir.display()
+            ),
+            None,
+        ));
+    }
+
+    // An absolute root with no parent is the filesystem root (`/`). Walking it
+    // visits every file on the machine and effectively never returns.
+    if search_dir.parent().is_none() {
+        return Err(McpError::invalid_request(
+            format!(
+                "Refusing to search the filesystem root: {}. \
+                 Provide a `path`, or run with a session working directory set.",
+                search_dir.display()
+            ),
+            None,
+        ));
+    }
+
+    Ok(())
 }
 
 /// Check if a file exists and is accessible
@@ -287,6 +351,13 @@ pub enum FileOperation {
 /// ```
 #[derive(Debug, Clone)]
 pub struct FilePathValidator {
+    /// Session working directory — the base relative paths resolve against.
+    ///
+    /// Tool handlers set this from
+    /// [`ToolContext::session_root`](crate::mcp::tool_registry::ToolContext::session_root)
+    /// so relative paths are anchored at the board directory, never at the
+    /// process current directory.
+    base_dir: PathBuf,
     /// Optional workspace root - if set, all paths must be within this directory
     workspace_root: Option<PathBuf>,
     /// Whether to allow symlink resolution (default: false for security)
@@ -297,21 +368,23 @@ pub struct FilePathValidator {
     normalize_unicode: bool,
 }
 
-impl Default for FilePathValidator {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl FilePathValidator {
-    /// Creates a new validator with default security settings
+    /// Creates a new validator rooted at a session working directory.
     ///
     /// Default settings:
     /// - No workspace root restriction
     /// - Symlinks disallowed
     /// - Common dangerous patterns blocked
     /// - Unicode normalization enabled
-    pub fn new() -> Self {
+    ///
+    /// # Arguments
+    ///
+    /// * `base_dir` - The session working directory relative paths resolve
+    ///   against. Tool handlers pass
+    ///   [`ToolContext::session_root`](crate::mcp::tool_registry::ToolContext::session_root)
+    ///   here so resolution is anchored at the board directory, never the
+    ///   process current directory.
+    pub fn new(base_dir: PathBuf) -> Self {
         let mut blocked_patterns = HashSet::new();
 
         // Block path traversal patterns that escape to parent directories
@@ -326,6 +399,7 @@ impl FilePathValidator {
         blocked_patterns.insert("\\0".to_string());
 
         Self {
+            base_dir,
             workspace_root: None,
             allow_symlinks: false,
             blocked_patterns,
@@ -333,18 +407,31 @@ impl FilePathValidator {
         }
     }
 
-    /// Creates a validator with a specific workspace root
+    /// Creates a validator with a specific workspace root.
     ///
     /// All validated paths must be within the specified workspace directory.
     /// This provides strong protection against directory traversal attacks.
+    /// The workspace root doubles as the base directory for relative-path
+    /// resolution.
     ///
     /// # Arguments
     ///
-    /// * `workspace_root` - The root directory that constrains all file operations
+    /// * `workspace_root` - The root directory that constrains all file
+    ///   operations and anchors relative paths
     pub fn with_workspace_root(workspace_root: PathBuf) -> Self {
-        let mut validator = Self::new();
+        let mut validator = Self::new(workspace_root.clone());
         validator.workspace_root = Some(workspace_root);
         validator
+    }
+
+    /// Overrides the base directory relative paths resolve against.
+    ///
+    /// Use when relative resolution should be anchored somewhere other than the
+    /// workspace root (or to set the session root on a validator built with a
+    /// different constructor).
+    pub fn with_base_dir(mut self, base_dir: PathBuf) -> Self {
+        self.base_dir = base_dir;
+        self
     }
 
     /// Enables or disables symlink resolution
@@ -420,14 +507,9 @@ impl FilePathValidator {
         let resolved_path = if path_buf.is_absolute() {
             path_buf
         } else {
-            // Resolve relative path against current working directory
-            let current_dir = std::env::current_dir().map_err(|e| {
-                McpError::invalid_request(
-                    format!("Failed to get current working directory: {}", e),
-                    None,
-                )
-            })?;
-            current_dir.join(path_buf)
+            // Resolve relative path against the session working directory, never
+            // the process CWD (which is `/` for the bundled GUI app).
+            self.base_dir.join(path_buf)
         };
 
         // Step 2: Symlink validation BEFORE canonicalization
@@ -438,8 +520,11 @@ impl FilePathValidator {
             ));
         }
 
-        // Step 3: Basic validation (reuse existing function which may canonicalize)
-        let mut validated_path = validate_file_path(&resolved_path.to_string_lossy())?;
+        // Step 3: Basic validation (reuse existing function which may canonicalize).
+        // resolved_path is already absolute here, so the base dir is unused, but
+        // pass it through for consistency.
+        let mut validated_path =
+            validate_file_path(&self.base_dir, &resolved_path.to_string_lossy())?;
 
         // Step 4: Unicode normalization if enabled
         if self.normalize_unicode {
@@ -764,9 +849,12 @@ impl SecureFileAccess {
         Self { validator }
     }
 
-    /// Creates a SecureFileAccess with default security settings
-    pub fn default_secure() -> Self {
-        Self::new(FilePathValidator::new())
+    /// Creates a SecureFileAccess rooted at a session working directory.
+    ///
+    /// Relative paths resolve against `base_dir`. Tool handlers pass
+    /// [`ToolContext::session_root`](crate::mcp::tool_registry::ToolContext::session_root).
+    pub fn default_secure(base_dir: PathBuf) -> Self {
+        Self::new(FilePathValidator::new(base_dir))
     }
 
     /// Creates a SecureFileAccess with workspace boundary enforcement
@@ -948,40 +1036,80 @@ impl SecureFileAccess {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
     use std::fs;
     use tempfile::TempDir;
 
+    /// A throwaway session-root base for tests that only exercise absolute,
+    /// empty, or too-long paths (where relative resolution never happens).
+    fn test_base() -> PathBuf {
+        std::env::temp_dir()
+    }
+
+    #[test]
+    fn test_reject_filesystem_root_rejects_root() {
+        let result = reject_filesystem_root(Path::new("/"));
+        assert!(result.is_err(), "the filesystem root must be rejected");
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(
+            err.contains("filesystem root"),
+            "error should explain the filesystem-root refusal, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_reject_filesystem_root_rejects_relative_dot() {
+        // The `session_root` last-resort fallback. A relative `.` slips past a
+        // naive `parent().is_none()` check, so it must be rejected explicitly.
+        let result = reject_filesystem_root(Path::new("."));
+        assert!(result.is_err(), "a bare relative `.` must be rejected");
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(
+            err.contains("could not be"),
+            "error should explain the unresolved-root refusal, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_reject_filesystem_root_rejects_empty() {
+        let result = reject_filesystem_root(Path::new(""));
+        assert!(result.is_err(), "an empty path must be rejected");
+    }
+
+    #[test]
+    fn test_reject_filesystem_root_accepts_normal_dir() {
+        let temp_dir = TempDir::new().unwrap();
+        let result = reject_filesystem_root(temp_dir.path());
+        assert!(
+            result.is_ok(),
+            "a normal absolute directory with a parent must be accepted: {:?}",
+            result
+        );
+    }
+
     #[test]
     fn test_validate_file_path_empty() {
-        let result = validate_file_path("");
+        let result = validate_file_path(&test_base(), "");
         assert!(result.is_err());
 
-        let result = validate_file_path("   ");
+        let result = validate_file_path(&test_base(), "   ");
         assert!(result.is_err());
     }
 
     #[test]
-    #[serial(cwd)]
     fn test_validate_file_path_relative() {
-        use std::fs;
-        use swissarmyhammer_common::test_utils::CurrentDirGuard;
-        use tempfile::TempDir;
-
+        // Relative paths resolve against the explicit base dir (the session
+        // working directory), so no cwd pinning is needed.
         let temp_dir = TempDir::new().unwrap();
-        // The RAII guard pins cwd to the temp dir for the whole test and
-        // restores the original working directory on drop, even on panic.
-        let _cwd_guard = CurrentDirGuard::new(temp_dir.path())
-            .expect("Failed to pin working directory to the isolated temp dir");
+        let base = temp_dir.path().to_path_buf();
 
-        // Create test files
-        fs::create_dir_all("relative").unwrap();
-        fs::write("relative/path", "test content").unwrap();
-        fs::create_dir_all("current").unwrap();
-        fs::write("current/path", "test content").unwrap();
+        // Create test files under the base
+        fs::create_dir_all(base.join("relative")).unwrap();
+        fs::write(base.join("relative/path"), "test content").unwrap();
+        fs::create_dir_all(base.join("current")).unwrap();
+        fs::write(base.join("current/path"), "test content").unwrap();
 
-        // Relative paths should now be accepted and resolved to absolute paths
-        let result = validate_file_path("relative/path");
+        // Relative paths should be accepted and resolved against the base
+        let result = validate_file_path(&base, "relative/path");
         assert!(result.is_ok(), "Simple relative paths should be accepted");
         let resolved = result.unwrap();
         assert!(
@@ -989,7 +1117,7 @@ mod tests {
             "Should be resolved to absolute path"
         );
 
-        let result = validate_file_path("./current/path");
+        let result = validate_file_path(&base, "./current/path");
         assert!(
             result.is_ok(),
             "Current directory relative paths should be accepted"
@@ -1001,7 +1129,7 @@ mod tests {
         );
 
         // Parent directory paths should still be blocked by dangerous pattern checking
-        let result = validate_file_path("../parent/path");
+        let result = validate_file_path(&base, "../parent/path");
         assert!(
             result.is_err(),
             "Parent directory traversal should still be blocked"
@@ -1012,7 +1140,7 @@ mod tests {
     fn test_validate_file_path_extremely_long() {
         // Test extremely long path that exceeds PATH_MAX
         let extremely_long_path = "a".repeat(5000);
-        let result = validate_file_path(&extremely_long_path);
+        let result = validate_file_path(&test_base(), &extremely_long_path);
         assert!(result.is_err(), "Extremely long paths should be rejected");
 
         let error_msg = format!("{:?}", result.unwrap_err());
@@ -1029,7 +1157,7 @@ mod tests {
         // as long as the parent directory exists
         let temp_dir = TempDir::new().unwrap();
         let non_existent_file = temp_dir.path().join("does_not_exist.txt");
-        let result = validate_file_path(&non_existent_file.to_string_lossy());
+        let result = validate_file_path(&test_base(), &non_existent_file.to_string_lossy());
         assert!(result.is_ok());
     }
 
@@ -1039,7 +1167,7 @@ mod tests {
         let test_file = temp_dir.path().join("test.txt");
         fs::write(&test_file, "test content").unwrap();
 
-        let result = validate_file_path(&test_file.to_string_lossy());
+        let result = validate_file_path(&test_base(), &test_file.to_string_lossy());
         assert!(result.is_ok());
 
         let validated_path = result.unwrap();
@@ -1108,7 +1236,7 @@ mod tests {
 
     #[test]
     fn test_file_path_validator_default() {
-        let validator = FilePathValidator::new();
+        let validator = FilePathValidator::new(test_base());
 
         // Test default blocked patterns
         let temp_dir = TempDir::new().unwrap();
@@ -1131,22 +1259,15 @@ mod tests {
     }
 
     #[test]
-    #[serial(cwd)]
     fn test_file_path_validator_relative_paths() {
-        use swissarmyhammer_common::test_utils::CurrentDirGuard;
-
-        // Use validator without workspace restrictions for basic testing
-        let validator = FilePathValidator::new();
+        // Relative paths resolve against the validator's base dir (the session
+        // working directory), so no cwd pinning is needed.
         let temp_dir = TempDir::new().unwrap();
+        let validator = FilePathValidator::new(temp_dir.path().to_path_buf());
 
         // Create test files
         let test_file = temp_dir.path().join("test_file.txt");
         fs::write(&test_file, "test content").unwrap();
-
-        // Change to the temp directory for relative path testing. The RAII
-        // guard restores the original working directory on drop, even on panic.
-        let _cwd_guard = CurrentDirGuard::new(temp_dir.path())
-            .expect("Failed to pin working directory to the isolated temp dir");
 
         // Test basic relative path resolution
         let result = validator.validate_path("test_file.txt");
@@ -1177,49 +1298,32 @@ mod tests {
     }
 
     #[test]
-    #[serial(cwd)]
     fn test_file_path_validator_relative_with_workspace() {
-        use swissarmyhammer_common::test_utils::CurrentDirGuard;
-
         let temp_dir = TempDir::new().unwrap();
         let workspace_root = temp_dir.path().to_path_buf();
+        // with_workspace_root anchors relative resolution at the workspace, so a
+        // relative path resolves within it without any cwd manipulation.
         let validator = FilePathValidator::with_workspace_root(workspace_root.clone());
 
         // Create test file in workspace
         let test_file = workspace_root.join("workspace_file.txt");
         fs::write(&test_file, "workspace content").unwrap();
 
-        // Change to workspace directory. The scoped RAII guard restores the
-        // original working directory on drop, even on panic.
-        {
-            let _cwd_guard = CurrentDirGuard::new(&workspace_root)
-                .expect("Failed to pin working directory to the workspace temp dir");
+        // Test relative path within workspace
+        let result = validator.validate_path("workspace_file.txt");
+        assert!(
+            result.is_ok(),
+            "Should accept relative path within workspace"
+        );
 
-            // Test relative path within workspace
-            let result = validator.validate_path("workspace_file.txt");
-            assert!(
-                result.is_ok(),
-                "Should accept relative path within workspace"
-            );
-        }
-
-        // Create and try to access file outside workspace
+        // An absolute path outside the workspace must be rejected by the
+        // boundary check.
         let outside_dir = TempDir::new().unwrap();
         let outside_file = outside_dir.path().join("outside_file.txt");
         fs::write(&outside_file, "outside content").unwrap();
 
-        // Change to outside directory and try relative path (should fail workspace check)
-        if outside_dir.path().exists() {
-            let _cwd_guard = CurrentDirGuard::new(outside_dir.path())
-                .expect("Failed to pin working directory to the outside temp dir");
-            let result = validator.validate_path("outside_file.txt");
-            assert!(
-                result.is_err(),
-                "Should reject relative path outside workspace"
-            );
-        } else {
-            println!("Outside directory doesn't exist, skipping outside workspace test");
-        }
+        let result = validator.validate_path(&outside_file.to_string_lossy());
+        assert!(result.is_err(), "Should reject path outside workspace");
     }
 
     #[test]
@@ -1251,7 +1355,7 @@ mod tests {
 
     #[test]
     fn test_file_path_validator_blocked_patterns() {
-        let mut validator = FilePathValidator::new();
+        let mut validator = FilePathValidator::new(test_base());
         validator.add_blocked_pattern("secret".to_string());
 
         let temp_dir = TempDir::new().unwrap();
@@ -1284,7 +1388,7 @@ mod tests {
                 // Verify the symlink was actually created
                 if symlink_file.is_symlink() {
                     // Test with symlinks disabled (default)
-                    let validator = FilePathValidator::new();
+                    let validator = FilePathValidator::new(test_base());
                     let result = validator.validate_path(&symlink_file.to_string_lossy());
                     assert!(
                         result.is_err(),
@@ -1292,7 +1396,7 @@ mod tests {
                     );
 
                     // Test with symlinks enabled
-                    let mut validator = FilePathValidator::new();
+                    let mut validator = FilePathValidator::new(test_base());
                     validator.set_allow_symlinks(true);
                     let result = validator.validate_path(&symlink_file.to_string_lossy());
                     assert!(
@@ -1316,7 +1420,7 @@ mod tests {
 
     #[test]
     fn test_file_path_validator_unicode_normalization() {
-        let validator = FilePathValidator::new();
+        let validator = FilePathValidator::new(test_base());
 
         // Test null byte rejection
         let result = validator.validate_path("/tmp/file\0.txt");
@@ -1388,25 +1492,18 @@ mod tests {
     }
 
     #[test]
-    #[serial(cwd)]
     fn test_secure_file_access_read_relative_paths() {
-        use swissarmyhammer_common::test_utils::CurrentDirGuard;
-
-        // Use default secure access without workspace restrictions for simple testing
-        let secure_access = SecureFileAccess::default_secure();
-
         let temp_dir = TempDir::new().unwrap();
         let workspace_root = temp_dir.path().to_path_buf();
+
+        // Relative paths resolve against the session base dir (the temp dir), so
+        // no cwd pinning is needed.
+        let secure_access = SecureFileAccess::default_secure(workspace_root.clone());
 
         // Create test file with content
         let test_file = workspace_root.join("relative_test.txt");
         let content = "Relative path content";
         fs::write(&test_file, content).unwrap();
-
-        // Change to temp directory to test relative paths. The RAII guard
-        // restores the original working directory on drop, even on panic.
-        let _cwd_guard = CurrentDirGuard::new(&workspace_root)
-            .expect("Failed to pin working directory to the isolated temp dir");
 
         // Test read with relative path
         let result = secure_access.read("relative_test.txt", None, None);
@@ -1549,7 +1646,7 @@ mod tests {
         let test_file = temp_dir.path().join("multi_match.txt");
         fs::write(&test_file, "foo bar foo baz foo").unwrap();
 
-        let secure_access = SecureFileAccess::default_secure();
+        let secure_access = SecureFileAccess::default_secure(test_base());
 
         // Edit with multiple matches and replace_all=false should fail
         let result = secure_access.edit(
@@ -1569,7 +1666,7 @@ mod tests {
         let test_file = temp_dir.path().join("replace_all.txt");
         fs::write(&test_file, "foo bar foo baz foo").unwrap();
 
-        let secure_access = SecureFileAccess::default_secure();
+        let secure_access = SecureFileAccess::default_secure(test_base());
 
         // Edit with replace_all=true should succeed
         let result = secure_access.edit(
@@ -1590,7 +1687,7 @@ mod tests {
         let test_file = temp_dir.path().join("no_match.txt");
         fs::write(&test_file, "hello world").unwrap();
 
-        let secure_access = SecureFileAccess::default_secure();
+        let secure_access = SecureFileAccess::default_secure(test_base());
 
         let result = secure_access.edit(
             &test_file.to_string_lossy(),
@@ -1669,7 +1766,7 @@ mod tests {
         let test_file = temp_dir.path().join("limit_only.txt");
         fs::write(&test_file, "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\n").unwrap();
 
-        let secure_access = SecureFileAccess::default_secure();
+        let secure_access = SecureFileAccess::default_secure(test_base());
 
         let result = secure_access.read(&test_file.to_string_lossy(), None, Some(2));
         assert!(result.is_ok());
@@ -1685,7 +1782,7 @@ mod tests {
         let test_file = temp_dir.path().join("offset_only.txt");
         fs::write(&test_file, "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\n").unwrap();
 
-        let secure_access = SecureFileAccess::default_secure();
+        let secure_access = SecureFileAccess::default_secure(test_base());
 
         let result = secure_access.read(&test_file.to_string_lossy(), Some(3), None);
         assert!(result.is_ok());
@@ -1697,8 +1794,8 @@ mod tests {
 
     #[test]
     fn test_file_path_validator_long_path() {
-        let validator = FilePathValidator::new();
-        let long_path = format!("/{}", "a".repeat(4097));
+        let validator = FilePathValidator::new(test_base());
+        let long_path = "/".to_string() + &"a".repeat(4097);
 
         let result = validator.validate_path(&long_path);
         assert!(result.is_err());

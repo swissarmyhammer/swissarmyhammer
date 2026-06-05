@@ -235,6 +235,20 @@ impl Operation {
         self.params.get(key).and_then(|v| v.as_bool())
     }
 
+    /// Get an unsigned integer parameter.
+    ///
+    /// Accepts JSON numbers (any non-negative integer that fits in `u64`)
+    /// AND numeric strings — MCP clients sometimes JSON-encode arguments
+    /// from string-typed transports and would otherwise lose pagination
+    /// inputs to a silent type mismatch.
+    pub fn get_u64(&self, key: &str) -> Option<u64> {
+        match self.params.get(key)? {
+            Value::Number(n) => n.as_u64(),
+            Value::String(s) => s.parse::<u64>().ok(),
+            _ => None,
+        }
+    }
+
     /// Get a required string parameter
     pub fn require_string(&self, key: &str) -> Result<&str, String> {
         self.get_string(key)

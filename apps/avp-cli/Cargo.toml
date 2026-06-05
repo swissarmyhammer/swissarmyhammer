@@ -7,8 +7,9 @@ repository.workspace = true
 homepage.workspace = true
 description = "Agent Validator Protocol - Claude Code hook processor CLI"
 
+# No `formula = "..."` override: the formula is named after the crate
+# (`avp-cli`), consistent with every other CLI in the workspace.
 [package.metadata.dist]
-formula = "avp"
 
 [lib]
 name = "avp"

@@ -18,16 +18,16 @@ use swissarmyhammer_tools::mcp::{
 /// - Fast execution (<1s instead of 20-30s)
 #[tokio::test]
 async fn test_mcp_server_with_rmcp_client() {
-    // Start in-process HTTP MCP server with agent_mode=true since we test agent tools.
-    // Run against an isolated temp dir so `initialize_code_context` skips the
-    // synchronous monorepo walk that would otherwise run when MCP Initialize fires.
+    // Start in-process HTTP MCP server. The full tool union (including agent
+    // tools) is always registered. Run against an isolated temp dir so
+    // `initialize_code_context` skips the synchronous monorepo walk that would
+    // otherwise run when MCP Initialize fires.
     let temp = tempfile::TempDir::new().expect("Failed to create temp dir");
     let mut server = start_mcp_server_with_options(
         McpServerMode::Http { port: None },
         None,
         None,
         Some(temp.path().to_path_buf()),
-        true,
     )
     .await
     .expect("Failed to start in-process MCP server");
@@ -44,13 +44,18 @@ async fn test_mcp_server_with_rmcp_client() {
     assert!(!tools.tools.is_empty(), "Server should provide tools");
 
     let tool_names: Vec<String> = tools.tools.iter().map(|t| t.name.to_string()).collect();
+    // `tools/list` composes per connecting client. The default `test-client`
+    // name is an unknown host, served `Shared` tools only — neither the
+    // `Agent`-category `files` tool nor the `Replacement`-category `shell` tool
+    // (which is reserved for Claude). Both remain *callable*; composition gates
+    // only what is advertised.
     assert!(
-        tool_names.contains(&"files".to_string()),
-        "Should have files tool"
+        !tool_names.contains(&"files".to_string()),
+        "unknown host must not be advertised the Agent-category files tool"
     );
     assert!(
-        tool_names.contains(&"shell".to_string()),
-        "Should have shell tool"
+        !tool_names.contains(&"shell".to_string()),
+        "unknown host must not be advertised the Replacement-category shell tool"
     );
 
     // List prompts to verify prompt functionality

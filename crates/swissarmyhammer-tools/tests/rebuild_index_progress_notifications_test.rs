@@ -134,16 +134,22 @@ fn make_token(s: &str) -> ProgressToken {
 
 #[tokio::test]
 async fn rebuild_index_emits_progress_notifications_when_token_supplied() {
+    // This test asserts the progress-notification wiring, not semantic
+    // embeddings. Skip the multi-GB embedding-model load (which on a clean
+    // machine downloads from HuggingFace and dominates the run) so the test
+    // exercises the chunk/progress path quickly and hermetically. nextest runs
+    // each test in its own process, so this env var does not leak into others.
+    std::env::set_var("SAH_DISABLE_EMBEDDING", "1");
+
     // 1. Stand up an in-process HTTP MCP server scoped to a tempdir so it
-    //    doesn't walk the host repo. agent_mode=true is required because
-    //    `code_context` is registered through the agent path.
+    //    doesn't walk the host repo. The full tool union is registered, so
+    //    `code_context` is available.
     let project = create_test_project();
     let mut server = start_mcp_server_with_options(
         McpServerMode::Http { port: None },
         None,
         None,
         Some(project.path().to_path_buf()),
-        true,
     )
     .await
     .expect("start MCP server");

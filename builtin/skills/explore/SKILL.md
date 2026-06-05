@@ -1,31 +1,25 @@
 ---
 name: explore
+profiles:
+  - code-context
 description: Understand how unfamiliar code works before planning or changing it — its structure, behavior, data flow, and the blast radius of a change. Use when the user says "explore", "investigate", "how does X work", "why does X happen", "where is X handled", "what calls X", "what would it take to change X", or whenever you need to understand code before acting on it. Drives exploration with the code_context MCP tool — symbol search, callgraph traversal, and blast-radius analysis — instead of reading files top to bottom.
 license: MIT OR Apache-2.0
 compatibility: Requires the `code_context` MCP tool for symbol search, callgraph traversal, and blast-radius analysis during exploration.
+agent: explorer
 metadata:
   author: swissarmyhammer
   version: "{{version}}"
 ---
 
-{% include "_partials/code-context-checkpoints" %}
 {% include "_partials/architecture-awareness" %}
 
 # Explore
 
 Understand code well enough to explain how it works and what a change would touch.
 
-{% if arguments %}
-## Focus
+$ARGUMENTS
 
-> {{arguments}}
-{% endif %}
-
-## Why This Exists
-
-The gap between "I don't understand this" and "I know what to do" is where bad decisions happen. Default behavior — read a couple files top to bottom, grep, act — misses how code actually connects.
-
-This skill enforces a structured path. It uses `code_context` to find the *right* code fast, trace connections, and measure blast radius — not linear reading.
+{% include "_partials/delegate-to-subagent" %}
 
 ## Done Means
 

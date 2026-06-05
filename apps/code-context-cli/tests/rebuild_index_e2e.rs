@@ -90,6 +90,11 @@ fn rebuild_index_default_progress_prints_summary() {
     let output = Command::cargo_bin("code-context")
         .expect("locate code-context binary")
         .current_dir(workspace.path())
+        // This test asserts the rebuild summary contract (field presence), not
+        // semantic embeddings. Skip the multi-GB embedding-model load so the
+        // run stays fast and hermetic — on a clean machine the model would be
+        // downloaded from HuggingFace and dominate the test time.
+        .env("SAH_DISABLE_EMBEDDING", "1")
         .args(["rebuild", "index", "--layer", "treesitter"])
         .output()
         .expect("spawn code-context");
@@ -135,6 +140,9 @@ fn rebuild_index_no_progress_prints_clean_summary() {
     let output = Command::cargo_bin("code-context")
         .expect("locate code-context binary")
         .current_dir(workspace.path())
+        // See the default-progress test: the embeddings are irrelevant to the
+        // summary contract under test, so skip the model load.
+        .env("SAH_DISABLE_EMBEDDING", "1")
         .args(["--no-progress", "rebuild", "index", "--layer", "treesitter"])
         .output()
         .expect("spawn code-context");

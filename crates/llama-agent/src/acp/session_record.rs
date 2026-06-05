@@ -50,22 +50,49 @@ use agent_client_protocol::schema::{
 };
 use agent_client_protocol_extras::SessionRecord;
 
+use crate::acp::visible_text::{FilterSegment, VisibleTextFilter};
 use crate::types::ids::ToolCallId;
 use crate::types::{Message, MessageRole, Session};
 
-/// Convert a single llama [`Message`] into an ACP [`SessionUpdate`].
+/// Convert a single llama [`Message`] into one or more ACP [`SessionUpdate`]s.
 ///
-/// Returns `None` for [`MessageRole::System`] messages: system prompts and
-/// compaction summaries are agent-internal scaffolding and are not part of the
-/// conversation a client replays on `session/load`.
+/// Returns an empty vector for [`MessageRole::System`] messages: system
+/// prompts and compaction summaries are agent-internal scaffolding and are
+/// not part of the conversation a client replays on `session/load`.
 ///
 /// # Mapping
 ///
-/// * [`MessageRole::User`] → [`SessionUpdate::UserMessageChunk`]
-/// * [`MessageRole::Assistant`] → [`SessionUpdate::AgentMessageChunk`]
-/// * [`MessageRole::Tool`] → [`SessionUpdate::ToolCall`] (a complete tool call
-///   carrying the result; see the module docs for the round-trip contract)
-/// * [`MessageRole::System`] → `None`
+/// * [`MessageRole::User`] → one [`SessionUpdate::UserMessageChunk`]
+/// * [`MessageRole::Assistant`] → an ordered list of
+///   [`SessionUpdate::AgentMessageChunk`] and [`SessionUpdate::AgentThoughtChunk`]
+///   matching the original raw text's `<think>` / visible interleaving. The
+///   raw content is run through [`VisibleTextFilter`] — the same splitter
+///   used during live streaming — so a session reload reconstructs the
+///   structured reasoning vs. text exactly as it was broadcast. Without this
+///   step the entire raw content was emitted as one `AgentMessageChunk` and
+///   the FE saw `<think>` markup mixed into the visible message body: the
+///   "thinking text was lost on the MCP side" bug.
+/// * [`MessageRole::Tool`] → one [`SessionUpdate::ToolCall`] (a complete tool
+///   call carrying the result; see the module docs for the round-trip
+///   contract)
+/// * [`MessageRole::System`] → empty
+pub fn message_to_session_updates(message: &Message) -> Vec<SessionUpdate> {
+    match message.role {
+        MessageRole::User => vec![SessionUpdate::UserMessageChunk(text_chunk(
+            &message.content,
+        ))],
+        MessageRole::Assistant => assistant_content_to_updates(&message.content),
+        MessageRole::Tool => vec![SessionUpdate::ToolCall(tool_call_from_message(message))],
+        MessageRole::System => Vec::new(),
+    }
+}
+
+/// Single-update form for backwards-compatible callers that only want the
+/// "primary" update for a message. Loses the multi-segment split for
+/// assistant messages — prefer [`message_to_session_updates`] for replayable
+/// stream projection.
+///
+/// Kept for the public API surface; not used by the persistence path.
 pub fn message_to_session_update(message: &Message) -> Option<SessionUpdate> {
     match message.role {
         MessageRole::User => Some(SessionUpdate::UserMessageChunk(text_chunk(
@@ -79,14 +106,38 @@ pub fn message_to_session_update(message: &Message) -> Option<SessionUpdate> {
     }
 }
 
+/// Split a persisted assistant `content` string into the ordered
+/// [`SessionUpdate`] stream the FE expects: `<think>` runs become
+/// [`SessionUpdate::AgentThoughtChunk`], visible runs become
+/// [`SessionUpdate::AgentMessageChunk`], and `<tool_call>` markup is dropped
+/// (the actual tool call is replayed from the following `Tool` message).
+///
+/// Uses the same [`VisibleTextFilter`] that the live streaming path uses, so
+/// the projected stream a `session/load` replays is byte-equivalent to what
+/// the client originally saw broadcast.
+fn assistant_content_to_updates(content: &str) -> Vec<SessionUpdate> {
+    let mut filter = VisibleTextFilter::default();
+    let mut segments = filter.push(content);
+    segments.extend(filter.finish());
+    segments
+        .into_iter()
+        .map(|seg| match seg {
+            FilterSegment::Visible(text) => SessionUpdate::AgentMessageChunk(text_chunk(&text)),
+            FilterSegment::Thought(text) => SessionUpdate::AgentThoughtChunk(text_chunk(&text)),
+        })
+        .collect()
+}
+
 /// Convert a whole conversation into the ordered ACP [`SessionUpdate`] stream.
 ///
-/// Order is preserved. [`MessageRole::System`] messages are dropped (see
-/// [`message_to_session_update`]).
+/// Order is preserved. [`MessageRole::System`] messages are dropped, and
+/// each assistant message expands into the ordered visible/thought stream
+/// produced by [`assistant_content_to_updates`] so reasoning survives a
+/// `session/load`.
 pub fn messages_to_session_updates(messages: &[Message]) -> Vec<SessionUpdate> {
     messages
         .iter()
-        .filter_map(message_to_session_update)
+        .flat_map(message_to_session_updates)
         .collect()
 }
 
@@ -105,10 +156,69 @@ pub fn messages_to_session_updates(messages: &[Message]) -> Vec<SessionUpdate> {
 /// with the current time: the original per-message timestamps are not part of
 /// the persisted update stream.
 pub fn session_updates_to_messages(updates: &[SessionUpdate]) -> Vec<Message> {
-    updates
-        .iter()
-        .filter_map(session_update_to_message)
-        .collect()
+    // Stateful pass: `AgentThoughtChunk` and consecutive `AgentMessageChunk`s
+    // are folded back into one [`MessageRole::Assistant`] message whose
+    // `content` reconstructs the original `<think>…</think>` markup. Without
+    // this, a session that persisted a split visible/thought stream (the new
+    // `assistant_content_to_updates` projection) would lose the thinking on
+    // BE resume — the inverse of the bug fixed in the forward direction.
+    let mut out: Vec<Message> = Vec::with_capacity(updates.len());
+    let mut buffered: Option<AssistantBuilder> = None;
+
+    for update in updates {
+        match update {
+            SessionUpdate::AgentThoughtChunk(chunk) => {
+                let text = content_block_text(&chunk.content);
+                buffered
+                    .get_or_insert_with(AssistantBuilder::default)
+                    .push_thought(&text);
+            }
+            SessionUpdate::AgentMessageChunk(chunk) => {
+                let text = content_block_text(&chunk.content);
+                buffered
+                    .get_or_insert_with(AssistantBuilder::default)
+                    .push_visible(&text);
+            }
+            other => {
+                if let Some(builder) = buffered.take() {
+                    out.push(builder.finish());
+                }
+                if let Some(msg) = session_update_to_message(other) {
+                    out.push(msg);
+                }
+            }
+        }
+    }
+    if let Some(builder) = buffered.take() {
+        out.push(builder.finish());
+    }
+    out
+}
+
+/// Accumulator for the visible/thought stream of one assistant turn. Each
+/// `push_*` call appends to a single growing `content` buffer in source
+/// order, re-wrapping thought runs in `<think>…</think>` so the result is
+/// indistinguishable from the original raw model output. `finish` produces
+/// the canonical [`MessageRole::Assistant`] message.
+#[derive(Default)]
+struct AssistantBuilder {
+    content: String,
+}
+
+impl AssistantBuilder {
+    fn push_visible(&mut self, text: &str) {
+        self.content.push_str(text);
+    }
+
+    fn push_thought(&mut self, text: &str) {
+        self.content.push_str("<think>");
+        self.content.push_str(text);
+        self.content.push_str("</think>");
+    }
+
+    fn finish(self) -> Message {
+        plain_message(MessageRole::Assistant, self.content)
+    }
 }
 
 /// Build an agent-neutral [`SessionRecord`] from a live [`Session`].
@@ -211,6 +321,12 @@ fn tool_call_from_message(message: &Message) -> ToolCall {
 ///
 /// Returns `None` for [`SessionUpdate`] variants that have no llama [`Message`]
 /// equivalent.
+///
+/// [`SessionUpdate::AgentThoughtChunk`] folds into the prior assistant
+/// message rather than producing a fresh one — see
+/// [`session_updates_to_messages`] for the coalescing logic. This helper
+/// alone cannot do that (it has no prior context), so it returns `None` for
+/// thought chunks and callers must use the stream-aware variant.
 fn session_update_to_message(update: &SessionUpdate) -> Option<Message> {
     match update {
         SessionUpdate::UserMessageChunk(chunk) => Some(plain_message(
@@ -330,6 +446,109 @@ mod tests {
     fn assistant_message_maps_to_agent_chunk() {
         let update = message_to_session_update(&msg(MessageRole::Assistant, "hi there")).unwrap();
         assert!(matches!(update, SessionUpdate::AgentMessageChunk(_)));
+    }
+
+    /// The user-reported bug: an assistant message with `<think>` markup must
+    /// project to a SEPARATE thought update plus a separate visible update,
+    /// in source order. Before this fix the entire raw content (markup
+    /// included) was crammed into one `AgentMessageChunk` and the FE saw
+    /// `<think>` tags as part of the assistant's visible reply — "the
+    /// thinking text was lost on the MCP side".
+    #[test]
+    fn assistant_message_with_think_splits_into_thought_then_visible() {
+        let raw = "<think>let me check</think>Here you go.";
+        let updates = messages_to_session_updates(&[msg(MessageRole::Assistant, raw)]);
+        assert_eq!(updates.len(), 2, "must emit two updates, got {updates:?}");
+        match &updates[0] {
+            SessionUpdate::AgentThoughtChunk(chunk) => {
+                assert_eq!(content_block_text(&chunk.content), "let me check");
+            }
+            other => panic!("expected AgentThoughtChunk first, got {other:?}"),
+        }
+        match &updates[1] {
+            SessionUpdate::AgentMessageChunk(chunk) => {
+                assert_eq!(content_block_text(&chunk.content), "Here you go.");
+            }
+            other => panic!("expected AgentMessageChunk second, got {other:?}"),
+        }
+    }
+
+    /// `<tool_call>` markup persisted in the assistant's raw content must be
+    /// stripped from the projected updates — the structured ToolCall comes
+    /// from the following Tool-role message. Leaking the raw markup into an
+    /// AgentMessageChunk would render the tool-call JSON as visible message
+    /// text in the UI, which is the exact pre-filter bug.
+    #[test]
+    fn assistant_message_drops_tool_call_markup_from_visible_stream() {
+        let raw = r#"I'll look that up.<tool_call>{"name":"x"}</tool_call>"#;
+        let updates = messages_to_session_updates(&[msg(MessageRole::Assistant, raw)]);
+        // Only the leading visible run survives; the tool_call body is dropped.
+        assert_eq!(updates.len(), 1, "tool_call markup must be stripped");
+        match &updates[0] {
+            SessionUpdate::AgentMessageChunk(chunk) => {
+                let text = content_block_text(&chunk.content);
+                assert_eq!(text, "I'll look that up.");
+                assert!(!text.contains("<tool_call>"));
+                assert!(!text.contains("\"name\""));
+            }
+            other => panic!("expected AgentMessageChunk, got {other:?}"),
+        }
+    }
+
+    /// Thought-before-visible-before-thought (multiple interleaved spans in
+    /// one assistant message) must produce alternating updates in source
+    /// order, so the FE renders reasoning in the spot it actually appeared.
+    #[test]
+    fn assistant_message_preserves_thought_visible_interleave_on_load() {
+        let raw = "<think>a</think>X<think>b</think>Y";
+        let updates = messages_to_session_updates(&[msg(MessageRole::Assistant, raw)]);
+        let kinds: Vec<&str> = updates
+            .iter()
+            .map(|u| match u {
+                SessionUpdate::AgentThoughtChunk(_) => "T",
+                SessionUpdate::AgentMessageChunk(_) => "V",
+                _ => "?",
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["T", "V", "T", "V"],
+            "must emit T V T V in order"
+        );
+    }
+
+    /// On BE resume, the split update stream must coalesce back into a
+    /// single assistant Message whose content reconstructs the original
+    /// `<think>…</think>` markup — the inverse of the forward split. Without
+    /// this round-trip the next turn's prompt would lose the prior turn's
+    /// thinking entirely.
+    #[test]
+    fn assistant_thought_and_visible_round_trip_through_session_updates() {
+        let original = "<think>plan</think>Done.";
+        let updates = messages_to_session_updates(&[msg(MessageRole::Assistant, original)]);
+        let restored = session_updates_to_messages(&updates);
+        assert_eq!(
+            restored.len(),
+            1,
+            "two updates must coalesce into one assistant message"
+        );
+        assert_eq!(restored[0].role, MessageRole::Assistant);
+        assert_eq!(restored[0].content, original);
+    }
+
+    /// A persisted assistant message with no `<think>` markup must still
+    /// project to a single `AgentMessageChunk` and round-trip cleanly — the
+    /// new code path must not regress the common no-reasoning case.
+    #[test]
+    fn assistant_message_without_think_is_a_single_chunk() {
+        let raw = "just an answer";
+        let updates = messages_to_session_updates(&[msg(MessageRole::Assistant, raw)]);
+        assert_eq!(updates.len(), 1);
+        assert!(matches!(updates[0], SessionUpdate::AgentMessageChunk(_)));
+
+        let restored = session_updates_to_messages(&updates);
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].content, raw);
     }
 
     /// System messages (prompts, compaction summaries) are not replayed.

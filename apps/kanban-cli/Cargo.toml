@@ -5,10 +5,15 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Standalone CLI for SwissArmyHammer Kanban board"
+homepage.workspace = true
+description = "kanban — a git-native task board for humans and AI coding agents; CLI + MCP server over versionable .kanban/ files"
 
+# No `formula = "..."` override: the Homebrew formula is named after the crate
+# (`kanban-cli`). The short `kanban` token belongs to the desktop app cask
+# (apps/kanban-app), which bundles this CLI as a sidecar. An override here would
+# recreate the formula/cask name collision that made `brew install kanban` pull
+# the CLI instead of the app.
 [package.metadata.dist]
-formula = "kanban"
 
 [[bin]]
 name = "kanban"
@@ -21,8 +26,6 @@ swissarmyhammer-entity = { workspace = true }
 swissarmyhammer-merge = { workspace = true }
 swissarmyhammer-operations = { workspace = true }
 swissarmyhammer-common = { workspace = true }
-swissarmyhammer-skills = { workspace = true }
-swissarmyhammer-templating = { workspace = true }
 swissarmyhammer-doctor = { workspace = true }
 mirdan = { workspace = true }
 
@@ -44,6 +47,8 @@ once_cell = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
 swissarmyhammer-cli-completions = { workspace = true, features = ["test-helpers"] }
+# Enable mirdan's test-support helpers for the registry deploy tests.
+mirdan = { workspace = true, features = ["test-support"] }
 
 [build-dependencies]
 clap = { workspace = true }

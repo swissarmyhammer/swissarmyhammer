@@ -900,7 +900,7 @@ Examples:
   sah --verbose model list                 # Show detailed information
   sah --format=json model list             # Output as JSON
   sah model use claude-code                # Apply claude-code model
-  sah --debug model use qwen-coder         # Use model with debug output
+  sah --debug model use qwen         # Use model with debug output
 ";
 
 const MODEL_USE_LONG_ABOUT: &str = "
@@ -916,7 +916,7 @@ Model precedence (highest to lowest):
 
 Examples:
   sah model use claude-code                # Apply Claude Code model
-  sah model use qwen-coder                # Apply Qwen Coder model
+  sah model use qwen                       # Apply the Qwen model
 ";
 
 /// Statistics about CLI tool validation results

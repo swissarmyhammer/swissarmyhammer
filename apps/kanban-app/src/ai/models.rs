@@ -615,7 +615,7 @@ mod tests {
     }
 
     #[test]
-    fn list_models_excludes_local_llama_models_for_now() {
+    fn list_models_includes_kanban_tagged_qwen_and_excludes_others() {
         let _env = EnvGuard::acquire();
         let dir = tempfile::tempdir().unwrap();
         write_fake_executable(dir.path(), "claude");
@@ -624,24 +624,29 @@ mod tests {
 
         let models = ai_list_models().expect("model enumeration must succeed");
 
-        // For now only `claude-code` carries the `kanban` tag, so the panel
-        // must not surface any local llama models — even though the built-in
-        // set still ships them.
-        assert!(
-            !models.iter().any(|m| m.kind == ModelKind::LocalLlama),
-            "no local llama model should be listed while only `claude-code` is \
-             kanban-tagged, got {models:?}"
-        );
-
-        // The Claude Code entry is still offered (and embedding models stay out).
+        // `claude-code` and `qwen` both carry the `kanban` tag, so both must
+        // surface in the panel. `qwen` is a local llama chat model.
         assert!(
             models.iter().any(|m| m.id == CLAUDE_CODE_MODEL_ID),
-            "the Claude Code entry must still be listed, got {models:?}"
+            "the Claude Code entry must be listed, got {models:?}"
         );
-        assert!(
-            !models.iter().any(|m| m.id == "qwen-embedding"),
-            "embedding-only models must be excluded from agent enumeration"
+        let qwen = models
+            .iter()
+            .find(|m| m.id == "qwen")
+            .unwrap_or_else(|| panic!("`qwen` must be listed, got {models:?}"));
+        assert_eq!(
+            qwen.kind,
+            ModelKind::LocalLlama,
+            "`qwen` must be enumerated as a local llama model, got {qwen:?}"
         );
+
+        // The other qwen variants stay untagged and must not appear.
+        for excluded in ["qwen-0.6b-test", "qwen-0.8b-mtp-test", "qwen-embedding"] {
+            assert!(
+                !models.iter().any(|m| m.id == excluded),
+                "untagged model `{excluded}` must not be listed, got {models:?}"
+            );
+        }
     }
 
     #[test]
@@ -711,10 +716,10 @@ mod tests {
 
     #[test]
     fn resolve_model_config_for_local_llama_model() {
-        // `qwen-coder` is a built-in `llama-agent` model. Resolving it must
+        // `qwen` is a built-in `llama-agent` model. Resolving it must
         // yield a runnable chat-agent config.
-        let config = resolve_model_config("qwen-coder")
-            .expect("a built-in llama model must resolve to a config");
+        let config =
+            resolve_model_config("qwen").expect("a built-in llama model must resolve to a config");
         assert_eq!(config.executor_type(), ModelExecutorType::LlamaAgent);
     }
 
