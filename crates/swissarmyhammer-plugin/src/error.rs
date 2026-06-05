@@ -54,6 +54,25 @@ pub enum Error {
     #[error("plugin was reloaded; retry the request")]
     PluginReloaded,
 
+    /// A registered server accepted the call but its handler reported a failure.
+    ///
+    /// Carries the JSON-RPC error code and message the handler returned (for
+    /// example `-32602` invalid params or `-32603` internal error). This is
+    /// deliberately distinct from [`ServerUnavailable`]: the server *is*
+    /// serving — it ran the request and returned an error — so flattening it to
+    /// "server is unavailable" would hide the actual fault. Preserving the code
+    /// and message keeps a failing tool call legible all the way back to the
+    /// caller.
+    ///
+    /// [`ServerUnavailable`]: Self::ServerUnavailable
+    #[error("call failed (code {code}): {message}")]
+    CallFailed {
+        /// The JSON-RPC error code the handler reported.
+        code: i32,
+        /// The human-readable error message the handler reported.
+        message: String,
+    },
+
     /// No plugin is loaded under the named plugin id.
     ///
     /// Raised when an operation — such as [`unload`] — names a plugin that the

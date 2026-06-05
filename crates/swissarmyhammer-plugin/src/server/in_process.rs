@@ -169,14 +169,20 @@ where
 ///
 /// `rmcp`'s `ErrorData` distinguishes a missing tool — code
 /// [`METHOD_NOT_FOUND`](rmcp::model::ErrorCode::METHOD_NOT_FOUND) — from every
-/// other failure. A missing tool becomes [`Error::UnknownTool`]; anything else
-/// becomes [`Error::ServerUnavailable`], since the handler is registered but
-/// could not serve the request.
+/// other failure. A missing tool becomes [`Error::UnknownTool`]; every other
+/// failure becomes [`Error::CallFailed`], preserving the handler's real
+/// JSON-RPC code and message. Flattening these to [`Error::ServerUnavailable`]
+/// would hide the actual fault (for example a `-32602` invalid-params or
+/// `-32603` internal error raised by a command callback), so the code and
+/// message are carried through verbatim to keep failures legible at the caller.
 fn map_rmcp_error(error: rmcp::ErrorData) -> Error {
     if error.code == rmcp::model::ErrorCode::METHOD_NOT_FOUND {
         Error::UnknownTool
     } else {
-        Error::ServerUnavailable
+        Error::CallFailed {
+            code: error.code.0,
+            message: error.message.into_owned(),
+        }
     }
 }
 
@@ -201,8 +207,9 @@ where
     /// # Errors
     ///
     /// Returns [`Error::UnknownTool`] when `tool` is not in the wrapped
-    /// handler's tool list, or [`Error::ServerUnavailable`] when the handler's
-    /// `call_tool` itself reports a failure.
+    /// handler's tool list, or [`Error::CallFailed`] — carrying the handler's
+    /// real code and message — when the handler's `call_tool` itself reports a
+    /// failure.
     async fn invoke(
         &self,
         caller: CallerId,
@@ -281,6 +288,18 @@ mod tests {
         #[tool(name = "whoami", description = "Reports the caller identity.")]
         async fn whoami(&self, Extension(caller): Extension<CallerId>) -> String {
             format!("{caller:?}")
+        }
+
+        /// Always fails with a distinctive `-32602` invalid-params error.
+        ///
+        /// Used to prove the adapter preserves the handler's real error code and
+        /// message rather than flattening every failure to "server unavailable".
+        #[tool(name = "boom", description = "Always fails with invalid params.")]
+        async fn boom(&self) -> Result<String, rmcp::ErrorData> {
+            Err(rmcp::ErrorData::invalid_params(
+                "boom: the seven sins of the parameter",
+                None,
+            ))
         }
     }
 
@@ -364,6 +383,36 @@ mod tests {
             matches!(err, Error::UnknownTool),
             "a missing tool should map to UnknownTool, got {err:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn handler_failure_preserves_the_real_code_and_message() {
+        let server = InProcessServer::new(EchoServer::new())
+            .await
+            .expect("wrapping a real rmcp handler should succeed");
+
+        let err = server
+            .invoke(CallerId::HostInternal, "boom", json!({}))
+            .await
+            .expect_err("a tool that returns an error should fail the invoke");
+
+        match err {
+            Error::CallFailed { code, message } => {
+                assert_eq!(
+                    code,
+                    rmcp::model::ErrorCode::INVALID_PARAMS.0,
+                    "the real -32602 code must survive the adapter"
+                );
+                assert!(
+                    message.contains("seven sins of the parameter"),
+                    "the real handler message must survive the adapter, got {message:?}"
+                );
+            }
+            other => panic!(
+                "a handler failure must surface as CallFailed carrying the real \
+                 code+message, not the opaque {other:?}"
+            ),
+        }
     }
 
     #[tokio::test]
