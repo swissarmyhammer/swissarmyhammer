@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KT6R6HR3KJT6JVNDRAJV8V4T
-position_column: todo
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffea80
 project: short-ids
 title: 'Short IDs: mention identity — task ^ slug = short id (backend)'
 ---

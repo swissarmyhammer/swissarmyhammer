@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffe780
 project: short-ids
 title: 'Short IDs: core derivation + board resolver'
 ---

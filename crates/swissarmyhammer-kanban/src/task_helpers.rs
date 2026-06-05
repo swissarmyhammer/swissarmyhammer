@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use swissarmyhammer_entity::{Entity, EntityFilterContext};
 
-use crate::types::Ordinal;
+use crate::types::{resolve_short_ref, Ordinal, ResolveResult, TaskId};
 use crate::virtual_tags::{TerminalColumnId, VirtualTagRegistry};
 
 /// Generate a default title for a new task.
@@ -206,9 +206,25 @@ pub fn find_dependent_task_ids(task_id: &str, all_tasks: &[Entity]) -> Vec<Strin
         .collect()
 }
 
+/// Inject the derived `short_id` field onto a task entity in place.
+///
+/// The short id is the last seven lowercased characters of the task's ULID
+/// (see [`crate::types::short_id`]). It is never stored — always derived — so
+/// this is a read-time enrichment: both the per-read enrichment path
+/// ([`enrich_task_entity`]) and the per-keystroke mention search populate it
+/// here so downstream consumers (the frontend entity store, the CM6 mention
+/// metaMap) can key on the short id without re-deriving it in JavaScript.
+pub fn set_task_short_id(entity: &mut Entity) {
+    entity.set(
+        "short_id",
+        json!(crate::types::short_id(entity.id.as_str())),
+    );
+}
+
 /// Inject computed fields into a task entity's fields map.
 ///
 /// Enriches the raw entity with computed dependency-graph and progress data:
+/// - `short_id`: derived 7-char short handle (see [`set_task_short_id`])
 /// - `progress_fraction`: scalar 0.0–1.0 derived from checklist progress
 /// - `ready`: true when all dependencies are in the terminal column
 /// - `blocked_by`: list of incomplete dependency task IDs
@@ -223,6 +239,9 @@ pub fn enrich_task_entity(
     terminal_column_id: &str,
     registry: &VirtualTagRegistry,
 ) {
+    // Derived short handle — display + input only, never stored.
+    set_task_short_id(entity);
+
     // progress as a scalar fraction (the progress field from ComputeEngine is {total, completed, percent})
     let progress = task_progress(entity);
     entity.set("progress_fraction", json!(progress));
@@ -327,15 +346,16 @@ fn build_dependency_indexes(entities: &[Entity]) -> DependencyIndexes {
 
 /// Enrich a single task entity using pre-built indexes.
 ///
-/// Sets progress_fraction, ready, blocked_by, blocks, virtual_tags, and
-/// filter_tags fields. Uses the indexes for O(1) dependency lookups instead
-/// of scanning the full task list.
+/// Sets short_id, progress_fraction, ready, blocked_by, blocks, virtual_tags,
+/// and filter_tags fields. Uses the indexes for O(1) dependency lookups
+/// instead of scanning the full task list.
 fn enrich_task_from_indexes(
     entity: &mut Entity,
     indexes: &DependencyIndexes,
     terminal_column_id: &str,
     registry: &VirtualTagRegistry,
 ) {
+    set_task_short_id(entity);
     entity.set("progress_fraction", json!(task_progress(entity)));
 
     // Ready: all deps in terminal column
@@ -453,6 +473,10 @@ pub fn task_entity_to_json(entity: &Entity) -> Value {
 
     let mut result = json!({
         "id": entity.id,
+        // Derived forgiving short handle: the last seven lowercased ULID
+        // characters. Never stored — always derived from the canonical id so
+        // consumers can echo `^<short>` back to humans.
+        "short_id": crate::types::short_id(entity.id.as_str()),
         "title": entity.get_str("title").unwrap_or(""),
         "description": entity.get_str("body").unwrap_or(""),
         "position": position,
@@ -638,6 +662,28 @@ impl<'a> TaskFilterAdapter<'a> {
             registry: Some(registry),
         }
     }
+
+    /// Resolve a forgiving `^ref` against the task ids this card can match.
+    ///
+    /// `id` is treated as a forgiving task reference (canonical 7-char short
+    /// id, full ULID, or unique ULID prefix, all case-insensitive). The
+    /// candidate set is exactly the ids a `^ref` is allowed to match for this
+    /// task — its own id plus its `depends_on` entries — mirroring the
+    /// full-id semantics in [`Self::has_ref`]. Resolution reuses the
+    /// canonical [`resolve_short_ref`] so short ids behave identically to
+    /// every other surface that accepts them.
+    ///
+    /// Returns `true` when the reference resolves to one of the candidate ids.
+    /// An ambiguous prefix (more than one candidate) does not match — `^ref`
+    /// is a membership predicate, not a picker, so an unresolved reference is
+    /// simply "no".
+    fn short_ref_matches(&self, id: &str, depends_on: &[String]) -> bool {
+        let candidates: Vec<TaskId> = std::iter::once(self.entity.id.as_ref())
+            .chain(depends_on.iter().map(String::as_str))
+            .map(TaskId::from_string)
+            .collect();
+        matches!(resolve_short_ref(&candidates, id), ResolveResult::Found(_))
+    }
 }
 
 impl<'a> swissarmyhammer_filter_expr::FilterContext for TaskFilterAdapter<'a> {
@@ -676,6 +722,12 @@ impl<'a> swissarmyhammer_filter_expr::FilterContext for TaskFilterAdapter<'a> {
         }
         let depends_on = self.entity.get_string_list("depends_on");
         if depends_on.iter().any(|r| r == id) {
+            return true;
+        }
+        // Short-id / ULID-prefix resolution: a `^<short>` reference resolves
+        // to a full task id before matching, so short ids select the same
+        // tasks as their full ULIDs do.
+        if self.short_ref_matches(id, &depends_on) {
             return true;
         }
         // Fall back to slug-of-title: resolve `id` to a task id via the
@@ -1013,6 +1065,16 @@ mod tests {
     }
 
     #[test]
+    fn test_task_entity_to_json_includes_short_id() {
+        // The output JSON must carry a derived `short_id` — the last seven
+        // lowercased characters of the ULID — so API consumers can echo the
+        // forgiving short handle back to humans.
+        let e = make_task("01KT6SAAM6CR85YZD26JHSC87E", "Test", "", "todo");
+        let result = task_entity_to_json(&e);
+        assert_eq!(result["short_id"], "jhsc87e");
+    }
+
+    #[test]
     fn test_task_entity_to_rich_json() {
         let dep = make_task("dep1", "Dep", "", "todo");
         let mut e = make_task("t1", "Test", "", "todo");
@@ -1043,6 +1105,29 @@ mod tests {
         assert_eq!(e.get("ready").unwrap(), &json!(false));
         assert_eq!(e.get("blocked_by").unwrap(), &json!(["dep1"]));
         assert_eq!(e.get("blocks").unwrap(), &json!([]));
+    }
+
+    #[test]
+    fn set_task_short_id_injects_derived_field() {
+        // The derived `short_id` is the last seven lowercased ULID chars.
+        // set_task_short_id mutates the entity in place so the frontend
+        // entity store (and `search_mentions`) can key the mention metaMap on
+        // it without re-deriving in JS.
+        let mut e = make_task("01KT6R6HR3KJT6JVNDRAJV8V4T", "Test", "", "todo");
+        set_task_short_id(&mut e);
+        assert_eq!(e.get_str("short_id"), Some("ajv8v4t"));
+    }
+
+    #[test]
+    fn test_enrich_task_entity_sets_short_id() {
+        // Enrichment is the single read-time path that the Tauri commands
+        // serialize to the frontend, so `short_id` must land here too — not
+        // only in the tool-API `task_entity_to_json`.
+        let mut e = make_task("01KT6R6HR3KJT6JVNDRAJV8V4T", "Test", "", "todo");
+        let all = vec![e.clone()];
+        let registry = VirtualTagRegistry::new();
+        enrich_task_entity(&mut e, &all, "done", &registry);
+        assert_eq!(e.get_str("short_id"), Some("ajv8v4t"));
     }
 
     #[test]
@@ -1081,6 +1166,16 @@ mod tests {
         assert_eq!(t1_enriched.get("ready").unwrap(), &json!(false));
         assert_eq!(t1_enriched.get("blocked_by").unwrap(), &json!(["dep1"]));
         assert_eq!(t1_enriched.get("blocks").unwrap(), &json!([]));
+    }
+
+    #[test]
+    fn test_enrich_all_task_entities_sets_short_id() {
+        // The batch path is what `list_entities` runs, so it must inject the
+        // same derived `short_id` as the single-entity path.
+        let mut entities = vec![make_task("01KT6R6HR3KJT6JVNDRAJV8V4T", "Test", "", "todo")];
+        let registry = VirtualTagRegistry::new();
+        enrich_all_task_entities(&mut entities, "done", &registry);
+        assert_eq!(entities[0].get_str("short_id"), Some("ajv8v4t"));
     }
 
     #[test]
@@ -1808,5 +1903,74 @@ mod tests {
 
         assert!(adapter.has_ref("01OTHER"));
         assert!(adapter.has_ref("01SELF"));
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Short-id `^ref` resolution
+    //
+    // These pin the contract from
+    // `.kanban/tasks/01KT6SAMJAJ40XVQ9Y7JRAJ9VG.md`: a `^<short>` filter
+    // must resolve the 7-char short id (and full ULID / mixed case) to a
+    // task id before matching against the task's own id and its
+    // depends_on list. Short-id derivation reuses `short_id` /
+    // `resolve_short_ref`.
+    // ─────────────────────────────────────────────────────────────────
+
+    // Real ULIDs from the short-ids epic board.
+    const REF_SELF: &str = "01KT6SAMJAJ40XVQ9Y7JRAJ9VG";
+    const REF_DEP: &str = "01KT6R6HR3KJT6JVNDRAJV8V4T";
+
+    #[test]
+    fn task_filter_adapter_has_ref_matches_own_short_id() {
+        use crate::types::short_id;
+        use swissarmyhammer_filter_expr::FilterContext;
+
+        let task = make_task(REF_SELF, "Self", "", "todo");
+        let adapter = TaskFilterAdapter::new(&task);
+
+        // The task's own 7-char short id matches.
+        assert!(adapter.has_ref(&short_id(REF_SELF)));
+        // The full ULID still matches.
+        assert!(adapter.has_ref(REF_SELF));
+    }
+
+    #[test]
+    fn task_filter_adapter_has_ref_matches_dependency_short_id() {
+        use crate::types::short_id;
+        use swissarmyhammer_filter_expr::FilterContext;
+
+        let mut task = make_task(REF_SELF, "Self", "", "todo");
+        task.set("depends_on", json!([REF_DEP]));
+        let adapter = TaskFilterAdapter::new(&task);
+
+        // A dependency's short id matches, mirroring full-id semantics.
+        assert!(adapter.has_ref(&short_id(REF_DEP)));
+        // The dependency's full ULID still matches.
+        assert!(adapter.has_ref(REF_DEP));
+    }
+
+    #[test]
+    fn task_filter_adapter_has_ref_short_id_is_case_insensitive() {
+        use crate::types::short_id;
+        use swissarmyhammer_filter_expr::FilterContext;
+
+        let task = make_task(REF_SELF, "Self", "", "todo");
+        let adapter = TaskFilterAdapter::new(&task);
+
+        // Mixed-case short id resolves (short_id() is lowercase; upper-case
+        // the human input).
+        assert!(adapter.has_ref(&short_id(REF_SELF).to_uppercase()));
+    }
+
+    #[test]
+    fn task_filter_adapter_has_ref_unknown_short_id_does_not_match() {
+        use swissarmyhammer_filter_expr::FilterContext;
+
+        let mut task = make_task(REF_SELF, "Self", "", "todo");
+        task.set("depends_on", json!([REF_DEP]));
+        let adapter = TaskFilterAdapter::new(&task);
+
+        // A 7-char string that is neither task's short id must not match.
+        assert!(!adapter.has_ref("zzzzzzz"));
     }
 }

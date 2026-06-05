@@ -279,25 +279,38 @@ describe("MarkdownDisplay — mention widgets", () => {
       ],
       task: [
         {
-          id: "t99",
+          id: "01KT4CNAYW7JG0X8F8W28RFP1R",
           entity_type: "task",
-          moniker: "task:t99",
-          fields: { title: "Task Title", color: "00ff00" },
+          moniker: "task:01KT4CNAYW7JG0X8F8W28RFP1R",
+          // The task mention slug is the derived 7-char short id (lowercased
+          // last-7 of the ULID), and the title rides along in the tooltip.
+          fields: {
+            short_id: "28rfp1r",
+            title: "Long Sentence-Like Task Title",
+            color: "00ff00",
+          },
         },
       ],
     };
     mockMentionableTypes = [
       { entityType: "tag", prefix: "#", displayField: "tag_name" },
       { entityType: "project", prefix: "$", displayField: "name" },
-      { entityType: "task", prefix: "^", displayField: "title" },
+      // Tasks key their mention metaMap on the short_id field, so the pill
+      // labels with `^<short>` and reserves the title for the tooltip.
+      {
+        entityType: "task",
+        prefix: "^",
+        displayField: "title",
+        slugField: "short_id",
+      },
     ];
   });
 
-  it("renders tag, project, and task mentions as CM6 pill widgets with display names", async () => {
-    // Three known mentions on a single line (not a heading — no leading
-    // `# ` with whitespace). Decoration widgets should replace the raw
-    // slugs with the entity display names, clipped via `clipDisplayName`.
-    const md = "intro\n\n#bug-fix $my-project ^task-title";
+  it("renders tag and project mentions as CM6 pill widgets with display names", async () => {
+    // Known mentions on a single line (not a heading — no leading `# ` with
+    // whitespace). Decoration widgets replace the raw slugs with the entity
+    // display names, clipped via `clipDisplayName`.
+    const md = "intro\n\n#bug-fix $my-project";
     const { container } = render(
       <MarkdownDisplay {...makeProps(md, "full")} />,
     );
@@ -307,6 +320,49 @@ describe("MarkdownDisplay — mention widgets", () => {
     const texts = Array.from(pills).map((p) => p.textContent);
     expect(texts).toContain("#Bug Fix");
     expect(texts).toContain("$My Project");
-    expect(texts).toContain("^Task Title");
+  });
+
+  it("renders a ^<short> task pill from a bare short id", async () => {
+    // A 7-char short id is shape-matched and labelled `^<short>` — the title
+    // is intentionally NOT shown inline (it lives in the hover tooltip).
+    const md = "see ^28rfp1r for context";
+    const { container } = render(
+      <MarkdownDisplay {...makeProps(md, "full")} />,
+    );
+    await flush();
+
+    const pills = container.querySelectorAll(".cm-mention-pill");
+    const texts = Array.from(pills).map((p) => p.textContent);
+    expect(texts).toContain("^28rfp1r");
+  });
+
+  it("renders a ^<short> task pill from a full ULID reference", async () => {
+    // The 26-char full ULID normalizes to its last-7 and renders the SAME
+    // `^<short>` pill as the bare short-id form.
+    const md = "see ^01KT4CNAYW7JG0X8F8W28RFP1R for context";
+    const { container } = render(
+      <MarkdownDisplay {...makeProps(md, "full")} />,
+    );
+    await flush();
+
+    const pills = container.querySelectorAll(".cm-mention-pill");
+    const texts = Array.from(pills).map((p) => p.textContent);
+    expect(texts).toContain("^28rfp1r");
+  });
+
+  it("renders an unknown short-id ref as muted raw text, not a pill", async () => {
+    // Shape matches but resolution misses → muted mark on the raw token, no
+    // widget pill, no crash.
+    const md = "see ^zzzzzzz for context";
+    const { container } = render(
+      <MarkdownDisplay {...makeProps(md, "full")} />,
+    );
+    await flush();
+
+    const pills = container.querySelectorAll(".cm-mention-pill");
+    const texts = Array.from(pills).map((p) => p.textContent);
+    expect(texts).not.toContain("^zzzzzzz");
+    // The raw token survives as plain editor text.
+    expect(container.textContent).toContain("^zzzzzzz");
   });
 });

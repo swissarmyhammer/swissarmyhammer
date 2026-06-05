@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KT6R6HR3KJT6JVNDRAJV8V4T
-position_column: todo
-position_ordinal: '8380'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffe880
 project: short-ids
 title: 'Short IDs: filter DSL ^ref resolves short ids'
 ---

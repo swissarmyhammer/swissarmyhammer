@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KT6SAXCBZFE6S0DEPZDJSQAA
-position_column: todo
-position_ordinal: '8680'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffec80
 project: short-ids
 title: 'Short IDs: CM6 — ^ autocomplete inserts short id'
 ---

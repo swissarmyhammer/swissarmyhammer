@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KT6R6HR3KJT6JVNDRAJV8V4T
-position_column: todo
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffe980
 project: short-ids
 title: 'Short IDs: enforce uniqueness at create + doctor check'
 ---

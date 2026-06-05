@@ -19,7 +19,9 @@ use crate::task::{
     AddTask, ArchiveTask, AssignTask, CompleteTask, DeleteTask, GetTask, ListArchived, ListTasks,
     MoveTask, NextTask, TagTask, UnarchiveTask, UnassignTask, UntagTask, UpdateTask,
 };
-use crate::types::{ActorId, Noun, Operation as KanbanOperation, TaskId, Verb};
+use crate::types::{
+    resolve_short_ref, ActorId, Noun, Operation as KanbanOperation, ResolveResult, TaskId, Verb,
+};
 use crate::{KanbanContext, KanbanError, KanbanOperationProcessor, OperationProcessor};
 use serde_json::Value;
 
@@ -27,6 +29,152 @@ use serde_json::Value;
 fn req<'a>(op: &'a KanbanOperation, key: &str) -> Result<&'a str, KanbanError> {
     op.get_string(key)
         .ok_or_else(|| KanbanError::parse(format!("missing required field: {}", key)))
+}
+
+/// Recognize an already-canonical full ULID reference and return its canonical
+/// (uppercase) form, skipping any board lookup.
+///
+/// A canonical reference is a 26-char Crockford-base32 ULID, optionally carrying
+/// a leading `^` sigil and in any case — the same forms [`resolve_short_ref`]
+/// would treat as a full-ULID match. Anything else (short id, prefix, garbage)
+/// returns `None`, deferring to the board-scanning resolver.
+///
+/// This is the fast path for the common case where the caller already holds the
+/// full id: the stored ULID *is* the canonical identity, so no scan of live or
+/// archived tasks is needed to normalize it. Existence is enforced downstream by
+/// the underlying command, exactly as it is for the board-scan path (which only
+/// loads ids, never proving the live task still exists).
+fn canonical_full_ulid(raw: &str) -> Option<String> {
+    let needle = raw.trim();
+    let needle = needle.strip_prefix('^').unwrap_or(needle);
+    // `Ulid::from_string` accepts only well-formed 26-char Crockford-base32
+    // input (case-insensitively) and re-serializes to the canonical uppercase
+    // form — the same casing the board stores and the resolver would return.
+    ulid::Ulid::from_string(needle)
+        .ok()
+        .map(|ulid| ulid.to_string())
+}
+
+/// Load every task id known to the board — live tasks plus archived ones.
+///
+/// Used by the forgiving task-ref resolver so callers can pass a short id,
+/// `^<short>`, or a ULID prefix anywhere a full ULID is accepted. Archived
+/// tasks are included so id-coercing operations that act on them (notably
+/// `unarchive task`) can still resolve a short id to the full ULID; existence
+/// of the *live* task is then enforced by the underlying command, not the
+/// resolver.
+///
+/// Cost note: the live half (`ectx.list("task")`) reads through the entity
+/// cache, but the archived half (`ectx.list_archived("task")`) is **not**
+/// cached — it does a fresh disk scan of the trash dir on every call (and, when
+/// a compute engine is attached, per-archived-task changelog derivation). So
+/// this is only cheap when the archive is small. Callers that already hold a
+/// canonical full ULID should short-circuit via [`canonical_full_ulid`] to skip
+/// this scan entirely.
+async fn board_task_ids(ctx: &KanbanContext) -> Result<Vec<TaskId>, KanbanError> {
+    let ectx = ctx.entity_context().await?;
+    let live = ectx.list("task").await?;
+    let archived = ectx.list_archived("task").await?;
+    let live_ids = live.iter().map(|t| TaskId::from_string(t.id.as_str()));
+    // Archived entities carry a compound storage id (`<task_id>.<trash_id>`);
+    // the original task id is the segment before the first dot. Reduce to that
+    // so a short id or full ULID resolves to the canonical task ulid rather
+    // than the trash filename (which would later panic the unarchive path).
+    let archived_ids = archived.iter().map(|t| {
+        let raw = t.id.as_str();
+        TaskId::from_string(raw.split('.').next().unwrap_or(raw))
+    });
+    Ok(live_ids.chain(archived_ids).collect())
+}
+
+/// Resolve a forgiving task reference to its canonical full ULID string.
+///
+/// Accepts a full 26-char ULID, the 7-char short id, either with a leading
+/// `^` sigil, or a git-style ULID prefix — case-insensitive — via the core
+/// [`resolve_short_ref`] resolver. A full ULID continues to resolve to itself
+/// unchanged. An unknown or ambiguous reference yields a clean
+/// [`KanbanError::TaskNotFound`] rather than a panic.
+///
+/// A canonical full ULID short-circuits via [`canonical_full_ulid`] and skips
+/// the board scan entirely: the full id is already the canonical identity, so
+/// there is nothing to resolve, and the underlying command enforces existence.
+async fn resolve_task_ref(ctx: &KanbanContext, raw: &str) -> Result<String, KanbanError> {
+    if let Some(canonical) = canonical_full_ulid(raw) {
+        return Ok(canonical);
+    }
+    let ids = board_task_ids(ctx).await?;
+    match resolve_short_ref(&ids, raw) {
+        ResolveResult::Found(id) => Ok(id.as_str().to_string()),
+        ResolveResult::NotFound | ResolveResult::Ambiguous(_) => Err(KanbanError::TaskNotFound {
+            id: raw.to_string(),
+        }),
+    }
+}
+
+/// Require a task-id param under `key`, then resolve it to a full ULID.
+///
+/// Combines [`req`] (missing-field error) with [`resolve_task_ref`] (forgiving
+/// short-id coercion) so the many task-id dispatch arms route through the
+/// resolver in one call instead of a raw `from_string`.
+async fn req_task_id(
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+    key: &str,
+) -> Result<String, KanbanError> {
+    let raw = req(op, key)?;
+    resolve_task_ref(ctx, raw).await
+}
+
+/// Resolve an optional placement-ref param (`before_id`/`after_id`) to a full
+/// ULID, returning `Ok(None)` when the param is absent.
+///
+/// Unlike [`resolve_task_ref`], a reference that resolves to no task is **not**
+/// an error here: placement neighbors are advisory, and [`MoveTask`] is built
+/// to fall through to appending at the end of the column when the neighbor it
+/// is pointed at no longer exists. So an unresolved ref is passed through
+/// verbatim, preserving that tolerant append behavior, while a short id or
+/// prefix that *does* resolve is still coerced to its canonical ULID.
+/// Ambiguity remains a hard error — a non-unique prefix is a genuine caller
+/// mistake, not a missing neighbor.
+async fn resolve_opt_placement_ref(
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+    key: &str,
+) -> Result<Option<String>, KanbanError> {
+    let Some(raw) = op.get_string(key) else {
+        return Ok(None);
+    };
+    let ids = board_task_ids(ctx).await?;
+    match resolve_short_ref(&ids, raw) {
+        ResolveResult::Found(id) => Ok(Some(id.as_str().to_string())),
+        // Unknown neighbor — hand the raw value to MoveTask, which appends.
+        ResolveResult::NotFound => Ok(Some(raw.to_string())),
+        ResolveResult::Ambiguous(_) => Err(KanbanError::TaskNotFound {
+            id: raw.to_string(),
+        }),
+    }
+}
+
+/// Normalize a `depends_on` JSON array of forgiving task refs to full ULIDs.
+///
+/// Each entry may be a short id, `^<short>`, prefix, or full ULID; every one
+/// is resolved through [`resolve_task_ref`] so the stored value is always the
+/// canonical 26-char ULID. Returns `Ok(None)` when the param is absent.
+async fn resolve_depends_on(
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Option<Vec<TaskId>>, KanbanError> {
+    let Some(deps) = op.get_param("depends_on").and_then(|v| v.as_array()) else {
+        return Ok(None);
+    };
+    let mut resolved = Vec::with_capacity(deps.len());
+    for v in deps {
+        if let Some(s) = v.as_str() {
+            let full = resolve_task_ref(ctx, s).await?;
+            resolved.push(TaskId::from_string(full));
+        }
+    }
+    Ok(Some(resolved))
 }
 
 /// Dispatch board operations (init, get, update).
@@ -161,11 +309,7 @@ async fn dispatch_add_task(
         cmd = cmd.with_assignees(assignees);
     }
 
-    if let Some(deps) = op.get_param("depends_on").and_then(|v| v.as_array()) {
-        let dep_ids: Vec<TaskId> = deps
-            .iter()
-            .filter_map(|v| v.as_str().map(TaskId::from_string))
-            .collect();
+    if let Some(dep_ids) = resolve_depends_on(ctx, op).await? {
         if !dep_ids.is_empty() {
             cmd = cmd.with_depends_on(dep_ids);
         }
@@ -202,7 +346,7 @@ async fn dispatch_update_task(
     ctx: &KanbanContext,
     op: &KanbanOperation,
 ) -> Result<Value, KanbanError> {
-    let id = req(op, "id")?;
+    let id = req_task_id(ctx, op, "id").await?;
     let mut cmd = UpdateTask::new(id);
     if let Some(title) = op.get_string("title") {
         cmd = cmd.with_title(title);
@@ -219,11 +363,7 @@ async fn dispatch_update_task(
             cmd = cmd.with_assignees(ids);
         }
     }
-    if let Some(deps) = op.get_param("depends_on").and_then(|v| v.as_array()) {
-        let dep_ids: Vec<TaskId> = deps
-            .iter()
-            .filter_map(|v| v.as_str().map(TaskId::from_string))
-            .collect();
+    if let Some(dep_ids) = resolve_depends_on(ctx, op).await? {
         cmd = cmd.with_depends_on(dep_ids);
     }
     if let Some(project) = op.get_string("project") {
@@ -295,16 +435,16 @@ async fn execute_task_crud_operation(
     match op.verb {
         Verb::Add => dispatch_add_task(processor, ctx, op).await,
         Verb::Get => {
-            let id = req(op, "id")?;
+            let id = req_task_id(ctx, op, "id").await?;
             processor.process(&GetTask::new(id), ctx).await
         }
         Verb::Update => dispatch_update_task(processor, ctx, op).await,
         Verb::Delete => {
-            let id = req(op, "id")?;
+            let id = req_task_id(ctx, op, "id").await?;
             processor.process(&DeleteTask::new(id), ctx).await
         }
         Verb::Complete => {
-            let id = req(op, "id")?;
+            let id = req_task_id(ctx, op, "id").await?;
             processor.process(&CompleteTask::new(id), ctx).await
         }
         _ => Err(KanbanError::parse(format!(
@@ -322,26 +462,26 @@ async fn execute_task_movement_operation(
 ) -> Result<Value, KanbanError> {
     match op.verb {
         Verb::Move => {
-            let id = req(op, "id")?;
+            let id = req_task_id(ctx, op, "id").await?;
             let column = req(op, "column")?;
             let mut cmd = MoveTask::to_column(id, column);
             if let Some(ordinal) = op.get_string("ordinal") {
                 cmd.ordinal = Some(ordinal.to_string());
             }
-            if let Some(before_id) = op.get_string("before_id") {
+            if let Some(before_id) = resolve_opt_placement_ref(ctx, op, "before_id").await? {
                 cmd.before_id = Some(before_id.into());
             }
-            if let Some(after_id) = op.get_string("after_id") {
+            if let Some(after_id) = resolve_opt_placement_ref(ctx, op, "after_id").await? {
                 cmd.after_id = Some(after_id.into());
             }
             processor.process(&cmd, ctx).await
         }
         Verb::Archive => {
-            let id = req(op, "id")?;
+            let id = req_task_id(ctx, op, "id").await?;
             processor.process(&ArchiveTask::new(id), ctx).await
         }
         Verb::Unarchive => {
-            let id = req(op, "id")?;
+            let id = req_task_id(ctx, op, "id").await?;
             processor.process(&UnarchiveTask::new(id), ctx).await
         }
         _ => Err(KanbanError::parse(format!(
@@ -359,24 +499,24 @@ async fn execute_task_assignment_operation(
 ) -> Result<Value, KanbanError> {
     match op.verb {
         Verb::Assign => {
-            let id = req(op, "id")?;
+            let id = req_task_id(ctx, op, "id").await?;
             let assignee = req(op, "assignee")?;
             processor.process(&AssignTask::new(id, assignee), ctx).await
         }
         Verb::Unassign => {
-            let id = req(op, "id")?;
+            let id = req_task_id(ctx, op, "id").await?;
             let assignee = req(op, "assignee")?;
             processor
                 .process(&UnassignTask::new(id, assignee), ctx)
                 .await
         }
         Verb::Tag => {
-            let id = req(op, "id")?;
+            let id = req_task_id(ctx, op, "id").await?;
             let tag = req(op, "tag")?;
             processor.process(&TagTask::new(id, tag), ctx).await
         }
         Verb::Untag => {
-            let id = req(op, "id")?;
+            let id = req_task_id(ctx, op, "id").await?;
             let tag = req(op, "tag")?;
             processor.process(&UntagTask::new(id, tag), ctx).await
         }
@@ -714,26 +854,21 @@ async fn execute_attachment_operation(
     match op.verb {
         Verb::Add => dispatch_add_attachment(processor, ctx, op).await,
         Verb::Get => {
+            let task_id = req_task_id(ctx, op, "task_id").await?;
             processor
-                .process(
-                    &GetAttachment::new(req(op, "task_id")?, req(op, "id")?),
-                    ctx,
-                )
+                .process(&GetAttachment::new(task_id, req(op, "id")?), ctx)
                 .await
         }
         Verb::Update => dispatch_update_attachment(processor, ctx, op).await,
         Verb::Delete => {
+            let task_id = req_task_id(ctx, op, "task_id").await?;
             processor
-                .process(
-                    &DeleteAttachment::new(req(op, "task_id")?, req(op, "id")?),
-                    ctx,
-                )
+                .process(&DeleteAttachment::new(task_id, req(op, "id")?), ctx)
                 .await
         }
         Verb::List => {
-            processor
-                .process(&ListAttachments::new(req(op, "task_id")?), ctx)
-                .await
+            let task_id = req_task_id(ctx, op, "task_id").await?;
+            processor.process(&ListAttachments::new(task_id), ctx).await
         }
         _ => Err(KanbanError::parse(format!(
             "unsupported operation: {} {}",
@@ -747,7 +882,8 @@ async fn dispatch_add_attachment(
     ctx: &KanbanContext,
     op: &KanbanOperation,
 ) -> Result<Value, KanbanError> {
-    let mut cmd = AddAttachment::new(req(op, "task_id")?, req(op, "name")?, req(op, "path")?);
+    let task_id = req_task_id(ctx, op, "task_id").await?;
+    let mut cmd = AddAttachment::new(task_id, req(op, "name")?, req(op, "path")?);
     if let Some(mime) = op.get_string("mime_type") {
         cmd = cmd.with_mime_type(mime);
     }
@@ -762,7 +898,8 @@ async fn dispatch_update_attachment(
     ctx: &KanbanContext,
     op: &KanbanOperation,
 ) -> Result<Value, KanbanError> {
-    let mut cmd = UpdateAttachment::new(req(op, "task_id")?, req(op, "id")?);
+    let task_id = req_task_id(ctx, op, "task_id").await?;
+    let mut cmd = UpdateAttachment::new(task_id, req(op, "id")?);
     if let Some(name) = op.get_string("name") {
         cmd = cmd.with_name(name);
     }
@@ -2548,5 +2685,202 @@ mod tests {
         assert_eq!(tasks[0]["due"], "2026-05-01");
         assert!(tasks[0]["scheduled"].is_null());
         assert!(tasks[0].get("created").is_some());
+    }
+
+    // ------------------------------------------------------------------
+    // Short-id input coercion + output (`short_id` field)
+    // ------------------------------------------------------------------
+
+    /// Add a single task and return its full ULID.
+    async fn add_one_task(ctx: &KanbanContext, title: &str) -> String {
+        let ops = parse_input(json!({"op": "add task", "title": title})).unwrap();
+        let r = execute_operation(ctx, &ops[0]).await.unwrap();
+        r["id"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_task_by_bare_short_id() {
+        let (_temp, ctx) = setup().await;
+        let id = add_one_task(&ctx, "Short fetch").await;
+        let short = crate::types::short_id(&id);
+
+        let ops = parse_input(json!({"op": "get task", "id": short})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["id"].as_str().unwrap(), id);
+        assert_eq!(result["title"], "Short fetch");
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_task_by_caret_short_id() {
+        let (_temp, ctx) = setup().await;
+        let id = add_one_task(&ctx, "Caret fetch").await;
+        let caret = format!("^{}", crate::types::short_id(&id));
+
+        let ops = parse_input(json!({"op": "get task", "id": caret})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["id"].as_str().unwrap(), id);
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_task_by_short_id_is_case_insensitive() {
+        let (_temp, ctx) = setup().await;
+        let id = add_one_task(&ctx, "Upper fetch").await;
+        let upper = crate::types::short_id(&id).to_uppercase();
+
+        let ops = parse_input(json!({"op": "get task", "id": upper})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["id"].as_str().unwrap(), id);
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_task_by_full_ulid_still_works() {
+        let (_temp, ctx) = setup().await;
+        let id = add_one_task(&ctx, "Full fetch").await;
+
+        let ops = parse_input(json!({"op": "get task", "id": id})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["id"].as_str().unwrap(), id);
+    }
+
+    #[tokio::test]
+    async fn dispatch_move_task_by_short_id() {
+        let (_temp, ctx) = setup().await;
+        let id = add_one_task(&ctx, "Short move").await;
+        let short = crate::types::short_id(&id);
+
+        let ops = parse_input(json!({"op": "move task", "id": short, "column": "doing"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["position"]["column"], "doing");
+        assert_eq!(result["id"].as_str().unwrap(), id);
+    }
+
+    #[tokio::test]
+    async fn dispatch_complete_task_by_short_id() {
+        let (_temp, ctx) = setup().await;
+        let id = add_one_task(&ctx, "Short complete").await;
+        let short = crate::types::short_id(&id);
+
+        let ops = parse_input(json!({"op": "complete task", "id": short})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["id"].as_str().unwrap(), id);
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_task_output_includes_short_id() {
+        let (_temp, ctx) = setup().await;
+        let id = add_one_task(&ctx, "With short id").await;
+
+        let ops = parse_input(json!({"op": "get task", "id": id})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(
+            result["short_id"].as_str().unwrap(),
+            crate::types::short_id(&id)
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_unknown_short_id_returns_clean_not_found() {
+        let (_temp, ctx) = setup().await;
+        add_one_task(&ctx, "Real task").await;
+
+        // `zzzzzzz` matches no task — must be a clean error, not a panic.
+        let ops = parse_input(json!({"op": "get task", "id": "zzzzzzz"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await;
+        assert!(result.is_err(), "unknown short id must return an error");
+    }
+
+    #[tokio::test]
+    async fn dispatch_ambiguous_prefix_returns_not_found() {
+        let (_temp, ctx) = setup().await;
+        // Two tasks both exist; an empty-ish ambiguous prefix that matches more
+        // than one task resolves to an error rather than picking one.
+        let id1 = add_one_task(&ctx, "Amb one").await;
+        let _id2 = add_one_task(&ctx, "Amb two").await;
+
+        // Both ULIDs share a long leading run (minted within the same ms burst);
+        // the first two chars `01` are a prefix of every ULID → ambiguous.
+        let shared_prefix = &id1[..2];
+        let ops = parse_input(json!({"op": "get task", "id": shared_prefix})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await;
+        assert!(
+            result.is_err(),
+            "an ambiguous prefix must return a not-found error, not a match"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_add_task_depends_on_short_id_persists_full_ulid() {
+        let (_temp, ctx) = setup().await;
+        let dep_id = add_one_task(&ctx, "Dependency").await;
+        let dep_short = crate::types::short_id(&dep_id);
+
+        // Create a task whose depends_on is given as a short id.
+        let ops = parse_input(json!({
+            "op": "add task",
+            "title": "Dependent",
+            "depends_on": [dep_short],
+        }))
+        .unwrap();
+        let created = execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        // The returned depends_on must carry the full canonical ULID.
+        let deps = created["depends_on"].as_array().unwrap();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].as_str().unwrap(), dep_id);
+    }
+
+    #[tokio::test]
+    async fn resolve_task_ref_short_circuits_canonical_full_ulid() {
+        // A canonical full 26-char ULID is returned directly by the resolver
+        // without consulting the board — proven here by resolving one that is
+        // NOT on the board: the old board-scan path returned TaskNotFound, the
+        // short-circuit returns the ULID unchanged (existence is then enforced
+        // by the underlying command, not the resolver).
+        let (_temp, ctx) = setup().await;
+        let absent = "01KT6SAXCBZFE6S0DEPZDJSQAA";
+        let resolved = resolve_task_ref(&ctx, absent).await.unwrap();
+        assert_eq!(resolved, absent);
+    }
+
+    #[tokio::test]
+    async fn resolve_task_ref_short_circuit_normalizes_case_and_caret() {
+        // The short-circuit must yield the canonical uppercase ULID even when
+        // the caller passes a lowercase form or a `^`-sigil-prefixed full ULID,
+        // matching the casing the board scan would have returned.
+        let (_temp, ctx) = setup().await;
+        let canonical = "01KT6SAXCBZFE6S0DEPZDJSQAA";
+        assert_eq!(
+            resolve_task_ref(&ctx, &canonical.to_lowercase())
+                .await
+                .unwrap(),
+            canonical
+        );
+        assert_eq!(
+            resolve_task_ref(&ctx, &format!("^{canonical}"))
+                .await
+                .unwrap(),
+            canonical
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_task_depends_on_short_id_persists_full_ulid() {
+        let (_temp, ctx) = setup().await;
+        let dep_id = add_one_task(&ctx, "Dep target").await;
+        let task_id = add_one_task(&ctx, "Will depend").await;
+        let dep_short = crate::types::short_id(&dep_id);
+
+        let ops = parse_input(json!({
+            "op": "update task",
+            "id": crate::types::short_id(&task_id),
+            "depends_on": [dep_short],
+        }))
+        .unwrap();
+        let updated = execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        assert_eq!(updated["id"].as_str().unwrap(), task_id);
+        let deps = updated["depends_on"].as_array().unwrap();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].as_str().unwrap(), dep_id);
     }
 }

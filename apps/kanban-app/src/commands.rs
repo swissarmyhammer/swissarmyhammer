@@ -409,8 +409,19 @@ pub async fn search_mentions(
         .map_err(|e| e.to_string())?;
 
     let display_field = mention_display_field_for(&ectx, &entity_type)?;
-    let entities = ectx.list(&entity_type).await.map_err(|e| e.to_string())?;
-    let matches = filter_mention_candidates(&entities, &query, display_field);
+    let slug_field = mention_slug_field_for(&ectx, &entity_type);
+    let mut entities = ectx.list(&entity_type).await.map_err(|e| e.to_string())?;
+    // Tasks key their mention slug on the derived 7-char short id, which is
+    // not a stored field. Populate it on the raw list (a pure id derivation,
+    // no DAG enrichment) so `filter_mention_candidates` can ship it as `slug`
+    // and match a `^`-mention query against it.
+    if entity_type == "task" {
+        for e in &mut entities {
+            swissarmyhammer_kanban::task_helpers::set_task_short_id(e);
+        }
+    }
+    let matches =
+        filter_mention_candidates(&entities, &query, display_field, slug_field.as_deref());
     Ok(json!(matches))
 }
 
@@ -431,12 +442,40 @@ fn mention_display_field_for<'a>(
         .unwrap_or("name"))
 }
 
+/// Resolve the `mention_slug_field` for `entity_type` from the field registry.
+///
+/// Returns `None` when the entity definition doesn't declare one — tag and
+/// actor ids are already slug-shaped, so their mention slug comes from
+/// `slugify(display_name)` on the frontend. `task` (`short_id`) and `project`
+/// (`id`) declare an explicit slug field whose value is shipped verbatim.
+fn mention_slug_field_for(
+    ectx: &swissarmyhammer_entity::EntityContext,
+    entity_type: &str,
+) -> Option<String> {
+    ectx.fields()
+        .get_entity(entity_type)
+        .and_then(|def| def.mention_slug_field.as_ref().map(|f| f.to_string()))
+}
+
 /// Filter `entities` down to the first `MENTION_AUTOCOMPLETE_LIMIT` whose
-/// display field or ID case-insensitively contains `query`, projecting each
-/// surviving entity into the `{id, display_name, color, avatar}` shape the
-/// CM6 autocomplete popup renders. An empty `query` returns the first
-/// `MENTION_AUTOCOMPLETE_LIMIT` entities as-is.
-fn filter_mention_candidates(entities: &[Entity], query: &str, display_field: &str) -> Vec<Value> {
+/// display field, ID, or slug case-insensitively contains `query`, projecting
+/// each surviving entity into the autocomplete-popup row shape. An empty
+/// `query` returns the first `MENTION_AUTOCOMPLETE_LIMIT` entities as-is.
+///
+/// `slug_field` is the entity definition's `mention_slug_field` (e.g.
+/// `short_id` for tasks, `id` for projects). When `Some`, each row carries a
+/// `slug` key sourced verbatim from that field, and the query also matches
+/// against the slug value — this is what lets a `^`-mention search resolve a
+/// task by its 7-char short id. The full-ULID and title cases are already
+/// covered by the `id`/`display` matches. When `None` (tags, actors whose ids
+/// are already slug-shaped), no `slug` key is emitted and the frontend falls
+/// back to `slugify(display_name)`.
+fn filter_mention_candidates(
+    entities: &[Entity],
+    query: &str,
+    display_field: &str,
+    slug_field: Option<&str>,
+) -> Vec<Value> {
     let query_lower = query.to_lowercase();
     entities
         .iter()
@@ -446,17 +485,23 @@ fn filter_mention_candidates(entities: &[Entity], query: &str, display_field: &s
             }
             let display = e.get_str(display_field).unwrap_or("");
             let id = e.id.as_str();
+            let slug = slug_field.and_then(|f| e.get_str(f)).unwrap_or("");
             display.to_lowercase().contains(&query_lower)
                 || id.to_lowercase().contains(&query_lower)
+                || slug.to_lowercase().contains(&query_lower)
         })
         .take(MENTION_AUTOCOMPLETE_LIMIT)
         .map(|e| {
-            json!({
+            let mut row = json!({
                 "id": e.id,
                 "display_name": e.get_str(display_field).unwrap_or(""),
                 "color": e.get_str("color"),
                 "avatar": e.get_str("avatar"),
-            })
+            });
+            if let Some(f) = slug_field {
+                row["slug"] = json!(e.get_str(f).unwrap_or(""));
+            }
+            row
         })
         .collect()
 }
@@ -2673,6 +2718,76 @@ mod tests {
         e
     }
 
+    /// Build a task entity fixture with a full ULID id, a title, and the
+    /// enriched `short_id` field already populated (as it is post-enrichment).
+    ///
+    /// `search_mentions` derives `short_id` before filtering, so the fixture
+    /// mirrors that shape: the slug field carries the 7-char short id while
+    /// `id` keeps the full 26-char ULID.
+    fn make_task(id: &str, title: &str) -> Entity {
+        use swissarmyhammer_kanban::types::short_id;
+        let mut e = Entity::new("task", id);
+        e.set("title", serde_json::json!(title));
+        e.set("short_id", serde_json::json!(short_id(id)));
+        e
+    }
+
+    #[test]
+    fn filter_mention_candidates_ships_task_short_id_as_slug() {
+        // A task mention identity row must carry the 7-char short id in `slug`
+        // (the inserted token + pill label) and the title in `display_name`
+        // (dropdown label + tooltip), while `id` keeps the full ULID.
+        let task = make_task("01KT6R6HR3KJT6JVNDRAJV8V4T", "Fix the login bug");
+        let matches = filter_mention_candidates(&[task], "", "title", Some("short_id"));
+        assert_eq!(matches.len(), 1);
+        let row = &matches[0];
+        assert_eq!(
+            row.get("id").and_then(|v| v.as_str()),
+            Some("01KT6R6HR3KJT6JVNDRAJV8V4T")
+        );
+        assert_eq!(row.get("slug").and_then(|v| v.as_str()), Some("ajv8v4t"));
+        assert_eq!(
+            row.get("display_name").and_then(|v| v.as_str()),
+            Some("Fix the login bug")
+        );
+    }
+
+    #[test]
+    fn filter_mention_candidates_matches_task_by_title_short_id_and_full_ulid() {
+        // The autocomplete card's 3-way search: a query matches a task by
+        // title substring, by its short id, and by its full ULID. All three
+        // must surface the same single task.
+        let task = make_task("01KT6R6HR3KJT6JVNDRAJV8V4T", "Fix the login bug");
+        let one = std::slice::from_ref(&task);
+        let by_title = filter_mention_candidates(one, "login", "title", Some("short_id"));
+        let by_short = filter_mention_candidates(one, "ajv8v4t", "title", Some("short_id"));
+        let by_ulid =
+            filter_mention_candidates(one, "01KT6R6HR3KJT6JVNDRAJV8V4T", "title", Some("short_id"));
+        assert_eq!(by_title.len(), 1, "title substring should match");
+        assert_eq!(by_short.len(), 1, "short id should match");
+        assert_eq!(by_ulid.len(), 1, "full ULID should match");
+    }
+
+    #[test]
+    fn filter_mention_candidates_matches_task_short_id_case_insensitively() {
+        // Short ids are lowercased, but the user may type uppercase; matching
+        // must be case-insensitive (the resolver is too).
+        let task = make_task("01KT6R6HR3KJT6JVNDRAJV8V4T", "Fix the login bug");
+        let matches = filter_mention_candidates(&[task], "AJV8V4T", "title", Some("short_id"));
+        assert_eq!(matches.len(), 1);
+    }
+
+    #[test]
+    fn filter_mention_candidates_omits_slug_when_slug_field_absent() {
+        // When no slug field is configured (tag/actor whose ids are already
+        // slug-shaped), the emitted row must NOT carry a `slug` key — the
+        // frontend falls back to slugify(display_name) for those types.
+        let tag = make_tag("bug");
+        let matches = filter_mention_candidates(&[tag], "", "tag_name", None);
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].get("slug").is_none());
+    }
+
     #[test]
     fn filter_mention_candidates_ships_project_id_and_display_name_separately() {
         // A project with a free-form id distinct from slugify(name) is the
@@ -2681,7 +2796,7 @@ mod tests {
         // `project` field equals `AUTH-Migration`. filter_mention_candidates
         // is the pinch point that ships both fields to the UI.
         let project = make_project("AUTH-Migration", "Auth Migration System");
-        let matches = filter_mention_candidates(&[project], "", "name");
+        let matches = filter_mention_candidates(&[project], "", "name", None);
         assert_eq!(matches.len(), 1);
         let row = &matches[0];
         assert_eq!(
@@ -2756,7 +2871,7 @@ mod tests {
         // has identical `id` and `display_name`. This guards against a
         // regression where the shape becomes asymmetric by accident.
         let tag = make_tag("bug");
-        let matches = filter_mention_candidates(&[tag], "", "tag_name");
+        let matches = filter_mention_candidates(&[tag], "", "tag_name", None);
         assert_eq!(matches.len(), 1);
         let row = &matches[0];
         assert_eq!(row.get("id").and_then(|v| v.as_str()), Some("bug"));

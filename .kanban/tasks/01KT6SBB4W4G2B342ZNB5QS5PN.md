@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KT6SAXCBZFE6S0DEPZDJSQAA
-position_column: todo
-position_ordinal: '8580'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffee80
 project: short-ids
 title: 'Short IDs: CM6 — render ^<short> in bodies as task pills'
 ---

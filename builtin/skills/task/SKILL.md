@@ -27,3 +27,5 @@ $ARGUMENTS
 {% include "_partials/architecture-awareness" %}
 
 {% include "_partials/task-standards" %}
+
+{% include "_partials/short-ids" %}
