@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffe780
 project: claude-hooks
 title: Share a JSONC reader primitive in swissarmyhammer-common
 ---

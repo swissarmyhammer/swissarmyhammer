@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KT9X89EXYAM6GPM6DV7E5WJ6
-position_column: todo
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffec80
 project: claude-hooks
 title: 'Loader: read the .claude/settings.json chain into a HookConfig'
 ---
@@ -42,3 +42,12 @@ Precedence chain (lowest → highest):
 - Missing/blank/malformed files are skipped without error.
 - Home resolution uses `dirs::home_dir()`; project resolution uses the passed cwd (hermetically testable via a temp HOME + temp cwd).
 - Returned HookConfig round-trips through `build_registrations` (with an evaluator) without error.
+
+## Review Findings (2026-06-04 14:22)
+
+### Warnings
+- [x] `crates/agent-client-protocol-extras/src/hook_settings.rs:253` — The test module serializes `$HOME`-mutating tests with a private `HOME_LOCK: Mutex<()>`, diverging from this crate's established convention of `serial_test::serial` (used pervasively in `raw_messages.rs` and `session_store.rs`). The two mechanisms are independent locks over process-global env state: a `hook_settings` test holding only `HOME_LOCK` can run concurrently with any other crate test that uses `#[serial]` and also mutates `$HOME`, so they would not be serialized against each other. They don't collide today only because `session_store.rs` happens to touch `XDG_STATE_HOME` rather than `$HOME` — a fragile coincidence. Use `#[serial]` (optionally with a named group like `#[serial(env)]`) and a restore-on-drop guard so all process-env-mutating tests share one serialization domain.
+
+### Nits
+- [x] `crates/agent-client-protocol-extras/src/hook_settings.rs:94` — No test exercises the `user_settings_path() == None` branch (no home dir → user level omitted). Hard to test hermetically since `dirs::home_dir()` reads the environment, but worth a note; could be covered by temporarily clearing `$HOME`/`USERPROFILE` under the same serialization guard.
+- [x] `crates/agent-client-protocol-extras/src/hook_settings.rs:182` — `try_load_hook_config` and `load_hook_config` each repeat the `merged` HashMap init and per-path loop skeleton, differing only in read-error handling (propagate vs. warn-and-skip). The duplication is minor and the two error strategies are genuinely different, so this is acceptable as-is — flagged only so a future third caller (if one ever appears) prompts extracting the shared per-path step.

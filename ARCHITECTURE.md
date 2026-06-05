@@ -483,6 +483,8 @@ ACP is the protocol that makes agents interoperable with editors (Zed, JetBrains
 
 The `llama-agent` crate contains the most complete ACP implementation, serving as a full protocol handler over JSON-RPC 2.0 / stdio. It builds its server via `agent_client_protocol::Agent.builder().on_receive_request(...).on_receive_notification(...).connect_with(transport, bridge)` — a single typed handler keyed on `ClientRequest` covers every ACP method (`initialize`, `authenticate`, `session/*`, plus extension channels), and the SDK demuxes by method name. The `acp-conformance` crate provides a protocol conformance test suite that validates any ACP backend against the spec.
 
+It also fires Claude-compatible `.claude/settings.json` hooks at its lifecycle seams: a per-session `HookableAgent` (from `agent-client-protocol-extras`) is built from the session cwd's settings chain and fires `SessionStart` (on `new_session`/`load_session`/`resume_session`), `UserPromptSubmit` (at `prompt` entry, which can block or inject context), and `Stop` (at `prompt` return) hooks. This is a contained extension of the ACP layer, not a new dependency edge. The tool-dispatch seam (`PreToolUse`/`PostToolUse`) is wired in a separate task.
+
 ### Subagent Metadata (not LLM inference)
 
 The agent MCP tool (`swissarmyhammer-agents`) does NOT run LLM inference. It provides **metadata** — agent definitions loaded from AGENT.md files via the VFS — so the host agent (Claude Code or a local LLM) can adopt the persona, instructions, and tool configuration of a specialized subagent. Operations: `list agent`, `use agent`, `search agent`. Agent instructions are rendered through Liquid templates at load time.

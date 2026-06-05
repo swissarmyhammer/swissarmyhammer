@@ -1462,7 +1462,7 @@ impl AgentAPI for AgentServer {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```no_run
     /// use llama_agent::{AgentServer, AgentConfig, AgentAPI, CompactionConfig};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -1510,7 +1510,7 @@ impl AgentAPI for AgentServer {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```no_run
     /// use llama_agent::{AgentServer, AgentConfig, AgentAPI, CompactionConfig};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -1562,7 +1562,7 @@ impl AgentAPI for AgentServer {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```no_run
     /// use llama_agent::{AgentServer, AgentConfig, AgentAPI, CompactionConfig};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -1612,7 +1612,7 @@ impl AgentAPI for AgentServer {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```no_run
     /// use llama_agent::{AgentServer, AgentConfig, AgentAPI, SessionId};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -2048,17 +2048,51 @@ impl AgentServer {
         &self,
         first_user_message: &str,
     ) -> Result<Option<String>, AgentError> {
+        // A title is a handful of tokens; cap generation tightly.
+        let raw = self
+            .generate_short(
+                agent_client_protocol_extras::TITLE_GENERATION_INSTRUCTION,
+                first_user_message,
+                32,
+            )
+            .await?;
+
+        Ok(agent_client_protocol_extras::normalize_title(&raw))
+    }
+
+    /// Run one short, bounded model call and return the raw generated text.
+    ///
+    /// This is the shared short-call path behind session-title generation and
+    /// hook evaluation: it builds a throwaway session of a user message plus a
+    /// trailing system instruction, renders it through the chat template, and
+    /// generates at most `max_tokens` tokens via the borrowed model. The system
+    /// instruction is placed last so it frames the user content for the model.
+    ///
+    /// # Parameters
+    /// - `system_instruction`: instruction constraining the model's output.
+    /// - `user_prompt`: the user-supplied content to act on.
+    /// - `max_tokens`: hard cap on generated tokens, keeping the call short.
+    ///
+    /// # Errors
+    /// Returns [`AgentError`] when the model is not loaded, the prompt fails to
+    /// render, a context cannot be created, or generation fails.
+    pub(crate) async fn generate_short(
+        &self,
+        system_instruction: &str,
+        user_prompt: &str,
+        max_tokens: u32,
+    ) -> Result<String, AgentError> {
         let messages = vec![
             Message {
                 role: crate::types::MessageRole::User,
-                content: first_user_message.to_string(),
+                content: user_prompt.to_string(),
                 tool_call_id: None,
                 tool_name: None,
                 timestamp: SystemTime::now(),
             },
             Message {
                 role: crate::types::MessageRole::System,
-                content: agent_client_protocol_extras::TITLE_GENERATION_INSTRUCTION.to_string(),
+                content: system_instruction.to_string(),
                 tool_call_id: None,
                 tool_name: None,
                 timestamp: SystemTime::now(),
@@ -2088,7 +2122,7 @@ impl AgentServer {
         let model_manager = Arc::clone(&self.model_manager);
         let chat_template = Arc::clone(&self.chat_template);
 
-        let raw = model_manager
+        model_manager
             .with_model(|model| {
                 let prompt = chat_template
                     .render_session_with_config(
@@ -2098,7 +2132,7 @@ impl AgentServer {
                     )
                     .map_err(|e| {
                         crate::types::SessionError::InvalidState(format!(
-                            "Failed to render title prompt: {e}"
+                            "Failed to render short-call prompt: {e}"
                         ))
                     })?;
 
@@ -2106,14 +2140,13 @@ impl AgentServer {
                     .create_session_context(model, &temp_session.id)
                     .map_err(|e| {
                         crate::types::SessionError::InvalidState(format!(
-                            "Failed to create title context: {e}"
+                            "Failed to create short-call context: {e}"
                         ))
                     })?;
 
-                // A title is a handful of tokens; cap generation tightly.
                 let request = GenerationRequest {
                     session_id: SessionId::new(),
-                    max_tokens: Some(32),
+                    max_tokens: Some(max_tokens),
                     temperature: None,
                     top_p: None,
                     stop_tokens: Vec::new(),
@@ -2131,7 +2164,7 @@ impl AgentServer {
                 )
                 .map_err(|e| {
                     crate::types::SessionError::InvalidState(format!(
-                        "Title generation failed: {e}"
+                        "Short-call generation failed: {e}"
                     ))
                 })?;
 
@@ -2139,9 +2172,161 @@ impl AgentServer {
             })
             .await
             .map_err(AgentError::Model)?
-            .map_err(AgentError::Session)?;
+            .map_err(AgentError::Session)
+    }
 
-        Ok(agent_client_protocol_extras::normalize_title(&raw))
+    /// Run a bounded multi-turn agent loop and return the final raw text.
+    ///
+    /// This is the agentic counterpart to [`generate_short`](Self::generate_short),
+    /// used by hook evaluation when a hook is declared `type: agent`. Where
+    /// `generate_short` is a single throwaway call, this runs the model's own
+    /// tool loop against an ephemeral session that has the agent's tools
+    /// discovered, so the model can investigate (run tools) before committing to
+    /// a verdict.
+    ///
+    /// Tool dispatch is *not* reimplemented here — each turn reuses the same
+    /// [`process_tool_calls`](Self::process_tool_calls) path that backs the live
+    /// [`generate`](Self::generate) loop. The only thing this method adds is the
+    /// bound: unlike `generate`, which relies on natural termination, this loop
+    /// stops after at most `max_turns` tool rounds and caps each generation at
+    /// `max_tokens`, so a runaway model cannot turn a hook into an unbounded
+    /// call. When the turn budget is exhausted with tool calls still pending, a
+    /// final capped generation forces the model to emit its verdict text.
+    ///
+    /// The ephemeral session is created solely for this evaluation and removed
+    /// afterward (best effort); it never touches a caller's real session.
+    ///
+    /// # Parameters
+    /// - `system_instruction`: instruction constraining the model's final output.
+    /// - `user_prompt`: the hook input the model evaluates.
+    /// - `max_turns`: hard cap on tool-call rounds.
+    /// - `max_tokens`: per-turn hard cap on generated tokens.
+    ///
+    /// # Errors
+    /// Returns [`AgentError`] when the session cannot be created, tools cannot be
+    /// discovered, or a generation fails. Callers degrade such errors to an
+    /// Allow decision rather than propagating.
+    pub(crate) async fn generate_agent_short(
+        &self,
+        system_instruction: &str,
+        user_prompt: &str,
+        max_turns: usize,
+        max_tokens: u32,
+    ) -> Result<String, AgentError> {
+        // Ephemeral session with the agent's tools, framed like generate_short:
+        // user content first, system instruction last so it frames the input.
+        let mut session = self.create_session().await?;
+        self.discover_tools(&mut session).await?;
+
+        let session_id = session.id;
+        for message in [
+            Message {
+                role: crate::types::MessageRole::User,
+                content: user_prompt.to_string(),
+                tool_call_id: None,
+                tool_name: None,
+                timestamp: SystemTime::now(),
+            },
+            Message {
+                role: crate::types::MessageRole::System,
+                content: system_instruction.to_string(),
+                tool_call_id: None,
+                tool_name: None,
+                timestamp: SystemTime::now(),
+            },
+        ] {
+            self.add_message(&session_id, message).await?;
+        }
+
+        let driver = SessionTurnDriver {
+            agent: self,
+            session_id,
+            max_tokens,
+        };
+        let result = run_bounded_tool_loop(&driver, max_turns).await;
+
+        // Best-effort cleanup: a failed removal must not change the verdict.
+        if let Err(e) = self.session_manager.delete_session(&session_id).await {
+            tracing::debug!(error = %e, "Failed to remove ephemeral hook-eval session");
+        }
+
+        result
+    }
+
+    /// Fetch `session_id` from the session manager, erroring if it is gone.
+    async fn require_session(&self, session_id: SessionId) -> Result<Session, AgentError> {
+        self.session_manager
+            .get_session(&session_id)
+            .await?
+            .ok_or_else(|| {
+                AgentError::Session(crate::types::SessionError::NotFound(session_id.to_string()))
+            })
+    }
+
+    /// Run one capped generation turn against the current state of `session_id`.
+    async fn generate_once(
+        &self,
+        session_id: SessionId,
+        max_tokens: u32,
+    ) -> Result<GenerationResponse, AgentError> {
+        let session = self.require_session(session_id).await?;
+        let request = GenerationRequest {
+            session_id,
+            max_tokens: Some(max_tokens),
+            temperature: None,
+            top_p: None,
+            stop_tokens: Vec::new(),
+            stopping_config: None,
+        };
+        self.request_queue
+            .submit_request(request, &session)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Append one tool round (the assistant's tool-call message plus each tool
+    /// result) to the session so the next turn can build on it.
+    ///
+    /// Mirrors the message bookkeeping the live [`generate`](Self::generate) loop
+    /// does between turns.
+    async fn append_tool_round(
+        &self,
+        session_id: &SessionId,
+        assistant_text: &str,
+        tool_results: &[ToolResult],
+    ) -> Result<(), AgentError> {
+        self.add_message(
+            session_id,
+            Message {
+                role: crate::types::MessageRole::Assistant,
+                content: assistant_text.to_string(),
+                tool_call_id: None,
+                tool_name: None,
+                timestamp: SystemTime::now(),
+            },
+        )
+        .await?;
+
+        for tool_result in tool_results {
+            let content = match &tool_result.error {
+                Some(error) => format!("Error: {error}"),
+                None => serde_json::to_string(&tool_result.result)
+                    .unwrap_or_else(|_| "Invalid tool result".to_string()),
+            };
+            self.add_message(
+                session_id,
+                Message {
+                    role: crate::types::MessageRole::Tool,
+                    content,
+                    tool_call_id: Some(tool_result.call_id),
+                    tool_name: None,
+                    timestamp: SystemTime::now(),
+                },
+            )
+            .await?;
+        }
+
+        Ok(())
     }
 
     /// Resolve which MCP backend should handle `tool_name` for `session`.
@@ -2372,6 +2557,102 @@ impl AgentServer {
 
         // Default to non-retriable for safety - tool errors are often deterministic
         false
+    }
+}
+
+/// One round of the bounded hook-evaluation tool loop.
+///
+/// This is the seam between [`run_bounded_tool_loop`]'s control flow — turn
+/// counting, the empty-vs-nonempty branch, the between-turn append, and the
+/// forced final generation — and the GPU-bound work it sequences. Production
+/// is [`SessionTurnDriver`], which runs the real model generation and the real
+/// [`AgentServer::process_tool_calls`] dispatch against an ephemeral session;
+/// tests supply a scripted driver so the production loop runs without a model.
+#[async_trait]
+trait BoundedTurn: Send + Sync {
+    /// Run one capped generation and return its raw text.
+    ///
+    /// # Errors
+    /// Returns [`AgentError`] when generation fails.
+    async fn generate(&self) -> Result<String, AgentError>;
+
+    /// Process any tool calls in `text`; when at least one ran, append the
+    /// round (assistant message + tool results) so the next turn can build on
+    /// it, and return `true`. Returns `false` when `text` contains no tool
+    /// calls — i.e. it is the model's final verdict.
+    ///
+    /// # Errors
+    /// Returns [`AgentError`] when tool processing or the append fails.
+    async fn process_and_append(&self, text: &str) -> Result<bool, AgentError>;
+}
+
+/// Drive a bounded multi-turn tool loop and return the model's final text.
+///
+/// Runs up to `max_turns` generation rounds. Each round generates, then
+/// processes tool calls: if none ran, the generated text is the model's verdict
+/// and is returned immediately; otherwise the round is appended and the loop
+/// continues. If the turn budget is spent with tools still pending, one final
+/// capped generation forces the model to commit to a verdict rather than
+/// returning a half-finished tool-call fragment, so the call always terminates.
+///
+/// The loop is generic over the [`BoundedTurn`] seam so its control flow can be
+/// exercised without a model. See [`SessionTurnDriver`] for the production
+/// wiring.
+///
+/// # Errors
+/// Propagates any [`AgentError`] from the underlying generation or tool
+/// processing; the hook evaluator degrades such errors to an Allow decision.
+async fn run_bounded_tool_loop(
+    driver: &impl BoundedTurn,
+    max_turns: usize,
+) -> Result<String, AgentError> {
+    for _ in 0..max_turns {
+        let text = driver.generate().await?;
+        if !driver.process_and_append(&text).await? {
+            // No tool calls: this is the model's final answer (its verdict).
+            return Ok(text);
+        }
+    }
+
+    // Turn budget spent with tools still pending: take one final capped
+    // generation so the model commits to a verdict.
+    driver.generate().await
+}
+
+/// Production [`BoundedTurn`] driver: runs the real model generation and tool
+/// dispatch against one ephemeral hook-evaluation session.
+///
+/// Re-reads the session from the manager each turn (inside `generate` and
+/// `process_and_append`) so the tool results appended on the previous turn are
+/// visible to the next generation. Tool dispatch is *not* reimplemented — it
+/// reuses [`AgentServer::process_tool_calls`], the same path the live
+/// [`AgentServer::generate`] loop uses.
+struct SessionTurnDriver<'a> {
+    agent: &'a AgentServer,
+    session_id: SessionId,
+    max_tokens: u32,
+}
+
+#[async_trait]
+impl BoundedTurn for SessionTurnDriver<'_> {
+    async fn generate(&self) -> Result<String, AgentError> {
+        let response = self
+            .agent
+            .generate_once(self.session_id, self.max_tokens)
+            .await?;
+        Ok(response.generated_text)
+    }
+
+    async fn process_and_append(&self, text: &str) -> Result<bool, AgentError> {
+        let session = self.agent.require_session(self.session_id).await?;
+        let tool_results = self.agent.process_tool_calls(text, &session).await?;
+        if tool_results.is_empty() {
+            return Ok(false);
+        }
+        self.agent
+            .append_tool_round(&self.session_id, text, &tool_results)
+            .await?;
+        Ok(true)
     }
 }
 
@@ -3164,6 +3445,139 @@ mod tests {
                 "the client with failed discovery must not be invoked for a tool it \
                  never advertised; got {:?}",
                 raced.calls()
+            );
+        }
+    }
+
+    /// Drives the REAL [`run_bounded_tool_loop`] control flow — turn counting,
+    /// the empty-vs-nonempty tool branch, the between-turn append, and the
+    /// forced final generation after the turn budget is spent.
+    ///
+    /// The loop is generic over the [`BoundedTurn`] seam, so a scripted driver
+    /// stands in for the GPU-bound generation and the real tool dispatch while
+    /// the production turn-counting logic runs unchanged. This is what makes the
+    /// acceptance criteria (bound respected, tools run across rounds, final
+    /// verdict forced) assert on the production loop rather than a parallel
+    /// re-implementation.
+    mod bounded_tool_loop {
+        use super::*;
+        use std::sync::Mutex;
+
+        /// A [`BoundedTurn`] driver scripted per turn. Each scripted entry is the
+        /// text a turn "generates" paired with whether that text contained tool
+        /// calls — `true` keeps the loop going, `false` is a final verdict that
+        /// ends it. Once the script is drained, every further turn returns
+        /// `after_script`, modelling a model that either keeps calling tools
+        /// forever (`true`) or finally answers (`false`).
+        ///
+        /// The driver records the text of every `generate` and every
+        /// `process_and_append` call, in order, so a test can assert on exactly
+        /// how many generations and tool-processing rounds the real loop ran.
+        struct ScriptedTurn {
+            /// Per-turn `(generated_text, tools_ran)` outcomes, consumed in order.
+            turns: Mutex<std::collections::VecDeque<(String, bool)>>,
+            /// Outcome returned for every turn beyond the script.
+            after_script: (String, bool),
+            /// The `tools_ran` flag of the most recent `generate`, replayed by the
+            /// paired `process_and_append` — production threads exactly one
+            /// generation into one tool-processing step per turn.
+            last_tools_ran: Mutex<bool>,
+            /// Every generated text the loop asked for, in order.
+            generated: Mutex<Vec<String>>,
+            /// Every text the loop asked to process for tool calls, in order.
+            processed: Mutex<Vec<String>>,
+        }
+
+        impl ScriptedTurn {
+            fn new(turns: Vec<(&str, bool)>, after_script: (&str, bool)) -> Self {
+                Self {
+                    turns: Mutex::new(
+                        turns
+                            .into_iter()
+                            .map(|(t, ran)| (t.to_string(), ran))
+                            .collect(),
+                    ),
+                    after_script: (after_script.0.to_string(), after_script.1),
+                    last_tools_ran: Mutex::new(false),
+                    generated: Mutex::new(Vec::new()),
+                    processed: Mutex::new(Vec::new()),
+                }
+            }
+
+            fn next_outcome(&self) -> (String, bool) {
+                self.turns
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .unwrap_or_else(|| self.after_script.clone())
+            }
+        }
+
+        #[async_trait]
+        impl BoundedTurn for ScriptedTurn {
+            async fn generate(&self) -> Result<String, AgentError> {
+                let (text, tools_ran) = self.next_outcome();
+                *self.last_tools_ran.lock().unwrap() = tools_ran;
+                self.generated.lock().unwrap().push(text.clone());
+                Ok(text)
+            }
+
+            async fn process_and_append(&self, text: &str) -> Result<bool, AgentError> {
+                self.processed.lock().unwrap().push(text.to_string());
+                Ok(*self.last_tools_ran.lock().unwrap())
+            }
+        }
+
+        #[tokio::test]
+        async fn stops_at_first_verdict_without_running_full_budget() {
+            // Turn 1 calls tools, turn 2 emits the verdict (no tools) → the loop
+            // must return turn 2's text after exactly two generations.
+            let driver = ScriptedTurn::new(
+                vec![("call a tool", true), (r#"{"ok": true}"#, false)],
+                ("never reached", false),
+            );
+            let out = run_bounded_tool_loop(&driver, 8).await.unwrap();
+            assert_eq!(out, r#"{"ok": true}"#);
+            assert_eq!(
+                driver.generated.lock().unwrap().len(),
+                2,
+                "loop should stop the turn after the first tool-free verdict"
+            );
+        }
+
+        #[tokio::test]
+        async fn forces_a_final_generation_when_budget_is_spent() {
+            // The script always reports tools ran, so the loop never sees a
+            // verdict within the budget. With max_turns=3 the loop runs 3
+            // tool rounds, then a 4th forced generation produces the verdict.
+            let driver = ScriptedTurn::new(Vec::new(), ("forced verdict", true));
+            let out = run_bounded_tool_loop(&driver, 3).await.unwrap();
+            assert_eq!(out, "forced verdict");
+            assert_eq!(
+                driver.generated.lock().unwrap().len(),
+                4,
+                "3 budgeted turns + 1 forced final generation"
+            );
+            assert_eq!(
+                driver.processed.lock().unwrap().len(),
+                3,
+                "tool processing happens only within the budgeted turns, not on \
+                 the forced final generation"
+            );
+        }
+
+        #[tokio::test]
+        async fn respects_the_turn_cap() {
+            // A model that would call tools forever must stop at the cap: with
+            // max_turns=5 there are exactly 5 budgeted generations plus the one
+            // forced final, never more.
+            let driver = ScriptedTurn::new(Vec::new(), ("still going", true));
+            run_bounded_tool_loop(&driver, 5).await.unwrap();
+            assert_eq!(
+                driver.generated.lock().unwrap().len(),
+                6,
+                "5 budgeted turns + 1 forced final, regardless of an infinite \
+                 tool-calling model"
             );
         }
     }

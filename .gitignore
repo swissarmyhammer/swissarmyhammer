@@ -160,3 +160,6 @@ ane-embedding/convert/output/
 .claude/worktrees
 .swissarmyhammer
 .code-context/
+
+# Isolated CARGO_TARGET_DIR scratch dirs used by implement/verify runs
+target-implement-verify/

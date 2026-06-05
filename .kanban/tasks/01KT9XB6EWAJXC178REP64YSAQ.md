@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KT9XAK5FB9Y91XBBZDMFMHW9
 - 01KT9X9035DHGKAE4YZW0Z0K0X
-position_column: todo
-position_ordinal: '8680'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffee80
 project: claude-hooks
 title: Fire PreToolUse/PostToolUse/PostToolUseFailure at the real tool-dispatch seam (true blocking)
 ---

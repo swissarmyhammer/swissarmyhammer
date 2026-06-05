@@ -45,14 +45,46 @@ use crate::hook_config::{
     HookCommandContext, HookDecision, HookEvent, HookEventKind, HookRegistration, SessionSource,
 };
 use agent_client_protocol::schema::{
-    ContentBlock, PromptRequest, PromptResponse, SessionNotification, SessionUpdate, TextContent,
-    ToolCallStatus,
+    ContentBlock, PromptRequest, PromptResponse, SessionNotification, TextContent,
 };
 use agent_client_protocol::{Channel, Client, ConnectTo, Result as AcpResult};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::broadcast;
+
+/// `_meta` key under which an ACP `ToolCall` / `ToolCallUpdate` carries the
+/// **bare** llama-agent tool name (e.g. `fs_read`, `shell`,
+/// `mcp__<server>__<tool>`).
+///
+/// The human-readable `ToolCall.title` may be decorated as
+/// `"<name>: <description>"` for display, so hook matchers must never test
+/// against it. Producers (see `llama-agent`'s `tool_call_to_acp`) write the
+/// un-decorated name here; [`notification_to_events`] reads it so
+/// `PreToolUse` / `PostToolUse` / `PostToolUseFailure` events carry the bare
+/// name into matcher evaluation.
+pub const TOOL_NAME_META_KEY: &str = "tool_name";
+
+/// The outcome of firing `PreToolUse` hooks at the tool-dispatch seam.
+///
+/// Returned by [`HookableAgent::run_pre_tool_use`]; the dispatch driver
+/// matches on it to decide whether to run the tool, skip it, or stop the turn.
+#[derive(Clone, Debug)]
+pub enum PreToolUseOutcome {
+    /// Run the tool. `updated_input`, when `Some`, replaces the tool arguments
+    /// before execution (`updatedInput`); `context`, when `Some`, is injected
+    /// alongside the tool result (`additionalContext`).
+    Proceed {
+        updated_input: Option<serde_json::Value>,
+        context: Option<String>,
+    },
+    /// Do not run the tool — a hook denied it (`Block` / permissionDecision
+    /// `deny`). The `reason` is fed back to the model as the tool result.
+    Deny { reason: String },
+    /// Stop the agentic turn without running the tool (`continue:false` /
+    /// `Cancel`).
+    StopTurn { reason: String },
+}
 
 // ---------------------------------------------------------------------------
 // HookableAgent middleware
@@ -125,20 +157,26 @@ impl<A> HookableAgent<A> {
     }
 
     /// Register a hook handler for the given event kinds with an optional
-    /// regex matcher pattern.
+    /// matcher pattern.
+    ///
+    /// The matcher follows Claude Code's rules (see [`crate::hook_config::Matcher`]):
+    /// `None`, `Some("")`, or `Some("*")` match everything; a plain identifier
+    /// (or `|`-separated identifiers) is a full-string match; anything else is a
+    /// JavaScript-style regex evaluated like `RegExp(pattern).test(value)`. The
+    /// regex is intentionally unanchored, so the pattern author controls anchoring
+    /// via `^`/`$`.
     ///
     /// # Panics
-    /// If `matcher` is `Some(pat)` and `pat` is not a valid regular
-    /// expression.
+    /// If `matcher` is `Some(pat)` where `pat` is treated as a regex and is not
+    /// a valid regular expression.
     pub fn with_hook(
         mut self,
         events: &[HookEventKind],
         matcher: Option<&str>,
         handler: impl crate::hook_config::HookHandler + 'static,
     ) -> Self {
-        let matcher = matcher.map(|pat| {
-            regex::Regex::new(pat).unwrap_or_else(|e| panic!("invalid hook matcher regex: {e}"))
-        });
+        let matcher = crate::hook_config::Matcher::try_parse(matcher.unwrap_or(""))
+            .unwrap_or_else(|e| panic!("invalid hook matcher regex: {e}"));
         self.hooks.push(HookRegistration::new(
             events.to_vec(),
             matcher,
@@ -245,6 +283,135 @@ impl<A> HookableAgent<A> {
         response
     }
 
+    /// Fire `PreToolUse` hooks synchronously at the tool-dispatch seam, before
+    /// the tool runs.
+    ///
+    /// Unlike the notification path ([`Self::intercept_notifications`]), this
+    /// fires *before* the tool is executed, so its decisions can genuinely gate
+    /// and rewrite the call — Claude Code's true-blocking semantics. The caller
+    /// drives the returned [`PreToolUseOutcome`]:
+    ///
+    /// - [`PreToolUseOutcome::Deny`] → skip execution, feed the reason back to
+    ///   the model as the tool result.
+    /// - [`PreToolUseOutcome::StopTurn`] → stop the agentic turn (`continue:false`).
+    /// - [`PreToolUseOutcome::Proceed`] → run the tool, applying any
+    ///   `updated_input` to the arguments and injecting any `context` alongside
+    ///   the result.
+    ///
+    /// Decision priority mirrors the other seams: the first `Block`/deny wins
+    /// (over context/updatedInput), then `Cancel` (`continue:false`), then the
+    /// first `updatedInput`, then the first `additionalContext`.
+    ///
+    /// The `cwd` carried into the event is resolved from the session id via
+    /// [`Self::get_cwd`].
+    pub async fn run_pre_tool_use(
+        &self,
+        session_id: &str,
+        tool_name: &str,
+        tool_input: Option<serde_json::Value>,
+        tool_use_id: Option<&str>,
+    ) -> PreToolUseOutcome {
+        let cwd = self.get_cwd(session_id);
+        let event = HookEvent::PreToolUse {
+            session_id: session_id.to_string(),
+            tool_name: tool_name.to_string(),
+            tool_input,
+            tool_use_id: tool_use_id.map(str::to_string),
+            cwd,
+        };
+        let decisions = self.run_hooks(&event).await;
+
+        if let Some(reason) = Self::find_block(&decisions) {
+            return PreToolUseOutcome::Deny {
+                reason: reason.to_string(),
+            };
+        }
+        if let Some(reason) = Self::find_cancel(&decisions) {
+            return PreToolUseOutcome::StopTurn {
+                reason: reason.to_string(),
+            };
+        }
+        let updated_input = decisions.iter().find_map(|d| match d {
+            HookDecision::AllowWithUpdatedInput { updated_input } => Some(updated_input.clone()),
+            _ => None,
+        });
+        let context = Self::collect_context(&decisions);
+        PreToolUseOutcome::Proceed {
+            updated_input,
+            context,
+        }
+    }
+
+    /// Fire `PostToolUse` hooks synchronously after a successful tool call.
+    ///
+    /// Returns any joined `additionalContext` to feed back to the model
+    /// alongside the tool result. These hooks cannot block — the action has
+    /// already happened — so `Block`/`Cancel`/`updatedInput` decisions are not
+    /// honored here.
+    pub async fn run_post_tool_use(
+        &self,
+        session_id: &str,
+        tool_name: &str,
+        tool_input: Option<serde_json::Value>,
+        tool_response: Option<serde_json::Value>,
+        tool_use_id: Option<&str>,
+    ) -> Option<String> {
+        let cwd = self.get_cwd(session_id);
+        let event = HookEvent::PostToolUse {
+            session_id: session_id.to_string(),
+            tool_name: tool_name.to_string(),
+            tool_input,
+            tool_response,
+            tool_use_id: tool_use_id.map(str::to_string),
+            cwd,
+        };
+        let decisions = self.run_hooks(&event).await;
+        Self::collect_context(&decisions)
+    }
+
+    /// Fire `PostToolUseFailure` hooks synchronously after a failed tool call.
+    ///
+    /// Returns any joined `additionalContext` (Claude's exit-2 stderr feedback)
+    /// to feed back to the model. Like [`Self::run_post_tool_use`], these hooks
+    /// cannot block.
+    pub async fn run_post_tool_use_failure(
+        &self,
+        session_id: &str,
+        tool_name: &str,
+        tool_input: Option<serde_json::Value>,
+        error: Option<serde_json::Value>,
+        tool_use_id: Option<&str>,
+    ) -> Option<String> {
+        let cwd = self.get_cwd(session_id);
+        let event = HookEvent::PostToolUseFailure {
+            session_id: session_id.to_string(),
+            tool_name: tool_name.to_string(),
+            tool_input,
+            error,
+            tool_use_id: tool_use_id.map(str::to_string),
+            cwd,
+        };
+        let decisions = self.run_hooks(&event).await;
+        Self::collect_context(&decisions)
+    }
+
+    /// Join every `AllowWithContext` string from a decision set with newlines,
+    /// or `None` when no decision carried context.
+    fn collect_context(decisions: &[HookDecision]) -> Option<String> {
+        let contexts: Vec<&str> = decisions
+            .iter()
+            .filter_map(|d| match d {
+                HookDecision::AllowWithContext { context } => Some(context.as_str()),
+                _ => None,
+            })
+            .collect();
+        if contexts.is_empty() {
+            None
+        } else {
+            Some(contexts.join("\n"))
+        }
+    }
+
     /// Fire an arbitrary hook event and return all decisions.
     ///
     /// This is the public entry point for callers (CLI, MCP proxy, etc.)
@@ -285,7 +452,6 @@ impl<A> HookableAgent<A> {
         let mut recv = receiver;
 
         tokio::spawn(async move {
-            let mut tool_names = HashMap::new();
             run_notification_loop(
                 &mut recv,
                 &hooks,
@@ -293,7 +459,6 @@ impl<A> HookableAgent<A> {
                 &tx,
                 &cancel_tx,
                 &context_tx,
-                &mut tool_names,
             )
             .await;
         });
@@ -419,11 +584,38 @@ pub fn hookable_agent_from_config<A>(
     config: &crate::HookConfig,
     evaluator: Option<Arc<dyn crate::HookEvaluator>>,
 ) -> Result<HookableAgent<A>, crate::HookConfigError> {
-    let registrations = config.build_registrations(evaluator)?;
+    hookable_agent_from_config_with_context(inner, config, evaluator, HookCommandContext::default())
+}
+
+/// Like [`hookable_agent_from_config`] but folds an explicit
+/// [`HookCommandContext`] into both the built registrations and the wrapper.
+///
+/// The `command_context` (`transcript_path`, `permission_mode`) is captured
+/// into every command/prompt/agent handler — so their JSON stdin matches
+/// Claude Code's input shape — *and* recorded on the wrapper so
+/// [`HookableAgent::command_context`] reflects it. Building handlers with the
+/// same context the wrapper reports keeps the two from drifting; the builder
+/// methods ([`HookableAgent::with_transcript_path`] /
+/// [`HookableAgent::with_permission_mode`]) only retag the wrapper and do not
+/// rebuild already-built handlers, so a context known up front must be threaded
+/// here.
+///
+/// # Errors
+/// Returns [`crate::HookConfigError`] if the config contains an empty hook
+/// list, an invalid matcher regex, or a `prompt`/`agent` handler without a
+/// corresponding `evaluator`.
+pub fn hookable_agent_from_config_with_context<A>(
+    inner: A,
+    config: &crate::HookConfig,
+    evaluator: Option<Arc<dyn crate::HookEvaluator>>,
+    command_context: HookCommandContext,
+) -> Result<HookableAgent<A>, crate::HookConfigError> {
+    let registrations = config.build_registrations_with_context(evaluator, &command_context)?;
     let mut agent = HookableAgent::new(inner);
     for reg in registrations {
         agent = agent.with_registration(reg);
     }
+    agent.command_context = command_context;
     Ok(agent)
 }
 
@@ -484,7 +676,6 @@ async fn run_notification_loop(
     tx: &broadcast::Sender<SessionNotification>,
     cancel_tx: &tokio::sync::mpsc::UnboundedSender<String>,
     context_tx: &tokio::sync::mpsc::UnboundedSender<String>,
-    tool_names: &mut HashMap<String, (String, Option<serde_json::Value>)>,
 ) {
     loop {
         match recv.recv().await {
@@ -495,7 +686,7 @@ async fn run_notification_loop(
                     .get(&notification.session_id.to_string())
                     .cloned()
                     .unwrap_or_else(|| PathBuf::from("."));
-                let events = notification_to_events(&notification, &cwd, tool_names);
+                let events = notification_to_events(&notification, &cwd);
                 dispatch_notification_hooks(hooks, &events, &notification, cancel_tx, context_tx)
                     .await;
                 let _ = tx.send(notification);
@@ -567,67 +758,20 @@ async fn dispatch_notification_hooks(
 
 /// Convert a [`SessionNotification`] into the hook events it should fire.
 ///
-/// Always produces a `Notification` event; for tool-call related updates,
-/// also produces a `PreToolUse`, `PostToolUse`, or `PostToolUseFailure`
-/// event ahead of it.
+/// Produces a single `Notification` event for the client-UI hook family.
 ///
-/// Tracks tool-call ids in `tool_names` so subsequent `ToolCallUpdate`s
-/// can be correlated back to the originating `ToolCall`'s name and input.
-fn notification_to_events(
-    notification: &SessionNotification,
-    cwd: &Path,
-    tool_names: &mut HashMap<String, (String, Option<serde_json::Value>)>,
-) -> Vec<HookEvent> {
-    let session_id = notification.session_id.to_string();
-    let mut events = vec![];
-
-    match &notification.update {
-        SessionUpdate::ToolCall(tool_call) => {
-            let id = tool_call.tool_call_id.0.to_string();
-            tool_names.insert(
-                id.clone(),
-                (tool_call.title.clone(), tool_call.raw_input.clone()),
-            );
-            events.push(HookEvent::PreToolUse {
-                session_id: session_id.clone(),
-                tool_name: tool_call.title.clone(),
-                tool_input: tool_call.raw_input.clone(),
-                tool_use_id: Some(id),
-                cwd: cwd.to_path_buf(),
-            });
-        }
-        SessionUpdate::ToolCallUpdate(update) => {
-            let id = update.tool_call_id.0.to_string();
-            let (name, input) = tool_names.get(&id).cloned().unwrap_or((id.clone(), None));
-            if update.fields.status == Some(ToolCallStatus::Failed) {
-                events.push(HookEvent::PostToolUseFailure {
-                    session_id: session_id.clone(),
-                    tool_name: name,
-                    tool_input: input,
-                    error: update.fields.raw_output.clone(),
-                    tool_use_id: Some(id),
-                    cwd: cwd.to_path_buf(),
-                });
-            } else {
-                events.push(HookEvent::PostToolUse {
-                    session_id: session_id.clone(),
-                    tool_name: name,
-                    tool_input: input,
-                    tool_response: update.fields.raw_output.clone(),
-                    tool_use_id: Some(id),
-                    cwd: cwd.to_path_buf(),
-                });
-            }
-        }
-        _ => {}
-    }
-
-    events.push(HookEvent::Notification {
+/// `PreToolUse` / `PostToolUse` / `PostToolUseFailure` are deliberately **not**
+/// derived from notifications: those fire synchronously at the real
+/// tool-dispatch seam (see [`HookableAgent::run_pre_tool_use`] and friends),
+/// where their decisions can genuinely gate, rewrite, and feed back the call —
+/// true blocking, unlike the after-the-fact notification stream. Firing them
+/// here too would double-fire every tool hook, so this path stays
+/// `Notification`-only while notifications are still broadcast for the UI.
+fn notification_to_events(notification: &SessionNotification, cwd: &Path) -> Vec<HookEvent> {
+    vec![HookEvent::Notification {
         notification: Box::new(notification.clone()),
         cwd: cwd.to_path_buf(),
-    });
-
-    events
+    }]
 }
 
 // ---------------------------------------------------------------------------
@@ -639,7 +783,8 @@ mod tests {
     use super::*;
     use crate::hook_config::HookHandler;
     use agent_client_protocol::schema::{
-        ContentChunk, SessionId, StopReason, ToolCall, ToolCallUpdate, ToolCallUpdateFields,
+        ContentChunk, SessionId, SessionUpdate, StopReason, ToolCall, ToolCallStatus,
+        ToolCallUpdate, ToolCallUpdateFields,
     };
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -864,7 +1009,7 @@ mod tests {
 
         let reg = HookRegistration::new(
             vec![HookEventKind::PreToolUse],
-            Some(regex::Regex::new("Edit").unwrap()),
+            crate::hook_config::Matcher::try_parse("Edit").unwrap(),
             Arc::new(hook),
         );
 
@@ -1283,7 +1428,7 @@ mod tests {
 
         let matching_reg = HookRegistration::new(
             vec![HookEventKind::Notification],
-            Some(regex::Regex::new("agent_message").unwrap()),
+            crate::hook_config::Matcher::try_parse("agent_message").unwrap(),
             Arc::new(RecordingHook {
                 called: Arc::new(AtomicBool::new(false)),
             }),
@@ -1292,7 +1437,7 @@ mod tests {
 
         let non_matching_reg = HookRegistration::new(
             vec![HookEventKind::Notification],
-            Some(regex::Regex::new("^tool_call$").unwrap()),
+            crate::hook_config::Matcher::try_parse("^tool_call$").unwrap(),
             Arc::new(RecordingHook {
                 called: Arc::new(AtomicBool::new(false)),
             }),
@@ -1302,8 +1447,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_notification_hook_context_forwarded_via_channel() {
+        // A `Notification`-family hook returning AllowWithContext still forwards
+        // its context through the channel. (Tool-call hooks no longer fire here;
+        // they fire at the dispatch seam — so this exercises the surviving
+        // Notification path.)
         let agent = HookableAgent::new(DummyInner).with_hook(
-            &[HookEventKind::PostToolUse],
+            &[HookEventKind::Notification],
             None,
             ContextHook {
                 context: "lint warning: unused variable".into(),
@@ -1313,20 +1462,9 @@ mod tests {
         let (notify_tx, notify_rx) = broadcast::channel(16);
         let (_, _cancel_rx, mut context_rx) = agent.intercept_notifications(notify_rx);
 
-        let tool_call = ToolCall::new("call-1", "Bash");
         let _ = notify_tx.send(SessionNotification::new(
             SessionId::from("s1"),
-            SessionUpdate::ToolCall(tool_call),
-        ));
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-
-        let update = ToolCallUpdate::new(
-            "call-1",
-            ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
-        );
-        let _ = notify_tx.send(SessionNotification::new(
-            SessionId::from("s1"),
-            SessionUpdate::ToolCallUpdate(update),
+            SessionUpdate::ToolCall(ToolCall::new("call-1", "Bash")),
         ));
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
@@ -1460,7 +1598,7 @@ mod tests {
         let called = Arc::new(AtomicBool::new(false));
         let reg = HookRegistration::new(
             vec![HookEventKind::UserPromptSubmit],
-            None,
+            crate::hook_config::Matcher::All,
             Arc::new(RecordingHook {
                 called: called.clone(),
             }),
@@ -1498,30 +1636,28 @@ mod tests {
     }
 
     // -- notification_to_events tests --
+    //
+    // The notification path is now `Notification`-only: tool-call notifications
+    // no longer derive `PreToolUse`/`PostToolUse`/`PostToolUseFailure` events.
+    // Those fire synchronously at the dispatch seam (`run_pre_tool_use` etc.),
+    // so deriving them here would double-fire every tool hook.
 
     #[test]
-    fn test_notification_to_events_tool_call() {
+    fn test_notification_to_events_tool_call_emits_only_notification() {
         let notification = SessionNotification::new(
             SessionId::from("s1"),
             SessionUpdate::ToolCall(ToolCall::new("c1", "Bash")),
         );
-        let mut tool_names = HashMap::new();
-        let events = notification_to_events(&notification, &PathBuf::from("/tmp"), &mut tool_names);
+        let events = notification_to_events(&notification, &PathBuf::from("/tmp"));
 
-        assert_eq!(events.len(), 2);
-        assert!(matches!(events[0], HookEvent::PreToolUse { .. }));
-        assert!(matches!(events[1], HookEvent::Notification { .. }));
-        assert!(tool_names.contains_key("c1"));
+        // A ToolCall notification fires the UI `Notification` hook only — NOT a
+        // PreToolUse (that path moved to the dispatch seam to avoid double-fire).
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], HookEvent::Notification { .. }));
     }
 
     #[test]
-    fn test_notification_to_events_tool_call_update_success() {
-        let mut tool_names = HashMap::new();
-        tool_names.insert(
-            "c1".to_string(),
-            ("Bash".to_string(), Some(serde_json::json!({"cmd": "ls"}))),
-        );
-
+    fn test_notification_to_events_tool_call_update_emits_only_notification() {
         let update = ToolCallUpdate::new(
             "c1",
             ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
@@ -1529,50 +1665,12 @@ mod tests {
         let notification =
             SessionNotification::new(SessionId::from("s1"), SessionUpdate::ToolCallUpdate(update));
 
-        let events = notification_to_events(&notification, &PathBuf::from("/tmp"), &mut tool_names);
+        let events = notification_to_events(&notification, &PathBuf::from("/tmp"));
 
-        assert_eq!(events.len(), 2);
-        assert!(matches!(events[0], HookEvent::PostToolUse { .. }));
-    }
-
-    #[test]
-    fn test_notification_to_events_tool_call_update_failure() {
-        let mut tool_names = HashMap::new();
-        tool_names.insert("c1".to_string(), ("Bash".to_string(), None));
-
-        let update = ToolCallUpdate::new(
-            "c1",
-            ToolCallUpdateFields::new().status(ToolCallStatus::Failed),
-        );
-        let notification =
-            SessionNotification::new(SessionId::from("s1"), SessionUpdate::ToolCallUpdate(update));
-
-        let events = notification_to_events(&notification, &PathBuf::from("/tmp"), &mut tool_names);
-
-        assert_eq!(events.len(), 2);
-        assert!(matches!(events[0], HookEvent::PostToolUseFailure { .. }));
-    }
-
-    #[test]
-    fn test_notification_to_events_unknown_tool_call_id() {
-        let mut tool_names = HashMap::new();
-
-        let update = ToolCallUpdate::new(
-            "unknown-id",
-            ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
-        );
-        let notification =
-            SessionNotification::new(SessionId::from("s1"), SessionUpdate::ToolCallUpdate(update));
-
-        let events = notification_to_events(&notification, &PathBuf::from("/tmp"), &mut tool_names);
-
-        assert_eq!(events.len(), 2);
-        match &events[0] {
-            HookEvent::PostToolUse { tool_name, .. } => {
-                assert_eq!(tool_name, "unknown-id");
-            }
-            other => panic!("Expected PostToolUse, got {:?}", other.kind()),
-        }
+        // A ToolCallUpdate fires the UI `Notification` hook only — NOT a
+        // PostToolUse/PostToolUseFailure (those moved to the dispatch seam).
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], HookEvent::Notification { .. }));
     }
 
     #[test]
@@ -1583,11 +1681,41 @@ mod tests {
                 TextContent::new("hi"),
             ))),
         );
-        let mut tool_names = HashMap::new();
-        let events = notification_to_events(&notification, &PathBuf::from("/tmp"), &mut tool_names);
+        let events = notification_to_events(&notification, &PathBuf::from("/tmp"));
 
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0], HookEvent::Notification { .. }));
+    }
+
+    /// A `PreToolUse` hook registered on the wrapper does NOT fire from the
+    /// notification stream — the notification path stays `Notification`-only so
+    /// the dispatch-seam firing is the sole source. This is the no-double-firing
+    /// guard at the notification boundary.
+    #[tokio::test]
+    async fn test_pre_tool_use_hook_does_not_fire_from_notifications() {
+        let called = Arc::new(AtomicBool::new(false));
+        let agent = HookableAgent::new(DummyInner).with_hook(
+            &[HookEventKind::PreToolUse],
+            None,
+            RecordingHook {
+                called: called.clone(),
+            },
+        );
+
+        let (notify_tx, notify_rx) = broadcast::channel(16);
+        let (_rx, _cancel_rx, _context_rx) = agent.intercept_notifications(notify_rx);
+
+        let _ = notify_tx.send(SessionNotification::new(
+            SessionId::from("s1"),
+            SessionUpdate::ToolCall(ToolCall::new("c1", "Bash")),
+        ));
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        assert!(
+            !called.load(Ordering::SeqCst),
+            "a PreToolUse hook must not fire from the notification stream — \
+             tool hooks fire only at the dispatch seam"
+        );
     }
 
     // -- dispatch_notification_hooks tests --
@@ -1607,7 +1735,7 @@ mod tests {
 
         let hooks = vec![HookRegistration::new(
             vec![HookEventKind::Notification],
-            None,
+            crate::hook_config::Matcher::All,
             Arc::new(UpdatedInputHook),
         )];
 
@@ -1633,7 +1761,7 @@ mod tests {
     async fn test_dispatch_notification_hooks_block_decision_is_noop() {
         let hooks = vec![HookRegistration::new(
             vec![HookEventKind::Notification],
-            None,
+            crate::hook_config::Matcher::All,
             Arc::new(BlockHook {
                 reason: "blocked".into(),
             }),
@@ -1663,7 +1791,7 @@ mod tests {
     async fn test_dispatch_notification_hooks_should_continue_is_noop() {
         let hooks = vec![HookRegistration::new(
             vec![HookEventKind::Notification],
-            None,
+            crate::hook_config::Matcher::All,
             Arc::new(ShouldContinueHook {
                 reason: "keep going".into(),
             }),
@@ -1692,6 +1820,208 @@ mod tests {
 
     // -- Spot-check: HookRegistration / HookDecision sanity (deeper coverage
     //    lives in `hook_config` tests).
+
+    // -- PreToolUse / PostToolUse synchronous-seam helper tests --
+
+    /// A `deny` (Block) decision yields a `Deny` outcome carrying the reason,
+    /// so the dispatch seam can skip execution and feed the reason back.
+    #[tokio::test]
+    async fn test_run_pre_tool_use_block_yields_deny() {
+        let agent = HookableAgent::new(DummyInner).with_hook(
+            &[HookEventKind::PreToolUse],
+            Some("Bash"),
+            BlockHook {
+                reason: "no shell".into(),
+            },
+        );
+        let outcome = agent
+            .run_pre_tool_use(
+                "s1",
+                "Bash",
+                Some(serde_json::json!({"command": "ls"})),
+                Some("t1"),
+            )
+            .await;
+        match outcome {
+            PreToolUseOutcome::Deny { reason } => assert_eq!(reason, "no shell"),
+            other => panic!("expected Deny, got {other:?}"),
+        }
+    }
+
+    /// A non-matching matcher leaves the call to proceed unchanged.
+    #[tokio::test]
+    async fn test_run_pre_tool_use_non_matching_proceeds() {
+        let agent = HookableAgent::new(DummyInner).with_hook(
+            &[HookEventKind::PreToolUse],
+            Some("Edit"),
+            BlockHook {
+                reason: "blocked".into(),
+            },
+        );
+        let outcome = agent.run_pre_tool_use("s1", "Bash", None, None).await;
+        assert!(matches!(outcome, PreToolUseOutcome::Proceed { .. }));
+    }
+
+    /// `updatedInput` is surfaced so the seam can rewrite the tool arguments
+    /// before dispatch.
+    #[tokio::test]
+    async fn test_run_pre_tool_use_updated_input_rewrites_args() {
+        struct UpdatedInputHook;
+        #[async_trait::async_trait]
+        impl HookHandler for UpdatedInputHook {
+            async fn handle(&self, _event: &HookEvent) -> HookDecision {
+                HookDecision::AllowWithUpdatedInput {
+                    updated_input: serde_json::json!({"command": "safe"}),
+                }
+            }
+        }
+        let agent = HookableAgent::new(DummyInner).with_hook(
+            &[HookEventKind::PreToolUse],
+            None,
+            UpdatedInputHook,
+        );
+        let outcome = agent
+            .run_pre_tool_use(
+                "s1",
+                "Bash",
+                Some(serde_json::json!({"command": "rm"})),
+                None,
+            )
+            .await;
+        match outcome {
+            PreToolUseOutcome::Proceed {
+                updated_input,
+                context,
+            } => {
+                assert_eq!(updated_input, Some(serde_json::json!({"command": "safe"})));
+                assert!(context.is_none());
+            }
+            other => panic!("expected Proceed, got {other:?}"),
+        }
+    }
+
+    /// `additionalContext` is surfaced so the seam can inject it alongside the
+    /// tool result.
+    #[tokio::test]
+    async fn test_run_pre_tool_use_context_is_surfaced() {
+        let agent = HookableAgent::new(DummyInner).with_hook(
+            &[HookEventKind::PreToolUse],
+            None,
+            ContextHook {
+                context: "be careful".into(),
+            },
+        );
+        let outcome = agent.run_pre_tool_use("s1", "Bash", None, None).await;
+        match outcome {
+            PreToolUseOutcome::Proceed {
+                context,
+                updated_input,
+            } => {
+                assert_eq!(context.as_deref(), Some("be careful"));
+                assert!(updated_input.is_none());
+            }
+            other => panic!("expected Proceed, got {other:?}"),
+        }
+    }
+
+    /// `Block` wins over a context decision from another hook on the same call.
+    #[tokio::test]
+    async fn test_run_pre_tool_use_block_wins_over_context() {
+        let agent = HookableAgent::new(DummyInner)
+            .with_hook(
+                &[HookEventKind::PreToolUse],
+                None,
+                ContextHook {
+                    context: "fyi".into(),
+                },
+            )
+            .with_hook(
+                &[HookEventKind::PreToolUse],
+                None,
+                BlockHook {
+                    reason: "denied".into(),
+                },
+            );
+        let outcome = agent.run_pre_tool_use("s1", "Bash", None, None).await;
+        assert!(matches!(outcome, PreToolUseOutcome::Deny { .. }));
+    }
+
+    /// A `Cancel` (continue:false) decision yields a `StopTurn` outcome.
+    #[tokio::test]
+    async fn test_run_pre_tool_use_cancel_yields_stop_turn() {
+        struct CancelHook;
+        #[async_trait::async_trait]
+        impl HookHandler for CancelHook {
+            async fn handle(&self, _event: &HookEvent) -> HookDecision {
+                HookDecision::Cancel {
+                    reason: "halt".into(),
+                }
+            }
+        }
+        let agent = HookableAgent::new(DummyInner).with_hook(
+            &[HookEventKind::PreToolUse],
+            None,
+            CancelHook,
+        );
+        let outcome = agent.run_pre_tool_use("s1", "Bash", None, None).await;
+        match outcome {
+            PreToolUseOutcome::StopTurn { reason } => assert_eq!(reason, "halt"),
+            other => panic!("expected StopTurn, got {other:?}"),
+        }
+    }
+
+    /// `PostToolUse` surfaces additionalContext to feed back after success.
+    #[tokio::test]
+    async fn test_run_post_tool_use_surfaces_context() {
+        let agent = HookableAgent::new(DummyInner).with_hook(
+            &[HookEventKind::PostToolUse],
+            None,
+            ContextHook {
+                context: "lint clean".into(),
+            },
+        );
+        let ctx = agent
+            .run_post_tool_use("s1", "Bash", None, Some(serde_json::json!("ok")), None)
+            .await;
+        assert_eq!(ctx.as_deref(), Some("lint clean"));
+    }
+
+    /// `PostToolUseFailure` surfaces additionalContext to feed back after error.
+    #[tokio::test]
+    async fn test_run_post_tool_use_failure_surfaces_context() {
+        let agent = HookableAgent::new(DummyInner).with_hook(
+            &[HookEventKind::PostToolUseFailure],
+            None,
+            ContextHook {
+                context: "see stderr".into(),
+            },
+        );
+        let ctx = agent
+            .run_post_tool_use_failure("s1", "Bash", None, Some(serde_json::json!("exit 2")), None)
+            .await;
+        assert_eq!(ctx.as_deref(), Some("see stderr"));
+    }
+
+    /// The synchronous PreToolUse helper fires a matching hook exactly once.
+    #[tokio::test]
+    async fn test_run_pre_tool_use_fires_once() {
+        let count = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        struct CountHook(Arc<std::sync::atomic::AtomicU32>);
+        #[async_trait::async_trait]
+        impl HookHandler for CountHook {
+            async fn handle(&self, _event: &HookEvent) -> HookDecision {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                HookDecision::Allow
+            }
+        }
+        let agent = HookableAgent::new(DummyInner).with_hook(
+            &[HookEventKind::PreToolUse],
+            None,
+            CountHook(count.clone()),
+        );
+        let _ = agent.run_pre_tool_use("s1", "Bash", None, None).await;
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn test_hook_decision_default_is_allow() {

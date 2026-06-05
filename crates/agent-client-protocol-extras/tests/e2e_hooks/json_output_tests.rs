@@ -9,6 +9,7 @@
 //! Hooks that fire from the notification pipeline (`intercept_notifications`):
 //!   PreToolUse, PostToolUse, PostToolUseFailure, Notification
 
+use agent_client_protocol_extras::PreToolUseOutcome;
 use tokio::sync::broadcast;
 
 use crate::helpers;
@@ -39,10 +40,10 @@ async fn user_prompt_submit_json_block() {
     );
 }
 
-/// PreToolUse with JSON decision:block — Block is a no-op in the notification
-/// pipeline (tool already initiated). Verify the hook ran.
+/// PreToolUse with JSON decision:block → Deny at the dispatch seam (true
+/// blocking — the tool never runs).
 #[tokio::test]
-async fn pre_tool_use_json_block_runs_hook() {
+async fn pre_tool_use_json_block_denies() {
     let tmp = tempfile::TempDir::new().unwrap();
     let json_output = r#"{"decision":"block","reason":"tool blocked"}"#;
     let script = helpers::write_json_output_script(tmp.path(), "hook.sh", json_output);
@@ -53,27 +54,20 @@ async fn pre_tool_use_json_block_runs_hook() {
 
     let _session_id = helpers::init_session(&agent).await;
 
-    let (tx, rx) = broadcast::channel(16);
-    let (_forwarded_rx, _cancel_rx, _context_rx) = agent.intercept_notifications(rx);
-
-    helpers::send_tool_completed_notifications(&tx, "test-session").await;
-
-    // Block is silently ignored in the notification pipeline.
-    // Verify hook ran and received correct JSON.
-    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
-    assert!(
-        captured.is_some(),
-        "PreToolUse hook should have been invoked"
-    );
-    let json: serde_json::Value =
-        serde_json::from_str(&captured.unwrap()).expect("Captured stdin should be valid JSON");
-    assert_eq!(json["hook_event_name"], "PreToolUse");
+    let outcome = helpers::fire_pre_tool_use(&agent, "Bash").await;
+    match outcome {
+        PreToolUseOutcome::Deny { reason } => assert!(
+            reason.contains("tool blocked"),
+            "decision:block should deny the call; got {reason:?}"
+        ),
+        other => panic!("expected Deny, got {other:?}"),
+    }
 }
 
-/// PostToolUse with JSON decision:block → not blockable, becomes context.
-/// Tested via intercept_notifications.
+/// PostToolUse with JSON decision:block → not blockable; a post-hook ignores
+/// `block`, so no context is fed back (the action already happened).
 #[tokio::test]
-async fn post_tool_use_json_block_becomes_context() {
+async fn post_tool_use_json_block_is_not_blockable() {
     let tmp = tempfile::TempDir::new().unwrap();
     let json_output = r#"{"decision":"block","reason":"post-tool feedback"}"#;
     let script = helpers::write_json_output_script(tmp.path(), "hook.sh", json_output);
@@ -84,23 +78,19 @@ async fn post_tool_use_json_block_becomes_context() {
 
     let _session_id = helpers::init_session(&agent).await;
 
-    let (tx, rx) = broadcast::channel(16);
-    let (_forwarded_rx, _cancel_rx, _context_rx) = agent.intercept_notifications(rx);
-
-    helpers::send_tool_completed_notifications(&tx, "test-session").await;
-
-    // PostToolUse not blockable — prompt would still succeed
-    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
+    // The hook runs but a top-level `block` is not context — PostToolUse cannot
+    // block, so it surfaces no additionalContext.
+    let ctx = helpers::fire_post_tool_use(&agent, "Bash").await;
     assert!(
-        captured.is_some(),
-        "PostToolUse hook should have been invoked"
+        ctx.is_none(),
+        "a PostToolUse decision:block is a no-op (not context); got {ctx:?}"
     );
 }
 
-/// PostToolUseFailure with JSON decision:block → not blockable, becomes context.
-/// Tested via intercept_notifications.
+/// PostToolUseFailure with JSON decision:block → not blockable; same as
+/// PostToolUse, `block` is ignored.
 #[tokio::test]
-async fn post_tool_use_failure_json_block_becomes_context() {
+async fn post_tool_use_failure_json_block_is_not_blockable() {
     let tmp = tempfile::TempDir::new().unwrap();
     let json_output = r#"{"decision":"block","reason":"failure feedback"}"#;
     let script = helpers::write_json_output_script(tmp.path(), "hook.sh", json_output);
@@ -112,16 +102,10 @@ async fn post_tool_use_failure_json_block_becomes_context() {
 
     let _session_id = helpers::init_session(&agent).await;
 
-    let (tx, rx) = broadcast::channel(16);
-    let (_forwarded_rx, _cancel_rx, _context_rx) = agent.intercept_notifications(rx);
-
-    helpers::send_tool_failed_notifications(&tx, "test-session").await;
-
-    // PostToolUseFailure not blockable — verify hook ran
-    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
+    let ctx = helpers::fire_post_tool_use_failure(&agent, "Bash").await;
     assert!(
-        captured.is_some(),
-        "PostToolUseFailure hook should have been invoked"
+        ctx.is_none(),
+        "a PostToolUseFailure decision:block is a no-op (not context); got {ctx:?}"
     );
 }
 

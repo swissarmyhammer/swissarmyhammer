@@ -8,42 +8,14 @@
 //! ingests user-written JSON config should accept JSONC. Writing remains
 //! strict JSON via `serde_json::to_string_pretty`.
 //!
-//! This module exposes a single helper, [`parse_jsonc`], that wraps
-//! `jsonc_parser::parse_to_value` and converts the result into a
-//! `serde_json::Value`. Parse failures surface as a `serde_json::Error` whose
-//! `Display` impl carries the original line/column information, so existing
-//! call-site error contexts (`"Invalid JSON in {path}: {e}"`) keep working
-//! unchanged.
+//! This module re-exports the single shared JSONC primitive,
+//! [`parse_jsonc`](swissarmyhammer_common::parse_jsonc), owned by
+//! `swissarmyhammer-common`. Mirdan keeps `crate::parse_jsonc` as the canonical
+//! call-site path; the implementation (and the `jsonc_parser` dependency) lives
+//! in the common crate so the Claude hook-settings loader can reuse it without
+//! depending on mirdan.
 
-use serde::de::Error as _;
-use serde_json::Value;
-
-/// Parse a string of JSONC (JSON with `//` and `/* */` comments and trailing
-/// commas) into a [`serde_json::Value`].
-///
-/// Plain JSON is fully backward compatible: any input that
-/// `serde_json::from_str` would parse, `parse_jsonc` parses to the same value.
-/// The lenient extensions accepted on top are line comments, block comments,
-/// and trailing commas.
-///
-/// # Errors
-///
-/// Returns a [`serde_json::Error`] when the input is neither valid JSON nor
-/// valid JSONC. The error's `Display` impl preserves the parser's original
-/// line/column information so user-facing messages stay informative.
-pub fn parse_jsonc(content: &str) -> Result<Value, serde_json::Error> {
-    // Empty or whitespace-only input — match serde_json's behavior, which
-    // rejects empty input with an EOF error. `jsonc_parser` would otherwise
-    // deserialize empty input as `null`.
-    if content.trim().is_empty() {
-        return serde_json::from_str(content);
-    }
-    jsonc_parser::parse_to_serde_value(content, &Default::default())
-        .map_err(|e| serde_json::Error::custom(e.to_string()))
-        .and_then(|opt: Option<Value>| {
-            opt.ok_or_else(|| serde_json::Error::custom("empty JSONC input"))
-        })
-}
+pub use swissarmyhammer_common::parse_jsonc;
 
 #[cfg(test)]
 mod tests {
