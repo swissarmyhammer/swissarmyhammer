@@ -566,6 +566,37 @@ impl ToolContext {
         self
     }
 
+    /// Resolve the session working directory — the root every tool operates against.
+    ///
+    /// The working directory of a board *is* the working directory of its agent
+    /// session, so all file tools (grep, glob, read, write, edit, shell) resolve
+    /// relative paths and default search roots from this value, never from the
+    /// process current directory. For the bundled GUI app the process CWD is `/`
+    /// (a read-only filesystem root); a single app process also hosts multiple
+    /// boards, so process CWD cannot be a per-session root anyway.
+    ///
+    /// Resolution order:
+    /// 1. [`Self::working_dir`] when set (the normal case — the server threads the
+    ///    board directory in at construction).
+    /// 2. The process current directory as a last resort, for stand-alone callers
+    ///    (CLI / tests) that constructed a context without a working dir. This is
+    ///    the *only* sanctioned `current_dir()` fallback; tool handlers must call
+    ///    this method instead of reaching for `std::env::current_dir()` directly,
+    ///    so that the in-process multi-board host never roots a search at `/`.
+    ///
+    /// Falls back to `.` when even the current directory cannot be determined
+    /// (e.g. it was deleted). This relative fallback is intentionally *not* a
+    /// usable search root: search tools (grep, glob) call
+    /// [`reject_filesystem_root`](crate::mcp::tools::files::shared_utils::reject_filesystem_root)
+    /// on the resolved root, which rejects a relative `.` (and the filesystem
+    /// root `/`) rather than walking the process CWD this method exists to avoid.
+    pub fn session_root(&self) -> PathBuf {
+        self.working_dir
+            .clone()
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+
     /// Set the MCP server instance for this context
     ///
     /// Uses interior mutability to set the server reference after context creation.
@@ -2906,6 +2937,20 @@ mod tests {
         let dir = std::path::PathBuf::from("/tmp/test");
         let ctx = ctx.with_working_dir(dir.clone());
         assert_eq!(ctx.working_dir, Some(dir));
+    }
+
+    #[test]
+    fn test_session_root_prefers_working_dir() {
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let git_ops = Arc::new(tokio::sync::Mutex::new(None));
+        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+
+        // With a working dir set, session_root returns it verbatim — never the
+        // process CWD.
+        let board_dir = std::path::PathBuf::from("/tmp/some-board");
+        let ctx = ToolContext::new(tool_handlers, git_ops, agent_config)
+            .with_working_dir(board_dir.clone());
+        assert_eq!(ctx.session_root(), board_dir);
     }
 
     #[tokio::test]

@@ -3,7 +3,6 @@ name: commit
 description: Git commit workflow. Use this skill whenever the user says "commit", "save changes", "check in", or otherwise wants to commit code. Always use this skill instead of running git commands directly.
 license: MIT OR Apache-2.0
 compatibility: Requires the `code_context` MCP tool for project detection to pick the right formatter/linter. Also requires `git` on the system PATH and a writable Git working tree.
-context: fork
 agent: committer
 metadata:
   author: swissarmyhammer
@@ -13,6 +12,8 @@ metadata:
 # Commit
 
 Create a git commit with a well-crafted conventional commit message.
+
+{% include "_partials/delegate-to-subagent" %}
 
 ## Guidelines
 

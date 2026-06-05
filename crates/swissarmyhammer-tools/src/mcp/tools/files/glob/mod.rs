@@ -3,7 +3,7 @@
 //! This module provides the GlobFileTool for fast file pattern matching with advanced filtering.
 
 use crate::mcp::tool_registry::{send_mcp_log, BaseToolImpl, ToolContext};
-use crate::mcp::tools::files::shared_utils::FilePathValidator;
+use crate::mcp::tools::files::shared_utils::{reject_filesystem_root, FilePathValidator};
 use ignore::WalkBuilder;
 use rmcp::model::{CallToolResult, LoggingLevel};
 use rmcp::ErrorData as McpError;
@@ -91,8 +91,13 @@ pub async fn execute_glob(
     // Validate pattern - pass the path to allow broader patterns when search is scoped
     validate_glob_pattern(&request.pattern, request.path.as_deref())?;
 
+    // The session working directory (the board dir) is the root for an unscoped
+    // glob and the base for resolving a relative `path`. Never the process CWD,
+    // which is `/` for the bundled GUI app.
+    let session_root = context.session_root();
+
     // Use FilePathValidator for comprehensive security validation
-    let validator = FilePathValidator::new();
+    let validator = FilePathValidator::new(session_root.clone());
 
     // Determine starting directory
     let search_dir = match request.path {
@@ -110,10 +115,14 @@ pub async fn execute_glob(
             }
             validated_path
         }
-        None => std::env::current_dir().map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("Failed to get current directory: {}", e), None)
-        })?,
+        None => session_root.clone(),
     };
+
+    // Defensive guard: never walk the entire filesystem or the process CWD. An
+    // unscoped glob whose session root resolved to `/` (or to an unresolved
+    // relative `.`) would stream tens of thousands of paths; refuse both — the
+    // same guard grep applies.
+    reject_filesystem_root(&search_dir)?;
 
     let respect_git_ignore = request.respect_git_ignore.unwrap_or(true);
     let case_sensitive = request.case_sensitive.unwrap_or(false);
@@ -128,11 +137,12 @@ pub async fn execute_glob(
     )
     .await;
 
-    // Use advanced gitignore integration with ignore crate
+    // Use advanced gitignore integration with ignore crate. Matched paths are
+    // displayed relative to the session root (not the process CWD).
     let matched_files = match if respect_git_ignore {
-        find_files_with_gitignore(&search_dir, &request.pattern, case_sensitive)
+        find_files_with_gitignore(&search_dir, &request.pattern, case_sensitive, &session_root)
     } else {
-        find_files_with_glob(&search_dir, &request.pattern, case_sensitive)
+        find_files_with_glob(&search_dir, &request.pattern, case_sensitive, &session_root)
     } {
         Ok(files) => files,
         Err(e) => {
@@ -194,10 +204,15 @@ pub async fn execute_glob(
 const MAX_RESULTS: usize = 10_000;
 
 /// Advanced file search using ignore crate for proper .gitignore support
+///
+/// `display_base` is the session working directory; matched paths are rendered
+/// relative to it to keep output compact, falling back to the absolute path when
+/// a file lies outside it.
 fn find_files_with_gitignore(
     search_dir: &Path,
     pattern: &str,
     case_sensitive: bool,
+    display_base: &Path,
 ) -> Result<Vec<String>, McpError> {
     let mut builder = WalkBuilder::new(search_dir);
 
@@ -230,8 +245,8 @@ fn find_files_with_gitignore(
     match_options.require_literal_separator = false;
     match_options.require_literal_leading_dot = false;
 
-    // Get current working directory for relative path conversion
-    let cwd = std::env::current_dir().unwrap_or_else(|_| search_dir.to_path_buf());
+    // Session root for relative path conversion (display only)
+    let cwd = display_base.to_path_buf();
 
     for entry in walker {
         // Performance optimization: stop if we have enough results
@@ -304,10 +319,14 @@ fn find_files_with_gitignore(
 }
 
 /// Fallback file search using basic glob without gitignore support
+///
+/// `display_base` is the session working directory; matched paths are rendered
+/// relative to it for compact output.
 fn find_files_with_glob(
     search_dir: &Path,
     pattern: &str,
     case_sensitive: bool,
+    display_base: &Path,
 ) -> Result<Vec<String>, McpError> {
     // Build search pattern - if pattern is already absolute, use as-is
     // Otherwise, join with search directory
@@ -330,8 +349,8 @@ fn find_files_with_glob(
 
     let mut matched_files = Vec::new();
 
-    // Get current working directory for relative path conversion
-    let cwd = std::env::current_dir().unwrap_or_else(|_| search_dir.to_path_buf());
+    // Session root for relative path conversion (display only)
+    let cwd = display_base.to_path_buf();
 
     for entry in entries {
         // Performance optimization: stop if we have enough results

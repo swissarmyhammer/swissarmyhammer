@@ -2435,15 +2435,24 @@ impl AgentServer {
         // a runaway re-prompt hang.
         let mcp_client = self.resolve_mcp_client_for_tool(session, &tool_name).await;
 
+        // Watchdog bound for a single dispatch attempt. A hung tool handler
+        // (unbounded walk, stalled socket, deadlock) is aborted here rather than
+        // wedging the agentic loop until the MCP transport tears the session
+        // down — see ToolExecutionConfig.
+        let tool_timeout = self.config.tool_execution_config.timeout;
+
         // Execute with retry logic
         let result = retry_manager
             .retry(&format!("tool_{}", tool_name), || async {
                 debug!("Calling MCP server for tool '{}' (attempt)", tool_name);
 
-                mcp_client
-                    .call_tool(&tool_name, tool_args.clone())
-                    .await
-                    .map_err(|mcp_error| {
+                // Bound the attempt: when the timeout elapses, the call future is
+                // dropped (cancelled) and the timeout surfaces as a non-retriable
+                // error so the loop reports it immediately instead of burning the
+                // whole watchdog budget on each retry.
+                let call = mcp_client.call_tool(&tool_name, tool_args.clone());
+                match tokio::time::timeout(tool_timeout, call).await {
+                    Ok(call_result) => call_result.map_err(|mcp_error| {
                         let error_msg = mcp_error.to_string();
                         let is_retriable = AgentServer::is_tool_error_retriable(&error_msg);
 
@@ -2463,7 +2472,17 @@ impl AgentServer {
                             message: error_msg,
                             is_retriable,
                         }
-                    })
+                    }),
+                    Err(_elapsed) => {
+                        let error_msg =
+                            format!("Tool '{}' timed out after {:?}", tool_name, tool_timeout);
+                        warn!("{}", error_msg);
+                        Err(ToolExecutionError {
+                            message: error_msg,
+                            is_retriable: false,
+                        })
+                    }
+                }
             })
             .await;
 
@@ -2661,6 +2680,7 @@ mod tests {
     use super::*;
     use crate::types::{
         ModelConfig, ModelSource, ParallelConfig, QueueConfig, RetryConfig, SessionConfig,
+        ToolExecutionConfig,
     };
 
     fn create_test_config() -> AgentConfig {
@@ -2685,6 +2705,7 @@ mod tests {
             mcp_servers: Vec::new(),
             session_config: SessionConfig::default(),
             parallel_execution_config: ParallelConfig::default(),
+            tool_execution_config: ToolExecutionConfig::default(),
         }
     }
 
@@ -2760,6 +2781,7 @@ mod tests {
             mcp_servers: Vec::new(),
             session_config: SessionConfig::default(),
             parallel_execution_config: ParallelConfig::default(),
+            tool_execution_config: ToolExecutionConfig::default(),
         };
 
         // This should pass all validation except for the model file not existing
@@ -2905,6 +2927,10 @@ mod tests {
             behavior: CallBehavior,
             advertised_tools: Vec<String>,
             list_tools_calls: AtomicUsize,
+            /// When set, `call_tool` sleeps this long before consulting
+            /// `behavior` — modelling a slow/hung tool handler so the watchdog
+            /// timeout can be exercised.
+            call_delay: Option<std::time::Duration>,
         }
 
         impl ScriptedMcpClient {
@@ -2915,6 +2941,7 @@ mod tests {
                     behavior,
                     advertised_tools: Vec::new(),
                     list_tools_calls: AtomicUsize::new(0),
+                    call_delay: None,
                 })
             }
             /// Like [`new`], but the client advertises `tools` from `list_tools`
@@ -2926,6 +2953,19 @@ mod tests {
                     behavior,
                     advertised_tools: tools.iter().map(|t| t.to_string()).collect(),
                     list_tools_calls: AtomicUsize::new(0),
+                    call_delay: None,
+                })
+            }
+            /// A client whose every `call_tool` blocks for `delay` before it
+            /// would return — used to drive the watchdog-timeout path.
+            fn blocking_for(delay: std::time::Duration, behavior: CallBehavior) -> Arc<Self> {
+                Arc::new(Self {
+                    calls: Mutex::new(Vec::new()),
+                    index: AtomicUsize::new(0),
+                    behavior,
+                    advertised_tools: Vec::new(),
+                    list_tools_calls: AtomicUsize::new(0),
+                    call_delay: Some(delay),
                 })
             }
             fn calls(&self) -> Vec<String> {
@@ -2952,6 +2992,9 @@ mod tests {
             ) -> Result<String, MCPError> {
                 let idx = self.index.fetch_add(1, Ordering::SeqCst);
                 self.calls.lock().unwrap().push(name.to_string());
+                if let Some(delay) = self.call_delay {
+                    tokio::time::sleep(delay).await;
+                }
                 (self.behavior)(idx, name)
             }
             async fn list_prompts(&self) -> Result<Vec<rmcp::model::Prompt>, MCPError> {
@@ -2977,7 +3020,15 @@ mod tests {
         /// Build an `AgentServer` whose model is never loaded. The tool-dispatch
         /// methods under test do not touch the model/queue, so this is sound.
         fn headless_agent(mcp_client: Arc<dyn MCPClient>) -> AgentServer {
-            let config = create_test_config();
+            headless_agent_with_config(mcp_client, create_test_config())
+        }
+
+        /// Like [`headless_agent`], but with an explicit config so a test can
+        /// tune, e.g., the tool-execution watchdog timeout.
+        fn headless_agent_with_config(
+            mcp_client: Arc<dyn MCPClient>,
+            config: AgentConfig,
+        ) -> AgentServer {
             let model_manager =
                 Arc::new(ModelManager::new(config.model.clone()).expect("ModelManager::new"));
             let request_queue = Arc::new(RequestQueue::new(
@@ -3141,6 +3192,66 @@ mod tests {
                 mock.calls().len(),
                 1,
                 "a non-retriable error must NOT be retried"
+            );
+        }
+
+        #[tokio::test]
+        async fn execute_tool_with_retry_times_out_a_hung_tool_and_keeps_the_loop_alive() {
+            // A tool whose handler blocks for 30s would, before the watchdog,
+            // wedge the agentic loop until the MCP transport tore the session
+            // down. With a 50ms watchdog the attempt is aborted and surfaced as
+            // a structured timeout error — fast, and the loop stays alive.
+            let blocking = ScriptedMcpClient::blocking_for(
+                std::time::Duration::from_secs(30),
+                Box::new(|_idx, name| Ok(format!("never:{name}"))),
+            );
+
+            let mut config = create_test_config();
+            config.tool_execution_config.timeout = std::time::Duration::from_millis(50);
+            let agent = headless_agent_with_config(blocking.clone(), config);
+            let session = session_with_tools(&["hang"]);
+
+            let started = std::time::Instant::now();
+            let result = agent
+                .execute_tool_with_retry(&tool_call("hang"), &session)
+                .await;
+            let elapsed = started.elapsed();
+
+            // The turn returns a timeout error result within the bound — nowhere
+            // near the tool's 30s block — rather than stalling.
+            assert!(
+                elapsed < std::time::Duration::from_secs(5),
+                "watchdog must abort the hung tool quickly, took {elapsed:?}"
+            );
+            let error = result
+                .error
+                .as_ref()
+                .expect("a hung tool must surface as an error result, not a hang");
+            assert!(
+                error.contains("timed out"),
+                "error must identify the timeout, got: {error}"
+            );
+            assert_eq!(
+                result.result,
+                serde_json::Value::Null,
+                "a timed-out tool has no result payload"
+            );
+
+            // A timeout is non-retriable: exactly one attempt, so the watchdog
+            // budget is spent once rather than per retry.
+            assert_eq!(blocking.calls().len(), 1, "a timeout must NOT be retried");
+
+            // The agent is unharmed: a subsequent (fast) tool call still works,
+            // proving the timeout did not poison the loop.
+            let healthy = ScriptedMcpClient::new(Box::new(|_idx, name| Ok(format!("ok:{name}"))));
+            let agent2 = headless_agent(healthy);
+            let session2 = session_with_tools(&["ping"]);
+            let after = agent2
+                .execute_tool_with_retry(&tool_call("ping"), &session2)
+                .await;
+            assert!(
+                after.error.is_none(),
+                "the loop stays alive after a timeout: {after:?}"
             );
         }
 

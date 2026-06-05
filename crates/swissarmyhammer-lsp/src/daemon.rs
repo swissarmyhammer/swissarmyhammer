@@ -68,6 +68,11 @@ pub struct LspDaemon {
     state_tx: watch::Sender<LspDaemonState>,
     /// Read-side of the state watch (cloneable for external consumers).
     state_rx: watch::Receiver<LspDaemonState>,
+    /// Grace period for [`shutdown`](Self::shutdown) before the child is killed
+    /// on drop. Defaults to [`SHUTDOWN_GRACE_SECS`]; tests override it via
+    /// [`set_shutdown_grace`](Self::set_shutdown_grace) so they don't wait out
+    /// the full production grace period when probing the timeout path.
+    shutdown_grace: Duration,
 }
 
 impl std::fmt::Debug for LspDaemon {
@@ -91,7 +96,19 @@ impl LspDaemon {
             consecutive_failures: 0,
             state_tx,
             state_rx,
+            shutdown_grace: Duration::from_secs(SHUTDOWN_GRACE_SECS),
         }
+    }
+
+    /// Override the graceful-shutdown grace period.
+    ///
+    /// Test-only seam: the production default is [`SHUTDOWN_GRACE_SECS`], but
+    /// tests that deliberately drive the timeout branch (a child that ignores
+    /// the closed pipes and never exits) set a short period so they assert the
+    /// timeout → kill-on-drop behavior in milliseconds instead of seconds.
+    #[cfg(test)]
+    pub(crate) fn set_shutdown_grace(&mut self, grace: Duration) {
+        self.shutdown_grace = grace;
     }
 
     /// Get a cloneable receiver to observe state changes.
@@ -382,11 +399,8 @@ impl LspDaemon {
 
         self.set_state(LspDaemonState::ShuttingDown);
 
-        let result = tokio::time::timeout(
-            Duration::from_secs(SHUTDOWN_GRACE_SECS),
-            Self::graceful_shutdown(child),
-        )
-        .await;
+        let result =
+            tokio::time::timeout(self.shutdown_grace, Self::graceful_shutdown(child)).await;
 
         match result {
             Ok(Ok(())) => {
@@ -1417,6 +1431,11 @@ mod tests {
         let spec = test_spec("sleep");
         let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
         daemon.child = Some(child);
+        // `sleep` ignores the closed pipes and never exits, so graceful
+        // shutdown always hits the timeout branch. Shorten the grace period so
+        // the test exercises that branch (state → NotStarted, child killed on
+        // drop) without waiting out the full production grace.
+        daemon.set_shutdown_grace(Duration::from_millis(200));
 
         // Shutdown should complete within the grace period (kill_on_drop)
         daemon.shutdown().await;
@@ -2990,13 +3009,14 @@ time.sleep(0.5)
     /// `shutdown()` on a process that refuses to exit within the grace
     /// window (by ignoring stdin close) must eventually return with state
     /// NotStarted. This covers the `Err(_)` (timeout) branch of the
-    /// shutdown outcome match. Slow test (~5s) — same pattern as existing
-    /// `test_shutdown_kills_long_running_child` but with an explicit
-    /// state-transition sequence assertion.
+    /// shutdown outcome match. The grace period is shortened via
+    /// `set_shutdown_grace` so the timeout branch is exercised in
+    /// milliseconds rather than the full production grace — same pattern as
+    /// `test_shutdown_kills_long_running_child`.
     #[tokio::test]
     async fn test_shutdown_timeout_path_emits_shutting_down_then_not_started() {
         // sleep never responds to stdin close — shutdown will hit the
-        // SHUTDOWN_GRACE_SECS timeout.
+        // grace-period timeout.
         let workspace = tempfile::tempdir().expect("workspace tempdir");
         let child = Command::new("sleep")
             .args(["60"])
@@ -3010,6 +3030,8 @@ time.sleep(0.5)
         let spec = test_spec("sleep");
         let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
         daemon.child = Some(child);
+        let grace = Duration::from_millis(200);
+        daemon.set_shutdown_grace(grace);
 
         let mut rx = daemon.state_rx();
         // Drain any prior state changes
@@ -3025,12 +3047,12 @@ time.sleep(0.5)
         assert_eq!(daemon.state(), LspDaemonState::NotStarted);
         assert!(daemon.child.is_none());
 
-        // Elapsed time must be at least near SHUTDOWN_GRACE_SECS (5s)
-        // because graceful_shutdown waits for the sleep process which
-        // never exits from stdin close alone.
+        // Elapsed time must be at least the (shortened) grace period because
+        // graceful_shutdown waits for the sleep process, which never exits
+        // from stdin close alone and so always hits the timeout branch.
         assert!(
-            elapsed >= Duration::from_secs(4),
-            "expected at least ~5s shutdown (timeout path), got: {elapsed:?}"
+            elapsed >= grace,
+            "expected at least the grace period {grace:?} (timeout path), got: {elapsed:?}"
         );
     }
 

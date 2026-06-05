@@ -168,6 +168,7 @@ fn real_model_config() -> AgentConfig {
         session_config: SessionConfig::default(),
         parallel_execution_config: ParallelConfig::default(),
         queue_config: QueueConfig::default(),
+        tool_execution_config: Default::default(),
     }
 }
 

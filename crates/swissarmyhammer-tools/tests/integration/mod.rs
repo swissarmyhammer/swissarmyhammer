@@ -11,6 +11,7 @@ mod per_client_tool_composition;
 mod rmcp_stdio_working;
 mod semantic_search_e2e;
 mod serve_time_bash_deny;
+mod session_root_resolution;
 mod skill_e2e;
 mod web_fetch_specification_compliance;
 mod web_search_integration;

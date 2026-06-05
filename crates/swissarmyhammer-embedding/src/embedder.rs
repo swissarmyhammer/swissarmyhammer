@@ -1034,8 +1034,17 @@ mod tests {
         });
     }
 
-    /// `load()` on a model without the actual file on disk returns an error.
-    /// This exercises the `TextEmbedder::load` delegation path.
+    /// Exercises the `TextEmbedder::load` delegation path against a real model.
+    ///
+    /// Despite the historical name, this is a model-load test, not an
+    /// error-path test: when the `nomic-embed-code` weights are cached it takes
+    /// the `Ok` branch and loads a multi-GB GGUF (and on a cold cache it
+    /// downloads gigabytes from HuggingFace). It is therefore gated behind the
+    /// `embedding-models` feature like the other model-dependent tests, and run
+    /// via `cargo nextest run --features embedding-models --profile embedding-models`.
+    /// Deterministic, fast coverage of the genuine missing-file error path
+    /// lives at the llama-embedding layer (`test_load_missing_local_file_returns_error`).
+    #[cfg(feature = "embedding-models")]
     #[test]
     fn embedder_load_without_model_file_returns_error() {
         let rt = rt();

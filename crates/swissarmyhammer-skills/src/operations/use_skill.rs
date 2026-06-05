@@ -36,6 +36,7 @@ impl Execute<SkillContext, SkillError> for UseSkill {
                     "description": skill.description,
                     "instructions": skill.instructions,
                     "allowed_tools": skill.allowed_tools,
+                    "agent": skill.agent,
                     "source": skill.source.to_string(),
                 });
 
