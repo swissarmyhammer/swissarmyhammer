@@ -44,9 +44,10 @@ use swissarmyhammer_operations::{operation, Operation};
 )]
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Inspect {
-    /// The window whose inspector stack is mutated (e.g. `"main"`).
+    /// The active scope chain; the target window is resolved from its
+    /// `window:` moniker.
     #[serde(default)]
-    pub window_label: String,
+    pub scope_chain: Vec<String>,
     /// The `type:id` moniker to inspect (e.g. `"task:01XYZ"`).
     #[serde(default)]
     pub moniker: String,
@@ -66,9 +67,10 @@ pub struct Inspect {
 )]
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct InspectorClose {
-    /// The window whose inspector stack is popped.
+    /// The active scope chain; the target window is resolved from its
+    /// `window:` moniker.
     #[serde(default)]
-    pub window_label: String,
+    pub scope_chain: Vec<String>,
 }
 
 /// Close all inspector entries for a window.
@@ -84,9 +86,10 @@ pub struct InspectorClose {
 )]
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct InspectorCloseAll {
-    /// The window whose inspector stack is cleared.
+    /// The active scope chain; the target window is resolved from its
+    /// `window:` moniker.
     #[serde(default)]
-    pub window_label: String,
+    pub scope_chain: Vec<String>,
 }
 
 /// Persist the user-chosen inspector panel width for a window.
@@ -102,9 +105,10 @@ pub struct InspectorCloseAll {
 )]
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct InspectorSetWidth {
-    /// The window whose inspector width is set.
+    /// The active scope chain; the target window is resolved from its
+    /// `window:` moniker.
     #[serde(default)]
-    pub window_label: String,
+    pub scope_chain: Vec<String>,
     /// The new inspector width in CSS pixels.
     #[serde(default)]
     pub width: u32,
@@ -125,9 +129,10 @@ pub struct InspectorSetWidth {
 )]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct PaletteOpen {
-    /// The window whose palette is opened.
+    /// The active scope chain; the target window is resolved from its
+    /// `window:` moniker.
     #[serde(default)]
-    pub window_label: String,
+    pub scope_chain: Vec<String>,
     /// The palette mode: `"command"` (default) or `"search"`.
     #[serde(default = "default_palette_mode")]
     pub mode: String,
@@ -136,7 +141,7 @@ pub struct PaletteOpen {
 impl Default for PaletteOpen {
     fn default() -> Self {
         Self {
-            window_label: String::new(),
+            scope_chain: Vec::new(),
             mode: default_palette_mode(),
         }
     }
@@ -160,9 +165,10 @@ fn default_palette_mode() -> String {
 )]
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct PaletteClose {
-    /// The window whose palette is closed.
+    /// The active scope chain; the target window is resolved from its
+    /// `window:` moniker.
     #[serde(default)]
-    pub window_label: String,
+    pub scope_chain: Vec<String>,
 }
 
 // Keymap operation ──────────────────────────────────────────────────────
@@ -213,6 +219,34 @@ pub struct SetScopeChain {
     pub scope_chain: Vec<String>,
 }
 
+// Active-view operation ───────────────────────────────────────────────────
+
+/// Set the active view for a window (the `view.set` command).
+///
+/// Ports [`crate::state::UIState::set_active_view`]: records the per-window
+/// active view id AND rewrites every `view:*` moniker in the recorded focus
+/// scope chain to point at the new view, so the palette / context menu keep
+/// offering the right view-scoped commands until the next `ui.setFocus`. The
+/// target window is resolved from the scope chain's `window:` moniker — there
+/// is no separate `window_label`.
+///
+/// Returns the change payload, or `null` when nothing changed.
+#[operation(
+    verb = "set",
+    noun = "active_view",
+    description = "Set the active view for a window (resolved from the scope chain)"
+)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SetActiveView {
+    /// The active scope chain; the target window is resolved from its
+    /// `window:` moniker, and its `view:*` monikers are rewritten to `view_id`.
+    #[serde(default)]
+    pub scope_chain: Vec<String>,
+    /// The id of the view to make active.
+    #[serde(default)]
+    pub view_id: String,
+}
+
 // Rename operation ──────────────────────────────────────────────────────
 
 /// Enter inline rename mode for the active perspective tab.
@@ -230,10 +264,10 @@ pub struct SetScopeChain {
 )]
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct StartRename {
-    /// The window the rename applies to (carried for parity with the
-    /// frontend command; the backend does not read it).
+    /// The active scope chain (carried for parity with the frontend command;
+    /// the backend does not read it).
     #[serde(default)]
-    pub window_label: String,
+    pub scope_chain: Vec<String>,
 }
 
 // Drag operations ───────────────────────────────────────────────────────
@@ -318,9 +352,10 @@ pub struct DragComplete {}
 )]
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ShowCommand {
-    /// The window whose command palette is opened.
+    /// The active scope chain; the target window is resolved from its
+    /// `window:` moniker.
     #[serde(default)]
-    pub window_label: String,
+    pub scope_chain: Vec<String>,
 }
 
 /// Open the command palette for a window (the `app.palette` toggle).
@@ -336,9 +371,10 @@ pub struct ShowCommand {
 )]
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ShowPalette {
-    /// The window whose palette is opened.
+    /// The active scope chain; the target window is resolved from its
+    /// `window:` moniker.
     #[serde(default)]
-    pub window_label: String,
+    pub scope_chain: Vec<String>,
 }
 
 /// Open the command palette in `"search"` mode (the `app.search` toggle).
@@ -354,9 +390,10 @@ pub struct ShowPalette {
 )]
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ShowSearch {
-    /// The window whose search palette is opened.
+    /// The active scope chain; the target window is resolved from its
+    /// `window:` moniker.
     #[serde(default)]
-    pub window_label: String,
+    pub scope_chain: Vec<String>,
 }
 
 /// Dismiss the topmost UI surface for a window (the `app.dismiss` toggle).
@@ -372,9 +409,10 @@ pub struct ShowSearch {
 )]
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Dismiss {
-    /// The window whose UI surface is dismissed.
+    /// The active scope chain; the target window is resolved from its
+    /// `window:` moniker.
     #[serde(default)]
-    pub window_label: String,
+    pub scope_chain: Vec<String>,
 }
 
 /// All `ui_state` operations — the canonical list used for schema generation.
@@ -395,6 +433,7 @@ static UI_STATE_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::ne
         Box::leak(Box::<PaletteClose>::default()) as &dyn Operation,
         Box::leak(Box::<SetKeymapMode>::default()) as &dyn Operation,
         Box::leak(Box::<SetScopeChain>::default()) as &dyn Operation,
+        Box::leak(Box::<SetActiveView>::default()) as &dyn Operation,
         Box::leak(Box::<StartRename>::default()) as &dyn Operation,
         Box::leak(Box::<DragStart>::default()) as &dyn Operation,
         Box::leak(Box::<DragCancel>::default()) as &dyn Operation,

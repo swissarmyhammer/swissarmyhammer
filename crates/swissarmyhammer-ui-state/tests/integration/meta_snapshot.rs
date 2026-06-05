@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use super::common::{request_context, Harness};
 
-/// The 16 operations the `ui_state` tool advertises, as `(noun, verb, op)`.
+/// The 17 operations the `ui_state` tool advertises, as `(noun, verb, op)`.
 ///
 /// A deliberate addition / rename should update this list in the same PR as
 /// the operation struct change.
@@ -31,6 +31,8 @@ fn expected_operations() -> Vec<(&'static str, &'static str, &'static str)> {
         ("keymap", "set", "set keymap"),
         // scope chain (ui.setFocus routing target)
         ("scope_chain", "set", "set scope_chain"),
+        // active view (view.set)
+        ("active_view", "set", "set active_view"),
         // rename
         ("rename", "start", "start rename"),
         // drag
@@ -47,7 +49,7 @@ fn expected_operations() -> Vec<(&'static str, &'static str, &'static str)> {
 
 /// The `_meta` tree under `io.swissarmyhammer/operations` enumerates every
 /// (noun, verb, op) tuple for the `ui_state` tool. This snapshot pins the
-/// current set of 16 ops and asserts the wire `op` enum matches it exactly.
+/// current set of 17 ops and asserts the wire `op` enum matches it exactly.
 #[tokio::test]
 async fn ui_state_tool_meta_operations_tree_is_complete() {
     let h = Harness::new();
@@ -71,7 +73,7 @@ async fn ui_state_tool_meta_operations_tree_is_complete() {
         .expect("_meta carries io.swissarmyhammer/operations");
 
     let expected = expected_operations();
-    assert_eq!(expected.len(), 16, "ui_state exposes exactly 16 operations");
+    assert_eq!(expected.len(), 17, "ui_state exposes exactly 17 operations");
 
     for (noun, verb, op_str) in &expected {
         let leaf = ops_tree

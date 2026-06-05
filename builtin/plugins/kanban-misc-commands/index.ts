@@ -22,7 +22,7 @@
 //   tag.update       → kanban `update tag`       (this.kanban.kanban.tag.update)
 //   attachment.open  → window `open path`        (this.window.window.path.open)
 //   attachment.reveal→ window `reveal path`      (this.window.window.path.reveal)
-//   view.set         → views  `set view`         (this.views.views.view.set)
+//   view.set         → ui_state `set active_view` (this.ui_state.ui_state.active_view.set)
 
 import {
   Availability,
@@ -60,7 +60,7 @@ export default class KanbanMiscCommandsPlugin extends Plugin {
    * The metadata on each registration is the source YAML's metadata, 1:1.
    */
   async load(): Promise<void> {
-    await ensureServices(this, ["commands", "kanban", "window", "views"]);
+    await ensureServices(this, ["commands", "kanban", "window", "views", "ui_state"]);
 
     await registerCommands(this, [
       // ─── column.reorder ─────────────────────────────────────────────────
@@ -214,9 +214,12 @@ export default class KanbanMiscCommandsPlugin extends Plugin {
       },
 
       // ─── view.set ───────────────────────────────────────────────────────
-      // YAML (view.yaml): visible:false, param view_id(args). Routes to the
-      // views server's `set view` verb, writing the ViewDef identified by the
-      // `view_id` arg the palette pre-fills.
+      // YAML (view.yaml): visible:false, param view_id(args). Switches the
+      // ACTIVE view for the window — routes to ui_state `set active_view`,
+      // which records the per-window active view AND rewrites the focus scope
+      // chain's `view:*` monikers. The target window is resolved from the
+      // `window:` moniker in the scope chain (the single structured param) —
+      // there is no denormalized `window_label`.
       {
         id: "view.set",
         name: "Switch View",
@@ -224,8 +227,10 @@ export default class KanbanMiscCommandsPlugin extends Plugin {
         params: [{ name: "view_id", from: "args" }],
         execute: async (rawCtx) => {
           const ctx = (rawCtx ?? {}) as CommandContext;
-          const id = ctx.args?.view_id;
-          return await this.views.views.view.set({ id });
+          return await this.ui_state.ui_state.active_view.set({
+            scope_chain: ctx.scope_chain ?? [],
+            view_id: ctx.args?.view_id,
+          });
         },
       },
     ]);

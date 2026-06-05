@@ -19,7 +19,7 @@ async fn inspect_pushes_onto_inspector_stack() {
     let res = call_tool(
         &service,
         "inspect inspector",
-        json!({ "op": "inspect inspector", "window_label": "main", "moniker": "task:01XYZ" }),
+        json!({ "op": "inspect inspector", "scope_chain": ["window:main"], "moniker": "task:01XYZ" }),
     )
     .await
     .expect("inspect should succeed");
@@ -41,7 +41,7 @@ async fn inspect_stacks_then_close_pops_top() {
         call_tool(
             &service,
             "inspect inspector",
-            json!({ "op": "inspect inspector", "window_label": "main", "moniker": moniker }),
+            json!({ "op": "inspect inspector", "scope_chain": ["window:main"], "moniker": moniker }),
         )
         .await
         .expect("inspect should succeed");
@@ -54,7 +54,7 @@ async fn inspect_stacks_then_close_pops_top() {
     let res = call_tool(
         &service,
         "close inspector",
-        json!({ "op": "close inspector", "window_label": "main" }),
+        json!({ "op": "close inspector", "scope_chain": ["window:main"] }),
     )
     .await
     .expect("close inspector should succeed");
@@ -73,7 +73,7 @@ async fn close_all_clears_inspector_stack() {
         call_tool(
             &service,
             "inspect inspector",
-            json!({ "op": "inspect inspector", "window_label": "main", "moniker": moniker }),
+            json!({ "op": "inspect inspector", "scope_chain": ["window:main"], "moniker": moniker }),
         )
         .await
         .expect("inspect should succeed");
@@ -82,7 +82,7 @@ async fn close_all_clears_inspector_stack() {
     let res = call_tool(
         &service,
         "close_all inspector",
-        json!({ "op": "close_all inspector", "window_label": "main" }),
+        json!({ "op": "close_all inspector", "scope_chain": ["window:main"] }),
     )
     .await
     .expect("close_all inspector should succeed");
@@ -101,7 +101,7 @@ async fn set_width_persists_clamped_inspector_width() {
     let res = call_tool(
         &service,
         "set_width inspector",
-        json!({ "op": "set_width inspector", "window_label": "main", "width": 540 }),
+        json!({ "op": "set_width inspector", "scope_chain": ["window:main"], "width": 540 }),
     )
     .await
     .expect("set_width should succeed");
@@ -112,7 +112,7 @@ async fn set_width_persists_clamped_inspector_width() {
     call_tool(
         &service,
         "set_width inspector",
-        json!({ "op": "set_width inspector", "window_label": "main", "width": 1 }),
+        json!({ "op": "set_width inspector", "scope_chain": ["window:main"], "width": 1 }),
     )
     .await
     .expect("set_width should succeed");
@@ -188,7 +188,7 @@ async fn palette_open_then_close_toggles_flag() {
     let res = call_tool(
         &service,
         "open palette",
-        json!({ "op": "open palette", "window_label": "main", "mode": "search" }),
+        json!({ "op": "open palette", "scope_chain": ["window:main"], "mode": "search" }),
     )
     .await
     .expect("open palette should succeed");
@@ -199,7 +199,7 @@ async fn palette_open_then_close_toggles_flag() {
     let res = call_tool(
         &service,
         "close palette",
-        json!({ "op": "close palette", "window_label": "main" }),
+        json!({ "op": "close palette", "scope_chain": ["window:main"] }),
     )
     .await
     .expect("close palette should succeed");
@@ -216,7 +216,7 @@ async fn palette_open_defaults_to_command_mode() {
     call_tool(
         &service,
         "open palette",
-        json!({ "op": "open palette", "window_label": "main" }),
+        json!({ "op": "open palette", "scope_chain": ["window:main"] }),
     )
     .await
     .expect("open palette should succeed");
@@ -303,7 +303,7 @@ async fn start_rename_is_backend_noop() {
     let res = call_tool(
         &service,
         "start rename",
-        json!({ "op": "start rename", "window_label": "main" }),
+        json!({ "op": "start rename", "scope_chain": ["window:main"] }),
     )
     .await
     .expect("start rename should succeed");
@@ -323,7 +323,7 @@ async fn show_command_opens_palette_in_command_mode() {
     call_tool(
         &service,
         "show command",
-        json!({ "op": "show command", "window_label": "main" }),
+        json!({ "op": "show command", "scope_chain": ["window:main"] }),
     )
     .await
     .expect("show command should succeed");
@@ -341,7 +341,7 @@ async fn show_search_opens_palette_in_search_mode() {
     call_tool(
         &service,
         "show search",
-        json!({ "op": "show search", "window_label": "main" }),
+        json!({ "op": "show search", "scope_chain": ["window:main"] }),
     )
     .await
     .expect("show search should succeed");
@@ -359,7 +359,7 @@ async fn show_palette_opens_palette() {
     let res = call_tool(
         &service,
         "show palette",
-        json!({ "op": "show palette", "window_label": "main" }),
+        json!({ "op": "show palette", "scope_chain": ["window:main"] }),
     )
     .await
     .expect("show palette should succeed");
@@ -378,14 +378,14 @@ async fn dismiss_closes_open_palette_first() {
     call_tool(
         &service,
         "show command",
-        json!({ "op": "show command", "window_label": "main" }),
+        json!({ "op": "show command", "scope_chain": ["window:main"] }),
     )
     .await
     .expect("show command should succeed");
     call_tool(
         &service,
         "inspect inspector",
-        json!({ "op": "inspect inspector", "window_label": "main", "moniker": "task:01XYZ" }),
+        json!({ "op": "inspect inspector", "scope_chain": ["window:main"], "moniker": "task:01XYZ" }),
     )
     .await
     .expect("inspect should succeed");
@@ -394,7 +394,7 @@ async fn dismiss_closes_open_palette_first() {
     let res = call_tool(
         &service,
         "dismiss ui",
-        json!({ "op": "dismiss ui", "window_label": "main" }),
+        json!({ "op": "dismiss ui", "scope_chain": ["window:main"] }),
     )
     .await
     .expect("dismiss should succeed");
@@ -406,7 +406,7 @@ async fn dismiss_closes_open_palette_first() {
     let res = call_tool(
         &service,
         "dismiss ui",
-        json!({ "op": "dismiss ui", "window_label": "main" }),
+        json!({ "op": "dismiss ui", "scope_chain": ["window:main"] }),
     )
     .await
     .expect("dismiss should succeed");

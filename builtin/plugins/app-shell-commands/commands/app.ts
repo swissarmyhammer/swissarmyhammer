@@ -13,7 +13,6 @@ import {
   type CommandSpec,
   type StoreDispatch,
   type UiStateDispatch,
-  windowLabel,
 } from "./context.ts";
 
 /** Build the nine `app.*` command registrations. */
@@ -69,7 +68,7 @@ export function appCommands(
       execute: async (rawCtx: unknown) => {
         const ctx = (rawCtx ?? {}) as CommandContext;
         return await uiState.ui_state.ui_state.command.show({
-          window_label: windowLabel(ctx),
+          scope_chain: ctx.scope_chain ?? [],
         });
       },
     },
@@ -86,7 +85,7 @@ export function appCommands(
       execute: async (rawCtx: unknown) => {
         const ctx = (rawCtx ?? {}) as CommandContext;
         return await uiState.ui_state.ui_state.palette.show({
-          window_label: windowLabel(ctx),
+          scope_chain: ctx.scope_chain ?? [],
         });
       },
     },
@@ -103,7 +102,7 @@ export function appCommands(
       execute: async (rawCtx: unknown) => {
         const ctx = (rawCtx ?? {}) as CommandContext;
         return await uiState.ui_state.ui_state.search.show({
-          window_label: windowLabel(ctx),
+          scope_chain: ctx.scope_chain ?? [],
         });
       },
     },
@@ -119,7 +118,7 @@ export function appCommands(
       execute: async (rawCtx: unknown) => {
         const ctx = (rawCtx ?? {}) as CommandContext;
         return await uiState.ui_state.ui_state.ui.dismiss({
-          window_label: windowLabel(ctx),
+          scope_chain: ctx.scope_chain ?? [],
         });
       },
     },

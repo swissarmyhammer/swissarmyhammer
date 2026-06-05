@@ -68,7 +68,22 @@ use crate::support::{call_command, execute_result, try_call_command};
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// The window the ui commands operate on throughout the test.
-const WINDOW: &str = "main";
+///
+/// Deliberately NOT `"main"`: the window is carried only in the scope chain's
+/// `window:` moniker (the production shape), and the ui_state server defaults a
+/// chainless op to `"main"`. Using a non-default label proves the window is
+/// resolved from the scope chain rather than silently falling back to the
+/// default — the exact regression where palette/inspector state was written to
+/// a `"main"` slot no real board window reads.
+const WINDOW: &str = "board-test";
+
+/// The production-shape scope chain a real dispatch carries: a `window:<label>`
+/// moniker plus the `engine` root. The window is the single structured
+/// parameter every per-window ui_state op resolves its target from — there is
+/// no denormalized `window_label`.
+fn window_scope() -> Value {
+    json!([format!("window:{WINDOW}"), "engine"])
+}
 
 // ───────────────────────────────────────────────────────────────────────────
 // Staging the committed builtin bundle
@@ -338,18 +353,6 @@ async fn execute_ok(
     execute_result(&resp)
 }
 
-/// A single-scope snapshot under layer `/L` containing `fq` at a 10x10 rect —
-/// the minimal shape `set focus` needs to commit (mirrors the focus e2e).
-fn snapshot_one(fq: &str) -> Value {
-    json!({
-        "layer_fq": "/L",
-        "scopes": [
-            { "fq": fq, "rect": { "x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0 },
-              "parent_zone": null, "nav_override": {} }
-        ]
-    })
-}
-
 // ───────────────────────────────────────────────────────────────────────────
 // The test
 // ───────────────────────────────────────────────────────────────────────────
@@ -443,7 +446,7 @@ async fn ui_commands_plugin_registers_and_executes() {
     execute_ok(
         &service,
         "ui.inspect",
-        json!({ "target": "task:01ABC", "args": { "window_label": WINDOW } }),
+        json!({ "target": "task:01ABC", "scope_chain": window_scope() }),
     )
     .await;
     assert_eq!(
@@ -456,7 +459,7 @@ async fn ui_commands_plugin_registers_and_executes() {
     execute_ok(
         &service,
         "ui.inspect",
-        json!({ "target": "tag:bug", "args": { "window_label": WINDOW } }),
+        json!({ "target": "tag:bug", "scope_chain": window_scope() }),
     )
     .await;
     assert_eq!(
@@ -469,7 +472,7 @@ async fn ui_commands_plugin_registers_and_executes() {
     execute_ok(
         &service,
         "ui.inspector.close",
-        json!({ "args": { "window_label": WINDOW } }),
+        json!({ "scope_chain": window_scope() }),
     )
     .await;
     assert_eq!(
@@ -482,7 +485,7 @@ async fn ui_commands_plugin_registers_and_executes() {
     execute_ok(
         &service,
         "ui.inspector.close_all",
-        json!({ "args": { "window_label": WINDOW } }),
+        json!({ "scope_chain": window_scope() }),
     )
     .await;
     assert!(
@@ -494,7 +497,7 @@ async fn ui_commands_plugin_registers_and_executes() {
     execute_ok(
         &service,
         "ui.inspector.set_width",
-        json!({ "args": { "window_label": WINDOW, "width": 480 } }),
+        json!({ "scope_chain": window_scope(), "args": { "width": 480 } }),
     )
     .await;
     assert_eq!(
@@ -511,17 +514,24 @@ async fn ui_commands_plugin_registers_and_executes() {
     execute_ok(
         &service,
         "ui.palette.open",
-        json!({ "args": { "window_label": WINDOW } }),
+        json!({ "scope_chain": window_scope() }),
     )
     .await;
     assert!(
         backends.ui_state.palette_open(WINDOW),
         "ui.palette.open must open the command palette on the UIState"
     );
+    // The window must come from the scope chain, NOT default to "main": the
+    // exact regression where palette state landed on a window no board reads.
+    assert!(
+        !backends.ui_state.palette_open("main"),
+        "ui.palette.open must NOT write to the default 'main' window when the \
+         scope chain names a different window"
+    );
     execute_ok(
         &service,
         "ui.palette.close",
-        json!({ "args": { "window_label": WINDOW } }),
+        json!({ "scope_chain": window_scope() }),
     )
     .await;
     assert!(
@@ -556,11 +566,19 @@ async fn ui_commands_plugin_registers_and_executes() {
     execute_ok(
         &service,
         "ui.entity.startRename",
-        json!({ "args": { "window_label": WINDOW } }),
+        json!({ "scope_chain": window_scope() }),
     )
     .await;
 
-    // ── (3h) ui.setFocus changes the focus state via the focus server ───────
+    // ── (3h) ui.setFocus records the focus scope chain in ui_state ──────────
+    // ui.setFocus routes to the ui_state `set scope_chain` op — it records the
+    // UI-state focus scope chain the frontend already computes (leaf-first).
+    // The spatial focus KERNEL is the separate `focus` server; ui.setFocus must
+    // NOT touch it.
+    assert!(
+        backends.ui_state.scope_chain().is_empty(),
+        "precondition: no focus scope chain recorded before ui.setFocus"
+    );
     assert!(
         backends
             .spatial_state
@@ -568,31 +586,41 @@ async fn ui_commands_plugin_registers_and_executes() {
             .await
             .focused_in(&WindowLabel::from_string(WINDOW))
             .is_none(),
-        "precondition: no focus slot before ui.setFocus"
+        "precondition: no spatial-focus slot before ui.setFocus"
     );
+    let chain = vec![
+        "field:k1".to_string(),
+        format!("window:{WINDOW}"),
+        "engine".to_string(),
+    ];
     let focus = execute_ok(
         &service,
         "ui.setFocus",
-        json!({ "args": { "fq": "/L/k1", "snapshot": snapshot_one("/L/k1") } }),
+        json!({ "args": { "scope_chain": chain } }),
     )
     .await;
-    // The focus dispatch returns the raw MCP `tools/call` response; the focus
-    // server's payload (`{ ok: true, event: <FocusChangedEvent> }`) is under
-    // `structuredContent`.
-    let focus_event = &focus["structuredContent"]["event"];
-    assert_eq!(focus_event["window_label"], json!(WINDOW));
-    assert_eq!(focus_event["next_fq"], json!("/L/k1"));
-    // ...and the focus state is observably updated on the shared SpatialState.
-    let focused = backends
-        .spatial_state
-        .lock()
-        .await
-        .focused_in(&WindowLabel::from_string(WINDOW))
-        .map(|fq| fq.as_str().to_string());
+    // The dispatch returns the ui_state op's `{ ok, change }` envelope under
+    // `structuredContent`; the recorded chain is the `ScopeChain` change.
     assert_eq!(
-        focused,
-        Some("/L/k1".to_string()),
-        "ui.setFocus must commit the focus on the focus server's SpatialState"
+        focus["structuredContent"]["change"]["ScopeChain"],
+        json!(chain),
+        "ui.setFocus must return the recorded scope chain in its change payload"
+    );
+    assert_eq!(
+        backends.ui_state.scope_chain(),
+        chain,
+        "ui.setFocus must record the focus scope chain into ui_state"
+    );
+    // ...and it must NOT have committed anything on the spatial focus kernel:
+    // that is the separate `focus` server's concern.
+    assert!(
+        backends
+            .spatial_state
+            .lock()
+            .await
+            .focused_in(&WindowLabel::from_string(WINDOW))
+            .is_none(),
+        "ui.setFocus must not commit on the spatial focus kernel"
     );
 
     // ── (3i) window.new hits the recording WindowShell spy ──────────────────

@@ -28,8 +28,8 @@ use swissarmyhammer_operations_macros::operation_tool;
 
 use crate::operations::{
     operations, Dismiss, DragCancel, DragComplete, DragStart, Inspect, InspectorClose,
-    InspectorCloseAll, InspectorSetWidth, PaletteClose, PaletteOpen, SetKeymapMode, SetScopeChain,
-    ShowCommand, ShowPalette, ShowSearch, StartRename,
+    InspectorCloseAll, InspectorSetWidth, PaletteClose, PaletteOpen, SetActiveView, SetKeymapMode,
+    SetScopeChain, ShowCommand, ShowPalette, ShowSearch, StartRename,
 };
 use crate::state::{DragSession, DragSource, UIState};
 
@@ -44,11 +44,25 @@ const MIN_INSPECTOR_WIDTH: u32 = 320;
 /// Mirrors the original `MAX_INSPECTOR_WIDTH` constant.
 const MAX_INSPECTOR_WIDTH: u32 = 800;
 
-/// The window label used when an op omits an explicit one.
+/// The window label used when a scope chain carries no `window:` moniker.
 ///
 /// Matches the `ctx.window_label_from_scope().unwrap_or("main")` fallback the
 /// original command layer used.
 const DEFAULT_WINDOW_LABEL: &str = "main";
+
+/// Resolve the target window label from a scope chain.
+///
+/// The window is carried in the scope chain as a `window:<label>` moniker — the
+/// scope chain is the single structured parameter every per-window op receives,
+/// so the window is read from it rather than from a redundant denormalized
+/// `window_label` field. Returns the first `window:` moniker's label, or
+/// [`DEFAULT_WINDOW_LABEL`] when the chain carries none.
+fn window_from_scope(scope_chain: &[String]) -> &str {
+    scope_chain
+        .iter()
+        .find_map(|m| m.strip_prefix("window:"))
+        .unwrap_or(DEFAULT_WINDOW_LABEL)
+}
 
 /// In-process `rmcp::ServerHandler` for the `ui_state` operation tool.
 ///
@@ -85,16 +99,6 @@ impl UiStateServer {
         &self.ui_state
     }
 
-    /// Resolve the effective window label for an op, falling back to `"main"`
-    /// when the op supplied an empty string.
-    fn window_label(label: &str) -> &str {
-        if label.is_empty() {
-            DEFAULT_WINDOW_LABEL
-        } else {
-            label
-        }
-    }
-
     /// Build the platform-facing `ui_state` tool definition.
     ///
     /// The `inputSchema` is the flat `op` enum derived from the operation
@@ -112,28 +116,28 @@ impl UiStateServer {
 
     /// Handle `inspect inspector` — push a moniker onto the window's stack.
     fn handle_inspect(&self, req: Inspect) -> Result<Value, McpError> {
-        let window = Self::window_label(&req.window_label);
+        let window = window_from_scope(&req.scope_chain);
         let change = self.ui_state.inspect(window, &req.moniker);
         Ok(serde_json::json!({ "ok": true, "change": change }))
     }
 
     /// Handle `close inspector` — pop the topmost entry.
     fn handle_inspector_close(&self, req: InspectorClose) -> Result<Value, McpError> {
-        let window = Self::window_label(&req.window_label);
+        let window = window_from_scope(&req.scope_chain);
         let change = self.ui_state.inspector_close(window);
         Ok(serde_json::json!({ "ok": true, "change": change }))
     }
 
     /// Handle `close_all inspector` — clear the stack.
     fn handle_inspector_close_all(&self, req: InspectorCloseAll) -> Result<Value, McpError> {
-        let window = Self::window_label(&req.window_label);
+        let window = window_from_scope(&req.scope_chain);
         let change = self.ui_state.inspector_close_all(window);
         Ok(serde_json::json!({ "ok": true, "change": change }))
     }
 
     /// Handle `set_width inspector` — persist the clamped panel width.
     fn handle_inspector_set_width(&self, req: InspectorSetWidth) -> Result<Value, McpError> {
-        let window = Self::window_label(&req.window_label);
+        let window = window_from_scope(&req.scope_chain);
         let width = req.width.clamp(MIN_INSPECTOR_WIDTH, MAX_INSPECTOR_WIDTH);
         let change = self.ui_state.set_inspector_width(window, width);
         Ok(serde_json::json!({ "ok": true, "change": change }))
@@ -141,7 +145,7 @@ impl UiStateServer {
 
     /// Handle `open palette` — open the palette in the requested mode.
     fn handle_palette_open(&self, req: PaletteOpen) -> Result<Value, McpError> {
-        let window = Self::window_label(&req.window_label);
+        let window = window_from_scope(&req.scope_chain);
         let change = self
             .ui_state
             .set_palette_open_with_mode(window, true, &req.mode);
@@ -150,7 +154,7 @@ impl UiStateServer {
 
     /// Handle `close palette` — close the palette.
     fn handle_palette_close(&self, req: PaletteClose) -> Result<Value, McpError> {
-        let window = Self::window_label(&req.window_label);
+        let window = window_from_scope(&req.scope_chain);
         let change = self.ui_state.set_palette_open(window, false);
         Ok(serde_json::json!({ "ok": true, "change": change }))
     }
@@ -164,6 +168,32 @@ impl UiStateServer {
     /// Handle `set scope_chain` — record the focus scope chain (`ui.setFocus`).
     fn handle_set_scope_chain(&self, req: SetScopeChain) -> Result<Value, McpError> {
         let change = self.ui_state.set_scope_chain(req.scope_chain);
+        Ok(serde_json::json!({ "ok": true, "change": change }))
+    }
+
+    /// Handle `set active_view` — record the window's active view and keep the
+    /// recorded focus scope chain's `view:*` monikers pointed at it.
+    ///
+    /// Ports the original `SetActiveViewCmd`: without the scope-chain rewrite the
+    /// palette / context menu keep offering commands for whichever view was last
+    /// in scope, so `entity.add:{type}` and friends fan out from the stale view.
+    fn handle_set_active_view(&self, req: SetActiveView) -> Result<Value, McpError> {
+        let window = window_from_scope(&req.scope_chain);
+        let change = self.ui_state.set_active_view(window, &req.view_id);
+
+        let mut chain = self.ui_state.scope_chain();
+        let new_moniker = format!("view:{}", req.view_id);
+        let mut mutated = false;
+        for moniker in &mut chain {
+            if moniker.starts_with("view:") && *moniker != new_moniker {
+                *moniker = new_moniker.clone();
+                mutated = true;
+            }
+        }
+        if mutated {
+            self.ui_state.set_scope_chain(chain);
+        }
+
         Ok(serde_json::json!({ "ok": true, "change": change }))
     }
 
@@ -207,7 +237,7 @@ impl UiStateServer {
 
     /// Handle `show command` — open the palette in command mode.
     fn handle_show_command(&self, req: ShowCommand) -> Result<Value, McpError> {
-        let window = Self::window_label(&req.window_label);
+        let window = window_from_scope(&req.scope_chain);
         let change = self
             .ui_state
             .set_palette_open_with_mode(window, true, "command");
@@ -216,14 +246,14 @@ impl UiStateServer {
 
     /// Handle `show palette` — open the palette without forcing a mode.
     fn handle_show_palette(&self, req: ShowPalette) -> Result<Value, McpError> {
-        let window = Self::window_label(&req.window_label);
+        let window = window_from_scope(&req.scope_chain);
         let change = self.ui_state.set_palette_open(window, true);
         Ok(serde_json::json!({ "ok": true, "change": change }))
     }
 
     /// Handle `show search` — open the palette in search mode.
     fn handle_show_search(&self, req: ShowSearch) -> Result<Value, McpError> {
-        let window = Self::window_label(&req.window_label);
+        let window = window_from_scope(&req.scope_chain);
         let change = self
             .ui_state
             .set_palette_open_with_mode(window, true, "search");
@@ -232,7 +262,7 @@ impl UiStateServer {
 
     /// Handle `dismiss ui` — layered close: palette first, then inspector.
     fn handle_dismiss(&self, req: Dismiss) -> Result<Value, McpError> {
-        let window = Self::window_label(&req.window_label);
+        let window = window_from_scope(&req.scope_chain);
         // Layer 1: close the palette if open in this window.
         if self.ui_state.palette_open(window) {
             let change = self.ui_state.set_palette_open(window, false);
@@ -314,6 +344,7 @@ impl ServerHandler for UiStateServer {
             "close palette" => self.handle_palette_close(deserialize_op(arguments, &op)?)?,
             "set keymap" => self.handle_set_keymap_mode(deserialize_op(arguments, &op)?)?,
             "set scope_chain" => self.handle_set_scope_chain(deserialize_op(arguments, &op)?)?,
+            "set active_view" => self.handle_set_active_view(deserialize_op(arguments, &op)?)?,
             "start rename" => self.handle_start_rename(deserialize_op(arguments, &op)?)?,
             "start drag" => self.handle_drag_start(deserialize_op(arguments, &op)?)?,
             "cancel drag" => self.handle_drag_cancel(deserialize_op(arguments, &op)?)?,

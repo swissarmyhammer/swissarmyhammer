@@ -8,8 +8,9 @@
  *
  * Mirrors `swissarmyhammer_command_service::CommandContext`: the active scope
  * monikers, the optional context-menu target moniker, and a free-form args
- * bag the dispatching surface populates (the app-shell commands read the
- * window the action fired in out of `args.window_label`).
+ * bag the dispatching surface populates. The app-shell UI toggles resolve the
+ * window the action fired in from the `window:` moniker in `scope_chain` — the
+ * single structured parameter — not a denormalized `window_label`.
  */
 export interface CommandContext {
   /** Active scope monikers, leaf-last (e.g. `["board:01A", "task:42"]`). */
@@ -109,16 +110,4 @@ export interface UiStateDispatch {
       };
     };
   };
-}
-
-/**
- * Resolve the `window_label` the UI toggles / drag ops need.
- *
- * The dispatching surface plants the active window's label in `args`; the
- * `ui_state` ops default a missing label to the empty string server-side, so
- * a `""` fallback is the faithful no-op-when-absent behavior.
- */
-export function windowLabel(ctx: CommandContext): string {
-  const fromArgs = ctx.args?.window_label;
-  return typeof fromArgs === "string" ? fromArgs : "";
 }

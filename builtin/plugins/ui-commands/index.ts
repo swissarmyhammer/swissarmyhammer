@@ -111,18 +111,6 @@ interface WindowDispatch {
 }
 
 /**
- * Resolve the `window_label` the ui_state / focus / window ops carry.
- *
- * The dispatching surface plants the active window's label in `args`; the
- * `ui_state` ops default a missing label to the empty string server-side, so
- * a `""` fallback is the faithful no-op-when-absent behavior.
- */
-function windowLabel(ctx: CommandContext): string {
-  const fromArgs = ctx.args?.window_label;
-  return typeof fromArgs === "string" ? fromArgs : "";
-}
-
-/**
  * The ui-commands builtin plugin.
  *
  * Registers the ten UI commands ported from `ui.yaml`, routed across the
@@ -173,7 +161,7 @@ export default class UiCommandsPlugin extends Plugin {
         execute: async (rawCtx: unknown) => {
           const ctx = (rawCtx ?? {}) as CommandContext;
           return await uiState.ui_state.ui_state.inspector.inspect({
-            window_label: windowLabel(ctx),
+            scope_chain: ctx.scope_chain ?? [],
             moniker: ctx.target ?? "",
           });
         },
@@ -188,7 +176,7 @@ export default class UiCommandsPlugin extends Plugin {
         execute: async (rawCtx: unknown) => {
           const ctx = (rawCtx ?? {}) as CommandContext;
           return await uiState.ui_state.ui_state.inspector.close({
-            window_label: windowLabel(ctx),
+            scope_chain: ctx.scope_chain ?? [],
           });
         },
       },
@@ -203,7 +191,7 @@ export default class UiCommandsPlugin extends Plugin {
         execute: async (rawCtx: unknown) => {
           const ctx = (rawCtx ?? {}) as CommandContext;
           return await uiState.ui_state.ui_state.inspector.close_all({
-            window_label: windowLabel(ctx),
+            scope_chain: ctx.scope_chain ?? [],
           });
         },
       },
@@ -221,7 +209,7 @@ export default class UiCommandsPlugin extends Plugin {
         execute: async (rawCtx: unknown) => {
           const ctx = (rawCtx ?? {}) as CommandContext;
           return await uiState.ui_state.ui_state.inspector.set_width({
-            window_label: windowLabel(ctx),
+            scope_chain: ctx.scope_chain ?? [],
             width: ctx.args?.width,
           });
         },
@@ -236,7 +224,7 @@ export default class UiCommandsPlugin extends Plugin {
         execute: async (rawCtx: unknown) => {
           const ctx = (rawCtx ?? {}) as CommandContext;
           return await uiState.ui_state.ui_state.palette.open({
-            window_label: windowLabel(ctx),
+            scope_chain: ctx.scope_chain ?? [],
           });
         },
       },
@@ -250,7 +238,7 @@ export default class UiCommandsPlugin extends Plugin {
         execute: async (rawCtx: unknown) => {
           const ctx = (rawCtx ?? {}) as CommandContext;
           return await uiState.ui_state.ui_state.palette.close({
-            window_label: windowLabel(ctx),
+            scope_chain: ctx.scope_chain ?? [],
           });
         },
       },
@@ -270,7 +258,7 @@ export default class UiCommandsPlugin extends Plugin {
         execute: async (rawCtx: unknown) => {
           const ctx = (rawCtx ?? {}) as CommandContext;
           return await uiState.ui_state.ui_state.rename.start({
-            window_label: windowLabel(ctx),
+            scope_chain: ctx.scope_chain ?? [],
           });
         },
       },

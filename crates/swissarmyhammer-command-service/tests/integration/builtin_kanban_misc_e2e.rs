@@ -13,9 +13,11 @@
 //!   operation tool, here wrapped over a recording `SpyShell` so the OS file
 //!   actions are observable without a live file manager (the window-service
 //!   tests' `WindowShell` spy seam);
-//! - `view.set` → the in-process `views` operation tool, wired over a real
-//!   `PerspectiveContext` + `ViewsContext` substrate (the views-service tests'
-//!   substrate).
+//! - `view.set` → the in-process `ui_state` operation tool: it SWITCHES the
+//!   active view for the window named by the scope chain's `window:` moniker
+//!   (recording the per-window active view), not a views-definition write. A
+//!   `views` backend is still exposed because the plugin's `ensureServices`
+//!   activates it.
 //!
 //! Each `ServerHandler` backend (`window`, `views`) is wrapped in an
 //! [`InProcessServer`] to satisfy `expose_rust_module`'s `McpServer` contract;
@@ -29,8 +31,8 @@
 //!    `visible` / `context_menu` match the source-YAML baseline 1:1.
 //! 3. **Real effect** — executing each command produces its observable effect:
 //!    `column.reorder` + `tag.update` mutate the kanban store; `attachment.open`
-//!    / `attachment.reveal` drive the recorded shell calls; `view.set` writes a
-//!    `ViewDef` through the views kernel.
+//!    / `attachment.reveal` drive the recorded shell calls; `view.set` records
+//!    the per-window active view in `ui_state`, resolved from the scope chain.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -49,6 +51,7 @@ use swissarmyhammer_store::{StoreContext, StoreHandle};
 use swissarmyhammer_tools::mcp::plugin_bridge::build_tool_modules;
 use swissarmyhammer_tools::mcp::ToolHandlers;
 use swissarmyhammer_tools::{register_kanban_tools, ToolContext, ToolRegistry};
+use swissarmyhammer_ui_state::{UIState, UiStateServer};
 use swissarmyhammer_views::{ViewStore, ViewsContext, ViewsServer};
 use swissarmyhammer_window_service::{
     ContextMenuItem, CreatedBoard, MonitorInfo, NewWindow, OpenedBoard, WindowPosition,
@@ -298,7 +301,10 @@ async fn expose_window_module(host: &PluginHost) -> Arc<SpyShell> {
 struct ExposedViews {
     _dir: TempDir,
     _store_ctx: Arc<StoreContext>,
-    views: Arc<RwLock<ViewsContext>>,
+    /// Kept alive so the views substrate outlives the plugin's `load()` and
+    /// every `execute`. `view.set` now records the active view in `ui_state`
+    /// (not a views-definition write), so the context is no longer read back.
+    _views: Arc<RwLock<ViewsContext>>,
 }
 
 /// Build a `views` substrate (mirroring `wire_store_substrate`), wrap a
@@ -353,7 +359,7 @@ async fn expose_views_module(host: &PluginHost) -> ExposedViews {
     ExposedViews {
         _dir: dir,
         _store_ctx: store_ctx,
-        views,
+        _views: views,
     }
 }
 
@@ -450,9 +456,26 @@ async fn kanban_misc_commands_plugin_registers_and_executes() {
     let window_spy = tokio::time::timeout(TIMEOUT, expose_window_module(&host))
         .await
         .expect("exposing window should not hang");
-    let views = tokio::time::timeout(TIMEOUT, expose_views_module(&host))
+    let _views = tokio::time::timeout(TIMEOUT, expose_views_module(&host))
         .await
         .expect("exposing views should not hang");
+
+    // `view.set` records the active view in `ui_state` (not a views-definition
+    // write), so expose a ui_state backend too. Keep the `Arc<UIState>` so the
+    // effect assertion can read the recorded active view back.
+    let ui_state = Arc::new(UIState::new());
+    {
+        let server = UiStateServer::new(Arc::clone(&ui_state));
+        let module = InProcessServer::new(server)
+            .await
+            .expect("wrapping the ui_state server in an InProcessServer should succeed");
+        host.expose_rust_module(
+            "ui_state".to_string(),
+            Arc::new(module) as Arc<dyn PluginMcpServer>,
+        )
+        .await
+        .expect("exposing the ui_state module should succeed");
+    }
 
     // Seed a board with three default columns (todo/doing/done) and one tag.
     kanban
@@ -645,15 +668,29 @@ async fn kanban_misc_commands_plugin_registers_and_executes() {
         "attachment.open / attachment.reveal must drive the window shell's OS file actions"
     );
 
-    // ── (3d) Real effect: view.set → views `set view` ──────────────────────
+    // ── (3d) Real effect: view.set → ui_state `set active_view` ─────────────
+    // `view.set` SWITCHES the active view for a window — it records the active
+    // view in `ui_state` for the window named by the scope chain's `window:`
+    // moniker. The window is the single structured parameter (no denormalized
+    // `window_label`): a non-"main" label proves the op resolves the window
+    // from the scope chain rather than defaulting.
     let view_id = "01VIEWSETTEST00000000000000";
+    let window = "board-misc-test";
+    assert_eq!(
+        ui_state.active_view_id(window),
+        "",
+        "precondition: no active view recorded for the window before view.set"
+    );
     let set_view = call_command(
         &service,
         CallerId::HostInternal,
         json!({
             "op": "execute command",
             "id": "view.set",
-            "ctx": { "args": { "view_id": view_id } },
+            "ctx": {
+                "scope_chain": [format!("window:{window}"), "engine"],
+                "args": { "view_id": view_id },
+            },
         }),
     )
     .await;
@@ -662,28 +699,17 @@ async fn kanban_misc_commands_plugin_registers_and_executes() {
         json!(true),
         "executing view.set should succeed, got {set_view}"
     );
-    // The execute envelope is `{ ok, result: <plugin return> }`; the plugin's
-    // single `views set view` call returns that backend's full `CallToolResult`
-    // (`{ content, structuredContent: { ok, view, entry_id }, isError }`). The
-    // written view id therefore lives under
-    // `structuredContent.result.structuredContent.view.id`.
-    let view_id_value = &set_view["structuredContent"]["result"]["structuredContent"]["view"]["id"];
     assert_eq!(
-        view_id_value,
-        &json!(view_id),
-        "view.set must have written the view through the views kernel, got {set_view}"
+        ui_state.active_view_id(window),
+        view_id,
+        "view.set must record the active view for the window named in the scope chain"
     );
-    // And the views kernel actually holds the written view.
-    let stored_has_view = views
-        .views
-        .read()
-        .await
-        .all_views()
-        .iter()
-        .any(|v| v.id == view_id);
-    assert!(
-        stored_has_view,
-        "view.set must have persisted the view in the views kernel"
+    // And it must NOT have written to the default "main" window — the regression
+    // where per-window state landed on a window no board reads.
+    assert_eq!(
+        ui_state.active_view_id("main"),
+        "",
+        "view.set must resolve the window from the scope chain, not default to 'main'"
     );
 }
 
