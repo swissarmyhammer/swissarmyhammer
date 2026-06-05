@@ -45,6 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         mcp_servers: vec![], // No MCP servers for this example
         session_config: SessionConfig::default(),
         parallel_execution_config: ParallelConfig::default(),
+        tool_execution_config: Default::default(),
     };
 
     println!("Initializing agent for streaming...");

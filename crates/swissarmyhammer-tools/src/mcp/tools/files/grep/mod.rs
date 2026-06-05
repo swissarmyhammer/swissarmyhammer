@@ -2,17 +2,17 @@
 //! Content-based search tool using ripgrep library
 
 use crate::mcp::tool_registry::{send_mcp_log, BaseToolImpl, ToolContext};
-use crate::mcp::tools::files::shared_utils::FilePathValidator;
+use crate::mcp::tools::files::shared_utils::{reject_filesystem_root, FilePathValidator};
 use grep::regex::RegexMatcher;
 use grep::searcher::sinks::UTF8;
 use grep::searcher::{BinaryDetection, Searcher, SearcherBuilder};
+use ignore::WalkBuilder;
 use rmcp::model::{CallToolResult, LoggingLevel};
 use rmcp::ErrorData as McpError;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
-use walkdir::WalkDir;
 
 /// Operation metadata for grep content search
 #[derive(Debug, Default)]
@@ -160,7 +160,12 @@ pub async fn execute_grep(
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
     let request: GrepRequest = BaseToolImpl::parse_arguments(arguments)?;
-    let validator = FilePathValidator::new();
+
+    // The session working directory (the board dir) is the root for an unscoped
+    // search and the base for resolving a relative `path`. Never the process CWD,
+    // which is `/` for the bundled GUI app.
+    let session_root = context.session_root();
+    let validator = FilePathValidator::new(session_root.clone());
 
     let search_dir = match &request.path {
         Some(path_str) => {
@@ -173,10 +178,13 @@ pub async fn execute_grep(
             }
             validated_path
         }
-        None => std::env::current_dir().map_err(|e| {
-            McpError::internal_error(format!("Failed to get current directory: {}", e), None)
-        })?,
+        None => session_root,
     };
+
+    // Defensive guard: never walk the entire filesystem or the process CWD. A
+    // search rooted at `/` (the original "grep hung forever" failure) or at an
+    // unresolved relative `.` would visit far too much; refuse both.
+    reject_filesystem_root(&search_dir)?;
 
     send_mcp_log(
         context,
@@ -214,14 +222,27 @@ pub async fn execute_grep(
         .transpose()
         .map_err(|e| McpError::invalid_request(format!("Invalid glob pattern: {}", e), None))?;
 
-    // Walk directory and search files
-    let walker = if search_dir.is_file() {
-        WalkDir::new(&search_dir).max_depth(0)
-    } else {
-        WalkDir::new(&search_dir)
-    };
+    // Walk directory and search files.
+    //
+    // Use `ignore::WalkBuilder` (ripgrep's own walker) so the search honors
+    // `.gitignore`/`.ignore`, skips the `.git` directory, and — crucially —
+    // does not descend into ignored build output like `target/`. A raw
+    // `walkdir::WalkDir` rooted high in the tree walks every file unconditionally,
+    // which is what let an unscoped grep run forever.
+    let mut builder = WalkBuilder::new(&search_dir);
+    builder
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .ignore(true)
+        .parents(true)
+        .hidden(true); // skip hidden files/dirs (e.g. `.git`) like ripgrep does
+    if search_dir.is_file() {
+        builder.max_depth(Some(0));
+    }
+    let walker = builder.build();
 
-    for entry in walker.into_iter().filter_map(|e| e.ok()) {
+    for entry in walker.filter_map(|e| e.ok()) {
         let path = entry.path();
 
         if !path.is_file() {

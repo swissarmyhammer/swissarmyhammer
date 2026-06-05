@@ -85,6 +85,7 @@ fn test_agent_config_creation_without_acp() {
         },
         mcp_servers: Vec::new(),
         parallel_execution_config: ParallelConfig::default(),
+        tool_execution_config: Default::default(),
     };
 
     // Verify configuration is valid

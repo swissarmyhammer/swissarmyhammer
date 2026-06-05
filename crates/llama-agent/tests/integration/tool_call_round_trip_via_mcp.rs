@@ -90,6 +90,7 @@ fn create_agent_config(mcp_url: String) -> AgentConfig {
         })],
         session_config: SessionConfig::default(),
         parallel_execution_config: ParallelConfig::default(),
+        tool_execution_config: Default::default(),
         queue_config: QueueConfig::default(),
     }
 }

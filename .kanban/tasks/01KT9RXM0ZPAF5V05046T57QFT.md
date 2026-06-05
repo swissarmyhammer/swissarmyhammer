@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8380'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffea80
 project: ai-panel
 title: Qwen over-scopes simple "create a task" requests — loads explore skill + whole-repo grep instead of just adding the card
 ---

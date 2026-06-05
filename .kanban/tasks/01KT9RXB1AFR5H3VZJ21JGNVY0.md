@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffe880
 project: ai-panel
 title: Agent tool execution needs a watchdog timeout so a slow/hung tool returns an error instead of stalling the whole turn
 ---

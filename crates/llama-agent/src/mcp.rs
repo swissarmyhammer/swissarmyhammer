@@ -8,7 +8,10 @@ use crate::types::tools::ToolDefinition;
 use async_trait::async_trait;
 use rmcp::{
     model::*,
-    transport::{stdio, StreamableHttpClientTransport},
+    transport::{
+        common::client_side_sse::ExponentialBackoff, stdio,
+        streamable_http_client::StreamableHttpClientTransportConfig, StreamableHttpClientTransport,
+    },
     ClientHandler, RoleClient, ServiceExt,
 };
 use serde_json::Value;
@@ -22,6 +25,51 @@ use tokio::time::timeout;
 /// This needs to be long enough for shell commands that may run for extended periods
 /// (e.g., `cargo build`, `cargo test`, long-running scripts).
 const DEFAULT_MCP_TIMEOUT_SECS: u64 = 600;
+
+/// Maximum number of automatic SSE reconnect attempts for the streamable-HTTP
+/// transport before the transport stops retrying.
+///
+/// rmcp's default streamable-HTTP retry policy is an [`ExponentialBackoff`] with
+/// `max_times: None` — i.e. it reconnects the standalone `GET /mcp` SSE stream
+/// *forever*. When the server tears down a session (for example after the
+/// streamable-HTTP serve loop closes), every reconnect attempt comes back
+/// `404 Not Found`, and with an unbounded policy the client loops on the dead
+/// session indefinitely (observed backoff: 3s, 2s, 4s, 8s, 16s, 32s, 64s…),
+/// which presents to the user as a panel that is "stuck forever".
+///
+/// Bounding the policy lets the reconnect loop give up after a finite window so
+/// the transport stops hammering a session the server already deleted. With the
+/// default 1s base duration, six attempts span roughly 1s + 2s + 4s + 8s + 16s +
+/// 32s ≈ 63s of reconnect effort before the standalone stream task ends.
+const MAX_SSE_RECONNECT_ATTEMPTS: usize = 6;
+
+/// Build the rmcp streamable-HTTP transport configuration for `url`.
+///
+/// This mirrors [`StreamableHttpClientTransport::from_uri`] (default reqwest
+/// client, transparent re-initialization on a 404'd session) but replaces the
+/// **unbounded** default reconnect policy with a bounded [`ExponentialBackoff`]
+/// capped at [`MAX_SSE_RECONNECT_ATTEMPTS`]. Without this cap the transport
+/// reconnects a dead session's SSE stream forever; with it, the reconnect loop
+/// terminates so a torn-down session can no longer wedge the client.
+///
+/// `reinit_on_expired_session` is left enabled (the rmcp default) so a *transient*
+/// session expiry still self-heals via a single re-initialization handshake; only
+/// genuinely dead sessions, where re-init also fails, fall through to the bounded
+/// reconnect path.
+///
+/// # Arguments
+///
+/// * `url` — the streamable-HTTP MCP endpoint (e.g. `http://127.0.0.1:8080/mcp`).
+fn streamable_http_transport_config(url: &str) -> StreamableHttpClientTransportConfig {
+    // `ExponentialBackoff` is `#[non_exhaustive]`, so it can only be built from
+    // its `Default` and then have its public fields adjusted.
+    let mut retry_policy = ExponentialBackoff::default();
+    retry_policy.max_times = Some(MAX_SSE_RECONNECT_ATTEMPTS);
+
+    let mut config = StreamableHttpClientTransportConfig::with_uri(url);
+    config.retry_config = Arc::new(retry_policy);
+    config
+}
 
 /// Convert an rmcp [`Tool`] returned from `tools/list` into a llama-agent
 /// [`ToolDefinition`].
@@ -232,7 +280,8 @@ impl UnifiedMCPClient {
         timeout_secs: Option<u64>,
         handler: Arc<crate::mcp_client_handler::NotifyingClientHandler>,
     ) -> Result<Self, MCPError> {
-        let transport = StreamableHttpClientTransport::from_uri(url);
+        let transport =
+            StreamableHttpClientTransport::from_config(streamable_http_transport_config(url));
 
         let service = (*handler).clone().serve(transport).await.map_err(|e| {
             MCPError::Protocol(format!("Failed to create HTTP MCP client: {:?}", e))
@@ -947,5 +996,44 @@ mod tests {
             HealthStatus::Unhealthy(msg) => assert_eq!(msg, "Connection failed"),
             _ => panic!("Expected unhealthy status"),
         }
+    }
+
+    /// The streamable-HTTP transport must use a *bounded* reconnect policy so a
+    /// torn-down session (repeated `404 Not Found`) can no longer be retried
+    /// forever. rmcp's default policy is unbounded, which is the bug this card
+    /// fixes; this test pins the bound in place.
+    #[test]
+    fn streamable_http_config_uses_bounded_reconnect_policy() {
+        let config = streamable_http_transport_config("http://127.0.0.1:8080/mcp");
+
+        // Early attempts still back off and reconnect...
+        assert!(
+            config.retry_config.retry(0).is_some(),
+            "first reconnect attempt should be allowed"
+        );
+        assert!(
+            config
+                .retry_config
+                .retry(MAX_SSE_RECONNECT_ATTEMPTS - 1)
+                .is_some(),
+            "attempts below the cap should still reconnect"
+        );
+
+        // ...but once the cap is reached the policy gives up instead of looping
+        // on the dead session forever.
+        assert!(
+            config
+                .retry_config
+                .retry(MAX_SSE_RECONNECT_ATTEMPTS)
+                .is_none(),
+            "reconnect policy must stop retrying at the configured cap"
+        );
+        assert!(
+            config
+                .retry_config
+                .retry(MAX_SSE_RECONNECT_ATTEMPTS + 10)
+                .is_none(),
+            "reconnect policy must stay terminal past the cap"
+        );
     }
 }

@@ -43,6 +43,7 @@ fn create_config() -> AgentConfig {
             ..Default::default()
         },
         parallel_execution_config: ParallelConfig::default(),
+        tool_execution_config: Default::default(),
         queue_config: QueueConfig::default(),
     }
 }

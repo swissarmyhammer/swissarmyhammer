@@ -80,6 +80,7 @@ async fn demonstrate_invalid_model_config() -> Result<(), Box<dyn std::error::Er
         mcp_servers: vec![],
         session_config: SessionConfig::default(),
         parallel_execution_config: ParallelConfig::default(),
+        tool_execution_config: Default::default(),
     };
 
     match <AgentServer as AgentAPI>::initialize(invalid_hf_config).await {
@@ -107,6 +108,7 @@ async fn demonstrate_invalid_model_config() -> Result<(), Box<dyn std::error::Er
         mcp_servers: vec![],
         session_config: SessionConfig::default(),
         parallel_execution_config: ParallelConfig::default(),
+        tool_execution_config: Default::default(),
     };
 
     match <AgentServer as AgentAPI>::initialize(invalid_local_config).await {
@@ -135,6 +137,7 @@ async fn demonstrate_invalid_model_config() -> Result<(), Box<dyn std::error::Er
         mcp_servers: vec![],
         session_config: SessionConfig::default(),
         parallel_execution_config: ParallelConfig::default(),
+        tool_execution_config: Default::default(),
     };
 
     match <AgentServer as AgentAPI>::initialize(invalid_batch_config).await {
@@ -187,6 +190,7 @@ async fn demonstrate_mcp_server_failures() -> Result<(), Box<dyn std::error::Err
         ],
         session_config: SessionConfig::default(),
         parallel_execution_config: ParallelConfig::default(),
+        tool_execution_config: Default::default(),
     };
 
     println!("Attempting to initialize with invalid MCP servers...");
@@ -247,6 +251,7 @@ async fn demonstrate_generation_errors() -> Result<(), Box<dyn std::error::Error
         mcp_servers: vec![],
         session_config: SessionConfig::default(),
         parallel_execution_config: ParallelConfig::default(),
+        tool_execution_config: Default::default(),
     };
 
     println!("Attempting to initialize agent for generation error tests...");

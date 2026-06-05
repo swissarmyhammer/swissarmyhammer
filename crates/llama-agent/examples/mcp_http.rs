@@ -70,6 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         mcp_servers: vec![create_echo_server_config()],
         session_config: SessionConfig::default(),
         parallel_execution_config: ParallelConfig::default(),
+        tool_execution_config: Default::default(),
     };
 
     info!("Initializing AgentServer (this may take a while for model loading)...");

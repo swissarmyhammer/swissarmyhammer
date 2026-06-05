@@ -131,6 +131,7 @@ impl EditFileTool {
     /// - Security checks through file path validation
     fn validate_edit_operation(
         &self,
+        base_dir: &Path,
         file_path: &str,
         content: &str,
         old_string: &str,
@@ -138,8 +139,9 @@ impl EditFileTool {
     ) -> Result<EditValidation, McpError> {
         use crate::mcp::tools::files::shared_utils::validate_file_path;
 
-        // Validate file path first
-        let path = validate_file_path(file_path)?;
+        // Validate file path first (relative paths resolve against the session
+        // working directory, never the process CWD)
+        let path = validate_file_path(base_dir, file_path)?;
         if !path.exists() {
             return Err(McpError::invalid_request(
                 format!("File does not exist: {}", file_path),
@@ -218,6 +220,7 @@ impl EditFileTool {
     /// 8. Clean up temporary file on any failure
     pub fn edit_file_atomic(
         &self,
+        base_dir: &Path,
         file_path: &str,
         old_string: &str,
         new_string: &str,
@@ -225,8 +228,9 @@ impl EditFileTool {
     ) -> Result<EditResult, McpError> {
         use crate::mcp::tools::files::shared_utils::{handle_file_error, validate_file_path};
 
-        // Step 1: Validate file path and get canonical path
-        let path = validate_file_path(file_path)?;
+        // Step 1: Validate file path and get canonical path. Relative paths
+        // resolve against the session working directory, never the process CWD.
+        let path = validate_file_path(base_dir, file_path)?;
 
         info!(
             path = %path.display(),
@@ -243,8 +247,13 @@ impl EditFileTool {
         let line_ending = LineEnding::detect(&original_content);
 
         // Step 4: Validate edit operation
-        let validation =
-            self.validate_edit_operation(file_path, &original_content, old_string, replace_all)?;
+        let validation = self.validate_edit_operation(
+            base_dir,
+            file_path,
+            &original_content,
+            old_string,
+            replace_all,
+        )?;
 
         // Step 5: Get original file metadata for preservation
         let original_metadata =
@@ -394,7 +403,7 @@ impl EditFileTool {
 /// Execute a file edit operation
 pub async fn execute_edit(
     arguments: serde_json::Map<String, serde_json::Value>,
-    _context: &ToolContext,
+    context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
     use serde::Deserialize;
     use swissarmyhammer_common::rate_limiter::get_rate_limiter;
@@ -508,7 +517,9 @@ pub async fn execute_edit(
         "Attempting atomic edit operation(s)"
     );
 
-    // Apply edits sequentially
+    // Apply edits sequentially. Relative paths resolve against the session
+    // working directory (the board dir), never the process CWD.
+    let base_dir = context.session_root();
     let tool = EditFileTool::new();
     let mut total_replacements = 0;
     let mut final_result: Option<EditResult> = None;
@@ -525,6 +536,7 @@ pub async fn execute_edit(
         );
 
         let edit_result = tool.edit_file_atomic(
+            &base_dir,
             &file_path,
             &edit_op.old_text,
             &edit_op.new_text,
@@ -832,8 +844,13 @@ mod tests {
             let _temp_pattern = format!("{}.tmp.*", test_file.display());
 
             // The edit should work even with readonly file since we change permissions on temp file
-            let edit_result =
-                tool.edit_file_atomic(&test_file.to_string_lossy(), "original", "modified", false);
+            let edit_result = tool.edit_file_atomic(
+                temp_dir.path(),
+                &test_file.to_string_lossy(),
+                "original",
+                "modified",
+                false,
+            );
 
             // Check that no temporary files remain regardless of result
             let temp_files: Vec<_> = temp_dir
@@ -877,8 +894,13 @@ mod tests {
             let original_mode = original_metadata.permissions().mode();
 
             let tool = EditFileTool::new();
-            let edit_result =
-                tool.edit_file_atomic(&test_file.to_string_lossy(), "test", "updated", false);
+            let edit_result = tool.edit_file_atomic(
+                temp_dir.path(),
+                &test_file.to_string_lossy(),
+                "test",
+                "updated",
+                false,
+            );
 
             assert!(edit_result.is_ok());
 
@@ -929,6 +951,7 @@ mod tests {
         // Test with content that has multiple occurrences
         let content = "test content with test and more test";
         let _result = tool.validate_edit_operation(
+            std::path::Path::new("/tmp"),
             "/dev/null", // Won't be used in this test
             content,
             "test",
