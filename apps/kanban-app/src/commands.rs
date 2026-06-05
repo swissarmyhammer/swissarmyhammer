@@ -1973,6 +1973,7 @@ fn emit_ui_state_change_if_needed(app: &AppHandle, state: &AppState, result: &Va
     let Some(kind) = ui_state_change_kind(result) else {
         return;
     };
+    tracing::debug!(kind, "emitting ui-state-changed");
     let _ = app.emit(
         "ui-state-changed",
         serde_json::json!({ "kind": kind, "state": state.ui_state.to_json() }),
@@ -1991,8 +1992,15 @@ fn emit_ui_state_change_if_needed(app: &AppHandle, state: &AppState, result: &Va
 ///   which are not typed as `UIStateChange` but still mutate what the
 ///   `UIStateProvider` renders.
 fn ui_state_change_kind(result: &Value) -> Option<&'static str> {
+    // Commands dispatched through the CommandService / builtin plugins return
+    // an `{ ok, change }` envelope; the typed `UIStateChange` lives under
+    // `change` (and is `null` when the command made no UI-state change). The
+    // legacy Rust-impl and test paths return the bare `UIStateChange` (or a
+    // `BoardSwitch` / `BoardClose` side-effect shape) directly — so unwrap the
+    // envelope when present, falling back to the raw result otherwise.
+    let change_candidate = result.get("change").unwrap_or(result);
     if let Ok(change) =
-        serde_json::from_value::<swissarmyhammer_ui_state::UIStateChange>(result.clone())
+        serde_json::from_value::<swissarmyhammer_ui_state::UIStateChange>(change_candidate.clone())
     {
         return Some(match change {
             swissarmyhammer_ui_state::UIStateChange::ScopeChain(_) => "scope_chain",
@@ -3151,6 +3159,44 @@ mod tests {
             ui_state_change_kind(&serde_json::json!({ "some_other_key": 1 })),
             None
         );
+    }
+
+    // ── PRODUCTION ENVELOPE SHAPE ──────────────────────────────────
+    //
+    // Commands dispatched through the CommandService / builtin plugins do NOT
+    // return a bare `UIStateChange`; they return the `{ ok, change }` envelope
+    // the `ui_state` MCP ops produce. The bare-enum tests above pass against a
+    // shape production never emits — so they stayed green while pressing `:`
+    // (palette) and clicking inspect (inspector) silently failed to emit a
+    // `ui-state-changed` event. These tests pin the REAL wire shape so the
+    // regression cannot return.
+
+    #[test]
+    fn ui_state_change_kind_envelope_palette_open() {
+        // Exactly what `app.command` / `ui.palette.open` return in production
+        // (observed in the OS log): `{ ok, change: { PaletteOpen: true } }`.
+        let value = serde_json::json!({ "ok": true, "change": { "PaletteOpen": true } });
+        assert_eq!(ui_state_change_kind(&value), Some("palette_open"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_envelope_inspector_stack() {
+        // Exactly what `ui.inspect` returns in production:
+        // `{ ok, change: { InspectorStack: [...] } }`.
+        let value = serde_json::json!({
+            "ok": true,
+            "change": { "InspectorStack": ["task:01ABC"] },
+        });
+        assert_eq!(ui_state_change_kind(&value), Some("inspector_stack"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_envelope_null_change_is_none() {
+        // A command that made no UI-state change returns `{ ok, change: null }`
+        // (e.g. a second `app.command` while the palette is already open). It
+        // must NOT trigger an emit.
+        let value = serde_json::json!({ "ok": true, "change": serde_json::Value::Null });
+        assert_eq!(ui_state_change_kind(&value), None);
     }
 
     // ── context-menu round-trip parity ────────────────────────────
