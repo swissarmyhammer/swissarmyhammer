@@ -2410,7 +2410,43 @@ pub async fn command_tool_call(
                 .await
         }
     };
-    result.map_err(|e| e.to_string())
+    result.map_err(|e| e.to_string()).map(unwrap_tool_result)
+}
+
+/// Unwrap the structured payload from a raw rmcp `CallToolResult` JSON value.
+///
+/// `PluginHost::call` returns the full `tools/call` response envelope —
+/// `{ content: [{ type: "text", text: "<json>" }], structuredContent: {...},
+/// isError: bool }`. Every frontend `callMcpTool` consumer
+/// (`window-mcp.ts`, `entity-mcp.ts`, …) expects the *unwrapped* structured
+/// object (`{ ok, board, columns, ... }`), not this envelope. This is the
+/// single seam that bridges the two: prefer `structuredContent`, fall back to
+/// parsing the first text content part as JSON, and finally return the value
+/// unchanged when it is not an envelope at all (so non-tool-call responses
+/// pass through untouched).
+///
+/// Mirrors the extraction the test helper `command_ids_from_call_result`
+/// performs in `plugins.rs`; both encode the same envelope contract.
+fn unwrap_tool_result(value: Value) -> Value {
+    let Value::Object(map) = &value else {
+        return value;
+    };
+    // Not a CallToolResult envelope — pass through unchanged.
+    if !map.contains_key("content") && !map.contains_key("structuredContent") {
+        return value;
+    }
+    if let Some(structured) = map.get("structuredContent") {
+        if !structured.is_null() {
+            return structured.clone();
+        }
+    }
+    // Fall back to the first text content part, parsed as JSON.
+    let parsed = map
+        .get("content")
+        .and_then(Value::as_array)
+        .and_then(|parts| parts.iter().find_map(|p| p.get("text")?.as_str()))
+        .and_then(|text| serde_json::from_str::<Value>(text).ok());
+    parsed.unwrap_or(value)
 }
 
 /// Start (or re-bind) the calling window's `NotificationBridge` → Tauri-event
@@ -2639,6 +2675,44 @@ mod tests {
     // Stage 4 as a follow-up clean-up. The underlying generator lives in
     // `swissarmyhammer_focus::generate_sneak_codes` and is exercised by
     // its own unit tests in the focus crate.
+
+    use super::unwrap_tool_result;
+    use serde_json::json;
+
+    /// A `CallToolResult` envelope with `structuredContent` unwraps to that
+    /// structured payload — the shape `getBoardData` / `listOpenBoards` expect.
+    #[test]
+    fn unwrap_tool_result_prefers_structured_content() {
+        let envelope = json!({
+            "content": [{ "type": "text", "text": "{\"ok\":true,\"board\":{\"id\":\"board\"}}" }],
+            "structuredContent": { "ok": true, "board": { "id": "board" } },
+            "isError": false,
+        });
+        let out = unwrap_tool_result(envelope);
+        assert_eq!(out, json!({ "ok": true, "board": { "id": "board" } }));
+    }
+
+    /// When `structuredContent` is absent/null, the first text content part is
+    /// parsed as JSON and returned.
+    #[test]
+    fn unwrap_tool_result_falls_back_to_text_content() {
+        let envelope = json!({
+            "content": [{ "type": "text", "text": "{\"ok\":true,\"boards\":[]}" }],
+            "structuredContent": serde_json::Value::Null,
+            "isError": false,
+        });
+        let out = unwrap_tool_result(envelope);
+        assert_eq!(out, json!({ "ok": true, "boards": [] }));
+    }
+
+    /// A value that is not a `CallToolResult` envelope (no `content` /
+    /// `structuredContent`) passes through unchanged — non-tool-call responses
+    /// must not be mangled.
+    #[test]
+    fn unwrap_tool_result_passes_through_non_envelope() {
+        let plain = json!({ "result": "ok", "undoable": true });
+        assert_eq!(unwrap_tool_result(plain.clone()), plain);
+    }
 
     /// Verifies that store_name and id are correctly extracted from ChangeEvent
     /// payloads, and that events with missing fields are identified.
