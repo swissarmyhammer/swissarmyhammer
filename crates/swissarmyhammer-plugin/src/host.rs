@@ -102,6 +102,90 @@ use crate::server::{CallerId, CliServer, McpServer, PluginId, ToolMetadata, UrlS
 /// timeout and the outer "host did not answer" error.
 const BRIDGE_TIMEOUT: Duration = Duration::from_secs(35);
 
+/// A boxed, `'static` future producing the result of a routed bridge call.
+///
+/// This is the unit a [`BridgeCallScope`] wraps. The routed `tools/call` future
+/// owns everything it touches (the host clone, the caller, the server and tool
+/// names, the arguments), so a `'static` bound is satisfiable and lets the
+/// future move onto the host's [`bridge_runtime`](HostInner::bridge_runtime).
+pub type BridgeCallFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send>>;
+
+/// Re-establishes ambient context around a bridge-routed `tools/call`.
+///
+/// # The problem this solves
+///
+/// A plugin command's `execute` callback runs on that plugin's isolate worker
+/// thread. When the callback calls back into an in-process server (`this.store`,
+/// `this.entity`, `this.views`), the call leaves the isolate as a `toolsCall`
+/// envelope and the host services it by spawning the routed future onto the
+/// host's long-lived [`bridge_runtime`](HostInner::bridge_runtime) — a
+/// *different* tokio task on a *different* runtime than the one that drove the
+/// dispatch.
+///
+/// Servers that resolve their per-board services from a `tokio::task_local!`
+/// (scoped by the dispatcher around the command dispatch) therefore see an
+/// **unscoped** task on the bridge runtime: the task-local set on the dispatch
+/// task does not cross the thread/runtime hop. The result is "no board scoped"
+/// failures for every store/entity/views call a command callback makes.
+///
+/// # The seam
+///
+/// A higher layer that owns the per-board services installs a `BridgeCallScope`
+/// on the host (see [`PluginHost::set_bridge_call_scope`]). The host applies it
+/// around every routed `tools/call` future on the bridge runtime, so the layer
+/// can re-establish exactly the task-local scopes the dispatch task held. The
+/// host stays agnostic to *what* context is carried — it only knows to wrap the
+/// future — which keeps the lower-level plugin crate free of any dependency on
+/// the store/entity/views crates that own those task-locals.
+///
+/// Because each per-board [`PluginHost`] serves only its own board's callbacks,
+/// a single installed scope per host is unambiguous: there is no need to key by
+/// plugin id.
+pub trait BridgeCallScope: Send + Sync {
+    /// Wrap `call` so the routed `tools/call` runs with the layer's ambient
+    /// context (task-local scopes) re-established on the bridge runtime.
+    fn scope(&self, call: BridgeCallFuture) -> BridgeCallFuture;
+}
+
+/// RAII guard that removes one installed [`BridgeCallScope`] on drop.
+///
+/// Returned by [`PluginHost::set_bridge_call_scope`]. Holding it pins this
+/// dispatch's scope for the duration of a command dispatch; dropping it removes
+/// exactly this dispatch's entry (by token), never another concurrent
+/// dispatch's. When the last entry is removed a later bridge call runs unwrapped
+/// (its server resolvers then return their own structured "not scoped" errors,
+/// exactly as before this seam existed).
+///
+/// # Concurrency
+///
+/// A single per-board host can service several command dispatches concurrently
+/// (multiple windows on one board, overlapping async commands). Each install
+/// pushes its own `(token, scope)` entry; the guard removes only its own token
+/// on drop. The bridge applies the most-recently-installed surviving scope —
+/// and since every scope on one host carries the *same* board's services, any
+/// surviving entry resolves the correct board. A single mutable slot would be
+/// wrong here: one dispatch's guard dropping would clear a concurrent
+/// dispatch's still-needed scope.
+#[must_use = "dropping the guard immediately removes this dispatch's bridge-call scope"]
+pub struct BridgeCallScopeGuard {
+    /// The host whose scope stack this guard removes its entry from on drop.
+    inner: Arc<HostInner>,
+    /// The token identifying this guard's entry in the host's scope stack.
+    token: u64,
+}
+
+impl Drop for BridgeCallScopeGuard {
+    fn drop(&mut self) {
+        let mut stack = self
+            .inner
+            .bridge_call_scopes
+            .lock()
+            .expect("bridge_call_scopes poisoned");
+        stack.retain(|(token, _)| *token != self.token);
+    }
+}
+
 /// The top-level plugin host.
 ///
 /// Owns the live [`ServerRegistry`], the per-plugin [`PluginLedger`], the table
@@ -243,6 +327,30 @@ struct HostInner {
     /// documented "no subscribers ⇒ inert" property of
     /// [`NotificationBridge`](crate::notify::NotificationBridge) is preserved.
     pump_started: std::sync::Once,
+
+    /// The stack of context-propagation wrappers applied around every
+    /// bridge-routed `tools/call` future on the [`bridge_runtime`].
+    ///
+    /// Each concurrent command dispatch on this host pushes one `(token, scope)`
+    /// entry via
+    /// [`set_bridge_call_scope`](PluginHost::set_bridge_call_scope); the returned
+    /// [`BridgeCallScopeGuard`] removes exactly that token on drop. The bridge
+    /// applies the most-recently-installed surviving scope (`last()`). An empty
+    /// stack means a routed call runs unwrapped — the pre-seam behavior.
+    ///
+    /// A stack (not a single slot) is required because one per-board host can
+    /// service several dispatches at once; a single slot would let one
+    /// dispatch's guard drop clear a concurrent dispatch's still-needed scope.
+    /// Every scope on one host carries the same board's services, so applying
+    /// any surviving entry resolves the correct board. See [`BridgeCallScope`].
+    ///
+    /// Held behind its own short-lived mutex, outside the host's main state
+    /// mutex, because the bridge reads it on the hot routing path.
+    bridge_call_scopes: Mutex<Vec<(u64, Arc<dyn BridgeCallScope>)>>,
+
+    /// Monotonic source of unique tokens identifying bridge-scope stack entries,
+    /// so a [`BridgeCallScopeGuard`] removes only its own entry on drop.
+    bridge_call_scope_seq: AtomicU64,
 
     /// The mutable host state guarded by one mutex.
     state: Mutex<HostState>,
@@ -823,6 +931,8 @@ impl PluginHost {
                 notification_bridge: NotificationBridge::new(),
                 event_subscriptions: EventSubscriptions::new(),
                 pump_started: std::sync::Once::new(),
+                bridge_call_scopes: Mutex::new(Vec::new()),
+                bridge_call_scope_seq: AtomicU64::new(0),
                 state: Mutex::new(HostState {
                     registry: ServerRegistry::new(),
                     ledger: PluginLedger::new(),
@@ -1956,6 +2066,52 @@ impl PluginHost {
         invoker.invoke(callback_id, args).await
     }
 
+    /// Install a [`BridgeCallScope`] that wraps every bridge-routed
+    /// `tools/call` future for the lifetime of the returned guard.
+    ///
+    /// A higher layer that owns per-board services calls this around a command
+    /// dispatch so that the store/entity/views task-local scopes are
+    /// re-established on the host's bridge runtime — where a command callback's
+    /// `this.store`/`this.entity`/`this.views` calls are actually serviced.
+    /// Dropping the [`BridgeCallScopeGuard`] removes this dispatch's scope.
+    ///
+    /// Each call pushes its own entry onto the host's scope stack, identified by
+    /// a unique token; the guard removes exactly that token on drop, so
+    /// concurrent dispatches on one host (multiple windows / overlapping async
+    /// commands) never clear each other's scope. The bridge applies the
+    /// most-recently-installed surviving scope, which on a per-board host always
+    /// carries the correct board's services.
+    pub fn set_bridge_call_scope(&self, scope: Arc<dyn BridgeCallScope>) -> BridgeCallScopeGuard {
+        let token = self
+            .inner
+            .bridge_call_scope_seq
+            .fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .bridge_call_scopes
+            .lock()
+            .expect("bridge_call_scopes poisoned")
+            .push((token, scope));
+        BridgeCallScopeGuard {
+            inner: Arc::clone(&self.inner),
+            token,
+        }
+    }
+
+    /// The most-recently-installed surviving [`BridgeCallScope`], if any.
+    ///
+    /// Read by [`HostBridge::tools_call`] to wrap the routed call future. The
+    /// `Arc` is cloned out under the short-lived stack lock so the lock is never
+    /// held across the routed future. On a per-board host every entry carries
+    /// the same board's services, so the top of the stack is always correct.
+    fn bridge_call_scope(&self) -> Option<Arc<dyn BridgeCallScope>> {
+        self.inner
+            .bridge_call_scopes
+            .lock()
+            .expect("bridge_call_scopes poisoned")
+            .last()
+            .map(|(_, scope)| Arc::clone(scope))
+    }
+
     /// Ensures this host's event pump task is running.
     ///
     /// Called from the `subscribe` envelope handler. Spawned lazily — on the
@@ -2186,8 +2342,22 @@ impl HostBridge {
         let caller = CallerId::Plugin(self.plugin_id.clone());
         // The call is routed at the live registry and attributed to the plugin
         // this bridge is scoped to.
-        self.block_on(async move { host.route(caller, &server, &tool, arguments).await })?
-            .map_err(|error| error.to_string())
+        //
+        // A command callback that originated this `tools/call` ran on the
+        // isolate worker thread, but the routed future runs on the host's
+        // `bridge_runtime` — a different tokio task that does NOT inherit the
+        // task-local scopes the dispatcher set around the dispatch. When a
+        // higher layer has installed a `BridgeCallScope`, wrap the routed future
+        // so those scopes (the per-board store/entity/views services) are
+        // re-established here, where the call is actually serviced. With no
+        // scope installed the future runs unwrapped — the pre-seam behavior.
+        let routed: BridgeCallFuture =
+            Box::pin(async move { host.route(caller, &server, &tool, arguments).await });
+        let routed = match self.host.bridge_call_scope() {
+            Some(scope) => scope.scope(routed),
+            None => routed,
+        };
+        self.block_on(routed)?.map_err(|error| error.to_string())
     }
 
     /// Handles a `callbackDispatch` envelope: records the plugin's callbacks.
@@ -2939,6 +3109,61 @@ mod tests {
             sources,
             vec![FileSource::User],
             "a `for_tests` host with no project layer discovers only the user layer"
+        );
+    }
+
+    /// A trivial [`BridgeCallScope`] that records which scope was applied by
+    /// returning a future the test can identify. It does not actually wrap — the
+    /// stack-management tests inspect the host's installed scope directly.
+    struct MarkerScope;
+
+    impl super::BridgeCallScope for MarkerScope {
+        fn scope(&self, call: super::BridgeCallFuture) -> super::BridgeCallFuture {
+            call
+        }
+    }
+
+    /// Concurrent dispatches each push their own bridge-scope entry; dropping
+    /// ONE guard must not clear another still-held guard's scope. This is the
+    /// regression for the single-slot bug where one dispatch's guard drop
+    /// cleared a concurrent dispatch's still-needed scope, surfacing as
+    /// intermittent "no ViewsBoardServices active" failures.
+    #[test]
+    fn dropping_one_bridge_scope_guard_leaves_a_concurrent_one_active() {
+        use std::sync::Arc;
+
+        let host = super::PluginHost::for_tests(
+            std::env::temp_dir().join("plugin-host-bridge-scope-stack"),
+            None,
+        );
+
+        // No scope installed → nothing to apply.
+        assert!(
+            host.bridge_call_scope().is_none(),
+            "a fresh host has no installed bridge scope"
+        );
+
+        // Two concurrent dispatches each install a scope.
+        let guard_a = host.set_bridge_call_scope(Arc::new(MarkerScope));
+        let guard_b = host.set_bridge_call_scope(Arc::new(MarkerScope));
+        assert!(
+            host.bridge_call_scope().is_some(),
+            "with two scopes installed a bridge call still resolves one"
+        );
+
+        // Dropping the FIRST-installed guard must leave the second active —
+        // the single-slot design would have cleared the slot entirely here.
+        drop(guard_a);
+        assert!(
+            host.bridge_call_scope().is_some(),
+            "dropping one concurrent dispatch's guard must not clear the other's scope"
+        );
+
+        // Dropping the last guard clears the stack: a later call runs unwrapped.
+        drop(guard_b);
+        assert!(
+            host.bridge_call_scope().is_none(),
+            "once every guard is dropped the host has no installed bridge scope"
         );
     }
 }

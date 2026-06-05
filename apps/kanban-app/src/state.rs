@@ -1005,7 +1005,10 @@ impl AppState {
         let registry = crate::command_services::build_registry_from_metadata(metadata);
         let count = registry.all_commands().len();
         *self.commands_registry.write().await = registry;
-        tracing::info!(count, "populated commands_registry façade from CommandService");
+        tracing::info!(
+            count,
+            "populated commands_registry façade from CommandService"
+        );
     }
 
     /// The stored `AppHandle`-backed shells, if [`Self::install_apphandle_shells`]

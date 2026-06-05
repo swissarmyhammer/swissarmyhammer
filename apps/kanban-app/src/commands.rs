@@ -1302,6 +1302,60 @@ async fn dispatch_via_service(
     }
 }
 
+/// Re-establishes the active board's substrate task-locals around a bridge
+/// call serviced on the host's `bridge_runtime`.
+///
+/// A command's `execute` callback runs on the plugin isolate worker thread; the
+/// `this.store`/`this.entity`/`this.views` calls it makes are routed back as
+/// `tools/call` envelopes and serviced on the host's long-lived
+/// `bridge_runtime` — a different tokio task than the one
+/// [`try_dispatch_via_command_service`] scoped. The dispatcher's task-local
+/// scopes do not cross that hop, so without this the substrate servers run
+/// unscoped on the bridge runtime.
+///
+/// Installed on the board's [`PluginHost`](swissarmyhammer_plugin::PluginHost)
+/// via [`set_bridge_call_scope`](swissarmyhammer_plugin::PluginHost::set_bridge_call_scope)
+/// for the duration of the dispatch, this carries the SAME per-board service
+/// bundles the dispatcher scopes and re-applies them — `store` outermost, then
+/// `entity`, then `views` — around the routed call, matching the dispatch-site
+/// nesting so every callback-originated substrate call resolves the calling
+/// board's services.
+struct BoardSubstrateScope {
+    /// The board's store context, when resolved.
+    store_ctx: Option<Arc<swissarmyhammer_store::StoreContext>>,
+    /// The board's entity services bundle, when resolved.
+    entity_services: Option<swissarmyhammer_entity_mcp::server::EntityBoardServices>,
+    /// The board's views (perspectives + views) services bundle, when resolved.
+    views_services: Option<swissarmyhammer_views::ViewsBoardServices>,
+}
+
+impl swissarmyhammer_plugin::BridgeCallScope for BoardSubstrateScope {
+    fn scope(
+        &self,
+        call: swissarmyhammer_plugin::BridgeCallFuture,
+    ) -> swissarmyhammer_plugin::BridgeCallFuture {
+        // Nest the scopes inner-to-outer so the resulting order is
+        // store(entity(views(call))) — identical to the dispatch-site wrapping.
+        let mut fut = call;
+        if let Some(views) = self.views_services.clone() {
+            fut = Box::pin(swissarmyhammer_views::scope_views_board_services(
+                views, fut,
+            ));
+        }
+        if let Some(entity) = self.entity_services.clone() {
+            fut = Box::pin(
+                swissarmyhammer_entity_mcp::server::scope_entity_board_services(entity, fut),
+            );
+        }
+        if let Some(store) = self.store_ctx.clone() {
+            fut = Box::pin(swissarmyhammer_kanban::command_seam::scope_store_context(
+                store, fut,
+            ));
+        }
+        fut
+    }
+}
+
 /// Attempt the new path. Returns `None` when no `CommandService` is wired
 /// (test fixtures / failed bootstrap); the caller falls back unconditionally
 /// in that case.
@@ -1316,9 +1370,18 @@ async fn try_dispatch_via_command_service(
     // platform; fall back to the global platform's service for boardless
     // dispatch (no active board). This keeps a board's project-plugin command
     // registrations isolated to that board.
-    let service = match active_handle.and_then(|h| h.platform()) {
-        Some(platform) => platform.lock().await.command_service()?,
-        None => state.plugin_platform.lock().await.command_service()?,
+    //
+    // Capture the SAME platform's host alongside the service: the host owns the
+    // `bridge_runtime` that services callback-originated `this.store`/`this.entity`/
+    // `this.views` calls, so the substrate scope (installed below) must go on
+    // exactly that host. A boardless dispatch has no per-board substrate to
+    // scope, so it carries no host here.
+    let (service, board_host) = match active_handle.and_then(|h| h.platform()) {
+        Some(platform) => {
+            let guard = platform.lock().await;
+            (guard.command_service()?, Some(guard.host().clone()))
+        }
+        None => (state.plugin_platform.lock().await.command_service()?, None),
     };
 
     let req = swissarmyhammer_command_service::ExecuteCommand {
@@ -1394,6 +1457,29 @@ async fn try_dispatch_via_command_service(
             }
         },
         None => None,
+    };
+
+    // Install the substrate scope on the board's host so callback-originated
+    // `this.store`/`this.entity`/`this.views` calls — serviced on the host's
+    // `bridge_runtime`, a different task than this one — resolve the SAME
+    // per-board services this task scopes. The guard is held across the dispatch
+    // `.await` below and clears the scope on drop. Cloning the bundles is cheap
+    // (each is `Arc`-backed) and leaves the originals for the dispatch-task
+    // scoping that follows.
+    //
+    // Only meaningful with a per-board host AND at least one resolved bundle; a
+    // boardless dispatch leaves the host unscoped, exactly as before.
+    let _bridge_scope_guard = match &board_host {
+        Some(host)
+            if store_ctx.is_some() || entity_services.is_some() || views_services.is_some() =>
+        {
+            Some(host.set_bridge_call_scope(Arc::new(BoardSubstrateScope {
+                store_ctx: store_ctx.clone(),
+                entity_services: entity_services.clone(),
+                views_services: views_services.clone(),
+            })))
+        }
+        _ => None,
     };
 
     // Capture `service` by move into the dispatch future so the lock guard

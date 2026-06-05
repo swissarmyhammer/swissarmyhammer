@@ -50,7 +50,7 @@ pub mod server;
 pub use discovery::{discover_plugins, DiscoveredPlugin, LayerRoot, PLUGINS_SUBDIR};
 pub use dispatcher::Dispatcher;
 pub use error::{Error, Result};
-pub use host::PluginHost;
+pub use host::{BridgeCallFuture, BridgeCallScope, BridgeCallScopeGuard, PluginHost};
 pub use ledger::{CallbackId, PluginLedger, RegistrationHandle};
 pub use notify::{
     ChangeOp, FieldChange, McpNotification, NotificationBridge, NotificationSubscription,

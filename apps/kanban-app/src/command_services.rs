@@ -23,8 +23,8 @@
 use std::sync::{Arc, OnceLock};
 
 use swissarmyhammer_app_service::{AppService, AppShell};
-use swissarmyhammer_command_service::CommandMetadata;
 use swissarmyhammer_command_service::bootstrap::install_commands_module_with;
+use swissarmyhammer_command_service::CommandMetadata;
 use swissarmyhammer_command_service::CommandService;
 use swissarmyhammer_entity_mcp::server::{
     task_local_resolver as entity_task_local_resolver, EntityServer,
