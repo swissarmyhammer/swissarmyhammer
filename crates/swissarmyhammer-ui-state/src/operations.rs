@@ -186,6 +186,33 @@ pub struct SetKeymapMode {
     pub mode: String,
 }
 
+// Focus operation ─────────────────────────────────────────────────────────
+
+/// Set the focus scope chain (the routing target for `ui.setFocus`).
+///
+/// Ports [`crate::state::UIState::set_scope_chain`]. The frontend computes the
+/// chain by walking the focus registry from the focused scope to the root
+/// (leaf-first) and sends it on every focus change; recording it here is what
+/// drives command gating's scope fallback and the `scope_chain` UI-state echo.
+///
+/// This is the UI-state scope chain — distinct from the spatial `focus` kernel,
+/// which the separate `focus` MCP server owns. `ui.setFocus` consumes the
+/// `scope_chain` the frontend already sends; there is no separate `fq` to
+/// supply (the focus target is the chain's leaf).
+///
+/// Returns the change payload: `{ ok: true, change: <UIStateChange> }`.
+#[operation(
+    verb = "set",
+    noun = "scope_chain",
+    description = "Set the focus scope chain (routing target for ui.setFocus)"
+)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SetScopeChain {
+    /// The focus scope chain, leaf-first (the leaf is the focus target).
+    #[serde(default)]
+    pub scope_chain: Vec<String>,
+}
+
 // Rename operation ──────────────────────────────────────────────────────
 
 /// Enter inline rename mode for the active perspective tab.
@@ -355,8 +382,9 @@ pub struct Dismiss {
 /// Both the wire-schema generator (`generate_mcp_schema`) and the discovery
 /// `_meta` generator (`generate_operations_meta`) are driven from this single
 /// slice via the `operation_tool!` macro, so there is one source of truth for
-/// what the `ui_state` tool exposes. There are exactly 15 operations and none
-/// of them is a focus / `set_focus` op.
+/// what the `ui_state` tool exposes. The `set scope_chain` op records the
+/// UI-state focus scope chain (the `ui.setFocus` routing target); it is NOT a
+/// spatial focus op — the separate `focus` MCP server owns the focus kernel.
 static UI_STATE_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(|| {
     vec![
         Box::leak(Box::<Inspect>::default()) as &dyn Operation,
@@ -366,6 +394,7 @@ static UI_STATE_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::ne
         Box::leak(Box::<PaletteOpen>::default()) as &dyn Operation,
         Box::leak(Box::<PaletteClose>::default()) as &dyn Operation,
         Box::leak(Box::<SetKeymapMode>::default()) as &dyn Operation,
+        Box::leak(Box::<SetScopeChain>::default()) as &dyn Operation,
         Box::leak(Box::<StartRename>::default()) as &dyn Operation,
         Box::leak(Box::<DragStart>::default()) as &dyn Operation,
         Box::leak(Box::<DragCancel>::default()) as &dyn Operation,

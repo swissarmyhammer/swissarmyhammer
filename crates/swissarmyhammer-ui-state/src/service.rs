@@ -28,8 +28,8 @@ use swissarmyhammer_operations_macros::operation_tool;
 
 use crate::operations::{
     operations, Dismiss, DragCancel, DragComplete, DragStart, Inspect, InspectorClose,
-    InspectorCloseAll, InspectorSetWidth, PaletteClose, PaletteOpen, SetKeymapMode, ShowCommand,
-    ShowPalette, ShowSearch, StartRename,
+    InspectorCloseAll, InspectorSetWidth, PaletteClose, PaletteOpen, SetKeymapMode, SetScopeChain,
+    ShowCommand, ShowPalette, ShowSearch, StartRename,
 };
 use crate::state::{DragSession, DragSource, UIState};
 
@@ -158,6 +158,12 @@ impl UiStateServer {
     /// Handle `set keymap` — set the active keymap mode.
     fn handle_set_keymap_mode(&self, req: SetKeymapMode) -> Result<Value, McpError> {
         let change = self.ui_state.set_keymap_mode(&req.mode);
+        Ok(serde_json::json!({ "ok": true, "change": change }))
+    }
+
+    /// Handle `set scope_chain` — record the focus scope chain (`ui.setFocus`).
+    fn handle_set_scope_chain(&self, req: SetScopeChain) -> Result<Value, McpError> {
+        let change = self.ui_state.set_scope_chain(req.scope_chain);
         Ok(serde_json::json!({ "ok": true, "change": change }))
     }
 
@@ -307,6 +313,7 @@ impl ServerHandler for UiStateServer {
             "open palette" => self.handle_palette_open(deserialize_op(arguments, &op)?)?,
             "close palette" => self.handle_palette_close(deserialize_op(arguments, &op)?)?,
             "set keymap" => self.handle_set_keymap_mode(deserialize_op(arguments, &op)?)?,
+            "set scope_chain" => self.handle_set_scope_chain(deserialize_op(arguments, &op)?)?,
             "start rename" => self.handle_start_rename(deserialize_op(arguments, &op)?)?,
             "start drag" => self.handle_drag_start(deserialize_op(arguments, &op)?)?,
             "cancel drag" => self.handle_drag_cancel(deserialize_op(arguments, &op)?)?,

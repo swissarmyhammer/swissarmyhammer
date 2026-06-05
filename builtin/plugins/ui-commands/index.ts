@@ -25,7 +25,7 @@
 //   ui.palette.close      → ui_state `close palette`       (...palette.close)
 //   ui.entity.startRename → ui_state `start rename`        (...rename.start)
 //   ui.mode.set           → ui_state `set keymap`          (...keymap.set)
-//   ui.setFocus           → focus    `set focus`           (...focus.set)
+//   ui.setFocus           → ui_state `set scope_chain`     (...scope_chain.set)
 //   window.new            → window   `new window`          (...window.new)
 //
 // Memory `no-client-side-inspect`: `ui.inspect` dispatches through the backend
@@ -34,9 +34,13 @@
 // context-menu target moniker. The regression e2e asserts this routes via the
 // Command service.
 //
-// Spatial focus is owned by the SEPARATE `focus` MCP server (`SpatialRegistry`
-// / `SpatialState`), NOT by `ui_state`. `ui.setFocus` routes to focus
-// `set focus` — the `ui_state` server deliberately exposes no `set_focus` op.
+// `ui.setFocus` records the focus scope chain into `ui_state` via
+// `set scope_chain`: the frontend sends the `scope_chain` it already computes
+// (leaf-first), and the backend consumes it directly — no separate `fq`. The
+// spatial focus KERNEL is still a separate `focus` MCP server (`SpatialRegistry`
+// / `SpatialState`); the spatial-nav React layer drives it directly through the
+// generic `command_tool_call` bridge, which is why `focus` is still ensured
+// above.
 
 import {
   CommandContext,
@@ -61,6 +65,7 @@ import {
  *   `close palette`       → this.ui_state.ui_state.palette.close
  *   `start rename`        → this.ui_state.ui_state.rename.start
  *   `set keymap`          → this.ui_state.ui_state.keymap.set
+ *   `set scope_chain`     → this.ui_state.ui_state.scope_chain.set
  */
 interface UiStateDispatch {
   ui_state: {
@@ -81,21 +86,7 @@ interface UiStateDispatch {
       keymap: {
         set(args: Record<string, unknown>): Promise<unknown>;
       };
-    };
-  };
-}
-
-/**
- * The dispatch surface for the `focus` operation tool — the spatial-nav focus
- * kernel `ui.setFocus` routes to.
- *
- * Verb/noun pair from `crates/swissarmyhammer-focus/src/operations.rs`:
- *   `set focus` → this.focus.focus.focus.set
- */
-interface FocusDispatch {
-  focus: {
-    focus: {
-      focus: {
+      scope_chain: {
         set(args: Record<string, unknown>): Promise<unknown>;
       };
     };
@@ -157,10 +148,13 @@ export default class UiCommandsPlugin extends Plugin {
    * metadata, 1:1.
    */
   async load(): Promise<void> {
+    // `focus` is ensured (and thereby activated into the live registry) even
+    // though no command here routes to it: the spatial-nav React layer reaches
+    // the focus kernel through the `focus` MCP module via the generic
+    // `command_tool_call` bridge, and module activation is what registers it.
     await ensureServices(this, ["commands", "ui_state", "window", "focus"]);
 
     const uiState = this as unknown as UiStateDispatch;
-    const focus = this as unknown as FocusDispatch;
     const window = this as unknown as WindowDispatch;
 
     await registerCommands(this, [
@@ -299,10 +293,12 @@ export default class UiCommandsPlugin extends Plugin {
       },
 
       // ─── ui.setFocus ────────────────────────────────────────────────────
-      // ui.yaml: visible:false, undoable:false. Routes to the SEPARATE `focus`
-      // server's `set focus` — spatial focus is owned by the focus kernel, NOT
-      // ui_state. The op takes the target FQM (`fq`) plus the per-decision
-      // `snapshot`; the dispatching surface plants both in args.
+      // ui.yaml: visible:false, undoable:false. Records the focus scope chain
+      // into ui_state via `set scope_chain`. The frontend sends `scope_chain`
+      // (leaf-first, the leaf is the focus target) on every focus change; the
+      // backend consumes that chain directly — there is no separate `fq` to
+      // supply. The recorded chain drives command gating's scope fallback and
+      // the `scope_chain` UI-state echo the frontend listens for.
       {
         id: "ui.setFocus",
         name: "Set Focus",
@@ -310,10 +306,12 @@ export default class UiCommandsPlugin extends Plugin {
         undoable: false,
         execute: async (rawCtx: unknown) => {
           const ctx = (rawCtx ?? {}) as CommandContext;
-          const args = ctx.args ?? {};
-          const focusArgs: Record<string, unknown> = { fq: args.fq };
-          if (args.snapshot !== undefined) focusArgs.snapshot = args.snapshot;
-          return await focus.focus.focus.focus.set(focusArgs);
+          const scopeChain = Array.isArray(ctx.args?.scope_chain)
+            ? ctx.args.scope_chain
+            : [];
+          return await uiState.ui_state.ui_state.scope_chain.set({
+            scope_chain: scopeChain,
+          });
         },
       },
 

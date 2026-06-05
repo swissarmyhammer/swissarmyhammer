@@ -3,15 +3,17 @@
 //! Pins the discovery surface so changes to the operation set are visible in
 //! code review. The tree shape is the noun->verb->{op} layout produced by
 //! `generate_operations_meta`. Also enforces the hard constraint that the
-//! `ui_state` tool exposes **no** focus / `set_focus` op — spatial focus is
-//! owned by the separate `focus` server.
+//! `ui_state` tool exposes **no** spatial-focus op — the spatial focus KERNEL
+//! is owned by the separate `focus` server. (`ui.setFocus` records the UI-state
+//! focus *scope chain* via `set scope_chain`, which is a `ui_state` concern, not
+//! a spatial-focus op.)
 
 use rmcp::ServerHandler;
 use serde_json::Value;
 
 use super::common::{request_context, Harness};
 
-/// The 15 operations the `ui_state` tool advertises, as `(noun, verb, op)`.
+/// The 16 operations the `ui_state` tool advertises, as `(noun, verb, op)`.
 ///
 /// A deliberate addition / rename should update this list in the same PR as
 /// the operation struct change.
@@ -27,6 +29,8 @@ fn expected_operations() -> Vec<(&'static str, &'static str, &'static str)> {
         ("palette", "close", "close palette"),
         // keymap
         ("keymap", "set", "set keymap"),
+        // scope chain (ui.setFocus routing target)
+        ("scope_chain", "set", "set scope_chain"),
         // rename
         ("rename", "start", "start rename"),
         // drag
@@ -43,7 +47,7 @@ fn expected_operations() -> Vec<(&'static str, &'static str, &'static str)> {
 
 /// The `_meta` tree under `io.swissarmyhammer/operations` enumerates every
 /// (noun, verb, op) tuple for the `ui_state` tool. This snapshot pins the
-/// current set of 15 ops and asserts the wire `op` enum matches it exactly.
+/// current set of 16 ops and asserts the wire `op` enum matches it exactly.
 #[tokio::test]
 async fn ui_state_tool_meta_operations_tree_is_complete() {
     let h = Harness::new();
@@ -67,7 +71,7 @@ async fn ui_state_tool_meta_operations_tree_is_complete() {
         .expect("_meta carries io.swissarmyhammer/operations");
 
     let expected = expected_operations();
-    assert_eq!(expected.len(), 15, "ui_state exposes exactly 15 operations");
+    assert_eq!(expected.len(), 16, "ui_state exposes exactly 16 operations");
 
     for (noun, verb, op_str) in &expected {
         let leaf = ops_tree
@@ -104,11 +108,13 @@ async fn ui_state_tool_meta_operations_tree_is_complete() {
     );
 }
 
-/// Hard constraint: the `ui_state` tool owns no focus / `set_focus` op.
+/// Hard constraint: the `ui_state` tool owns no spatial-focus op.
 ///
-/// Spatial focus is owned by the separate `focus` MCP server; `ui.setFocus`
-/// routes there, not here. This test fails loudly if a `set_focus` /
-/// `SetFocus` op (or any `focus` noun) sneaks back onto `ui_state`.
+/// The spatial focus KERNEL is owned by the separate `focus` MCP server. The
+/// `ui_state` tool records only the UI-state focus *scope chain*
+/// (`set scope_chain`, the `ui.setFocus` routing target) — never a spatial
+/// `set_focus` / `SetFocus` op. This test fails loudly if any op string or noun
+/// mentioning `focus` sneaks onto `ui_state`.
 #[tokio::test]
 async fn ui_state_tool_has_no_set_focus_op() {
     let h = Harness::new();
@@ -137,7 +143,10 @@ async fn ui_state_tool_has_no_set_focus_op() {
     }
 
     // And the _meta tree must carry no `focus` noun.
-    let meta = tool.meta.as_ref().expect("ui_state advertises a _meta tree");
+    let meta = tool
+        .meta
+        .as_ref()
+        .expect("ui_state advertises a _meta tree");
     let ops_tree = meta
         .0
         .get("io.swissarmyhammer/operations")

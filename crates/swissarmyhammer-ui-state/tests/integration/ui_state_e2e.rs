@@ -139,6 +139,45 @@ async fn set_keymap_mode_sets_active_keymap() {
     assert_eq!(h.ui_state.keymap_mode(), "vim");
 }
 
+/// `set scope_chain` records the focus scope chain the frontend sends — the
+/// `ui.setFocus` routing target. The op consumes `scope_chain` directly; there
+/// is no `fq`.
+#[tokio::test]
+async fn set_scope_chain_records_the_focus_scope_chain() {
+    let h = Harness::new();
+    let service = h.service();
+    assert!(
+        h.ui_state.scope_chain().is_empty(),
+        "scope chain starts empty"
+    );
+
+    let res = call_tool(
+        &service,
+        "set scope_chain",
+        json!({
+            "op": "set scope_chain",
+            "scope_chain": ["field:T1.title", "card:T1", "board:main"],
+        }),
+    )
+    .await
+    .expect("set scope_chain should succeed");
+
+    assert_eq!(
+        res["change"]["ScopeChain"],
+        json!(["field:T1.title", "card:T1", "board:main"]),
+        "the op returns the recorded chain in its change payload"
+    );
+    assert_eq!(
+        h.ui_state.scope_chain(),
+        vec![
+            "field:T1.title".to_string(),
+            "card:T1".to_string(),
+            "board:main".to_string()
+        ],
+        "the chain is recorded into UI state for command-gating fallback"
+    );
+}
+
 /// `open palette` flips the palette flag on; `close palette` flips it off.
 #[tokio::test]
 async fn palette_open_then_close_toggles_flag() {
@@ -218,13 +257,9 @@ async fn drag_start_then_complete_transitions_session() {
     assert_eq!(active.entity_id(), Some("01TASK"));
 
     // Completing takes and returns the session.
-    let res = call_tool(
-        &service,
-        "complete drag",
-        json!({ "op": "complete drag" }),
-    )
-    .await
-    .expect("complete drag should succeed");
+    let res = call_tool(&service, "complete drag", json!({ "op": "complete drag" }))
+        .await
+        .expect("complete drag should succeed");
     assert_eq!(res["session"]["session_id"], json!("01DRAG"));
     // No active session remains after completion.
     assert!(h.ui_state.drag_session().is_none());
@@ -385,13 +420,9 @@ async fn unknown_op_errors() {
     let h = Harness::new();
     let service = h.service();
 
-    let err = call_tool(
-        &service,
-        "frobnicate ui",
-        json!({ "op": "frobnicate ui" }),
-    )
-    .await
-    .expect_err("unknown op should error");
+    let err = call_tool(&service, "frobnicate ui", json!({ "op": "frobnicate ui" }))
+        .await
+        .expect_err("unknown op should error");
 
     assert!(
         err.message.contains("frobnicate ui"),
