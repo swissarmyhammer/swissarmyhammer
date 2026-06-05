@@ -3,6 +3,7 @@
 mod acp_agentic_loop;
 mod acp_config_file;
 mod acp_error_propagation;
+mod acp_hooks_real_model;
 mod acp_read_file;
 mod acp_slash_command;
 mod acp_stdio_transport;

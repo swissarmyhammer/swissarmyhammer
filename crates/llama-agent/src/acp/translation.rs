@@ -807,16 +807,26 @@ pub fn tool_call_to_acp(
     // Add raw input (the arguments)
     acp_call = acp_call.raw_input(tool_call.arguments.clone());
 
-    // If we have tool definition, add it to meta
+    // Always carry the bare tool name in _meta. The title above may be
+    // decorated as "<name>: <description>" for display, so hook matchers
+    // (PreToolUse / PostToolUse / PostToolUseFailure) must test against this
+    // un-decorated name instead. The notification-stream interceptor reads it
+    // via `agent_client_protocol_extras::hookable_agent::TOOL_NAME_META_KEY`.
+    let mut meta = serde_json::Map::new();
+    meta.insert(
+        agent_client_protocol_extras::hookable_agent::TOOL_NAME_META_KEY.to_string(),
+        serde_json::Value::String(tool_call.name.clone()),
+    );
+
+    // If we have a tool definition, add it to meta alongside the bare name.
     if let Some(def) = tool_def {
-        let mut meta = serde_json::Map::new();
         meta.insert(
             "tool_definition".to_string(),
             tool_definition_to_acp_format(def),
         );
-
-        acp_call = acp_call.meta(meta);
     }
+
+    acp_call = acp_call.meta(meta);
 
     acp_call
 }
@@ -2589,8 +2599,11 @@ mod tests {
             Some(serde_json::json!({"path": "/tmp/test.txt"}))
         );
 
-        // Verify no meta when no definition provided
-        assert!(acp_call.meta.is_none());
+        // Meta carries the bare tool name even without a definition (so hook
+        // matchers can test it), but no tool_definition entry is present.
+        let meta = acp_call.meta.expect("meta should carry the bare tool name");
+        assert_eq!(meta["tool_name"], "fs_read");
+        assert!(!meta.contains_key("tool_definition"));
     }
 
     #[test]
@@ -2629,6 +2642,69 @@ mod tests {
             "Read a file from disk"
         );
         assert_eq!(meta["tool_definition"]["server"], "filesystem");
+    }
+
+    #[test]
+    fn test_tool_call_to_acp_carries_bare_name_in_meta_without_def() {
+        use crate::types::ids::ToolCallId;
+        use agent_client_protocol_extras::hookable_agent::TOOL_NAME_META_KEY;
+
+        let tool_call = ToolCall {
+            id: ToolCallId::new(),
+            name: "fs_read".to_string(),
+            arguments: serde_json::json!({"path": "/tmp/test.txt"}),
+        };
+
+        let acp_call = tool_call_to_acp(tool_call, None);
+
+        // The bare name must be carried in _meta so hook matchers can test it
+        // even though the title may later be description-decorated.
+        let meta = acp_call.meta.expect("meta should carry the bare tool name");
+        assert_eq!(meta[TOOL_NAME_META_KEY], "fs_read");
+    }
+
+    #[test]
+    fn test_tool_call_to_acp_carries_bare_name_in_meta_with_decorated_title() {
+        use crate::types::ids::ToolCallId;
+        use agent_client_protocol_extras::hookable_agent::TOOL_NAME_META_KEY;
+
+        let tool_call = ToolCall {
+            id: ToolCallId::new(),
+            name: "fs_read".to_string(),
+            arguments: serde_json::json!({"path": "/tmp/test.txt"}),
+        };
+        let tool_def = ToolDefinition {
+            name: "fs_read".to_string(),
+            description: "Read a file from disk".to_string(),
+            parameters: serde_json::json!({"type": "object"}),
+            server_name: "filesystem".to_string(),
+        };
+
+        let acp_call = tool_call_to_acp(tool_call, Some(&tool_def));
+
+        // Title is decorated for humans, but the bare name lives in _meta.
+        assert_eq!(acp_call.title, "fs_read: Read a file from disk");
+        let meta = acp_call.meta.expect("meta should carry the bare tool name");
+        assert_eq!(meta[TOOL_NAME_META_KEY], "fs_read");
+        // The tool definition is still present alongside the bare name.
+        assert_eq!(meta["tool_definition"]["name"], "fs_read");
+    }
+
+    #[test]
+    fn test_tool_call_to_acp_meta_bare_name_is_mcp_qualified() {
+        use crate::types::ids::ToolCallId;
+        use agent_client_protocol_extras::hookable_agent::TOOL_NAME_META_KEY;
+
+        let tool_call = ToolCall {
+            id: ToolCallId::new(),
+            name: "mcp__memory__store".to_string(),
+            arguments: serde_json::json!({}),
+        };
+
+        let acp_call = tool_call_to_acp(tool_call, None);
+
+        let meta = acp_call.meta.expect("meta should carry the bare tool name");
+        assert_eq!(meta[TOOL_NAME_META_KEY], "mcp__memory__store");
     }
 
     #[test]

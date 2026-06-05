@@ -10,7 +10,7 @@ use futures::StreamExt;
 use swissarmyhammer_common::Pretty;
 use tokio::sync::{broadcast, RwLock};
 
-use agent_client_protocol_extras::{RawMessageManager, SessionStore};
+use agent_client_protocol_extras::{RawMessageManager, SessionSource, SessionStore};
 
 use super::config::AcpConfig;
 use super::filesystem::FilesystemOperations;
@@ -86,6 +86,15 @@ pub struct AcpServer {
     /// MCP server list. This is what makes a llama-agent fully tooled even when
     /// the `session/new` request carries zero MCP servers.
     agent_tools_mount: Arc<dyn crate::mcp::AgentToolsMount>,
+
+    /// Per-session Claude-Code hook wiring.
+    ///
+    /// Loads each session's `.claude/settings.json` hook config from its cwd,
+    /// builds the registrations once per session, and exposes the lifecycle
+    /// seams fired at `new_session`/`load_session` (SessionStart), `prompt`
+    /// entry (UserPromptSubmit), and `prompt` return (Stop). A session with no
+    /// `.claude` settings gets an empty hook set and behaves exactly as before.
+    session_hooks: super::hooks::SessionHooks,
 }
 
 /// Default interval between session-cache eviction sweeps (5 minutes).
@@ -113,6 +122,45 @@ struct AgenticStep {
     tool_calls: usize,
     /// How many of those tool calls failed.
     failed_tool_calls: usize,
+}
+
+/// Outcome of processing one tool call at the dispatch seam
+/// ([`AcpServer::process_tool_call`]), consumed by the agentic loop.
+#[derive(Debug, Clone)]
+struct ProcessedToolCall {
+    /// Whether this call counts as a non-success for the runaway guard. Only a
+    /// genuine tool-error result (a `ToolResult` with a non-empty `error`) or a
+    /// hard dispatch error counts. A `PreToolUse` deny does NOT: it is informed
+    /// forward progress — the model is fed the block reason and continues —
+    /// so the runaway guard must not treat a denied call as "no progress".
+    failed: bool,
+    /// Whether a `PreToolUse` `continue:false` asked the loop to stop the turn.
+    stop_turn: bool,
+    /// The content fed back to the model as the tool's output (deny reason or
+    /// result, plus any injected `additionalContext`). `None` when the turn was
+    /// stopped or a hard execution error produced no tool result.
+    ///
+    /// The agentic loop persists this via `process_tool_call` itself; it is read
+    /// by the dispatch-seam tests to assert the model-visible feedback.
+    #[cfg_attr(not(test), allow(dead_code))]
+    model_feedback: Option<String>,
+    /// The arguments actually dispatched to `handle_tool_call`, after any
+    /// `updatedInput` rewrite. `Null` when the tool was never dispatched
+    /// (deny / stop-turn). Read by the dispatch-seam tests to assert the
+    /// `updatedInput` rewrite reached `handle_tool_call`.
+    #[cfg_attr(not(test), allow(dead_code))]
+    dispatched_input: serde_json::Value,
+}
+
+/// Join an optional pre-dispatch and post-dispatch hook context into one
+/// newline-separated block, or `None` when neither carried context.
+fn join_hook_context(pre: Option<String>, post: Option<String>) -> Option<String> {
+    match (pre, post) {
+        (Some(a), Some(b)) => Some(format!("{a}\n{b}")),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
 }
 
 /// What the agentic loop should do after a generation step.
@@ -244,6 +292,12 @@ impl AcpServer {
             config.terminal.graceful_shutdown_timeout.as_duration(),
         )));
 
+        // Per-session hook wiring loads each session's `.claude` settings from
+        // its cwd. The permission policy seeds the command-hook permission-mode
+        // field once; the agent backend drives prompt/agent hook evaluation.
+        let session_hooks =
+            super::hooks::SessionHooks::new(Arc::clone(&agent_server), &config.permission_policy);
+
         // The raw JSON-RPC transcript recorder is per-session, not per-server:
         // it is created in `new_session` once the session ULID is known and
         // registered in the shared registry keyed by that ULID.
@@ -261,6 +315,7 @@ impl AcpServer {
             cleanup_interval,
             max_session_age,
             agent_tools_mount,
+            session_hooks,
         };
 
         (server, notification_rx)
@@ -1149,6 +1204,13 @@ impl AcpServer {
         // the session. The ACP session id is the llama session id string.
         self.ensure_acp_session_state(&req.session_id).await?;
 
+        // Load the resumed session's `.claude` hook config from its persisted
+        // cwd and fire SessionStart hooks with source=resume. The cwd comes from
+        // the durable SessionRecord, which is the source of truth across restarts.
+        self.session_hooks
+            .track_session_start(&req.session_id, SessionSource::Resume, record.cwd.clone())
+            .await;
+
         // Replay the recorded conversation via session/update notifications.
         // This is the only thing `session/load` does beyond `session/resume`.
         //
@@ -1210,6 +1272,14 @@ impl AcpServer {
         // Ensure ACP session state exists so the next `session/prompt` resolves
         // the session.
         self.ensure_acp_session_state(&req.session_id).await?;
+
+        // Load the resumed session's `.claude` hook config from its persisted
+        // cwd and fire SessionStart hooks with source=resume — the same restore
+        // seam as `session/load`, so a resumed session's hooks are wired before
+        // its next prompt.
+        self.session_hooks
+            .track_session_start(&req.session_id, SessionSource::Resume, record.cwd.clone())
+            .await;
 
         tracing::info!("Resumed session {}", req.session_id.0);
 
@@ -1766,6 +1836,11 @@ impl AcpServer {
         // Validate MCP transport capabilities before accepting servers
         self.validate_mcp_transports(&request.mcp_servers)?;
 
+        // Capture the session cwd before it is moved into session creation: the
+        // per-session hook config is loaded from this directory's `.claude`
+        // settings, and SessionStart hooks need it.
+        let session_cwd = request.cwd.clone();
+
         // Create a new llama-agent session with the provided cwd
         let llama_session = self
             .agent_server
@@ -1966,6 +2041,13 @@ impl AcpServer {
         // it up from there to record outgoing frames.
         Self::wire_raw_message_manager(&session_id);
 
+        // Load the session's `.claude` hook config from its cwd and fire
+        // SessionStart hooks with source=startup. A cwd with no `.claude`
+        // settings yields an empty hook set and this is effectively a no-op.
+        self.session_hooks
+            .track_session_start(&session_id, SessionSource::Startup, session_cwd)
+            .await;
+
         // Build session mode state if modes are supported
         let modes = if self.config.capabilities.supports_modes {
             self.build_session_mode_state_with_current(&self.config.default_mode_id)
@@ -2078,6 +2160,322 @@ impl AcpServer {
         Ok(response)
     }
 
+    /// Process a single tool call the model emitted, firing Claude-Code tool
+    /// hooks synchronously around the real dispatch (`handle_tool_call`).
+    ///
+    /// This is the true-blocking seam: `PreToolUse` fires *before* dispatch, so
+    /// its decisions genuinely gate and rewrite the call, and `PostToolUse` /
+    /// `PostToolUseFailure` fire after to feed `additionalContext` back to the
+    /// model. The flow per [`PreToolUseOutcome`]:
+    ///
+    /// - **Deny** (`Block` / permissionDecision `deny`) → skip dispatch entirely
+    ///   and synthesize a tool result carrying the deny reason, fed back to the
+    ///   model as the tool's output (Claude's "blocked" behavior). This is
+    ///   informed forward progress, NOT a runaway-guard failure: the model sees
+    ///   the block reason and continues, so it returns `failed: false`. (The
+    ///   client still sees a failed `ToolCallUpdate` for the UI — that signal is
+    ///   separate from the runaway-guard flag.)
+    /// - **StopTurn** (`Cancel` / `continue:false`) → skip dispatch and signal
+    ///   the agentic loop to stop the turn.
+    /// - **Proceed** → apply any `updatedInput` to the arguments *before*
+    ///   dispatch, run `handle_tool_call`, then fire the matching post-hook and
+    ///   append any `additionalContext` (pre + post) to the result fed back.
+    ///
+    /// The bare llama tool name (`tool_call.name`) is used for matcher
+    /// evaluation, never a decorated display title.
+    ///
+    /// On success/failure the ACP `ToolCall` (pending, carrying the dispatched
+    /// args) and `ToolCallUpdate` notifications are broadcast for the client UI,
+    /// and the tool result is appended to the llama session so the model sees it
+    /// on the next turn. Returns a [`ProcessedToolCall`] the agentic loop uses to
+    /// drive its counters and stop condition.
+    async fn process_tool_call(
+        &self,
+        tool_call: crate::types::ToolCall,
+        acp_session: &AcpSessionState,
+        session_id: &agent_client_protocol::schema::SessionId,
+        hooks: Option<&super::hooks::SessionHookAgent>,
+    ) -> Result<ProcessedToolCall, agent_client_protocol::Error> {
+        use agent_client_protocol_extras::PreToolUseOutcome;
+
+        let tool_name = tool_call.name.clone();
+        let tool_call_id = tool_call.id;
+        let tool_use_id = tool_call_id.to_string();
+
+        // PreToolUse — fire BEFORE dispatch so decisions can gate/rewrite the
+        // call. A session with no hooks proceeds unchanged.
+        let outcome = match hooks {
+            Some(h) => {
+                h.run_pre_tool_use(
+                    session_id.0.as_ref(),
+                    &tool_name,
+                    Some(tool_call.arguments.clone()),
+                    Some(&tool_use_id),
+                )
+                .await
+            }
+            None => PreToolUseOutcome::Proceed {
+                updated_input: None,
+                context: None,
+            },
+        };
+
+        let (updated_input, pre_context) = match outcome {
+            PreToolUseOutcome::Deny { reason } => {
+                // Skip dispatch entirely; synthesize a denied tool result and
+                // feed the reason back to the model, mirroring Claude's blocked
+                // behavior. Emit a failed ToolCallUpdate so the client observes
+                // the denial in its UI.
+                //
+                // A deny is informed forward progress, NOT a runaway-guard
+                // failure: the model is told why the call was blocked and
+                // continues. So this returns `failed: false` even though the
+                // client-facing ToolCallUpdate is marked failed — those two
+                // signals are deliberately distinct. Were a deny counted as a
+                // failure, an all-denied step would trip
+                // `AgenticLoopLimits::evaluate` (failed == total) and abort the
+                // whole turn instead of letting the model react to the block.
+                // The per-turn `max_iterations` cap remains the safety net for a
+                // model that only ever calls a denied tool.
+                let denied = crate::types::ToolResult {
+                    call_id: tool_call_id,
+                    result: serde_json::Value::Null,
+                    error: Some(format!("Blocked by hook: {reason}")),
+                };
+                self.broadcast_tool_call_pending(
+                    session_id,
+                    &tool_name,
+                    tool_call_id,
+                    &tool_call.arguments,
+                );
+                self.broadcast_tool_result(session_id, denied.clone());
+                let feedback = self.append_tool_result(acp_session, denied, None).await?;
+                return Ok(ProcessedToolCall {
+                    failed: false,
+                    stop_turn: false,
+                    model_feedback: Some(feedback),
+                    dispatched_input: serde_json::Value::Null,
+                });
+            }
+            PreToolUseOutcome::StopTurn { reason } => {
+                tracing::info!(
+                    "PreToolUse hook requested turn stop (continue:false) for '{}': {}",
+                    tool_name,
+                    reason
+                );
+                return Ok(ProcessedToolCall {
+                    failed: false,
+                    stop_turn: true,
+                    model_feedback: None,
+                    dispatched_input: serde_json::Value::Null,
+                });
+            }
+            PreToolUseOutcome::Proceed {
+                updated_input,
+                context,
+            } => (updated_input, context),
+        };
+
+        // Apply updatedInput to the arguments BEFORE dispatch (genuinely
+        // possible at this seam, unlike the notification path).
+        let mut tool_call = tool_call;
+        if let Some(new_input) = updated_input {
+            tool_call.arguments = new_input;
+        }
+        let dispatched_input = tool_call.arguments.clone();
+
+        // Broadcast the pending ToolCall with the args that will actually run.
+        self.broadcast_tool_call_pending(session_id, &tool_name, tool_call_id, &dispatched_input);
+
+        // Dispatch the tool through permission checking and execution.
+        let mut permission_storage = super::permissions::PermissionStorage::new();
+        let tool_result = super::translation::handle_tool_call(
+            tool_call.clone(),
+            acp_session,
+            Arc::clone(&self.agent_server),
+            &self.permission_engine,
+            &mut permission_storage,
+        )
+        .await;
+
+        match tool_result {
+            Ok(result) => {
+                let failed = result.error.is_some();
+                if failed {
+                    tracing::warn!(
+                        "Tool call {} returned an error result: {}",
+                        result.call_id,
+                        result.error.as_deref().unwrap_or("")
+                    );
+                } else {
+                    tracing::info!("Tool call {} completed successfully", result.call_id);
+                }
+
+                // Post-hook: PostToolUseFailure on a tool-level error result,
+                // PostToolUse otherwise. These cannot block; they only surface
+                // additionalContext to thread back to the model.
+                let post_context = match hooks {
+                    Some(h) if failed => {
+                        h.run_post_tool_use_failure(
+                            session_id.0.as_ref(),
+                            &tool_name,
+                            Some(dispatched_input.clone()),
+                            result.error.clone().map(serde_json::Value::String),
+                            Some(&tool_use_id),
+                        )
+                        .await
+                    }
+                    Some(h) => {
+                        h.run_post_tool_use(
+                            session_id.0.as_ref(),
+                            &tool_name,
+                            Some(dispatched_input.clone()),
+                            Some(result.result.clone()),
+                            Some(&tool_use_id),
+                        )
+                        .await
+                    }
+                    None => None,
+                };
+
+                self.broadcast_tool_result(session_id, result.clone());
+
+                let injected = join_hook_context(pre_context, post_context);
+                let feedback = self
+                    .append_tool_result(acp_session, result.clone(), injected)
+                    .await?;
+
+                // Send Plan notification if this was a kanban-related tool call.
+                if tool_name == "mcp__sah__kanban" {
+                    if let Err(e) = self.send_plan_notification_from_result(session_id, &result) {
+                        tracing::warn!(
+                            "Failed to send Plan notification after '{}': {}",
+                            tool_name,
+                            e
+                        );
+                    }
+                }
+
+                Ok(ProcessedToolCall {
+                    failed,
+                    stop_turn: false,
+                    model_feedback: Some(feedback),
+                    dispatched_input,
+                })
+            }
+            Err(e) => {
+                tracing::error!("Tool call execution failed: {}", e);
+
+                // PostToolUseFailure for a hard execution error (no ToolResult).
+                let post_context = match hooks {
+                    Some(h) => {
+                        h.run_post_tool_use_failure(
+                            session_id.0.as_ref(),
+                            &tool_name,
+                            Some(dispatched_input.clone()),
+                            Some(serde_json::Value::String(e.to_string())),
+                            Some(&tool_use_id),
+                        )
+                        .await
+                    }
+                    None => None,
+                };
+
+                let mut message = format!("Tool call failed: {e}");
+                if let Some(ctx) = join_hook_context(pre_context, post_context) {
+                    message.push_str("\n\n");
+                    message.push_str(&ctx);
+                }
+                let error_notification = agent_client_protocol::schema::SessionNotification::new(
+                    session_id.clone(),
+                    agent_client_protocol::schema::SessionUpdate::AgentMessageChunk(
+                        agent_client_protocol::schema::ContentChunk::new(
+                            agent_client_protocol::schema::ContentBlock::from(message.clone()),
+                        ),
+                    ),
+                );
+                self.broadcast_notification(error_notification);
+
+                Ok(ProcessedToolCall {
+                    failed: true,
+                    stop_turn: false,
+                    model_feedback: None,
+                    dispatched_input,
+                })
+            }
+        }
+    }
+
+    /// Broadcast the initial pending `ToolCall` notification (per ACP spec),
+    /// carrying the bare tool name and the arguments that will actually run.
+    fn broadcast_tool_call_pending(
+        &self,
+        session_id: &agent_client_protocol::schema::SessionId,
+        tool_name: &str,
+        tool_call_id: crate::types::ids::ToolCallId,
+        arguments: &serde_json::Value,
+    ) {
+        let initial_tool_call = agent_client_protocol::schema::ToolCall::new(
+            agent_client_protocol::schema::ToolCallId::new(tool_call_id.to_string()),
+            tool_name,
+        )
+        .status(agent_client_protocol::schema::ToolCallStatus::Pending)
+        .raw_input(arguments.clone());
+        let notification = agent_client_protocol::schema::SessionNotification::new(
+            session_id.clone(),
+            agent_client_protocol::schema::SessionUpdate::ToolCall(initial_tool_call),
+        );
+        self.broadcast_notification(notification);
+    }
+
+    /// Broadcast a `ToolCallUpdate` notification carrying a tool result.
+    fn broadcast_tool_result(
+        &self,
+        session_id: &agent_client_protocol::schema::SessionId,
+        result: crate::types::ToolResult,
+    ) {
+        let update = super::translation::tool_result_to_acp_update(result);
+        let notification = agent_client_protocol::schema::SessionNotification::new(
+            session_id.clone(),
+            agent_client_protocol::schema::SessionUpdate::ToolCallUpdate(update),
+        );
+        self.broadcast_notification(notification);
+    }
+
+    /// Append a tool result to the llama session as a `Tool`-role message,
+    /// optionally with hook-injected `additionalContext` appended, and return
+    /// the exact content the model will see.
+    async fn append_tool_result(
+        &self,
+        acp_session: &AcpSessionState,
+        result: crate::types::ToolResult,
+        injected_context: Option<String>,
+    ) -> Result<String, agent_client_protocol::Error> {
+        let mut content = match &result.error {
+            Some(err) => err.clone(),
+            None => result.result.to_string(),
+        };
+        if let Some(ctx) = injected_context {
+            content.push_str("\n\n");
+            content.push_str(&ctx);
+        }
+        let tool_message = crate::types::Message {
+            role: crate::types::MessageRole::Tool,
+            content: content.clone(),
+            tool_call_id: Some(result.call_id),
+            tool_name: None,
+            timestamp: std::time::SystemTime::now(),
+        };
+        self.agent_server
+            .add_message(&acp_session.llama_session_id, tool_message)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to add tool result to session: {}", e);
+                Self::convert_error(e)
+            })?;
+        Ok(content)
+    }
+
     pub async fn prompt(
         &self,
         request: agent_client_protocol::schema::PromptRequest,
@@ -2099,6 +2497,21 @@ impl AcpServer {
             tracing::error!("Session not found: {}", request.session_id.0);
             agent_client_protocol::Error::invalid_params()
         })?;
+
+        // Hold the resolved session id for the Stop seam at this turn's return;
+        // the request is consumed below, but its session id is needed afterward.
+        let session_id = request.session_id.clone();
+
+        // Fire UserPromptSubmit hooks at the turn's entry. A `Block`/`Cancel`
+        // decision returns the ACP error here — before any message is added to
+        // the session or any generation runs — so the model is never invoked.
+        // Otherwise the returned request carries any `additionalContext` the
+        // hooks prepended, and that context flows into the messages the model
+        // sees. A session with no hooks returns the request unchanged.
+        let request = match self.session_hooks.for_session(&session_id).await {
+            Some(hooks) => hooks.run_user_prompt_submit(request).await?,
+            None => request,
+        };
 
         // Optional per-request generation cap. The ACP `_meta` map is the
         // documented extensibility channel — callers (e.g. the validator
@@ -2374,118 +2787,35 @@ impl AcpServer {
                     Self::convert_error(e)
                 })?;
 
-            // Execute each tool call
+            // Resolve this session's hooks once for the whole step. A session
+            // with no `.claude` hook config yields `None`, in which case
+            // `process_tool_call` proceeds with no hook firing.
+            let session_hooks = self.session_hooks.for_session(&request.session_id).await;
+
+            // Execute each tool call, firing Claude-Code tool hooks synchronously
+            // around the real dispatch (`process_tool_call`). A `PreToolUse`
+            // `continue:false` decision stops the turn after the current call.
+            let mut stop_turn_requested = false;
             for tool_call in tool_calls {
-                let tool_name = tool_call.name.clone();
-                let tool_call_id = tool_call.id;
-                tracing::info!("Processing tool call: {} (id: {})", tool_name, tool_call_id);
-
-                // Send initial ToolCall notification with pending status (per ACP spec)
-                let initial_tool_call = agent_client_protocol::schema::ToolCall::new(
-                    agent_client_protocol::schema::ToolCallId::new(tool_call_id.to_string()),
-                    &tool_name,
-                )
-                .status(agent_client_protocol::schema::ToolCallStatus::Pending)
-                .raw_input(tool_call.arguments.clone());
-
-                let tool_call_notification =
-                    agent_client_protocol::schema::SessionNotification::new(
-                        request.session_id.clone(),
-                        agent_client_protocol::schema::SessionUpdate::ToolCall(initial_tool_call),
-                    );
-                self.broadcast_notification(tool_call_notification);
-
-                // Handle tool call with permission checking and execution
-                let mut permission_storage = super::permissions::PermissionStorage::new();
-                let tool_result = super::translation::handle_tool_call(
-                    tool_call,
-                    &acp_session,
-                    Arc::clone(&self.agent_server),
-                    &self.permission_engine,
-                    &mut permission_storage,
-                )
-                .await;
-
-                match tool_result {
-                    Ok(result) => {
-                        // A `ToolResult` carrying a non-empty `error` is a
-                        // tool-level failure surfaced as a value (e.g. the MCP
-                        // server returned -32602 "tool not found"), not a
-                        // success. Count it so the runaway guard can tell a step
-                        // that made no progress from one that did.
-                        if result.error.is_some() {
-                            failed_tool_calls += 1;
-                            tracing::warn!(
-                                "Tool call {} returned an error result: {}",
-                                result.call_id,
-                                result.error.as_deref().unwrap_or("")
-                            );
-                        } else {
-                            tracing::info!("Tool call {} completed successfully", result.call_id);
-                        }
-
-                        // Convert tool result to ACP ToolCallUpdate and broadcast
-                        let update = super::translation::tool_result_to_acp_update(result.clone());
-                        let notification = agent_client_protocol::schema::SessionNotification::new(
-                            request.session_id.clone(),
-                            agent_client_protocol::schema::SessionUpdate::ToolCallUpdate(update),
-                        );
-                        self.broadcast_notification(notification);
-
-                        // Add tool result to session
-                        let tool_message = crate::types::Message {
-                            role: crate::types::MessageRole::Tool,
-                            content: result.result.to_string(),
-                            tool_call_id: Some(result.call_id),
-                            tool_name: None, // Tool name is not available in the ToolResult
-                            timestamp: std::time::SystemTime::now(),
-                        };
-                        self.agent_server
-                            .add_message(&acp_session.llama_session_id, tool_message)
-                            .await
-                            .map_err(|e| {
-                                tracing::error!("Failed to add tool result to session: {}", e);
-                                Self::convert_error(e)
-                            })?;
-
-                        // Send Plan notification if this was a kanban-related tool call
-                        // The kanban tool includes _plan data in its response when tasks are modified
-                        if tool_name == "mcp__sah__kanban" {
-                            tracing::debug!(
-                                "Kanban tool call '{}', checking for Plan data",
-                                tool_name
-                            );
-                            if let Err(e) = self
-                                .send_plan_notification_from_result(&request.session_id, &result)
-                            {
-                                tracing::warn!(
-                                    "Failed to send Plan notification after '{}': {}",
-                                    tool_name,
-                                    e
-                                );
-                                // Don't fail the entire operation if Plan notification fails
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        failed_tool_calls += 1;
-                        tracing::error!("Tool call execution failed: {}", e);
-                        // Convert tool call error to ACP notification
-                        let error_notification =
-                            agent_client_protocol::schema::SessionNotification::new(
-                                request.session_id.clone(),
-                                agent_client_protocol::schema::SessionUpdate::AgentMessageChunk(
-                                    agent_client_protocol::schema::ContentChunk::new(
-                                        agent_client_protocol::schema::ContentBlock::from(format!(
-                                            "Tool call failed: {}",
-                                            e
-                                        )),
-                                    ),
-                                ),
-                            );
-                        self.broadcast_notification(error_notification);
-                        // Continue with other tool calls even if one fails
-                    }
+                tracing::info!(
+                    "Processing tool call: {} (id: {})",
+                    tool_call.name,
+                    tool_call.id
+                );
+                let processed = self
+                    .process_tool_call(
+                        tool_call,
+                        &acp_session,
+                        &request.session_id,
+                        session_hooks.as_deref(),
+                    )
+                    .await?;
+                if processed.failed {
+                    failed_tool_calls += 1;
+                }
+                if processed.stop_turn {
+                    stop_turn_requested = true;
+                    break;
                 }
             }
 
@@ -2507,6 +2837,14 @@ impl AcpServer {
                 );
                 return Err(agent_client_protocol::Error::internal_error()
                     .data(serde_json::json!({ "agentic_loop_aborted": reason })));
+            }
+
+            // A `PreToolUse` `continue:false` decision stops the turn: the model
+            // does not get to respond to further tool results this turn.
+            if stop_turn_requested {
+                tracing::info!("Stopping agentic loop: a PreToolUse hook requested continue:false");
+                final_stop_reason = agent_client_protocol::schema::StopReason::Cancelled;
+                break;
             }
 
             // Only stop on hard limits - otherwise continue to let model respond to tool results
@@ -2575,8 +2913,35 @@ impl AcpServer {
 
         let response =
             agent_client_protocol::schema::PromptResponse::new(final_stop_reason).meta(meta);
+
+        // Fire Stop hooks at the turn's return. A Stop hook that "blocks" means
+        // "don't stop" — it yields `ShouldContinue`, which annotates the
+        // response meta with `hook_should_continue: true` and `hook_reason`.
+        // (Re-entering the agentic loop with that reason as feedback is left to
+        // a follow-up; today the meta is propagated to the client.) A session
+        // with no hooks returns the response unchanged.
+        let response = self.apply_stop_hooks(&session_id, response).await;
+
         self.log_response("prompt", &response);
         Ok(response)
+    }
+
+    /// Fire the session's `Stop` hooks against a finished turn's response.
+    ///
+    /// Delegates to [`HookableAgent::run_stop`], which annotates the response
+    /// meta with `hook_should_continue: true` (and `hook_reason`) when any Stop
+    /// hook returns a `ShouldContinue` decision. Returns the response unchanged
+    /// for a session with no hooks. Split out from [`prompt`](Self::prompt) so
+    /// the Stop seam is exercisable without driving a full generation turn.
+    async fn apply_stop_hooks(
+        &self,
+        session_id: &agent_client_protocol::schema::SessionId,
+        response: agent_client_protocol::schema::PromptResponse,
+    ) -> agent_client_protocol::schema::PromptResponse {
+        match self.session_hooks.for_session(session_id).await {
+            Some(hooks) => hooks.run_stop(session_id.0.to_string(), response).await,
+            None => response,
+        }
     }
 
     /// Handle the ACP `session/cancel` notification.
@@ -3549,6 +3914,344 @@ mod tests {
         server
     }
 
+    /// Tests for the synchronous PreToolUse/PostToolUse/PostToolUseFailure
+    /// firing at the real tool-dispatch seam (`process_tool_call`). These drive
+    /// the seam directly with a hand-built [`SessionHookAgent`] carrying a
+    /// scripted hook, so no model (and no GPU) is needed.
+    mod tool_dispatch_hooks {
+        use super::*;
+        use crate::acp::hooks::SessionHookAgent;
+        use agent_client_protocol_extras::{HookDecision, HookEvent, HookEventKind, HookHandler};
+
+        /// Build a server (capturing its notification receiver) plus a real
+        /// session, returning the server, the session's [`AcpSessionState`], its
+        /// ACP session id, and the notification receiver.
+        async fn server_with_session() -> (
+            Arc<AcpServer>,
+            crate::acp::session::AcpSessionState,
+            agent_client_protocol::schema::SessionId,
+            tokio::sync::broadcast::Receiver<agent_client_protocol::schema::SessionNotification>,
+        ) {
+            use crate::types::{
+                AgentConfig, ModelConfig, ModelSource, ParallelConfig, QueueConfig, RetryConfig,
+                SessionConfig,
+            };
+            use tempfile::TempDir;
+
+            let temp_dir = TempDir::new().unwrap();
+            let test_config = AgentConfig {
+                model: ModelConfig {
+                    source: ModelSource::Local {
+                        folder: temp_dir.path().to_path_buf(),
+                        filename: Some("test.gguf".to_string()),
+                    },
+                    batch_size: 512,
+                    n_seq_max: 1,
+                    n_threads: 1,
+                    n_threads_batch: 1,
+                    use_hf_params: false,
+                    retry_config: RetryConfig::default(),
+                    debug: false,
+                },
+                queue_config: QueueConfig::default(),
+                mcp_servers: Vec::new(),
+                session_config: SessionConfig::default(),
+                parallel_execution_config: ParallelConfig::default(),
+                tool_execution_config: Default::default(),
+            };
+            let model_manager =
+                Arc::new(crate::model::ModelManager::new(test_config.model.clone()).unwrap());
+            let request_queue = Arc::new(crate::queue::RequestQueue::new(
+                model_manager.clone(),
+                test_config.queue_config.clone(),
+                test_config.session_config.clone(),
+            ));
+            let session_manager = Arc::new(crate::session::SessionManager::new(
+                test_config.session_config.clone(),
+            ));
+            let mcp_client: Arc<dyn crate::mcp::MCPClient> =
+                Arc::new(crate::mcp::NoOpMCPClient::new());
+            let chat_template = Arc::new(crate::chat_template::ChatTemplateEngine::new());
+            let dependency_analyzer =
+                Arc::new(crate::dependency_analysis::DependencyAnalyzer::new(
+                    test_config.parallel_execution_config.clone(),
+                ));
+            let agent_server = Arc::new(AgentServer::new(
+                model_manager,
+                request_queue,
+                session_manager,
+                mcp_client,
+                chat_template,
+                dependency_analyzer,
+                test_config,
+            ));
+            let (server, rx) =
+                AcpServer::new(agent_server, AcpConfig::default(), test_agent_tools_mount());
+            let server = Arc::new(server);
+
+            let session_response = server
+                .new_session(agent_client_protocol::schema::NewSessionRequest::new(
+                    std::env::current_dir().unwrap(),
+                ))
+                .await
+                .expect("new_session");
+            let session_id = session_response.session_id.clone();
+            let acp_session = server
+                .get_session_by_id(&session_id)
+                .await
+                .expect("session must exist");
+            (server, acp_session, session_id, rx)
+        }
+
+        /// A scripted hook returning a fixed decision for any matching event.
+        struct ScriptedHook(HookDecision);
+
+        #[async_trait::async_trait]
+        impl HookHandler for ScriptedHook {
+            async fn handle(&self, _event: &HookEvent) -> HookDecision {
+                self.0.clone()
+            }
+        }
+
+        /// A hook that records every event it sees, returning Allow.
+        struct CountingHook(Arc<std::sync::atomic::AtomicU32>);
+
+        #[async_trait::async_trait]
+        impl HookHandler for CountingHook {
+            async fn handle(&self, _event: &HookEvent) -> HookDecision {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                HookDecision::Allow
+            }
+        }
+
+        fn tool_call(name: &str, args: serde_json::Value) -> crate::types::ToolCall {
+            crate::types::ToolCall {
+                id: crate::types::ids::ToolCallId::new(),
+                name: name.to_string(),
+                arguments: args,
+            }
+        }
+
+        /// A PreToolUse `deny` decision prevents `handle_tool_call` from running;
+        /// the model receives the deny reason as the tool result and the loop
+        /// continues — a deny is informed forward progress, NOT a runaway-guard
+        /// failure.
+        #[tokio::test]
+        #[serial]
+        async fn pre_tool_use_deny_skips_dispatch_and_feeds_reason_back() {
+            let _state = StateDirGuard::new();
+            let (server, acp_session, session_id, _rx) = server_with_session().await;
+
+            let hooks = SessionHookAgent::new(()).with_hook(
+                &[HookEventKind::PreToolUse],
+                Some("dangerous_tool"),
+                ScriptedHook(HookDecision::Block {
+                    reason: "policy forbids dangerous_tool".into(),
+                }),
+            );
+
+            let outcome = server
+                .process_tool_call(
+                    tool_call("dangerous_tool", serde_json::json!({"x": 1})),
+                    &acp_session,
+                    &session_id,
+                    Some(&hooks),
+                )
+                .await
+                .expect("process_tool_call must not error");
+
+            assert!(!outcome.stop_turn, "deny is not a turn-stop");
+            assert!(
+                !outcome.failed,
+                "a deny is informed forward progress, not a runaway-guard failure"
+            );
+            let feedback = outcome
+                .model_feedback
+                .expect("deny must feed a tool result back to the model");
+            assert!(
+                feedback.contains("policy forbids dangerous_tool"),
+                "the model feedback must carry the deny reason; got {feedback:?}"
+            );
+        }
+
+        /// A PreToolUse `updatedInput` rewrites the arguments actually dispatched
+        /// to `handle_tool_call`.
+        #[tokio::test]
+        #[serial]
+        async fn pre_tool_use_updated_input_rewrites_dispatched_args() {
+            let _state = StateDirGuard::new();
+            let (server, acp_session, session_id, _rx) = server_with_session().await;
+
+            let hooks = SessionHookAgent::new(()).with_hook(
+                &[HookEventKind::PreToolUse],
+                None,
+                ScriptedHook(HookDecision::AllowWithUpdatedInput {
+                    updated_input: serde_json::json!({"command": "echo safe"}),
+                }),
+            );
+
+            let outcome = server
+                .process_tool_call(
+                    tool_call("some_tool", serde_json::json!({"command": "rm -rf /"})),
+                    &acp_session,
+                    &session_id,
+                    Some(&hooks),
+                )
+                .await
+                .expect("process_tool_call must not error");
+
+            assert_eq!(
+                outcome.dispatched_input,
+                serde_json::json!({"command": "echo safe"}),
+                "updatedInput must replace the args dispatched to handle_tool_call"
+            );
+        }
+
+        /// PostToolUseFailure fires on a failed call and its additionalContext is
+        /// delivered to the model alongside the failure.
+        #[tokio::test]
+        #[serial]
+        async fn post_tool_use_failure_context_is_delivered() {
+            let _state = StateDirGuard::new();
+            let (server, acp_session, session_id, _rx) = server_with_session().await;
+
+            // `unknown_tool` has no MCP backing on this empty session, so
+            // `handle_tool_call` returns a tool-level error → PostToolUseFailure.
+            let hooks = SessionHookAgent::new(()).with_hook(
+                &[HookEventKind::PostToolUseFailure],
+                None,
+                ScriptedHook(HookDecision::AllowWithContext {
+                    context: "hint: the tool is unavailable".into(),
+                }),
+            );
+
+            let outcome = server
+                .process_tool_call(
+                    tool_call("unknown_tool", serde_json::json!({})),
+                    &acp_session,
+                    &session_id,
+                    Some(&hooks),
+                )
+                .await
+                .expect("process_tool_call must not error");
+
+            assert!(outcome.failed, "an unknown tool is a failed call");
+            let feedback = outcome
+                .model_feedback
+                .expect("a failed call still feeds the result back to the model");
+            assert!(
+                feedback.contains("hint: the tool is unavailable"),
+                "PostToolUseFailure additionalContext must reach the model; got {feedback:?}"
+            );
+        }
+
+        /// PostToolUse additionalContext is delivered to the model after a
+        /// successful call. Uses the in-process `echo` agent tool, which really
+        /// executes (no model needed).
+        #[tokio::test]
+        #[serial]
+        async fn post_tool_use_context_is_delivered_after_success() {
+            let _state = StateDirGuard::new();
+            let (server, acp_session, session_id, _rx) = server_with_session().await;
+
+            let hooks = SessionHookAgent::new(()).with_hook(
+                &[HookEventKind::PostToolUse],
+                Some("echo"),
+                ScriptedHook(HookDecision::AllowWithContext {
+                    context: "note: echo succeeded".into(),
+                }),
+            );
+
+            let outcome = server
+                .process_tool_call(
+                    tool_call("echo", serde_json::json!({"message": "hi"})),
+                    &acp_session,
+                    &session_id,
+                    Some(&hooks),
+                )
+                .await
+                .expect("process_tool_call must not error");
+
+            assert!(!outcome.failed, "echo must succeed");
+            let feedback = outcome
+                .model_feedback
+                .expect("a successful call feeds its result back to the model");
+            assert!(
+                feedback.contains("Echo: hi"),
+                "the model must see the tool result; got {feedback:?}"
+            );
+            assert!(
+                feedback.contains("note: echo succeeded"),
+                "PostToolUse additionalContext must reach the model; got {feedback:?}"
+            );
+        }
+
+        /// A PreToolUse hook fires exactly once per tool call at the dispatch
+        /// seam — no double-firing.
+        #[tokio::test]
+        #[serial]
+        async fn pre_tool_use_fires_exactly_once() {
+            let _state = StateDirGuard::new();
+            let (server, acp_session, session_id, _rx) = server_with_session().await;
+
+            let count = Arc::new(std::sync::atomic::AtomicU32::new(0));
+            let hooks = SessionHookAgent::new(()).with_hook(
+                &[HookEventKind::PreToolUse],
+                None,
+                CountingHook(count.clone()),
+            );
+
+            let _ = server
+                .process_tool_call(
+                    tool_call("unknown_tool", serde_json::json!({})),
+                    &acp_session,
+                    &session_id,
+                    Some(&hooks),
+                )
+                .await
+                .expect("process_tool_call must not error");
+
+            assert_eq!(
+                count.load(std::sync::atomic::Ordering::SeqCst),
+                1,
+                "PreToolUse must fire exactly once per tool call"
+            );
+        }
+
+        /// A PreToolUse `continue:false` (Cancel) stops the turn without
+        /// dispatching the tool.
+        #[tokio::test]
+        #[serial]
+        async fn pre_tool_use_continue_false_stops_turn() {
+            let _state = StateDirGuard::new();
+            let (server, acp_session, session_id, _rx) = server_with_session().await;
+
+            let hooks = SessionHookAgent::new(()).with_hook(
+                &[HookEventKind::PreToolUse],
+                None,
+                ScriptedHook(HookDecision::Cancel {
+                    reason: "halt the turn".into(),
+                }),
+            );
+
+            let outcome = server
+                .process_tool_call(
+                    tool_call("any_tool", serde_json::json!({})),
+                    &acp_session,
+                    &session_id,
+                    Some(&hooks),
+                )
+                .await
+                .expect("process_tool_call must not error");
+
+            assert!(outcome.stop_turn, "continue:false must stop the turn");
+            assert!(
+                outcome.model_feedback.is_none(),
+                "a stopped turn does not dispatch the tool"
+            );
+        }
+    }
+
     mod agentic_loop_guard {
         use super::super::{AgenticLoopAction, AgenticStep, AGENTIC_LOOP_LIMITS};
 
@@ -3564,6 +4267,23 @@ mod tests {
             assert!(matches!(
                 AGENTIC_LOOP_LIMITS.evaluate(1, &step),
                 AgenticLoopAction::Abort(_)
+            ));
+        }
+
+        #[test]
+        fn a_single_denied_but_not_failed_call_continues() {
+            // A PreToolUse deny is informed forward progress, not a failure:
+            // `process_tool_call` reports it as `failed == false`, so a step whose
+            // sole tool call was denied arrives here as one tool call with zero
+            // failures. The model has the deny reason to act on — continue the
+            // loop rather than abort the whole turn.
+            let step = AgenticStep {
+                tool_calls: 1,
+                failed_tool_calls: 0,
+            };
+            assert!(matches!(
+                AGENTIC_LOOP_LIMITS.evaluate(1, &step),
+                AgenticLoopAction::Continue
             ));
         }
 
@@ -5696,5 +6416,757 @@ mod tests {
             notifications.try_recv().is_err(),
             "no notification should be emitted when a title already exists"
         );
+    }
+
+    /// Acceptance tests for the per-session Claude-Code hook lifecycle wiring
+    /// (SessionStart / UserPromptSubmit / Stop).
+    ///
+    /// All of these run model-free: a `.claude/settings.json` placed in the
+    /// session cwd drives **command** hooks (a shell command over JSON stdin),
+    /// so the model is never loaded. UserPromptSubmit blocking and
+    /// additionalContext are observed through the real `prompt` entry seam; the
+    /// Stop annotation is observed through `apply_stop_hooks`, the seam `prompt`
+    /// fires at its return — the full generation turn cannot run without a GPU,
+    /// so the Stop seam is exercised directly rather than through a live turn.
+    mod hook_lifecycle {
+        use super::*;
+        use agent_client_protocol::schema::{
+            ContentBlock, NewSessionRequest, PromptRequest, PromptResponse, SessionId, StopReason,
+            TextContent,
+        };
+        use std::fs;
+        use std::path::Path;
+        use tempfile::TempDir;
+
+        /// Point `HOME` at a temp dir for the duration of a test so the
+        /// user-level `~/.claude/settings.json` the hook loader reads is empty
+        /// and deterministic — a real home directory's hooks must not bleed into
+        /// these tests. Restores the previous `HOME` on drop. Use only from a
+        /// `#[serial]` test (it mutates a process-global env var).
+        struct HomeGuard {
+            previous: Option<String>,
+            _home: TempDir,
+        }
+
+        impl HomeGuard {
+            fn new() -> Self {
+                let previous = std::env::var("HOME").ok();
+                let home = TempDir::new().unwrap();
+                fs::create_dir_all(home.path().join(".claude")).unwrap();
+                std::env::set_var("HOME", home.path());
+                Self {
+                    previous,
+                    _home: home,
+                }
+            }
+        }
+
+        impl Drop for HomeGuard {
+            fn drop(&mut self) {
+                match &self.previous {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+        }
+
+        /// Create a project cwd whose `.claude/settings.json` carries `contents`.
+        fn project_with_settings(contents: &str) -> TempDir {
+            let dir = TempDir::new().unwrap();
+            let claude = dir.path().join(".claude");
+            fs::create_dir_all(&claude).unwrap();
+            fs::write(claude.join("settings.json"), contents).unwrap();
+            dir
+        }
+
+        /// A single user text block carrying `text`.
+        fn text_prompt(session_id: SessionId, text: &str) -> PromptRequest {
+            PromptRequest::new(
+                session_id,
+                vec![ContentBlock::Text(TextContent::new(text.to_string()))],
+            )
+        }
+
+        /// Resolve the ACP session id to its llama `SessionId`.
+        fn llama_id(session_id: &SessionId) -> crate::types::SessionId {
+            crate::types::SessionId::from_str(session_id.0.as_ref())
+                .expect("session id this server created must parse")
+        }
+
+        /// The user/tool message text recorded on a session, in order.
+        async fn session_message_texts(server: &AcpServer, session_id: &SessionId) -> Vec<String> {
+            server
+                .agent_server
+                .session_manager()
+                .get_session(&llama_id(session_id))
+                .await
+                .expect("session lookup")
+                .expect("session exists")
+                .messages
+                .iter()
+                .map(|m| m.content.clone())
+                .collect()
+        }
+
+        /// A SessionStart command hook fires once on `new_session` with
+        /// `source=startup` — the hook's JSON stdin carries `hook_event_name`
+        /// and `source`, which the command echoes into a marker file.
+        #[tokio::test]
+        #[serial]
+        async fn session_start_fires_on_new_session_with_startup_source() {
+            let _home = HomeGuard::new();
+            let project = TempDir::new().unwrap();
+            let marker = project.path().join("session_start.marker");
+            // The hook reads its JSON stdin and writes it to the marker file so
+            // the test can assert it fired and saw the right event/source.
+            let settings = format!(
+                r#"{{ "hooks": {{ "SessionStart": [ {{ "hooks": [ {{ "type": "command", "command": "cat >> {}" }} ] }} ] }} }}"#,
+                marker.display()
+            );
+            fs::create_dir_all(project.path().join(".claude")).unwrap();
+            fs::write(
+                project.path().join(".claude").join("settings.json"),
+                settings,
+            )
+            .unwrap();
+
+            let server = create_test_server().await;
+            server
+                .new_session(NewSessionRequest::new(project.path().to_path_buf()))
+                .await
+                .expect("new_session must succeed");
+
+            let recorded = read_marker(&marker);
+            assert!(
+                recorded.contains("\"hook_event_name\":\"SessionStart\"")
+                    || recorded.contains("\"hook_event_name\": \"SessionStart\""),
+                "SessionStart hook must fire on new_session; stdin was: {recorded}"
+            );
+            assert!(
+                recorded.contains("startup"),
+                "new_session SessionStart source must be `startup`; stdin was: {recorded}"
+            );
+        }
+
+        /// On `load_session` the SessionStart hook fires with `source=resume`.
+        #[tokio::test]
+        #[serial]
+        async fn session_start_fires_on_load_session_with_resume_source() {
+            let _home = HomeGuard::new();
+            let project = TempDir::new().unwrap();
+            let marker = project.path().join("session_start.marker");
+            let settings = format!(
+                r#"{{ "hooks": {{ "SessionStart": [ {{ "hooks": [ {{ "type": "command", "command": "cat >> {}" }} ] }} ] }} }}"#,
+                marker.display()
+            );
+            fs::create_dir_all(project.path().join(".claude")).unwrap();
+            fs::write(
+                project.path().join(".claude").join("settings.json"),
+                settings,
+            )
+            .unwrap();
+
+            let server = create_test_server().await;
+            // Create the session (fires startup) and persist its record.
+            let created = server
+                .new_session(NewSessionRequest::new(project.path().to_path_buf()))
+                .await
+                .expect("new_session must succeed");
+
+            // A fresh server instance loads the persisted session from the same
+            // cwd: load_session must fire SessionStart with source=resume.
+            let server2 = create_test_server_with_mount(test_agent_tools_mount()).await;
+            let _ = fs::remove_file(&marker); // drop the startup record
+            server2
+                .load_session(agent_client_protocol::schema::LoadSessionRequest::new(
+                    created.session_id.clone(),
+                    project.path().to_path_buf(),
+                ))
+                .await
+                .expect("load_session must succeed");
+
+            let recorded = read_marker(&marker);
+            assert!(
+                recorded.contains("resume"),
+                "load_session SessionStart source must be `resume`; stdin was: {recorded}"
+            );
+        }
+
+        /// A UserPromptSubmit command hook exiting 2 blocks the prompt: the ACP
+        /// call returns the block error, and — because the block happens at the
+        /// turn's entry — no message is ever added to the session (proving the
+        /// model is never invoked).
+        #[tokio::test]
+        #[serial]
+        async fn user_prompt_submit_exit_2_blocks_prompt_and_skips_model() {
+            let _home = HomeGuard::new();
+            // Exit code 2 is Claude Code's "block" signal; stderr becomes the reason.
+            let project = project_with_settings(
+                r#"{ "hooks": { "UserPromptSubmit": [ { "hooks": [ { "type": "command", "command": "echo policy violation >&2; exit 2" } ] } ] } }"#,
+            );
+
+            let server = create_test_server().await;
+            let created = server
+                .new_session(NewSessionRequest::new(project.path().to_path_buf()))
+                .await
+                .expect("new_session must succeed");
+
+            let result = server
+                .prompt(text_prompt(created.session_id.clone(), "do the thing"))
+                .await;
+
+            let err = result.expect_err("a blocking UserPromptSubmit hook must fail the prompt");
+            assert!(
+                err.message.to_lowercase().contains("policy violation"),
+                "the block reason must reach the client; got: {}",
+                err.message
+            );
+
+            // The model is never invoked: a block at the entry seam means the
+            // user prompt is never translated/added to the session.
+            let texts = session_message_texts(&server, &created.session_id).await;
+            assert!(
+                !texts.iter().any(|t| t.contains("do the thing")),
+                "a blocked prompt must not add the user message to the session; got: {texts:?}"
+            );
+        }
+
+        /// A UserPromptSubmit hook returning `additionalContext` prepends that
+        /// context to the prompt the model sees: the injected text lands in the
+        /// session's message history ahead of the user's own prompt.
+        #[tokio::test]
+        #[serial]
+        async fn user_prompt_submit_additional_context_prepends_to_prompt() {
+            let _home = HomeGuard::new();
+            // Exit 0 with a JSON body carrying additionalContext on stdout: the
+            // command handler parses it into an AllowWithContext decision.
+            let project = project_with_settings(
+                r#"{ "hooks": { "UserPromptSubmit": [ { "hooks": [ { "type": "command", "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"INJECTED_CONTEXT_MARKER\"}}'" } ] } ] } }"#,
+            );
+
+            let server = create_test_server().await;
+            let created = server
+                .new_session(NewSessionRequest::new(project.path().to_path_buf()))
+                .await
+                .expect("new_session must succeed");
+
+            // The prompt errors at generation (no model loaded), but the hook
+            // runs and the messages are added BEFORE generation — so the session
+            // history records the injected context regardless.
+            let _ = server
+                .prompt(text_prompt(created.session_id.clone(), "user question"))
+                .await;
+
+            let texts = session_message_texts(&server, &created.session_id).await;
+            let injected = texts
+                .iter()
+                .position(|t| t.contains("INJECTED_CONTEXT_MARKER"));
+            let user = texts.iter().position(|t| t.contains("user question"));
+            assert!(
+                injected.is_some(),
+                "additionalContext must be injected into the prompt the model sees; got: {texts:?}"
+            );
+            if let (Some(i), Some(u)) = (injected, user) {
+                assert!(
+                    i <= u,
+                    "injected context must be prepended ahead of the user prompt; got: {texts:?}"
+                );
+            }
+        }
+
+        /// A Stop hook returning `decision:block` (=> ShouldContinue) annotates
+        /// the response meta with `hook_should_continue=true`. Driven through the
+        /// `apply_stop_hooks` seam `prompt` fires at its return.
+        #[tokio::test]
+        #[serial]
+        async fn stop_hook_block_annotates_should_continue_meta() {
+            let _home = HomeGuard::new();
+            // Exit 0 with a JSON body that decides `block` for Stop: a Stop
+            // "block" means "don't stop", i.e. ShouldContinue.
+            let project = project_with_settings(
+                r#"{ "hooks": { "Stop": [ { "hooks": [ { "type": "command", "command": "echo '{\"decision\":\"block\",\"reason\":\"tests still failing\"}'" } ] } ] } }"#,
+            );
+
+            let server = create_test_server().await;
+            let created = server
+                .new_session(NewSessionRequest::new(project.path().to_path_buf()))
+                .await
+                .expect("new_session must succeed");
+
+            let response = PromptResponse::new(StopReason::EndTurn);
+            let annotated = server.apply_stop_hooks(&created.session_id, response).await;
+
+            let meta = annotated
+                .meta
+                .as_ref()
+                .expect("a ShouldContinue Stop hook must annotate the response meta");
+            assert_eq!(
+                meta.get("hook_should_continue"),
+                Some(&serde_json::Value::Bool(true)),
+                "Stop `block` must set hook_should_continue=true; meta was: {meta:?}"
+            );
+            assert_eq!(
+                meta.get("hook_reason"),
+                Some(&serde_json::Value::String(
+                    "tests still failing".to_string()
+                )),
+                "the Stop reason must be carried on the meta"
+            );
+        }
+
+        /// A session whose cwd has no `.claude` settings behaves exactly as
+        /// before: no hooks fire, the prompt entry seam returns the request
+        /// unchanged, and the Stop seam returns the response unchanged.
+        #[tokio::test]
+        #[serial]
+        async fn session_without_claude_settings_has_no_hook_overhead() {
+            let _home = HomeGuard::new();
+            // A bare cwd with no `.claude` directory at all.
+            let project = TempDir::new().unwrap();
+
+            let server = create_test_server().await;
+            let created = server
+                .new_session(NewSessionRequest::new(project.path().to_path_buf()))
+                .await
+                .expect("new_session must succeed");
+
+            // The Stop seam is a no-op: the response comes back untouched.
+            let response = PromptResponse::new(StopReason::EndTurn);
+            let unchanged = server.apply_stop_hooks(&created.session_id, response).await;
+            assert!(
+                unchanged.meta.is_none()
+                    || !unchanged
+                        .meta
+                        .as_ref()
+                        .unwrap()
+                        .contains_key("hook_should_continue"),
+                "a hook-free session must not annotate the Stop response"
+            );
+
+            // The hooks entry exists (built once at session start) but carries no
+            // registrations, so firing matches nothing.
+            assert!(
+                server
+                    .session_hooks
+                    .for_session(&created.session_id)
+                    .await
+                    .is_some(),
+                "a session-start always builds a (possibly empty) hook agent"
+            );
+        }
+
+        /// A command hook's JSON stdin carries the session's `transcript_path`
+        /// — the per-session `raw.jsonl` the server wires at `new_session` — so
+        /// a hook can read the transcript, matching Claude Code's hook contract.
+        #[tokio::test]
+        #[serial]
+        async fn command_hook_input_carries_transcript_path() {
+            let _home = HomeGuard::new();
+            let project = TempDir::new().unwrap();
+            let marker = project.path().join("session_start.marker");
+            let settings = format!(
+                r#"{{ "hooks": {{ "SessionStart": [ {{ "hooks": [ {{ "type": "command", "command": "cat >> {}" }} ] }} ] }} }}"#,
+                marker.display()
+            );
+            fs::create_dir_all(project.path().join(".claude")).unwrap();
+            fs::write(
+                project.path().join(".claude").join("settings.json"),
+                settings,
+            )
+            .unwrap();
+
+            let server = create_test_server().await;
+            let created = server
+                .new_session(NewSessionRequest::new(project.path().to_path_buf()))
+                .await
+                .expect("new_session must succeed");
+
+            // The transcript path the server wires for this session is the exact
+            // `raw.jsonl` resolved from the session ULID; the command hook's
+            // stdin must echo that path so a hook can read the transcript.
+            let expected =
+                agent_client_protocol_extras::raw_transcript_path(created.session_id.0.as_ref())
+                    .expect("transcript path resolves for the new session")
+                    .display()
+                    .to_string();
+
+            let recorded = read_marker(&marker);
+            assert!(
+                recorded.contains(&expected),
+                "command-hook stdin must carry the session transcript path `{expected}`; stdin was: {recorded}"
+            );
+        }
+
+        /// Read a hook marker file, returning empty string if it was never
+        /// written (the hook never fired).
+        fn read_marker(marker: &Path) -> String {
+            fs::read_to_string(marker).unwrap_or_default()
+        }
+    }
+
+    /// End-to-end acceptance tests proving the whole hook path works against
+    /// **real** `.claude/settings.json` (and `.claude/settings.local.json`)
+    /// files, driven entirely by the server's own per-session registration
+    /// loader — never a hand-built [`SessionHookAgent`].
+    ///
+    /// Where [`hook_lifecycle`](super::hook_lifecycle) exercises the
+    /// session/prompt/stop seams and [`tool_dispatch_hooks`] drives the tool
+    /// seam with scripted in-memory hooks, this module closes the loop: it
+    /// places command hooks in real settings files in a session cwd (and a
+    /// temp `HOME` for the user level), starts a session so the server loads
+    /// those settings, then fires the tool-dispatch seam through the *loaded*
+    /// registrations via [`AcpServer::for_session`]. It also covers the
+    /// `disableAllHooks` off-switch, settings-file precedence (a user-level
+    /// HOME-override hook AND a project hook both fire), and the
+    /// `settings.local.json` chain link.
+    ///
+    /// All hooks are `type: command` shell hooks, so the model is never loaded
+    /// and no GPU is needed.
+    mod hook_e2e {
+        use super::*;
+        use crate::acp::hooks::SessionHookAgent;
+        use agent_client_protocol::schema::{NewSessionRequest, SessionId};
+        use std::fs;
+        use std::path::Path;
+        use std::sync::Arc;
+        use tempfile::TempDir;
+
+        /// Point `HOME` at a temp dir so the user-level
+        /// `~/.claude/settings.json` is hermetic — a real home directory's
+        /// hooks must not bleed into these tests. Optionally seeds a user-level
+        /// settings file. Restores the previous `HOME` on drop. Use only from a
+        /// `#[serial]` test (it mutates a process-global env var).
+        struct HomeGuard {
+            previous: Option<String>,
+            home: TempDir,
+        }
+
+        impl HomeGuard {
+            fn new() -> Self {
+                let previous = std::env::var("HOME").ok();
+                let home = TempDir::new().unwrap();
+                fs::create_dir_all(home.path().join(".claude")).unwrap();
+                std::env::set_var("HOME", home.path());
+                Self { previous, home }
+            }
+
+            /// Write the user-level `~/.claude/settings.json`.
+            fn write_user_settings(&self, contents: &str) {
+                fs::write(
+                    self.home.path().join(".claude").join("settings.json"),
+                    contents,
+                )
+                .unwrap();
+            }
+        }
+
+        impl Drop for HomeGuard {
+            fn drop(&mut self) {
+                match &self.previous {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+        }
+
+        /// Write `contents` to `<dir>/.claude/<file>`, creating `.claude`.
+        fn write_claude_file(dir: &TempDir, file: &str, contents: &str) {
+            let claude = dir.path().join(".claude");
+            fs::create_dir_all(&claude).unwrap();
+            fs::write(claude.join(file), contents).unwrap();
+        }
+
+        /// Start a session in `cwd` and return the server (Arc) and ACP id, so
+        /// the server has loaded `cwd`'s `.claude` settings into its
+        /// per-session registrations.
+        async fn server_session_in(cwd: &Path) -> (Arc<AcpServer>, SessionId) {
+            let server = Arc::new(create_test_server().await);
+            let created = server
+                .new_session(NewSessionRequest::new(cwd.to_path_buf()))
+                .await
+                .expect("new_session must succeed");
+            (server, created.session_id)
+        }
+
+        /// The loaded [`SessionHookAgent`] for a started session — the
+        /// registrations the server built from the cwd's real settings chain.
+        async fn loaded_hooks(server: &AcpServer, session_id: &SessionId) -> Arc<SessionHookAgent> {
+            server
+                .session_hooks
+                .for_session(session_id)
+                .await
+                .expect("a started session always has a (possibly empty) hook agent")
+        }
+
+        fn tool_call(name: &str, args: serde_json::Value) -> crate::types::ToolCall {
+            crate::types::ToolCall {
+                id: crate::types::ids::ToolCallId::new(),
+                name: name.to_string(),
+                arguments: args,
+            }
+        }
+
+        /// E2E: a PreToolUse `deny` hook in a real `.claude/settings.json`,
+        /// loaded by the server and matched against the llama tool name
+        /// `fs_write`, prevents the scripted tool call from dispatching — the
+        /// model receives the deny reason as the tool result.
+        ///
+        /// The command hook returns `permissionDecision: deny` via JSON stdout,
+        /// matching Claude Code's PreToolUse contract.
+        #[tokio::test]
+        #[serial]
+        async fn pre_tool_use_deny_from_settings_file_blocks_scripted_tool_call() {
+            let _state = StateDirGuard::new();
+            let _home = HomeGuard::new();
+            let project = TempDir::new().unwrap();
+            // A real PreToolUse command hook matching the llama tool name
+            // `fs_write` that denies via the documented JSON-stdout contract.
+            write_claude_file(
+                &project,
+                "settings.json",
+                r#"{ "hooks": { "PreToolUse": [ { "matcher": "fs_write", "hooks": [ { "type": "command", "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"policy forbids fs_write\"}}'" } ] } ] } }"#,
+            );
+
+            let (server, session_id) = server_session_in(project.path()).await;
+            let acp_session = server
+                .get_session_by_id(&session_id)
+                .await
+                .expect("session must exist");
+            let hooks = loaded_hooks(&server, &session_id).await;
+
+            let outcome = server
+                .process_tool_call(
+                    tool_call("fs_write", serde_json::json!({"path": "/etc/passwd"})),
+                    &acp_session,
+                    &session_id,
+                    Some(&hooks),
+                )
+                .await
+                .expect("process_tool_call must not error");
+
+            assert!(
+                !outcome.failed,
+                "a settings-file deny is informed forward progress, not a runaway-guard failure"
+            );
+            assert_eq!(
+                outcome.dispatched_input,
+                serde_json::Value::Null,
+                "a denied call must never dispatch — fs_write must not run"
+            );
+            let feedback = outcome
+                .model_feedback
+                .expect("deny must feed a tool result back to the model");
+            assert!(
+                feedback.contains("policy forbids fs_write"),
+                "the model must see the settings-file deny reason; got {feedback:?}"
+            );
+        }
+
+        /// E2E: a PostToolUse command hook in a real `.claude/settings.json`
+        /// returns `additionalContext`, and that context reaches the model
+        /// after a successful tool call. Uses the in-process `echo` agent tool,
+        /// which really executes (no model needed).
+        #[tokio::test]
+        #[serial]
+        async fn post_tool_use_additional_context_from_settings_file_reaches_model() {
+            let _state = StateDirGuard::new();
+            let _home = HomeGuard::new();
+            let project = TempDir::new().unwrap();
+            write_claude_file(
+                &project,
+                "settings.json",
+                r#"{ "hooks": { "PostToolUse": [ { "matcher": "echo", "hooks": [ { "type": "command", "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"POST_TOOL_CONTEXT_MARKER\"}}'" } ] } ] } }"#,
+            );
+
+            let (server, session_id) = server_session_in(project.path()).await;
+            let acp_session = server
+                .get_session_by_id(&session_id)
+                .await
+                .expect("session must exist");
+            let hooks = loaded_hooks(&server, &session_id).await;
+
+            let outcome = server
+                .process_tool_call(
+                    tool_call("echo", serde_json::json!({"message": "hi"})),
+                    &acp_session,
+                    &session_id,
+                    Some(&hooks),
+                )
+                .await
+                .expect("process_tool_call must not error");
+
+            assert!(!outcome.failed, "echo must succeed");
+            let feedback = outcome
+                .model_feedback
+                .expect("a successful call feeds its result back to the model");
+            assert!(
+                feedback.contains("Echo: hi"),
+                "the model must see the tool result; got {feedback:?}"
+            );
+            assert!(
+                feedback.contains("POST_TOOL_CONTEXT_MARKER"),
+                "PostToolUse additionalContext from the settings file must reach the model; got {feedback:?}"
+            );
+        }
+
+        /// E2E: `disableAllHooks: true` in the settings chain disables
+        /// everything end-to-end. With the flag set, a session's loaded
+        /// registrations are empty even though the same file declares a
+        /// PreToolUse deny — so the tool dispatches normally.
+        #[tokio::test]
+        #[serial]
+        async fn disable_all_hooks_disables_everything_end_to_end() {
+            let _state = StateDirGuard::new();
+            let _home = HomeGuard::new();
+            let project = TempDir::new().unwrap();
+            // A would-be deny hook, neutralized by the hard off-switch.
+            write_claude_file(
+                &project,
+                "settings.json",
+                r#"{ "disableAllHooks": true, "hooks": { "PreToolUse": [ { "matcher": "echo", "hooks": [ { "type": "command", "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"should never fire\"}}'" } ] } ] } }"#,
+            );
+
+            let (server, session_id) = server_session_in(project.path()).await;
+            let acp_session = server
+                .get_session_by_id(&session_id)
+                .await
+                .expect("session must exist");
+            let hooks = loaded_hooks(&server, &session_id).await;
+
+            let outcome = server
+                .process_tool_call(
+                    tool_call("echo", serde_json::json!({"message": "hi"})),
+                    &acp_session,
+                    &session_id,
+                    Some(&hooks),
+                )
+                .await
+                .expect("process_tool_call must not error");
+
+            // The deny never fired: echo dispatched and succeeded.
+            assert!(
+                !outcome.failed,
+                "disableAllHooks must neutralize the PreToolUse deny; echo should have run"
+            );
+            assert_ne!(
+                outcome.dispatched_input,
+                serde_json::Value::Null,
+                "disableAllHooks must let the tool dispatch normally"
+            );
+            let feedback = outcome.model_feedback.expect("echo feeds its result back");
+            assert!(
+                feedback.contains("Echo: hi"),
+                "with hooks disabled, the tool runs; got {feedback:?}"
+            );
+            assert!(
+                !feedback.contains("should never fire"),
+                "disableAllHooks must suppress the deny reason entirely; got {feedback:?}"
+            );
+        }
+
+        /// E2E precedence: a user-level (HOME-override) `~/.claude/settings.json`
+        /// hook AND a project-level `.claude/settings.json` hook for the same
+        /// event both fire. Both PreToolUse command hooks append a distinct
+        /// marker to a shared file; after one tool call, both markers are
+        /// present, proving the user → project additive merge.
+        #[tokio::test]
+        #[serial]
+        async fn user_and_project_pre_tool_use_hooks_both_fire() {
+            let _state = StateDirGuard::new();
+            let home = HomeGuard::new();
+            let project = TempDir::new().unwrap();
+            // A shared marker file both hooks append to (in the project dir so
+            // it outlives the hook subprocess).
+            let marker = project.path().join("precedence.marker");
+
+            // User-level hook: appends USER_HOOK.
+            home.write_user_settings(&format!(
+                r#"{{ "hooks": {{ "PreToolUse": [ {{ "hooks": [ {{ "type": "command", "command": "echo USER_HOOK >> {} ; echo '{{}}'" }} ] }} ] }} }}"#,
+                marker.display()
+            ));
+            // Project-level hook: appends PROJECT_HOOK.
+            write_claude_file(
+                &project,
+                "settings.json",
+                &format!(
+                    r#"{{ "hooks": {{ "PreToolUse": [ {{ "hooks": [ {{ "type": "command", "command": "echo PROJECT_HOOK >> {} ; echo '{{}}'" }} ] }} ] }} }}"#,
+                    marker.display()
+                ),
+            );
+
+            let (server, session_id) = server_session_in(project.path()).await;
+            let acp_session = server
+                .get_session_by_id(&session_id)
+                .await
+                .expect("session must exist");
+            let hooks = loaded_hooks(&server, &session_id).await;
+
+            let _ = server
+                .process_tool_call(
+                    tool_call("echo", serde_json::json!({"message": "hi"})),
+                    &acp_session,
+                    &session_id,
+                    Some(&hooks),
+                )
+                .await
+                .expect("process_tool_call must not error");
+
+            let recorded = fs::read_to_string(&marker).unwrap_or_default();
+            assert!(
+                recorded.contains("USER_HOOK"),
+                "the user-level HOME-override hook must fire; marker was: {recorded:?}"
+            );
+            assert!(
+                recorded.contains("PROJECT_HOOK"),
+                "the project-level hook must fire; marker was: {recorded:?}"
+            );
+        }
+
+        /// E2E: a hook declared only in `.claude/settings.local.json` (the
+        /// highest-precedence chain link) is loaded and fires — proving the
+        /// local settings file is part of the loaded chain end-to-end.
+        #[tokio::test]
+        #[serial]
+        async fn settings_local_json_pre_tool_use_deny_blocks_call() {
+            let _state = StateDirGuard::new();
+            let _home = HomeGuard::new();
+            let project = TempDir::new().unwrap();
+            // Only settings.local.json carries the hook — no settings.json.
+            write_claude_file(
+                &project,
+                "settings.local.json",
+                r#"{ "hooks": { "PreToolUse": [ { "matcher": "fs_read", "hooks": [ { "type": "command", "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"local override forbids fs_read\"}}'" } ] } ] } }"#,
+            );
+
+            let (server, session_id) = server_session_in(project.path()).await;
+            let acp_session = server
+                .get_session_by_id(&session_id)
+                .await
+                .expect("session must exist");
+            let hooks = loaded_hooks(&server, &session_id).await;
+
+            let outcome = server
+                .process_tool_call(
+                    tool_call("fs_read", serde_json::json!({"path": "/etc/hosts"})),
+                    &acp_session,
+                    &session_id,
+                    Some(&hooks),
+                )
+                .await
+                .expect("process_tool_call must not error");
+
+            assert!(
+                !outcome.failed,
+                "a settings.local.json deny is informed forward progress, not a runaway-guard \
+                 failure"
+            );
+            let feedback = outcome
+                .model_feedback
+                .expect("deny must feed a tool result back to the model");
+            assert!(
+                feedback.contains("local override forbids fs_read"),
+                "the settings.local.json deny reason must reach the model; got {feedback:?}"
+            );
+        }
     }
 }

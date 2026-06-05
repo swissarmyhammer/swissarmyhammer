@@ -6,11 +6,13 @@
 //! - PreToolUse `updatedInput` → AllowWithUpdatedInput
 //! - Stop `reason` → ShouldContinue
 
+use agent_client_protocol_extras::PreToolUseOutcome;
 use tokio::sync::broadcast;
 
 use crate::helpers;
 
-/// PreToolUse hookSpecificOutput.additionalContext → AllowWithContext via context channel.
+/// PreToolUse hookSpecificOutput.additionalContext → Proceed with context, fired
+/// synchronously at the dispatch seam.
 #[tokio::test]
 async fn pre_tool_use_additional_context() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -23,29 +25,17 @@ async fn pre_tool_use_additional_context() {
 
     let _session_id = helpers::init_session(&agent).await;
 
-    let (tx, rx) = broadcast::channel(16);
-    let (_forwarded_rx, _cancel_rx, mut context_rx) = agent.intercept_notifications(rx);
-
-    helpers::send_tool_completed_notifications(&tx, "test-session").await;
-
-    // Synchronize: wait for the hook script to finish before checking channel.
-    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
-    assert!(
-        captured.is_some(),
-        "PreToolUse hook should have been invoked"
-    );
-
-    // Hook already finished, so the channel message is already buffered.
-    let short = std::time::Duration::from_millis(200);
-    let ctx = tokio::time::timeout(short, context_rx.recv()).await;
-    assert!(
-        ctx.is_ok(),
-        "PreToolUse additionalContext should deliver via context channel"
-    );
-    assert!(
-        ctx.unwrap().unwrap().contains("extra info from hook"),
-        "Context should contain the additionalContext value"
-    );
+    let outcome = helpers::fire_pre_tool_use(&agent, "Bash").await;
+    match outcome {
+        PreToolUseOutcome::Proceed { context, .. } => assert!(
+            context
+                .as_deref()
+                .unwrap_or_default()
+                .contains("extra info from hook"),
+            "PreToolUse additionalContext should be surfaced; got {context:?}"
+        ),
+        other => panic!("expected Proceed with context, got {other:?}"),
+    }
 }
 
 /// UserPromptSubmit hookSpecificOutput.additionalContext → AllowWithContext → context injected.
@@ -75,7 +65,8 @@ async fn user_prompt_submit_additional_context() {
     );
 }
 
-/// PostToolUse hookSpecificOutput.additionalContext → AllowWithContext via context channel.
+/// PostToolUse hookSpecificOutput.additionalContext → context surfaced after a
+/// successful call at the dispatch seam.
 #[tokio::test]
 async fn post_tool_use_additional_context() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -88,32 +79,17 @@ async fn post_tool_use_additional_context() {
 
     let _session_id = helpers::init_session(&agent).await;
 
-    let (tx, rx) = broadcast::channel(16);
-    let (_forwarded_rx, _cancel_rx, mut context_rx) = agent.intercept_notifications(rx);
-
-    helpers::send_tool_completed_notifications(&tx, "test-session").await;
-
-    // Synchronize: wait for the hook script to finish before checking channel.
-    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
+    let ctx = helpers::fire_post_tool_use(&agent, "Bash").await;
     assert!(
-        captured.is_some(),
-        "PostToolUse hook should have been invoked"
-    );
-
-    // Hook already finished, so the channel message is already buffered.
-    let short = std::time::Duration::from_millis(200);
-    let ctx = tokio::time::timeout(short, context_rx.recv()).await;
-    assert!(
-        ctx.is_ok(),
-        "PostToolUse additionalContext should deliver via context channel"
-    );
-    assert!(
-        ctx.unwrap().unwrap().contains("post-tool context"),
-        "Context should contain the additionalContext value"
+        ctx.as_deref()
+            .unwrap_or_default()
+            .contains("post-tool context"),
+        "PostToolUse additionalContext should be surfaced; got {ctx:?}"
     );
 }
 
-/// PostToolUseFailure hookSpecificOutput.additionalContext → AllowWithContext via context channel.
+/// PostToolUseFailure hookSpecificOutput.additionalContext → context surfaced
+/// after a failed call at the dispatch seam.
 #[tokio::test]
 async fn post_tool_use_failure_additional_context() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -127,28 +103,12 @@ async fn post_tool_use_failure_additional_context() {
 
     let _session_id = helpers::init_session(&agent).await;
 
-    let (tx, rx) = broadcast::channel(16);
-    let (_forwarded_rx, _cancel_rx, mut context_rx) = agent.intercept_notifications(rx);
-
-    helpers::send_tool_failed_notifications(&tx, "test-session").await;
-
-    // Synchronize: wait for the hook script to finish before checking channel.
-    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
+    let ctx = helpers::fire_post_tool_use_failure(&agent, "Bash").await;
     assert!(
-        captured.is_some(),
-        "PostToolUseFailure hook should have been invoked"
-    );
-
-    // Hook already finished, so the channel message is already buffered.
-    let short = std::time::Duration::from_millis(200);
-    let ctx = tokio::time::timeout(short, context_rx.recv()).await;
-    assert!(
-        ctx.is_ok(),
-        "PostToolUseFailure additionalContext should deliver via context channel"
-    );
-    assert!(
-        ctx.unwrap().unwrap().contains("failure context"),
-        "Context should contain the additionalContext value"
+        ctx.as_deref()
+            .unwrap_or_default()
+            .contains("failure context"),
+        "PostToolUseFailure additionalContext should be surfaced; got {ctx:?}"
     );
 }
 
@@ -246,7 +206,8 @@ async fn stop_specific_reason_should_continue() {
     );
 }
 
-/// PreToolUse hookSpecificOutput.permissionDecision:deny → Block (no-op in notification pipeline).
+/// PreToolUse hookSpecificOutput.permissionDecision:deny → Deny at the dispatch
+/// seam (true blocking — the tool never runs).
 #[tokio::test]
 async fn pre_tool_use_permission_decision_deny() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -259,24 +220,18 @@ async fn pre_tool_use_permission_decision_deny() {
 
     let _session_id = helpers::init_session(&agent).await;
 
-    let (tx, rx) = broadcast::channel(16);
-    let (_forwarded_rx, _cancel_rx, _context_rx) = agent.intercept_notifications(rx);
-
-    helpers::send_tool_completed_notifications(&tx, "test-session").await;
-
-    // Block is silently ignored in notification pipeline (tool already initiated).
-    // Verify hook ran.
-    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
-    assert!(
-        captured.is_some(),
-        "PreToolUse hook should have been invoked"
-    );
-    let json: serde_json::Value =
-        serde_json::from_str(&captured.unwrap()).expect("Captured stdin should be valid JSON");
-    assert_eq!(json["hook_event_name"], "PreToolUse");
+    let outcome = helpers::fire_pre_tool_use(&agent, "Bash").await;
+    match outcome {
+        PreToolUseOutcome::Deny { reason } => assert!(
+            reason.contains("tool not permitted"),
+            "deny reason should be surfaced; got {reason:?}"
+        ),
+        other => panic!("expected Deny, got {other:?}"),
+    }
 }
 
-/// PreToolUse hookSpecificOutput.updatedInput → AllowWithUpdatedInput (logged as Allow in pipeline).
+/// PreToolUse hookSpecificOutput.updatedInput → Proceed carrying the rewritten
+/// input, applied at the dispatch seam.
 #[tokio::test]
 async fn pre_tool_use_updated_input() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -290,19 +245,13 @@ async fn pre_tool_use_updated_input() {
 
     let _session_id = helpers::init_session(&agent).await;
 
-    let (tx, rx) = broadcast::channel(16);
-    let (_forwarded_rx, _cancel_rx, _context_rx) = agent.intercept_notifications(rx);
-
-    helpers::send_tool_completed_notifications(&tx, "test-session").await;
-
-    // AllowWithUpdatedInput is logged and treated as Allow in notification pipeline.
-    // Verify hook ran.
-    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
-    assert!(
-        captured.is_some(),
-        "PreToolUse hook should have been invoked"
-    );
-    let json: serde_json::Value =
-        serde_json::from_str(&captured.unwrap()).expect("Captured stdin should be valid JSON");
-    assert_eq!(json["hook_event_name"], "PreToolUse");
+    let outcome = helpers::fire_pre_tool_use(&agent, "Bash").await;
+    match outcome {
+        PreToolUseOutcome::Proceed { updated_input, .. } => assert_eq!(
+            updated_input,
+            Some(serde_json::json!({"modified": true})),
+            "updatedInput should rewrite the dispatched arguments"
+        ),
+        other => panic!("expected Proceed with updated_input, got {other:?}"),
+    }
 }
