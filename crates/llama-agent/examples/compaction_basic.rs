@@ -47,6 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         queue_config: QueueConfig::default(),
         mcp_servers: vec![],
         parallel_execution_config: ParallelConfig::default(),
+        tool_execution_config: Default::default(),
     };
 
     let agent = AgentServer::initialize(config).await?;

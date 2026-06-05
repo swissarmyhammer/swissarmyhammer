@@ -505,12 +505,16 @@ pub(super) async fn process_child_output_with_limits(
     Ok((exit_status, setup.output_buffer, line_count))
 }
 
-/// Validate and prepare working directory
+/// Validate and prepare working directory.
+///
+/// When the caller does not specify a `working_directory`, the command runs in
+/// `default_dir` — the session working directory (the board dir) — never the
+/// process CWD, which is `/` for the bundled GUI app.
 pub(super) fn prepare_working_directory(
     working_directory: Option<PathBuf>,
+    default_dir: PathBuf,
 ) -> Result<PathBuf, ShellError> {
-    let work_dir = working_directory
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let work_dir = working_directory.unwrap_or(default_dir);
 
     if !work_dir.exists() {
         return Err(ShellError::WorkingDirectoryError {
@@ -623,9 +627,10 @@ pub(super) fn format_execution_result(
 pub(super) fn spawn_shell_command(
     command: &str,
     working_directory: Option<PathBuf>,
+    default_dir: PathBuf,
     environment: Option<&std::collections::HashMap<String, String>>,
 ) -> Result<(AsyncProcessGuard, PathBuf), ShellError> {
-    let work_dir = prepare_working_directory(working_directory)?;
+    let work_dir = prepare_working_directory(working_directory, default_dir)?;
     let cmd = prepare_shell_command(command, &work_dir, environment);
     let child = spawn_command_process(cmd, command, &work_dir)?;
     let process_guard = AsyncProcessGuard::new(child, command.to_string());
@@ -967,7 +972,8 @@ mod tests {
     #[test]
     fn test_prepare_working_directory_with_existing_dir() {
         let tmp = tempfile::tempdir().unwrap();
-        let result = prepare_working_directory(Some(tmp.path().to_path_buf()));
+        let result =
+            prepare_working_directory(Some(tmp.path().to_path_buf()), PathBuf::from("/unused"));
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), tmp.path());
     }
@@ -975,20 +981,22 @@ mod tests {
     /// Test that `prepare_working_directory` returns an error for a non-existent directory.
     #[test]
     fn test_prepare_working_directory_nonexistent_dir() {
-        let result =
-            prepare_working_directory(Some(PathBuf::from("/nonexistent/path/that/does/not/exist")));
+        let result = prepare_working_directory(
+            Some(PathBuf::from("/nonexistent/path/that/does/not/exist")),
+            PathBuf::from("/unused"),
+        );
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(err, ShellError::WorkingDirectoryError { .. }));
     }
 
-    /// Test that `prepare_working_directory` falls back to current dir when None.
+    /// Test that `prepare_working_directory` falls back to the session default when None.
     #[test]
-    fn test_prepare_working_directory_none_uses_current_dir() {
-        let result = prepare_working_directory(None);
+    fn test_prepare_working_directory_none_uses_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = prepare_working_directory(None, tmp.path().to_path_buf());
         assert!(result.is_ok());
-        // Should return some existing directory (cwd or ".")
-        assert!(result.unwrap().exists());
+        assert_eq!(result.unwrap(), tmp.path());
     }
 
     // -----------------------------------------------------------------------
@@ -1053,7 +1061,12 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_shell_command_success() {
         let tmp = tempfile::tempdir().unwrap();
-        let result = spawn_shell_command("echo hello", Some(tmp.path().to_path_buf()), None);
+        let result = spawn_shell_command(
+            "echo hello",
+            Some(tmp.path().to_path_buf()),
+            PathBuf::from("/unused"),
+            None,
+        );
         assert!(result.is_ok());
         let (mut guard, work_dir) = result.unwrap();
         assert_eq!(work_dir, tmp.path());
@@ -1067,8 +1080,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mut env = std::collections::HashMap::new();
         env.insert("TEST_KEY".to_string(), "test_value".to_string());
-        let result =
-            spawn_shell_command("echo $TEST_KEY", Some(tmp.path().to_path_buf()), Some(&env));
+        let result = spawn_shell_command(
+            "echo $TEST_KEY",
+            Some(tmp.path().to_path_buf()),
+            PathBuf::from("/unused"),
+            Some(&env),
+        );
         assert!(result.is_ok());
         let (mut guard, _) = result.unwrap();
         let _ = guard.force_kill().await;
@@ -1077,8 +1094,12 @@ mod tests {
     /// Test that `spawn_shell_command` fails for a non-existent working directory.
     #[test]
     fn test_spawn_shell_command_bad_working_dir() {
-        let result =
-            spawn_shell_command("echo hello", Some(PathBuf::from("/nonexistent/dir")), None);
+        let result = spawn_shell_command(
+            "echo hello",
+            Some(PathBuf::from("/nonexistent/dir")),
+            PathBuf::from("/unused"),
+            None,
+        );
         assert!(result.is_err());
     }
 
@@ -1177,9 +1198,13 @@ mod tests {
     #[tokio::test]
     async fn test_execute_with_guard_captures_output() {
         let tmp = tempfile::tempdir().unwrap();
-        let (mut guard, work_dir) =
-            spawn_shell_command("echo guard_test", Some(tmp.path().to_path_buf()), None)
-                .expect("spawn failed");
+        let (mut guard, work_dir) = spawn_shell_command(
+            "echo guard_test",
+            Some(tmp.path().to_path_buf()),
+            PathBuf::from("/unused"),
+            None,
+        )
+        .expect("spawn failed");
 
         let result =
             execute_with_guard(&mut guard, 99, "echo guard_test".to_string(), work_dir).await;
@@ -1198,6 +1223,7 @@ mod tests {
         let (mut guard, work_dir) = spawn_shell_command(
             "echo error_output >&2",
             Some(tmp.path().to_path_buf()),
+            PathBuf::from("/unused"),
             None,
         )
         .expect("spawn failed");
@@ -1219,9 +1245,13 @@ mod tests {
     #[tokio::test]
     async fn test_execute_with_guard_nonzero_exit() {
         let tmp = tempfile::tempdir().unwrap();
-        let (mut guard, work_dir) =
-            spawn_shell_command("exit 42", Some(tmp.path().to_path_buf()), None)
-                .expect("spawn failed");
+        let (mut guard, work_dir) = spawn_shell_command(
+            "exit 42",
+            Some(tmp.path().to_path_buf()),
+            PathBuf::from("/unused"),
+            None,
+        )
+        .expect("spawn failed");
 
         let result = execute_with_guard(&mut guard, 101, "exit 42".to_string(), work_dir).await;
 
@@ -1234,9 +1264,13 @@ mod tests {
     #[tokio::test]
     async fn test_execute_with_guard_no_child() {
         let tmp = tempfile::tempdir().unwrap();
-        let (mut guard, work_dir) =
-            spawn_shell_command("echo hello", Some(tmp.path().to_path_buf()), None)
-                .expect("spawn failed");
+        let (mut guard, work_dir) = spawn_shell_command(
+            "echo hello",
+            Some(tmp.path().to_path_buf()),
+            PathBuf::from("/unused"),
+            None,
+        )
+        .expect("spawn failed");
 
         // Take the child away so the guard is empty
         let _ = guard.take_child();

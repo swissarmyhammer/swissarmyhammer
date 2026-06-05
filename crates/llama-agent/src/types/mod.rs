@@ -47,7 +47,7 @@ pub use generation::{FinishReason, GenerationRequest, GenerationResponse, Stoppi
 pub use tools::{
     AccessType, ConflictType, ParallelConfig, ParallelExecutionConfig, ParameterReference,
     ReferenceType, ResourceAccess, ResourceType, ToolCall, ToolConflict, ToolDefinition,
-    ToolResult,
+    ToolExecutionConfig, ToolResult,
 };
 
 // Re-export configuration types

@@ -14,7 +14,7 @@ use std::time::Duration;
 use crate::types::errors::{AgentError, MCPError, QueueError, SessionError};
 use crate::types::mcp::MCPServerConfig;
 use crate::types::sessions::CompactionConfig;
-use crate::types::tools::ParallelConfig;
+use crate::types::tools::{ParallelConfig, ToolExecutionConfig};
 
 /// Configuration for model loading and runtime parameters.
 ///
@@ -120,6 +120,10 @@ pub struct AgentConfig {
     pub mcp_servers: Vec<MCPServerConfig>,
     pub session_config: SessionConfig,
     pub parallel_execution_config: ParallelConfig,
+    /// Watchdog bounding every tool-call dispatch. `#[serde(default)]` keeps
+    /// configs serialized before this field existed loadable.
+    #[serde(default)]
+    pub tool_execution_config: ToolExecutionConfig,
 }
 
 impl AgentConfig {

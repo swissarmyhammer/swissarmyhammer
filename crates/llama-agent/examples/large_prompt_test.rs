@@ -51,6 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         mcp_servers: Vec::new(), // No MCP servers needed for this test
         session_config: SessionConfig::default(),
         parallel_execution_config: Default::default(),
+        tool_execution_config: Default::default(),
     };
 
     info!("Initializing AgentServer (this will load the Qwen3 model)...");

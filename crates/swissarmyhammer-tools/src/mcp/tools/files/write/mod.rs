@@ -129,7 +129,7 @@ impl WriteFileTool {
 /// Execute a file write operation
 pub async fn execute_write(
     arguments: serde_json::Map<String, serde_json::Value>,
-    _context: &ToolContext,
+    context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
     use crate::mcp::tools::files::shared_utils::ensure_directory_exists;
     use serde::Deserialize;
@@ -182,19 +182,13 @@ pub async fn execute_write(
         ));
     }
 
-    // Resolve to absolute path
+    // Resolve to absolute path against the session working directory (the board
+    // dir), never the process CWD.
     let path_buf = PathBuf::from(&request.file_path);
     let validated_path = if path_buf.is_absolute() {
         path_buf
     } else {
-        std::env::current_dir()
-            .map_err(|e| {
-                McpError::invalid_request(
-                    format!("Failed to get current working directory: {}", e),
-                    None,
-                )
-            })?
-            .join(path_buf)
+        context.session_root().join(path_buf)
     };
 
     // Check for path traversal attempts

@@ -103,6 +103,7 @@ fn unloaded_agent_config(model_dir: &TempDir, session_config: SessionConfig) -> 
         mcp_servers: Vec::new(),
         session_config,
         parallel_execution_config: ParallelConfig::default(),
+        tool_execution_config: Default::default(),
     }
 }
 
@@ -189,6 +190,7 @@ fn real_model_config() -> AgentConfig {
         mcp_servers: Vec::new(),
         session_config: SessionConfig::default(),
         parallel_execution_config: ParallelConfig::default(),
+        tool_execution_config: Default::default(),
         queue_config: QueueConfig::default(),
     }
 }

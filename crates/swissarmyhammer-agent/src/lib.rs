@@ -1129,6 +1129,7 @@ async fn get_or_init_llama_agent_server(
         session_config: llama_agent::types::SessionConfig::default(),
         mcp_servers,
         parallel_execution_config: llama_agent::types::ParallelConfig::default(),
+        tool_execution_config: llama_agent::types::ToolExecutionConfig::default(),
     };
 
     let agent_server = llama_agent::AgentServer::initialize(agent_config)

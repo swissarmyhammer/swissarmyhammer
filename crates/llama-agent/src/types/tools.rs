@@ -61,6 +61,34 @@ impl Default for ParallelConfig {
 /// Type alias for parallel execution configuration.
 pub type ParallelExecutionConfig = ParallelConfig;
 
+/// Configuration for the per-tool-call watchdog.
+///
+/// Every tool dispatch is bounded by [`ToolExecutionConfig::timeout`]. A tool
+/// handler that hangs (an unbounded filesystem walk, a stalled network call, a
+/// deadlock) would otherwise block the agentic loop indefinitely until the MCP
+/// transport tears the session down. The watchdog instead aborts the hung call
+/// and surfaces a structured error tool-result, so the loop fails gracefully
+/// and stays alive.
+///
+/// The default is deliberately well under the MCP transport's idle timeout so
+/// the loop fails *before* the session is closed out from under it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolExecutionConfig {
+    /// Maximum wall-clock duration a single tool-call attempt may run before it
+    /// is aborted and reported as a timeout error.
+    pub timeout: std::time::Duration,
+}
+
+impl Default for ToolExecutionConfig {
+    fn default() -> Self {
+        Self {
+            // Comfortably under the 300s MCP transport timeout so the watchdog
+            // wins the race and the loop reports a timeout rather than dying.
+            timeout: std::time::Duration::from_secs(60),
+        }
+    }
+}
+
 /// Type of access a tool requires to a resource.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AccessType {

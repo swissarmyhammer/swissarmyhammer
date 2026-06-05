@@ -449,6 +449,7 @@ pub fn create_minimal_config() -> AgentConfig {
             kv_cache_dir: None,
         },
         parallel_execution_config: ParallelConfig::default(),
+        tool_execution_config: Default::default(),
     }
 }
 
