@@ -309,11 +309,12 @@ impl HostDispatcher for CallbackHostBridge {
 /// Builds a real MCP server against an isolated temp working directory.
 ///
 /// The temp `work_dir` keeps the server's bootstrap from walking the real
-/// monorepo and gives the `files` tool a clean place to write. `agent_mode` is
-/// `true` so the unified `files` tool — the operation tool this test routes the
-/// callback's effect through — is registered and reachable for exposure.
+/// monorepo and gives the `files` tool a clean place to write. The bootstrap
+/// registers the full in-process tool set — including the unified `files` tool,
+/// the operation tool this test routes the callback's effect through — so it is
+/// reachable for exposure.
 async fn build_mcp_server(work_dir: &Path) -> McpServer {
-    McpServer::new_with_work_dir(PromptLibrary::new(), work_dir.to_path_buf(), None, true)
+    McpServer::new_with_work_dir(PromptLibrary::new(), work_dir.to_path_buf(), None)
         .await
         .expect("MCP server bootstrap should succeed")
 }

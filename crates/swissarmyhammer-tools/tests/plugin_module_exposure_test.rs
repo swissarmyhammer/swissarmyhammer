@@ -44,10 +44,10 @@ fn write_plugin(dir: &std::path::Path, body: &str) {
 /// The temp dir keeps `initialize_code_context` from walking the real
 /// monorepo, and gives the `files` tool a clean place to write.
 ///
-/// `agent_mode` is `true` so the full in-process tool set — including the
-/// unified `files` tool, which is an agent tool — is registered.
+/// The bootstrap registers the full in-process tool set — including the unified
+/// `files` tool, which is an agent tool.
 async fn build_mcp_server(work_dir: &std::path::Path) -> McpServer {
-    McpServer::new_with_work_dir(PromptLibrary::new(), work_dir.to_path_buf(), None, true)
+    McpServer::new_with_work_dir(PromptLibrary::new(), work_dir.to_path_buf(), None)
         .await
         .expect("MCP server bootstrap should succeed")
 }

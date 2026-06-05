@@ -101,11 +101,11 @@ const PROBE_PAYLOAD: &str = "e2e payload routed through operation _meta path sug
 /// Builds a real MCP server against an isolated temp working directory.
 ///
 /// The temp `work_dir` keeps the server's bootstrap from walking the real
-/// monorepo. `agent_mode` is `true` so the full in-process tool set — including
-/// the unified `files` tool, the operation tool under test — is registered,
-/// which is what makes the real `files` operation tool reachable for exposure.
+/// monorepo. The bootstrap registers the full in-process tool set — including
+/// the unified `files` tool, the operation tool under test — which is what makes
+/// the real `files` operation tool reachable for exposure.
 async fn build_mcp_server(work_dir: &Path) -> McpServer {
-    McpServer::new_with_work_dir(PromptLibrary::new(), work_dir.to_path_buf(), None, true)
+    McpServer::new_with_work_dir(PromptLibrary::new(), work_dir.to_path_buf(), None)
         .await
         .expect("MCP server bootstrap should succeed")
 }

@@ -232,10 +232,10 @@ async fn start_endpoint() -> Endpoint {
 /// Builds a real MCP server against an isolated temp working directory.
 ///
 /// The temp `work_dir` keeps the server's bootstrap from walking the real
-/// monorepo. `agent_mode` is `true` so the unified `files` tool is registered
-/// and reachable for exposure as the test's observation channel.
+/// monorepo. The bootstrap registers the unified `files` tool, which is
+/// reachable for exposure as the test's observation channel.
 async fn build_mcp_server(work_dir: &Path) -> McpServer {
-    McpServer::new_with_work_dir(PromptLibrary::new(), work_dir.to_path_buf(), None, true)
+    McpServer::new_with_work_dir(PromptLibrary::new(), work_dir.to_path_buf(), None)
         .await
         .expect("MCP server bootstrap should succeed")
 }

@@ -252,7 +252,7 @@ fn copy_dir_recursive(source: &Path, destination: &Path) {
 /// Panics if the MCP server bootstrap fails.
 #[allow(dead_code)]
 pub async fn build_mcp_server(work_dir: &Path) -> McpServer {
-    McpServer::new_with_work_dir(PromptLibrary::new(), work_dir.to_path_buf(), None, true)
+    McpServer::new_with_work_dir(PromptLibrary::new(), work_dir.to_path_buf(), None)
         .await
         .expect("MCP server bootstrap should succeed")
 }
