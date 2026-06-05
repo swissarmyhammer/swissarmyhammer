@@ -18,17 +18,17 @@ New deps in `crates/swissarmyhammer-kanban/Cargo.toml`:
 
 New file: `crates/swissarmyhammer-kanban/src/task/embedding_cache.rs` (registered as `mod embedding_cache;` in `crates/swissarmyhammer-kanban/src/task/mod.rs`).
 
-Storage location: derive from the board dir. `KanbanContext::root()` returns the `.kanban` directory (see `crates/swissarmyhammer-kanban/src/context.rs`). Put the sidecar at `<root>/search-cache.sqlite3` (sibling of `board.yaml`/`tasks/`). Add a `KanbanContext` path helper `pub fn search_cache_path(&self) -> PathBuf { self.root.join(\"search-cache.sqlite3\") }` next to the other path helpers (`board_path`, `tasks_dir`, …).
+Storage location: derive from the board dir. `KanbanContext::root()` returns the `.kanban` directory (see `crates/swissarmyhammer-kanban/src/context.rs`). Put the sidecar at `<root>/search-cache.sqlite3` (sibling of `board.yaml`/`tasks/`). Add a `KanbanContext` path helper `pub fn search_cache_path(&self) -> PathBuf { self.root.join("search-cache.sqlite3") }` next to the other path helpers (`board_path`, `tasks_dir`, …).
 
 Schema (created on open if absent):
 - `embeddings(task_id TEXT NOT NULL, content_hash TEXT NOT NULL, vector BLOB NOT NULL, PRIMARY KEY(task_id, content_hash))`.
 - `meta(key TEXT PRIMARY KEY, value TEXT)` storing the embedder model name (`Embedder::model_name`) and dimension. On open, if the stored model name or dim differs from the current embedder's, DROP/clear `embeddings` (self-healing invalidation) and rewrite the meta row.
 
 API (sync rusqlite behind a small struct; embedding calls are async via the `Embedder`):
-- `pub struct EmbeddingCache { conn: rusqlite::Connection }` with `open(path, model_name, dim) -> Result<Self>` (creates schema, runs model/dim invalidation). `open` MUST create the file and parent-safe schema when the path does not exist — this is the cold-start / fresh-clone rebuild path.
+- `pub struct EmbeddingCache { conn: rusqlite::Connection }` with `open(path, model_name, dim) -> Result<Self>` — creates the schema in WAL mode (`PRAGMA journal_mode=WAL`, so concurrent readers — GUI, MCP server, CLI — don't block the writer) and runs model/dim invalidation. `open` MUST create the file and schema when the path does not exist — this is the cold-start / fresh-clone rebuild path.
 - `pub fn get(&self, task_id: &str, content_hash: &str) -> Option<Vec<f32>>` (cache hit -> deserialize blob).
-- `pub fn put(&self, task_id: &str, content_hash: &str, vector: &[f32])` (serialize + upsert).
-- `content_hash` is computed by the caller from the task's embedded content (title+description+tags) — define a `pub fn content_hash(text: &str) -> String` helper here using a stable hash (e.g. `xxhash-rust` xxh3, already a workspace dep, or sha2). Document the exact input contract so the search-op card composes the same string.
+- `pub fn put(&self, task_id: &str, content_hash: &str, vector: &[f32])` — serialize + upsert, AND delete any other rows for the same `task_id` (different `content_hash`) so the cache holds at most ONE current vector per task. Without this, every task edit leaves a dead row and the cache grows unbounded.
+- Single canonical embed-text composition lives HERE so hashing and embedding can never drift: `pub fn task_embedding_text(title: &str, description: &str) -> String` (embed text = `title` + "\n" + `description`). Tags are NOT embedded — they are a lexical-only Doc field in the search-op card, so a tag-only edit must not change the hash or force a re-embed. `pub fn content_hash(text: &str) -> String` hashes that same string with a stable hash (xxh3 / sha2; even a machine-local non-portable hash like `DefaultHasher` is acceptable since the cache is gitignored and rebuilt per machine). The search-op card MUST call `task_embedding_text` once and use its output for BOTH `content_hash` and the embedder input.
 
 Lazy-fill belongs to the search-op card (it owns the `Embedder` and the corpus); THIS card delivers the store + invalidation + helpers, fully unit/integration tested without needing a real model (insert/get/put/hash and the model/dim-mismatch invalidation can all be tested with synthetic vectors and fake model-name/dim args).
 
@@ -42,16 +42,18 @@ The cache lives INSIDE `.kanban/`, which is only PARTIALLY tracked — the task 
 
 ## Acceptance Criteria
 - [ ] `crates/swissarmyhammer-kanban/Cargo.toml` gains `rusqlite`, `swissarmyhammer-search`, `swissarmyhammer-embedding` deps; `cargo build -p swissarmyhammer-kanban` compiles.
-- [ ] `EmbeddingCache::open` creates the sidecar at `<root>/search-cache.sqlite3` with the `embeddings` + `meta` tables.
+- [ ] `EmbeddingCache::open` creates the sidecar at `<root>/search-cache.sqlite3` in WAL mode with the `embeddings` + `meta` tables.
 - [ ] `put` then `get` for the same `(task_id, content_hash)` returns the exact vector (round-trips through the search-crate blob helpers).
 - [ ] `get` for a missing `(task_id, content_hash)` returns `None`.
+- [ ] `put` keeps at most one row per `task_id`: after putting a new `content_hash` for a task, prior rows for that `task_id` are gone.
+- [ ] `task_embedding_text(title, description)` is the single composition used for both hashing and embedding; a tag-only change does not alter it (tags are not part of the embed text).
 - [ ] Opening the cache with a different model name OR a different dim than the stored meta clears `embeddings` (self-healing) and updates `meta`.
 - [ ] `KanbanContext::search_cache_path()` returns `<root>/search-cache.sqlite3`.
 - [ ] **Cold start:** `EmbeddingCache::open` against a path that does NOT exist creates a fully usable cache (schema present, `put`/`get` work) — no pre-existing file required. This is the cross-machine / fresh-clone rebuild guarantee at the store layer.
 - [ ] **Gitignore:** after board init (and on open of a pre-existing board), `.kanban/.gitignore` contains `search-cache.sqlite3` (+ `-wal`/`-shm`, or the glob), the entries are not duplicated on repeat, and `git check-ignore` would match the cache file. `.kanban/`'s tracked task files remain un-ignored.
 
 ## Tests
-- [ ] Unit/integration tests in `embedding_cache.rs` `#[cfg(test)] mod tests` using a `TempDir`: put/get round-trip; get-miss returns None; content_hash is stable for equal input and differs for different input; model-name-mismatch invalidation clears rows; dim-mismatch invalidation clears rows; reopening with the SAME model/dim preserves rows.
+- [ ] Unit/integration tests in `embedding_cache.rs` `#[cfg(test)] mod tests` using a `TempDir`: put/get round-trip; get-miss returns None; `put` prunes prior rows for the same task_id (only the latest hash survives); `task_embedding_text` excludes tags / `content_hash` stable for equal input and differs for different input; model-name-mismatch invalidation clears rows; dim-mismatch invalidation clears rows; reopening with the SAME model/dim preserves rows.
 - [ ] Cold-start test: `open` on a non-existent path inside a fresh `TempDir` succeeds and supports `put`/`get` (proves the rebuild-on-checkout path at the store layer).
 - [ ] Gitignore test (in `board/init.rs` tests or `embedding_cache.rs`): after writing/refreshing `.kanban/.gitignore`, assert it contains the `search-cache.sqlite3` (+ sidecar) patterns, that running the writer twice does not duplicate lines, and that the committed task files are still not ignored.
 - [ ] `cargo test -p swissarmyhammer-kanban embedding_cache` and the gitignore test pass (all new tests green, no real model required).
