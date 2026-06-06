@@ -24,8 +24,7 @@
 use std::sync::Arc;
 
 use agent_client_protocol::schema::{
-    ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, SessionNotification,
-    TextContent,
+    ContentBlock, NewSessionRequest, PromptRequest, SessionNotification, TextContent,
 };
 use agent_client_protocol::{Agent, ConnectionTo};
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
@@ -40,6 +39,16 @@ const MAX_REMOTE_WORKERS: usize = 8;
 
 /// Default per-call cap on generation tokens for a single `submit` prompt.
 pub const DEFAULT_MAX_TOKENS: u64 = 16 * 1024;
+
+/// Defensive ceiling on a single prompt turn (`new_session` → `prompt`).
+///
+/// A correctly wired client answers every nested agent→client request, so a turn
+/// completes in seconds-to-minutes. This generous backstop exists only so a
+/// future wedge (e.g. an unanswered agent request) degrades that one task to an
+/// error — the fleet reports zero findings for it and the review COMPLETES —
+/// instead of hanging the whole review forever. It is tuned far above any
+/// legitimately slow turn so it never false-fires in normal operation.
+const PROMPT_TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// Backend-aware policy describing how many workers the pool runs and whether it
 /// adapts that count under load.
@@ -218,7 +227,21 @@ async fn worker_loop(
         };
 
         let notifications = notifier.sender().subscribe();
-        let result = run_prompt(&agent, notifications, job.prompt, max_tokens).await;
+        // Backstop the turn with a generous timeout so a wedged prompt (e.g. a
+        // nested agent request the client failed to answer) degrades this one
+        // task to an error rather than hanging the whole review forever.
+        let result = match tokio::time::timeout(
+            PROMPT_TURN_TIMEOUT,
+            run_prompt(&agent, notifications, job.prompt, max_tokens),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_elapsed) => Err(claude_agent::AgentError::Internal(format!(
+                "prompt turn exceeded {}s and was abandoned",
+                PROMPT_TURN_TIMEOUT.as_secs()
+            ))),
+        };
         // The submitter may have dropped its receiver; that is fine.
         let _ = job.respond_to.send(result);
     }
@@ -226,27 +249,24 @@ async fn worker_loop(
 
 /// Drive a single prompt turn against an ACP 0.12 agent connection.
 ///
-/// Routes the three ACP requests (`initialize` → `new_session` → `prompt`)
-/// through the typed [`ConnectionTo<Agent>`] handle, spawning a per-session
-/// notification collector so streaming `session/update` content is captured
-/// concurrently with the prompt. The per-call token cap is attached to the
-/// prompt request's `meta` map under the key `"max_tokens"`.
+/// Routes the two per-prompt ACP requests (`new_session` → `prompt`) through the
+/// typed [`ConnectionTo<Agent>`] handle, spawning a per-session notification
+/// collector so streaming `session/update` content is captured concurrently with
+/// the prompt. The per-call token cap is attached to the prompt request's `meta`
+/// map under the key `"max_tokens"`.
+///
+/// `initialize` is deliberately NOT here: it is a once-per-connection handshake
+/// the driver performs before any worker runs (see
+/// `review::drive::run_pipeline_in_connection`). Issuing it per prompt raced N
+/// concurrent handshakes over the single shared connection and wedged the real
+/// agent.
 async fn run_prompt(
     agent: &ConnectionTo<Agent>,
     notifications: broadcast::Receiver<SessionNotification>,
     prompt: String,
     max_tokens: u64,
 ) -> PromptResult {
-    // 1. initialize
-    agent
-        .send_request(InitializeRequest::new(1.into()))
-        .block_task()
-        .await
-        .map_err(|e| {
-            claude_agent::AgentError::Internal(format!("Failed to initialize agent: {}", e))
-        })?;
-
-    // 2. new_session
+    // new_session
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
     let session_response = agent
         .send_request(NewSessionRequest::new(cwd))
@@ -777,18 +797,17 @@ mod tests {
         (temp, fixture_path)
     }
 
-    /// A recorded session that round-trips initialize → new_session → prompt,
-    /// with the prompt's assistant content delivered via a streamed
-    /// `agent_message_chunk` notification (the same shape the production agents
-    /// emit). The content marks the validation as passed.
+    /// A recorded session that round-trips new_session → prompt, with the
+    /// prompt's assistant content delivered via a streamed `agent_message_chunk`
+    /// notification (the same shape the production agents emit). The content marks
+    /// the validation as passed.
+    ///
+    /// No `initialize` call is recorded: the pool's `run_prompt` no longer issues
+    /// `initialize` per prompt — that is a once-per-connection handshake the
+    /// driver performs (`review::drive::run_pipeline_in_connection`), so a worker
+    /// only round-trips `new_session` → `prompt`.
     const PLAYBACK_PASS: &str = r#"{
   "calls": [
-    {
-      "method": "initialize",
-      "request": { "protocolVersion": 1 },
-      "response": { "protocolVersion": 1 },
-      "notifications": []
-    },
     {
       "method": "new_session",
       "request": { "cwd": "/tmp", "mcpServers": [] },

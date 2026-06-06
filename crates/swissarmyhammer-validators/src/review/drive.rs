@@ -35,11 +35,15 @@
 //! parser reads. Forwarding solely from `notification_rx` keeps delivery
 //! single-path for both the real handle and a scripted agent.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use agent_client_protocol::schema::SessionNotification;
-use agent_client_protocol::{Client, ConnectionTo, DynConnectTo};
+use agent_client_protocol::schema::{
+    AgentRequest, ClientCapabilities, FileSystemCapabilities, InitializeRequest,
+    PermissionOptionId, ReadTextFileResponse, RequestPermissionOutcome, RequestPermissionResponse,
+    SelectedPermissionOutcome, SessionNotification, WriteTextFileResponse,
+};
+use agent_client_protocol::{Client, ConnectionTo, DynConnectTo, Responder};
 use model_embedding::TextEmbedder;
 use rusqlite::Connection;
 use tokio::sync::broadcast;
@@ -101,9 +105,28 @@ pub async fn run_review_over_agent(
     // twice (see the module docs).
     let (notifier, forward_task) = build_pool_notifier(notification_rx);
 
+    // The repo root the agent's `fs/read_text_file` requests are resolved under.
+    // Owned so the `'static` request handler can keep it for the connection's life.
+    let repo_root: Arc<PathBuf> = Arc::new(repo_path.to_path_buf());
+
     let connect_result = Client
         .builder()
         .name("swissarmyhammer-review")
+        .on_receive_request(
+            {
+                let repo_root = Arc::clone(&repo_root);
+                move |req: AgentRequest,
+                      responder: Responder<serde_json::Value>,
+                      cx: ConnectionTo<agent_client_protocol::Agent>| {
+                    let repo_root = Arc::clone(&repo_root);
+                    async move {
+                        answer_agent_request(req, responder, &cx, &repo_root);
+                        Ok(())
+                    }
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
         .connect_with(agent, {
             let notifier = Arc::clone(&notifier);
             move |cx: ConnectionTo<agent_client_protocol::Agent>| {
@@ -177,6 +200,109 @@ async fn forward_notifications(
     }
 }
 
+/// Answer a request the agent sends back to the review client mid-prompt.
+///
+/// A real `claude` agent, during a prompt turn, issues nested agent→client
+/// requests and `block_task().await`s their responses before the turn can
+/// finish. The review's client MUST answer them or the prompt deadlocks — the
+/// pool never drains and the whole review hangs (the production symptom).
+///
+/// Each variant is handled and a response is ALWAYS sent — no agent request is
+/// ever left unanswered:
+///
+/// - `session/request_permission` → auto-approve (`Selected("allow")`). The
+///   review runs unattended; there is no human to prompt for tool consent.
+/// - `fs/read_text_file` → read the file from disk under `repo_path` (honoring
+///   the optional 1-based `line` and `limit`) and return its content.
+/// - `fs/write_text_file` → respond success WITHOUT writing. A review is
+///   read-only; the agent gets a clean ack rather than a hang or a repo mutation.
+/// - anything else (terminals, etc.) → method-not-found error.
+///
+/// The work is dispatched via [`ConnectionTo::spawn`] so it runs OFF the
+/// connection's single dispatch loop, keeping that loop free to route responses
+/// (the same agent↔client deadlock discipline as
+/// `swissarmyhammer_agent::dispatch_claude_request`). `read_text_file` touches
+/// the disk, so spawning it off the loop also avoids blocking dispatch on IO.
+fn answer_agent_request(
+    request: AgentRequest,
+    responder: Responder<serde_json::Value>,
+    cx: &ConnectionTo<agent_client_protocol::Agent>,
+    repo_root: &Arc<PathBuf>,
+) {
+    let repo_root = Arc::clone(repo_root);
+    let _ = cx.clone().spawn(async move {
+        match request {
+            AgentRequest::RequestPermissionRequest(_req) => {
+                let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+                    PermissionOptionId::new("allow"),
+                ));
+                responder
+                    .cast()
+                    .respond_with_result(Ok(RequestPermissionResponse::new(outcome)))
+            }
+            AgentRequest::ReadTextFileRequest(req) => {
+                let result = read_text_file_under_repo(&repo_root, &req)
+                    .map(ReadTextFileResponse::new)
+                    .map_err(|e| agent_client_protocol::Error::invalid_params().data(e));
+                responder.cast().respond_with_result(result)
+            }
+            AgentRequest::WriteTextFileRequest(_req) => {
+                // A review is read-only: ack success without touching the repo.
+                responder
+                    .cast()
+                    .respond_with_result(Ok(WriteTextFileResponse::new()))
+            }
+            other => {
+                tracing::warn!(
+                    "review client received unsupported agent request: {}",
+                    other.method()
+                );
+                responder
+                    .cast::<serde_json::Value>()
+                    .respond_with_error(agent_client_protocol::Error::method_not_found())
+            }
+        }
+    });
+}
+
+/// Read a text file the agent requested, resolved under `repo_root`, honoring the
+/// optional 1-based `line` start and `limit` line count.
+///
+/// An absolute path is read as-is; a relative path is joined onto `repo_root`.
+/// Returns the (possibly sliced) file content, or an error string when the file
+/// cannot be read.
+fn read_text_file_under_repo(
+    repo_root: &Path,
+    req: &agent_client_protocol::schema::ReadTextFileRequest,
+) -> Result<String, String> {
+    let path = if req.path.is_absolute() {
+        req.path.clone()
+    } else {
+        repo_root.join(&req.path)
+    };
+
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+
+    // No slice requested: return the whole file.
+    if req.line.is_none() && req.limit.is_none() {
+        return Ok(content);
+    }
+
+    let lines: Vec<&str> = content.lines().collect();
+    let start = req.line.map(|l| (l.max(1) - 1) as usize).unwrap_or(0);
+    let end = req
+        .limit
+        .map(|l| start + l as usize)
+        .unwrap_or(lines.len())
+        .min(lines.len());
+
+    if start >= lines.len() {
+        return Ok(String::new());
+    }
+    Ok(lines[start..end].join("\n"))
+}
+
 /// Build the pool inside the live connection and run the pipeline to a report.
 ///
 /// Split out so the `connect_with` closure body has a single typed future to
@@ -195,6 +321,28 @@ async fn run_pipeline_in_connection(
     fleet_config: FleetConfig,
     now: &str,
 ) -> agent_client_protocol::Result<Result<ReviewReport, AvpError>> {
+    // ACP `initialize` is a ONCE-per-connection handshake. Do it here, before
+    // the pool's workers issue any prompts, rather than per prompt: the pool
+    // shares this single connection across N workers, so initializing per prompt
+    // raced N concurrent handshakes at the one real agent process and wedged it
+    // (the first prompt completed; the rest hung forever with no timeout). The
+    // workers now only `new_session` + `prompt` over the already-initialized
+    // connection.
+    // Advertise the client filesystem capability the request handler backs:
+    // `fs/read_text_file` is served (from disk under `repo_path`), while
+    // `fs/write_text_file` is declined as unsupported — a review is read-only.
+    // The agent consults these capabilities before issuing the corresponding
+    // requests, so they must match `answer_agent_request`.
+    cx.send_request(
+        InitializeRequest::new(1.into()).client_capabilities(
+            ClientCapabilities::new().fs(FileSystemCapabilities::new()
+                .read_text_file(true)
+                .write_text_file(false)),
+        ),
+    )
+    .block_task()
+    .await?;
+
     let pool = AgentPool::new(cx, notifier, pool_config);
     let report = run_review(
         scope,
@@ -385,6 +533,12 @@ mod tests {
         /// Whether to additionally re-emit each reply over the live connection,
         /// reproducing a real handle's broadcast→connection bridge.
         bridge_to_connection: bool,
+        /// Whether the `prompt` handler issues a mid-turn `session/request_permission`
+        /// request back to the client and blocks on its response before returning
+        /// `end_turn` — exactly as a real `claude` agent does for tool consent. This
+        /// reproduces the agent↔client deadlock: a client that registers no
+        /// `on_receive_request` handler never answers, so the prompt never returns.
+        demand_permission: bool,
     }
 
     impl ScriptedAgent {
@@ -398,6 +552,23 @@ mod tests {
                 script,
                 notify_tx,
                 bridge_to_connection,
+                demand_permission: false,
+            })
+        }
+
+        /// Like [`ScriptedAgent::new`] but the `prompt` handler issues a mid-turn
+        /// `session/request_permission` round-trip to the client and only returns
+        /// `end_turn` once the client answers (see [`demand_permission`]).
+        fn new_demanding(
+            script: Vec<(String, String)>,
+            notify_tx: broadcast::Sender<SessionNotification>,
+        ) -> Arc<Self> {
+            Arc::new(Self {
+                next_session: AtomicUsize::new(0),
+                script,
+                notify_tx,
+                bridge_to_connection: false,
+                demand_permission: true,
             })
         }
 
@@ -440,6 +611,106 @@ mod tests {
         }
     }
 
+    /// A scripted agent whose `prompt` issues an `fs/read_text_file` request to
+    /// the client for `read_path` and records the content the client returns
+    /// (`observed_content`) before streaming its reply. Used to prove the client's
+    /// read handler serves real on-disk content under `repo_path`.
+    struct FsReadingAgent {
+        next_session: AtomicUsize,
+        script: Vec<(String, String)>,
+        notify_tx: broadcast::Sender<SessionNotification>,
+        read_path: std::path::PathBuf,
+        observed_content: Arc<std::sync::Mutex<Option<String>>>,
+    }
+
+    impl FsReadingAgent {
+        fn response_for(&self, prompt: &str) -> String {
+            for (needle, response) in &self.script {
+                if prompt.contains(needle) {
+                    return response.clone();
+                }
+            }
+            "[]".to_string()
+        }
+    }
+
+    struct FsReadingAdapter(Arc<FsReadingAgent>);
+
+    impl ConnectTo<Client> for FsReadingAdapter {
+        async fn connect_to(
+            self,
+            client: impl ConnectTo<<Client as Role>::Counterpart>,
+        ) -> agent_client_protocol::Result<()> {
+            let mock = Arc::clone(&self.0);
+            agent_client_protocol::Agent
+                .builder()
+                .name("fs-reading-agent")
+                .on_receive_request(
+                    {
+                        let mock = Arc::clone(&mock);
+                        async move |req: agent_client_protocol::ClientRequest, responder, cx| {
+                            dispatch_fs_reading(&mock, req, responder, &cx)
+                        }
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_notification(
+                    async move |_n: agent_client_protocol::ClientNotification, _cx| Ok(()),
+                    agent_client_protocol::on_receive_notification!(),
+                )
+                .connect_to(client)
+                .await
+        }
+    }
+
+    fn dispatch_fs_reading(
+        mock: &Arc<FsReadingAgent>,
+        request: agent_client_protocol::ClientRequest,
+        responder: agent_client_protocol::Responder<serde_json::Value>,
+        cx: &ConnectionTo<Client>,
+    ) -> agent_client_protocol::Result<()> {
+        use agent_client_protocol::ClientRequest as Req;
+
+        let mock = Arc::clone(mock);
+        let cx = cx.clone();
+        cx.clone().spawn(async move {
+            match request {
+                Req::InitializeRequest(_) => responder
+                    .cast()
+                    .respond_with_result(Ok(InitializeResponse::new(1.into()))),
+                Req::NewSessionRequest(_req) => {
+                    let n = mock.next_session.fetch_add(1, Ordering::SeqCst);
+                    let id = agent_client_protocol::schema::SessionId::new(format!("sess-{n}"));
+                    responder
+                        .cast()
+                        .respond_with_result(Ok(NewSessionResponse::new(id)))
+                }
+                Req::PromptRequest(req) => {
+                    use agent_client_protocol::schema::ReadTextFileRequest;
+                    let read_request =
+                        ReadTextFileRequest::new(req.session_id.clone(), mock.read_path.clone());
+                    if let Ok(resp) = cx.send_request(read_request).block_task().await {
+                        *mock.observed_content.lock().unwrap() = Some(resp.content);
+                    }
+
+                    let prompt = prompt_text(&req);
+                    let text = mock.response_for(&prompt);
+                    let update = SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                        ContentBlock::Text(TextContent::new(text)),
+                    ));
+                    let notif = SessionNotification::new(req.session_id.clone(), update);
+                    let _ = mock.notify_tx.send(notif);
+                    responder.cast().respond_with_result(Ok(PromptResponse::new(
+                        agent_client_protocol::schema::StopReason::EndTurn,
+                    )))
+                }
+                _ => responder
+                    .cast::<serde_json::Value>()
+                    .respond_with_error(agent_client_protocol::Error::method_not_found()),
+            }
+        })
+    }
+
     fn dispatch(
         mock: &Arc<ScriptedAgent>,
         request: agent_client_protocol::ClientRequest,
@@ -463,6 +734,37 @@ mod tests {
                         .respond_with_result(Ok(NewSessionResponse::new(id)))
                 }
                 Req::PromptRequest(req) => {
+                    // Mid-turn, a real claude agent asks the client for tool
+                    // consent via `session/request_permission` and blocks on the
+                    // answer before finishing the turn. Model that here: send the
+                    // request to the client and `.block_task().await` it. If the
+                    // client registers no `on_receive_request` handler, this never
+                    // returns and the whole prompt deadlocks — the production hang.
+                    if mock.demand_permission {
+                        use agent_client_protocol::schema::{
+                            RequestPermissionRequest, ToolCallUpdate, ToolCallUpdateFields,
+                        };
+                        let tool_call_update = ToolCallUpdate::new(
+                            agent_client_protocol::schema::ToolCallId::new("tool-read"),
+                            ToolCallUpdateFields::new(),
+                        );
+                        let permission_request = RequestPermissionRequest::new(
+                            req.session_id.clone(),
+                            tool_call_update,
+                            vec![],
+                        );
+                        if cx
+                            .send_request(permission_request)
+                            .block_task()
+                            .await
+                            .is_err()
+                        {
+                            return responder.cast::<serde_json::Value>().respond_with_error(
+                                agent_client_protocol::Error::internal_error(),
+                            );
+                        }
+                    }
+
                     let prompt = prompt_text(&req);
                     let text = mock.response_for(&prompt);
                     let update = SessionUpdate::AgentMessageChunk(ContentChunk::new(
@@ -596,6 +898,162 @@ mod tests {
         );
         assert_eq!(report.counts.blockers, 1);
         assert_eq!(report.counts.confirmed, 1);
+    }
+
+    // ---- agent↔client permission deadlock reproduction (the keystone) ------
+
+    /// The keystone regression test for the real-claude review hang.
+    ///
+    /// A real `claude` agent, mid-prompt, sends `session/request_permission`
+    /// (tool consent) and `fs/read_text_file` requests BACK to the client and
+    /// blocks on the answer before finishing the turn. The review's ACP `Client`
+    /// (built in [`run_review_over_agent`]) must register an `on_receive_request`
+    /// handler that answers them; without it the agent's request hangs unanswered,
+    /// the prompt never returns, the pool never drains, and the whole review hangs
+    /// forever (the production symptom: one `new_session`, one `end_turn`, silence).
+    ///
+    /// This drives the REAL `run_review_over_agent` (and therefore the real client
+    /// built in `drive.rs`) with a [`ScriptedAgent::new_demanding`] mock whose
+    /// `prompt` issues that permission round-trip. The whole pipeline is wrapped in
+    /// a [`tokio::time::timeout`] so a HANG becomes a fast test FAILURE rather than
+    /// a wedged CI. Before the fix (no client handler) this times out; after the
+    /// fix (handler auto-approves) it completes and renders the confirmed finding.
+    ///
+    /// The fan-out and verify prompts BOTH demand a permission round-trip, so this
+    /// also proves the pool advances past the first task — a single unanswered
+    /// request anywhere in the pipeline would wedge it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn review_does_not_deadlock_when_agent_demands_permission_mid_prompt() {
+        let repo = TestRepo::new();
+        repo.write("src/lib.rs", "fn placeholder() {}\n");
+        repo.commit("initial");
+        let dup = body("compute");
+        repo.write("src/lib.rs", &format!("fn placeholder() {{}}\n\n{dup}\n"));
+
+        let conn = index_conn();
+        let dup_emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        seed_chunk(&conn, "src/lib.rs", "compute", &dup, &dup_emb);
+        seed_chunk(&conn, "src/existing.rs", "old_compute", &dup, &dup_emb);
+
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
+        let embedder = MockEmbedder::new(DIM);
+
+        let (notify_tx, notification_rx) = broadcast::channel(64);
+        // Every prompt this agent serves blocks on a `session/request_permission`
+        // round-trip to the client first — both the fan-out prompt and the verify
+        // prompt.
+        let agent = ScriptedAgent::new_demanding(
+            vec![
+                (
+                    "# Validator: deduplicate".to_string(),
+                    findings_json("src/lib.rs", "blocker", "compute duplicates old_compute"),
+                ),
+                ("compute duplicates old_compute".to_string(), confirm_json()),
+            ],
+            notify_tx,
+        );
+
+        let dyn_agent = DynConnectTo::new(ScriptedAdapter(agent));
+
+        let report = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            run_review_over_agent(
+                dyn_agent,
+                notification_rx,
+                Scope::Working,
+                repo.path(),
+                &loader,
+                &conn,
+                &embedder,
+                PoolConfig::remote(2),
+                FleetConfig::default(),
+                "2026-06-05 12:00",
+            ),
+        )
+        .await
+        .expect(
+            "the review must not hang when the agent demands a mid-prompt permission \
+             round-trip; a timeout here means the review Client never answered the agent's \
+             session/request_permission request (the production deadlock)",
+        );
+
+        let report = report.expect("pipeline should produce a report");
+        assert!(
+            report.markdown.contains("### Blockers"),
+            "the confirmed blocker finding must be rendered after the permission round-trips: {}",
+            report.markdown
+        );
+        assert_eq!(report.counts.blockers, 1);
+        assert_eq!(report.counts.confirmed, 1);
+    }
+
+    /// Companion to the deadlock reproduction: the agent demands an
+    /// `fs/read_text_file` round-trip mid-prompt, and the client must serve the
+    /// read from disk under `repo_path`. Proves the read handler returns the real
+    /// file content (not just that the request is answered).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn review_serves_fs_read_text_file_from_disk_under_repo_path() {
+        let repo = TestRepo::new();
+        repo.write("src/lib.rs", "fn placeholder() {}\n");
+        repo.commit("initial");
+        let dup = body("compute");
+        repo.write("src/lib.rs", &format!("fn placeholder() {{}}\n\n{dup}\n"));
+
+        let conn = index_conn();
+        let dup_emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        seed_chunk(&conn, "src/lib.rs", "compute", &dup, &dup_emb);
+        seed_chunk(&conn, "src/existing.rs", "old_compute", &dup, &dup_emb);
+
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
+        let embedder = MockEmbedder::new(DIM);
+
+        let read_path = repo.path().join("src/lib.rs");
+        let (notify_tx, notification_rx) = broadcast::channel(64);
+        let observed = Arc::new(std::sync::Mutex::new(Option::<String>::None));
+        let agent = Arc::new(FsReadingAgent {
+            next_session: AtomicUsize::new(0),
+            script: vec![
+                (
+                    "# Validator: deduplicate".to_string(),
+                    findings_json("src/lib.rs", "blocker", "compute duplicates old_compute"),
+                ),
+                ("compute duplicates old_compute".to_string(), confirm_json()),
+            ],
+            notify_tx,
+            read_path: read_path.clone(),
+            observed_content: Arc::clone(&observed),
+        });
+
+        let dyn_agent = DynConnectTo::new(FsReadingAdapter(agent));
+
+        let report = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            run_review_over_agent(
+                dyn_agent,
+                notification_rx,
+                Scope::Working,
+                repo.path(),
+                &loader,
+                &conn,
+                &embedder,
+                PoolConfig::remote(2),
+                FleetConfig::default(),
+                "2026-06-05 12:00",
+            ),
+        )
+        .await
+        .expect("the review must serve fs/read_text_file without hanging");
+
+        let _report = report.expect("pipeline should produce a report");
+        let content = observed
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the agent must have received a read response");
+        assert!(
+            content.contains("pub fn compute"),
+            "the client must serve the real file content from disk, got: {content}"
+        );
     }
 
     // ---- single-path notification invariant (the double-delivery guard) ----
