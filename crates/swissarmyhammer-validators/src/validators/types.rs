@@ -254,7 +254,7 @@ impl ValidatorFrontmatter {
 pub enum ValidatorSource {
     /// Builtin validators embedded in the binary.
     Builtin,
-    /// User validators from $XDG_DATA_HOME/validators.
+    /// User validators from ~/.validators.
     User,
     /// Project validators from ./.validators.
     Project,

@@ -23,9 +23,7 @@ $ARGUMENTS
 
 ## Guidelines
 
-{% include "_partials/coding-standards" %}
 {% include "_partials/review-column" %}
-{% include "_partials/architecture-awareness" %}
 
 ## The `review` tool
 

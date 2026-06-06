@@ -24,7 +24,7 @@ use clap::{Parser, Subcommand};
     long_about = "Mirdan manages skills, validators, tools, and plugins across \
     all detected AI coding agents.\n\n\
     Skills are deployed to each agent's skill directory (e.g. .claude/skills/, .cursor/skills/).\n\
-    Validators are deployed to ./.validators/ (project) or $XDG_DATA_HOME/validators/ (global, defaults to ~/.local/share/validators/).\n\
+    Validators are deployed to ./.validators/ (project) or ~/.validators/ (global).\n\
     Tools are deployed to .tools/ and registered in agent MCP configs.\n\
     Plugins are deployed to agent plugin directories (e.g. .claude/plugins/).\n\n\
     Environment variables:\n  \
@@ -257,7 +257,7 @@ pub enum NewKind {
     Validator {
         /// Validator name (kebab-case, 1-64 chars)
         name: String,
-        /// Create in $XDG_DATA_HOME/validators/ instead of ./.validators/
+        /// Create in ~/.validators/ instead of ./.validators/
         #[arg(long)]
         global: bool,
     },

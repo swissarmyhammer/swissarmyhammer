@@ -143,7 +143,19 @@ pub async fn run_review_request(
     agent_factory: AgentFactory,
     now: String,
 ) -> Result<ReviewReport, String> {
+    // Carry the caller's `tracing` subscriber across the thread boundary so the
+    // engine's observability lines — emitted on the blocking thread's runtime
+    // below — reach the same subscriber the caller installed (`sah serve`'s global
+    // subscriber in production, a scoped capture subscriber in tests).
+    // `spawn_blocking` runs on a fresh thread that does not inherit the parent's
+    // thread-local default dispatcher, so we capture and re-install it explicitly;
+    // we also carry the current span so the engine lines stay correlated with the
+    // request.
+    let dispatch = tracing::dispatcher::get_default(|d| d.clone());
+    let span = tracing::Span::current();
     tokio::task::spawn_blocking(move || {
+        let _dispatch = tracing::dispatcher::set_default(&dispatch);
+        let _entered = span.enter();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

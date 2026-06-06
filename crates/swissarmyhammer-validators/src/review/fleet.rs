@@ -119,16 +119,27 @@ pub async fn run_fleet(
             continue;
         };
         let total_batches = batch_count(validator.files.len(), batch_size);
+        // The rule names being applied come from the loader's RuleSet (the
+        // authoritative source), so the log shows exactly which validator×rules
+        // ran — not just the validator name.
+        let rule_names: Vec<&str> = ruleset.rules.iter().map(|r| r.name.as_str()).collect();
         tracing::info!(
             validator = %validator.validator_name,
             files = validator.files.len(),
             batch_size,
             batches = total_batches,
+            rules = ?rule_names,
             "fleet fan-out: batching files into agent tasks"
         );
         for batch in validator.files.chunks(batch_size) {
             let prompt = render_fleet_prompt(&work.change_purpose, validator, ruleset, batch);
             let files: Vec<String> = batch.iter().map(|f| f.path.clone()).collect();
+            tracing::debug!(
+                validator = %validator.validator_name,
+                files = ?files,
+                rules = ?rule_names,
+                "fleet fan-out: submitting validator×files×rules task"
+            );
             pending.push(Pending {
                 validator: validator.validator_name.clone(),
                 files,
@@ -907,6 +918,37 @@ mod tests {
         ));
         assert!(logs_contain("batches=3"));
         assert!(logs_contain("batch_size=2"));
+    }
+
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn fan_out_logs_the_rule_names_being_applied_per_validator() {
+        // A validator with two distinctively-named rules; the fan-out log must
+        // name the rules being applied (sourced from the loader's RuleSet) so the
+        // logs show exactly which validator×rules ran.
+        let rs = ruleset(
+            "deduplicate",
+            "mandate",
+            &[("no-copy-paste", "body a"), ("prefer-reuse", "body b")],
+        );
+        let loader = loader_with(vec![rs]);
+
+        let files: Vec<FileWork> = vec![file_work("src/a.rs", "alpha", "src/x.rs")];
+        let work = WorkList {
+            change_purpose: "purpose".to_string(),
+            validators: vec![validator_work("deduplicate", files)],
+        };
+
+        let agent = ScriptedAgent::new(vec![]);
+        let _findings = with_pool(agent, PoolConfig::remote(1), move |pool| async move {
+            run_fleet(&work, &loader, &pool, FleetConfig::default()).await
+        })
+        .await;
+
+        // The batching log carries the rule names from the loader's RuleSet as a
+        // structured field (the exact bracketed list only this log emits — the
+        // rendered prompt spells rules as `### Rule: ...` prose, not this shape).
+        assert!(logs_contain("rules=[\"no-copy-paste\", \"prefer-reuse\"]"));
     }
 
     #[tokio::test]

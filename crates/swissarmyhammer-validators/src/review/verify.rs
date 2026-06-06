@@ -136,22 +136,31 @@ pub fn run_guard(candidates: &[Candidate]) -> GuardOutcome {
     let mut outcome = GuardOutcome::default();
     for candidate in candidates {
         match guard_verdict(candidate) {
-            Some(reason) => outcome.refuted.push(VerifiedFinding {
-                finding: candidate.finding.clone(),
-                confirmed: false,
-                reason: reason.to_string(),
-                refuted_by: Some(RefutingLayer::Guard),
-            }),
+            Some(rule) => {
+                tracing::debug!(
+                    file = %candidate.finding.file,
+                    validator = %candidate.finding.validator,
+                    rule = ?candidate.finding.rule,
+                    probe = %rule.probe,
+                    "guard auto-refuted finding"
+                );
+                outcome.refuted.push(VerifiedFinding {
+                    finding: candidate.finding.clone(),
+                    confirmed: false,
+                    reason: rule.reason.to_string(),
+                    refuted_by: Some(RefutingLayer::Guard),
+                });
+            }
             None => outcome.survivors.push(candidate.clone()),
         }
     }
     outcome
 }
 
-/// The guard's verdict for one candidate: `Some(reason)` when a `fact` probe
-/// deterministically refutes it, `None` when it is undecidable and must go to
-/// the agent.
-fn guard_verdict(candidate: &Candidate) -> Option<&'static str> {
+/// The guard's verdict for one candidate: `Some(rule)` — the [`GuardRule`] whose
+/// `fact` probe deterministically refuted it — when refuted, `None` when it is
+/// undecidable and must go to the agent.
+fn guard_verdict(candidate: &Candidate) -> Option<&'static GuardRule> {
     for rule in GUARD_RULES {
         if !finding_is_class(&candidate.finding, rule.class) {
             continue;
@@ -163,7 +172,7 @@ fn guard_verdict(candidate: &Candidate) -> Option<&'static str> {
             continue;
         };
         if rule.refute.refutes(!fact.rows.is_empty()) {
-            return Some(rule.reason);
+            return Some(rule);
         }
     }
     None
@@ -253,12 +262,21 @@ pub async fn verify_findings(candidates: Vec<Candidate>, pool: &AgentPool) -> Ve
         })
         .collect();
 
+    let guard_refuted = refuted.len();
+
     // The guard-refuted findings carry straight through.
     let mut verified = refuted;
 
     // Collect each verify task, refuting by default on any failure.
     for task in pending {
         let verdict = collect_verdict(task.rx.await);
+        tracing::debug!(
+            file = %task.finding.file,
+            validator = %task.finding.validator,
+            rule = ?task.finding.rule,
+            confirmed = verdict.confirmed,
+            "verify: agent verdict"
+        );
         verified.push(VerifiedFinding {
             finding: task.finding,
             confirmed: verdict.confirmed,
@@ -266,6 +284,15 @@ pub async fn verify_findings(candidates: Vec<Candidate>, pool: &AgentPool) -> Ve
             refuted_by: Some(RefutingLayer::Agent),
         });
     }
+
+    let confirmed = verified.iter().filter(|v| v.confirmed).count();
+    tracing::info!(
+        candidates = verified.len(),
+        confirmed,
+        refuted = verified.len() - confirmed,
+        guard_refuted,
+        "review verify complete"
+    );
 
     VerifyOutcome { verified }
 }
@@ -578,6 +605,26 @@ mod tests {
         assert_eq!(outcome.refuted.len(), 1);
         assert!(!outcome.refuted[0].confirmed);
         assert_eq!(outcome.refuted[0].refuted_by, Some(RefutingLayer::Guard));
+    }
+
+    #[test]
+    #[tracing_test::traced_test]
+    fn guard_logs_the_finding_and_fact_probe_when_it_auto_refutes() {
+        // A dead-code finding the `callers` fact refutes — the guard must log it.
+        let candidate = Candidate {
+            finding: dead_code_finding("src/lib.rs", "target"),
+            source_slice: "fn target() {}".to_string(),
+            probe_results: vec![callers_probe("target", &["uses_target"])],
+        };
+
+        let outcome = run_guard(&[candidate]);
+        assert_eq!(outcome.refuted.len(), 1);
+
+        // The guard auto-refute is logged, naming the finding (its file/validator)
+        // and the `callers` fact probe that decided it.
+        assert!(logs_contain("guard auto-refuted finding"));
+        assert!(logs_contain("probe=callers"));
+        assert!(logs_contain("validator=dead-code"));
     }
 
     #[test]

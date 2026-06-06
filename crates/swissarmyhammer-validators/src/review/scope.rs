@@ -287,10 +287,44 @@ pub async fn scope_review(
         .collect();
     validator_work.sort_by(|a, b| a.validator_name.cmp(&b.validator_name));
 
+    log_scope_selection(&validator_work);
+
     Ok(WorkList {
         change_purpose: resolved.change_purpose,
         validators: validator_work,
     })
+}
+
+/// Log the resolved review scope: an INFO summary naming the matched validators
+/// and the total file count, plus a per-validator DEBUG line carrying each
+/// validator's file count, declared probes, and rule names.
+///
+/// The summary fires even when nothing matched (reporting an empty set) so a
+/// `review` run always shows what the scope stage selected; per-validator detail
+/// stays at DEBUG so a default-level run sees the selection without per-rule
+/// noise.
+fn log_scope_selection(validators: &[ValidatorWork]) {
+    let names: Vec<&str> = validators
+        .iter()
+        .map(|v| v.validator_name.as_str())
+        .collect();
+    let total_files: usize = validators.iter().map(|v| v.files.len()).sum();
+    tracing::info!(
+        validators = ?names,
+        validator_count = validators.len(),
+        files = total_files,
+        "review scope resolved"
+    );
+    for validator in validators {
+        let files: Vec<&str> = validator.files.iter().map(|f| f.path.as_str()).collect();
+        tracing::debug!(
+            validator = %validator.validator_name,
+            files = ?files,
+            probes = ?validator.probes,
+            rules = ?validator.rules,
+            "review scope: validator matched"
+        );
+    }
 }
 
 /// A validator matched to one or more files, accumulated during matching.
@@ -959,6 +993,59 @@ mod tests {
             "duplicates probe_results should carry the existing.rs hit, got: {:?}",
             file.probe_results
         );
+    }
+
+    // ---- scope_review: observability tracing -----------------------------
+
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn scope_review_logs_the_selected_validators_and_their_rules() {
+        let repo = TestRepo::new();
+        repo.write("src/lib.rs", "fn placeholder() {}\n");
+        repo.commit("initial");
+        let dup = body("compute");
+        repo.write("src/lib.rs", &format!("fn placeholder() {{}}\n\n{dup}\n"));
+
+        let conn = index_conn();
+        let dup_emb = vec![1.0, 0.0, 0.0, 0.0];
+        seed_chunk(&conn, "src/lib.rs", "compute", &dup, &dup_emb);
+
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
+        let embedder = MockEmbedder::new(DIM);
+
+        let _work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+            .await
+            .unwrap();
+
+        // The selection summary names the matched validator and file count.
+        assert!(logs_contain("review scope resolved"));
+        assert!(logs_contain("validators=[\"deduplicate\"]"));
+        // The per-validator detail line names the validator, its files, and its
+        // declared probes/rules.
+        assert!(logs_contain("validator=deduplicate"));
+        assert!(logs_contain("deduplicate-rule"));
+        assert!(logs_contain("duplicates"));
+    }
+
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn scope_review_logs_a_summary_even_when_nothing_matches() {
+        let repo = TestRepo::new();
+        repo.write("Cargo.lock", "# lockfile\n");
+        repo.commit("initial");
+        repo.write("Cargo.lock", "# lockfile\nupdated = true\n");
+
+        let conn = index_conn();
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
+        let embedder = MockEmbedder::new(DIM);
+
+        let _work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+            .await
+            .unwrap();
+
+        // The summary still fires, reporting zero matched validators.
+        assert!(logs_contain("review scope resolved"));
+        assert!(logs_contain("validators=[]"));
     }
 
     // ---- scope_review: probe dedupe --------------------------------------

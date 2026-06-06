@@ -137,10 +137,14 @@ recordings/
 /// Configuration for `.validators` directories.
 ///
 /// Validators (rules-as-data quality gates) use this configuration for the
-/// user-wide validator store (`$XDG_DATA_HOME/validators/`) and the
-/// project-local validator store (`./.validators/`). The XDG path resolves to
-/// `$XDG_DATA_HOME/validators/` (default `~/.local/share/validators/`); the
-/// project path resolves to `<git_root>/.validators/`.
+/// user-wide validator store (`~/.validators/`) and the project-local validator
+/// store (`./.validators/`). The user path resolves to `~/.validators/` (via
+/// `from_user_home`, consistent with the skills/agents/tools home-dotfile
+/// stores); the project path resolves to `<git_root>/.validators/`.
+///
+/// An XDG (`$XDG_DATA_HOME/validators/`) resolution is still available via
+/// `xdg_data()` for the shared VFS/YAML-expander path, but the validator store
+/// itself is the home dotfile.
 #[derive(Debug, Clone, Copy)]
 pub struct ValidatorsConfig;
 

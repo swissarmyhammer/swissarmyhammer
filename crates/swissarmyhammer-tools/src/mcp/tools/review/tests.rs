@@ -59,29 +59,6 @@ fn review_tool_is_registered_with_its_ops() {
 // fixtures
 // ---------------------------------------------------------------------------
 
-/// Restore an env var on drop.
-struct EnvVarGuard {
-    key: &'static str,
-    previous: Option<String>,
-}
-
-impl EnvVarGuard {
-    fn set(key: &'static str, value: &Path) -> Self {
-        let previous = std::env::var(key).ok();
-        std::env::set_var(key, value);
-        Self { key, previous }
-    }
-}
-
-impl Drop for EnvVarGuard {
-    fn drop(&mut self) {
-        match &self.previous {
-            Some(v) => std::env::set_var(self.key, v),
-            None => std::env::remove_var(self.key),
-        }
-    }
-}
-
 /// Write a minimal RuleSet (VALIDATOR.md + one rule) under `base/<name>/`, with
 /// the given file glob and probe list.
 fn write_ruleset(base: &Path, name: &str, glob: &str, probes: &[&str]) {
@@ -103,6 +80,18 @@ fn write_ruleset(base: &Path, name: &str, glob: &str, probes: &[&str]) {
     std::fs::write(
         dir.join("rules/check.md"),
         "---\nname: check\ndescription: Check\n---\n\nCheck the code.\n",
+    )
+    .unwrap();
+}
+
+/// Write a malformed RuleSet under `base/<name>/`: a VALIDATOR.md whose
+/// frontmatter does not parse (unterminated YAML), so the loader drops it.
+fn write_malformed_ruleset(base: &Path, name: &str) {
+    let dir = base.join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("VALIDATOR.md"),
+        "---\nseverity: error\nmatch: [unterminated\n",
     )
     .unwrap();
 }
@@ -132,13 +121,11 @@ async fn context_at(dir: &Path) -> ToolContext {
 #[tokio::test]
 #[serial_test::serial(cwd)]
 async fn list_validators_surfaces_user_and_project_layers_with_probes() {
-    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+    let home = IsolatedTestEnvironment::new().expect("isolated env");
 
-    // User store: $XDG_DATA_HOME/validators/<name>
-    let xdg = tempfile::TempDir::new().unwrap();
-    let user_validators = xdg.path().join("validators");
+    // User store: ~/.validators/<name> (resolved via the isolated temp HOME)
+    let user_validators = home.home_path().join(".validators");
     write_ruleset(&user_validators, "user-dedup", "*.rs", &["duplicates"]);
-    let _xdg_guard = EnvVarGuard::set("XDG_DATA_HOME", xdg.path());
 
     // Project store: <git_root>/.validators/<name>
     let project = tempfile::TempDir::new().unwrap();
@@ -185,8 +172,6 @@ async fn check_validators_reports_an_unknown_probe() {
         "*.rs",
         &["not-a-real-probe"],
     );
-    let xdg = tempfile::TempDir::new().unwrap();
-    let _xdg_guard = EnvVarGuard::set("XDG_DATA_HOME", xdg.path());
     let _cwd = CurrentDirGuard::new(project.path()).expect("chdir");
 
     let mut registry = ToolRegistry::new();
@@ -220,6 +205,60 @@ async fn check_validators_reports_an_unknown_probe() {
 
 #[tokio::test]
 #[serial_test::serial(cwd)]
+async fn check_validators_reports_a_malformed_validator_and_still_loads_the_valid_one() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let project = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(project.path().join(".git")).unwrap();
+    let project_validators = project.path().join(".validators");
+    // A malformed validator (unparseable frontmatter) alongside a valid one.
+    write_malformed_ruleset(&project_validators, "broken-one");
+    write_ruleset(&project_validators, "good-one", "*.rs", &["duplicates"]);
+    let _cwd = CurrentDirGuard::new(project.path()).expect("chdir");
+
+    let mut registry = ToolRegistry::new();
+    register_review_tools(&mut registry);
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(project.path()).await;
+
+    let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("check validators"));
+    let result = tool
+        .execute(args, &context)
+        .await
+        .expect("check validators");
+    let body = extract_text(&result);
+    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+
+    // The malformed validator is surfaced as an error, not silently dropped.
+    assert_eq!(
+        parsed["ok"],
+        json!(false),
+        "a malformed validator must fail the lint: {body}"
+    );
+    let errors = parsed["errors"].as_array().unwrap();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e["path"].as_str().unwrap_or("").contains("broken-one")),
+        "the dropped validator's path must be named, got: {body}"
+    );
+    // The valid validator alongside it still loaded and is counted.
+    let mut list_args = serde_json::Map::new();
+    list_args.insert("op".to_string(), json!("list validators"));
+    let listed = tool
+        .execute(list_args, &context)
+        .await
+        .expect("list validators");
+    let listed_body = extract_text(&listed);
+    assert!(
+        listed_body.contains("good-one"),
+        "the valid validator alongside a broken one still loads, got: {listed_body}"
+    );
+}
+
+#[tokio::test]
+#[serial_test::serial(cwd)]
 async fn get_validator_returns_rule_bodies_and_probes() {
     let _home = IsolatedTestEnvironment::new().expect("isolated env");
 
@@ -231,8 +270,6 @@ async fn get_validator_returns_rule_bodies_and_probes() {
         "*.rs",
         &["duplicates"],
     );
-    let xdg = tempfile::TempDir::new().unwrap();
-    let _xdg_guard = EnvVarGuard::set("XDG_DATA_HOME", xdg.path());
     let _cwd = CurrentDirGuard::new(project.path()).expect("chdir");
 
     let mut registry = ToolRegistry::new();
@@ -279,8 +316,6 @@ async fn doctor_reports_one_ok_when_all_validators_are_valid() {
         "*.rs",
         &["duplicates"],
     );
-    let xdg = tempfile::TempDir::new().unwrap();
-    let _xdg_guard = EnvVarGuard::set("XDG_DATA_HOME", xdg.path());
     let _cwd = CurrentDirGuard::new(project.path()).expect("chdir");
 
     let checks = ReviewTool::new().run_health_checks();
@@ -318,8 +353,6 @@ async fn doctor_reports_an_error_naming_a_malformed_validator_with_a_fix() {
         "*.rs",
         &["not-a-real-probe"],
     );
-    let xdg = tempfile::TempDir::new().unwrap();
-    let _xdg_guard = EnvVarGuard::set("XDG_DATA_HOME", xdg.path());
     let _cwd = CurrentDirGuard::new(project.path()).expect("chdir");
 
     let checks = ReviewTool::new().run_health_checks();
@@ -347,6 +380,40 @@ async fn doctor_reports_an_error_naming_a_malformed_validator_with_a_fix() {
     );
 }
 
+#[tokio::test]
+#[serial_test::serial(cwd)]
+async fn doctor_reports_an_error_for_a_dropped_malformed_validator() {
+    use swissarmyhammer_common::health::{Doctorable, HealthStatus};
+
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    // A project with a malformed validator that fails to parse: the loader drops
+    // it, but doctor must surface it as an Error rather than reporting all valid.
+    let project = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(project.path().join(".git")).unwrap();
+    write_malformed_ruleset(&project.path().join(".validators"), "broken-one");
+    let _cwd = CurrentDirGuard::new(project.path()).expect("chdir");
+
+    let checks = ReviewTool::new().run_health_checks();
+
+    let error = checks
+        .iter()
+        .find(|c| c.status == HealthStatus::Error)
+        .unwrap_or_else(|| panic!("a dropped validator must produce an Error, got: {checks:?}"));
+
+    assert_eq!(error.category, "validators");
+    assert!(
+        error.name.contains("broken-one") || error.message.contains("broken-one"),
+        "the error must name the dropped validator, got: name={:?} message={:?}",
+        error.name,
+        error.message
+    );
+    assert!(
+        error.fix.is_some(),
+        "the error must carry a fix suggestion, got: {error:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // review working (full pipeline through the registered tool, scripted agent)
 // ---------------------------------------------------------------------------
@@ -361,8 +428,6 @@ async fn review_working_through_the_registered_tool_flags_a_planted_duplicate() 
     // agent that confirms the planted duplicate.
     let repo = TestRepo::new();
     let factory = planted_duplicate_fixture(&repo);
-    let xdg = tempfile::TempDir::new().unwrap();
-    let _xdg_guard = EnvVarGuard::set("XDG_DATA_HOME", xdg.path());
     let _cwd = CurrentDirGuard::new(repo.path()).expect("chdir");
 
     let mut registry = ToolRegistry::new();
@@ -390,6 +455,48 @@ async fn review_working_through_the_registered_tool_flags_a_planted_duplicate() 
     );
     assert_eq!(parsed["counts"]["blockers"], json!(1));
     assert_eq!(parsed["counts"]["confirmed"], json!(1));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial(cwd)]
+#[tracing_test::traced_test]
+async fn review_working_emits_observability_traces_through_spawn_blocking() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    // The same planted-duplicate fixture, but here we assert the engine's
+    // observability `tracing` lines actually surface on the REAL tool path — the
+    // pipeline runs inside spawn_blocking on its own current-thread runtime, so
+    // this proves the traces propagate to the process subscriber `sah serve` uses.
+    let repo = TestRepo::new();
+    let factory = planted_duplicate_fixture(&repo);
+    let _cwd = CurrentDirGuard::new(repo.path()).expect("chdir");
+
+    let mut registry = ToolRegistry::new();
+    registry.register(
+        ReviewTool::new()
+            .with_agent_factory(factory)
+            .with_embedder_factory(mock_embedder_factory()),
+    );
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(repo.path()).await;
+
+    let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("review working"));
+    args.insert("backend".to_string(), json!("local"));
+    let _result = tool
+        .execute(args, &context)
+        .await
+        .expect("review working dispatch");
+
+    // The scope stage logged the selection summary naming the matched validator.
+    assert!(logs_contain("review scope resolved"));
+    assert!(logs_contain("deduplicate"));
+    // The fleet stage logged the validator×files×rules batching.
+    assert!(logs_contain(
+        "fleet fan-out: batching files into agent tasks"
+    ));
+    // The synthesis stage logged the final counts.
+    assert!(logs_contain("review synthesis complete"));
 }
 
 // ---------------------------------------------------------------------------
@@ -436,8 +543,6 @@ async fn mcp_server_set_review_factories_runs_review_working_end_to_end() {
 
     let repo = TestRepo::new();
     let factory = planted_duplicate_fixture(&repo);
-    let xdg = tempfile::TempDir::new().unwrap();
-    let _xdg_guard = EnvVarGuard::set("XDG_DATA_HOME", xdg.path());
     let _cwd = CurrentDirGuard::new(repo.path()).expect("chdir");
 
     // The production-shaped seam: build the real server (registers the bare
@@ -479,8 +584,6 @@ async fn review_tool_with_concurrency_pins_the_pool_worker_count() {
 
     let repo = TestRepo::new();
     let factory = planted_duplicate_fixture(&repo);
-    let xdg = tempfile::TempDir::new().unwrap();
-    let _xdg_guard = EnvVarGuard::set("XDG_DATA_HOME", xdg.path());
     let _cwd = CurrentDirGuard::new(repo.path()).expect("chdir");
 
     let mut registry = ToolRegistry::new();

@@ -81,7 +81,7 @@ _arguments "${_arguments_options[@]}" : \
 (validator)
 _arguments "${_arguments_options[@]}" : \
 '--agent=[Limit operations to a single agent (e.g. claude-code, cursor)]:AGENT_ID:_default' \
-'--global[Create in \$XDG_DATA_HOME/validators/ instead of ./.validators/]' \
+'--global[Create in ~/.validators/ instead of ./.validators/]' \
 '-d[Enable debug output to stderr]' \
 '--debug[Enable debug output to stderr]' \
 '-y[Skip confirmation prompts (useful for CI/CD)]' \

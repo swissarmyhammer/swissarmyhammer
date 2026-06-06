@@ -7,8 +7,9 @@
 //! `dead-code/rules/dead-code.md`).
 //!
 //! This mirrors how `swissarmyhammer-skills` embeds `builtin/skills/`: the
-//! profile installer materializes these onto disk at `$XDG_DATA_HOME/validators/`
-//! so users can read, learn from, and copy them. The validator *loader* still
+//! profile installer materializes these onto disk in the validators store
+//! (`~/.validators/` global or `./.validators/` project) so users can read,
+//! learn from, and copy them. The validator *loader* still
 //! reads the embedded set at lowest precedence; this on-disk copy is the
 //! read-only reference, refreshed on every install.
 

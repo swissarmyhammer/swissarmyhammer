@@ -2,7 +2,7 @@
 //!
 //! Loads validators from multiple directories with precedence:
 //! 1. Builtin validators (embedded in the binary) - lowest precedence
-//! 2. User validators ($XDG_DATA_HOME/validators)
+//! 2. User validators (~/.validators)
 //! 3. Project validators (./.validators) - highest precedence
 //!
 //! Later sources override earlier ones with the same name.
@@ -17,15 +17,27 @@
 //! expand to YAML file contents. See [`YamlExpander`] for details.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use swissarmyhammer_directory::{ManagedDirectory, ValidatorsConfig, YamlExpander};
+use swissarmyhammer_directory::{
+    DirectoryConfig, ManagedDirectory, ValidatorsConfig, YamlExpander,
+};
 use swissarmyhammer_templating::partials::TemplateContentProvider;
 
 use crate::error::AvpError;
 
 use super::parser::{parse_ruleset_directory, parse_validator_with_expansion};
 use super::types::{MatchContext, RuleSet, Validator, ValidatorSource};
+
+/// Resolve the user (global) validators store directory, `~/.validators`.
+///
+/// Resolves home the same raw way the shared `mirdan::store` does
+/// (`dirs::home_dir().join(ValidatorsConfig::DIR_NAME)`), so the loader and the
+/// store agree on a single resolution mechanism for the same path. Returns
+/// `None` when the home directory cannot be determined.
+fn user_validators_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(ValidatorsConfig::DIR_NAME))
+}
 
 /// Loader for validators with directory stacking precedence.
 ///
@@ -41,6 +53,25 @@ pub struct ValidatorLoader {
     rulesets: HashMap<String, RuleSet>,
     /// YAML expander for `@` include references.
     expander: YamlExpander<ValidatorsConfig>,
+    /// RuleSet directories that failed to parse and were skipped, retained so a
+    /// malformed validator is reported (by `check validators` / `sah doctor`)
+    /// instead of silently dropped.
+    load_failures: Vec<LoadFailure>,
+}
+
+/// A validator directory the loader could not parse, retained for reporting.
+///
+/// The loader keeps loading the rest of the stack when one validator is broken
+/// (a broken validator never aborts the run); each failure is recorded here so
+/// the lint surface can name the offending path and its parse problem.
+#[derive(Debug, Clone)]
+pub struct LoadFailure {
+    /// The RuleSet directory that failed to parse.
+    pub path: PathBuf,
+    /// Which precedence layer the directory came from.
+    pub source: ValidatorSource,
+    /// The parse problem, formatted for display.
+    pub error: String,
 }
 
 impl Default for ValidatorLoader {
@@ -56,6 +87,7 @@ impl ValidatorLoader {
             validators: HashMap::new(),
             rulesets: HashMap::new(),
             expander: YamlExpander::new(),
+            load_failures: Vec::new(),
         }
     }
 
@@ -65,6 +97,7 @@ impl ValidatorLoader {
             validators: HashMap::new(),
             rulesets: HashMap::new(),
             expander,
+            load_failures: Vec::new(),
         }
     }
 
@@ -87,18 +120,17 @@ impl ValidatorLoader {
     ///
     /// This loads validators from:
     /// 1. Builtin validators (call `load_builtins()` first if needed)
-    /// 2. User validators from $XDG_DATA_HOME/validators
+    /// 2. User validators from ~/.validators
     /// 3. Project validators from ./.validators
     ///
     /// Later sources override earlier ones with the same name.
     ///
     /// Note: Call `load_includes()` before this to enable `@` reference expansion.
     pub fn load_all(&mut self) -> Result<(), AvpError> {
-        // Load RuleSets from the user directory ($XDG_DATA_HOME/validators)
-        if let Ok(dir) = ManagedDirectory::<ValidatorsConfig>::xdg_data() {
-            let validators_dir = dir.root();
+        // Load RuleSets from the user directory (~/.validators)
+        if let Some(validators_dir) = user_validators_dir() {
             if validators_dir.exists() {
-                self.load_rulesets_directory(validators_dir, ValidatorSource::User)?;
+                self.load_rulesets_directory(&validators_dir, ValidatorSource::User)?;
             }
         }
 
@@ -250,11 +282,10 @@ impl ValidatorLoader {
     pub fn get_directories() -> Vec<std::path::PathBuf> {
         let mut dirs = Vec::new();
 
-        // User directory ($XDG_DATA_HOME/validators)
-        if let Ok(dir) = ManagedDirectory::<ValidatorsConfig>::xdg_data() {
-            let validators_dir = dir.root();
+        // User directory (~/.validators)
+        if let Some(validators_dir) = user_validators_dir() {
             if validators_dir.exists() {
-                dirs.push(validators_dir.to_path_buf());
+                dirs.push(validators_dir);
             }
         }
 
@@ -342,6 +373,11 @@ impl ValidatorLoader {
                 }
                 Err(e) => {
                     tracing::warn!("Failed to parse RuleSet at {}: {}", dir_path.display(), e);
+                    self.load_failures.push(LoadFailure {
+                        path: dir_path.clone(),
+                        source: source.clone(),
+                        error: e.to_string(),
+                    });
                 }
             }
         }
@@ -391,6 +427,15 @@ impl ValidatorLoader {
         self.rulesets.keys().cloned().collect()
     }
 
+    /// The RuleSet directories that failed to parse during loading.
+    ///
+    /// A malformed validator is skipped (it never crashes the run) but recorded
+    /// here so the lint surface can report it as an error rather than dropping it
+    /// silently. Empty when every directory parsed cleanly.
+    pub fn load_failures(&self) -> &[LoadFailure] {
+        &self.load_failures
+    }
+
     /// Get diagnostic information about validator loading.
     ///
     /// Returns information about:
@@ -412,15 +457,14 @@ impl ValidatorLoader {
             error: None,
         };
 
-        // Check user directory ($XDG_DATA_HOME/validators)
-        match ManagedDirectory::<ValidatorsConfig>::xdg_data() {
-            Ok(dir) => {
-                let validators_dir = dir.root().to_path_buf();
+        // Check user directory (~/.validators)
+        match user_validators_dir() {
+            Some(validators_dir) => {
                 user_dir_info.exists = validators_dir.exists();
                 user_dir_info.path = Some(validators_dir);
             }
-            Err(e) => {
-                user_dir_info.error = Some(format!("{}", e));
+            None => {
+                user_dir_info.error = Some("could not determine home directory".to_string());
             }
         }
 
@@ -474,7 +518,7 @@ pub struct DirectoryInfo {
 /// Diagnostic information about validator loading.
 #[derive(Debug, Clone)]
 pub struct ValidatorDiagnostics {
-    /// Information about the user validators directory ($XDG_DATA_HOME/validators).
+    /// Information about the user validators directory (~/.validators).
     pub user_directory: DirectoryInfo,
     /// Information about the project validators directory (./.validators).
     pub project_directory: DirectoryInfo,
@@ -575,9 +619,9 @@ mod tests {
     #[test]
     #[serial_test::serial(cwd)]
     fn test_load_all_discovers_user_and_project_validators_with_precedence() {
-        // User store: $XDG_DATA_HOME/validators/<name>
-        let xdg_home = TempDir::new().unwrap();
-        let user_validators = xdg_home.path().join("validators");
+        // User store: ~/.validators/<name> (resolved via a temp HOME)
+        let home = TempDir::new().unwrap();
+        let user_validators = home.path().join(".validators");
         write_ruleset(&user_validators, "user-only", "User-only ruleset");
         write_ruleset(&user_validators, "shared", "User version");
 
@@ -588,7 +632,7 @@ mod tests {
         write_ruleset(&project_validators, "project-only", "Project-only ruleset");
         write_ruleset(&project_validators, "shared", "Project version");
 
-        let _env = EnvVarGuard::set("XDG_DATA_HOME", xdg_home.path());
+        let _env = EnvVarGuard::set("HOME", home.path());
         let _cwd = CwdGuard::change_to(project_root.path());
 
         let mut loader = ValidatorLoader::new();
@@ -597,7 +641,7 @@ mod tests {
         // Both user-only and project-only RuleSets are discovered.
         assert!(
             loader.get_ruleset("user-only").is_some(),
-            "user RuleSet from $XDG_DATA_HOME/validators should load"
+            "user RuleSet from ~/.validators should load"
         );
         assert!(
             loader.get_ruleset("project-only").is_some(),
@@ -610,11 +654,68 @@ mod tests {
         assert_eq!(shared.description(), "Project version");
     }
 
+    /// Write a malformed RuleSet: a VALIDATOR.md whose frontmatter is broken
+    /// (unterminated YAML), so the parser rejects it.
+    fn write_malformed_ruleset(base: &Path, name: &str) {
+        let dir = base.join(name);
+        fs::create_dir_all(&dir).unwrap();
+        // Missing the closing `---` and a name field → frontmatter parse failure.
+        fs::write(
+            dir.join("VALIDATOR.md"),
+            "---\nseverity: not-a-real-severity\nmatch: [unterminated\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn load_all_collects_malformed_validator_as_a_failure_and_still_loads_the_valid_one() {
+        // One valid and one malformed RuleSet side by side in the user store.
+        let home = TempDir::new().unwrap();
+        let user_validators = home.path().join(".validators");
+        write_ruleset(&user_validators, "good-one", "A valid ruleset");
+        write_malformed_ruleset(&user_validators, "broken-one");
+
+        // An empty project root so only the user store contributes.
+        let project_root = TempDir::new().unwrap();
+        fs::create_dir_all(project_root.path().join(".git")).unwrap();
+
+        let _env = EnvVarGuard::set("HOME", home.path());
+        let _cwd = CwdGuard::change_to(project_root.path());
+
+        let mut loader = ValidatorLoader::new();
+        loader.load_all().unwrap();
+
+        // The valid one loaded; the broken one did not crash the run.
+        assert!(
+            loader.get_ruleset("good-one").is_some(),
+            "the valid ruleset alongside a broken one still loads"
+        );
+
+        // The broken one is recorded as a collected failure naming its path.
+        let failures = loader.load_failures();
+        assert_eq!(failures.len(), 1, "the malformed ruleset is collected once");
+        let failure = &failures[0];
+        assert!(
+            failure.path.to_string_lossy().contains("broken-one"),
+            "the failure names the offending validator path, got: {}",
+            failure.path.display()
+        );
+        assert!(
+            !failure.error.is_empty(),
+            "the failure carries the parse problem"
+        );
+    }
+
     #[test]
     fn test_loader_new() {
         let loader = ValidatorLoader::new();
         assert!(loader.is_empty());
         assert_eq!(loader.len(), 0);
+        assert!(
+            loader.load_failures().is_empty(),
+            "a fresh loader has no load failures"
+        );
     }
 
     #[test]
@@ -983,9 +1084,7 @@ Body.
         // Test ValidatorDiagnostics struct fields are accessible
         let diag = ValidatorDiagnostics {
             user_directory: DirectoryInfo {
-                path: Some(std::path::PathBuf::from(
-                    "/home/user/.local/share/validators",
-                )),
+                path: Some(std::path::PathBuf::from("/home/user/.validators")),
                 exists: true,
                 error: None,
             },

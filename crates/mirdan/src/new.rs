@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use crate::agents;
 use crate::package_type::is_valid_package_name;
 use crate::registry::RegistryError;
-use swissarmyhammer_directory::{AvpConfig, ManagedDirectory, ValidatorsConfig};
+use swissarmyhammer_directory::{AvpConfig, ManagedDirectory};
 
 /// Run the `mirdan new skill` command.
 ///
@@ -118,12 +118,9 @@ pub fn run_new_validator(name: &str, global: bool) -> Result<(), RegistryError> 
     }
 
     let base_dir = if global {
-        ManagedDirectory::<ValidatorsConfig>::xdg_data()
-            .map_err(|e| {
-                RegistryError::Validation(format!("Could not resolve XDG data dir: {}", e))
-            })?
-            .root()
-            .join(name)
+        // Global validators live in the shared home-dotfile store `~/.validators/`
+        // (consistent with skills/agents/tools), not XDG.
+        crate::store::validators_store_dir(true).join(name)
     } else {
         PathBuf::from(name)
     };

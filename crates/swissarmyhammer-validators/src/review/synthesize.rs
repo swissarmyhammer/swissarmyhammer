@@ -114,6 +114,15 @@ pub fn synthesize(verified: Vec<VerifiedFinding>, now: &str) -> ReviewReport {
         }
     }
 
+    tracing::info!(
+        blockers = counts.blockers,
+        warnings = counts.warnings,
+        nits = counts.nits,
+        confirmed = counts.confirmed,
+        refuted = counts.refuted,
+        "review synthesis complete"
+    );
+
     ReviewReport { markdown, counts }
 }
 
@@ -220,6 +229,13 @@ pub async fn run_review(
 ) -> Result<ReviewReport, AvpError> {
     // Stage 1: scope → work-list (deterministic).
     let work = scope_review(scope, repo_path, loader, conn, embedder).await?;
+
+    let total_files: usize = work.validators.iter().map(|v| v.files.len()).sum();
+    tracing::info!(
+        validators = work.validators.len(),
+        files = total_files,
+        "review run: scoped work-list ready, fanning out"
+    );
 
     // Stage 2: fan out across the shared pool; awaiting drains every fan-out task.
     let findings = run_fleet(&work, loader, pool, fleet_config).await;
@@ -337,6 +353,31 @@ mod tests {
         let report = synthesize(vec![], "2026-04-11 13:08");
         assert_eq!(report.markdown, "## Review Findings (2026-04-11 13:08)\n");
         assert_eq!(report.counts, ReviewCounts::default());
+    }
+
+    #[test]
+    #[tracing_test::traced_test]
+    fn synthesize_logs_the_final_severity_and_verdict_counts() {
+        let verified = vec![
+            confirmed(
+                "src/a.rs",
+                42,
+                "dead-code",
+                Some("no-unused"),
+                Severity::Blocker,
+                "`foo` is never called",
+                Some("Delete it"),
+            ),
+            refuted("src/a.rs", 99, "dead-code", "`bar` is never called"),
+        ];
+
+        let _report = synthesize(verified, "2026-04-11 13:08");
+
+        // The synthesis summary reports the per-severity + per-verdict tallies.
+        assert!(logs_contain("review synthesis complete"));
+        assert!(logs_contain("blockers=1"));
+        assert!(logs_contain("confirmed=1"));
+        assert!(logs_contain("refuted=1"));
     }
 
     #[test]

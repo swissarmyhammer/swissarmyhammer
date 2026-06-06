@@ -140,3 +140,6 @@ tokio = { workspace = true }
 model-embedding = { workspace = true, features = ["test-support"] }
 # Scripted ACP agent harness for the review-tool integration tests.
 agent-client-protocol-extras = { workspace = true }
+# Captures `tracing` output to assert the review engine's observability traces
+# fire on the real tool path (through spawn_blocking).
+tracing-test = { workspace = true }

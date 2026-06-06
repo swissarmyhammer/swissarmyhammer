@@ -218,14 +218,17 @@ pub fn get_validator(name: &str) -> Result<ValidatorDetail, String> {
     })
 }
 
-/// `check validators`: lint every loaded RuleSet.
+/// `check validators`: lint every loaded RuleSet and report load failures.
 ///
 /// Reports a problem when a RuleSet declares a glob that does not compile, sets a
 /// stray `triggerMatcher` (review validators match by file, not by event), or
-/// declares a probe that is not in the engine's probe catalog. A RuleSet that
-/// failed to parse never reaches the loader, so a malformed-frontmatter validator
-/// is reported indirectly: it is simply absent. The lint here covers the
-/// structural checks on what *did* load.
+/// declares a probe that is not in the engine's probe catalog.
+///
+/// A RuleSet whose frontmatter does not parse never reaches the loaded set, but
+/// it is **not** silently dropped: the loader retains each parse failure
+/// ([`load_failures`](swissarmyhammer_validators::ValidatorLoader::load_failures))
+/// and this lint surfaces every one as an error naming the offending path and its
+/// parse problem. A broken validator never aborts the run — the rest still load.
 ///
 /// # Errors
 ///
@@ -239,6 +242,17 @@ pub fn check_validators() -> Result<CheckValidatorsResponse, String> {
     for ruleset in rulesets {
         let path = ruleset.base_path.display().to_string();
         lint_ruleset(ruleset, &path, &mut errors);
+    }
+
+    // Dropped (unparseable) validators: each is reported, not swallowed.
+    for failure in loader.load_failures() {
+        errors.push(ValidatorProblem {
+            path: failure.path.display().to_string(),
+            problem: format!(
+                "failed to load ({} validator): {}",
+                failure.source, failure.error
+            ),
+        });
     }
 
     errors.sort_by(|a, b| {

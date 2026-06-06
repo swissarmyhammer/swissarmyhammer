@@ -73,6 +73,23 @@ pub fn tool_store_dir(global: bool) -> PathBuf {
     }
 }
 
+/// Return the central validator store directory.
+///
+/// - Project scope: `.validators/`
+/// - Global scope: `~/.validators/`
+///
+/// Validators deploy store-only (no symlink): the validator engine's loader
+/// reads this directory directly, the same way the tool store is read.
+pub fn validators_store_dir(global: bool) -> PathBuf {
+    if global {
+        dirs::home_dir()
+            .expect("Could not find home directory")
+            .join(".validators")
+    } else {
+        PathBuf::from(".validators")
+    }
+}
+
 /// Compute the symlink name for a sanitized package path, given a policy.
 ///
 /// - `LastSegment`: `"anthropics/skills/algorithmic-art"` → `"algorithmic-art"`
@@ -421,6 +438,20 @@ mod tests {
     fn test_tool_store_dir_global() {
         let dir = tool_store_dir(true);
         assert!(dir.ends_with(".tools"));
+        let home = dirs::home_dir().unwrap();
+        assert!(dir.starts_with(home));
+    }
+
+    #[test]
+    fn test_validators_store_dir_project() {
+        let dir = validators_store_dir(false);
+        assert_eq!(dir, PathBuf::from(".validators"));
+    }
+
+    #[test]
+    fn test_validators_store_dir_global() {
+        let dir = validators_store_dir(true);
+        assert!(dir.ends_with(".validators"));
         let home = dirs::home_dir().unwrap();
         assert!(dir.starts_with(home));
     }

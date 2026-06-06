@@ -86,7 +86,7 @@ pub fn discover_packages(
         }
     }
 
-    // Scan validators from ./.validators/ (project) and $XDG_DATA_HOME/validators/ (global)
+    // Scan validators from ./.validators/ (project) and ~/.validators/ (global)
     // Skip when --agent is set: validators are not agent-scoped
     if (validators_only || scan_all) && agent_filter.is_none() {
         let local_validators = crate::install::validators_dir(false);
@@ -96,11 +96,7 @@ pub fn discover_packages(
 
         let global_validators = crate::install::validators_dir(true);
         if global_validators.exists() {
-            scan_validators(
-                &global_validators,
-                "$XDG_DATA_HOME/validators/",
-                &mut packages,
-            );
+            scan_validators(&global_validators, "~/.validators/", &mut packages);
         }
     }
 
