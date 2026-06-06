@@ -28,9 +28,6 @@ use super::tool_registry::{
 };
 use super::tools::agent::register_agent_tools;
 use super::tools::skill::register_skill_tools;
-use super::tracing_util::{
-    serialize_json_bounded, truncate_utf8_for_log, MAX_ARGS_BYTES_INFO, MAX_PREVIEW_BYTES_INFO,
-};
 use swissarmyhammer_agents::AgentLibrary;
 use swissarmyhammer_skills::SkillLibrary;
 
@@ -1812,16 +1809,16 @@ fn connecting_host_from_context(context: &RequestContext<RoleServer>) -> Host {
         .unwrap_or(Host::Other)
 }
 
-/// Render a [`CallToolResult`] for diagnostic preview.
+/// Render a [`CallToolResult`] as its full diagnostic text.
 ///
 /// Joins all text content blocks; non-text blocks (images, audio, etc.) are
-/// summarized as `<binary:N bytes>` placeholders so the log line stays
-/// compact even for tools that return mixed content.
+/// summarized as `<image>` / `<audio>` / `<resource>` placeholders so the log
+/// line stays readable even for tools that return mixed content.
 ///
-/// Returns `(total_text_bytes, joined_text)`. The caller is responsible for
-/// truncating the returned string before emitting it at info level — full
-/// text payloads are only safe at trace level.
-fn format_call_result_for_preview(result: &rmcp::model::CallToolResult) -> (usize, String) {
+/// Returns `(total_text_bytes, joined_text)` — the complete joined text, never
+/// truncated. Log truncation is forbidden in this codebase, so callers emit the
+/// returned string in full.
+fn format_call_result_text(result: &rmcp::model::CallToolResult) -> (usize, String) {
     use rmcp::model::RawContent;
 
     let mut joined = String::new();
@@ -2085,39 +2082,22 @@ impl ServerHandler for McpServer {
             //   parse_ms     — pre-call args logging + lookup of the tool.
             //   dispatch_ms  — building the tool context for this peer.
             //   handler_ms   — `tool.execute()` itself.
-            //   response_ms  — formatting the response preview.
+            //   response_ms  — formatting the response text.
             let total_start = std::time::Instant::now();
             let parse_start = total_start;
 
             // Pre-call args logging — answers "what did rule X actually
-            // call?". JSON serialization is gated behind `tracing::enabled!`
+            // call?". The FULL serialized args are logged at info level, never
+            // truncated. JSON serialization is gated behind `tracing::enabled!`
             // so info-disabled runs do not allocate.
-            //
-            // Trace-level callers see the full payload; info-level callers
-            // see a UTF-8-safe truncation with a `...[+N more bytes]`
-            // marker. The info path uses a bounded writer that stops
-            // serializing at the byte budget instead of allocating the full
-            // JSON and discarding the tail.
             if let Some(args) = request.arguments.as_ref() {
-                if tracing::enabled!(tracing::Level::TRACE) {
+                if tracing::enabled!(tracing::Level::INFO) {
                     let full = serde_json::to_string(args)
                         .unwrap_or_else(|_| "<unserializable>".to_string());
-                    tracing::trace!(
-                        tool = %tool_name,
-                        args_full = %full,
-                        "tool_call args (full payload)"
-                    );
-                } else if tracing::enabled!(tracing::Level::INFO) {
-                    let (preview, total_bytes) = serialize_json_bounded(args, MAX_ARGS_BYTES_INFO);
-                    let suffix = if total_bytes > preview.len() {
-                        format!("...[+{} more bytes]", total_bytes - preview.len())
-                    } else {
-                        String::new()
-                    };
                     tracing::info!(
                         tool = %tool_name,
-                        args_preview = %format!("{}{}", preview, suffix),
-                        args_bytes = total_bytes,
+                        args_bytes = full.len(),
+                        args = %full,
                         "tool_call args"
                     );
                 }
@@ -2166,22 +2146,15 @@ impl ServerHandler for McpServer {
             };
             tracing::Span::current().record("status", if is_error { "error" } else { "ok" });
 
-            // Post-call response preview — answers "what did the tool
-            // return?". Computed when info OR trace is enabled so the trace
-            // branch never reads from an empty preview when info is
-            // suppressed by a custom subscriber.
-            //
-            // Note: This is a *preview*, not the full payload. Full
-            // responses (including `read_file` content and tool errors) are
-            // emitted only at trace level — keeps secret hygiene at info
-            // level while still surfacing diagnostic detail.
+            // Post-call response text — answers "what did the tool return?".
+            // The FULL joined result text is logged at info level, never
+            // truncated. Computed only when info is enabled so info-disabled
+            // runs do not allocate.
             let response_start = std::time::Instant::now();
-            let (result_bytes, preview): (usize, String) =
-                if tracing::enabled!(tracing::Level::INFO)
-                    || tracing::enabled!(tracing::Level::TRACE)
-                {
+            let (result_bytes, result_text): (usize, String) =
+                if tracing::enabled!(tracing::Level::INFO) {
                     match &result {
-                        Ok(call_result) => format_call_result_for_preview(call_result),
+                        Ok(call_result) => format_call_result_text(call_result),
                         Err(e) => {
                             let s = e.to_string();
                             (s.len(), s)
@@ -2192,15 +2165,6 @@ impl ServerHandler for McpServer {
                 };
             let response_ms = response_start.elapsed().as_millis() as u64;
 
-            if tracing::enabled!(tracing::Level::TRACE) {
-                tracing::trace!(
-                    tool = %tool_name,
-                    result_full = %preview,
-                    result_bytes,
-                    "tool_call result (full payload)"
-                );
-            }
-
             let total_ms = total_start.elapsed().as_millis() as u64;
             tracing::info!(
                 duration_ms = total_ms,
@@ -2210,7 +2174,7 @@ impl ServerHandler for McpServer {
                 response_ms,
                 error = is_error,
                 result_bytes,
-                preview = %truncate_utf8_for_log(&preview, MAX_PREVIEW_BYTES_INFO),
+                result = %result_text,
                 "tool_call complete"
             );
 
