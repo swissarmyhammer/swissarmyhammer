@@ -125,12 +125,23 @@ pub trait Doctorable {
 
     /// Run health checks and return results
     ///
-    /// Implementations should:
+    /// The default returns a single OK [`HealthCheck`] built from the
+    /// component's [`name`](Self::name) and [`category`](Self::category),
+    /// so every component surfaces at least one line in `sah doctor` even
+    /// when it has no special diagnostics to report.
+    ///
+    /// Implementations with real diagnostics should override this and:
     /// - Check all relevant health conditions
     /// - Return one HealthCheck per condition
     /// - Provide clear messages and actionable fixes
     /// - Avoid blocking or expensive operations
-    fn run_health_checks(&self) -> Vec<HealthCheck>;
+    fn run_health_checks(&self) -> Vec<HealthCheck> {
+        vec![HealthCheck::ok(
+            self.name(),
+            format!("{} available", self.name()),
+            self.category(),
+        )]
+    }
 
     /// Optional: Check if this component is available/applicable
     ///
@@ -295,6 +306,32 @@ mod tests {
 
         assert_eq!(ok_checks.len(), 1);
         assert_eq!(error_checks.len(), 1);
+    }
+
+    #[test]
+    fn test_default_run_health_checks_yields_single_ok() {
+        // A minimal Doctorable that only defines name() and category()
+        // should inherit the default run_health_checks producing exactly
+        // one OK check derived from name()/category().
+        struct MinimalComponent;
+
+        impl Doctorable for MinimalComponent {
+            fn name(&self) -> &str {
+                "Minimal"
+            }
+
+            fn category(&self) -> &str {
+                "tools"
+            }
+        }
+
+        let checks = MinimalComponent.run_health_checks();
+        assert_eq!(checks.len(), 1, "default should yield exactly one check");
+        let check = &checks[0];
+        assert_eq!(check.status, HealthStatus::Ok);
+        assert_eq!(check.name, "Minimal");
+        assert_eq!(check.category, "tools");
+        assert_eq!(check.message, "Minimal available");
     }
 
     #[test]

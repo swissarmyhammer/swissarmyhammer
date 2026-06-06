@@ -11,11 +11,9 @@ brew install swissarmyhammer/tap/swissarmyhammer-cli
 # Initialize in your project
 cd your-project
 sah init        # MCP server + tools + skills
-avp init        # Validators (hooks)
 
 # Verify
 sah doctor
-avp doctor
 ```
 
 ## The Development Cycle

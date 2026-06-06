@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KTBNPQQJ45YWGVSY10NR4RX9
-position_column: todo
-position_ordinal: 8f80
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffb80
 project: local-review
 title: Migrate safety rules to focused review-time validators (no-secrets, injection, command-safety, test-integrity)
 ---

@@ -1,0 +1,71 @@
+[package]
+name = "swissarmyhammer-validators"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pluggable review engine: the rules-as-data validator loader and the shared agent pool"
+
+[dependencies]
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Pattern matching
+glob = { workspace = true }
+regex = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# File system traversal
+walkdir = { workspace = true }
+
+# Validator directory management and `@`-include expansion
+swissarmyhammer-directory = { workspace = true }
+
+# Templating / partials for the rules-as-data loader
+swissarmyhammer-templating = { workspace = true }
+
+# ACP agent connection driven by the shared agent pool
+claude-agent = { workspace = true }
+agent-client-protocol = { workspace = true }
+
+# Scope stage (engine stage 1): the changed-file set + entity-level semantic diff
+# are reused from the same library crates the `git` MCP tool is built on. The tool
+# itself lives in `swissarmyhammer-tools` and is not library-callable from the
+# engine (depending on it would invert the dependency direction), so this is the
+# factored shared git-ops call site — git2 via `swissarmyhammer-git` plus the
+# tree-sitter differ in `swissarmyhammer-sem` — never a reimplementation or shell-out.
+swissarmyhammer-git = { workspace = true }
+swissarmyhammer-sem = { workspace = true }
+
+# Engine-run code_context probes: the duplicate/callgraph/search ops reused as a
+# library (never reimplemented) and the embedding trait used to bind probe args.
+swissarmyhammer-code-context = { workspace = true }
+model-embedding = { workspace = true }
+# The code_context ops take a `&Connection`; the probe runner's public API mirrors
+# that established pattern, so rusqlite is a normal dependency, not just dev.
+rusqlite = { workspace = true }
+
+# Async runtime backing the agent pool's worker tasks
+tokio = { workspace = true }
+
+[build-dependencies]
+swissarmyhammer-build = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+serial_test = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tracing-test = { workspace = true }
+# Mock-agent harness for the agent-pool tests (PlaybackAgent + ConnectTo wiring)
+agent-client-protocol-extras = { workspace = true }
+futures = { workspace = true }
+# Deterministic embedder for the probe-runner tests (no 600MB model load)
+model-embedding = { workspace = true, features = ["test-support"] }
+# Real temp git repos for the scope-stage tests (init/commit/working-tree).
+git2 = { workspace = true }

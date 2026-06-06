@@ -118,6 +118,7 @@ pub fn plugin_catalog() -> Vec<PluginSpec> {
                 mcp_server: Some(ProfileMcpServer::serve("sah")),
                 skills: Some(Selector::All),
                 agents: Some(Selector::All),
+                validators: Some(Selector::All),
                 statusline: false,
                 preamble: false,
             },

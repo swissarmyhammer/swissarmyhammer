@@ -7,8 +7,8 @@ use agent_client_protocol::schema::{
 };
 use agent_client_protocol::Result as AcpResult;
 use agent_client_protocol_extras::{
-    hookable_agent_from_config, HookCommandContext, HookConfig, HookEvaluator, HookEventKind,
-    HookableAgent, PlaybackAgent, SessionSource,
+    hookable_agent_from_config, HookConfig, HookEvaluator, HookEventKind, HookableAgent,
+    PlaybackAgent, SessionSource,
 };
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -427,26 +427,6 @@ pub(crate) async fn send_named_tool_notification(
         SessionUpdate::ToolCall(tool_call),
     ));
     tokio::time::sleep(NOTIFY_DELAY).await;
-}
-
-// ---------------------------------------------------------------------------
-// AVP schema validation helpers
-// ---------------------------------------------------------------------------
-
-/// Build a HookCommandContext with typical test values for AVP validation.
-///
-/// `avp_schema_tests.rs` is the only consumer; that module is currently
-/// disabled while `avp-common` is unbuildable under ACP 0.11 (it depends
-/// on `claude-agent` and `llama-agent`, which sibling tasks haven't yet
-/// migrated). Once the sibling tasks land, re-enable that module and this
-/// helper will be reached again — keep it here so the migration path is
-/// a one-line `mod avp_schema_tests;` add in `main.rs`.
-#[allow(dead_code)]
-pub(crate) fn avp_test_context() -> HookCommandContext {
-    HookCommandContext {
-        transcript_path: "/tmp/test-transcript.jsonl".to_string(),
-        permission_mode: "default".to_string(),
-    }
 }
 
 // ---------------------------------------------------------------------------

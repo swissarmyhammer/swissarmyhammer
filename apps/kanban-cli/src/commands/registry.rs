@@ -41,6 +41,7 @@ pub fn profile(_scope: InitScope) -> mirdan::install::Profile {
             KANBAN_PROFILE.to_string(),
         )),
         agents: None,
+        validators: None,
         statusline: false,
         preamble: false,
     }

@@ -48,10 +48,10 @@ impl McpTool for MyTool {
 
 ### Doctorable
 
-Health checks for `sah doctor`. Use the macro for tools with no external dependencies:
+Health checks for `sah doctor`. Use the macro for tools with no external dependencies; it wires `name()`/`category()` and inherits the default OK check so the tool still appears in the report:
 
 ```rust
-impl_empty_doctorable!(MyTool);
+impl_default_doctorable!(MyTool);
 ```
 
 Or implement custom checks:

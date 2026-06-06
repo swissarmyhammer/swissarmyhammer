@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KTBN925WPAWDYXS12W5HETEH
-position_column: todo
-position_ordinal: '8380'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffff080
 project: local-review
 title: Finding data model + structured agent-output schema
 ---
@@ -24,14 +24,20 @@ Types:
 - `parse_findings(agent_text) -> Result<Vec<Finding>>` tolerant of prose/``` fences around the JSON.
 
 ## Acceptance Criteria
-- [ ] `Finding` (with `validator`, optional `rule`, and the `claim`/`evidence`/`suggestion` semantics above), `Severity`, `VerifiedFinding` exist with round-trip serde tests.
-- [ ] `Severity` serializes to exactly `blocker` / `warning` / `nit`.
-- [ ] `parse_findings` extracts a `Vec<Finding>` from a realistic response (prose + fenced JSON), tolerates a missing `rule`/`suggestion`, and errors clearly on malformed input.
-- [ ] Field names/semantics are documented on the type (claim = what+why; evidence = proof).
+- [x] `Finding` (with `validator`, optional `rule`, and the `claim`/`evidence`/`suggestion` semantics above), `Severity`, `VerifiedFinding` exist with round-trip serde tests.
+- [x] `Severity` serializes to exactly `blocker` / `warning` / `nit`.
+- [x] `parse_findings` extracts a `Vec<Finding>` from a realistic response (prose + fenced JSON), tolerates a missing `rule`/`suggestion`, and errors clearly on malformed input.
+- [x] Field names/semantics are documented on the type (claim = what+why; evidence = proof).
 
 ## Tests
-- [ ] Unit tests: serde round-trip per type (incl. a finding with `rule: None` and one with `Some`); `parse_findings` on (a) clean JSON, (b) JSON in ```json fences with surrounding prose, (c) malformed → `Err`.
-- [ ] `cargo test -p swissarmyhammer-validators review::types` green.
+- [x] Unit tests: serde round-trip per type (incl. a finding with `rule: None` and one with `Some`); `parse_findings` on (a) clean JSON, (b) JSON in ```json fences with surrounding prose, (c) malformed → `Err`.
+- [x] `cargo test -p swissarmyhammer-validators review::types` green.
 
 ## Workflow
 - Use `/tdd` — round-trip and parser tests first. Reuse fence-stripping from the existing validator response parser rather than writing a new one. Depends on the rename (engine crate name). (Fan-out prompt must request `rule` + the claim/evidence split — handled in the fan-out task.)
+
+## Implementation Notes
+- `parse_validator_response`/`extract_json` were removed from the tree in the RuleSet-architecture refactor (commit 89dc90bad). Recovered the proven fence-stripping algorithm from git history (`avp-common/src/validator/executor.rs`) and ported it into `src/review/types.rs` as `extract_json_array`, generalized from a single JSON object (`{}`) to the JSON array (`[]`) findings are emitted as. Honours string literals/escapes so a `]` inside a claim string is not mistaken for the array close.
+- New module wired in: `src/review/mod.rs` (re-exports) + `pub mod review;` in `lib.rs`.
+- Errors flow through the crate's existing `AvpError::Json` (`#[from] serde_json::Error`).
+- Verification: `cargo test -p swissarmyhammer-validators` → 144 lib + 2 doc tests pass, 0 failures; `cargo clippy -p swissarmyhammer-validators --all-targets` clean.

@@ -185,8 +185,8 @@ fn is_task_modifying_operation(verb: Verb, noun: Noun) -> bool {
     )
 }
 
-// No health checks needed
-crate::impl_empty_doctorable!(KanbanTool);
+// No special health checks; inherits the default OK check.
+crate::impl_default_doctorable!(KanbanTool);
 
 impl swissarmyhammer_common::lifecycle::Initializable for KanbanTool {
     fn name(&self) -> &str {

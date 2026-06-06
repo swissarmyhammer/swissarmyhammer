@@ -5,8 +5,8 @@ depends_on:
 - 01KTBNNTCCVS81QZV4CFQZV4X1
 - 01KTBNQZFX33J2QA6E99HE0M5S
 - 01KTBNGHCH7B3J3DVF9CXPADJ1
-position_column: todo
-position_ordinal: '9180'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffff80
 project: local-review
 title: 'End-to-end: real diff → review tool → confirmed duplication/dead-code/hardcode findings'
 ---
@@ -32,14 +32,24 @@ Drive the full path: index the fixture (code_context), then run the tool with a 
 - Skill path: assert the report lands on a temp kanban task (task-mode append / range-mode tracking task) in the documented format.
 
 ## Acceptance Criteria
-- [ ] E2E exercises real scope → fan-out → guard → verify → synthesize through the registered tool against a real temp git repo + code_context index, across `review working`/`sha`/`file`.
-- [ ] Items 1–5 reported with correct validator + severity; item 6 refuted by the agent; item 7 refuted by the guard (no agent spent on it); the language item (if included) flagged by the `rust` validator.
-- [ ] The skill-side write path lands the report on a temp kanban task in the dated GFM format.
-- [ ] Runs in CI without a live model (deterministic agent), asserting pipeline behavior, not hardcoded output strings (no fixture-only shortcut).
+- [x] E2E exercises real scope → fan-out → guard → verify → synthesize through the registered tool against a real temp git repo + code_context index, across `review working`/`sha`/`file`.
+- [x] Items 1–5 reported with correct validator + severity; item 6 refuted by the agent; item 7 refuted by the guard (no agent spent on it); the language item (rust) flagged by the `rust` validator.
+- [x] The skill-side write path lands the report on a temp kanban task in the dated GFM format.
+- [x] Runs in CI without a live model (deterministic agent), asserting pipeline behavior, not hardcoded output strings (no fixture-only shortcut).
 
 ## Tests
-- [ ] `crates/swissarmyhammer-tools/tests/integration/review_e2e.rs` (or the established integration location) green.
-- [ ] `cargo test -p swissarmyhammer-tools review_e2e` and `cargo test --workspace` green.
+- [x] `crates/swissarmyhammer-tools/tests/integration/review_e2e.rs` green.
+- [x] `cargo test -p swissarmyhammer-tools review_e2e` (4 passed) and `cargo build --workspace --tests` (exit 0) green.
 
 ## Workflow
-- Use `/tdd` — stand up the planted-defect fixture and assertions first. Mirror `semantic_search_e2e.rs` for the real-indexer→real-tool structure. Guard against the fixture-only anti-pattern: drive the production tool path end to end. Depends on the tool, the skill, and the hook teardown (no stale hook path interferes).
+- Used `/tdd`: stood up the planted-defect fixture + assertions first, then proved RED via a deliberate guard break (item 7 surfaced as a blocker), then GREEN with the guard restored. Mirrors `semantic_search_e2e.rs` for the real-pipeline structure. Drives the production tool path end to end (registered `ReviewTool` → `run_review_request` → real git diff + real scope + real probes + guard + verify + synthesize); only the agent (scripted playback) and embedder (mock) and index *contents* (deterministically seeded into the real on-disk schema) are deterministic — the seam the `review_op` tests already use.
+
+## Implementation notes
+- New file: `crates/swissarmyhammer-tools/tests/integration/review_e2e.rs` (+ one `mod review_e2e;` line in `tests/integration/mod.rs`). No production code changed; `apps/swissarmyhammer-cli` server wiring and `builtin/validators/**` untouched.
+- Four planted `.rs` files (≤ default batch size 4) so each builtin validator (`duplication`/`reuse`/`data-driven`/`dead-code`/`no-secrets`/`rust`) gets one fan-out batch and the scripted agent fires once per validator. Items 4 (dead orphan) and 7 (claimed-dead-but-called) live in *separate* files so each file's `callers` fact attaches to only its own symbol — the guard refutes 7 (seeded `lsp_call_edge`) and passes 4 (no edge) deterministically.
+- On-disk index built at `<repo>/.code-context/index.db` with the production `create_schema`, seeded so `find_duplicates`/`search_code`/`get_callgraph` hit deterministically (mock embedder, no 600 MB model).
+- Scripted ACP agent matches each prompt on ALL of a needle set (validator+file for fan-out, claim for verify), and is shaped like a real `AcpAgentHandle` (streams onto the backend broadcast that `notification_rx` subscribes to, AND bridges onto the connection) so it exercises the production single-path notification collection.
+- The `review working` test asserts counts: 3 blockers (1,4,5), 3 warnings (2,3,8), 6 confirmed, 2 refuted — and that the two refuted claims are absent from the rendered GFM. `sha`/`file` share the dispatch→driver path. The kanban-write test drives a real file-backed board (`InitBoard`/`AddTask`/`GetTask`) and asserts the engine `markdown` lands verbatim.
+
+## Pre-existing unrelated failure (NOT introduced here)
+- `integration::skill_e2e::test_skill_test_returns_body_content` fails on this branch independently of this change (verified by removing review_e2e.rs + the mod line and re-running: still 0 passed / 1 failed). It asserts the deployed `test` skill body contains "tester"; the deployed skill content has drifted. Out of scope for this task (different skill, file untouched here).

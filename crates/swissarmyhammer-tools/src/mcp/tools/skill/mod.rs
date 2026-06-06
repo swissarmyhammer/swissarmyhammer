@@ -124,7 +124,7 @@ impl swissarmyhammer_common::lifecycle::Initializable for SkillTool {
 // user} · Skills`), which knows both `~/.claude/skills/` and the project's
 // `.claude/skills/`. The legacy project-scope-only `Skills installation` check
 // was removed (kanban 01KSMXKZM1NZV1QH0SSKAP0V4P).
-crate::impl_empty_doctorable!(SkillTool);
+crate::impl_default_doctorable!(SkillTool);
 
 #[async_trait]
 impl McpTool for SkillTool {

@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KTBNHSR4EVTVJ35MGGD510R2
-position_column: todo
-position_ordinal: '8880'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffff680
 project: local-review
 title: Install builtin validators to $XDG_DATA_HOME/validators (deploy + refresh)
 ---

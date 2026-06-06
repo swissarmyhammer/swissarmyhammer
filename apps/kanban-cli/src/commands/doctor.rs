@@ -5,8 +5,8 @@
 //! - `kanban` binary in PATH
 //! - Kanban board initialized under `.kanban/` in the current working directory
 //!
-//! Modeled on the same `DoctorRunner` pattern as `shelltool-cli` and `avp-cli`
-//! so the three CLI doctors stay structurally consistent.
+//! Modeled on the same `DoctorRunner` pattern as `shelltool-cli`
+//! so the CLI doctors stay structurally consistent.
 
 use std::env;
 use std::path::PathBuf;

@@ -2,8 +2,8 @@
 assignees:
 - claude-code
 depends_on: []
-position_column: todo
-position_ordinal: '8580'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffeb80
 project: local-review
 title: 'Teardown: remove the AVP validator doctor rule'
 ---

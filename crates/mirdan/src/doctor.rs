@@ -3,16 +3,14 @@
 //! Checks:
 //! 1. Mirdan binary in PATH
 //! 2. Agents detected
-//! 3. AVP directory exists
-//! 4. Install stack (per-component install status from [`crate::status`])
-//! 5. Registry reachable
-//! 6. Credentials valid
+//! 3. Install stack (per-component install status from [`crate::status`])
+//! 4. Registry reachable
+//! 5. Credentials valid
 
 use std::env;
 use std::path::PathBuf;
 
 use swissarmyhammer_common::lifecycle::InitScope;
-use swissarmyhammer_directory::{AvpConfig, ManagedDirectory};
 use swissarmyhammer_doctor::{Check, CheckStatus, DoctorRunner};
 
 use crate::agents;
@@ -44,7 +42,6 @@ impl MirdanDoctor {
     pub async fn run_diagnostics(&mut self) -> i32 {
         self.check_mirdan_in_path();
         self.check_agents_detected();
-        self.check_avp_directory();
         self.check_install_stack();
         self.check_registry_reachable().await;
         self.check_credentials();
@@ -171,44 +168,6 @@ impl MirdanDoctor {
         }
     }
 
-    /// Check if .avp/ directory exists for validators.
-    fn check_avp_directory(&mut self) {
-        let local_avp = PathBuf::from(".avp");
-        // Global AVP validators live under $XDG_DATA_HOME/avp/ (defaults to ~/.local/share/avp/)
-        let global_avp = ManagedDirectory::<AvpConfig>::xdg_data()
-            .ok()
-            .map(|dir| dir.root().to_path_buf());
-
-        let local_exists = local_avp.exists();
-        let global_exists = global_avp.as_ref().is_some_and(|p| p.exists());
-
-        if local_exists || global_exists {
-            let mut locations = Vec::new();
-            if local_exists {
-                locations.push("project (.avp/)");
-            }
-            if global_exists {
-                locations.push("global ($XDG_DATA_HOME/avp/)");
-            }
-            self.add_check(Check {
-                name: "AVP Directory".to_string(),
-                status: CheckStatus::Ok,
-                message: format!("Found: {}", locations.join(", ")),
-                fix: None,
-            });
-        } else {
-            self.add_check(Check {
-                name: "AVP Directory".to_string(),
-                status: CheckStatus::Warning,
-                message: "No .avp directory found".to_string(),
-                fix: Some(
-                    "Run 'mirdan new validator <name>' or 'mirdan install <package>' to create one"
-                        .to_string(),
-                ),
-            });
-        }
-    }
-
     /// Check if the registry is reachable.
     async fn check_registry_reachable(&mut self) {
         let url = get_registry_url();
@@ -325,14 +284,6 @@ mod tests {
         doctor.check_agents_detected();
         assert_eq!(doctor.checks().len(), 1);
         assert_eq!(doctor.checks()[0].name, "Agents Detected");
-    }
-
-    #[test]
-    fn test_check_avp_directory() {
-        let mut doctor = MirdanDoctor::new();
-        doctor.check_avp_directory();
-        assert_eq!(doctor.checks().len(), 1);
-        assert_eq!(doctor.checks()[0].name, "AVP Directory");
     }
 
     #[test]

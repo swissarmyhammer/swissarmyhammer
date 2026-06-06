@@ -1,6 +1,7 @@
 ---
 name: no-test-cheating
 description: Detect attempts to skip, disable, or mock tests inappropriately
+severity: error
 ---
 
 # No Test Cheating Validator

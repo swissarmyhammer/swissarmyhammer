@@ -88,7 +88,6 @@ dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-schema",
  "async-trait",
- "avp-common",
  "axum",
  "futures",
  "model-context-protocol-extras",
@@ -531,69 +530,6 @@ name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
-
-[[package]]
-name = "avp-cli"
-version = "0.14.0"
-dependencies = [
- "avp-common",
- "clap",
- "clap-markdown",
- "clap_complete",
- "clap_mangen",
- "colored 2.2.0",
- "comfy-table",
- "dirs",
- "serde_json",
- "serial_test",
- "swissarmyhammer-cli-completions",
- "swissarmyhammer-common",
- "swissarmyhammer-config",
- "swissarmyhammer-doctor",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "avp-common"
-version = "0.14.0"
-dependencies = [
- "agent-client-protocol",
- "agent-client-protocol-extras",
- "async-trait",
- "base64 0.22.1",
- "claude-agent",
- "fs2",
- "futures",
- "glob",
- "mirdan",
- "num_cpus",
- "regex",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "serial_test",
- "sha2",
- "similar",
- "swissarmyhammer-agent",
- "swissarmyhammer-build",
- "swissarmyhammer-common",
- "swissarmyhammer-config",
- "swissarmyhammer-directory",
- "swissarmyhammer-prompts",
- "swissarmyhammer-templating",
- "swissarmyhammer-tools",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-test",
- "uuid",
- "walkdir",
- "which",
-]
 
 [[package]]
 name = "aws-lc-rs"
@@ -4830,6 +4766,7 @@ dependencies = [
  "serial_test",
  "sha2",
  "swissarmyhammer-agents",
+ "swissarmyhammer-build",
  "swissarmyhammer-cli-completions",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
@@ -8109,7 +8046,6 @@ dependencies = [
  "arboard",
  "assert_cmd",
  "atty",
- "avp-common",
  "chrono",
  "clap",
  "clap-markdown",
@@ -8750,6 +8686,8 @@ dependencies = [
 name = "swissarmyhammer-tools"
 version = "0.14.0"
 dependencies = [
+ "agent-client-protocol",
+ "agent-client-protocol-extras",
  "anyhow",
  "async-trait",
  "async-watcher",
@@ -8757,6 +8695,7 @@ dependencies = [
  "base64 0.22.1",
  "byte-unit",
  "chrono",
+ "claude-agent",
  "dirs",
  "encoding_rs",
  "filetime",
@@ -8803,6 +8742,7 @@ dependencies = [
  "swissarmyhammer-skills",
  "swissarmyhammer-templating",
  "swissarmyhammer-treesitter",
+ "swissarmyhammer-validators",
  "swissarmyhammer-web",
  "tempfile",
  "test-log",
@@ -8873,6 +8813,37 @@ dependencies = [
  "tree-sitter-typescript",
  "tree-sitter-yaml",
  "tree-sitter-zig",
+]
+
+[[package]]
+name = "swissarmyhammer-validators"
+version = "0.14.0"
+dependencies = [
+ "agent-client-protocol",
+ "agent-client-protocol-extras",
+ "claude-agent",
+ "futures",
+ "git2",
+ "glob",
+ "model-embedding",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "serial_test",
+ "swissarmyhammer-build",
+ "swissarmyhammer-code-context",
+ "swissarmyhammer-directory",
+ "swissarmyhammer-git",
+ "swissarmyhammer-sem",
+ "swissarmyhammer-templating",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-test",
+ "walkdir",
 ]
 
 [[package]]

@@ -3,7 +3,7 @@
 //! Mirdan manages four package types across all detected AI coding agents:
 //!
 //! - **Skills** (agentskills.io spec): Deployed to each agent's skill directory
-//! - **Validators** (AVP spec): Deployed to .avp/validators/
+//! - **Validators** (AVP spec): Deployed to ./.validators/
 //! - **Tools** (MCP server definitions): Deployed to .tools/ + agent MCP configs
 //! - **Plugins** (Claude Code plugins): Deployed to .claude/plugins/
 //!
@@ -12,6 +12,7 @@
 pub mod agents;
 pub mod auth;
 pub mod banner;
+pub mod builtin_validators;
 mod cli;
 pub use cli::{Cli, Commands, NewKind};
 pub mod completions;

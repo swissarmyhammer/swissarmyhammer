@@ -21,6 +21,44 @@ use swissarmyhammer_tools::mcp::unified_server::McpServerHandle;
 
 pub mod display;
 
+/// Wire the live `review` agent + embedder factories into a freshly-started MCP
+/// server.
+///
+/// The server registers the `review` tool with no agent factory (so its
+/// pipeline ops error until wired). This is the cycle-free injection point: the
+/// CLI may depend on `swissarmyhammer-agent`, which `swissarmyhammer-tools`
+/// cannot. We build the production `review_agent_factory` from the server's
+/// own resolved `ModelConfig` and register the configured tool into the shared
+/// registry the serving task reads on every `call_tool`. A pinned
+/// `review.concurrency` is honored when set; the platform embedder default is
+/// kept (`None`).
+///
+/// A no-op when the handle exposes no server instance (it always does for the
+/// stdio/HTTP serve paths).
+async fn wire_review_factories(handle: &McpServerHandle, concurrency: Option<usize>) {
+    use swissarmyhammer_agent::review_agent_factory;
+
+    let Some(server) = handle.server() else {
+        return;
+    };
+    let model_config = server.tool_context.agent_config.clone();
+    let factory = review_agent_factory(model_config);
+    server
+        .set_review_factories(factory, None, concurrency)
+        .await;
+}
+
+/// Read the `review.concurrency` config override (a positive integer pinning the
+/// review pool worker count). Returns `None` when unset, non-numeric, or `0`.
+fn review_concurrency(cli_context: &CliContext) -> Option<usize> {
+    cli_context
+        .template_context
+        .get("review.concurrency")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .filter(|n| *n > 0)
+}
+
 /// Help text for the serve command
 #[cfg(test)]
 pub const DESCRIPTION: &str = include_str!("description.md");
@@ -74,6 +112,8 @@ async fn handle_http_serve(
         Ok(handle) => handle,
         Err(exit_code) => return exit_code,
     };
+
+    wire_review_factories(&server_handle, review_concurrency(cli_context)).await;
 
     manage_http_server_lifecycle(cli_context, server_handle).await
 }
@@ -249,6 +289,8 @@ async fn handle_stdio_serve(cli_context: &CliContext, model_override: Option<Str
             Ok(handle) => handle,
             Err(exit_code) => return exit_code,
         };
+
+    wire_review_factories(&server_handle, review_concurrency(cli_context)).await;
 
     handle_stdio_server_shutdown(server_handle).await
 }

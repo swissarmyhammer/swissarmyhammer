@@ -333,7 +333,7 @@ const PRIORITY_DIRS: &[&str] = &[
     "skills",
     ".claude/skills",
     "validators",
-    ".avp/validators",
+    ".validators",
     "tools",
     ".tools",
     "plugins",
@@ -347,7 +347,7 @@ const MAX_SCAN_DEPTH: usize = 5;
 /// Search order:
 /// 1. Subpath (if provided)
 /// 2. Root directory
-/// 3. Priority directories (`skills/`, `.claude/skills/`, `validators/`, `.avp/validators/`)
+/// 3. Priority directories (`skills/`, `.claude/skills/`, `validators/`, `.validators/`)
 /// 4. Recursive scan (max depth 5)
 ///
 /// Deduplicates by package name.

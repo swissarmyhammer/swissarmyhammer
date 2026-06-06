@@ -988,18 +988,21 @@ pub enum ToolCategory {
     },
 }
 
-/// Macro to implement Doctorable for tools that don't have health checks
+/// Macro to implement Doctorable for tools that don't have special health checks
 ///
-/// This provides a default implementation that returns no health checks.
-/// Tools that need custom health diagnostics should implement Doctorable manually.
+/// Wires `name()` to the tool's [`McpTool::name`] and `category()` to `"tools"`,
+/// and inherits the [`Doctorable::run_health_checks`] default — a single OK check
+/// derived from `name()`/`category()`. As a result every tool surfaces at least
+/// one OK line in `sah doctor`. Tools that need custom diagnostics should
+/// implement Doctorable manually and override `run_health_checks`.
 ///
 /// # Example
 ///
 /// ```ignore
-/// impl_empty_doctorable!(MyTool);
+/// impl_default_doctorable!(MyTool);
 /// ```
 #[macro_export]
-macro_rules! impl_empty_doctorable {
+macro_rules! impl_default_doctorable {
     ($tool_type:ty) => {
         impl swissarmyhammer_common::health::Doctorable for $tool_type {
             fn name(&self) -> &str {
@@ -1008,14 +1011,6 @@ macro_rules! impl_empty_doctorable {
 
             fn category(&self) -> &str {
                 "tools"
-            }
-
-            fn run_health_checks(&self) -> Vec<swissarmyhammer_common::health::HealthCheck> {
-                Vec::new()
-            }
-
-            fn is_applicable(&self) -> bool {
-                true
             }
         }
     };
@@ -2050,6 +2045,11 @@ register_tool_category!(
     ralph,
     "Register all ralph persistent instruction tools with the registry"
 );
+register_tool_category!(
+    register_review_tools,
+    review,
+    "Register the operation-based review tool with the registry"
+);
 
 /// Create a fully registered tool registry with all available tools
 ///
@@ -2072,6 +2072,7 @@ pub async fn create_fully_registered_tool_registry() -> ToolRegistry {
     register_code_context_tools(&mut registry);
     register_web_tools(&mut registry);
     register_ralph_tools(&mut registry);
+    register_review_tools(&mut registry);
 
     registry
 }
@@ -2481,9 +2482,9 @@ mod tests {
     struct InvalidSchemaTool;
     struct MissingCategoryTool;
 
-    impl_empty_doctorable!(ValidTool);
-    impl_empty_doctorable!(InvalidSchemaTool);
-    impl_empty_doctorable!(MissingCategoryTool);
+    impl_default_doctorable!(ValidTool);
+    impl_default_doctorable!(InvalidSchemaTool);
+    impl_default_doctorable!(MissingCategoryTool);
     impl_empty_initializable!(ValidTool);
     impl_empty_initializable!(InvalidSchemaTool);
     impl_empty_initializable!(MissingCategoryTool);
@@ -3186,7 +3187,7 @@ mod tests {
 
     /// Mock tool that reports the `Agent` category.
     struct MockAgentTool;
-    impl_empty_doctorable!(MockAgentTool);
+    impl_default_doctorable!(MockAgentTool);
     impl_empty_initializable!(MockAgentTool);
 
     #[async_trait::async_trait]
@@ -3387,7 +3388,7 @@ mod tests {
     // --- Hidden tool for testing ---
 
     struct HiddenTool;
-    impl_empty_doctorable!(HiddenTool);
+    impl_default_doctorable!(HiddenTool);
     impl_empty_initializable!(HiddenTool);
 
     #[async_trait::async_trait]
@@ -3753,7 +3754,7 @@ mod tests {
     #[test]
     fn test_cli_about_empty_description() {
         struct EmptyDescTool;
-        impl_empty_doctorable!(EmptyDescTool);
+        impl_default_doctorable!(EmptyDescTool);
         impl_empty_initializable!(EmptyDescTool);
 
         #[async_trait::async_trait]
@@ -3787,7 +3788,7 @@ mod tests {
     #[test]
     fn test_cli_about_only_headers() {
         struct HeaderOnlyTool;
-        impl_empty_doctorable!(HeaderOnlyTool);
+        impl_default_doctorable!(HeaderOnlyTool);
         impl_empty_initializable!(HeaderOnlyTool);
 
         #[async_trait::async_trait]

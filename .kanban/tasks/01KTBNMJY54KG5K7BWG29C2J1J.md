@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KTBNM0YGVRJQJSCTQBDHR68H
-position_column: todo
-position_ordinal: 8b80
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffff780
 project: local-review
 title: 'Engine stage 3 — verify: adversarial refute pass over candidate findings'
 ---

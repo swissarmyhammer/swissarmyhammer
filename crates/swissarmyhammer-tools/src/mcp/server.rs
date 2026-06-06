@@ -23,8 +23,8 @@ use tokio::sync::{Mutex, RwLock};
 use super::tool_handlers::ToolHandlers;
 use super::tool_registry::{
     register_code_context_tools, register_file_tools, register_git_tools, register_kanban_tools,
-    register_questions_tools, register_ralph_tools, register_shell_tools, register_web_tools,
-    ToolContext, ToolRegistry,
+    register_questions_tools, register_ralph_tools, register_review_tools, register_shell_tools,
+    register_web_tools, ToolContext, ToolRegistry,
 };
 use super::tools::agent::register_agent_tools;
 use super::tools::skill::register_skill_tools;
@@ -686,6 +686,7 @@ impl McpServer {
         register_ralph_tools(tool_registry);
         register_agent_tools(tool_registry, agent_library, prompt_library.clone());
         register_file_tools(tool_registry);
+        register_review_tools(tool_registry);
         register_skill_tools(tool_registry, skill_library, prompt_library);
 
         // Apply tool enable/disable config from tools.yaml (global + project layers)
@@ -1059,6 +1060,37 @@ impl McpServer {
                 None,
             ))
         }
+    }
+
+    /// Wire the live `review` factories into this server's tool registry.
+    ///
+    /// The server registers the `review` tool with no agent factory at
+    /// construction (see [`register_review_tools`](crate::mcp::tools::review::register_review_tools)),
+    /// so its three pipeline ops (`review file`/`working`/`sha`) return an
+    /// actionable error until a factory is wired. This is the injection seam the
+    /// wiring layer — a crate that may depend on `swissarmyhammer-agent`, which
+    /// `swissarmyhammer-tools` cannot — calls after building the server to swap
+    /// the bare tool for one that drives the configured backend.
+    ///
+    /// `agent_factory` mints a fresh ACP agent per review run; `embedder_factory`
+    /// is `None` to keep the loaded platform-embedder default; `concurrency` pins
+    /// the pool worker count (`review.concurrency`) when set. Registration is by
+    /// tool name, so this overwrites the bare `review` tool. The registry is
+    /// shared across server clones and read per `call_tool`, so the swap takes
+    /// effect for every subsequent `review` dispatch on this server.
+    pub async fn set_review_factories(
+        &self,
+        agent_factory: crate::mcp::tools::review::review_op::AgentFactory,
+        embedder_factory: Option<crate::mcp::tools::review::review_op::EmbedderFactory>,
+        concurrency: Option<usize>,
+    ) {
+        let mut registry = self.tool_registry.write().await;
+        crate::mcp::tools::review::register_review_tool_with_factories(
+            &mut registry,
+            agent_factory,
+            embedder_factory,
+            concurrency,
+        );
     }
 
     /// Get a specific prompt by name, with optional template argument rendering.

@@ -91,6 +91,13 @@ reqwest = { workspace = true }
 swissarmyhammer-embedding = { workspace = true }
 model-embedding = { workspace = true }
 
+# Pluggable review engine: the operation-based `review` MCP tool is a thin dispatch
+# shim over this crate's `run_review` pipeline + rules-as-data validator loader.
+swissarmyhammer-validators = { workspace = true }
+# ACP primitives for supplying the review engine its live agent connection.
+claude-agent = { workspace = true }
+agent-client-protocol = { workspace = true }
+
 # SQLite for embedding storage
 rusqlite = { workspace = true }
 
@@ -131,3 +138,5 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 # MockEmbedder for code_context indexing tests, to avoid loading a real ML model.
 model-embedding = { workspace = true, features = ["test-support"] }
+# Scripted ACP agent harness for the review-tool integration tests.
+agent-client-protocol-extras = { workspace = true }

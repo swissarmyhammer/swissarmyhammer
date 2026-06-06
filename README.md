@@ -194,10 +194,7 @@ Guardrails. `avp` hooks into your agent as a pre/post validator. Every time the 
 - **command-safety** -- safe shell command checks
 - **test-integrity** -- catches test cheating (skipping tests, weakening assertions, hardcoding expected values)
 
-```bash
-avp init        # Install validators into your project
-avp list        # See what's active
-```
+Validators install as Claude Code hooks when you run `sah init`, and run automatically on every tool call.
 
 ### [mirdan](https://mirdan.ai) -- Package Manager for Agent Skills
 

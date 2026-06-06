@@ -1106,49 +1106,13 @@ mod tests {
         assert_eq!(session.calls[2].notifications.len(), 1);
     }
 
-    /// Load every fixture under `avp-common/tests/fixtures/recordings/` from
-    /// disk and assert it parses with the new types — this is the strongest
-    /// guarantee that the on-disk wire format is unchanged. The crate
-    /// boundary makes a `tests/` integration test awkward (avp-common is
-    /// not a dev-dep here yet — task A5 will re-add it), so we just read
-    /// the files relative to the workspace root via `CARGO_MANIFEST_DIR`.
-    #[test]
-    fn all_avp_recording_fixtures_deserialize() {
-        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let fixtures_dir = manifest_dir
-            .parent()
-            .expect("crate has a workspace root parent")
-            .join("avp-common/tests/fixtures/recordings");
-
-        if !fixtures_dir.exists() {
-            // Fixture directory absent (e.g. the crate is being checked
-            // out of context). Skip rather than fail.
-            return;
-        }
-
-        let mut checked = 0usize;
-        for entry in std::fs::read_dir(&fixtures_dir).unwrap() {
-            let entry = entry.unwrap();
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            let contents = std::fs::read_to_string(&path).unwrap();
-            let session: RecordedSession = serde_json::from_str(&contents)
-                .unwrap_or_else(|e| panic!("fixture {} failed to parse: {e}", path.display()));
-            assert!(
-                !session.calls.is_empty(),
-                "fixture {} has no calls",
-                path.display()
-            );
-            checked += 1;
-        }
-
-        assert!(
-            checked > 0,
-            "expected at least one fixture in {fixtures_dir:?}"
-        );
-    }
+    // NOTE: the former `all_avp_recording_fixtures_deserialize` test loaded
+    // every `avp-common/tests/fixtures/recordings/*.json` file from disk. Those
+    // fixtures were deleted with the AVP hook-execution teardown, so that test
+    // could only ever early-return on the missing directory and assert nothing.
+    // The on-disk-format-stability guarantee it provided is now covered by
+    // `legacy_existing_fixture_deserializes` above, which inlines a real legacy
+    // fixture instead of depending on files that no longer exist.
 
     // -- legacy_method_for: every documented mapping plus fallback. --
 

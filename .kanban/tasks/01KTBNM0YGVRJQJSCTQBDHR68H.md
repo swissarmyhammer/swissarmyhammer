@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KTBN9E9FD9X1PY1ARY9SMN99
 - 01KTBNKCZ2JRRX514XWHPFB7V1
-position_column: todo
-position_ordinal: 8a80
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffff580
 project: local-review
 title: 'Engine stage 2 — fan-out: one agent per (validator × file), file-grain, in parallel'
 ---
@@ -25,16 +25,22 @@ The fleet. The shard is the validator; the **grain is the file**. Produce one ag
 **Result handling:** parse each returned task with `parse_findings`; tag findings with the validator; hand them to the verify guard. A task that errors/times out yields zero findings for that `(validator, file)` and is logged via `tracing`, never panics the run.
 
 ## Acceptance Criteria
-- [ ] Fan-out builds one task per `(validator, file)` (batched) and submits to the shared `AgentPool`; findings are tagged by validator and `rule`.
-- [ ] The rendered prompt contains exactly the payload above; the output contract instructs the agent to emit `rule` + `claim`(what+why) + `evidence`(cited probe proof) + `suggestion`.
-- [ ] No concurrency logic here — all execution goes through the pool; backend pass-through honored; batching logged.
-- [ ] A failing/slow task degrades to zero findings for its `(validator, file)` without aborting the others.
+- [x] Fan-out builds one task per `(validator, file)` (batched) and submits to the shared `AgentPool`; findings are tagged by validator and `rule`.
+- [x] The rendered prompt contains exactly the payload above; the output contract instructs the agent to emit `rule` + `claim`(what+why) + `evidence`(cited probe proof) + `suggestion`.
+- [x] No concurrency logic here — all execution goes through the pool; backend pass-through honored; batching logged.
+- [x] A failing/slow task degrades to zero findings for its `(validator, file)` without aborting the others.
 
 ## Tests
-- [ ] Mock-agent test (`PlaybackAgent`/`SessionRecordingAgent`): a `WorkList` with 2 validators × 2 files → ≤4 tasks submitted, scripted responses parsed into the merged `Vec<Finding>` with correct `validator`/`rule` tags; assert the rendered prompt for one pair contains the change purpose + that file's probe evidence and NOT the other file's content.
-- [ ] Batching test: many small files collapse into fewer tasks, logged.
-- [ ] Resilience test: one task errors → its findings empty, the rest still return (no deadlock/panic).
-- [ ] `cargo test -p swissarmyhammer-validators review::fleet` green.
+- [x] Mock-agent test (`PlaybackAgent`/`SessionRecordingAgent`): a `WorkList` with 2 validators × 2 files → ≤4 tasks submitted, scripted responses parsed into the merged `Vec<Finding>` with correct `validator`/`rule` tags; assert the rendered prompt for one pair contains the change purpose + that file's probe evidence and NOT the other file's content.
+- [x] Batching test: many small files collapse into fewer tasks, logged.
+- [x] Resilience test: one task errors → its findings empty, the rest still return (no deadlock/panic).
+- [x] `cargo test -p swissarmyhammer-validators review::fleet` green.
 
 ## Workflow
 - Use `/tdd` — script the mock agents and assert the merged findings + the exact prompt payload (incl. the `rule`/`evidence` contract) first, then implement the renderer + task submission. Reuse the `AgentPool` and the validator prompt-render path; do not reimplement concurrency or templating.
+
+## Implementation notes
+- Implemented in `crates/swissarmyhammer-validators/src/review/fleet.rs` (new module, re-exported from `review/mod.rs`).
+- `run_fleet(work, loader, pool, config)` packs each validator's files into `FleetConfig::batch_size` batches, renders one prompt per batch via `render_fleet_prompt`, submits to the shared `AgentPool`, parses each response with `parse_findings`, and tags findings with the authoritative validator name. Returns the merged `Vec<Finding>` — the seam the downstream verify guard consumes (verify is a sibling/blocked task, so the guard call site is not in this crate yet).
+- The renderer takes the validator's loaded `RuleSet` (via `loader.get_ruleset`) as the authoritative source of the mandate (`description`) and the verbatim rule bodies, because stage-1 `WorkList`/`ValidatorWork` carries only rule *names*, not bodies. No new template engine — the prompt is assembled directly from the structured stage-1 data.
+- No concurrency logic added: every task goes through `pool.submit`; the pool owns worker count. A task that errors/times out or returns unparseable content is logged via `tracing::warn!` and contributes zero findings; batching is logged via `tracing::info!`.

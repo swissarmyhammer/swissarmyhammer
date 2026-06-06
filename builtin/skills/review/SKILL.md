@@ -5,7 +5,7 @@ profiles:
 description: Code review workflow. Use this skill whenever the user says "review", "code review", "review this PR", "review my changes", or otherwise wants a code review.
 agent: reviewer
 license: MIT OR Apache-2.0
-compatibility: Requires the `code_context` MCP tool (for symbol lookup, callgraph, and blast-radius during review) and the `kanban` MCP tool (to drive tasks through the review column and capture follow-up findings). 
+compatibility: Requires the `review` MCP tool (the local multi-agent review engine) and the `kanban` MCP tool (to drive tasks through the review column and capture findings). 
 metadata:
   author: "swissarmyhammer"
   version: "{{version}}"
@@ -14,7 +14,7 @@ metadata:
 
 # Code Review
 
-Perform a structured code review. Findings land as a GFM checklist on a kanban task — attached to the work, not piling up as new tasks.
+Perform a structured code review. You are a **thin driver**: detect the mode, call the right `review` op, write the returned findings onto a kanban task, and summarize. The `review` tool runs the multi-agent engine fleet — design, reuse/dead-code, correctness, tests, security, clarity, performance, language-specific checks. You do not hand-run those layers; the engine does.
 
 Here is what the user provided: 
 $ARGUMENTS
@@ -26,6 +26,33 @@ $ARGUMENTS
 {% include "_partials/coding-standards" %}
 {% include "_partials/review-column" %}
 {% include "_partials/architecture-awareness" %}
+
+## The `review` tool
+
+The engine is op-dispatched (verb + noun). Each `review` op returns a `ReviewReport`:
+
+- `markdown` — a dated `## Review Findings (YYYY-MM-DD HH:MM)` section, organized by severity, already formatted as a GFM checklist. Write it onto the task verbatim.
+- `counts` — `{ blockers, warnings, nits, confirmed, refuted }`. Use it for the summary.
+
+| Op | Scope | When |
+|----|-------|------|
+| `{"op": "review working"}` | Uncommitted changes vs `HEAD` | The everyday default. |
+| `{"op": "review sha", "sha": "<commit-or-range>"}` | The changes in/since a commit or range (e.g. `HEAD~4..HEAD`, `abc123..HEAD`) | A commit, range, or "since" hint. |
+| `{"op": "review file", "path": "<path-or-glob>"}` | An explicit file path or glob | A specific file or set of files. |
+
+### Passthrough modifiers
+
+Every `review` op accepts two optional modifiers:
+
+- **`validators`** — an array naming a subset of validators to run (defaults to every matching validator). Use it when the user wants a narrowed review — e.g. "review just duplication" → pass the duplication validator's name in `validators`.
+- **`backend`** — `session` (the remote default) or `local`. Pass `"local"` when the user says "review locally" / wants the in-process Llama backend.
+
+```json
+{"op": "review working", "validators": ["duplication"]}
+{"op": "review sha", "sha": "HEAD~4..HEAD", "backend": "local"}
+```
+
+There are no "dimensions" — that concept is gone. Scope is the op (`working`/`sha`/`file`); narrowing is `validators`; the backend is `backend`.
 
 ## Process
 
@@ -50,9 +77,9 @@ Bare `/review` check:
 
 If any exist, pick the oldest (lowest ordinal / earliest created) for task-mode.
 
-### 3. Get the changes
+### 3. Run the engine
 
-`git` `op: "get changes"` to scope the diff.
+The chosen op decides the scope. Pass through `validators` / `backend` when the user asked to narrow or to run locally.
 
 **Task-mode** — read the task first:
 
@@ -60,110 +87,29 @@ If any exist, pick the oldest (lowest ordinal / earliest created) for task-mode.
 {"op": "get task", "id": "<id>"}
 ```
 
-Use any range hint in the description (commit range, branch, PR ref) to scope. No hint → `{"op": "get changes"}` auto-detects.
+Derive the scope from any range hint in the description (commit range, branch, "since" ref):
+
+| Task body has | Call |
+|---------------|------|
+| A commit/range/branch hint | `{"op": "review sha", "sha": "<range>"}` |
+| No range hint | `{"op": "review working"}` |
 
 **Range-mode**:
 
 | User says | Call |
 |-----------|------|
-| `/review` (review column empty) | `{"op": "get changes"}` — auto-detects |
-| `/review the last 4 commits` | `{"op": "get changes", "range": "HEAD~4..HEAD"}` |
-| `/review since abc123` | `{"op": "get changes", "range": "abc123..HEAD"}` |
-| `/review abc123..def456` | `{"op": "get changes", "range": "abc123..def456"}` |
-| `/review feature-branch` | `{"op": "get changes", "branch": "feature-branch"}` |
+| `/review` (review column empty) | `{"op": "review working"}` |
+| `/review the last 4 commits` | `{"op": "review sha", "sha": "HEAD~4..HEAD"}` |
+| `/review since abc123` | `{"op": "review sha", "sha": "abc123..HEAD"}` |
+| `/review abc123..def456` | `{"op": "review sha", "sha": "abc123..def456"}` |
+| `/review feature-branch` | `{"op": "review sha", "sha": "feature-branch"}` |
+| `/review src/auth.rs` or a glob | `{"op": "review file", "path": "<path-or-glob>"}` |
 
-Read every changed file in full — diffs alone lack context. Understand the **purpose** of the change before reviewing (PR description, commit messages, kanban task body).
+Take the report's `markdown` (the dated `## Review Findings (...)` section) and `counts`. You do not read files or run layers yourself — the engine fleet did, including any language-specific checks (now validators).
 
-When a `range` was used (explicit or auto-detected), use `get diff` with `file@<ref>` for semantic diffs:
+### 4. Apply findings
 
-```json
-{"op": "get diff", "left": "src/main.rs@HEAD~4", "right": "src/main.rs"}
-```
-
-For every changed file: `{"op": "get blastradius", "file_path": "<file>"}` and `get callgraph` (inbound) on changed symbols. Diff shows what changed; blast radius shows what it *affects* — sizes the change for Layer 1, finds untouched callers the change may have quietly broken for Layer 3. An **empty inbound callgraph** on an added/changed symbol that isn't an entry point, exported API, or test is the dead-code signal for Layer 2.
-
-Run `{"op": "find duplicates", "file_path": "<file>"}` on the changed files — the verbatim/near-verbatim duplication signal for Layer 2.
-
-### 4. Layered examination
-
-Don't skip layers — each catches different problems.
-
-**Layer 1: Design & Architecture** — Does it fit? Appropriate abstractions? Over-engineering? Right codebase for this?
-
-**Layer 2: Reuse, Dead Code & Data-Driven Design** — the highest-leverage layer for machine-written code, which trends toward duplication and hardcoding. Findings here are **blockers**.
-
-- **Dead code (blocker)** — any added or changed symbol with an empty inbound callgraph that is not an entry point, exported public API, or test is dead. Also flag orphaned modules never wired into production, unreachable branches, commented-out code, and tests that exercise only a dead path. Delete it; don't ship it.
-- **Duplication (blocker for verbatim/near-verbatim)** — copies drift out of sync and inflate the surface area. Extract a shared function and parameterize the difference. Two blocks that differ only by a value are one function with an argument.
-- **Hardcoding → data** — be data-driven. A `match`/`if`-chain over a known set whose arms differ only in constants is a table, not control flow. Repeated literals are a named constant or config entry. Variation belongs in data (tables, maps, config, declarative specs) interpreted by a single code path — not in parallel code paths a human must keep in lockstep.
-- **Calibration** — warranted generalization removes *existing* duplication or serves a *real* variation axis. Rule of three: two occurrences is coincidence, three is a pattern. No second caller → no parameter. The right abstraction beats three copies; the wrong abstraction is worse than five. Speculative abstraction with no real consumer is over-engineering — flag it under Layer 1, not here.
-
-**Layer 3: Functionality & Correctness** — Does it do what the author intended? Good for users? Edge cases (empty, null, boundary, error)? Off-by-one, wrong booleans, missing early returns? Concurrency (races, deadlocks, shared mutable state)?
-
-**Layer 4: Tests** — Tests for new/changed behavior? Verify behavior, not implementation? Would they fail if the code were broken? Edge cases covered? Mocks only at system boundaries?
-
-**Layer 5: Security** — Input validated? Injection (SQL, command, XSS, template)? Secrets safe? Auth checks? Error messages safe?
-
-**Layer 6: Naming, Clarity, Simplicity** — Descriptive without being verbose? Understandable without explanation? Comments explain "why"? Stale comments or TODOs?
-
-**Layer 7: Performance** (when relevant) — O(n²)+ on large data? Unnecessary allocations in hot paths? N+1 queries? Resource cleanup in all paths?
-
-### 5. Review every line
-
-If code is hard to understand, that's itself a finding.
-
-### 6. Apply language-specific guidelines
-
-| Language | File |
-|----------|------|
-| Rust | [RUST_REVIEW.md](./references/RUST_REVIEW.md) |
-| Dart / Flutter | [DART_FLUTTER_REVIEW.md](./references/DART_FLUTTER_REVIEW.md) |
-| Python | [PYTHON_REVIEW.md](./references/PYTHON_REVIEW.md) |
-| JavaScript / TypeScript | [JS_TS_REVIEW.md](./references/JS_TS_REVIEW.md) |
-
-Multi-language project → apply all relevant sections. Same severity levels.
-
-### 7. Architecture review
-
-If `ARCHITECTURE.md` exists at the project root, add an alignment layer:
-
-- **Follows documented architecture?** New code in the right module/layer/component. Flag changes that bypass boundaries (handler calling DB directly when architecture specifies a service layer).
-- **New components placed correctly?** New files/modules/crates fit the structure?
-- **Requires an architecture update?** Intentional divergence or extension (new module, dependency direction, service) → finding recommending `ARCHITECTURE.md` update.
-
-Architecture findings use the same severity levels — boundary violation = **warning**; undocumented structural addition = **nit** unless it contradicts an explicit constraint (then **blocker**).
-
-No `ARCHITECTURE.md` → skip.
-
-### 8. Format findings as a dated GFM checklist
-
-Single dated section, organized by severity (current local date/time):
-
-```markdown
-## Review Findings (2026-04-11 13:08)
-
-### Blockers
-- [ ] `path/to/file.rs:42` — What's wrong. Why it matters. Suggested fix.
-
-### Warnings
-- [ ] `path/to/file.rs:10` — What's wrong and suggested fix.
-
-### Nits
-- [ ] `path/to/file.rs:88` — Minor issue.
-```
-
-| Severity | Meaning |
-|----------|---------|
-| **blocker** | Correctness bug, security vuln, data loss risk, dead code, or verbatim/near-verbatim duplication |
-| **warning** | Design problem, missing test, performance concern |
-| **nit** | Style preference, minor improvement |
-
-Each finding: **where** (file:line), **what**, **why** (skip for nits), **suggestion** when non-obvious. Omit empty severity subsections.
-
-**One concern per checklist item.** Don't bundle. Three components with the same problem = three items.
-
-### 9. Apply findings
-
-Never create one kanban task per finding. Findings = checklist items on a host task — the task being reviewed (task-mode) or a single tracking task (range-mode).
+Never create one kanban task per finding. Findings = checklist items on a host task — the task being reviewed (task-mode) or a single tracking task (range-mode). The engine's `markdown` is already the dated section; write it in per the contract below.
 
 #### Task-mode
 
@@ -179,7 +125,7 @@ Never create one kanban task per finding. Findings = checklist items on a host t
 
 3. Parse the description for prior `## Review Findings (...)` sections; note whether every `- [ ]` has been flipped to `- [x]`.
 
-4. Outcome:
+4. Outcome (use the engine's `counts` to decide "zero new findings"):
    - **Zero new findings AND every prior item checked** → move to terminal column:
 
      ```json
@@ -188,7 +134,7 @@ Never create one kanban task per finding. Findings = checklist items on a host t
 
      Leave description history intact.
 
-   - **New findings OR any prior item still unchecked** → append a new dated `## Review Findings (YYYY-MM-DD HH:MM)` section, write it back:
+   - **New findings OR any prior item still unchecked** → append the report's `markdown` (a new dated `## Review Findings (YYYY-MM-DD HH:MM)` section), write it back:
 
      ```json
      {"op": "update task", "id": "<id>", "description": "<existing + blank line + new section>"}
@@ -198,7 +144,7 @@ Never create one kanban task per finding. Findings = checklist items on a host t
 
 #### Range-mode
 
-1. Fresh review with **zero findings** → "clean, nothing to track", exit. Do NOT create a tracking task.
+1. Fresh review with **zero findings** (`counts` all zero) → "clean, nothing to track", exit. Do NOT create a tracking task.
 
 2. Otherwise create a tracking task in `review`. First ensure the `#review` tag exists:
 
@@ -208,21 +154,21 @@ Never create one kanban task per finding. Findings = checklist items on a host t
 
    Missing → `{"op": "add tag", "id": "review", "name": "Review", "color": "9900cc", "description": "Ad-hoc range review tracking"}`.
 
-3. Create directly in `review`:
+3. Create directly in `review`, embedding the report's `markdown` after the scope line:
 
    ```json
-   {"op": "add task", "title": "Review of <scope>", "description": "Scope: <range or branch>\n\n## Review Findings (YYYY-MM-DD HH:MM)\n\n### Blockers\n- [ ] ...\n\n### Warnings\n- [ ] ...", "column": "review"}
+   {"op": "add task", "title": "Review of <scope>", "description": "Scope: <range or branch>\n\n<report.markdown>", "column": "review"}
    ```
 
 4. Tag it: `{"op": "tag task", "id": "<new-id>", "tag": "review"}`.
 
    A subsequent `/review <tracking-id>` follows task-mode and moves it to terminal when all items are checked and a fresh review is clean.
 
-### 10. Summarize
+### 5. Summarize
 
 - **Mode**: task-mode (with id) or range-mode (with scope)
-- **Scope reviewed**: effective range or branch
-- **Counts**: by severity ("1 blocker, 3 warnings, 5 nits" or "clean")
+- **Scope reviewed**: the op and its target (`review working`, `review sha HEAD~4..HEAD`, `review file src/auth.rs`)
+- **Counts**: from `counts` — by severity ("1 blocker, 3 warnings, 5 nits" or "clean")
 - **Outcome**: one of
   - task advanced to terminal column
   - findings appended to task `<id>`; remains in `review`
@@ -237,32 +183,30 @@ No verdict label (no approve / request-changes / comment-only) — the column mo
 **Task-mode clean:** `/review 01KN2X3Y4Z5A6B7C8D9E0F1G2H`.
 
 1. Ensure review column.
-2. `get task` → read body, scope the diff.
-3. `get changes` auto-detect, read every changed file, apply seven layers (+ RUST_REVIEW.md for Rust).
-4. Zero new findings, all prior items now `- [x]`.
-5. Move to `done`.
+2. `get task` → read body; no range hint, so `{"op": "review working"}`.
+3. Engine returns `counts` all zero, and all prior items are now `- [x]`.
+4. Move to `done`.
 
 The column move is the verdict — no findings appended, history preserved.
 
 **Range-mode with findings:** `/review the last 4 commits`.
 
 1. Ensure review column.
-2. `review` empty → range-mode. `get changes range: "HEAD~4..HEAD"`.
-3. For each file, `get diff left: "src/server.rs@HEAD~4" right: "src/server.rs"`.
-4. Layered review → 1 blocker (missing auth check), 2 nits.
-5. Ensure `#review` tag.
-6. Create tracking task in `review` with the dated findings checklist.
-7. Tag it `review`.
+2. `review` empty → range-mode. `{"op": "review sha", "sha": "HEAD~4..HEAD"}`.
+3. Engine returns `markdown` with 1 blocker + 2 nits and the matching `counts`.
+4. Ensure `#review` tag.
+5. Create tracking task in `review` with `Scope: HEAD~4..HEAD` + the report's `markdown`.
+6. Tag it `review`.
 
 Subsequent `/review <new-id>` follows task-mode — moves to `done` once items are checked and a re-review is clean.
 
+**Narrowed / local:** `/review just duplication` → `{"op": "review working", "validators": ["duplication"]}`. `/review locally` → `{"op": "review working", "backend": "local"}`.
+
 ## Rules
 
-- **Facts over opinions.** Technical arguments beat personal preference.
-- **Review the change, not the whole file.** Flag pre-existing issues only if the change makes them worse.
-- **Don't block on style.** Defer to formatters; accept the author's style if no convention exists.
-- **Specific and actionable.** "This is confusing" isn't enough — say what's confusing and what to do.
-- **One concern per checklist item.** Don't bundle.
+- **The engine is the analysis.** You drive it and record its findings; you do not re-run layers, re-read files, or second-guess the report.
+- **Facts over opinions.** The engine reports technical findings; relay them, don't editorialize.
+- **One concern per checklist item.** The engine already formats this way — preserve it.
 - **No per-finding tasks.** Findings = checklist items on the source task (task-mode) or a single tracking task (range-mode). The retired `review-finding` tag — don't create or reuse it.
 - **Preserve history on re-run.** Always append new dated sections. Never edit or delete prior ones; never flip checkboxes yourself — the user (or the implementer picking up the task) owns the marks.
-- **Skip gitignored files and dot-directories** (`.git/`, `.vscode/`, `.skills/`) unless explicitly asked.
+- **Column movement is the verdict.** Clean task → terminal column. Findings → stays in `review`.

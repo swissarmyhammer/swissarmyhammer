@@ -43,6 +43,7 @@ pub mod git;
 pub mod kanban;
 pub mod questions;
 pub mod ralph;
+pub mod review;
 pub mod shell;
 pub mod skill;
 pub mod web;

@@ -1,6 +1,6 @@
 # Validators
 
-Validators are the guardrails of SwissArmyHammer. They run as Claude Code hooks — firing on every tool call — to enforce code quality, security, and test integrity automatically. Instead of catching problems in review, validators prevent them from being introduced in the first place.
+Validators are the guardrails of SwissArmyHammer. They are rules-as-data quality gates — focused agents that enforce code quality, security, and test integrity. Each validator is scoped by file globs to the changed files it applies to, and the review pipeline runs the matching validators over those changes.
 
 ## What a Validator Is
 
@@ -45,40 +45,52 @@ Prevents test cheating:
 
 ## How Validators Work
 
-Validators run as hooks in Claude Code's hook system. When the agent makes a tool call (writing a file, running a command), AVP intercepts it and runs the relevant validators:
+The review pipeline collects the changed files, matches each validator's `match.files` globs against them, and runs the matching validators over the changes:
 
 ```
-Agent calls tool (e.g., write file)
+Changed files
     │
-    ├─ AVP hook fires
-    │    ├─ Code quality validator checks the change
+    ├─ Loader matches validators by file glob
+    │    ├─ Code quality validator checks the changed source
     │    ├─ Security validator checks for secrets
-    │    └─ Results fed back to agent
+    │    └─ Findings collected with each validator's severity
     │
-    └─ Agent sees feedback, can self-correct
+    └─ Blocking findings (error severity) gate the change
 ```
 
-This happens transparently. The agent doesn't need to explicitly invoke validators — they run automatically on every relevant action.
+Matching is on file globs only — a validator with no `match.files` applies to everything, and one scoped to `*.rs` only runs on Rust changes.
 
 ## Setting Up Validators
 
-Install AVP hooks into your project:
-
-```bash
-avp init
-```
-
-This registers AVP as a Claude Code hook and creates the `.avp/` directory. Built-in validators are always available; project-specific validators go in `.avp/validators/`.
+Built-in validators are always available. Project-specific validators go in `./.validators/`, and user-wide validators in `$XDG_DATA_HOME/validators/` (default `~/.local/share/validators/`).
 
 ## Creating Custom Validators
 
-Create a new validator rule set:
+A validator rule set is a directory with a `VALIDATOR.md` and a `rules/` directory. Each rule is a markdown file describing what to check.
 
-```bash
-avp new my-rules
+The `VALIDATOR.md` frontmatter declares:
+
+- `name` — the rule set identifier (defaults to the directory name).
+- `description` — what the rule set checks.
+- `match.files` — file glob patterns that scope the rule set to the changed files it applies to. Supports `@file_groups/...` includes (e.g. `@file_groups/source_code`) that expand to shared pattern lists. Matching is on file globs only.
+- `severity` — default severity for the rules (`info`, `warn`, or `error`).
+- `tags` — optional labels for filtering and organization.
+- `probes` — optional list of probe names (plain strings) the rule set requests from the probe catalog.
+
+```yaml
+---
+name: dead-code
+description: Flags symbols with no inbound callers
+match:
+  files:
+    - "@file_groups/source_code"
+severity: error
+probes:
+  - callers
+---
 ```
 
-This scaffolds a validator with a `VALIDATOR.md` and `rules/` directory. Each rule is a markdown file describing what to check.
+The legacy `trigger` key (which named a Claude Code hook event) has been removed. The loader is lenient — a leftover `trigger` still loads — but `check validators` flags it so you can remove it.
 
 ## Sharing Validators
 
@@ -100,6 +112,8 @@ This lets teams codify their standards as installable packages — new projects 
 | Location | Scope |
 |----------|-------|
 | Built-in (embedded in binary) | Always available |
-| Project `.avp/validators/` | Project-specific rules |
-| Global `~/.local/share/avp/validators/` | User-wide rules |
+| Project `./.validators/` | Project-specific rules |
+| Global `$XDG_DATA_HOME/validators/` (default `~/.local/share/validators/`) | User-wide rules |
 | Installed via Mirdan | Project or global |
+
+Precedence is builtin → user → project: a project rule set overrides a user rule set of the same name, which overrides the built-in.

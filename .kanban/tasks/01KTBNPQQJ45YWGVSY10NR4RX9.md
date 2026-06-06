@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KTBNHSR4EVTVJ35MGGD510R2
 - 01KTBQR87DKQF750JTJ3G52FZR
-position_column: todo
-position_ordinal: '8e80'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffff880
 project: local-review
 title: 'Author focused validators: duplication, reuse, data-driven, dead-code (+ re-homed quality)'
 ---

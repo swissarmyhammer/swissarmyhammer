@@ -36,24 +36,15 @@ This does two things:
 1. Registers `sah` as an MCP server in `.mcp.json`
 2. Creates the project directory with skills and workflows
 
-Set up validators:
-
-```bash
-avp init
-```
-
-This registers AVP hooks in Claude Code settings and creates the `.avp/` directory.
-
 Verify everything:
 
 ```bash
 sah doctor
-avp doctor
 ```
 
 ## Scope Options
 
-Both `sah init` and `avp init` support different scopes:
+`sah init` supports different scopes:
 
 | Scope | File | Use Case |
 |-------|------|----------|
@@ -63,7 +54,6 @@ Both `sah init` and `avp init` support different scopes:
 
 ```bash
 sah init user      # Install globally
-avp init user      # Install hooks globally
 ```
 
 ## Shell Completions (Optional)

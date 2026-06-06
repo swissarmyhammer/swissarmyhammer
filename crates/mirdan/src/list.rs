@@ -24,7 +24,7 @@ pub struct InstalledPackage {
 
 /// Discover installed packages by scanning the filesystem.
 ///
-/// Scans agent skill directories, .avp/validators/, .tools/, and agent plugin dirs.
+/// Scans agent skill directories, ./.validators/, .tools/, and agent plugin dirs.
 /// Returns a deduplicated, sorted list.
 ///
 /// When a type-specific flag is set (e.g. skills_only), only that type is scanned.
@@ -86,19 +86,21 @@ pub fn discover_packages(
         }
     }
 
-    // Scan validators from .avp/validators/
+    // Scan validators from ./.validators/ (project) and $XDG_DATA_HOME/validators/ (global)
     // Skip when --agent is set: validators are not agent-scoped
     if (validators_only || scan_all) && agent_filter.is_none() {
-        let local_validators = Path::new(".avp/validators");
+        let local_validators = crate::install::validators_dir(false);
         if local_validators.exists() {
-            scan_validators(local_validators, ".avp/validators/", &mut packages);
+            scan_validators(&local_validators, ".validators/", &mut packages);
         }
 
-        if let Some(home) = dirs::home_dir() {
-            let global_validators = home.join(".avp").join("validators");
-            if global_validators.exists() {
-                scan_validators(&global_validators, "~/.avp/validators/", &mut packages);
-            }
+        let global_validators = crate::install::validators_dir(true);
+        if global_validators.exists() {
+            scan_validators(
+                &global_validators,
+                "$XDG_DATA_HOME/validators/",
+                &mut packages,
+            );
         }
     }
 
@@ -554,7 +556,7 @@ metadata:
         std::env::set_current_dir(dir.path()).unwrap();
 
         // Create a validator structure
-        let val_dir = dir.path().join(".avp/validators/test-val");
+        let val_dir = dir.path().join(".validators/test-val");
         std::fs::create_dir_all(&val_dir).unwrap();
         std::fs::write(
             val_dir.join("VALIDATOR.md"),
@@ -653,7 +655,7 @@ metadata:
         std::env::set_current_dir(dir.path()).unwrap();
 
         // Create a validator structure
-        let val_dir = dir.path().join(".avp/validators/test-val");
+        let val_dir = dir.path().join(".validators/test-val");
         std::fs::create_dir_all(&val_dir).unwrap();
         std::fs::write(
             val_dir.join("VALIDATOR.md"),

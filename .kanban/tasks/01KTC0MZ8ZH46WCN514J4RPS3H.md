@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KTBNHSR4EVTVJ35MGGD510R2
-position_column: todo
-position_ordinal: '9580'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffa80
 project: local-review
 title: Author language validators from the *_REVIEW.md references (rust, python, js-ts, dart)
 ---

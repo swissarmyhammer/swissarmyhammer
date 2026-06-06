@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KTBN925WPAWDYXS12W5HETEH
-position_column: todo
-position_ordinal: '8780'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffff180
 project: local-review
 title: 'Validator format & directories: drop `trigger`, add `probes`, XDG user dir + ./.validators'
 ---

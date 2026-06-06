@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KTBNNTCCVS81QZV4CFQZV4X1
 - 01KTBRSCTFPDWX86B075YY92EK
-position_column: todo
-position_ordinal: '9480'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffd80
 project: local-review
 title: 'Review tool Doctorable: `check validators` surfaces in `sah doctor`'
 ---

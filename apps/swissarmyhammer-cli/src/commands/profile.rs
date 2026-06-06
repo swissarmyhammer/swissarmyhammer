@@ -33,6 +33,7 @@ pub fn sah_profile() -> Profile {
         mcp_server: Some(ProfileMcpServer::serve("sah")),
         skills: Some(Selector::All),
         agents: Some(Selector::All),
+        validators: Some(Selector::All),
         statusline: true,
         preamble: true,
     }
@@ -57,6 +58,7 @@ mod tests {
 
         assert_eq!(profile.skills, Some(Selector::All));
         assert_eq!(profile.agents, Some(Selector::All));
+        assert_eq!(profile.validators, Some(Selector::All));
         assert!(profile.statusline);
         assert!(profile.preamble);
     }

@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KTBN925WPAWDYXS12W5HETEH
-position_column: todo
-position_ordinal: '9280'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffff280
 project: local-review
 title: 'Engine: probe registry — engine-run code_context probes bound from the diff'
 ---
@@ -29,17 +29,25 @@ Dropped as incoherent: `search_symbol` (searching by an added symbol's own name 
 - `probe_exists(name) -> bool` so `check validators` can validate a validator's declared probes against the catalog.
 
 ## Acceptance Criteria
-- [ ] The catalog has exactly `callers`/`duplicates`/`similar`, each with op binding, arg-derivation, and a `fact`/`candidate` kind.
-- [ ] `run_probes` derives args from the semantic diff's entities/files and returns structured results; `similar` excludes self.
-- [ ] `duplicates` detects a block duplicated between two changed-but-unindexed files (changed-set comparison), not just index hits.
-- [ ] Unknown probe name → clear error; `probe_exists` callable from the validator linter.
-- [ ] Reuses the code_context tool as a library; no reimplemented duplicate/callgraph/search logic.
+- [x] The catalog has exactly `callers`/`duplicates`/`similar`, each with op binding, arg-derivation, and a `fact`/`candidate` kind.
+- [x] `run_probes` derives args from the semantic diff's entities/files and returns structured results; `similar` excludes self.
+- [x] `duplicates` detects a block duplicated between two changed-but-unindexed files (changed-set comparison), not just index hits.
+- [x] Unknown probe name → clear error; `probe_exists` callable from the validator linter.
+- [x] Reuses the code_context tool as a library; no reimplemented duplicate/callgraph/search logic.
 
 ## Tests
-- [ ] Integration test (real code_context index over a temp repo): a file adding a function duplicating an existing one → `duplicates` returns the hit; `callers` on the new uncalled symbol returns empty inbound; `similar` on a body that reimplements an existing util returns the util (and not itself).
-- [ ] Changed-set dup test: same block added to two new files → `duplicates` flags it despite neither being indexed.
-- [ ] `run_probes` with an unknown name errors; `probe_exists` returns false for it.
-- [ ] `cargo test -p swissarmyhammer-validators review::probes` green.
+- [x] Integration test (real code_context index over a temp repo): a file adding a function duplicating an existing one → `duplicates` returns the hit; `callers` on the new uncalled symbol returns empty inbound; `similar` on a body that reimplements an existing util returns the util (and not itself).
+- [x] Changed-set dup test: same block added to two new files → `duplicates` flags it despite neither being indexed.
+- [x] `run_probes` with an unknown name errors; `probe_exists` returns false for it.
+- [x] `cargo test -p swissarmyhammer-validators review::probes` green.
 
 ## Workflow
 - Use `/tdd` — assert real probe results over a temp-repo code_context index first, then implement the catalog + runner. The catalog is DATA (a table of entries), not a `match` arm per probe with copy-pasted call code — one code path parameterized by the entry. Depends on the rename (engine crate).
+
+## Implementation Notes
+- Catalog + runner live in `crates/swissarmyhammer-validators/src/review/probes.rs`, re-exported from `review/mod.rs`.
+- Catalog is a static `CATALOG: &[ProbeCatalogEntry]` table (name + `ProbeKind` + `ProbeOp`); `run_probes` is ONE parameterized dispatch loop over entries, no per-probe copy-pasted call code.
+- Reuses `swissarmyhammer_code_context::{find_duplicates, get_callgraph, search_code}` as a library — no reimplemented dup/callgraph/search logic.
+- Changed-set duplicate comparison embeds changed blocks and compares them pairwise (different-file only), so a paste into two brand-new unindexed files is flagged.
+- `run_probes(probe_names, file_change, conn, embedder)` — caller resolves `&Connection` from the session/work-dir (`CodeContextWorkspace::open`), never `current_dir()`; embedder is injected at a trait seam (`model_embedding::TextEmbedder`) so tests use the deterministic `MockEmbedder` (no 600MB model load) while production passes the real qwen embedder.
+- Tests build a real production-schema SQLite index (`db::create_schema`) seeded deterministically; the ops run against exactly what they run against in production.

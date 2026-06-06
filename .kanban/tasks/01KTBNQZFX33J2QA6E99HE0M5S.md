@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KTBNNTCCVS81QZV4CFQZV4X1
 - 01KTC0MZ8ZH46WCN514J4RPS3H
-position_column: todo
-position_ordinal: '9080'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffe80
 project: local-review
 title: Rewrite the `review` skill + `reviewer` agent as thin drivers of the review tool
 ---

@@ -134,6 +134,30 @@ recordings/
     }
 }
 
+/// Configuration for `.validators` directories.
+///
+/// Validators (rules-as-data quality gates) use this configuration for the
+/// user-wide validator store (`$XDG_DATA_HOME/validators/`) and the
+/// project-local validator store (`./.validators/`). The XDG path resolves to
+/// `$XDG_DATA_HOME/validators/` (default `~/.local/share/validators/`); the
+/// project path resolves to `<git_root>/.validators/`.
+#[derive(Debug, Clone, Copy)]
+pub struct ValidatorsConfig;
+
+impl DirectoryConfig for ValidatorsConfig {
+    const DIR_NAME: &'static str = ".validators";
+    const XDG_NAME: &'static str = "validators";
+    const GITIGNORE_CONTENT: &'static str = r#"# Validators store
+# This file is automatically created by swissarmyhammer-directory
+
+# Keep validator definitions (they should be committed)
+"#;
+
+    fn init_subdirs() -> &'static [&'static str] {
+        &[]
+    }
+}
+
 /// Configuration for `.shell` directories.
 ///
 /// Shell security uses this configuration for managing permit/deny
@@ -229,6 +253,13 @@ mod tests {
         // substring of `*.log`. Check for the line anchored by a newline on each side.
         assert!(AvpConfig::GITIGNORE_CONTENT.contains("\nlog\n"));
         assert!(AvpConfig::init_subdirs().is_empty());
+    }
+
+    #[test]
+    fn test_validators_config() {
+        assert_eq!(ValidatorsConfig::DIR_NAME, ".validators");
+        assert_eq!(ValidatorsConfig::XDG_NAME, "validators");
+        assert!(ValidatorsConfig::init_subdirs().is_empty());
     }
 
     #[test]

@@ -162,14 +162,9 @@ impl swissarmyhammer_common::health::Doctorable for RalphTool {
         "tools"
     }
 
-    fn run_health_checks(&self) -> Vec<swissarmyhammer_common::health::HealthCheck> {
-        // Directory existence is verified lazily on write; no external deps to check
-        Vec::new()
-    }
-
-    fn is_applicable(&self) -> bool {
-        true
-    }
+    // No special health checks (directory existence is verified lazily on write,
+    // no external deps); inherits the trait's default OK check so Ralph still
+    // surfaces in `sah doctor`.
 }
 
 impl swissarmyhammer_common::lifecycle::Initializable for RalphTool {

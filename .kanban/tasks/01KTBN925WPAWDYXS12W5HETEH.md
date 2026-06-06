@@ -5,8 +5,8 @@ depends_on:
 - 01KTBNFB7NPXNWKDK86T9A0M5C
 - 01KTBNGHCH7B3J3DVF9CXPADJ1
 - 01KTBNFMEAS2QQRH7N0RVDKC27
-position_column: todo
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffef80
 project: local-review
 title: Rename avp-common → swissarmyhammer-validators (the pluggable review engine crate)
 ---
