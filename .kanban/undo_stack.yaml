@@ -1,8 +1,4 @@
 entries:
-- id: 01KRE1W2Z0H6JWJ79GSHHKQSN5
-  label: update task 01KN4R7Z7GMBV2ZQ1XA9TA5DM8
-  item_id: 01KN4R7Z7GMBV2ZQ1XA9TA5DM8
-  group_id: null
 - id: 01KRE1W30HD0ZTFDE14VYE7QG5
   label: update task 01KQQTXDHP3XBHZ8G40AC4FG4D
   item_id: 01KQQTXDHP3XBHZ8G40AC4FG4D
@@ -398,6 +394,10 @@ entries:
 - id: 01KTCAG63VD22F7AVKHBTBBJV9
   label: create perspective 01KTCAG63VJ7KC2B19F70Z17MK
   item_id: 01KTCAG63VJ7KC2B19F70Z17MK
+  group_id: null
+- id: 01KTECFXW66GDPW59F5S2X4TRP
+  label: update actor wballard
+  item_id: wballard
   group_id: null
 pointer: 100
 max_size: 100
