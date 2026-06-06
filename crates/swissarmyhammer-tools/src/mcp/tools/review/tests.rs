@@ -457,47 +457,15 @@ async fn review_working_through_the_registered_tool_flags_a_planted_duplicate() 
     assert_eq!(parsed["counts"]["confirmed"], json!(1));
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[serial_test::serial(cwd)]
-#[tracing_test::traced_test]
-async fn review_working_emits_observability_traces_through_spawn_blocking() {
-    let _home = IsolatedTestEnvironment::new().expect("isolated env");
-
-    // The same planted-duplicate fixture, but here we assert the engine's
-    // observability `tracing` lines actually surface on the REAL tool path — the
-    // pipeline runs inside spawn_blocking on its own current-thread runtime, so
-    // this proves the traces propagate to the process subscriber `sah serve` uses.
-    let repo = TestRepo::new();
-    let factory = planted_duplicate_fixture(&repo);
-    let _cwd = CurrentDirGuard::new(repo.path()).expect("chdir");
-
-    let mut registry = ToolRegistry::new();
-    registry.register(
-        ReviewTool::new()
-            .with_agent_factory(factory)
-            .with_embedder_factory(mock_embedder_factory()),
-    );
-    let tool = registry.get_tool("review").unwrap();
-    let context = context_at(repo.path()).await;
-
-    let mut args = serde_json::Map::new();
-    args.insert("op".to_string(), json!("review working"));
-    args.insert("backend".to_string(), json!("local"));
-    let _result = tool
-        .execute(args, &context)
-        .await
-        .expect("review working dispatch");
-
-    // The scope stage logged the selection summary naming the matched validator.
-    assert!(logs_contain("review scope resolved"));
-    assert!(logs_contain("deduplicate"));
-    // The fleet stage logged the validator×files×rules batching.
-    assert!(logs_contain(
-        "fleet fan-out: batching files into agent tasks"
-    ));
-    // The synthesis stage logged the final counts.
-    assert!(logs_contain("review synthesis complete"));
-}
+// The engine's observability lines (`review scope resolved` / `fleet fan-out` /
+// `review synthesis complete`) are asserted to surface on the REAL tool path
+// under a **process-global** subscriber — the kind `sah serve` installs via
+// `set_global_default` — by the dedicated integration binary
+// `tests/review_global_subscriber.rs`. That test owns its whole process so the
+// global default can be installed safely, and it faithfully reproduces the
+// production logging condition. A thread-local *scoped* (`tracing-test`) check
+// was deliberately NOT used here: its thread-local capture masked whether the
+// `spawn_blocking` pipeline's lines reach the ambient subscriber at all.
 
 // ---------------------------------------------------------------------------
 // review working through a real McpServer wired via `set_review_factories`

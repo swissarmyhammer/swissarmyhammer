@@ -54,6 +54,14 @@ pub struct Finding {
     pub line: u32,
 
     /// The source validator — the shard/RuleSet that produced this finding.
+    ///
+    /// Optional in the agent's emitted JSON: the fan-out agent reviews against a
+    /// single validator and need not echo its name, and the engine
+    /// authoritatively re-tags every parsed finding with the shard's validator
+    /// (see `fleet::tag_findings`). Defaulting here keeps a real agent's
+    /// response — which routinely omits this redundant field — from failing to
+    /// parse and silently dropping the whole batch.
+    #[serde(default)]
     pub validator: String,
 
     /// Which specific rule inside the validator fired, when known.
@@ -356,6 +364,25 @@ mod tests {
         assert_eq!(findings[0].severity, Severity::Blocker);
         assert_eq!(findings[1].rule.as_deref(), Some("r2"));
         assert_eq!(findings[1].suggestion.as_deref(), Some("fix it"));
+    }
+
+    #[test]
+    fn parse_findings_tolerates_a_finding_without_validator() {
+        // The fan-out output contract does NOT ask the agent for `validator`
+        // (the engine knows the shard and re-tags every finding), so a real
+        // agent omits it. Before `#[serde(default)]` on `Finding::validator`,
+        // this failed with "missing field `validator`" and the WHOLE batch
+        // degraded to zero findings — a real review silently found nothing.
+        let text = r#"[
+            {"file": "lib.rs", "line": 5, "severity": "blocker",
+             "claim": "dead fn", "evidence": "no inbound callers"}
+        ]"#;
+        let findings = parse_findings(text).expect("a contract-shaped finding must parse");
+        assert_eq!(findings.len(), 1);
+        // The agent left it empty; the fleet stage fills the authoritative name.
+        assert_eq!(findings[0].validator, "");
+        assert_eq!(findings[0].severity, Severity::Blocker);
+        assert_eq!(findings[0].file, "lib.rs");
     }
 
     #[test]

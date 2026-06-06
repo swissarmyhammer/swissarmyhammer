@@ -427,6 +427,22 @@ impl ValidatorLoader {
         self.rulesets.keys().cloned().collect()
     }
 
+    /// Restrict the loaded RuleSets to the named subset.
+    ///
+    /// Drops every RuleSet whose name is not in `names`, so a later
+    /// `matching_rulesets` / scope pass only considers the requested validators.
+    /// This is how the `review` tool's `validators` subset modifier is honored —
+    /// scoping the fan-out to just the chosen validators. A name in `names` that
+    /// isn't loaded is simply ignored. An empty `names` is a no-op (callers that
+    /// want "all" should not call this).
+    pub fn retain_rulesets(&mut self, names: &[String]) {
+        if names.is_empty() {
+            return;
+        }
+        self.rulesets
+            .retain(|name, _| names.iter().any(|n| n == name));
+    }
+
     /// The RuleSet directories that failed to parse during loading.
     ///
     /// A malformed validator is skipped (it never crashes the run) but recorded
@@ -652,6 +668,36 @@ mod tests {
         let shared = loader.get_ruleset("shared").expect("shared ruleset");
         assert_eq!(shared.source, ValidatorSource::Project);
         assert_eq!(shared.description(), "Project version");
+    }
+
+    #[test]
+    fn retain_rulesets_keeps_only_the_named_subset() {
+        let dir = TempDir::new().unwrap();
+        write_ruleset(dir.path(), "dead-code", "Dead code");
+        write_ruleset(dir.path(), "duplication", "Duplication");
+        write_ruleset(dir.path(), "reuse", "Reuse");
+
+        let mut loader = ValidatorLoader::new();
+        loader
+            .load_rulesets_directory(dir.path(), ValidatorSource::Project)
+            .unwrap();
+        assert_eq!(loader.ruleset_count(), 3);
+
+        // Subset the loader the way the `review` tool's `validators` modifier does.
+        loader.retain_rulesets(&["dead-code".to_string()]);
+
+        assert_eq!(loader.ruleset_count(), 1);
+        assert!(loader.get_ruleset("dead-code").is_some());
+        assert!(loader.get_ruleset("duplication").is_none());
+        assert!(loader.get_ruleset("reuse").is_none());
+
+        // An empty subset is a no-op ("all"), not "remove everything".
+        let mut loader2 = ValidatorLoader::new();
+        loader2
+            .load_rulesets_directory(dir.path(), ValidatorSource::Project)
+            .unwrap();
+        loader2.retain_rulesets(&[]);
+        assert_eq!(loader2.ruleset_count(), 3);
     }
 
     /// Write a malformed RuleSet: a VALIDATOR.md whose frontmatter is broken

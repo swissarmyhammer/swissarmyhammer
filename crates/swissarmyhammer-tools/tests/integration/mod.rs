@@ -9,6 +9,7 @@ mod mcp_server_paritys;
 mod mirdan_test_support;
 mod per_client_tool_composition;
 mod review_e2e;
+mod review_fixture;
 mod rmcp_stdio_working;
 mod semantic_search_e2e;
 mod serve_time_bash_deny;

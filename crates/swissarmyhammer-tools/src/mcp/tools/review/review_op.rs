@@ -112,8 +112,9 @@ pub struct ReviewRequest {
     pub scope: Scope,
     /// The `backend` modifier (`session` | `local`), if supplied.
     pub backend: Option<String>,
-    /// The optional validator-subset modifier (currently advisory; the engine
-    /// loads the full matching set — subsetting is a later refinement).
+    /// The optional validator-subset modifier. When non-empty, the fan-out is
+    /// scoped to just these validators (via `retain_rulesets`); empty means
+    /// every matching validator.
     pub validators: Vec<String>,
     /// The pinned pool worker count from `review.concurrency`, applied by the
     /// server at the wiring layer. `None` defers to the coarse `backend` policy.
@@ -143,18 +144,17 @@ pub async fn run_review_request(
     agent_factory: AgentFactory,
     now: String,
 ) -> Result<ReviewReport, String> {
-    // Carry the caller's `tracing` subscriber across the thread boundary so the
-    // engine's observability lines — emitted on the blocking thread's runtime
-    // below — reach the same subscriber the caller installed (`sah serve`'s global
-    // subscriber in production, a scoped capture subscriber in tests).
-    // `spawn_blocking` runs on a fresh thread that does not inherit the parent's
-    // thread-local default dispatcher, so we capture and re-install it explicitly;
-    // we also carry the current span so the engine lines stay correlated with the
-    // request.
-    let dispatch = tracing::dispatcher::get_default(|d| d.clone());
+    // Carry the current span across the thread boundary so the engine's
+    // observability lines stay correlated with the originating `tool_call{...}`
+    // request span. The *subscriber* needs no carry: `sah serve` installs its
+    // subscriber as the process-global default (`set_global_default`), which is
+    // visible from every thread — including this `spawn_blocking` thread and the
+    // nested current-thread runtime — with no dispatcher dance. (The earlier
+    // `get_default`/`set_default` carry only mattered for a thread-local *scoped*
+    // subscriber, which no production path uses; an integration test installs a
+    // real global subscriber and asserts the engine lines surface.)
     let span = tracing::Span::current();
     tokio::task::spawn_blocking(move || {
-        let _dispatch = tracing::dispatcher::set_default(&dispatch);
         let _entered = span.enter();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -180,9 +180,10 @@ async fn run_review_request_inner(
     agent_factory: AgentFactory,
     now: String,
 ) -> Result<ReviewReport, String> {
-    let _ = &request.validators; // honored by scope/match; subset is a later refinement.
-
-    let loader = load_rules().map_err(|e| format!("failed to load validators: {e}"))?;
+    let mut loader = load_rules().map_err(|e| format!("failed to load validators: {e}"))?;
+    // Honor the `validators` subset modifier: when the caller named a subset,
+    // scope the fan-out to just those validators. Empty means "all matching".
+    loader.retain_rulesets(&request.validators);
     let conn = open_index_connection(&repo_path)?;
     let embedder = embedder_factory().await?;
 
