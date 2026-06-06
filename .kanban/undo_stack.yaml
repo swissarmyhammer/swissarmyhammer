@@ -1,8 +1,4 @@
 entries:
-- id: 01KRE1W30HD0ZTFDE14VYE7QG5
-  label: update task 01KQQTXDHP3XBHZ8G40AC4FG4D
-  item_id: 01KQQTXDHP3XBHZ8G40AC4FG4D
-  group_id: null
 - id: 01KRE1W30TJF465D23DB6FYAJB
   label: delete tag 01KPC9ZYH3BVK8N8V2CZJYYDNA
   item_id: 01KPC9ZYH3BVK8N8V2CZJYYDNA
@@ -398,6 +394,10 @@ entries:
 - id: 01KTECFXW66GDPW59F5S2X4TRP
   label: update actor wballard
   item_id: wballard
+  group_id: null
+- id: 01KTEFG7P7KP8WQFMDWTGMSX1K
+  label: delete task 01KTEEC1BQ6NX5P1XY93JACSY6
+  item_id: 01KTEEC1BQ6NX5P1XY93JACSY6
   group_id: null
 pointer: 100
 max_size: 100
