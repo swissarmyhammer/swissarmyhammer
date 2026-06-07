@@ -39,7 +39,9 @@ pub use execution_result::ExecutionResult;
 pub use operation::{Execute, Operation};
 pub use parameter::{ParamMeta, ParamType};
 pub use processor::OperationProcessor;
-pub use schema::{generate_mcp_schema, SchemaConfig};
+pub use schema::{
+    generate_mcp_schema, generate_mcp_schema_full, generate_mcp_schema_wire, SchemaConfig,
+};
 
 // Re-export proc macros
 pub use swissarmyhammer_operations_macros::{operation, param};

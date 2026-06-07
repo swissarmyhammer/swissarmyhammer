@@ -9,6 +9,15 @@ use std::collections::HashMap;
 
 use crate::{Operation, ParamType};
 
+/// The protocol discriminator field name shared by every generated schema.
+///
+/// This is the single most load-bearing key in the schema contract: it is the
+/// property that carries the operation enum and the entry in every `required`
+/// list, and the full and wire schemas must agree on it exactly. Defining it
+/// once here keeps every insertion / required-list site in lockstep so the name
+/// can never drift between surfaces.
+const OP_FIELD: &str = "op";
+
 /// Configuration for schema generation
 pub struct SchemaConfig {
     /// Tool description
@@ -79,7 +88,26 @@ impl SchemaConfig {
 ///
 /// let schema = generate_mcp_schema(&MY_OPERATIONS, config);
 /// ```
+///
+/// This is a thin alias of [`generate_mcp_schema_full`], kept so the existing
+/// in-process / wire callers keep compiling during the full-vs-wire transition.
 pub fn generate_mcp_schema(operations: &[&dyn Operation], config: SchemaConfig) -> Value {
+    generate_mcp_schema_full(operations, config)
+}
+
+/// Generate the complete CLI-facing MCP tool schema from operation metadata.
+///
+/// Byte-for-byte the historical behavior of [`generate_mcp_schema`]: flat
+/// `properties`, the `op` enum, `x-operation-schemas`, `x-operation-groups`,
+/// `x-forgiving-input`, `examples`, and any custom extensions. The
+/// schema-driven CLI generator ([`crate::cli_gen`]) reads this surface
+/// in-process, so it must retain the per-op detail.
+///
+/// # Arguments
+///
+/// * `operations` - Slice of operation trait objects
+/// * `config` - Schema configuration (description, examples, aliases)
+pub fn generate_mcp_schema_full(operations: &[&dyn Operation], config: SchemaConfig) -> Value {
     // Collect all unique parameters across all operations
     let all_properties = collect_all_parameters(operations);
 
@@ -129,6 +157,77 @@ pub fn generate_mcp_schema(operations: &[&dyn Operation], config: SchemaConfig) 
     schema
 }
 
+/// Generate the slim WIRE MCP tool schema from operation metadata.
+///
+/// This is the model-facing surface: it carries only what the model needs to
+/// call the tool correctly — the tool description, the `op` enum of valid op
+/// strings, and a compact per-op required-field map under `x-op-signatures`.
+/// It deliberately DROPS the heavy CLI-facing detail (`x-operation-schemas`,
+/// `x-operation-groups`, `x-forgiving-input`, `examples`) and the per-op
+/// property sub-objects, keeping only the `op` property.
+///
+/// Shape:
+/// ```jsonc
+/// {
+///   "type": "object",
+///   "additionalProperties": true,
+///   "description": "<tool description>",
+///   "properties": { "op": { "type": "string", "enum": [ ...op strings ] } },
+///   "required": ["op"],
+///   "x-op-signatures": { "<op>": ["<required param>", ...], ... }
+/// }
+/// ```
+///
+/// `x-op-signatures` has exactly one key per op in the enum; each value is that
+/// op's required parameter names (excluding `op`) in declaration order.
+///
+/// # Arguments
+///
+/// * `operations` - Slice of operation trait objects
+/// * `config` - Schema configuration (only `description` is used here)
+pub fn generate_mcp_schema_wire(operations: &[&dyn Operation], config: SchemaConfig) -> Value {
+    // Per-op required-name signatures, keyed by op string, covering every op.
+    let signatures: Map<String, Value> = operations
+        .iter()
+        .map(|op| (op.op_string(), json!(required_param_names_for_op(*op))))
+        .collect();
+
+    // Only the `op` property survives, carrying the enum of valid op strings.
+    let op_enum: Vec<String> = operations.iter().map(|op| op.op_string()).collect();
+
+    let mut properties = Map::new();
+    properties.insert(
+        OP_FIELD.to_string(),
+        json!({
+            "type": "string",
+            "enum": op_enum,
+        }),
+    );
+
+    json!({
+        "type": "object",
+        "additionalProperties": true,
+        "description": config.description,
+        "properties": properties,
+        "required": [OP_FIELD],
+        "x-op-signatures": signatures,
+    })
+}
+
+/// The required parameter names of a single operation, in declaration order.
+///
+/// Excludes the synthetic `op` field. Shared by [`operation_to_schema`] (the
+/// per-op full schema) and [`generate_mcp_schema_wire`] (the wire signature
+/// map) so the required-derivation logic lives in exactly one place. An op with
+/// no required parameters yields an empty vec.
+fn required_param_names_for_op(op: &dyn Operation) -> Vec<String> {
+    op.parameters()
+        .iter()
+        .filter(|param| param.required)
+        .map(|param| param.name.to_string())
+        .collect()
+}
+
 /// Collect all unique parameters across all operations
 ///
 /// Returns a properties object with all parameters that appear in any operation.
@@ -150,7 +249,7 @@ fn collect_all_parameters(operations: &[&dyn Operation]) -> Map<String, Value> {
 
     // Add op field first with enum of all operations
     properties.insert(
-        "op".to_string(),
+        OP_FIELD.to_string(),
         json!({
             "type": "string",
             "description": "Operation to perform (verb noun format). See x-operation-schemas for operation-specific parameter requirements.",
@@ -191,10 +290,12 @@ fn operation_to_schema(op: &dyn Operation) -> Value {
     let params = op.parameters();
 
     let mut properties = Map::new();
-    let mut required = vec!["op".to_string()];
 
-    // Op field is always const for this specific operation
-    properties.insert("op".to_string(), json!({"const": op.op_string()}));
+    // Op field is always const for this specific operation, and always required.
+    properties.insert(OP_FIELD.to_string(), json!({"const": op.op_string()}));
+    let mut required = vec![OP_FIELD.to_string()];
+    // Reuse the single source of truth for required-name derivation.
+    required.extend(required_param_names_for_op(op));
 
     // Add each parameter
     for param in params {
@@ -214,10 +315,6 @@ fn operation_to_schema(op: &dyn Operation) -> Value {
         }
 
         properties.insert(param.name.to_string(), Value::Object(prop_schema));
-
-        if param.required {
-            required.push(param.name.to_string());
-        }
     }
 
     json!({
@@ -479,6 +576,141 @@ mod tests {
         // Silent is not required
         let required = schema["required"].as_array().unwrap();
         assert!(!required.contains(&json!("silent")));
+    }
+
+    // ------------------------------------------------------------------
+    // Full vs wire schema split (card B)
+    // ------------------------------------------------------------------
+
+    use crate::test_support::{
+        MockAddColumn, MockAddTag, MockGetBoard, MockInitBoard, MockUpdateBoard,
+    };
+
+    /// The full multi-noun mock op set, mirroring `cli_gen`'s `mock_schema`.
+    fn full_mock_ops() -> Vec<&'static dyn Operation> {
+        vec![
+            &MockInitBoard,
+            &MockGetBoard,
+            &MockUpdateBoard,
+            &MockAddTask,
+            &MockGetTask,
+            &MockListTasks,
+            &MockAddColumn,
+            &MockAddTag,
+        ]
+    }
+
+    #[test]
+    fn full_schema_contains_all_custom_extensions() {
+        let ops = full_mock_ops();
+        let mut aliases = Map::new();
+        aliases.insert("add".to_string(), json!(["create", "new"]));
+        let config = SchemaConfig::new("Mock operations")
+            .with_examples(vec![json!({"value": {"op": "add task"}})])
+            .with_verb_aliases(aliases);
+        let schema = generate_mcp_schema_full(&ops, config);
+
+        assert!(schema["x-operation-schemas"].is_array());
+        assert!(schema["x-operation-groups"].is_object());
+        assert!(schema["x-forgiving-input"].is_object());
+        assert!(schema["examples"].is_array());
+        // Full schema carries per-op property sub-objects in the flat properties.
+        assert!(schema["properties"]["title"].is_object());
+    }
+
+    #[test]
+    fn wire_schema_omits_dropped_keys() {
+        let ops = full_mock_ops();
+        let mut aliases = Map::new();
+        aliases.insert("add".to_string(), json!(["create", "new"]));
+        let config = SchemaConfig::new("Mock operations")
+            .with_examples(vec![json!({"value": {"op": "add task"}})])
+            .with_verb_aliases(aliases);
+        let schema = generate_mcp_schema_wire(&ops, config);
+        let obj = schema.as_object().unwrap();
+
+        assert!(!obj.contains_key("x-operation-schemas"));
+        assert!(!obj.contains_key("x-operation-groups"));
+        assert!(!obj.contains_key("x-forgiving-input"));
+        assert!(!obj.contains_key("examples"));
+    }
+
+    #[test]
+    fn wire_schema_keeps_op_enum_and_top_level_shape() {
+        let ops = full_mock_ops();
+        let schema = generate_mcp_schema_wire(&ops, SchemaConfig::new("Mock operations"));
+
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["additionalProperties"], true);
+        assert_eq!(schema["description"], "Mock operations");
+        assert_eq!(schema["required"], json!(["op"]));
+
+        // The only property is `op`, with the full op enum.
+        let props = schema["properties"].as_object().unwrap();
+        assert_eq!(props.len(), 1, "wire properties must hold only `op`");
+        let enum_vals = props["op"]["enum"].as_array().unwrap();
+        let expected: Vec<Value> = ops.iter().map(|op| json!(op.op_string())).collect();
+        assert_eq!(enum_vals.len(), ops.len());
+        for op in &ops {
+            assert!(enum_vals.contains(&json!(op.op_string())));
+        }
+        let _ = expected;
+    }
+
+    #[test]
+    fn wire_schema_signatures_cover_every_op_with_ordered_required_names() {
+        let ops = full_mock_ops();
+        let schema = generate_mcp_schema_wire(&ops, SchemaConfig::new("Mock operations"));
+        let sigs = schema["x-op-signatures"].as_object().unwrap();
+
+        // One key per op in the enum.
+        assert_eq!(sigs.len(), ops.len());
+        for op in &ops {
+            assert!(
+                sigs.contains_key(&op.op_string()),
+                "missing signature for {}",
+                op.op_string()
+            );
+        }
+
+        // `init board` requires only `name` (excludes `op`).
+        assert_eq!(sigs["init board"], json!(["name"]));
+        // `add task` requires only `title` (description optional, assignees array).
+        assert_eq!(sigs["add task"], json!(["title"]));
+        // `get board` has no required params beyond op -> empty array.
+        assert_eq!(sigs["get board"], json!([]));
+        // `update board` has only an optional `name` -> empty array.
+        assert_eq!(sigs["update board"], json!([]));
+    }
+
+    #[test]
+    fn wire_schema_is_dramatically_smaller_than_full() {
+        let ops = full_mock_ops();
+        let full = generate_mcp_schema_full(&ops, SchemaConfig::new("Mock operations"));
+        let wire = generate_mcp_schema_wire(&ops, SchemaConfig::new("Mock operations"));
+
+        let full_len = serde_json::to_string(&full).unwrap().len();
+        let wire_len = serde_json::to_string(&wire).unwrap().len();
+
+        // Wire form for this mock set stays well under a safe ceiling.
+        assert!(
+            wire_len < 1024,
+            "wire schema unexpectedly large: {wire_len} bytes"
+        );
+        // And it is dramatically smaller than the full form.
+        assert!(
+            wire_len < full_len / 4,
+            "wire ({wire_len}) not < full/4 ({})",
+            full_len / 4
+        );
+    }
+
+    #[test]
+    fn alias_returns_full_schema() {
+        let ops = full_mock_ops();
+        let alias = generate_mcp_schema(&ops, SchemaConfig::new("Mock operations"));
+        let full = generate_mcp_schema_full(&ops, SchemaConfig::new("Mock operations"));
+        assert_eq!(alias, full);
     }
 
     #[test]
