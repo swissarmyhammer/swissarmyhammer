@@ -17,7 +17,7 @@ use agent_client_protocol::schema::SessionNotification;
 use agent_client_protocol::{Client, DynConnectTo};
 use rusqlite::Connection;
 use serde::Serialize;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, OnceCell, Semaphore};
 
 use swissarmyhammer_validators::review::{run_review_over_agent, FleetConfig, ReviewReport, Scope};
 use swissarmyhammer_validators::{load_rules, PoolConfig};
@@ -58,14 +58,45 @@ pub type EmbedderFactory = Arc<
         + Sync,
 >;
 
-/// The default embedder factory: load the platform embedder.
+/// Process-global cache of the loaded default embedder.
+///
+/// The default embedder is the platform `qwen-embedding` model — a
+/// multi-hundred-MB-to-GB load. Building a fresh one per review run wastes that
+/// load and, before the [`REVIEW_PIPELINE_GATE`] cap, multiplied the model's
+/// resident footprint across concurrent runs. Caching it here loads it once and
+/// shares one `Arc` across every default-factory run. Sharing is safe because
+/// review pipelines are serialized by the gate and a run embeds sequentially, so
+/// the shared model is never driven concurrently.
+static DEFAULT_EMBEDDER: OnceCell<Arc<dyn model_embedding::TextEmbedder>> = OnceCell::const_new();
+
+/// Return the cached embedder from `cell`, initializing it once via `init`.
+///
+/// A thin wrapper over [`OnceCell::get_or_try_init`] that hands back an owned
+/// `Arc` clone (the cache keeps its own). A failed `init` is *not* stored, so a
+/// later call retries the load rather than caching the failure. Factored out so
+/// the share-once contract is unit-testable without loading the real model.
+async fn shared_embedder<F, Fut>(
+    cell: &OnceCell<Arc<dyn model_embedding::TextEmbedder>>,
+    init: F,
+) -> Result<Arc<dyn model_embedding::TextEmbedder>, String>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<Arc<dyn model_embedding::TextEmbedder>, String>>,
+{
+    let embedder = cell.get_or_try_init(init).await?;
+    Ok(Arc::clone(embedder))
+}
+
+/// The default embedder factory: load the platform embedder once, share it.
 ///
 /// `swissarmyhammer_embedding::Embedder::default()` resolves the default model;
 /// the probe runner needs it *loaded*, so this awaits the load before handing it
-/// back.
+/// back. The loaded model is cached in [`DEFAULT_EMBEDDER`] and reused across
+/// review runs rather than reloaded per run. Tests inject their own
+/// [`EmbedderFactory`] (a mock), which never touches this cache.
 pub fn default_embedder_factory() -> EmbedderFactory {
     Arc::new(|| {
-        Box::pin(async {
+        Box::pin(shared_embedder(&DEFAULT_EMBEDDER, || async {
             use model_embedding::TextEmbedder as _;
             let embedder = swissarmyhammer_embedding::Embedder::default()
                 .await
@@ -75,7 +106,7 @@ pub fn default_embedder_factory() -> EmbedderFactory {
                 .await
                 .map_err(|e| format!("failed to load embedder: {e}"))?;
             Ok(Arc::new(embedder) as Arc<dyn model_embedding::TextEmbedder>)
-        })
+        }))
     })
 }
 
@@ -100,6 +131,19 @@ fn pool_config_for(backend: Option<&str>, concurrency: Option<usize>) -> PoolCon
 /// Default remote worker count when `backend` is `session`/absent and no
 /// `review.concurrency` override is supplied.
 const DEFAULT_REMOTE_WORKERS: usize = 4;
+
+/// Process-global cap on concurrent review pipelines.
+///
+/// A single review already fans out internally across its
+/// [`AgentPool`](swissarmyhammer_validators::AgentPool); running many review
+/// *pipelines* at once instead multiplies the per-run footprint — each loads its
+/// own embedding corpus, its own embedder model, and its own agent — which OOMed
+/// large repos under a full parallel review (e.g. a `review file`-per-file
+/// fan-out minting dozens of pipelines, each holding a multi-hundred-MB corpus +
+/// model). One permit serializes pipelines so only one such resource set is
+/// resident at a time; throughput is preserved by the in-run fan-out, which this
+/// does not touch.
+static REVIEW_PIPELINE_GATE: Semaphore = Semaphore::const_new(1);
 
 /// Directory holding the code_context index, relative to the workspace root.
 const CONTEXT_DIR: &str = ".code-context";
@@ -153,6 +197,15 @@ pub async fn run_review_request(
     // `get_default`/`set_default` carry only mattered for a thread-local *scoped*
     // subscriber, which no production path uses; an integration test installs a
     // real global subscriber and asserts the engine lines surface.)
+    // Serialize review pipelines process-wide: hold a permit for the whole run so
+    // only one corpus + embedder + agent set is resident at a time (see
+    // `REVIEW_PIPELINE_GATE`). Acquired here, *outside* the `spawn_blocking`, so a
+    // second concurrent request waits before it builds any of those resources.
+    let _permit = REVIEW_PIPELINE_GATE
+        .acquire()
+        .await
+        .map_err(|e| format!("review pipeline gate closed: {e}"))?;
+
     let span = tracing::Span::current();
     tokio::task::spawn_blocking(move || {
         let _entered = span.enter();
@@ -271,5 +324,68 @@ impl From<ReviewReport> for ReviewResponse {
                 refuted: report.counts.refuted,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn mock() -> Arc<dyn model_embedding::TextEmbedder> {
+        Arc::new(model_embedding::mock::MockEmbedder::new(4))
+            as Arc<dyn model_embedding::TextEmbedder>
+    }
+
+    /// The shared-embedder cache runs `init` exactly once and hands every caller
+    /// the same `Arc` — the load-once-share contract `default_embedder_factory`
+    /// relies on so the model isn't reloaded per review run.
+    #[tokio::test]
+    async fn shared_embedder_initializes_once_and_shares_the_arc() {
+        let cell = OnceCell::new();
+        let calls = AtomicUsize::new(0);
+
+        let first = shared_embedder(&cell, || async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(mock())
+        })
+        .await
+        .expect("first init");
+
+        let second = shared_embedder(&cell, || async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(mock())
+        })
+        .await
+        .expect("second call hits the cache");
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "init must run exactly once"
+        );
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "both calls must share the one cached Arc"
+        );
+    }
+
+    /// A failed `init` is not cached: a later call retries rather than handing
+    /// back a poisoned/failed cell forever.
+    #[tokio::test]
+    async fn shared_embedder_does_not_cache_a_failed_init() {
+        let cell = OnceCell::new();
+
+        let failed = shared_embedder(&cell, || async {
+            Err::<Arc<dyn model_embedding::TextEmbedder>, String>("load failed".to_string())
+        })
+        .await;
+        assert!(failed.is_err(), "the failed init surfaces as an error");
+
+        let retried = shared_embedder(&cell, || async { Ok(mock()) }).await;
+        assert!(
+            retried.is_ok(),
+            "a failed init must not poison the cache; a later init succeeds"
+        );
     }
 }

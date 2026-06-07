@@ -4,6 +4,7 @@
 //! against a pre-computed query embedding, and returns the top-k results.
 
 use rusqlite::Connection;
+use swissarmyhammer_entity_search::top_k_by_cosine;
 
 use crate::error::CodeContextError;
 
@@ -83,14 +84,44 @@ pub struct SearchCodeResult {
     pub progress: Option<IndexingProgress>,
 }
 
-/// A row loaded from `ts_chunks` with its embedding.
-struct EmbeddingRow {
-    file_path: String,
-    start_line: u32,
-    end_line: u32,
-    symbol_path: Option<String>,
-    text: String,
-    embedding: Vec<f32>,
+/// A chunk loaded from `ts_chunks` together with its embedding.
+///
+/// Loading the embedding table is expensive (every row carries a multi-hundred-
+/// float vector), so this type is the unit of a **reusable corpus**: a caller
+/// that runs many comparisons against the same index — e.g. the review engine's
+/// probe runner, which would otherwise call [`find_duplicates`] once per changed
+/// file and [`search_code`] once per added function — loads the corpus once with
+/// [`load_all_embedded_chunks`] and feeds it to [`search_loaded`] /
+/// [`find_duplicates_in`](crate::find_duplicates_in) instead of re-materializing
+/// the whole table per call.
+#[derive(Debug, Clone)]
+pub struct LoadedChunk {
+    /// Path of the file containing this chunk.
+    pub file_path: String,
+    /// First line of the chunk (1-indexed).
+    pub start_line: u32,
+    /// Last line of the chunk (1-indexed).
+    pub end_line: u32,
+    /// Qualified symbol path for this chunk, if available.
+    pub symbol_path: Option<String>,
+    /// Full text of the chunk.
+    pub text: String,
+    /// The chunk's embedding vector.
+    pub embedding: Vec<f32>,
+}
+
+impl LoadedChunk {
+    /// Render this chunk as a [`SearchCodeMatch`] carrying `similarity`.
+    fn to_match(&self, similarity: f32) -> SearchCodeMatch {
+        SearchCodeMatch {
+            file_path: self.file_path.clone(),
+            start_line: self.start_line,
+            end_line: self.end_line,
+            symbol_path: self.symbol_path.clone(),
+            text: self.text.clone(),
+            similarity,
+        }
+    }
 }
 
 pub use model_embedding::cosine_similarity;
@@ -121,31 +152,13 @@ pub fn search_code(
     options: &SearchCodeOptions,
 ) -> Result<SearchCodeResult, CodeContextError> {
     let rows = load_embedded_chunks(conn, options)?;
-    let total_chunks_searched = rows.len();
-
-    let mut scored: Vec<(f32, &EmbeddingRow)> = rows
-        .iter()
-        .map(|row| (cosine_similarity(query_embedding, &row.embedding), row))
-        .filter(|(sim, _)| *sim >= options.min_similarity)
-        .collect();
-
-    // Sort descending by similarity
-    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-
-    let truncated = scored.len() > options.top_k;
-    let matches: Vec<SearchCodeMatch> = scored
-        .into_iter()
-        .take(options.top_k)
-        .map(|(sim, row)| SearchCodeMatch {
-            file_path: row.file_path.clone(),
-            start_line: row.start_line,
-            end_line: row.end_line,
-            symbol_path: row.symbol_path.clone(),
-            text: row.text.clone(),
-            similarity: sim,
-        })
-        .collect();
-
+    let refs: Vec<&LoadedChunk> = rows.iter().collect();
+    let (matches, total_chunks_searched, truncated) = rank_loaded(
+        &refs,
+        query_embedding,
+        options.min_similarity,
+        options.top_k,
+    );
     let progress = compute_indexing_progress(conn)?;
 
     Ok(SearchCodeResult {
@@ -154,6 +167,100 @@ pub fn search_code(
         truncated,
         progress,
     })
+}
+
+/// Rank a pre-loaded corpus against `query_embedding` by cosine similarity.
+///
+/// The corpus-based counterpart of [`search_code`]: it runs the identical
+/// ranking core ([`rank_loaded`]) but against chunks the caller already loaded
+/// (via [`load_all_embedded_chunks`]) rather than re-reading the embedding table.
+/// `options.language` / `options.file_pattern` are applied in memory here so the
+/// shared corpus can be loaded unfiltered once and reused across many queries.
+/// Returns only the ranked matches — index-build `progress` is a connection-level
+/// snapshot the corpus path's callers (e.g. the review engine) do not consume.
+pub fn search_loaded(
+    corpus: &[LoadedChunk],
+    query_embedding: &[f32],
+    options: &SearchCodeOptions,
+) -> Vec<SearchCodeMatch> {
+    let filtered: Vec<&LoadedChunk> = corpus
+        .iter()
+        .filter(|c| chunk_matches_filters(c, options))
+        .collect();
+    rank_loaded(
+        &filtered,
+        query_embedding,
+        options.min_similarity,
+        options.top_k,
+    )
+    .0
+}
+
+/// Whether a chunk passes a [`SearchCodeOptions`] language / file-pattern filter.
+///
+/// Approximates the SQL `LIKE` predicates [`load_embedded_chunks`] applies on the
+/// connection path: `language` keeps chunks whose path ends in `.{ext}`, and
+/// `file_pattern` keeps chunks whose path contains the pattern. Unlike SQL `LIKE`
+/// this match is **case-sensitive** and treats the pattern **literally** (no `%`
+/// / `_` wildcard interpretation), so the two paths are not byte-identical for
+/// mixed-case extensions or wildcard patterns. The review engine — the only
+/// corpus-path caller — never sets these filters, so the two paths coincide in
+/// practice; a future corpus caller relying on full `LIKE` parity must account
+/// for this.
+fn chunk_matches_filters(chunk: &LoadedChunk, options: &SearchCodeOptions) -> bool {
+    if let Some(langs) = &options.language {
+        if !langs.is_empty()
+            && !langs
+                .iter()
+                .any(|ext| chunk.file_path.ends_with(&format!(".{ext}")))
+        {
+            return false;
+        }
+    }
+    if let Some(pattern) = &options.file_pattern {
+        if !chunk.file_path.contains(pattern.as_str()) {
+            return false;
+        }
+    }
+    true
+}
+
+/// The shared ranking core: cosine-score every chunk against the query, keep
+/// those at or above `min_similarity`, sort descending, and take the top `top_k`.
+///
+/// Returns the ranked matches, the number of chunks searched, and whether the
+/// result was truncated by `top_k`. Both [`search_code`] (connection-loaded) and
+/// [`search_loaded`] (corpus) route through here so the ranking logic lives in
+/// exactly one place.
+fn rank_loaded(
+    chunks: &[&LoadedChunk],
+    query_embedding: &[f32],
+    min_similarity: f32,
+    top_k: usize,
+) -> (Vec<SearchCodeMatch>, usize, bool) {
+    let total_chunks_searched = chunks.len();
+
+    // Rank via the shared bounded top-k primitive (the one in the search crate),
+    // so peak memory is O(top_k) — not O(corpus) — and we build a
+    // `SearchCodeMatch` (which clones chunk text) only for the kept hits.
+    let result = top_k_by_cosine(
+        query_embedding,
+        chunks
+            .iter()
+            .map(|chunk| (*chunk, chunk.embedding.as_slice())),
+        min_similarity,
+        top_k,
+    );
+    // `considered` counts every chunk at/above the threshold, so more matched
+    // than we kept exactly when it exceeds `top_k`.
+    let truncated = result.considered > top_k;
+    let matches: Vec<SearchCodeMatch> = result
+        .ranked
+        .into_iter()
+        .map(|r| r.id.to_match(r.score))
+        .collect();
+
+    (matches, total_chunks_searched, truncated)
 }
 
 /// Summarise embedding-pass progress from `indexed_files`.
@@ -195,11 +302,51 @@ fn compute_indexing_progress(
     }))
 }
 
+/// Load **every** embedded chunk from `ts_chunks`, unfiltered.
+///
+/// This is the reusable-corpus loader: it materializes the whole embedding table
+/// once so a caller running many comparisons against the same index (the review
+/// engine's probe runner — duplicates per changed file, similar per added
+/// function) pays the load cost a single time instead of re-reading and
+/// re-deserializing the table per call. Any size / language / path narrowing is
+/// applied in memory by the corpus consumers ([`search_loaded`],
+/// [`find_duplicates_in`](crate::find_duplicates_in)).
+///
+/// # Errors
+///
+/// Returns [`CodeContextError::Database`] on SQLite failures.
+pub fn load_all_embedded_chunks(conn: &Connection) -> Result<Vec<LoadedChunk>, CodeContextError> {
+    let mut stmt = conn.prepare(
+        "SELECT file_path, start_line, end_line, symbol_path, text, embedding
+         FROM ts_chunks
+         WHERE embedding IS NOT NULL",
+    )?;
+    let rows = stmt.query_map([], row_to_loaded_chunk)?;
+    let mut chunks = Vec::new();
+    for row in rows {
+        chunks.push(row?);
+    }
+    Ok(chunks)
+}
+
+/// Map a `ts_chunks` row (the standard 6-column projection) to a [`LoadedChunk`].
+fn row_to_loaded_chunk(row: &rusqlite::Row) -> rusqlite::Result<LoadedChunk> {
+    let blob: Vec<u8> = row.get(5)?;
+    Ok(LoadedChunk {
+        file_path: row.get(0)?,
+        start_line: row.get(1)?,
+        end_line: row.get(2)?,
+        symbol_path: row.get(3)?,
+        text: row.get(4)?,
+        embedding: deserialize_embedding(&blob),
+    })
+}
+
 /// Load chunk rows that have embeddings from `ts_chunks`.
 fn load_embedded_chunks(
     conn: &Connection,
     options: &SearchCodeOptions,
-) -> Result<Vec<EmbeddingRow>, CodeContextError> {
+) -> Result<Vec<LoadedChunk>, CodeContextError> {
     let mut sql = String::from(
         "SELECT file_path, start_line, end_line, symbol_path, text, embedding FROM ts_chunks WHERE embedding IS NOT NULL",
     );
@@ -219,17 +366,7 @@ fn load_embedded_chunks(
     }
 
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map([], |row| {
-        let blob: Vec<u8> = row.get(5)?;
-        Ok(EmbeddingRow {
-            file_path: row.get(0)?,
-            start_line: row.get(1)?,
-            end_line: row.get(2)?,
-            symbol_path: row.get(3)?,
-            text: row.get(4)?,
-            embedding: deserialize_embedding(&blob),
-        })
-    })?;
+    let rows = stmt.query_map([], row_to_loaded_chunk)?;
 
     let mut chunks = Vec::new();
     for row in rows {
@@ -555,6 +692,136 @@ mod tests {
             result.progress.is_none(),
             "progress must be None when there are no tracked files"
         );
+    }
+
+    /// The corpus path ([`load_all_embedded_chunks`] + [`search_loaded`]) must
+    /// return byte-identical matches to the connection-backed [`search_code`].
+    /// This pins the load-once review path to the single-call ranking so the two
+    /// can never silently diverge.
+    #[test]
+    fn search_loaded_matches_search_code() {
+        let conn = test_db();
+        insert_file(&conn, "src/a.rs");
+        insert_file(&conn, "src/b.rs");
+        insert_file(&conn, "src/c.rs");
+
+        let query = vec![1.0, 0.0, 0.0];
+        insert_chunk_with_embedding(
+            &conn,
+            "src/a.rs",
+            1,
+            5,
+            Some("a"),
+            "fn a() {}",
+            &[0.9, 0.1, 0.0],
+        );
+        insert_chunk_with_embedding(
+            &conn,
+            "src/b.rs",
+            1,
+            5,
+            Some("b"),
+            "fn b() {}",
+            &[0.5, 0.5, 0.0],
+        );
+        insert_chunk_with_embedding(
+            &conn,
+            "src/c.rs",
+            1,
+            5,
+            None,
+            "const X: i32 = 1;",
+            &[0.0, 0.0, 1.0],
+        );
+
+        let options = SearchCodeOptions::default();
+        let via_conn = search_code(&conn, &query, &options).unwrap();
+        let corpus = load_all_embedded_chunks(&conn).unwrap();
+        let via_corpus = search_loaded(&corpus, &query, &options);
+
+        assert_eq!(
+            serde_json::to_value(&via_conn.matches).unwrap(),
+            serde_json::to_value(&via_corpus).unwrap(),
+            "the corpus path must rank identically to the connection-backed search"
+        );
+    }
+
+    /// `search_loaded`'s in-memory `language` / `file_pattern` filters must
+    /// actually exclude non-matching chunks (the corpus path's filter, which the
+    /// equivalence test does not cover because the review passes no filters).
+    #[test]
+    fn search_loaded_applies_language_and_file_pattern_filters() {
+        let conn = test_db();
+        insert_file(&conn, "src/keep.rs");
+        insert_file(&conn, "src/skip.py");
+        insert_file(&conn, "vendor/keep.rs");
+
+        let query = vec![1.0, 0.0];
+        insert_chunk_with_embedding(
+            &conn,
+            "src/keep.rs",
+            1,
+            3,
+            Some("keep"),
+            "fn keep() {}",
+            &[1.0, 0.0],
+        );
+        insert_chunk_with_embedding(
+            &conn,
+            "src/skip.py",
+            1,
+            3,
+            Some("skip"),
+            "def skip(): pass",
+            &[1.0, 0.0],
+        );
+        insert_chunk_with_embedding(
+            &conn,
+            "vendor/keep.rs",
+            1,
+            3,
+            Some("vendored"),
+            "fn vendored() {}",
+            &[1.0, 0.0],
+        );
+        let corpus = load_all_embedded_chunks(&conn).unwrap();
+
+        // language filter: only the `.rs` chunks survive.
+        let rs_only = search_loaded(
+            &corpus,
+            &query,
+            &SearchCodeOptions {
+                language: Some(vec!["rs".to_string()]),
+                min_similarity: 0.0,
+                ..Default::default()
+            },
+        );
+        assert_eq!(rs_only.len(), 2, "two .rs chunks");
+        assert!(rs_only.iter().all(|m| m.file_path.ends_with(".rs")));
+
+        // file_pattern filter: only chunks whose path contains `src/`.
+        let src_only = search_loaded(
+            &corpus,
+            &query,
+            &SearchCodeOptions {
+                file_pattern: Some("src/".to_string()),
+                min_similarity: 0.0,
+                ..Default::default()
+            },
+        );
+        assert_eq!(src_only.len(), 2, "two chunks under src/");
+        assert!(src_only.iter().all(|m| m.file_path.contains("src/")));
+
+        // no filters: the whole corpus is ranked.
+        let unfiltered = search_loaded(
+            &corpus,
+            &query,
+            &SearchCodeOptions {
+                min_similarity: 0.0,
+                ..Default::default()
+            },
+        );
+        assert_eq!(unfiltered.len(), 3, "all three chunks when unfiltered");
     }
 
     /// When no files have been embedded yet (all `embedded=0`), `progress`

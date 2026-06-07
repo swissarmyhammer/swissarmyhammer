@@ -582,6 +582,88 @@ async fn review_tool_with_concurrency_pins_the_pool_worker_count() {
 }
 
 // ---------------------------------------------------------------------------
+// process-wide pipeline serialization (the parallel-review OOM cap)
+// ---------------------------------------------------------------------------
+
+/// Two `run_review_request` calls fired concurrently must NOT overlap: the
+/// process-global pipeline gate serializes them so only one corpus + embedder +
+/// agent set is ever resident at once. Each run still fans out internally across
+/// its `AgentPool`, so this caps the per-run footprint multiplier that OOMed a
+/// 512GB box under a full parallel review — it does not serialize the work
+/// inside a run.
+///
+/// The probe is the embedder factory: it records how many runs are inside the
+/// gated pipeline body at once (the factory is called only after the permit is
+/// acquired). With the gate, the peak is 1; without it, two concurrent runs both
+/// enter and the peak is 2.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[serial_test::serial(cwd)]
+async fn review_pipelines_run_one_at_a_time_process_wide() {
+    use super::review_op::{run_review_request, ReviewRequest};
+    use swissarmyhammer_validators::review::Scope;
+
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    // One shared repo + seeded index; both runs review it read-only.
+    let repo = TestRepo::new();
+    let factory = planted_duplicate_fixture(&repo);
+
+    let active = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let embedder = concurrency_probe_embedder_factory(Arc::clone(&active), Arc::clone(&peak));
+
+    let request = || ReviewRequest {
+        scope: Scope::Working,
+        backend: Some("local".to_string()),
+        validators: Vec::new(),
+        concurrency: None,
+    };
+    let run = |path: std::path::PathBuf| {
+        run_review_request(
+            request(),
+            path,
+            Arc::clone(&embedder),
+            Arc::clone(&factory),
+            "2026-06-07 12:00".to_string(),
+        )
+    };
+
+    let (a, b) = tokio::join!(
+        run(repo.path().to_path_buf()),
+        run(repo.path().to_path_buf())
+    );
+    a.expect("first review run");
+    b.expect("second review run");
+
+    assert_eq!(
+        peak.load(Ordering::SeqCst),
+        1,
+        "review pipelines must run one at a time process-wide; two overlapped"
+    );
+}
+
+/// An [`EmbedderFactory`] that records the peak number of review pipelines inside
+/// the gated body concurrently, then yields the deterministic mock embedder. The
+/// brief sleep widens the overlap window so an ungated pair reliably coincides.
+fn concurrency_probe_embedder_factory(
+    active: Arc<AtomicUsize>,
+    peak: Arc<AtomicUsize>,
+) -> EmbedderFactory {
+    Arc::new(move || {
+        let active = Arc::clone(&active);
+        let peak = Arc::clone(&peak);
+        Box::pin(async move {
+            let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+            peak.fetch_max(now, Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            active.fetch_sub(1, Ordering::SeqCst);
+            Ok(Arc::new(model_embedding::mock::MockEmbedder::new(DIM))
+                as Arc<dyn model_embedding::TextEmbedder>)
+        })
+    })
+}
+
+// ---------------------------------------------------------------------------
 // scripted-agent + on-disk-index + git-repo harness
 // ---------------------------------------------------------------------------
 

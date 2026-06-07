@@ -50,8 +50,8 @@ use rusqlite::Connection;
 use serde::Serialize;
 
 use swissarmyhammer_code_context::{
-    find_duplicates, get_callgraph, search_code, CallGraphDirection, CallGraphOptions,
-    FindDuplicatesOptions, SearchCodeOptions,
+    find_duplicates_in, get_callgraph, load_all_embedded_chunks, search_loaded, CallGraphDirection,
+    CallGraphOptions, FindDuplicatesOptions, LoadedChunk, SearchCodeOptions,
 };
 
 use crate::error::AvpError;
@@ -291,12 +291,29 @@ pub async fn run_probes(
     // probe is a clear error rather than a silent no-op.
     let entries = resolve_entries(probe_names)?;
 
+    // The embedding-backed probes (`duplicates`, `similar`) compare against the
+    // whole indexed corpus. Load it ONCE here and share it across every changed
+    // file and every added body, rather than re-materializing the entire
+    // `ts_chunks` embedding table inside `find_duplicates`/`search_code` per
+    // call — for a large index that repeated multi-hundred-MB load is what OOMed
+    // the review. The `callers` probe is index-graph-only and needs no corpus, so
+    // a callers-only run skips the load entirely.
+    let needs_corpus = entries
+        .iter()
+        .any(|e| matches!(e.op, ProbeOp::Duplicates | ProbeOp::Similar));
+    let corpus: Vec<LoadedChunk> = if needs_corpus {
+        load_all_embedded_chunks(conn)
+            .map_err(|e| AvpError::Context(format!("failed to load embedding corpus: {e}")))?
+    } else {
+        Vec::new()
+    };
+
     let mut results = Vec::new();
     for entry in entries {
         let mut probe_results = match entry.op {
             ProbeOp::Callers => run_callers(entry, file_change, conn)?,
-            ProbeOp::Duplicates => run_duplicates(entry, file_change, conn, embedder).await?,
-            ProbeOp::Similar => run_similar(entry, file_change, conn, embedder).await?,
+            ProbeOp::Duplicates => run_duplicates(entry, file_change, &corpus, embedder).await?,
+            ProbeOp::Similar => run_similar(entry, file_change, &corpus, embedder).await?,
         };
         results.append(&mut probe_results);
     }
@@ -374,22 +391,22 @@ fn run_callers(
 async fn run_duplicates(
     entry: &ProbeCatalogEntry,
     file_change: &FileChange,
-    conn: &Connection,
+    corpus: &[LoadedChunk],
     embedder: &dyn TextEmbedder,
 ) -> Result<Vec<ProbeResult>, AvpError> {
     let options = FindDuplicatesOptions::default();
     let mut out = Vec::new();
 
     // One result per changed file: index-backed duplicates of that file's
-    // blocks, found via the library op (never reimplemented).
+    // blocks, found via the library op (never reimplemented) against the shared
+    // pre-loaded corpus.
     let changed_files: BTreeSet<&str> = file_change
         .entities
         .iter()
         .map(|e| e.file_path.as_str())
         .collect();
     for file in &changed_files {
-        let result = find_duplicates(conn, file, &options)
-            .map_err(|e| AvpError::Context(format!("find_duplicates failed for {file}: {e}")))?;
+        let result = find_duplicates_in(corpus, file, &options);
         let rows = result
             .groups
             .iter()
@@ -474,7 +491,7 @@ async fn changed_set_duplicates(
 async fn run_similar(
     entry: &ProbeCatalogEntry,
     file_change: &FileChange,
-    conn: &Connection,
+    corpus: &[LoadedChunk],
     embedder: &dyn TextEmbedder,
 ) -> Result<Vec<ProbeResult>, AvpError> {
     let mut out = Vec::new();
@@ -492,11 +509,9 @@ async fn run_similar(
             top_k: DEFAULT_SIMILAR_TOP_K + 1,
             ..Default::default()
         };
-        let result = search_code(conn, &query, &options)
-            .map_err(|e| AvpError::Context(format!("search_code failed: {e}")))?;
+        let matches = search_loaded(corpus, &query, &options);
 
-        let rows: Vec<ProbeRow> = result
-            .matches
+        let rows: Vec<ProbeRow> = matches
             .iter()
             .filter(|m| !is_self_match(m, added))
             .take(DEFAULT_SIMILAR_TOP_K)

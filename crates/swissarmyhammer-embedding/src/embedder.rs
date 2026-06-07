@@ -4,12 +4,50 @@
 use ane_embedding::{AneEmbeddingConfig, AneEmbeddingModel};
 use llama_embedding::{EmbeddingConfig, EmbeddingModel};
 use model_embedding::{EmbeddingError, EmbeddingResult, TextEmbedder};
+use std::future::Future;
+
 use model_loader::ModelSource;
 use swissarmyhammer_config::model::{
     EmbeddingModelConfig, ModelExecutorConfig, ModelExecutorType, ModelManager,
 };
 use swissarmyhammer_config::parse_model_config;
 use thiserror::Error;
+use tokio::sync::Semaphore;
+
+/// Process-global serialization gate for embedding inference.
+///
+/// Embedding a text drives a model — llama.cpp on CPU/GPU, or CoreML on the
+/// Apple Neural Engine — which is heavy in both memory and compute. Every
+/// production embedding caller (the review pipeline's probes, the code-context
+/// indexer, entity search) funnels through [`Embedder`], yet nothing otherwise
+/// bounds how many embeddings run at once: independent callers, and even
+/// separate `Embedder` instances for different models, would each drive a model
+/// concurrently and stack their footprint (this is what let a parallel review
+/// exhaust memory).
+///
+/// This one-permit semaphore queues all of them so **at most one embedding
+/// inference runs per process at a time**, regardless of instance or caller
+/// count. It is held for the whole [`TextEmbedder::embed_text`] call — including
+/// the chunk-pool loop for long text — so one logical embedding finishes before
+/// the next starts.
+static EMBEDDING_GATE: Semaphore = Semaphore::const_new(1);
+
+/// Run `op` while holding the process-global embedding permit (see
+/// [`EMBEDDING_GATE`]). Callers that perform embedding inference wrap it here so
+/// the one-per-process limit holds across every backend and instance. Factored
+/// out so the serialization is unit-testable without a loaded model.
+async fn with_embedding_permit<F, Fut, T>(op: F) -> T
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = T>,
+{
+    // The gate is a `static` that is never closed, so acquisition cannot fail.
+    let _permit = EMBEDDING_GATE
+        .acquire()
+        .await
+        .expect("embedding gate semaphore is never closed");
+    op().await
+}
 
 #[derive(Error, Debug)]
 pub enum EmbedderError {
@@ -166,15 +204,21 @@ impl TextEmbedder for Embedder {
     }
 
     async fn embed_text(&self, text: &str) -> Result<EmbeddingResult, EmbeddingError> {
-        // Estimate token count (~4 chars per token is conservative for English).
-        // If the text likely fits in one model call, skip chunking.
-        let approx_tokens = text.len() / 3;
-        if approx_tokens <= self.max_sequence_length {
-            return self.embed_single(text).await;
-        }
-
-        // Text is likely too long — chunk and pool.
-        self.embed_chunked(text).await
+        // Serialize inference process-wide: at most one embedding runs at a time
+        // across all callers and `Embedder` instances (see `EMBEDDING_GATE`). The
+        // permit is held for the whole call, including the chunk-pool loop below.
+        with_embedding_permit(|| async {
+            // Estimate token count (~4 chars per token is conservative for
+            // English). If the text likely fits in one model call, skip chunking.
+            let approx_tokens = text.len() / 3;
+            if approx_tokens <= self.max_sequence_length {
+                self.embed_single(text).await
+            } else {
+                // Text is likely too long — chunk and pool.
+                self.embed_chunked(text).await
+            }
+        })
+        .await
     }
 
     fn embedding_dimension(&self) -> Option<usize> {
@@ -457,6 +501,45 @@ async fn build_ane_model(cfg: &EmbeddingModelConfig) -> Result<AneEmbeddingModel
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -------------------------------------------------------------------------
+    // embedding gate — process-wide one-inference-at-a-time serialization
+    // -------------------------------------------------------------------------
+
+    /// `with_embedding_permit` serializes concurrent callers: with three tasks
+    /// racing through it, the peak number inside the critical section is 1. This
+    /// is the one-embedding-per-process guarantee `embed_text` relies on, proven
+    /// without loading a model.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn with_embedding_permit_runs_one_at_a_time() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+
+        let run = |active: Arc<AtomicUsize>, peak: Arc<AtomicUsize>| async move {
+            with_embedding_permit(|| async {
+                let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(now, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                active.fetch_sub(1, Ordering::SeqCst);
+            })
+            .await
+        };
+
+        tokio::join!(
+            run(Arc::clone(&active), Arc::clone(&peak)),
+            run(Arc::clone(&active), Arc::clone(&peak)),
+            run(Arc::clone(&active), Arc::clone(&peak)),
+        );
+
+        assert_eq!(
+            peak.load(Ordering::SeqCst),
+            1,
+            "embedding inference must run one at a time process-wide"
+        );
+    }
 
     // -------------------------------------------------------------------------
     // chunk_text unit tests — pure function, no model required

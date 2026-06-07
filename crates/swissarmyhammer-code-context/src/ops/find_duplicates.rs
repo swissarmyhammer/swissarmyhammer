@@ -6,9 +6,10 @@
 //! like these places elsewhere."
 
 use rusqlite::Connection;
+use swissarmyhammer_entity_search::top_k_by_cosine;
 
 use crate::error::CodeContextError;
-use crate::ops::search_code::cosine_similarity;
+use crate::ops::search_code::{load_all_embedded_chunks, LoadedChunk};
 
 /// A chunk location with its text.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -78,33 +79,15 @@ pub struct FindDuplicatesResult {
     pub compared_chunks: usize,
 }
 
-/// An embedded chunk row from the database.
-struct EmbeddedChunk {
-    file_path: String,
-    start_line: u32,
-    end_line: u32,
-    symbol_path: Option<String>,
-    text: String,
-    embedding: Vec<f32>,
-}
-
-impl EmbeddedChunk {
-    fn to_chunk_ref(&self) -> ChunkRef {
-        ChunkRef {
-            file_path: self.file_path.clone(),
-            start_line: self.start_line,
-            end_line: self.end_line,
-            symbol_path: self.symbol_path.clone(),
-            text: self.text.clone(),
-        }
+/// Render a [`LoadedChunk`] as a [`ChunkRef`].
+fn chunk_ref(chunk: &LoadedChunk) -> ChunkRef {
+    ChunkRef {
+        file_path: chunk.file_path.clone(),
+        start_line: chunk.start_line,
+        end_line: chunk.end_line,
+        symbol_path: chunk.symbol_path.clone(),
+        text: chunk.text.clone(),
     }
-}
-
-/// Deserialize an embedding blob (little-endian f32 array).
-fn deserialize_embedding(blob: &[u8]) -> Vec<f32> {
-    blob.chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-        .collect()
 }
 
 /// Find chunks in `file` that are duplicated elsewhere in the codebase.
@@ -121,12 +104,35 @@ pub fn find_duplicates(
     file: &str,
     options: &FindDuplicatesOptions,
 ) -> Result<FindDuplicatesResult, CodeContextError> {
-    let all_chunks = load_embedded_chunks(conn, options.min_chunk_bytes)?;
+    let corpus = load_all_embedded_chunks(conn)?;
+    Ok(find_duplicates_in(&corpus, file, options))
+}
 
+/// Find duplicates of `file`'s chunks within an already-loaded corpus.
+///
+/// The corpus-based counterpart of [`find_duplicates`]: same grouping logic, but
+/// against chunks the caller loaded once (via
+/// [`load_all_embedded_chunks`](crate::load_all_embedded_chunks)) rather than
+/// re-reading the embedding table. The `min_chunk_bytes` size filter the
+/// connection-backed path applies in SQL is applied here in memory, so a single
+/// unfiltered corpus can be reused across many `find_duplicates_in` calls — the
+/// review engine's probe runner compares every changed file against the same
+/// corpus this way instead of re-materializing the whole index per file.
+pub fn find_duplicates_in(
+    corpus: &[LoadedChunk],
+    file: &str,
+    options: &FindDuplicatesOptions,
+) -> FindDuplicatesResult {
     let mut source_chunks_list = Vec::new();
     let mut other_chunks = Vec::new();
 
-    for chunk in &all_chunks {
+    for chunk in corpus {
+        // The connection-backed path filters `LENGTH(text) >= min_chunk_bytes`
+        // in SQL; apply the identical size floor here so the corpus can be loaded
+        // once, unfiltered, and reused.
+        if chunk.text.len() < options.min_chunk_bytes {
+            continue;
+        }
         if chunk.file_path == file {
             source_chunks_list.push(chunk);
         } else {
@@ -140,35 +146,37 @@ pub fn find_duplicates(
     let mut groups = Vec::new();
 
     for src in &source_chunks_list {
-        let mut matches: Vec<DuplicateMatch> = other_chunks
-            .iter()
-            .filter_map(|other| {
-                let sim = cosine_similarity(&src.embedding, &other.embedding);
-                if sim >= options.min_similarity {
-                    Some(DuplicateMatch {
-                        chunk: other.to_chunk_ref(),
-                        similarity: sim,
-                    })
-                } else {
-                    None
-                }
-            })
-            .collect();
+        // Rank the other chunks via the shared bounded top-k primitive instead of
+        // collecting EVERY above-threshold match and truncating. The old path
+        // cloned each matching chunk's full `text` (via `chunk_ref`) before the
+        // truncate, so a hot source chunk against a large corpus transiently
+        // materialized a huge fraction of it for a result that keeps
+        // `max_per_chunk`. Now the heap retains only `(&chunk, score)` and we
+        // clone text for the kept matches alone.
+        let ranked = top_k_by_cosine(
+            &src.embedding,
+            other_chunks
+                .iter()
+                .map(|other| (*other, other.embedding.as_slice())),
+            options.min_similarity,
+            options.max_per_chunk,
+        )
+        .ranked;
 
-        if matches.is_empty() {
+        if ranked.is_empty() {
             continue;
         }
 
-        // Sort descending by similarity
-        matches.sort_by(|a, b| {
-            b.similarity
-                .partial_cmp(&a.similarity)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        matches.truncate(options.max_per_chunk);
+        let matches: Vec<DuplicateMatch> = ranked
+            .into_iter()
+            .map(|r| DuplicateMatch {
+                chunk: chunk_ref(r.id),
+                similarity: r.score,
+            })
+            .collect();
 
         groups.push(DuplicateGroup {
-            source: src.to_chunk_ref(),
+            source: chunk_ref(src),
             duplicates: matches,
         });
     }
@@ -182,42 +190,12 @@ pub fn find_duplicates(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    Ok(FindDuplicatesResult {
+    FindDuplicatesResult {
         file: file.to_string(),
         groups,
         source_chunks,
         compared_chunks,
-    })
-}
-
-/// Load embedded chunks from `ts_chunks`, filtering by minimum size.
-fn load_embedded_chunks(
-    conn: &Connection,
-    min_chunk_bytes: usize,
-) -> Result<Vec<EmbeddedChunk>, CodeContextError> {
-    let mut stmt = conn.prepare(
-        "SELECT file_path, start_line, end_line, symbol_path, text, embedding
-         FROM ts_chunks
-         WHERE embedding IS NOT NULL AND LENGTH(text) >= ?1",
-    )?;
-
-    let rows = stmt.query_map([min_chunk_bytes as i64], |row| {
-        let blob: Vec<u8> = row.get(5)?;
-        Ok(EmbeddedChunk {
-            file_path: row.get(0)?,
-            start_line: row.get(1)?,
-            end_line: row.get(2)?,
-            symbol_path: row.get(3)?,
-            text: row.get(4)?,
-            embedding: deserialize_embedding(&blob),
-        })
-    })?;
-
-    let mut chunks = Vec::new();
-    for row in rows {
-        chunks.push(row?);
     }
-    Ok(chunks)
 }
 
 #[cfg(test)]
@@ -437,6 +415,59 @@ mod tests {
         assert!(result.groups.is_empty());
         assert_eq!(result.source_chunks, 0);
         assert_eq!(result.compared_chunks, 0);
+    }
+
+    /// The corpus path ([`load_all_embedded_chunks`] + [`find_duplicates_in`])
+    /// must return the same result as the connection-backed [`find_duplicates`],
+    /// including the in-memory `min_chunk_bytes` floor. This pins the load-once
+    /// review path to the single-call op so they can never silently diverge.
+    #[test]
+    fn find_duplicates_in_matches_find_duplicates() {
+        let conn = test_db();
+        insert_file(&conn, "src/handler.rs");
+        insert_file(&conn, "src/legacy.rs");
+        insert_file(&conn, "src/tiny.rs");
+
+        let text =
+            "fn validate_input(req: &Request) -> Result<(), Error> { check_fields(req)?; Ok(()) }";
+        insert_chunk(
+            &conn,
+            "src/handler.rs",
+            10,
+            15,
+            Some("validate_input"),
+            text,
+            &[0.9, 0.1, 0.0],
+        );
+        insert_chunk(
+            &conn,
+            "src/legacy.rs",
+            20,
+            25,
+            Some("check_input"),
+            text,
+            &[0.89, 0.11, 0.01],
+        );
+        // A sub-threshold chunk that must be filtered identically on both paths.
+        insert_chunk(&conn, "src/tiny.rs", 1, 1, None, "x;", &[0.9, 0.1, 0.0]);
+
+        let opts = FindDuplicatesOptions {
+            min_chunk_bytes: 10,
+            ..Default::default()
+        };
+        let via_conn = find_duplicates(&conn, "src/handler.rs", &opts).unwrap();
+        let corpus = load_all_embedded_chunks(&conn).unwrap();
+        let via_corpus = find_duplicates_in(&corpus, "src/handler.rs", &opts);
+
+        assert_eq!(via_conn.source_chunks, via_corpus.source_chunks);
+        assert_eq!(via_conn.compared_chunks, via_corpus.compared_chunks);
+        assert_eq!(via_conn.groups.len(), via_corpus.groups.len());
+        // Serialize to compare the full structure (groups carry f32 similarities).
+        assert_eq!(
+            serde_json::to_value(&via_conn).unwrap(),
+            serde_json::to_value(&via_corpus).unwrap(),
+            "the corpus path must produce the same duplicate groups as the connection path"
+        );
     }
 
     #[test]

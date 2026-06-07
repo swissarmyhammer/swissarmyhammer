@@ -1,7 +1,8 @@
-use model_embedding::{cosine_similarity, EmbeddingError, TextEmbedder};
+use model_embedding::{EmbeddingError, TextEmbedder};
 use swissarmyhammer_entity::Entity;
 
 use crate::error::Result;
+use crate::rank::top_k_by_cosine;
 use crate::result::{SearchResult, SearchStrategy};
 
 /// Stored embedding for an entity's concatenated text.
@@ -58,31 +59,32 @@ pub(crate) async fn build_embeddings(
 }
 
 /// Search embeddings by cosine similarity to the query embedding.
+///
+/// Ranks via the shared bounded [`top_k_by_cosine`] primitive (no per-call
+/// re-implementation of score → sort → truncate). No similarity floor is applied
+/// — every embedding is a candidate, ranked down to `limit`.
 pub(crate) fn semantic_search(
     query_embedding: &[f32],
     embeddings: &[EntityEmbedding],
     limit: usize,
 ) -> Vec<SearchResult> {
-    let mut scored: Vec<SearchResult> = embeddings
-        .iter()
-        .map(|ee| {
-            let sim = cosine_similarity(query_embedding, &ee.embedding);
-            SearchResult {
-                entity_id: ee.entity_id.clone(),
-                score: sim as f64,
-                strategy: SearchStrategy::Semantic,
-                matched_field: None,
-            }
-        })
-        .collect();
-
-    scored.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    scored.truncate(limit);
-    scored
+    top_k_by_cosine(
+        query_embedding,
+        embeddings
+            .iter()
+            .map(|ee| (ee.entity_id.as_str(), ee.embedding.as_slice())),
+        f32::NEG_INFINITY,
+        limit,
+    )
+    .ranked
+    .into_iter()
+    .map(|r| SearchResult {
+        entity_id: r.id.to_string(),
+        score: r.score as f64,
+        strategy: SearchStrategy::Semantic,
+        matched_field: None,
+    })
+    .collect()
 }
 
 #[cfg(test)]
