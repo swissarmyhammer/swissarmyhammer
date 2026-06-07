@@ -22,10 +22,14 @@ Because BOTH reorder and cross-column fail, the break is likely shared and upstr
 
 Reproduce: open a board with ≥2 tasks; drag one onto another position (reorder) and onto another column. Capture console + backend logs to see how far the drop gets. (Per project convention, check the macOS unified log: `log show --predicate 'subsystem == "com.swissarmyhammer.kanban"'`, and console.warn instrumentation — do not rely on stderr.)
 
+## Architecture steer (dedup review)
+For root cause #3 (move applied but not reflected): the re-render MUST come through the event/notification path, NOT a UI-side imperative refresh. After `task.move` succeeds, the data change should propagate via the bridge notification stream the "Route … onto the bridge" epic is building (board/entity data → `board-data-sync` updates from that event; cf. `notifications/ui_state/changed` `01KT9X0291XTGK5ZFVVRXRFSWF` and board lifecycle `01KT9X0SB17R3TRKT419A01TM7`). Do NOT add an imperative "refetch board after drop" in board-view.tsx — that smears data-sync control logic into the UI, against the target architecture (UI displays + routes only). If the move isn't reflected, fix the event emission/consumption, not a manual refresh.
+
 ## Acceptance Criteria
 - [ ] Dragging a task to a new position within a column persists the reorder and the new order renders.
 - [ ] Dragging a task to another column persists the column change and the card appears in the target column.
 - [ ] Root cause identified and documented (drop not firing vs. `task.move` rejecting vs. sync not reflecting).
+- [ ] Re-render is driven by the event/notification path, not an imperative UI-side refetch.
 
 ## Tests
 - [ ] Extend `apps/kanban-app/ui/src/components/board-drag-drop.test.tsx` (and/or `column-reorder.browser.test.tsx`) to drive a same-column reorder drop and assert `task.move` is dispatched with the correct `before_id`/`after_id` AND the resulting order updates.

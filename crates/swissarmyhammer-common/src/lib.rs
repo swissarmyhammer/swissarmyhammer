@@ -53,10 +53,10 @@ pub mod window_info;
 
 // Re-export commonly used constants for convenience
 pub use constants::DEFAULT_TEST_EMBEDDING_MODEL;
-pub use window_info::WindowInfo;
 pub use parameters::*;
 pub use test_utils::*;
 pub use validation::*;
+pub use window_info::WindowInfo;
 
 // Re-export commonly used ULID functions for convenience
 pub use utils::{generate_monotonic_ulid, generate_monotonic_ulid_string};

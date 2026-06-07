@@ -79,9 +79,13 @@ async fn unknown_op_errors_without_side_effect() {
     let h = Harness::new();
     let service = h.service();
 
-    let err = call_tool(&service, "frobnicate app", json!({ "op": "frobnicate app" }))
-        .await
-        .expect_err("unknown op should error");
+    let err = call_tool(
+        &service,
+        "frobnicate app",
+        json!({ "op": "frobnicate app" }),
+    )
+    .await
+    .expect_err("unknown op should error");
 
     assert!(
         err.message.contains("frobnicate app"),

@@ -26,7 +26,10 @@ async fn app_tool_meta_operations_tree_is_complete() {
     let tool = &listed.tools[0];
     assert_eq!(tool.name.as_ref(), "app");
 
-    let meta = tool.meta.as_ref().expect("app tool advertises a _meta tree");
+    let meta = tool
+        .meta
+        .as_ref()
+        .expect("app tool advertises a _meta tree");
     let ops_tree = meta
         .0
         .get("io.swissarmyhammer/operations")

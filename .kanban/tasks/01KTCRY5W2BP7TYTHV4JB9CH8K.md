@@ -20,22 +20,23 @@ function viewIcon(view: ViewDef) {
   return <LayoutGrid className="h-4 w-4" />;    // fallback — the 4 squares
 }
 ```
-So every non-board view falls through to `LayoutGrid` because `view.icon ?? view.kind` does not resolve to a valid lucide-react icon key after `kebabToPascal`. The board view only looks right by coincidence — either its `kind`/`icon` happens to map to a real lucide name, or its mapped name IS `LayoutGrid`.
+So every non-board view falls through to `LayoutGrid` because `view.icon ?? view.kind` does not resolve to a valid lucide-react icon key after `kebabToPascal`. The board view only looks right by coincidence.
 
 Root-cause candidates:
-1. **Backend doesn't populate `view.icon`** per view, so `viewIcon` falls back to `view.kind`, and the raw `kind` strings (e.g. `grid`, `table`, `board`) are not valid lucide PascalCase names (`Grid`, `Table`, `Board` are not all lucide icons — e.g. there is no `Board`; `Grid` is deprecated/renamed). Confirm what `ViewDef.icon` / `ViewDef.kind` actually contain at runtime (`apps/kanban-app/ui/src/types/kanban.ts`, and the backend view definitions).
-2. **Missing kind→icon mapping**: there is no deliberate per-kind icon map; the code relies on `kind` strings accidentally matching lucide names. Likely needs an explicit `kind -> lucide name` map (board → Columns/LayoutGrid, grid/table → Table, etc.) and/or each built-in view YAML to declare a valid `icon`.
+1. **Backend doesn't populate `view.icon`** per view, so `viewIcon` falls back to `view.kind`, and the raw `kind` strings (e.g. `grid`, `table`, `board`) are not valid lucide PascalCase names. Confirm what `ViewDef.icon` / `ViewDef.kind` contain at runtime (`apps/kanban-app/ui/src/types/kanban.ts`, and the backend view definitions).
+2. **Missing kind→icon mapping** — the code relies on `kind` strings accidentally matching lucide names.
 
-Reproduce: open a board with multiple view kinds; observe all left-nav view icons render as the 4-square LayoutGrid except board.
+## Architecture steer (dedup review)
+Resolve the icon from VIEW/SERVICE METADATA, not a UI-hardcoded `kind→icon` map. The per-view `icon` should be supplied by the views service / `ViewDef` (single source of truth); the UI's `viewIcon` stays a dumb lookup of that provided icon with one documented fallback. **Prefer fixing the data** — each built-in view definition declares a valid lucide `icon` — over adding a `kind→lucide` switch in `left-nav.tsx`. A hardcoded map in React is exactly the presentation/control logic we are removing from the UI (target: UI displays + routes only). If a kind-based default is unavoidable, it belongs in the view service metadata, not the component.
 
 ## Acceptance Criteria
 - [ ] Each view kind renders a distinct, sensible icon (board, grid/table, and any other kinds differ).
-- [ ] Icons resolve from an explicit, validated source (per-view `icon` and/or a kind→icon map) rather than accidental lucide name collisions.
-- [ ] Root cause identified (missing backend `icon` vs. invalid `kind`→lucide assumption).
+- [ ] The icon is supplied by view/service metadata (each built-in ViewDef declares a valid lucide `icon`); `viewIcon` is a dumb lookup + single documented fallback, with NO hardcoded kind→icon map in the component.
+- [ ] Root cause identified (missing service-provided `icon` vs. invalid `kind`→lucide assumption).
 
 ## Tests
-- [ ] Unit test for `viewIcon` (extract if needed) asserting each known view kind maps to its expected (non-fallback) icon, and an unknown kind maps to the documented fallback.
-- [ ] Test that built-in view definitions each declare an `icon` that resolves to a real lucide key (guard against silent fallback).
+- [ ] Unit test for `viewIcon` asserting a provided valid `icon` renders it, and an unknown/empty icon maps to the documented fallback.
+- [ ] Test that every built-in view definition declares an `icon` that resolves to a real lucide key (guard against silent fallback) — at the service/metadata layer.
 - [ ] Regression test failing before the fix, passing after.
 
 ## Workflow

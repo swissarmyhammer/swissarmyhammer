@@ -98,6 +98,7 @@ import type {
 import type { LayerScopeRegistry } from "@/lib/layer-scope-registry-context";
 import type { CommandDef } from "@/lib/command-scope";
 import { CommandScopeProvider } from "@/lib/command-scope";
+import { registerUiResponder } from "@/lib/ui-request-responder";
 
 // ---------------------------------------------------------------------------
 // Claim registry — per-FQM callbacks
@@ -263,9 +264,7 @@ export interface SpatialFocusActions {
    * none` / detached layout) ARE included — the Jump-To overlay
    * filters zero-area rects when laying out pills.
    */
-  enumerateScopesInLayer: (
-    layerFq: FullyQualifiedMoniker,
-  ) => Array<{
+  enumerateScopesInLayer: (layerFq: FullyQualifiedMoniker) => Array<{
     fq: FullyQualifiedMoniker;
     rect: DOMRect;
     /** Enclosing scope FQM, for nearest-focusable-ancestor (tier) computation. */
@@ -395,6 +394,33 @@ export function SpatialFocusProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
       if (unlisten) unlisten();
+    };
+  }, []);
+
+  // Register the host→UI geometry responders (Card F2). The focus kernel
+  // PULLS live geometry and current focus from the webview on demand over
+  // the F1 host→UI channel; this provider is the natural source because it
+  // already owns the latest focused FQM (`focusedFqRef`) and the per-layer
+  // scope registries (`layerRegistriesRef`). Both responders build their
+  // answer ON DEMAND at request time — `focus.geometry` re-samples
+  // `getBoundingClientRect` via `buildSnapshotForFocused`; nothing is
+  // cached. (`focus.scopeChain` is registered by `EntityFocusProvider`,
+  // which owns the focused entity's scope chain.) Registered in an effect
+  // (not render) so the cleanup runs on unmount and a hot-reloaded provider
+  // does not leak a stale responder.
+  useEffect(() => {
+    const unregisterGeometry = registerUiResponder("focus.geometry", () => {
+      const focusedFq = focusedFqRef.current;
+      if (focusedFq === null) return null;
+      return buildSnapshotForFocused(layerRegistriesRef, focusedFq) ?? null;
+    });
+    const unregisterCurrent = registerUiResponder(
+      "focus.current",
+      () => focusedFqRef.current,
+    );
+    return () => {
+      unregisterGeometry();
+      unregisterCurrent();
     };
   }, []);
 

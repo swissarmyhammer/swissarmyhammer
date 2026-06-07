@@ -4,11 +4,12 @@
 //! and `crates/swissarmyhammer-kanban/builtin/commands/*.yaml` except
 //! `ai.yaml`) and retired the legacy dispatch fallback; the follow-up
 //! card 01KT6WWYYWFQ2F4PGQ358SAHY7 then ported the final `ai.yaml`
-//! window-layer commands onto the `ai-commands` builtin plugin, retiring
-//! the last non-nav YAML command source. `CommandService` (fed by the 8
-//! builtin command plugins at app startup) is now the sole source of
-//! every command's metadata. This test pins the "all 67 commands wire
-//! through the new path" gate the cut-over depends on.
+//! window-layer commands onto the `ai-commands` builtin plugin; Card A
+//! then ported the nine `nav.*` commands onto the `nav-commands` builtin
+//! plugin, retiring the last YAML command source (`nav.yaml`).
+//! `CommandService` (fed by the 9 builtin command plugins at app startup)
+//! is now the sole source of every command's metadata. This test pins the
+//! "all 76 commands wire through the new path" gate the cut-over depends on.
 //!
 //! Scope delivered: **registration coverage** end-to-end.
 //!
@@ -22,7 +23,7 @@
 //!    helper lands on the service.
 //! 4. Discover and load every plugin.
 //! 5. Assert the union of registered commands matches the locked
-//!    67-id baseline (set-equality with order-stable diff so missing,
+//!    76-id baseline (set-equality with order-stable diff so missing,
 //!    extra, or renamed ids surface explicitly).
 //!
 //! Dispatch coverage (per-command real effects against the matching
@@ -33,7 +34,7 @@
 //! one of its commands, the sort of drop the per-plugin tests cannot
 //! catch because each only stages one bundle in isolation.
 //!
-//! The 67 commands across the 8 builtin command plugins (matches each
+//! The 76 commands across the 9 builtin command plugins (matches each
 //! plugin's `registerCommands(...)` call set):
 //!
 //! - `app-shell-commands` (15): help, about, quit, command, search,
@@ -49,13 +50,17 @@
 //!   clearGroup,sort.set,sort.clear,sort.toggle}.
 //! - `task-commands` (3): task.{move,untag,doThisNext}.
 //! - `ui-commands` (10): ui.inspect, ui.inspector.{close,close_all,set_width},
-//!   ui.palette.{open,close}, ui.entity.startRename, ui.mode.set, ui.setFocus,
-//!   window.new.
+//!   app.palette.open, ui.palette.close, ui.entity.startRename, ui.mode.set,
+//!   ui.setFocus, window.new. (The palette opener is `app.palette.open` after
+//!   the ui.*→app.* rename fold; `ui.palette.open` is retired.)
 //! - `ai-commands` (5): ai.{toggle,focus,newChat,model,cancel} — webview-
 //!   reactive no-ops; the metadata surfaces in the unified registry while the
 //!   AI panel React tree owns the live effect.
+//! - `nav-commands` (9): nav.{up,down,left,right,first,last,drillIn,drillOut,
+//!   jump} — directional/drill route to the focus kernel (host-driven), jump
+//!   is webview-bus handled. Ported from the retired `nav.yaml` overlay.
 //!
-//! TOTAL: 67 commands.
+//! TOTAL: 76 commands.
 
 #![allow(dead_code)]
 
@@ -93,6 +98,7 @@ const BUILTIN_COMMAND_PLUGINS: &[&str] = &[
     "task-commands",
     "ui-commands",
     "ai-commands",
+    "nav-commands",
 ];
 
 /// Backend modules every builtin command plugin's
@@ -277,7 +283,8 @@ fn expected_command_ids() -> BTreeSet<String> {
         "task.doThisNext",
         "task.move",
         "task.untag",
-        // ui-commands (10)
+        // ui-commands (10) — the palette opener is now `app.palette.open`
+        // (folded ui.*→app.* rename); `ui.palette.open` is fully retired.
         "ui.entity.startRename",
         "ui.inspect",
         "ui.inspector.close",
@@ -285,7 +292,7 @@ fn expected_command_ids() -> BTreeSet<String> {
         "ui.inspector.set_width",
         "ui.mode.set",
         "ui.palette.close",
-        "ui.palette.open",
+        "app.palette.open",
         "ui.setFocus",
         "window.new",
         // ai-commands (5)
@@ -294,6 +301,16 @@ fn expected_command_ids() -> BTreeSet<String> {
         "ai.model",
         "ai.newChat",
         "ai.toggle",
+        // nav-commands (9)
+        "nav.up",
+        "nav.down",
+        "nav.left",
+        "nav.right",
+        "nav.first",
+        "nav.last",
+        "nav.drillIn",
+        "nav.drillOut",
+        "nav.jump",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -306,7 +323,7 @@ fn expected_command_ids() -> BTreeSet<String> {
 /// plugin, and assert the union of registered commands equals the
 /// locked baseline.
 #[tokio::test]
-async fn all_eight_builtin_command_plugins_register_their_full_command_set() {
+async fn all_nine_builtin_command_plugins_register_their_full_command_set() {
     let user_root = TempDir::new().expect("user root temp dir");
     let builtin_root = TempDir::new().expect("builtin layer root temp dir");
 
@@ -369,7 +386,7 @@ async fn all_eight_builtin_command_plugins_register_their_full_command_set() {
 
     assert_eq!(
         got.len(),
-        67,
-        "the 8 builtin command plugins must collectively register exactly 67 commands"
+        76,
+        "the 9 builtin command plugins must collectively register exactly 76 commands"
     );
 }

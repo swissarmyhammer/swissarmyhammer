@@ -30,13 +30,13 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use swissarmyhammer_operations_macros::operation_tool;
 
-use swissarmyhammer_kanban::commands_core::{Command, CommandContext};
 use swissarmyhammer_entity::{Entity, EntityContext, EntityError, EntityId};
 use swissarmyhammer_entity_search::EntitySearchIndex;
 use swissarmyhammer_kanban::clipboard::{ClipboardProvider, ClipboardProviderExt};
 use swissarmyhammer_kanban::commands::clipboard_commands::{
     CopyEntityCmd, CutEntityCmd, PasteEntityCmd,
 };
+use swissarmyhammer_kanban::commands_core::{Command, CommandContext};
 use swissarmyhammer_kanban::KanbanContext;
 use swissarmyhammer_ui_state::UIState;
 
@@ -524,7 +524,10 @@ impl EntityServer {
             req.scope,
             Some(target),
         )?;
-        CutEntityCmd.execute(&ctx).await.map_err(command_error_to_mcp)
+        CutEntityCmd
+            .execute(&ctx)
+            .await
+            .map_err(command_error_to_mcp)
     }
 
     /// Handle a `Paste` call — dispatch the clipboard payload onto the
@@ -571,10 +574,9 @@ fn entity_error_to_mcp(err: EntityError) -> McpError {
             message,
             Some(serde_json::json!({ "type": entity_type, "id": id })),
         ),
-        EntityError::UnknownEntityType { entity_type } => McpError::invalid_params(
-            message,
-            Some(serde_json::json!({ "type": entity_type })),
-        ),
+        EntityError::UnknownEntityType { entity_type } => {
+            McpError::invalid_params(message, Some(serde_json::json!({ "type": entity_type })))
+        }
         EntityError::ValidationFailed { field, .. } => {
             McpError::invalid_params(message, Some(serde_json::json!({ "field": field })))
         }

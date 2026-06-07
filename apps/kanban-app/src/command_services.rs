@@ -29,7 +29,10 @@ use swissarmyhammer_command_service::CommandService;
 use swissarmyhammer_entity_mcp::server::{
     task_local_resolver as entity_task_local_resolver, EntityServer,
 };
-use swissarmyhammer_focus::{FocusChangedEvent, FocusEventSink, FocusServer};
+use swissarmyhammer_focus::{
+    FocusChangedEvent, FocusEventSink, FocusServer, FullyQualifiedMoniker, NavSnapshot,
+    UiGeometryProvider, WindowLabel,
+};
 use swissarmyhammer_kanban::command_seam::{task_local_store_resolver, StoreTransactionSeam};
 use swissarmyhammer_plugin::{InProcessServer, McpServer, PluginHost};
 use swissarmyhammer_store::StoreServer;
@@ -88,6 +91,95 @@ impl FocusEventSink for TauriFocusEventSink {
                 "TauriFocusEventSink: failed to emit focus-changed"
             );
         }
+    }
+}
+
+/// [`UiGeometryProvider`] that answers the focus kernel's on-demand geometry
+/// pulls by asking the webview over the F1 host→UI request/reply channel
+/// ([`crate::ui_request::request_from_ui`]) and awaiting the reply.
+///
+/// This is the app-layer half of the kernel's pull seam — the mirror image of
+/// [`TauriFocusEventSink`] (the push seam). The kernel defines the
+/// [`UiGeometryProvider`] trait and knows nothing about Tauri; this impl
+/// translates each query into a `ui/request` to the named window:
+///
+/// | trait method   | request kind        | webview responder builds            |
+/// |----------------|---------------------|-------------------------------------|
+/// | `snapshot`     | `focus.geometry`    | `buildSnapshotForFocused` (live DOM)|
+/// | `scope_chain`  | `focus.scopeChain`  | the current focus scope chain       |
+/// | `focus`        | `focus.current`     | the focused FQM                     |
+///
+/// Reads its [`AppHandle`] from the same deferred [`FOCUS_EVENT_APP_HANDLE`]
+/// cell the event sink uses — both are installed at focus-service construction
+/// but the handle only exists from `setup_app`. A request issued before the
+/// cell is filled (or that errors / times out) degrades to "nothing"
+/// (`None` / empty), matching the trait's window-closed / no-responder
+/// contract.
+struct TauriUiGeometryProvider;
+
+impl TauriUiGeometryProvider {
+    /// Issue a `kind` request to `window` over the F1 channel and return the
+    /// raw reply, or `None` when the handle is not yet installed or the
+    /// request failed (closed window, no responder, timeout).
+    ///
+    /// Holds no lock — the kernel drops its spatial locks before awaiting any
+    /// provider method, so this `await` is deadlock-safe by construction.
+    async fn pull(&self, window: &WindowLabel, kind: &str) -> Option<serde_json::Value> {
+        let app_handle = FOCUS_EVENT_APP_HANDLE.get()?;
+        match crate::ui_request::request_from_ui(
+            app_handle,
+            window.as_str(),
+            kind,
+            serde_json::json!({}),
+        )
+        .await
+        {
+            Ok(value) => Some(value),
+            Err(e) => {
+                tracing::debug!(
+                    window = %window,
+                    kind,
+                    error = %e,
+                    "TauriUiGeometryProvider: ui request failed; treating as no answer"
+                );
+                None
+            }
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl UiGeometryProvider for TauriUiGeometryProvider {
+    async fn snapshot(&self, window: &WindowLabel) -> Option<NavSnapshot> {
+        let value = self.pull(window, "focus.geometry").await?;
+        // The responder replies `null` for "no snapshot available"; a present
+        // value must deserialize into the kernel's wire shape.
+        if value.is_null() {
+            return None;
+        }
+        match serde_json::from_value(value) {
+            Ok(snapshot) => Some(snapshot),
+            Err(e) => {
+                tracing::warn!(window = %window, error = %e,
+                    "TauriUiGeometryProvider: focus.geometry reply was not a NavSnapshot");
+                None
+            }
+        }
+    }
+
+    async fn scope_chain(&self, window: &WindowLabel) -> Vec<FullyQualifiedMoniker> {
+        let Some(value) = self.pull(window, "focus.scopeChain").await else {
+            return Vec::new();
+        };
+        serde_json::from_value(value).unwrap_or_default()
+    }
+
+    async fn focus(&self, window: &WindowLabel) -> Option<FullyQualifiedMoniker> {
+        let value = self.pull(window, "focus.current").await?;
+        if value.is_null() {
+            return None;
+        }
+        serde_json::from_value(value).ok()
     }
 }
 
@@ -187,9 +279,15 @@ pub async fn install_app_command_services(
     // side-effecting `emit` the legacy `spatial_*` Tauri commands did.
     // The sink reads its AppHandle from a deferred cell that
     // `setup_app` fills via [`install_focus_event_app_handle`].
+    // The sink is the kernel's PUSH seam (events out); the provider is its
+    // PULL seam (geometry / scope-chain / focus in, on demand over the F1
+    // host→UI channel). Both read the deferred AppHandle from
+    // `FOCUS_EVENT_APP_HANDLE`, installed from `setup_app`.
     let focus_server: Arc<dyn McpServer> = Arc::new(
         InProcessServer::from_arc(Arc::new(
-            FocusServer::new().with_sink(Arc::new(TauriFocusEventSink)),
+            FocusServer::new()
+                .with_sink(Arc::new(TauriFocusEventSink))
+                .with_provider(Arc::new(TauriUiGeometryProvider)),
         ))
         .await
         .map_err(|e| format!("wrap focus as InProcessServer: {e}"))?,

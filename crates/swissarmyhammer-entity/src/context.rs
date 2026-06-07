@@ -706,10 +706,7 @@ impl EntityContext {
             // are non-fatal: `refresh_from_disk` only fails if the file
             // cannot be parsed, which means the cache is the better of
             // two bad options. Log and continue.
-            if let Err(e) = cache
-                .refresh_from_disk_with(entity_type, id, prov)
-                .await
-            {
+            if let Err(e) = cache.refresh_from_disk_with(entity_type, id, prov).await {
                 tracing::warn!(
                     entity_type = entity_type,
                     id = id,

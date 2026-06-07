@@ -175,7 +175,10 @@ fn run_new_board_initializes_board_on_disk() {
     assert_eq!(calls[0].0, expected_kanban);
     assert_eq!(calls[0].1, "my-project");
     // The board directory now exists on disk.
-    assert!(expected_kanban.is_dir(), "board .kanban dir created on disk");
+    assert!(
+        expected_kanban.is_dir(),
+        "board .kanban dir created on disk"
+    );
     // The originally-chosen folder is threaded back for the AppState open seam.
     assert_eq!(chosen_folder, folder);
 }
@@ -206,8 +209,8 @@ fn run_open_board_resolves_chosen_folder() {
     let kanban = folder.join(".kanban");
     std::fs::create_dir_all(&kanban).expect("create existing .kanban dir");
 
-    let result = run_open_board(&picker_returning(folder.clone()))
-        .expect("run_open_board should succeed");
+    let result =
+        run_open_board(&picker_returning(folder.clone())).expect("run_open_board should succeed");
 
     let (opened, chosen_folder): (OpenedBoard, PathBuf) =
         result.expect("picker chose a folder, so a board is opened");

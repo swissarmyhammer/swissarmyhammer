@@ -60,7 +60,9 @@ async fn setup(
     store_context.register(handle).await;
     ctx.set_store_context(Arc::clone(&store_context));
 
-    let cache = Arc::new(swissarmyhammer_entity::cache::EntityCache::new(Arc::clone(&ctx)));
+    let cache = Arc::new(swissarmyhammer_entity::cache::EntityCache::new(Arc::clone(
+        &ctx,
+    )));
     ctx.attach_cache(&cache);
 
     (dir, ctx, cache, store_context)
@@ -190,7 +192,11 @@ async fn update_undo_emits_old_values_redo_emits_new_values() {
                 .iter()
                 .find(|c| c.field == "tag_name")
                 .expect("tag_name must be in the undo diff");
-            assert_eq!(name.value, json!("Old Name"), "undo must surface the OLD value");
+            assert_eq!(
+                name.value,
+                json!("Old Name"),
+                "undo must surface the OLD value"
+            );
             txn.clone()
         }
         other => panic!("expected EntityChanged from undo of update, got {other:?}"),
@@ -213,7 +219,11 @@ async fn update_undo_emits_old_values_redo_emits_new_values() {
                 .iter()
                 .find(|c| c.field == "tag_name")
                 .expect("tag_name must be in the redo diff");
-            assert_eq!(name.value, json!("New Name"), "redo must surface the NEW value");
+            assert_eq!(
+                name.value,
+                json!("New Name"),
+                "redo must surface the NEW value"
+            );
         }
         other => panic!("expected EntityChanged from redo of update, got {other:?}"),
     }

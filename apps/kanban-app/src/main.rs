@@ -12,6 +12,7 @@ mod menu;
 mod plugins;
 mod state;
 mod tauri_reporter;
+mod ui_request;
 mod watcher;
 
 pub use tauri_reporter::TauriReporter;
@@ -79,6 +80,7 @@ fn run_app(app_state: AppState) {
             commands::save_dropped_file,
             commands::command_tool_call,
             commands::mcp_subscribe,
+            ui_request::ui_request_reply,
             ai::models::ai_list_models,
             ai::models::ai_start_agent,
             ai::models::ai_set_streaming,

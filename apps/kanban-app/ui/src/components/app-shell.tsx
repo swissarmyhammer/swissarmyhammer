@@ -15,7 +15,7 @@ import {
   type CommandDef,
   type DispatchOptions,
 } from "@/lib/command-scope";
-import { useFocusActions, useFocusedScope } from "@/lib/entity-focus-context";
+import { useFocusedScope } from "@/lib/entity-focus-context";
 import {
   useSpatialFocusActions,
   type SpatialFocusActions,
@@ -34,14 +34,9 @@ import { CommandPalette } from "@/components/command-palette";
 import { FocusLayer } from "@/components/focus-layer";
 import { JumpToOverlay } from "@/components/jump-to-overlay";
 import { useEnclosingLayerFq } from "@/components/layer-fq-context";
-import {
-  asSegment,
-  fqLastSegment,
-  type Direction,
-  type FullyQualifiedMoniker,
-} from "@/types/spatial";
+import { asSegment, fqLastSegment } from "@/types/spatial";
 import { triggerStartRename } from "@/components/perspective-tab-bar";
-import { runNavWithScrollOnEdge } from "@/lib/scroll-on-edge";
+import { registerWebviewCommandHandler } from "@/lib/webview-command-bus";
 import {
   aiStreaming,
   subscribeAiStreaming,
@@ -249,180 +244,21 @@ const STATIC_GLOBAL_COMMANDS: CommandDef[] = [
 ];
 
 /**
- * Key binding + display metadata for each universal navigation command.
+ * Read-only ref bag for the root-scope `entity.inspect` command closure.
  *
- * The `direction` field is the wire-shape literal that `spatial_navigate`
- * accepts (matches `Direction` in `types/spatial.ts`). Each command's
- * `execute` closure threads the currently-focused [`FullyQualifiedMoniker`]
- * (read via `actions.focusedFq()`) plus this direction string into
- * `spatial_navigate` via the spatial-actions ref.
+ * The closure is minted once into the `globalCommands` memo and lives for the
+ * AppShell's lifetime, but it needs to read the *latest* spatial focus actions
+ * on every keystroke. Holding the actions in a ref lets the memo dependency
+ * list stay empty without staling on context updates.
  *
- * Kept as a data table so `buildNavCommands` can produce the CommandDef[] in
- * a single pass without repetitive object literals.
- */
-const NAV_COMMAND_SPEC: ReadonlyArray<{
-  id: string;
-  name: string;
-  keys: CommandDef["keys"];
-  direction: Direction;
-}> = [
-  {
-    id: "nav.up",
-    name: "Navigate Up",
-    keys: { vim: "k", cua: "ArrowUp", emacs: "Ctrl+p" },
-    direction: "up",
-  },
-  {
-    id: "nav.down",
-    name: "Navigate Down",
-    keys: { vim: "j", cua: "ArrowDown", emacs: "Ctrl+n" },
-    direction: "down",
-  },
-  {
-    id: "nav.left",
-    name: "Navigate Left",
-    keys: { vim: "h", cua: "ArrowLeft", emacs: "Ctrl+b" },
-    direction: "left",
-  },
-  {
-    id: "nav.right",
-    name: "Navigate Right",
-    keys: { vim: "l", cua: "ArrowRight", emacs: "Ctrl+f" },
-    direction: "right",
-  },
-  {
-    id: "nav.first",
-    name: "Navigate to First",
-    keys: { cua: "Home", emacs: "Alt+<" },
-    direction: "first",
-  },
-  {
-    id: "nav.last",
-    name: "Navigate to Last",
-    keys: { vim: "Shift+G", cua: "End", emacs: "Alt+>" },
-    direction: "last",
-  },
-];
-
-/**
- * Build universal navigation CommandDefs that dispatch `spatial_navigate`.
- *
- * Each command reads the currently-focused [`FullyQualifiedMoniker`] from
- * the `SpatialFocusProvider` via `actions.focusedFq()`, then awaits the
- * matching Tauri command (`spatial_navigate`) with the per-spec `direction`
- * literal. When the registry has nothing focused (`focusedFq() === null`)
- * the command is a no-op — there is nothing to navigate from.
- *
- * Historically this was the entry point for the pull-based predicate
- * registry: each FocusScope with a matching `claimWhen` predicate would
- * claim focus when these commands fired. The predicate registry has been
- * replaced by the Rust spatial-nav kernel (beam search plus per-direction
- * `overrides`), so the React side now pushes the focused key + direction
- * into the kernel and the kernel emits `focus-changed` for the new
- * target, which the React tree picks up via `useFocusClaim`.
- */
-function buildNavCommands(
-  spatialActionsRef: React.MutableRefObject<SpatialFocusActions>,
-): CommandDef[] {
-  return NAV_COMMAND_SPEC.map((spec) => ({
-    id: spec.id,
-    name: spec.name,
-    keys: spec.keys,
-    execute: async () => {
-      await runNavWithScrollOnEdge(spatialActionsRef.current, spec.direction);
-    },
-  }));
-}
-
-/**
- * Read-only ref bag for the drill-in / drill-out command closures.
- *
- * The closures are minted once into the `globalCommands` memo and live
- * for the AppShell's lifetime, but they need to read the *latest*
- * spatial focus actions, entity setFocus callback, and `app.dismiss`
- * dispatcher on every keystroke. Holding all three in refs lets the
- * memo dependency list stay empty without staling on context updates.
+ * The directional / first-last / drill `nav.*` commands no longer live here —
+ * they are owned by the `nav-commands` builtin plugin
+ * (`builtin/plugins/nav-commands/index.ts`) and execute host-side through the
+ * `focus` kernel, so `useDispatchCommand` routes a dispatched `nav.*` id to the
+ * backend rather than a React closure.
  */
 interface DrillRefs {
   spatialActionsRef: React.MutableRefObject<SpatialFocusActions>;
-  setFocusRef: React.MutableRefObject<
-    (fq: FullyQualifiedMoniker | null) => void
-  >;
-  dismissRef: React.MutableRefObject<
-    (opts?: DispatchOptions) => Promise<unknown>
-  >;
-}
-
-/**
- * Build the `nav.drillIn` (Enter) and `nav.drillOut` (Escape) commands.
- *
- * Both read the currently-focused [`FullyQualifiedMoniker`] from the
- * `SpatialFocusProvider` via `actions.focusedFq()`, await the matching
- * Tauri command (`spatial_drill_in` / `spatial_drill_out`), and dispatch
- * `setFocus(result)` against the entity focus store on every result.
- * Under the no-silent-dropout contract the kernel always returns a
- * [`FullyQualifiedMoniker`]; the caller compares the result to the focused
- * FQM to detect the "no descent / no drill happened" case:
- *
- * - `nav.drillIn` falls through implicitly — `setFocus(focusedMoniker)`
- *   is idempotent on the entity-focus store, so a leaf without an
- *   inline-edit affordance is a visible no-op. Leaves with an editor
- *   handle Enter via their own scope-level command (e.g.
- *   `field.edit`, card-name rename) which shadows this binding.
- * - `nav.drillOut` falls through to `app.dismiss` when the result
- *   equals the focused moniker, so the existing Escape chain (close
- *   the topmost modal layer) still fires at a layer root.
- *
- * Mirrors the React contract documented on `SpatialFocusActions.drillIn`
- * / `drillOut` — purely a registry query, no focus-state mutation; the
- * caller wires the resulting moniker into the entity focus store.
- */
-function buildDrillCommands(refs: DrillRefs): CommandDef[] {
-  return [
-    {
-      id: "nav.drillIn",
-      name: "Drill In",
-      keys: { vim: "Enter", cua: "Enter" },
-      execute: async () => {
-        const actions = refs.spatialActionsRef.current;
-        const focusedFq = actions.focusedFq();
-        if (focusedFq === null) return;
-        const result = await actions.drillIn(focusedFq, focusedFq);
-        // The kernel always returns an FQM. When `result === focusedFq`
-        // the caller's setFocus call is idempotent (entity-focus store
-        // detects identity-stable FQMs and emits no event), which
-        // visually matches the legacy "null → no-op" behavior. When
-        // `result !== focusedFq` setFocus moves focus to the new
-        // target.
-        refs.setFocusRef.current(result);
-      },
-    },
-    {
-      id: "nav.drillOut",
-      name: "Drill Out",
-      keys: { vim: "Escape", cua: "Escape" },
-      execute: async () => {
-        const actions = refs.spatialActionsRef.current;
-        const focusedFq = actions.focusedFq();
-        if (focusedFq === null) {
-          // No spatial focus → nothing to drill out of; honour the
-          // existing Escape chain (close topmost modal layer).
-          await refs.dismissRef.current();
-          return;
-        }
-        const result = await actions.drillOut(focusedFq, focusedFq);
-        if (result === focusedFq) {
-          // Kernel echoed the focused FQM — layer-root edge or
-          // torn state. Fall through to `app.dismiss` to close the
-          // topmost modal layer; the user-observable behavior is
-          // identical to the legacy `null` fall-through.
-          await refs.dismissRef.current();
-        } else {
-          refs.setFocusRef.current(result);
-        }
-      },
-    },
-  ];
 }
 
 /**
@@ -542,8 +378,6 @@ function buildDynamicGlobalCommands(
   >,
 ): CommandDef[] {
   return [
-    ...buildDrillCommands(drillRefs),
-    ...buildNavCommands(drillRefs.spatialActionsRef),
     buildRootInspectCommand(drillRefs.spatialActionsRef, inspectDispatchRef),
     {
       id: "ui.entity.startRename",
@@ -720,7 +554,6 @@ export function AppShell({ children, onSwitchBoard }: AppShellProps) {
   // Tracks the AI conversation's streaming flag so `ai.cancel`'s `available`
   // is rebuilt whenever a turn starts or ends.
   const aiIsStreaming = useAiStreaming();
-  const { setFocus } = useFocusActions();
   const spatialActions = useSpatialFocusActions();
   const dismiss = useDispatchCommand("app.dismiss");
   // Pre-bound dispatcher for the root-scope `entity.inspect` command
@@ -734,26 +567,36 @@ export function AppShell({ children, onSwitchBoard }: AppShellProps) {
   // Jump-To overlay open/close lives here so every entry point —
   // vim-mode `s`, cua/emacs `Mod+G`, the Navigation > Jump To menu
   // item, and the palette — opens the *same* overlay instance. The
-  // `nav.jump` global command flips this; `<JumpToOverlay>` mounts
-  // when `jumpOpen` is true and dismisses itself via the sentinel
-  // `app.dismiss` shadow on Escape / backdrop click / blur.
+  // `nav.jump` plugin command's webview-bus handler (registered below)
+  // flips this; `<JumpToOverlay>` mounts when `jumpOpen` is true and
+  // dismisses itself via the sentinel `app.dismiss` shadow on Escape /
+  // backdrop click / blur.
   const [jumpOpen, setJumpOpen] = useState(false);
 
-  // Drill + nav commands need read-on-demand access to spatial focus, entity
-  // setFocus, and the `app.dismiss` dispatcher. Holding each in a ref keeps
-  // the `globalCommands` memo dependency list empty while still letting the
-  // closures see the latest context values at keystroke time. The actions
-  // bag from `useSpatialFocusActions` is itself identity-stable (built once
-  // per provider lifetime), so the ref is belt-and-braces — a future
-  // refactor that turns it into a per-render value still survives.
+  // The root-scope `entity.inspect` command needs read-on-demand access to
+  // spatial focus. Holding the actions in a ref keeps the `globalCommands`
+  // memo dependency list empty while still letting the closure see the latest
+  // context value at keystroke time. The actions bag from
+  // `useSpatialFocusActions` is itself identity-stable (built once per provider
+  // lifetime), so the ref is belt-and-braces — a future refactor that turns it
+  // into a per-render value still survives.
   const spatialActionsRef = useRef(spatialActions);
   spatialActionsRef.current = spatialActions;
-  const setFocusRef = useRef(setFocus);
-  setFocusRef.current = setFocus;
-  const dismissRef = useRef(dismiss);
-  dismissRef.current = dismiss;
   const inspectDispatchRef = useRef(inspectDispatch);
   inspectDispatchRef.current = inspectDispatch;
+
+  // `nav.jump` is a plugin command (owned by the `nav-commands` bundle) with no
+  // backend op: its effect is presentation-only — open the `<JumpToOverlay>`.
+  // Register a webview handler for the id on the command bus (Card B); when the
+  // id is dispatched (keybinding `s` / `Mod+G`, the Navigation > Jump To menu
+  // item, or the palette), `useDispatchCommand` runs this handler and skips the
+  // backend. The ownership-guarded cleanup runs on unmount so a stale closure
+  // never lingers. This is pure presentation — it only flips local React state.
+  useEffect(() => {
+    return registerWebviewCommandHandler("nav.jump", () => {
+      setJumpOpen(true);
+    });
+  }, []);
 
   // Window-root layer FQ — passed explicitly to the palette `<FocusLayer>`
   // because the command palette renders via `createPortal(document.body)`,
@@ -766,42 +609,18 @@ export function AppShell({ children, onSwitchBoard }: AppShellProps) {
   usePaletteModeSync(paletteOpen);
 
   // Static commands come from module scope; dynamic ones close over the
-  // spatial-actions / setFocus / dismiss refs. Both batches are stable, so
-  // the memo has no dependencies.
+  // spatial-actions ref. Both batches are stable, so the memo depends only on
+  // `aiIsStreaming` (which rebuilds the `ai.cancel` availability gate).
   //
-  // Dynamic commands precede static ones in the array so the drill
-  // commands' `keys: { cua: "Escape" }` reaches the `CommandScope` map
-  // before the static `app.dismiss: Escape`. `extractScopeBindings`
-  // walks the map in insertion order with first-key-wins semantics, so
-  // the `nav.drillOut` binding has to register first to claim Escape
-  // away from `app.dismiss` while a scope is focused. The drill
-  // execute closures fall through to `app.dismiss` themselves on a
-  // null kernel result, so the user-facing Escape behavior at a layer
-  // root is preserved.
+  // The directional / first-last / drill `nav.*` commands and `nav.jump` are
+  // no longer registered here — the `nav-commands` builtin plugin owns them.
+  // The directional / drill commands execute host-side through the `focus`
+  // kernel (so `useDispatchCommand` routes a dispatched `nav.*` id to the
+  // backend), and `nav.jump`'s webview-bus handler (registered above) opens the
+  // jump overlay.
   const globalCommands: CommandDef[] = useMemo(
     () => [
-      ...buildDynamicGlobalCommands(
-        {
-          spatialActionsRef,
-          setFocusRef,
-          dismissRef,
-        },
-        inspectDispatchRef,
-      ),
-      // `nav.jump` is neither directional (NAV_COMMAND_SPEC) nor a
-      // drill (buildDrillCommands) — it just flips the AppShell's
-      // `jumpOpen` flag, so it lives directly in the global batch.
-      // `setJumpOpen` is identity-stable (React guarantees the
-      // setter from `useState` keeps its identity across renders),
-      // so it's safe to leave the memo's dep list empty.
-      {
-        id: "nav.jump",
-        name: "Jump To",
-        keys: { vim: "s", cua: "Mod+G", emacs: "Mod+G" },
-        execute: async () => {
-          setJumpOpen(true);
-        },
-      },
+      ...buildDynamicGlobalCommands({ spatialActionsRef }, inspectDispatchRef),
       // The window-layer `ai.*` commands — registered here so their
       // keybindings fire app-wide. Rebuilt when `aiIsStreaming` flips
       // so `ai.cancel`'s `available` tracks the live conversation.

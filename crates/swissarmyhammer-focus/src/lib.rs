@@ -71,6 +71,7 @@ pub mod layer;
 pub mod navigate;
 pub mod observer;
 pub mod operations;
+pub mod provider;
 pub mod registry;
 pub mod server;
 pub mod snapshot;
@@ -80,16 +81,17 @@ pub mod types;
 
 /// Builtin command YAML files embedded at compile time, focus-specific.
 ///
-/// The 8 universal `nav.*` commands (`nav.up`, `nav.down`, `nav.left`,
-/// `nav.right`, `nav.first`, `nav.last`, `nav.drillIn`, `nav.drillOut`)
-/// are the user-facing surface of the focus kernel's navigation ops.
-/// The kernel is generic / domain-free, so this crate is the natural
-/// home for that metadata. Execution closures stay in the React layer
-/// (`kanban-app/ui/src/components/app-shell.tsx`) because they need
-/// live `SpatialFocusActions`; the YAML carries id, name, keys, and
-/// menu placement only. The app layer (kanban-app, kanban-cli, etc.)
-/// composes this contributor with the others via the app's
-/// `compose_registry!`.
+/// **Currently empty.** The nine universal `nav.*` commands once shipped
+/// here as data-only YAML stubs (`nav.yaml`) composed into the app's
+/// `CommandsRegistry` via `compose_registry!`. That YAML-merge / overlay
+/// approach is retired: the `nav.*` commands now live in the `nav-commands`
+/// builtin plugin (`builtin/plugins/nav-commands/index.ts`), which registers
+/// them on the `CommandService` with their `keys` + `menu` placement and
+/// routes execution through the `focus` kernel (host-driven) or the webview
+/// command bus (`nav.jump`). The OS menu is built FROM that service
+/// catalogue. This contributor therefore yields no sources today; the
+/// `include_dir!` machinery is retained so a future focus-specific command
+/// file requires no Rust changes (drop a `*.yaml` in `builtin/commands/`).
 static BUILTIN_COMMANDS: include_dir::Dir =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/builtin/commands");
 
@@ -125,7 +127,9 @@ pub use navigate::{drill_in, drill_out, pick_target};
 pub use observer::{FocusEventSink, NoopSink, RecordingSink};
 pub use operations::{
     operations, ClearFocus, DrillIn, DrillOut, Focus, FocusLost, Navigate, PopLayer, PushLayer,
+    QueryFocus, QueryGeometry, QueryScopeChain,
 };
+pub use provider::{NoopProvider, UiGeometryProvider};
 pub use registry::SpatialRegistry;
 pub use server::FocusServer;
 pub use snapshot::{FocusOverrides, IndexedSnapshot, NavSnapshot, SnapshotScope};

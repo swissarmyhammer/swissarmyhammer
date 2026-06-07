@@ -18,7 +18,8 @@ import { CommandBusyProvider } from "@/lib/command-scope";
 import { FocusDebugProvider } from "@/lib/focus-debug-context";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
-import { asSegment } from "@/types/spatial";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { asSegment, fqRoot, type FullyQualifiedMoniker } from "@/types/spatial";
 import { DiagErrorBoundary } from "@/components/diag-error-boundary";
 
 /**
@@ -29,6 +30,25 @@ import { DiagErrorBoundary } from "@/components/diag-error-boundary";
  * would force an unnecessary tear-down / re-push of the window root layer.
  */
 const WINDOW_LAYER_NAME = asSegment("window");
+
+/**
+ * Root the window-root focus layer at THIS window's own identity.
+ *
+ * The window is already a segment in the command scope chain
+ * (`window:<label>`), so the focus FQM must carry it too — otherwise every
+ * window roots its focus tree at the literal `/window` and the SAME board
+ * open in two windows mints identical FQMs (`/window/.../task:X`) that
+ * cross-fire each other's `focus-changed` registries ("navs affect all
+ * windows"). Rooting at the window label makes the window-root layer's FQM
+ * `/<label>/window` and every descendant `/<label>/window/...` — unique per
+ * window by construction, so no window-filtering guard is needed. `name`
+ * stays `"window"` so the z-tier table and `LayerName` metadata are
+ * unchanged. `getCurrentWindow().label` is resolved once at module scope
+ * (same accessor `window-container` uses for the `window:<label>` scope).
+ */
+const WINDOW_ROOT_FQ: FullyQualifiedMoniker = fqRoot(
+  asSegment(getCurrentWindow().label),
+);
 
 /** Parse URL params once at module level. */
 const URL_PARAMS = new URLSearchParams(window.location.search);
@@ -72,7 +92,7 @@ function App() {
     <DiagErrorBoundary>
       <FocusDebugProvider enabled={false}>
         <SpatialFocusProvider>
-          <FocusLayer name={WINDOW_LAYER_NAME}>
+          <FocusLayer name={WINDOW_LAYER_NAME} parentLayerFq={WINDOW_ROOT_FQ}>
             <CommandBusyProvider>
               <RustEngineContainer>
                 <WindowContainer>
@@ -135,7 +155,7 @@ function QuickCaptureApp() {
   return (
     <FocusDebugProvider enabled={false}>
       <SpatialFocusProvider>
-        <FocusLayer name={WINDOW_LAYER_NAME}>
+        <FocusLayer name={WINDOW_LAYER_NAME} parentLayerFq={WINDOW_ROOT_FQ}>
           <RustEngineContainer>
             <QuickCapture />
           </RustEngineContainer>

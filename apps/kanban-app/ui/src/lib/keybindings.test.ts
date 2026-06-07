@@ -288,8 +288,14 @@ describe("BINDING_TABLES", () => {
 
   it("vim bindings include expected commands", () => {
     const vim = BINDING_TABLES.vim;
-    expect(vim[":"]).toBe("app.command");
-    expect(vim["Mod+Shift+P"]).toBe("app.palette");
+    // The palette opener is the unified `app.palette.open` (folded from the
+    // old `ui.palette.open`). Its vim `:` binding rides on the plugin command
+    // metadata (resolved by `extractKeymapBindings`), so the static table no
+    // longer carries a `:` entry — that would only duplicate the dynamic
+    // binding. `Mod+Shift+P` is not in the command's `keys`, so it stays a
+    // static binding, now pointing at the unified id.
+    expect(vim[":"]).toBeUndefined();
+    expect(vim["Mod+Shift+P"]).toBe("app.palette.open");
     expect(vim["u"]).toBe("app.undo");
     expect(vim["Mod+r"]).toBe("app.redo");
     // Escape is now claimed by `nav.drillOut`, which delegates to
@@ -306,7 +312,7 @@ describe("BINDING_TABLES", () => {
 
   it("cua bindings include expected commands", () => {
     const cua = BINDING_TABLES.cua;
-    expect(cua["Mod+Shift+P"]).toBe("app.palette");
+    expect(cua["Mod+Shift+P"]).toBe("app.palette.open");
     expect(cua["Mod+z"]).toBe("app.undo");
     expect(cua["Mod+Shift+Z"]).toBe("app.redo");
     // See vim notes — Escape is now `nav.drillOut`, which falls
@@ -326,7 +332,7 @@ describe("BINDING_TABLES", () => {
 
   it("emacs bindings include expected commands", () => {
     const emacs = BINDING_TABLES.emacs;
-    expect(emacs["Mod+Shift+P"]).toBe("app.palette");
+    expect(emacs["Mod+Shift+P"]).toBe("app.palette.open");
     expect(emacs["Escape"]).toBe("nav.drillOut");
     expect(emacs["Enter"]).toBe("nav.drillIn");
   });
@@ -591,9 +597,16 @@ describe("createKeyHandler", () => {
   });
 
   it("vim colon binding works as single key", () => {
-    const handler = createKeyHandler("vim", executeCommand);
+    // The palette opener's vim `:` binding is no longer a static entry — it
+    // rides on the `app.palette.open` plugin command metadata, surfaced to the
+    // global layer via `extractKeymapBindings`. Pass that dynamic binding as
+    // the handler's `globalBindings` to prove `:` still resolves (now to the
+    // unified `app.palette.open`).
+    const handler = createKeyHandler("vim", executeCommand, undefined, {
+      ":": "app.palette.open",
+    });
     handler(fakeKeyEvent(":"));
-    expect(executeCommand).toHaveBeenCalledWith("app.command");
+    expect(executeCommand).toHaveBeenCalledWith("app.palette.open");
   });
 
   /* ---------- scope bindings ---------- */
@@ -861,7 +874,7 @@ describe("extractScopeBindings", () => {
 //   - `entity.copy`    — cua `Mod+C`, vim `y`
 //   - `entity.paste`   — cua `Mod+V`, vim `p`
 //   - `ui.inspector.close` — cua `Escape`, vim `q`
-//   - `ui.palette.open`    — cua `Mod+K`, vim `:`
+//   - `app.palette.open`   — cua `Mod+K`, vim `:`
 //
 // Cross-cutting commands auto-emit into the scope chain for every entity
 // moniker, so their `keys` get wired up through `extractScopeBindings` when a
@@ -1059,13 +1072,13 @@ describe("cross-cutting command keybinding dispatch", () => {
     expect(executeCommand).toHaveBeenCalledWith("ui.inspector.close");
   });
 
-  it("cua: Mod+K dispatches ui.palette.open when a scope claims it", () => {
-    // `ui.palette.open` declares `keys.cua: Mod+K`. If the focused scope
+  it("cua: Mod+K dispatches app.palette.open when a scope claims it", () => {
+    // `app.palette.open` declares `keys.cua: Mod+K`. If the focused scope
     // surfaces the command, the binding resolves and `Mod+K` fires it. The
     // production BINDING_TABLES uses `Mod+Shift+P` for the palette; this
     // test pins the scope-bound path independently.
     const scope = makeScope([
-      { id: "ui.palette.open", keys: { cua: "Mod+K", vim: ":" } },
+      { id: "app.palette.open", keys: { cua: "Mod+K", vim: ":" } },
     ]);
 
     withMacPlatform(() => {
@@ -1079,21 +1092,22 @@ describe("cross-cutting command keybinding dispatch", () => {
       // is pressed together with a shift-style chord target (Caps Lock or a
       // pre-uppercased key map).
       handler(fakeKeyEvent("K", { metaKey: true }));
-      expect(executeCommand).toHaveBeenCalledWith("ui.palette.open");
+      expect(executeCommand).toHaveBeenCalledWith("app.palette.open");
     });
   });
 
-  it("vim: : dispatches ui.palette.open from a scope that claims it", () => {
-    // Without a scope override, vim `:` hits the global `app.command`
-    // binding — this test pins the scope-bound ui.palette.open path. Since
-    // scope bindings shadow global ones, the scope's `:` wins.
+  it("vim: : dispatches app.palette.open from a scope that claims it", () => {
+    // The static global table no longer binds `:` (the palette opener's `:`
+    // is sourced dynamically from the `app.palette.open` command metadata).
+    // This test pins the scope-bound path: a focused scope that surfaces
+    // `app.palette.open` with `keys.vim: ":"` claims `:`.
     const scope = makeScope([
-      { id: "ui.palette.open", keys: { cua: "Mod+K", vim: ":" } },
+      { id: "app.palette.open", keys: { cua: "Mod+K", vim: ":" } },
     ]);
     const handler = createKeyHandler("vim", executeCommand, () =>
       extractScopeBindings(scope, "vim"),
     );
     handler(fakeKeyEvent(":"));
-    expect(executeCommand).toHaveBeenCalledWith("ui.palette.open");
+    expect(executeCommand).toHaveBeenCalledWith("app.palette.open");
   });
 });

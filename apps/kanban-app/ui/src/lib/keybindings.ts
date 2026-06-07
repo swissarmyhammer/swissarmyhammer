@@ -26,10 +26,15 @@ type SequenceTable = Record<string, Record<string, string>>;
  */
 export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
   vim: {
-    ":": "app.command",
+    // The palette opener is the unified `app.palette.open` (folded from the
+    // old `ui.palette.open`). Its vim `:` binding rides on the plugin
+    // `CommandDef` metadata (resolved by `extractKeymapBindings`), so no static
+    // `:` entry is needed here — it would only duplicate the dynamic binding.
+    // `Mod+Shift+P` is NOT carried in the command's `keys` (which are Mod+K /
+    // `:`), so it stays a static binding, now pointing at the unified id.
     "/": "app.search",
     "Mod+f": "app.search",
-    "Mod+Shift+P": "app.palette",
+    "Mod+Shift+P": "app.palette.open",
     u: "app.undo",
     "Mod+r": "app.redo",
     Enter: "nav.drillIn",
@@ -64,7 +69,7 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     "Mod+.": "ai.cancel",
   },
   cua: {
-    "Mod+Shift+P": "app.palette",
+    "Mod+Shift+P": "app.palette.open",
     "Mod+f": "app.search",
     "Mod+g": "nav.jump",
     "Mod+z": "app.undo",
@@ -109,7 +114,7 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     "Mod+.": "ai.cancel",
   },
   emacs: {
-    "Mod+Shift+P": "app.palette",
+    "Mod+Shift+P": "app.palette.open",
     "Mod+g": "nav.jump",
     Enter: "nav.drillIn",
     Escape: "nav.drillOut",

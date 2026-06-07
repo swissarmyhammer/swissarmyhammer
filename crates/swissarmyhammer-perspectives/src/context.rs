@@ -313,11 +313,7 @@ impl PerspectiveContext {
     /// the reversed command's transaction id; the plain wrapper stamps
     /// `origin: "user"`. The event kind is derived from the post-rewrite
     /// on-disk state, identical across callers.
-    pub async fn reload_from_disk_with(
-        &mut self,
-        id: &str,
-        prov: EventProvenance,
-    ) -> Result<()> {
+    pub async fn reload_from_disk_with(&mut self, id: &str, prov: EventProvenance) -> Result<()> {
         let path = self.perspective_path(id);
         if path.exists() {
             let content = fs::read_to_string(&path).await?;

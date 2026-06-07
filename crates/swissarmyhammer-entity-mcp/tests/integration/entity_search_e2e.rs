@@ -94,7 +94,10 @@ async fn search_finds_by_text_across_types() {
 
     // The login task and the login tag both match; the dashboard task does not.
     assert!(ids.contains(&"t1"), "login task should match: {ids:?}");
-    assert!(ids.contains(&"login-tag"), "login tag should match: {ids:?}");
+    assert!(
+        ids.contains(&"login-tag"),
+        "login tag should match: {ids:?}"
+    );
     assert!(
         !ids.contains(&"t2"),
         "unrelated dashboard task must not match: {ids:?}"

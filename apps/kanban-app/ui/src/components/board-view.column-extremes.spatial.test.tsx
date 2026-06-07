@@ -18,9 +18,9 @@
  * call `spatialActions.navigate(focusedFq, "first" | "last")` directly,
  * which dispatches `spatial_navigate` to the Rust kernel exactly once
  * per press. The board's vim `0` / `$` and cua `Mod+Home` / `Mod+End`
- * keys are NOT in the global `NAV_COMMAND_SPEC` (`Home` / `End` are
- * cua there, vim has only `Shift+G` for last) — they fill a gap that
- * the global spec does not cover.
+ * keys are NOT among the `nav-commands` plugin's `nav.first` /
+ * `nav.last` keys (`Home` / `End` are cua there, vim has only
+ * `Shift+G` for last) — they fill a gap the plugin does not cover.
  *
  * Sister test to `board-view.spatial.test.tsx` — same harness, same
  * mock pattern, same browser project.
@@ -281,10 +281,19 @@ function spatialNavigateCalls(): Array<{
   direction: string;
 }> {
   return mockInvoke.mock.calls
-    .filter((c) => (c[0] === "spatial_navigate" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "navigate focus")))
+    .filter(
+      (c) =>
+        c[0] === "spatial_navigate" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "navigate focus"),
+    )
     .map((c) => {
       const outer = c[1] as Record<string, unknown>;
-      const args = (outer?.params ?? outer) as { focusedFq: FullyQualifiedMoniker; direction: string };
+      const args = (outer?.params ?? outer) as {
+        focusedFq: FullyQualifiedMoniker;
+        direction: string;
+      };
       return args;
     });
 }

@@ -44,12 +44,14 @@ use tokio::sync::Mutex;
 use crate::observer::{FocusEventSink, NoopSink};
 use crate::operations::{
     operations, ClearFocus, DrillIn, DrillOut, Focus, FocusLost, GenerateSneakCodes, Navigate,
-    PopLayer, PushLayer,
+    PopLayer, PushLayer, QueryFocus, QueryGeometry, QueryScopeChain,
 };
-use crate::sneak::generate_sneak_codes;
+use crate::provider::{NoopProvider, UiGeometryProvider};
 use crate::registry::SpatialRegistry;
-use crate::snapshot::IndexedSnapshot;
+use crate::snapshot::{IndexedSnapshot, NavSnapshot};
+use crate::sneak::generate_sneak_codes;
 use crate::state::{FocusChangedEvent, SpatialState};
+use crate::types::{Direction, FullyQualifiedMoniker, WindowLabel};
 
 /// In-process `rmcp::ServerHandler` for the `focus` operation tool.
 ///
@@ -69,6 +71,13 @@ pub struct FocusServer {
     /// `app.emit_to("focus-changed", ...)` path). Defaults to [`NoopSink`]
     /// so unit tests that only consume return-value events stay unaffected.
     sink: Arc<dyn FocusEventSink>,
+    /// On-demand pull seam into the webview's live UI geometry. The
+    /// host-driven nav ops (`navigate`/`drill_in`/`drill_out` with a
+    /// `window` and no inline snapshot) and the `query *` ops ask this
+    /// provider for geometry / scope chain / focus. Defaults to
+    /// [`NoopProvider`] so callers that only use the inline-snapshot path
+    /// stay unaffected.
+    provider: Arc<dyn UiGeometryProvider>,
 }
 
 impl std::fmt::Debug for FocusServer {
@@ -90,6 +99,7 @@ impl FocusServer {
             spatial_registry: Arc::new(Mutex::new(SpatialRegistry::new())),
             spatial_state: Arc::new(Mutex::new(SpatialState::new())),
             sink: Arc::new(NoopSink),
+            provider: Arc::new(NoopProvider),
         }
     }
 
@@ -105,6 +115,7 @@ impl FocusServer {
             spatial_registry,
             spatial_state,
             sink: Arc::new(NoopSink),
+            provider: Arc::new(NoopProvider),
         }
     }
 
@@ -121,6 +132,21 @@ impl FocusServer {
     /// bootstrap uses.
     pub fn with_sink(mut self, sink: Arc<dyn FocusEventSink>) -> Self {
         self.sink = sink;
+        self
+    }
+
+    /// Attach a [`UiGeometryProvider`] so the host-driven nav ops and the
+    /// `query *` ops can PULL live geometry / scope chain / focus from the
+    /// webview on demand.
+    ///
+    /// Production wiring (the kanban app) passes a provider that answers each
+    /// query by issuing a `request_from_ui` host→UI request and awaiting the
+    /// webview's reply. Tests and unwired callers default to [`NoopProvider`]
+    /// (every pull yields "nothing"), so the inline-snapshot ops are
+    /// unaffected. Returns `self` for builder-style construction, mirroring
+    /// [`with_sink`](Self::with_sink).
+    pub fn with_provider(mut self, provider: Arc<dyn UiGeometryProvider>) -> Self {
+        self.provider = provider;
         self
     }
 
@@ -197,30 +223,128 @@ impl FocusServer {
         Ok(serde_json::json!({ "ok": true, "event": event }))
     }
 
-    /// Handle a `navigate focus` call. Ports `spatial_navigate`.
+    /// Read the focused FQM for `window` from the kernel, dropping the lock
+    /// before returning so no spatial lock is held across the geometry pull
+    /// that follows.
+    ///
+    /// The lock is acquired and released entirely within this call — the
+    /// returned owned FQM carries no borrow, satisfying the F1 deadlock
+    /// discipline (no lock held across the subsequent provider `.await`).
+    async fn focused_in_window(&self, window: &WindowLabel) -> Option<FullyQualifiedMoniker> {
+        let state = self.spatial_state.lock().await;
+        state.focused_in(window).cloned()
+    }
+
+    /// Resolve the geometry source for a host-driven nav op without holding
+    /// any spatial lock across the pull.
+    ///
+    /// Returns the `(focused_fq, snapshot)` pair to run the kernel logic
+    /// against, or `None` when the op should drop silently:
+    ///
+    /// - **Inline** (`snapshot` present): pairs the wire `snapshot` with the
+    ///   wire `focused_fq`; `None`/missing `focused_fq` drops.
+    /// - **Host-driven pull** (`window` present, no inline `snapshot`):
+    ///   resolves focus as wire `focused_fq` → PULLED UI focus
+    ///   (`provider.focus`, authoritative) → kernel `focus_by_window` slot
+    ///   (fallback), then PULLS the live snapshot from the provider. The kernel
+    ///   read and the provider awaits never overlap a held lock — each acquires
+    ///   and releases internally before the next.
+    async fn resolve_nav_source(
+        &self,
+        focused_fq: Option<FullyQualifiedMoniker>,
+        snapshot: Option<NavSnapshot>,
+        window: Option<WindowLabel>,
+        op: &str,
+        direction: Option<Direction>,
+    ) -> Option<(FullyQualifiedMoniker, NavSnapshot)> {
+        if let Some(snapshot) = snapshot {
+            // Inline path: the wire carries both geometry and the source FQM.
+            let Some(from) = focused_fq else {
+                tracing::debug!(op, "inline snapshot but no focused_fq — dropping");
+                return None;
+            };
+            return Some((from, snapshot));
+        }
+
+        let Some(window) = window else {
+            tracing::debug!(op, ?direction, "no snapshot and no window — dropping");
+            return None;
+        };
+
+        // Host-driven pull. The webview owns the AUTHORITATIVE current focus;
+        // the kernel's per-window slot is routinely empty in the running app
+        // (React drives focus, and the kernel `focus_by_window` commit drops
+        // when no snapshot accompanies the set-focus). So resolve focus as:
+        // explicit wire `focused_fq` → PULLED UI focus (provider, authoritative)
+        // → kernel slot (last-resort fallback). Every await runs with NO spatial
+        // lock held (`provider.focus`/`focused_in_window` each acquire+release
+        // internally).
+        let from = match focused_fq {
+            Some(from) => from,
+            None => match self
+                .provider
+                .focus(&window)
+                .await
+                .or(self.focused_in_window(&window).await)
+            {
+                Some(from) => from,
+                None => {
+                    tracing::debug!(op, window = %window, "no UI focus and no kernel slot — dropping");
+                    return None;
+                }
+            },
+        };
+        let Some(snapshot) = self.provider.snapshot(&window).await else {
+            tracing::debug!(op, window = %window, "provider yielded no snapshot — dropping");
+            return None;
+        };
+        Some((from, snapshot))
+    }
+
+    /// Handle a `navigate focus` call.
+    ///
+    /// Inline path ports `spatial_navigate` verbatim; the host-driven pull
+    /// path resolves focus from the kernel and pulls geometry from the
+    /// provider (Card F2). Either way the kernel mutation runs under the
+    /// spatial locks AFTER any provider await — never across it.
     async fn handle_navigate(&self, req: Navigate) -> Result<Value, McpError> {
-        let Some(snapshot) = req.snapshot else {
-            tracing::debug!(
-                op = "navigate focus",
-                focused_fq = %req.focused_fq,
-                direction = ?req.direction,
-                "snapshot=None — dropping navigation (transient unmount race)"
-            );
+        let Some((from, snapshot)) = self
+            .resolve_nav_source(
+                req.focused_fq,
+                req.snapshot,
+                req.window.clone(),
+                "navigate focus",
+                Some(req.direction),
+            )
+            .await
+        else {
             return Ok(serde_json::json!({ "ok": true, "event": Value::Null }));
         };
         let event = self
             .with_spatial(|registry, state| {
-                state.navigate(
-                    registry,
-                    &snapshot,
-                    req.focused_fq.clone(),
-                    req.direction,
-                    None,
-                )
+                state.navigate(registry, &snapshot, from, req.direction, req.window)
             })
             .await;
         self.forward_event(&event);
         Ok(serde_json::json!({ "ok": true, "event": event }))
+    }
+
+    /// Handle a `query geometry` call — pull the live snapshot for `window`.
+    async fn handle_query_geometry(&self, req: QueryGeometry) -> Result<Value, McpError> {
+        let snapshot = self.provider.snapshot(&req.window).await;
+        Ok(serde_json::json!({ "ok": true, "snapshot": snapshot }))
+    }
+
+    /// Handle a `query scope_chain` call — pull the scope chain for `window`.
+    async fn handle_query_scope_chain(&self, req: QueryScopeChain) -> Result<Value, McpError> {
+        let scope_chain = self.provider.scope_chain(&req.window).await;
+        Ok(serde_json::json!({ "ok": true, "scope_chain": scope_chain }))
+    }
+
+    /// Handle a `query focus` call — pull the focused FQM for `window`.
+    async fn handle_query_focus(&self, req: QueryFocus) -> Result<Value, McpError> {
+        let focus = self.provider.focus(&req.window).await;
+        Ok(serde_json::json!({ "ok": true, "focus": focus }))
     }
 
     /// Handle a `lose focus` call. Ports `spatial_focus_lost`.
@@ -270,17 +394,74 @@ impl FocusServer {
         Ok(serde_json::json!({ "ok": true, "next_fq": next_fq }))
     }
 
-    /// Handle a `drill_in layer` call. Ports `spatial_drill_in`.
-    async fn handle_drill_in(&self, req: DrillIn) -> Result<Value, McpError> {
-        let Some(snapshot) = req.snapshot else {
-            return Ok(serde_json::json!({ "ok": true, "next_fq": req.focused_fq }));
+    /// Resolve the `(focused_fq, snapshot)` source for a drill op, mirroring
+    /// [`resolve_nav_source`](Self::resolve_nav_source) but surfacing the
+    /// resolved `focused_fq` even when no snapshot is available — drill's
+    /// no-op contract echoes the focused FQM rather than dropping silently.
+    ///
+    /// Returns `(focused_fq, Some(snapshot))` when geometry is available, or
+    /// `(focused_fq, None)` when the snapshot could not be obtained but a
+    /// source FQM was resolved (the drill echoes it). Returns
+    /// `(None, None)` when no focus could be resolved at all.
+    async fn resolve_drill_source(
+        &self,
+        focused_fq: Option<FullyQualifiedMoniker>,
+        snapshot: Option<NavSnapshot>,
+        window: Option<WindowLabel>,
+    ) -> (Option<FullyQualifiedMoniker>, Option<NavSnapshot>) {
+        if let Some(snapshot) = snapshot {
+            return (focused_fq, Some(snapshot));
+        }
+        let Some(window) = window else {
+            // Inline path with no snapshot: echo the wire focused_fq.
+            return (focused_fq, None);
         };
-        let next_fq = self
-            .with_spatial(|registry, _state| {
+        let resolved = match focused_fq {
+            Some(f) => f,
+            None => match self
+                .provider
+                .focus(&window)
+                .await
+                .or(self.focused_in_window(&window).await)
+            {
+                Some(f) => f,
+                None => return (None, None),
+            },
+        };
+        let snapshot = self.provider.snapshot(&window).await;
+        (Some(resolved), snapshot)
+    }
+
+    /// Handle a `drill_in layer` call. Inline path ports `spatial_drill_in`;
+    /// the host-driven pull path resolves focus from the kernel and pulls
+    /// geometry from the provider (Card F2). With no snapshot the drill echoes
+    /// the resolved focused FQM (the no-op contract).
+    async fn handle_drill_in(&self, req: DrillIn) -> Result<Value, McpError> {
+        let window = req.window.clone();
+        let (focused_fq, snapshot) = self
+            .resolve_drill_source(req.focused_fq, req.snapshot, window.clone())
+            .await;
+        let Some(focused_fq) = focused_fq else {
+            return Ok(serde_json::json!({ "ok": true, "next_fq": Value::Null }));
+        };
+        let Some(snapshot) = snapshot else {
+            return Ok(serde_json::json!({ "ok": true, "next_fq": focused_fq }));
+        };
+        // Compute the drill-in target (pure snapshot query), then COMMIT focus
+        // to it and emit `focus-changed` — exactly as `handle_navigate` does.
+        // Previously this only returned `next_fq` without committing or
+        // forwarding the event, so the UI never moved focus on drill.
+        let echo = focused_fq.clone();
+        let event = self
+            .with_spatial(|registry, state| {
                 let view = IndexedSnapshot::new(&snapshot);
-                crate::navigate::drill_in(&view, registry, req.fq.clone(), &req.focused_fq)
+                let target =
+                    crate::navigate::drill_in(&view, registry, req.fq.clone(), &focused_fq);
+                state.focus_from(registry, &snapshot, focused_fq, target, window)
             })
             .await;
+        self.forward_event(&event);
+        let next_fq = event.and_then(|e| e.next_fq).unwrap_or(echo);
         Ok(serde_json::json!({ "ok": true, "next_fq": next_fq }))
     }
 
@@ -299,20 +480,35 @@ impl FocusServer {
         Ok(serde_json::json!({ "ok": true, "codes": codes }))
     }
 
-    /// Handle a `drill_out layer` call. Ports `spatial_drill_out`.
+    /// Handle a `drill_out layer` call. Inline path ports `spatial_drill_out`;
+    /// the host-driven pull path resolves focus from the kernel and pulls
+    /// geometry from the provider (Card F2). With no snapshot the drill echoes
+    /// the resolved focused FQM (the no-op contract).
     async fn handle_drill_out(&self, req: DrillOut) -> Result<Value, McpError> {
-        let Some(snapshot) = req.snapshot else {
-            return Ok(serde_json::json!({ "ok": true, "next_fq": req.focused_fq }));
+        let window = req.window.clone();
+        let (focused_fq, snapshot) = self
+            .resolve_drill_source(req.focused_fq, req.snapshot, window.clone())
+            .await;
+        let Some(focused_fq) = focused_fq else {
+            return Ok(serde_json::json!({ "ok": true, "next_fq": Value::Null }));
         };
-        // drill_out is a pure snapshot query; it does not touch the registry,
-        // but we still take the locks for parity with the Tauri adapter so the
-        // canonical lock order is honored uniformly.
-        let next_fq = self
-            .with_spatial(|_registry, _state| {
+        let Some(snapshot) = snapshot else {
+            return Ok(serde_json::json!({ "ok": true, "next_fq": focused_fq }));
+        };
+        // Compute the drill-out target (pure snapshot query), then COMMIT focus
+        // to it and emit `focus-changed` — exactly as `handle_navigate` does.
+        // Previously this only returned `next_fq` without committing or
+        // forwarding the event, so the UI never moved focus on drill.
+        let echo = focused_fq.clone();
+        let event = self
+            .with_spatial(|registry, state| {
                 let view = IndexedSnapshot::new(&snapshot);
-                crate::navigate::drill_out(&view, req.fq.clone(), &req.focused_fq)
+                let target = crate::navigate::drill_out(&view, req.fq.clone(), &focused_fq);
+                state.focus_from(registry, &snapshot, focused_fq, target, window)
             })
             .await;
+        self.forward_event(&event);
+        let next_fq = event.and_then(|e| e.next_fq).unwrap_or(echo);
         Ok(serde_json::json!({ "ok": true, "next_fq": next_fq }))
     }
 }
@@ -400,6 +596,18 @@ impl ServerHandler for FocusServer {
             "generate sneak_codes" => {
                 let req: GenerateSneakCodes = deserialize_op(arguments, &op)?;
                 self.handle_generate_sneak_codes(req).await?
+            }
+            "query geometry" => {
+                let req: QueryGeometry = deserialize_op(arguments, &op)?;
+                self.handle_query_geometry(req).await?
+            }
+            "query scope_chain" => {
+                let req: QueryScopeChain = deserialize_op(arguments, &op)?;
+                self.handle_query_scope_chain(req).await?
+            }
+            "query focus" => {
+                let req: QueryFocus = deserialize_op(arguments, &op)?;
+                self.handle_query_focus(req).await?
             }
             other => {
                 return Err(McpError::invalid_params(

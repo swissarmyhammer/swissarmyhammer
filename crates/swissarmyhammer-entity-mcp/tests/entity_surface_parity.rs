@@ -178,7 +178,9 @@ impl Transport<RoleServer> for ClosedTransport {
 fn mint_peer() -> Peer<RoleServer> {
     struct PeerProbe;
     impl ServerHandler for PeerProbe {}
-    serve_directly(PeerProbe, ClosedTransport, None).peer().clone()
+    serve_directly(PeerProbe, ClosedTransport, None)
+        .peer()
+        .clone()
 }
 
 /// Build a `KanbanContext` with an initialized board and `EntityTypeStore`
@@ -232,7 +234,10 @@ async fn entity_call(server: &EntityServer, op: &str, args: Value) -> Value {
     if let Value::Object(map) = args {
         request = request.with_arguments(map);
     }
-    let result = server.call_tool(request, context).await.expect("entity call");
+    let result = server
+        .call_tool(request, context)
+        .await
+        .expect("entity call");
     result
         .structured_content
         .expect("entity tool returns structured content")

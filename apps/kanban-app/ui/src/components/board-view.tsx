@@ -627,8 +627,8 @@ interface BoardActionDeps {
    * `null` when the board is mounted in a pre-spatial-nav harness
    * (legacy unit tests that wrap only `<EntityFocusProvider>`); in that
    * case the column-extreme commands are no-ops, matching the same
-   * "no kernel, nothing to navigate" fallback that
-   * `app-shell.tsx::buildNavCommands` uses.
+   * "no kernel, nothing to navigate" fallback the `nav-commands`
+   * plugin's directional commands use.
    */
   spatialActionsRef: React.RefObject<SpatialFocusActions | null>;
   dispatchEntityAddTask: ReturnType<typeof useDispatchCommand>;
@@ -694,12 +694,12 @@ function makeNewTaskCommand(deps: BoardActionDeps): CommandDef {
  *
  * Dispatches `spatial_navigate(focusedFq, direction)` to the Rust
  * spatial-nav kernel directly — same wire shape as the global
- * `nav.first` / `nav.last` commands defined in
- * `app-shell.tsx::buildNavCommands`. The board defines this command
- * locally only because vim `0` / `$` and cua `Mod+Home` / `Mod+End`
- * are NOT in the global `NAV_COMMAND_SPEC` (`Home` / `End` are cua
- * there, vim has only `Shift+G` for last). Both keysets resolve to
- * the same kernel call; the command exists to fill the keymap gap.
+ * `nav.first` / `nav.last` commands owned by the `nav-commands` builtin
+ * plugin. The board defines this command locally only because vim `0` /
+ * `$` and cua `Mod+Home` / `Mod+End` are NOT among the plugin's
+ * `nav.first` / `nav.last` keys (`Home` / `End` are cua there, vim has
+ * only `Shift+G` for last). Both keysets resolve to the same kernel
+ * call; the command exists to fill the keymap gap.
  *
  * No broadcast indirection — earlier the closure threaded the press
  * through `FocusActions.broadcastNavCommand`, which was a no-op stub
@@ -736,8 +736,8 @@ function makeNavCommand(
 /**
  * Board-level action commands: new task, first/last column navigation.
  *
- * The first / last column commands fill keymap gaps the global
- * `NAV_COMMAND_SPEC` (in `app-shell.tsx`) does not cover: vim `0` /
+ * The first / last column commands fill keymap gaps the `nav-commands`
+ * plugin's `nav.first` / `nav.last` keys do not cover: vim `0` /
  * `$` and cua `Mod+Home` / `Mod+End`. Both pairs map to the kernel's
  * `first` / `last` directions and dispatch `spatial_navigate` against
  * the focused FQM. The global `nav.first` / `nav.last` (cua `Home` /

@@ -4676,6 +4676,7 @@ name = "kanban-app"
 version = "0.14.0"
 dependencies = [
  "agent-client-protocol",
+ "async-trait",
  "base64 0.22.1",
  "clap",
  "dirs",
@@ -9731,6 +9732,7 @@ dependencies = [
 name = "swissarmyhammer-focus"
 version = "0.14.0"
 dependencies = [
+ "async-trait",
  "include_dir",
  "rmcp",
  "serde",

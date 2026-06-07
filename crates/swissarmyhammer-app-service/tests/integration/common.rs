@@ -145,7 +145,11 @@ pub fn request_context() -> RequestContext<RoleServer> {
 ///
 /// The `op` parameter is load-bearing in debug builds: it must match
 /// `arguments["op"]` so a typo in the call site is caught immediately.
-pub async fn call_tool(service: &AppService, op: &str, arguments: Value) -> Result<Value, McpError> {
+pub async fn call_tool(
+    service: &AppService,
+    op: &str,
+    arguments: Value,
+) -> Result<Value, McpError> {
     debug_assert_eq!(
         arguments.get("op").and_then(Value::as_str),
         Some(op),

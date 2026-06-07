@@ -60,6 +60,7 @@ const ALLOWED_INVOKE_HANDLERS = new Set<string>([
   "command_tool_call", // transport: generic `tools/call` MCP request bridge
   "mcp_subscribe", // transport: MCP-notification → Tauri-event pump bootstrap
   "dispatch_command", // transport: legacy unified dispatcher `callCommandTool` lowers `execute command` onto; other sites go through `useDispatchCommand`
+  "ui_request_reply", // transport: the webview's reply leg of the host→UI request/reply channel (`ui-request-responder.ts`); host asks via the `ui/request` event, no MCP-wire inverse exists
 
   // ── AI panel (ai-panel project territory) — documented natives. ──
   // The in-process ACP agent's lifecycle (registry, loopback WebSocket bridge,

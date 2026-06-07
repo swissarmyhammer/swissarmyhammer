@@ -492,7 +492,37 @@ impl SpatialState {
         let focused_segment = from.last_segment();
         let target_fq = crate::navigate::pick_target(&view, &from, &focused_segment, direction);
         view.get(&target_fq)?;
+        // `from` is the authoritative current focus the caller resolved (pulled
+        // from the UI on the host-driven path; supplied on the wire on the
+        // inline path). Reconcile the kernel's per-window slot to it BEFORE the
+        // commit so the emitted event reports the true `prev_fq` (and the slot
+        // stays in sync with the UI-owned focus instead of a stale/empty value).
+        if let Some(w) = window.clone() {
+            self.focus_by_window.insert(w, from.clone());
+        }
         self.focus(registry, snapshot, target_fq, window)
+    }
+
+    /// Commit focus to a precomputed `target`, first reconciling the per-window
+    /// slot to `from` so the emitted [`FocusChangedEvent`]'s `prev_fq` reflects
+    /// the true source (and the slot stays in sync with the UI-authoritative
+    /// focus). The drill handlers use this: they compute `target` via
+    /// [`crate::navigate::drill_in`] / [`crate::navigate::drill_out`] (pure
+    /// compute over the snapshot) and then commit + emit through here — exactly
+    /// as [`Self::navigate`] does for directional moves. Returns `None` when
+    /// the focus does not change (a drill no-op, `target == from`).
+    pub fn focus_from(
+        &mut self,
+        registry: &mut SpatialRegistry,
+        snapshot: &NavSnapshot,
+        from: FullyQualifiedMoniker,
+        target: FullyQualifiedMoniker,
+        window: Option<WindowLabel>,
+    ) -> Option<FocusChangedEvent> {
+        if let Some(w) = window.clone() {
+            self.focus_by_window.insert(w, from);
+        }
+        self.focus(registry, snapshot, target, window)
     }
 
     /// Clear focus for `window`.

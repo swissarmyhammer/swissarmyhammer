@@ -13,9 +13,11 @@ use super::common::request_context;
 
 /// The `_meta` tree under `io.swissarmyhammer/operations` enumerates every
 /// (noun, verb, op) tuple for the `focus` tool. This snapshot pins the current
-/// set of nine ops — eight `spatial_*` Tauri-command ports plus the
-/// pure-compute `generate sneak_codes` op — so a deliberate addition / rename
-/// updates this assertion in the same PR as the op struct change.
+/// set of twelve ops — eight `spatial_*` Tauri-command ports, the pure-compute
+/// `generate sneak_codes` op, and the three Card F2 on-demand geometry-pull
+/// query ops (`query geometry` / `query scope_chain` / `query focus`) — so a
+/// deliberate addition / rename updates this assertion in the same PR as the
+/// op struct change.
 #[tokio::test]
 async fn focus_tool_meta_operations_tree_is_complete() {
     let server = FocusServer::new();
@@ -49,6 +51,9 @@ async fn focus_tool_meta_operations_tree_is_complete() {
         ("layer", "drill_in", "drill_in layer"), // spatial_drill_in
         ("layer", "drill_out", "drill_out layer"), // spatial_drill_out
         ("sneak_codes", "generate", "generate sneak_codes"), // generate_jump_codes
+        ("geometry", "query", "query geometry"), // Card F2 on-demand geometry pull
+        ("scope_chain", "query", "query scope_chain"), // Card F2 scope-chain pull
+        ("focus", "query", "query focus"),       // Card F2 focus pull
     ];
 
     for (noun, verb, op_str) in &expected {

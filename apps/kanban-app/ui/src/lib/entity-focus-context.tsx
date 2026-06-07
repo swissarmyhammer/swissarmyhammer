@@ -57,6 +57,7 @@ import {
   type SegmentMoniker,
 } from "@/types/spatial";
 import { useOptionalFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
+import { registerUiResponder } from "@/lib/ui-request-responder";
 
 /** Pre-bound dispatch callable for a specific command — the shape returned by `useDispatchCommand(presetCmd)`. */
 type PreboundDispatch = (opts?: DispatchOptions) => Promise<unknown>;
@@ -325,6 +326,21 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
     };
     window.addEventListener("focus", handleWindowFocus);
     return () => window.removeEventListener("focus", handleWindowFocus);
+  }, [store]);
+
+  // Register the `focus.scopeChain` host→UI responder (Card F2). The focus
+  // kernel PULLS the current focus scope chain from the webview on demand
+  // over the F1 channel; this provider is the natural source because it owns
+  // the focused moniker (`store`) and the scope registry (`registryRef`) the
+  // chain is composed from — the same `buildScopeChain` the `ui.setFocus`
+  // bridge forwards on every focus change. Built ON DEMAND at request time,
+  // never cached. (`focus.geometry` / `focus.current` are registered by
+  // `SpatialFocusProvider`, which owns the live geometry + focused FQM.)
+  useEffect(() => {
+    return registerUiResponder("focus.scopeChain", () => {
+      const moniker = store.getSnapshot();
+      return moniker ? buildScopeChain(moniker, registryRef.current) : [];
+    });
   }, [store]);
 
   // Bridge spatial-focus → entity-focus: the kernel is the single

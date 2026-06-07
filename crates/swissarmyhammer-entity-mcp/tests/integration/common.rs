@@ -194,7 +194,8 @@ impl ClipboardHarness {
     pub async fn server(&self) -> EntityServer {
         EntityServer::with_clipboard(
             Arc::clone(&self.kanban),
-            Arc::clone(&self.clipboard) as Arc<dyn swissarmyhammer_kanban::clipboard::ClipboardProvider>,
+            Arc::clone(&self.clipboard)
+                as Arc<dyn swissarmyhammer_kanban::clipboard::ClipboardProvider>,
             Arc::clone(&self.ui_state),
         )
         .await

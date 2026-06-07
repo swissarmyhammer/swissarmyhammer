@@ -1318,8 +1318,11 @@ mod tests {
     /// shared `StoreContext` with a registered `tag` store — the same shape
     /// the kanban app boots, and the shape needed to exercise the ambient
     /// transaction on forward writes.
-    async fn setup_store_backed() -> (TempDir, EntityCache, Arc<swissarmyhammer_store::StoreContext>)
-    {
+    async fn setup_store_backed() -> (
+        TempDir,
+        EntityCache,
+        Arc<swissarmyhammer_store::StoreContext>,
+    ) {
         use swissarmyhammer_store::{StoreContext, StoreHandle};
 
         let fields = test_fields_context();
@@ -1332,7 +1335,11 @@ mod tests {
 
         let ctx = Arc::new(EntityContext::new(&root, fields.clone()));
         let tag_def = fields.get_entity("tag").unwrap();
-        let tag_fields: Vec<_> = fields.fields_for_entity("tag").into_iter().cloned().collect();
+        let tag_fields: Vec<_> = fields
+            .fields_for_entity("tag")
+            .into_iter()
+            .cloned()
+            .collect();
         let tag_store = crate::EntityTypeStore::new(
             &tag_dir,
             "tag",
@@ -1450,7 +1457,9 @@ mod tests {
 
         let event = rx.try_recv().unwrap();
         match event {
-            EntityEvent::EntityDeleted { entity_type, id, .. } => {
+            EntityEvent::EntityDeleted {
+                entity_type, id, ..
+            } => {
                 assert_eq!(entity_type, "tag");
                 assert_eq!(id, "t1");
             }

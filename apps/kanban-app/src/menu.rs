@@ -849,9 +849,48 @@ async fn open_and_notify(handle: &AppHandle, path: &Path, source_window_label: O
 #[cfg(test)]
 mod tests {
     use super::{collect_menu_entries, is_valid_accelerator_key, resolve_accelerator};
-    use swissarmyhammer_kanban::commands_core::{CommandDef, KeysDef};
-    use swissarmyhammer_kanban::compose_registry;
+    use crate::command_services::build_registry_from_metadata;
+    use crate::state::AppState;
+    use swissarmyhammer_kanban::commands_core::{CommandDef, CommandsRegistry, KeysDef};
     use swissarmyhammer_ui_state::UIState;
+    use tempfile::TempDir;
+
+    /// Build the synchronous [`CommandsRegistry`] from the SAME catalogue the
+    /// app composes at runtime — the production path, NOT a hand-built
+    /// `compose_registry!`.
+    ///
+    /// Mirrors `AppState::install_apphandle_shells` exactly: spin up the real
+    /// plugin platform over temp roots (which discovers every `builtin/plugins/`
+    /// bundle, including `nav-commands` and `ui-commands`), pull the live
+    /// `CommandService` catalogue via `list_metadata`, and project it onto the
+    /// `CommandsRegistry` façade through [`build_registry_from_metadata`] — the
+    /// exact snapshot `collect_menu_entries` consumes when the native menu is
+    /// built. Returns the registry plus the temp roots, which the caller keeps
+    /// alive for the registry's lifetime.
+    async fn runtime_registry() -> (CommandsRegistry, TempDir, TempDir, TempDir) {
+        let user_root = TempDir::new().expect("user root temp dir");
+        let builtin_cache = TempDir::new().expect("builtin cache temp dir");
+        let global_board_dir = TempDir::new().expect("global tool working dir");
+        std::fs::create_dir_all(user_root.path().join("plugins")).expect("user plugins dir");
+
+        let state = AppState::new_for_test_with_plugins(
+            user_root.path().to_path_buf(),
+            builtin_cache.path().to_path_buf(),
+            global_board_dir.path().to_path_buf(),
+        )
+        .await
+        .expect("AppState should build with the plugin platform");
+
+        let metadata = {
+            let platform = state.plugin_platform.lock().await;
+            platform
+                .command_service()
+                .expect("global CommandService is wired after discovery")
+                .list_metadata()
+        };
+        let registry = build_registry_from_metadata(&metadata);
+        (registry, user_root, builtin_cache, global_board_dir)
+    }
 
     /// Build a minimal `CommandDef` carrying only the per-mode keys —
     /// enough for `resolve_accelerator` to operate. All other fields
@@ -884,22 +923,26 @@ mod tests {
         }
     }
 
-    /// The composed registry contributed by `swissarmyhammer-focus` must
-    /// land all nine `nav.*` commands under a single top-level
-    /// `Navigation` submenu key. The native menu builder
+    /// The production CommandService catalogue — the SAME one the app
+    /// composes at runtime — must land all nine `nav.*` commands under a
+    /// single top-level `Navigation` submenu key. The native menu builder
     /// (`Menu::with_items` in `build_menu_from_commands`) feeds this map
     /// into `build_grouped_submenu(app, "Navigation",
     /// menus.get("Navigation"), …)`, so the count and grouping here is
     /// the load-bearing contract for the menu wiring.
-    #[test]
-    fn navigation_submenu_contains_all_nine_nav_commands() {
-        let registry = compose_registry![swissarmyhammer_focus, swissarmyhammer_kanban,];
+    ///
+    /// Built from `build_registry_from_metadata(service.list_metadata())`
+    /// (the `nav-commands` plugin's metadata), NOT a hand-built
+    /// `compose_registry!` — so this is the real menu-composition path.
+    #[tokio::test]
+    async fn navigation_submenu_contains_all_nine_nav_commands() {
+        let (registry, _user, _cache, _global) = runtime_registry().await;
         let ui_state = UIState::new();
         let menus = collect_menu_entries(&registry, &ui_state);
 
         let nav = menus
             .get("Navigation")
-            .expect("Navigation submenu must exist after composing the focus crate");
+            .expect("Navigation submenu must exist from the nav-commands plugin catalogue");
         assert_eq!(
             nav.len(),
             9,
@@ -923,7 +966,7 @@ mod tests {
         ];
         assert_eq!(got_ids, expected_ids);
 
-        // Entries must be sorted by (group, order). The YAML places
+        // Entries must be sorted by (group, order). The plugin places
         // directional first (group 0), first/last next (group 1),
         // drill commands next (group 2), and `nav.jump` last
         // (group 3). Pull just the group sequence and assert it is
@@ -938,6 +981,34 @@ mod tests {
         );
         assert_eq!(groups.first().copied(), Some(0), "first group must be 0");
         assert_eq!(groups.last().copied(), Some(3), "last group must be 3");
+    }
+
+    /// The palette opener must reach the OS menu THROUGH the service
+    /// catalogue as `app.palette.open` in the `App` submenu — proving the
+    /// `ui.palette.open` → `app.palette.open` rename-fold gave the palette an
+    /// App-menu affordance (it previously carried keys but no `menu`). Built
+    /// from the same production catalogue path as the nav test.
+    #[tokio::test]
+    async fn app_palette_open_lands_in_app_submenu() {
+        let (registry, _user, _cache, _global) = runtime_registry().await;
+        let ui_state = UIState::new();
+        let menus = collect_menu_entries(&registry, &ui_state);
+
+        let app = menus
+            .get("App")
+            .expect("App submenu must exist from the command-service catalogue");
+        assert!(
+            app.iter().any(|e| e.id == "app.palette.open"),
+            "App submenu must contain app.palette.open; got {:?}",
+            app.iter().map(|e| &e.id).collect::<Vec<_>>(),
+        );
+
+        // The legacy id must be fully retired — no `ui.palette.open` anywhere
+        // in the catalogue.
+        assert!(
+            registry.get("ui.palette.open").is_none(),
+            "ui.palette.open must be retired in favour of app.palette.open",
+        );
     }
 
     /// The `ai.toggle` View-submenu contract was previously driven by
@@ -1103,12 +1174,12 @@ mod tests {
     /// it binds to `Mod+G` (a chord), not an Arrow/Home/End/Enter/
     /// Escape named key — it was already rendering correctly under
     /// the old filter and only proves the chord branch.
-    #[test]
-    fn nav_commands_render_accelerators_in_cua_mode() {
-        let registry = compose_registry![swissarmyhammer_focus, swissarmyhammer_kanban,];
+    #[tokio::test]
+    async fn nav_commands_render_accelerators_in_cua_mode() {
+        let (registry, _user, _cache, _global) = runtime_registry().await;
 
         // Each (id, expected accelerator) pair maps directly to the
-        // YAML in `swissarmyhammer-focus/builtin/commands/nav.yaml`.
+        // `keys` the `nav-commands` plugin registers.
         let expected = [
             ("nav.up", "ArrowUp"),
             ("nav.down", "ArrowDown"),
@@ -1140,9 +1211,9 @@ mod tests {
     /// `nav.last` carries `vim: Shift+G` (a chord with `+`). Each
     /// must produce a non-None accelerator; the directional vim
     /// bindings (`h`/`j`/`k`/`l`, single chars) are likewise valid.
-    #[test]
-    fn nav_commands_render_accelerators_in_vim_mode() {
-        let registry = compose_registry![swissarmyhammer_focus, swissarmyhammer_kanban,];
+    #[tokio::test]
+    async fn nav_commands_render_accelerators_in_vim_mode() {
+        let (registry, _user, _cache, _global) = runtime_registry().await;
 
         let expected = [
             ("nav.up", "k"),
@@ -1171,18 +1242,18 @@ mod tests {
     /// binding — under vim mode the resolver falls back to cua,
     /// so the accelerator must be `Home` (not None). This exercises
     /// the fallback path through the named-key allowlist.
-    #[test]
-    fn resolve_accelerator_falls_back_to_cua_in_vim_mode() {
-        let registry = compose_registry![swissarmyhammer_focus, swissarmyhammer_kanban,];
+    #[tokio::test]
+    async fn resolve_accelerator_falls_back_to_cua_in_vim_mode() {
+        let (registry, _user, _cache, _global) = runtime_registry().await;
 
         let cmd = registry
             .get("nav.first")
             .expect("registry must define nav.first");
-        // Sanity: nav.first really has no vim binding in the YAML.
+        // Sanity: nav.first really has no vim binding in the plugin metadata.
         let keys = cmd.keys.as_ref().expect("nav.first has keys");
         assert!(
             keys.vim.is_none(),
-            "nav.first YAML must keep its vim binding empty so this test exercises the cua fallback",
+            "nav.first plugin metadata must keep its vim binding empty so this test exercises the cua fallback",
         );
 
         assert_eq!(

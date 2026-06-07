@@ -3,8 +3,17 @@ assignees:
 - claude-code
 position_column: todo
 position_ordinal: cf80
-title: ui-state-changed must use emit_to(window_label), not global emit
+title: Palette won't open / not on OS menu — SUBSUMED by Card A + CRQ6KJ (recommend close)
 ---
+## RECONCILED 2026-06-06 (dedup sweep)
+This card's title ("ui-state-changed must use emit_to") no longer matches its body. Its actual content — "why does the palette not open: hotkey path + missing OS-menu affordance" — is fully covered by two canonical cards:
+- **Card A `01KTCQFH7AEQDZD0QETSMCMGP0`** — palette opener (+ nav.*) on the OS menu, built FROM the CommandService catalogue.
+- **Palette bug `01KTCRQ6KJ67FJWYEZFQ6J7R13`** — the hotkey/execution open path (the command's `keys` drive the live keymap, a single service owns `palette_open`, single TS plugin command, no Rust impl).
+
+The `emit_to(window_label)` hypothesis in the original title was tried and reverted (owner note below). **Recommend CLOSING this card as subsumed.** Kept (not deleted) because it is owner-authored — surfacing rather than removing. Any unique signal is preserved below.
+
+---
+
 REOPENED 2026-06-06 — prior fix did NOT solve the problem and was discarded.
 
 ## OWNER CORRECTION

@@ -12,7 +12,10 @@ use serde_json::json;
 use super::common::{call_tool, Harness, SpyShell};
 
 /// Build a `Harness` whose spy returns the given canned board reads.
-fn harness_with_board_reads(open_boards: serde_json::Value, board_data: serde_json::Value) -> Harness {
+fn harness_with_board_reads(
+    open_boards: serde_json::Value,
+    board_data: serde_json::Value,
+) -> Harness {
     let base = Harness::new();
     let positions = base.shell.positions.clone();
     let spy = SpyShell::new(
@@ -85,9 +88,13 @@ async fn get_board_data_without_path_forwards_none() {
     let h = harness_with_board_reads(json!([]), json!({ "board": {} }));
     let service = h.service();
 
-    call_tool(&service, "get board data", json!({ "op": "get board data" }))
-        .await
-        .expect("get board data should succeed");
+    call_tool(
+        &service,
+        "get board data",
+        json!({ "op": "get board data" }),
+    )
+    .await
+    .expect("get board data should succeed");
 
     assert_eq!(h.shell.last_board_path(), None);
 }

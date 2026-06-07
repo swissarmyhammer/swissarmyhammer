@@ -21,7 +21,7 @@
 //   ui.inspector.close    → ui_state `close inspector`     (...inspector.close)
 //   ui.inspector.close_all→ ui_state `close_all inspector` (...inspector.close_all)
 //   ui.inspector.set_width→ ui_state `set_width inspector` (...inspector.set_width)
-//   ui.palette.open       → ui_state `open palette`        (...palette.open)
+//   app.palette.open      → ui_state `open palette`        (...palette.open)
 //   ui.palette.close      → ui_state `close palette`       (...palette.close)
 //   ui.entity.startRename → ui_state `start rename`        (...rename.start)
 //   ui.mode.set           → ui_state `set keymap`          (...keymap.set)
@@ -215,12 +215,20 @@ export default class UiCommandsPlugin extends Plugin {
         },
       },
 
-      // ─── ui.palette.open ────────────────────────────────────────────────
-      // ui.yaml: keys cua:Mod+K / vim:":". Routes to ui_state `open palette`.
+      // ─── app.palette.open ───────────────────────────────────────────────
+      // Folds the ui.*→app.* rename: this is the former `ui.palette.open`,
+      // now `app.palette.open` (the palette opener IS a `ui.*` command, so it
+      // adopts its final `app.*` name at move time). Routing to ui_state
+      // `open palette` is unchanged — only the id and the added `menu`
+      // placement change. The `menu:{path:["App"]}` gives the palette its OS-
+      // menu affordance (it previously carried keys cua:Mod+K / vim:":" but NO
+      // menu, which is why the palette was absent from the native menu bar);
+      // group 1 lands it between About (group 0) and Quit (group 2).
       {
-        id: "ui.palette.open",
+        id: "app.palette.open",
         name: "Command Palette",
         keys: { cua: "Mod+K", vim: ":" },
+        menu: { path: ["App"], group: 1, order: 0 },
         execute: async (rawCtx: unknown) => {
           const ctx = (rawCtx ?? {}) as CommandContext;
           return await uiState.ui_state.ui_state.palette.open({
@@ -322,7 +330,7 @@ export default class UiCommandsPlugin extends Plugin {
     ]);
 
     this.log.info(
-      "ui-commands: registered 10 commands (ui.inspect / ui.inspector.* / ui.palette.* / ui.entity.startRename / ui.mode.set / ui.setFocus / window.new) across ui_state / focus / window",
+      "ui-commands: registered 10 commands (ui.inspect / ui.inspector.* / app.palette.open / ui.palette.close / ui.entity.startRename / ui.mode.set / ui.setFocus / window.new) across ui_state / focus / window",
     );
   }
 }

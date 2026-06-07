@@ -94,6 +94,21 @@ pub struct ClearFocus {
 /// silently. Otherwise delegates to [`crate::SpatialState::navigate`].
 ///
 /// Returns `{ ok: true, event: <FocusChangedEvent|null> }`.
+/// Move focus relative to a scope in a cardinal direction.
+///
+/// Two call shapes, distinguished by which geometry source is supplied:
+///
+/// - **Inline** (the React `SpatialFocusActions::navigate` path): the caller
+///   sends both `focused_fq` and an inline `snapshot`. Ports `spatial_navigate`
+///   verbatim — a `None` snapshot drops silently.
+/// - **Host-driven pull** (Card F2 — the nav.* plugin commands): the caller
+///   sends only `window` + `direction`. The kernel resolves the current focus
+///   from its own `focus_by_window[window]` and PULLS the live geometry from
+///   the injected [`crate::UiGeometryProvider`] — no `focused_fq`, no
+///   `snapshot` on the wire. A window with no focused slot, or a provider that
+///   yields no snapshot, drops silently.
+///
+/// Returns `{ ok: true, event: <FocusChangedEvent|null> }`.
 #[operation(
     verb = "navigate",
     noun = "focus",
@@ -101,13 +116,21 @@ pub struct ClearFocus {
 )]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Navigate {
-    /// Currently focused scope to navigate from.
-    pub focused_fq: FullyQualifiedMoniker,
     /// Cardinal direction (or first/last) to move in.
     pub direction: Direction,
-    /// Per-decision scope geometry. `None` drops the navigation silently.
+    /// Currently focused scope to navigate from (inline path). Omitted on the
+    /// host-driven pull path, where the kernel resolves focus from
+    /// `focus_by_window[window]`.
+    #[serde(default)]
+    pub focused_fq: Option<FullyQualifiedMoniker>,
+    /// Per-decision scope geometry (inline path). `None` selects the
+    /// host-driven pull path when `window` is present, else drops silently.
     #[serde(default)]
     pub snapshot: Option<NavSnapshot>,
+    /// Owning window for the host-driven pull path. The kernel reads its
+    /// focused FQM and pulls geometry for this window.
+    #[serde(default)]
+    pub window: Option<WindowLabel>,
 }
 
 /// React to the focused scope unmounting and compute a focus fallback.
@@ -189,10 +212,17 @@ pub struct PopLayer {
 /// Compute the FQM to focus when drilling *into* a scope.
 ///
 /// Ports `spatial_drill_in`: pure query returning [`crate::drill_in`]'s
-/// result. When `snapshot` is `None`, returns `focused_fq` (transient
-/// unmount window).
+/// result. Two call shapes, like [`Navigate`]:
 ///
-/// Returns `{ ok: true, next_fq: <FullyQualifiedMoniker> }`.
+/// - **Inline**: caller supplies `focused_fq` + `snapshot`. A `None`
+///   snapshot returns `focused_fq` (transient unmount window).
+/// - **Host-driven pull**: caller supplies `window`; the kernel resolves
+///   `focused_fq` from `focus_by_window[window]` and pulls the snapshot from
+///   the [`crate::UiGeometryProvider`]. With no resolvable focus or no pulled
+///   snapshot, returns the resolved focus (or the wire `focused_fq`).
+///
+/// Returns `{ ok: true, next_fq: <FullyQualifiedMoniker|null> }` — `null`
+/// only when neither a wire `focused_fq` nor a kernel focus is available.
 #[operation(
     verb = "drill_in",
     noun = "layer",
@@ -202,19 +232,27 @@ pub struct PopLayer {
 pub struct DrillIn {
     /// Scope being drilled into.
     pub fq: FullyQualifiedMoniker,
-    /// Currently focused scope (the no-op return value).
-    pub focused_fq: FullyQualifiedMoniker,
-    /// Per-decision scope geometry. `None` returns `focused_fq`.
+    /// Currently focused scope (the no-op return value). Omitted on the
+    /// host-driven pull path.
+    #[serde(default)]
+    pub focused_fq: Option<FullyQualifiedMoniker>,
+    /// Per-decision scope geometry. `None` selects the host-driven pull path
+    /// when `window` is present, else returns `focused_fq`.
     #[serde(default)]
     pub snapshot: Option<NavSnapshot>,
+    /// Owning window for the host-driven pull path.
+    #[serde(default)]
+    pub window: Option<WindowLabel>,
 }
 
 /// Compute the FQM to focus when drilling *out of* a scope.
 ///
 /// Ports `spatial_drill_out`: pure query returning [`crate::drill_out`]'s
-/// result. When `snapshot` is `None`, returns `focused_fq`.
+/// result. Mirrors [`DrillIn`]'s two call shapes — inline (`focused_fq` +
+/// `snapshot`) and host-driven pull (`window`, focus resolved from the
+/// kernel, geometry pulled from the [`crate::UiGeometryProvider`]).
 ///
-/// Returns `{ ok: true, next_fq: <FullyQualifiedMoniker> }`.
+/// Returns `{ ok: true, next_fq: <FullyQualifiedMoniker|null> }`.
 #[operation(
     verb = "drill_out",
     noun = "layer",
@@ -224,11 +262,17 @@ pub struct DrillIn {
 pub struct DrillOut {
     /// Scope being drilled out of.
     pub fq: FullyQualifiedMoniker,
-    /// Currently focused scope (the no-op return value).
-    pub focused_fq: FullyQualifiedMoniker,
-    /// Per-decision scope geometry. `None` returns `focused_fq`.
+    /// Currently focused scope (the no-op return value). Omitted on the
+    /// host-driven pull path.
+    #[serde(default)]
+    pub focused_fq: Option<FullyQualifiedMoniker>,
+    /// Per-decision scope geometry. `None` selects the host-driven pull path
+    /// when `window` is present, else returns `focused_fq`.
     #[serde(default)]
     pub snapshot: Option<NavSnapshot>,
+    /// Owning window for the host-driven pull path.
+    #[serde(default)]
+    pub window: Option<WindowLabel>,
 }
 
 /// Generate prefix-free Jump-To sneak codes from the kernel's
@@ -250,6 +294,57 @@ pub struct DrillOut {
 pub struct GenerateSneakCodes {
     /// Number of distinct codes to generate. Must be `<= 529` (23²).
     pub count: usize,
+}
+
+/// Pull the live [`NavSnapshot`] for the focused layer in a window.
+///
+/// The on-demand geometry query (Card F2): the kernel asks the injected
+/// [`crate::UiGeometryProvider`] for a freshly-built snapshot
+/// (`getBoundingClientRect` at call time in the webview) and returns it
+/// verbatim. Lets plugins reach the live geometry through the generic MCP
+/// transport (`this.focus.query_geometry`) instead of building it client-side.
+///
+/// Returns `{ ok: true, snapshot: <NavSnapshot|null> }` — `null` when the
+/// provider has no snapshot (window closed, no responder, transient unmount).
+#[operation(
+    verb = "query",
+    noun = "geometry",
+    description = "Pull the live navigation snapshot for the focused layer in a window"
+)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QueryGeometry {
+    /// Window whose live geometry to pull.
+    pub window: WindowLabel,
+}
+
+/// Pull the current focus/command scope chain for a window.
+///
+/// Returns `{ ok: true, scope_chain: [FullyQualifiedMoniker] }`, outermost
+/// first — empty when the window has no active scope chain.
+#[operation(
+    verb = "query",
+    noun = "scope_chain",
+    description = "Pull the current focus scope chain for a window"
+)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QueryScopeChain {
+    /// Window whose scope chain to pull.
+    pub window: WindowLabel,
+}
+
+/// Pull the FQM currently focused in a window.
+///
+/// Returns `{ ok: true, focus: <FullyQualifiedMoniker|null> }` — `null` when
+/// the window has no focus.
+#[operation(
+    verb = "query",
+    noun = "focus",
+    description = "Pull the FQM currently focused in a window"
+)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QueryFocus {
+    /// Window whose focused FQM to pull.
+    pub window: WindowLabel,
 }
 
 /// All focus operations — the canonical list used for schema generation.
@@ -274,6 +369,9 @@ static FOCUS_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(|
         Box::leak(Box::new(proto_drill_in())) as &dyn Operation,
         Box::leak(Box::new(proto_drill_out())) as &dyn Operation,
         Box::leak(Box::new(proto_generate_sneak_codes())) as &dyn Operation,
+        Box::leak(Box::new(proto_query_geometry())) as &dyn Operation,
+        Box::leak(Box::new(proto_query_scope_chain())) as &dyn Operation,
+        Box::leak(Box::new(proto_query_focus())) as &dyn Operation,
     ]
 });
 
@@ -307,9 +405,10 @@ fn proto_clear_focus() -> ClearFocus {
 
 fn proto_navigate() -> Navigate {
     Navigate {
-        focused_fq: empty_fq(),
         direction: Direction::Up,
+        focused_fq: None,
         snapshot: None,
+        window: None,
     }
 }
 
@@ -343,21 +442,41 @@ fn proto_pop_layer() -> PopLayer {
 fn proto_drill_in() -> DrillIn {
     DrillIn {
         fq: empty_fq(),
-        focused_fq: empty_fq(),
+        focused_fq: None,
         snapshot: None,
+        window: None,
     }
 }
 
 fn proto_drill_out() -> DrillOut {
     DrillOut {
         fq: empty_fq(),
-        focused_fq: empty_fq(),
+        focused_fq: None,
         snapshot: None,
+        window: None,
     }
 }
 
 fn proto_generate_sneak_codes() -> GenerateSneakCodes {
     GenerateSneakCodes { count: 0 }
+}
+
+fn proto_query_geometry() -> QueryGeometry {
+    QueryGeometry {
+        window: WindowLabel::from_string(""),
+    }
+}
+
+fn proto_query_scope_chain() -> QueryScopeChain {
+    QueryScopeChain {
+        window: WindowLabel::from_string(""),
+    }
+}
+
+fn proto_query_focus() -> QueryFocus {
+    QueryFocus {
+        window: WindowLabel::from_string(""),
+    }
 }
 
 /// Get the canonical slice of all focus operations.

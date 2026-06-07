@@ -29,7 +29,7 @@
 //!    - `ui.inspect` pushes the target moniker onto the `UIState` inspector
 //!      stack, `ui.inspector.close` pops it, `ui.inspector.close_all` clears it,
 //!      `ui.inspector.set_width` persists the width.
-//!    - `ui.palette.open` flips the palette-open flag, `ui.palette.close`
+//!    - `app.palette.open` flips the palette-open flag, `ui.palette.close`
 //!      clears it.
 //!    - `ui.mode.set` switches the active keymap mode.
 //!    - `ui.entity.startRename` reaches the backend no-op (`{ ok: true }`).
@@ -410,7 +410,7 @@ async fn ui_commands_plugin_registers_and_executes() {
         "ui.inspector.close",
         "ui.inspector.close_all",
         "ui.inspector.set_width",
-        "ui.palette.open",
+        "app.palette.open",
         "ui.palette.close",
         "ui.entity.startRename",
         "ui.mode.set",
@@ -427,6 +427,14 @@ async fn ui_commands_plugin_registers_and_executes() {
         commands.len(),
         10,
         "exactly the 10 ported commands should be registered, got {:?}",
+        commands.keys().collect::<Vec<_>>()
+    );
+
+    // The palette opener was renamed `ui.palette.open` → `app.palette.open`
+    // (the ui.*→app.* rename fold). The legacy id must be fully retired.
+    assert!(
+        !commands.contains_key("ui.palette.open"),
+        "ui.palette.open must be retired in favour of app.palette.open; got {:?}",
         commands.keys().collect::<Vec<_>>()
     );
 
@@ -506,26 +514,26 @@ async fn ui_commands_plugin_registers_and_executes() {
         "ui.inspector.set_width must persist the inspector width on the UIState"
     );
 
-    // ── (3e) ui.palette.open / ui.palette.close flip the palette flag ───────
+    // ── (3e) app.palette.open / ui.palette.close flip the palette flag ──────
     assert!(
         !backends.ui_state.palette_open(WINDOW),
-        "precondition: the palette is closed before ui.palette.open"
+        "precondition: the palette is closed before app.palette.open"
     );
     execute_ok(
         &service,
-        "ui.palette.open",
+        "app.palette.open",
         json!({ "scope_chain": window_scope() }),
     )
     .await;
     assert!(
         backends.ui_state.palette_open(WINDOW),
-        "ui.palette.open must open the command palette on the UIState"
+        "app.palette.open must open the command palette on the UIState"
     );
     // The window must come from the scope chain, NOT default to "main": the
     // exact regression where palette state landed on a window no board reads.
     assert!(
         !backends.ui_state.palette_open("main"),
-        "ui.palette.open must NOT write to the default 'main' window when the \
+        "app.palette.open must NOT write to the default 'main' window when the \
          scope chain names a different window"
     );
     execute_ok(
@@ -651,7 +659,7 @@ fn metadata_asserts() -> Vec<MetadataAssert> {
         ("ui.inspector.close", assert_inspector_close),
         ("ui.inspector.close_all", assert_inspector_close_all),
         ("ui.inspector.set_width", assert_inspector_set_width),
-        ("ui.palette.open", assert_palette_open),
+        ("app.palette.open", assert_palette_open),
         ("ui.palette.close", assert_palette_close),
         ("ui.entity.startRename", assert_start_rename),
         ("ui.mode.set", assert_mode_set),
@@ -765,19 +773,26 @@ fn assert_inspector_set_width(cmd: &Value) {
     assert_no_menu(cmd, "ui.inspector.set_width");
 }
 
-/// `ui.palette.open` — ui.yaml: keys cua:Mod+K / vim:":"; no menu.
+/// `app.palette.open` — keys cua:Mod+K / vim:":" (unchanged from the former
+/// `ui.palette.open`); now carries an App-menu placement (the rename fold gave
+/// the palette its OS-menu affordance). Routing to ui_state `open palette` is
+/// unchanged.
 fn assert_palette_open(cmd: &Value) {
     assert_eq!(
         cmd["name"],
         json!("Command Palette"),
-        "ui.palette.open name"
+        "app.palette.open name"
     );
     assert_eq!(
         cmd["keys"],
         json!({ "cua": "Mod+K", "vim": ":" }),
-        "ui.palette.open keys"
+        "app.palette.open keys"
     );
-    assert_no_menu(cmd, "ui.palette.open");
+    assert_eq!(
+        cmd["menu"],
+        json!({ "path": ["App"], "group": 1, "order": 0 }),
+        "app.palette.open menu — App submenu affordance from the rename fold"
+    );
 }
 
 /// `ui.palette.close` — ui.yaml: visible:false; no keys/menu.

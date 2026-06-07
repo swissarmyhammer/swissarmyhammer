@@ -10,8 +10,8 @@
  * callers compiled while the migration progressed.
  *
  * This test asserts the field is gone from the actions bag — every
- * production caller has been migrated to either the global
- * `NAV_COMMAND_SPEC` (which dispatches `spatial_navigate`) or to a
+ * production caller has been migrated to either the `nav-commands`
+ * plugin's directional commands (which drive the focus kernel) or to a
  * direct `spatialActions.navigate(focusedFq, direction)` call. Once
  * deletion lands, the bag must not even carry the key, otherwise a new
  * caller could re-introduce the dead pathway by tab-completion.

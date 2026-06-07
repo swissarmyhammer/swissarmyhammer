@@ -152,7 +152,10 @@ impl ServerHandler for AppService {
             .get("op")
             .and_then(Value::as_str)
             .ok_or_else(|| {
-                McpError::invalid_params("missing required field `op` for app tool".to_string(), None)
+                McpError::invalid_params(
+                    "missing required field `op` for app tool".to_string(),
+                    None,
+                )
             })?
             .to_string();
 

@@ -18,5 +18,8 @@ Current state: the OS window-event handler `handle_window_event` (apps/kanban-ap
 - Declare on the window service tool via #[notification] struct=payload.
 - Coverage guard.
 
+## Sibling card (keep separate — decided 2026-06-06)
+**Board** lifecycle (opened/switched/closed) is the related-but-distinct event family — `01KT9X0SB17R3TRKT419A01TM7`. Kept separate on purpose: window lifecycle = raw OS window events; board lifecycle = board-file ↔ window association. Coordinate the window-service event-name namespace so `created/focused/closed` and `board.opened/...` don't collide and share one declaration pattern.
+
 ## Acceptance
 A plugin can `this.window.on("created"/"focused"/"closed", cb)` and observe window lifecycle (silent today); declared == published. Decide whether geometry changes are worth emitting (probably not — too frequent).
