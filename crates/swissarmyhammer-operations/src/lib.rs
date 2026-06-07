@@ -25,11 +25,15 @@
 //! }
 //! ```
 
+pub mod cli_gen;
 mod execution_result;
 mod operation;
 mod parameter;
 mod processor;
 pub mod schema;
+
+#[cfg(test)]
+pub(crate) mod test_support;
 
 pub use execution_result::ExecutionResult;
 pub use operation::{Execute, Operation};

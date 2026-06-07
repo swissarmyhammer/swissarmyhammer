@@ -260,83 +260,8 @@ fn group_operations_by_noun(operations: &[&dyn Operation]) -> Map<String, Value>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{MockAddTask, MockGetTask, MockListTasks};
     use crate::ParamMeta;
-
-    // Mock operation for testing
-    struct MockAddTask;
-
-    static MOCK_ADD_TASK_PARAMS: &[ParamMeta] = &[
-        ParamMeta::new("title")
-            .description("Task title")
-            .param_type(ParamType::String)
-            .required(),
-        ParamMeta::new("description")
-            .description("Task description")
-            .param_type(ParamType::String),
-    ];
-
-    impl Operation for MockAddTask {
-        fn verb(&self) -> &'static str {
-            "add"
-        }
-        fn noun(&self) -> &'static str {
-            "task"
-        }
-        fn description(&self) -> &'static str {
-            "Create a new task"
-        }
-        fn parameters(&self) -> &'static [ParamMeta] {
-            MOCK_ADD_TASK_PARAMS
-        }
-    }
-
-    struct MockGetTask;
-
-    static MOCK_GET_TASK_PARAMS: &[ParamMeta] = &[ParamMeta::new("id")
-        .description("Task ID")
-        .param_type(ParamType::String)
-        .required()];
-
-    impl Operation for MockGetTask {
-        fn verb(&self) -> &'static str {
-            "get"
-        }
-        fn noun(&self) -> &'static str {
-            "task"
-        }
-        fn description(&self) -> &'static str {
-            "Get a task"
-        }
-        fn parameters(&self) -> &'static [ParamMeta] {
-            MOCK_GET_TASK_PARAMS
-        }
-    }
-
-    struct MockListTasks;
-
-    static MOCK_LIST_TASKS_PARAMS: &[ParamMeta] = &[
-        ParamMeta::new("assignee")
-            .description("Filter by assignee")
-            .param_type(ParamType::String),
-        ParamMeta::new("ready")
-            .description("Filter by ready status")
-            .param_type(ParamType::Boolean),
-    ];
-
-    impl Operation for MockListTasks {
-        fn verb(&self) -> &'static str {
-            "list"
-        }
-        fn noun(&self) -> &'static str {
-            "tasks"
-        }
-        fn description(&self) -> &'static str {
-            "List all tasks"
-        }
-        fn parameters(&self) -> &'static [ParamMeta] {
-            MOCK_LIST_TASKS_PARAMS
-        }
-    }
 
     #[test]
     fn test_param_type_mapping() {

@@ -8545,9 +8545,12 @@ version = "0.14.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "clap",
+ "once_cell",
  "serde",
  "serde_json",
  "swissarmyhammer-operations-macros",
+ "thiserror 2.0.18",
  "tokio",
  "ulid",
 ]
