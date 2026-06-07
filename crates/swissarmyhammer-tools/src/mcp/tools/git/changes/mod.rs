@@ -17,7 +17,8 @@ use rmcp::model::CallToolResult;
 use serde::{Deserialize, Serialize};
 use swissarmyhammer_git::{GitOperations, GitResult};
 use swissarmyhammer_operations::{
-    generate_mcp_schema, Operation, ParamMeta, ParamType, SchemaConfig,
+    generate_mcp_schema_full, generate_mcp_schema_wire, Operation, ParamMeta, ParamType,
+    SchemaConfig,
 };
 
 use super::diff;
@@ -248,6 +249,14 @@ impl GitChangesTool {
 crate::impl_empty_doctorable!(GitChangesTool);
 crate::impl_empty_initializable!(GitChangesTool);
 
+/// Shared schema config for the git tool, so the wire and full generators stay
+/// in lockstep on the description.
+fn git_schema_config() -> SchemaConfig {
+    SchemaConfig::new(
+        "Git operations for analyzing branch changes and semantic diffs. Lists files changed on a branch, and provides entity-level semantic diffing.",
+    )
+}
+
 #[async_trait]
 impl McpTool for GitChangesTool {
     fn name(&self) -> &'static str {
@@ -259,10 +268,11 @@ impl McpTool for GitChangesTool {
     }
 
     fn schema(&self) -> serde_json::Value {
-        let config = SchemaConfig::new(
-            "Git operations for analyzing branch changes and semantic diffs. Lists files changed on a branch, and provides entity-level semantic diffing.",
-        );
-        generate_mcp_schema(&GIT_OPERATIONS, config)
+        generate_mcp_schema_wire(&GIT_OPERATIONS, git_schema_config())
+    }
+
+    fn schema_full(&self) -> serde_json::Value {
+        generate_mcp_schema_full(&GIT_OPERATIONS, git_schema_config())
     }
 
     fn operations(&self) -> &'static [&'static dyn swissarmyhammer_operations::Operation] {
@@ -545,18 +555,31 @@ mod tests {
     #[test]
     fn test_git_changes_tool_schema() {
         let tool = GitChangesTool::new();
-        let schema = tool.schema();
 
-        assert!(schema.is_object());
-        let properties = schema
+        // Wire schema: only `op` in properties, heavy keys dropped, signatures kept.
+        let wire = tool.schema();
+        assert!(wire.is_object());
+        assert!(wire["properties"]["op"].is_object());
+        assert!(wire["x-op-signatures"].is_object());
+        let wire_obj = wire.as_object().unwrap();
+        for key in [
+            "x-operation-schemas",
+            "x-operation-groups",
+            "x-forgiving-input",
+            "examples",
+        ] {
+            assert!(!wire_obj.contains_key(key), "wire schema must omit {key:?}");
+        }
+
+        // Full schema: flat per-op properties plus the heavy CLI-facing keys.
+        let full = tool.schema_full();
+        let properties = full
             .get("properties")
             .expect("schema should have properties");
         assert!(properties.get("branch").is_some());
         assert!(properties.get("op").is_some());
-
-        // Should have operation schemas
-        assert!(schema["x-operation-schemas"].is_array());
-        assert!(schema["x-operation-groups"].is_object());
+        assert!(full["x-operation-schemas"].is_array());
+        assert!(full["x-operation-groups"].is_object());
     }
 
     #[tokio::test]

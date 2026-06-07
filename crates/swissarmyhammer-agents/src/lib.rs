@@ -35,7 +35,7 @@ pub use context::AgentContext;
 pub use error::AgentError;
 pub use operations::{ListAgents, SearchAgent, UseAgent};
 pub use parse::{parse_input, AgentOperation};
-pub use schema::generate_agent_mcp_schema;
+pub use schema::{generate_agent_mcp_schema, generate_agent_mcp_schema_full};
 
 // Re-export Execute trait from operations crate
 pub use swissarmyhammer_operations::{async_trait, Execute, ExecutionResult, Operation};

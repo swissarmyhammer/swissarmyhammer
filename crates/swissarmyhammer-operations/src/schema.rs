@@ -157,6 +157,21 @@ pub fn generate_mcp_schema_full(operations: &[&dyn Operation], config: SchemaCon
     schema
 }
 
+/// The heavy CLI-facing keys that the FULL schema carries but the slim WIRE
+/// schema deliberately omits.
+///
+/// [`generate_mcp_schema_full`] adds all of these; [`generate_mcp_schema_wire`]
+/// adds none of them. This is the single source of truth for that contract:
+/// wire-omission tests across the workspace import this slice instead of
+/// re-declaring the literal list, so adding a fifth heavy key here keeps every
+/// such test in lockstep.
+pub const WIRE_DROPPED_KEYS: [&str; 4] = [
+    "x-operation-schemas",
+    "x-operation-groups",
+    "x-forgiving-input",
+    "examples",
+];
+
 /// Generate the slim WIRE MCP tool schema from operation metadata.
 ///
 /// This is the model-facing surface: it carries only what the model needs to

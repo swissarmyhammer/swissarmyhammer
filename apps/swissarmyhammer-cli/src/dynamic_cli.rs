@@ -1067,7 +1067,12 @@ impl CliBuilder {
     /// Early returns are used throughout to skip invalid tools gracefully rather than
     /// failing the entire CLI build. Invalid tools are logged and skipped.
     fn precompute_tool_command(tool: &dyn McpTool) -> Option<CommandData> {
-        let schema = tool.schema();
+        // The CLI command tree is built in-process from the schema's flat
+        // per-op `properties`, so it needs the FULL schema. Operation-based
+        // tools serve a slim wire schema from `schema()`; `schema_full()`
+        // returns the full surface (and falls back to `schema()` for tools
+        // whose schema is already full).
+        let schema = tool.schema_full();
 
         // Early return if schema validation fails
         if !Self::validate_tool_schema_for_cli(tool, &schema) {

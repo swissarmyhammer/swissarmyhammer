@@ -7,7 +7,6 @@ pub mod commands;
 pub mod completions;
 pub mod context;
 pub mod dynamic_cli;
-pub mod dynamic_execution;
 pub mod error;
 pub mod exit_codes;
 pub mod list;

@@ -5,7 +5,9 @@
 
 use serde_json::{json, Map, Value};
 use std::sync::LazyLock;
-use swissarmyhammer_operations::{generate_mcp_schema, Operation, SchemaConfig};
+use swissarmyhammer_operations::{
+    generate_mcp_schema_full, generate_mcp_schema_wire, Operation, SchemaConfig,
+};
 
 use crate::actor::{AddActor, DeleteActor, GetActor, ListActors, UpdateActor};
 use crate::attachment::{
@@ -90,18 +92,40 @@ pub fn kanban_operations() -> &'static [&'static dyn Operation] {
     &KANBAN_OPERATIONS
 }
 
-/// Generate MCP schema for kanban operations
+/// Build the shared schema configuration (description, examples, verb aliases)
+/// used by both the wire and full kanban schema generators.
 ///
-/// Uses the generic schema generator from swissarmyhammer-operations with
-/// kanban-specific examples and verb aliases.
-pub fn generate_kanban_mcp_schema(operations: &[&dyn Operation]) -> Value {
-    let config = SchemaConfig::new(
+/// Centralizing the config keeps the two generators in lockstep: the wire
+/// schema ignores the heavy fields but still carries the same description, and
+/// the full schema reuses the identical examples/aliases it always has.
+fn kanban_schema_config() -> SchemaConfig {
+    SchemaConfig::new(
         "Kanban board operations for task management. Accepts forgiving input with aliases and inference.",
     )
     .with_examples(generate_kanban_examples())
-    .with_verb_aliases(get_kanban_verb_aliases());
+    .with_verb_aliases(get_kanban_verb_aliases())
+}
 
-    generate_mcp_schema(operations, config)
+/// Generate the slim WIRE MCP schema for kanban operations.
+///
+/// This is the model-facing surface advertised over MCP `ListTools`. It carries
+/// only the op enum and per-op required-field signatures, deliberately dropping
+/// the heavy CLI-facing keys (`x-operation-schemas`, `x-operation-groups`,
+/// `x-forgiving-input`, `examples`). In-process CLI consumers that need the full
+/// per-op detail must call [`generate_kanban_mcp_schema_full`] instead.
+pub fn generate_kanban_mcp_schema(operations: &[&dyn Operation]) -> Value {
+    generate_mcp_schema_wire(operations, kanban_schema_config())
+}
+
+/// Generate the FULL CLI-facing MCP schema for kanban operations.
+///
+/// Retains the complete surface (flat per-op properties, `x-operation-schemas`,
+/// `x-operation-groups`, `x-forgiving-input`, `examples`). The schema-driven
+/// kanban-cli command tree reads this in-process, so it must keep per-op
+/// precision. Uses the generic full generator with kanban-specific examples and
+/// verb aliases.
+pub fn generate_kanban_mcp_schema_full(operations: &[&dyn Operation]) -> Value {
+    generate_mcp_schema_full(operations, kanban_schema_config())
 }
 
 /// Generate kanban-specific usage examples
@@ -188,6 +212,7 @@ mod tests {
         board::InitBoard,
         task::{AddTask, AssignTask, ListTasks},
     };
+    use swissarmyhammer_operations::WIRE_DROPPED_KEYS;
 
     // Helper to create a test operation list with static lifetime
     fn test_operations() -> Vec<&'static dyn Operation> {
@@ -202,9 +227,37 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_kanban_schema_structure() {
+    fn test_wire_schema_structure_omits_heavy_keys() {
         let ops = test_operations();
         let schema = generate_kanban_mcp_schema(&ops);
+        let obj = schema.as_object().unwrap();
+
+        // Verify top-level structure
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["additionalProperties"], true);
+        assert!(schema["description"].as_str().unwrap().contains("Kanban"));
+
+        // Verify properties.op exists with enum
+        assert!(schema["properties"]["op"].is_object());
+        assert_eq!(schema["properties"]["op"]["type"], "string");
+        assert!(schema["properties"]["op"]["enum"].is_array());
+
+        // The wire schema carries the per-op required-name signatures.
+        assert!(schema["x-op-signatures"].is_object());
+
+        // ...and omits every heavy CLI-facing key.
+        for key in WIRE_DROPPED_KEYS {
+            assert!(
+                !obj.contains_key(key),
+                "wire schema must omit heavy key {key:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_full_schema_structure_keeps_heavy_keys() {
+        let ops = test_operations();
+        let schema = generate_kanban_mcp_schema_full(&ops);
 
         // Verify top-level structure
         assert_eq!(schema["type"], "object");
@@ -228,9 +281,9 @@ mod tests {
     }
 
     #[test]
-    fn test_kanban_schema_has_examples() {
+    fn test_full_kanban_schema_has_examples() {
         let ops = test_operations();
-        let schema = generate_kanban_mcp_schema(&ops);
+        let schema = generate_kanban_mcp_schema_full(&ops);
 
         let examples = schema["examples"].as_array().unwrap();
         assert!(examples.len() >= 10);
@@ -251,9 +304,9 @@ mod tests {
     }
 
     #[test]
-    fn test_kanban_schema_has_verb_aliases() {
+    fn test_full_kanban_schema_has_verb_aliases() {
         let ops = test_operations();
-        let schema = generate_kanban_mcp_schema(&ops);
+        let schema = generate_kanban_mcp_schema_full(&ops);
 
         assert!(schema["x-forgiving-input"]["verb_aliases"].is_object());
 
@@ -267,46 +320,54 @@ mod tests {
 
     #[test]
     fn test_no_top_level_oneof() {
-        // Critical: Claude API doesn't support oneOf/allOf/anyOf at top level
+        // Critical: Claude API doesn't support oneOf/allOf/anyOf at top level.
+        // Holds for both the wire and full schemas.
         let ops = test_operations();
-        let schema = generate_kanban_mcp_schema(&ops);
-
-        assert!(!schema.as_object().unwrap().contains_key("oneOf"));
-        assert!(!schema.as_object().unwrap().contains_key("allOf"));
-        assert!(!schema.as_object().unwrap().contains_key("anyOf"));
-    }
-
-    #[test]
-    fn test_schema_includes_perspective_ops() {
-        let ops = kanban_operations();
-        let schema = generate_kanban_mcp_schema(ops);
-
-        let op_enum = schema["properties"]["op"]["enum"]
-            .as_array()
-            .expect("op enum should be an array");
-        let op_strings: Vec<&str> = op_enum.iter().filter_map(|v| v.as_str()).collect();
-
-        let expected = [
-            "add perspective",
-            "get perspective",
-            "update perspective",
-            "delete perspective",
-            "list perspectives",
-        ];
-        for expected_op in &expected {
-            assert!(
-                op_strings.contains(expected_op),
-                "op enum should contain {:?}, got: {:?}",
-                expected_op,
-                op_strings
-            );
+        for schema in [
+            generate_kanban_mcp_schema(&ops),
+            generate_kanban_mcp_schema_full(&ops),
+        ] {
+            assert!(!schema.as_object().unwrap().contains_key("oneOf"));
+            assert!(!schema.as_object().unwrap().contains_key("allOf"));
+            assert!(!schema.as_object().unwrap().contains_key("anyOf"));
         }
     }
 
     #[test]
-    fn test_schema_has_perspective_examples() {
+    fn test_schema_includes_perspective_ops() {
+        // The op enum is identical on both surfaces.
         let ops = kanban_operations();
-        let schema = generate_kanban_mcp_schema(ops);
+        for schema in [
+            generate_kanban_mcp_schema(ops),
+            generate_kanban_mcp_schema_full(ops),
+        ] {
+            let op_enum = schema["properties"]["op"]["enum"]
+                .as_array()
+                .expect("op enum should be an array");
+            let op_strings: Vec<&str> = op_enum.iter().filter_map(|v| v.as_str()).collect();
+
+            let expected = [
+                "add perspective",
+                "get perspective",
+                "update perspective",
+                "delete perspective",
+                "list perspectives",
+            ];
+            for expected_op in &expected {
+                assert!(
+                    op_strings.contains(expected_op),
+                    "op enum should contain {:?}, got: {:?}",
+                    expected_op,
+                    op_strings
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_full_schema_has_perspective_examples() {
+        let ops = kanban_operations();
+        let schema = generate_kanban_mcp_schema_full(ops);
 
         let examples = schema["examples"]
             .as_array()
@@ -363,6 +424,7 @@ mod tests {
     #[test]
     fn test_kanban_operations_generates_valid_schema() {
         let ops = kanban_operations();
+        // The op enum lives on both surfaces; assert it against the wire schema.
         let schema = generate_kanban_mcp_schema(ops);
 
         assert_eq!(schema["type"], "object");
@@ -385,6 +447,14 @@ mod tests {
                 op_name
             );
         }
+    }
+
+    #[test]
+    fn test_full_kanban_schema_operation_schemas_count() {
+        // The per-op `x-operation-schemas` array only lives on the full schema,
+        // and has exactly one entry per operation.
+        let ops = kanban_operations();
+        let schema = generate_kanban_mcp_schema_full(ops);
 
         let op_schemas = schema["x-operation-schemas"].as_array().unwrap();
         assert_eq!(

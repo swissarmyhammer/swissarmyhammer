@@ -9,7 +9,8 @@ use once_cell::sync::Lazy;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use swissarmyhammer_operations::{
-    generate_mcp_schema, Operation, ParamMeta, ParamType, SchemaConfig,
+    generate_mcp_schema_full, generate_mcp_schema_wire, Operation, ParamMeta, ParamType,
+    SchemaConfig,
 };
 
 use super::state::{delete_ralph, read_ralph, write_ralph, RalphState};
@@ -200,6 +201,14 @@ impl swissarmyhammer_common::lifecycle::Initializable for RalphTool {
     }
 }
 
+/// Shared schema config for the ralph tool, so the wire and full generators
+/// stay in lockstep on the description.
+fn ralph_schema_config() -> SchemaConfig {
+    SchemaConfig::new(
+        "Persistent agent loop instructions with per-session state. Stores instructions as .ralph/<session_id>.md files for Stop hook integration.",
+    )
+}
+
 #[async_trait]
 impl McpTool for RalphTool {
     fn name(&self) -> &'static str {
@@ -211,10 +220,11 @@ impl McpTool for RalphTool {
     }
 
     fn schema(&self) -> serde_json::Value {
-        let config = SchemaConfig::new(
-            "Persistent agent loop instructions with per-session state. Stores instructions as .ralph/<session_id>.md files for Stop hook integration.",
-        );
-        generate_mcp_schema(&RALPH_OPERATIONS, config)
+        generate_mcp_schema_wire(&RALPH_OPERATIONS, ralph_schema_config())
+    }
+
+    fn schema_full(&self) -> serde_json::Value {
+        generate_mcp_schema_full(&RALPH_OPERATIONS, ralph_schema_config())
     }
 
     fn operations(&self) -> &'static [&'static dyn swissarmyhammer_operations::Operation] {
@@ -532,13 +542,26 @@ mod tests {
     #[test]
     fn test_schema_generation() {
         let tool = RalphTool::new();
-        let schema = tool.schema();
-        assert!(schema.is_object());
-        let obj = schema.as_object().unwrap();
-        assert!(obj.contains_key("properties"));
-        // Verify op enum is present
-        let props = obj["properties"].as_object().unwrap();
-        assert!(props.contains_key("op"));
+
+        // Wire schema: op present, heavy keys dropped, signatures present.
+        let wire = tool.schema();
+        assert!(wire.is_object());
+        let obj = wire.as_object().unwrap();
+        assert!(obj["properties"].as_object().unwrap().contains_key("op"));
+        assert!(wire["x-op-signatures"].is_object());
+        for key in [
+            "x-operation-schemas",
+            "x-operation-groups",
+            "x-forgiving-input",
+            "examples",
+        ] {
+            assert!(!obj.contains_key(key), "wire schema must omit {key:?}");
+        }
+
+        // Full schema: heavy CLI-facing keys present.
+        let full = tool.schema_full();
+        assert!(full["x-operation-schemas"].is_array());
+        assert!(full["x-operation-groups"].is_object());
     }
 
     #[tokio::test]

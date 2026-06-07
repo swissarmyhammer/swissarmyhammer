@@ -403,9 +403,12 @@ mod tests {
     use super::*;
 
     /// Build the real kanban schema for testing.
+    ///
+    /// The command-tree generator consumes the FULL schema in-process, so these
+    /// tests mirror `main.rs` and use the `_full` variant.
     fn kanban_schema() -> Value {
         let ops = swissarmyhammer_kanban::schema::kanban_operations();
-        swissarmyhammer_kanban::schema::generate_kanban_mcp_schema(ops)
+        swissarmyhammer_kanban::schema::generate_kanban_mcp_schema_full(ops)
     }
 
     #[test]

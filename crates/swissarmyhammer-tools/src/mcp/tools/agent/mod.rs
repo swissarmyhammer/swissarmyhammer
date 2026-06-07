@@ -155,6 +155,10 @@ impl McpTool for AgentMcpTool {
         swissarmyhammer_agents::generate_agent_mcp_schema(&AGENT_OPERATIONS)
     }
 
+    fn schema_full(&self) -> serde_json::Value {
+        swissarmyhammer_agents::generate_agent_mcp_schema_full(&AGENT_OPERATIONS)
+    }
+
     fn operations(&self) -> &'static [&'static dyn Operation] {
         *AGENT_OPERATIONS
     }

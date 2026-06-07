@@ -796,7 +796,9 @@ async fn tool_schema(
     let tool = registry
         .get_tool(full_tool_name)
         .ok_or_else(|| format!("Tool not found: {}", full_tool_name))?;
-    Ok(tool.schema())
+    // CLI argument extraction reads the schema's flat per-op `properties`, so
+    // the FULL schema is required, not the slim wire form from `schema()`.
+    Ok(tool.schema_full())
 }
 
 async fn build_tool_arguments(
@@ -943,7 +945,9 @@ async fn convert_matches_to_arguments(
         .get_tool(tool_name)
         .ok_or_else(|| format!("Tool not found: {}", tool_name))?;
 
-    let schema = tool.schema();
+    // Extract properties from the FULL schema — operation-based tools serve a
+    // slim wire schema from `schema()` that omits the flat per-op properties.
+    let schema = tool.schema_full();
 
     // Extract properties from schema
     if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {

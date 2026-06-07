@@ -15,7 +15,9 @@ fn test_tool_registration_and_metadata() {
     assert_eq!(tool.name(), "web");
     assert!(!tool.description().is_empty());
 
-    let schema = tool.schema();
+    // Per-op flat properties (e.g. `url`) only exist on the FULL schema; the
+    // wire `schema()` carries just `op`.
+    let schema = tool.schema_full();
 
     // Validate schema structure
     assert_eq!(schema["type"], "object");
@@ -37,7 +39,8 @@ fn test_tool_registration_and_metadata() {
 #[test]
 fn test_fetch_parameter_schema_compliance() {
     let tool = WebTool::new();
-    let schema = tool.schema();
+    // Per-op flat properties only exist on the FULL schema.
+    let schema = tool.schema_full();
     let properties = &schema["properties"];
 
     // Check fetch-specific parameters exist

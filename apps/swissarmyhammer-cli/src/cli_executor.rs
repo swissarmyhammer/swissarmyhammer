@@ -135,7 +135,10 @@ impl CliExecutor {
         };
 
         let operations = tool.operations();
-        let schema = tool.schema();
+        // CLI args are mapped back to JSON from the schema's flat per-op
+        // `properties`, so the executor needs the FULL schema, not the slim
+        // wire form returned by `schema()` for operation-based tools.
+        let schema = tool.schema_full();
         drop(registry);
 
         // Build arguments from matches

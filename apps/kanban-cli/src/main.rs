@@ -31,7 +31,9 @@ fn main() {
     logging::init_tracing(false);
 
     let operations = swissarmyhammer_kanban::schema::kanban_operations();
-    let schema = swissarmyhammer_kanban::schema::generate_kanban_mcp_schema(operations);
+    // The CLI command tree is built in-process and needs the FULL schema
+    // (per-op `x-operation-schemas` + flat properties), not the slim wire form.
+    let schema = swissarmyhammer_kanban::schema::generate_kanban_mcp_schema_full(operations);
     let cmd = build_cli(&schema);
     let matches = cmd.get_matches();
 
