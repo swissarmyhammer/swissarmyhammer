@@ -61,6 +61,12 @@ async fn render_skill_instructions(
         if let Some(args) = arguments {
             template_context.set("arguments".to_string(), serde_json::json!(args));
         }
+        // Bind the skill's delegated agent so the `delegate-to-subagent` partial
+        // (`{% if agent %}{{ agent }}{% endif %}`) renders its dispatch block; an
+        // inline skill (no `agent`) leaves it unset and the block stays empty.
+        if let Some(agent) = value.get("agent").and_then(|v| v.as_str()) {
+            template_context.set("agent".to_string(), serde_json::json!(agent));
+        }
         let prompt_lib = prompt_library.read().await;
         match prompt_lib.render_text(instructions, &template_context) {
             Ok(rendered) => {
