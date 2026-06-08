@@ -133,8 +133,13 @@ fn generate_param_meta(field: &Field) -> proc_macro2::TokenStream {
     // Extract doc comment as description
     let description = extract_doc_comment(&field.attrs);
 
-    // Check if type is Option<T> to determine required
-    let required = !is_option_type(&field.ty);
+    // A field is required only when it is a non-Option type AND carries no
+    // serde default. A `#[serde(default ...)]` field is filled in by serde when
+    // the key is absent, so it is genuinely optional at dispatch even though its
+    // Rust type is not `Option<T>` (e.g. `Vec<T>`, `bool`, `HashMap`). Marking
+    // such a field required would make a schema-honoring CLI reject valid
+    // no-arg invocations.
+    let required = !is_option_type(&field.ty) && !has_serde_default(&field.attrs);
 
     // Determine param type from Rust type
     let param_type = rust_type_to_param_type(&field.ty);
@@ -182,6 +187,42 @@ fn extract_doc_comment(attrs: &[Attribute]) -> String {
         .collect();
 
     docs.join(" ")
+}
+
+/// Check if a field carries a serde default (`#[serde(default)]` or
+/// `#[serde(default = "...")]`, possibly alongside other serde options).
+///
+/// A serde-defaulted field is optional at dispatch — serde supplies the value
+/// when the input omits the key — so it must not be reported as `required` in
+/// the operation schema, regardless of whether its Rust type is `Option<T>`.
+fn has_serde_default(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        if !attr.path().is_ident("serde") {
+            return false;
+        }
+        // Scan the `#[serde(...)]` argument token stream directly for a top-level
+        // `default` identifier. We deliberately do NOT use `parse_nested_meta`
+        // here: serde also accepts list-valued items like
+        // `rename(serialize = "x")` and `bound(...)`, whose nested `(...)` group
+        // `parse_nested_meta`'s closure cannot consume, so the walk errors at that
+        // token and aborts *before* it ever reaches a later `default`. That false
+        // negative wrongly marks a defaulted field as required — the exact bug this
+        // function exists to prevent.
+        //
+        // A flat ident scan over the top-level tokens can't be aborted by a
+        // sibling item's shape, so a `default` anywhere in the list is detected
+        // regardless of what precedes it. Only top-level idents count: a `default`
+        // nested inside a `(...)` group (such as `rename(...)`) arrives as a single
+        // opaque `TokenTree::Group`, so its contents cannot trigger a false
+        // positive.
+        let Meta::List(list) = &attr.meta else {
+            return false;
+        };
+        list.tokens
+            .clone()
+            .into_iter()
+            .any(|tt| matches!(tt, proc_macro2::TokenTree::Ident(ident) if ident == "default"))
+    })
 }
 
 /// Check if type is Option<T>
@@ -264,4 +305,61 @@ pub fn param(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // Just pass through the item unchanged
     // The #[operation] macro reads these attributes
     item
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use syn::parse_quote;
+
+    /// A bare `#[serde(default)]` must be detected.
+    #[test]
+    fn bare_default_is_detected() {
+        let attr: Attribute = parse_quote!(#[serde(default)]);
+        assert!(has_serde_default(&[attr]));
+    }
+
+    /// A `#[serde(default = "fn")]` must be detected.
+    #[test]
+    fn valued_default_is_detected() {
+        let attr: Attribute = parse_quote!(#[serde(default = "make_default")]);
+        assert!(has_serde_default(&[attr]));
+    }
+
+    /// A serde attribute with no `default` item must NOT be detected.
+    #[test]
+    fn no_default_is_not_detected() {
+        let attr: Attribute = parse_quote!(#[serde(skip_serializing_if = "Option::is_none")]);
+        assert!(!has_serde_default(&[attr]));
+    }
+
+    /// Regression: a list-valued serde item (`rename(serialize = "x")`)
+    /// preceding `default` must NOT mask the `default`. The old
+    /// `parse_nested_meta` walk returned `Err` on the unconsumed `(...)` group
+    /// and aborted before reaching `default`, wrongly marking the field
+    /// required. `default` anywhere in the serde list must be detected
+    /// regardless of other list-valued items.
+    #[test]
+    fn list_valued_item_before_default_does_not_mask_it() {
+        let attr: Attribute = parse_quote!(#[serde(rename(serialize = "x"), default)]);
+        assert!(
+            has_serde_default(&[attr]),
+            "`default` after a list-valued serde item must still be detected"
+        );
+    }
+
+    /// A `bound(...)` list-valued item with nested parens preceding `default`
+    /// must also not mask it.
+    #[test]
+    fn bound_item_before_default_does_not_mask_it() {
+        let attr: Attribute = parse_quote!(#[serde(bound(deserialize = "T: Clone"), default)]);
+        assert!(has_serde_default(&[attr]));
+    }
+
+    /// A non-serde attribute is ignored entirely.
+    #[test]
+    fn non_serde_attribute_ignored() {
+        let attr: Attribute = parse_quote!(#[doc = "a comment"]);
+        assert!(!has_serde_default(&[attr]));
+    }
 }

@@ -5,6 +5,7 @@
 //! by compiling structs that use the macros and verifying the generated
 //! Operation trait implementations.
 
+use serde::Deserialize;
 use swissarmyhammer_operations::{operation, param, Operation, ParamType};
 
 // --- Basic operation with named fields ---
@@ -516,6 +517,63 @@ fn test_mixed_types_report() {
     assert_eq!(params[4].param_type, ParamType::Array);
     assert_eq!(params[5].param_type, ParamType::String);
     assert_eq!(params[6].param_type, ParamType::Integer);
+}
+
+// --- serde(default) on non-Option fields makes them optional ---
+
+/// Non-`Option` fields carrying `#[serde(default ...)]` are genuinely optional
+/// at dispatch (serde fills in a default when the key is absent), so they must
+/// NOT be marked `required` in the derived ParamMeta — otherwise a CLI that
+/// honors per-op required flags rejects valid no-arg invocations.
+#[operation(
+    verb = "add",
+    noun = "thing",
+    description = "Add a thing with serde-defaulted fields"
+)]
+#[derive(Debug, Deserialize)]
+struct SerdeDefaulted {
+    /// A genuinely required field (no default)
+    pub name: String,
+    /// Defaulted bool — optional via serde
+    #[serde(default)]
+    pub enabled: bool,
+    /// Defaulted vec — optional via serde
+    #[serde(default)]
+    pub items: Vec<String>,
+    /// Defaulted via a named function — also optional
+    #[serde(default = "default_count")]
+    pub count: u32,
+    /// Defaulted with extra serde options listed alongside
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
+}
+
+fn default_count() -> u32 {
+    1
+}
+
+#[test]
+fn test_serde_default_field_not_required() {
+    let op = SerdeDefaulted {
+        name: "x".into(),
+        enabled: false,
+        items: vec![],
+        count: 1,
+        note: String::new(),
+    };
+    let params = op.parameters();
+
+    let name = params.iter().find(|p| p.name == "name").unwrap();
+    assert!(name.required, "field with no serde default stays required");
+
+    for field in ["enabled", "items", "count", "note"] {
+        let p = params.iter().find(|p| p.name == field).unwrap();
+        assert!(
+            !p.required,
+            "non-Option field '{}' with #[serde(default)] must NOT be required",
+            field
+        );
+    }
 }
 
 // --- Default examples() is empty ---
