@@ -2,17 +2,17 @@
 
 use std::sync::Arc;
 use swissarmyhammer_common::{Result, SwissArmyHammerError};
-use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
+use swissarmyhammer_templating::{PromptResolver, TemplateLibrary};
 use tokio::sync::RwLock;
 
 /// Error handling implementation for MCP server
 pub struct ErrorHandler {
-    library: Arc<RwLock<PromptLibrary>>,
+    library: Arc<RwLock<TemplateLibrary>>,
 }
 
 impl ErrorHandler {
     /// Create a new error handler with the given prompt library
-    pub fn new(library: Arc<RwLock<PromptLibrary>>) -> Self {
+    pub fn new(library: Arc<RwLock<TemplateLibrary>>) -> Self {
         Self { library }
     }
 
@@ -94,7 +94,7 @@ impl ErrorHandler {
         let before_count = library.list().map(|p| p.len()).unwrap_or(0);
 
         // Clear existing prompts and reload
-        *library = PromptLibrary::new();
+        *library = TemplateLibrary::new();
         resolver
             .load_all_prompts(&mut library)
             .map_err(|e| SwissArmyHammerError::Other {
@@ -237,7 +237,7 @@ mod tests {
         let _guard = CwdGuard(std::env::current_dir().ok());
         std::env::set_current_dir(tmp.path()).unwrap();
 
-        let library = Arc::new(RwLock::new(PromptLibrary::new()));
+        let library = Arc::new(RwLock::new(TemplateLibrary::new()));
         let handler = ErrorHandler::new(library.clone());
         // reload_prompts with an empty library should succeed (loads 0 prompts)
         let result = handler.reload_prompts().await;
@@ -256,7 +256,7 @@ mod tests {
         let _guard = CwdGuard(std::env::current_dir().ok());
         std::env::set_current_dir(tmp.path()).unwrap();
 
-        let library = Arc::new(RwLock::new(PromptLibrary::new()));
+        let library = Arc::new(RwLock::new(TemplateLibrary::new()));
         let handler = ErrorHandler::new(library);
         assert!(handler.reload_prompts().await.is_ok());
         assert!(handler.reload_prompts().await.is_ok());
@@ -270,9 +270,12 @@ mod tests {
         let _guard = CwdGuard(std::env::current_dir().ok());
         std::env::set_current_dir(tmp.path()).unwrap();
 
-        let mut initial_library = PromptLibrary::new();
+        let mut initial_library = TemplateLibrary::new();
         initial_library
-            .add(swissarmyhammer_prompts::Prompt::new("test", "test content"))
+            .add(swissarmyhammer_templating::Prompt::new(
+                "test",
+                "test content",
+            ))
             .unwrap();
 
         let library = Arc::new(RwLock::new(initial_library));

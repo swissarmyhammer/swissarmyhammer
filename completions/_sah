@@ -118,14 +118,6 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
-(prompt)
-_arguments "${_arguments_options[@]}" : \
-'--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
-'-h[Print help (see more with '\''--help'\'')]' \
-'--help[Print help (see more with '\''--help'\'')]' \
-'*::args -- Subcommand and arguments for prompt (handled dynamically):_default' \
-&& ret=0
-;;
 (completion)
 _arguments "${_arguments_options[@]}" : \
 '--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
@@ -436,10 +428,6 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
-(prompt)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
 (completion)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -560,7 +548,6 @@ _sah_commands() {
 'init:Set up sah for all detected AI coding agents (skills + MCP)' \
 'deinit:Remove sah from all detected AI coding agents (skills + MCP)' \
 'doctor:Diagnose configuration and setup issues' \
-'prompt:Manage and test prompts' \
 'completion:Generate shell completion scripts' \
 'validate:Validate prompt files for syntax and best practices' \
 'model:Manage and interact with models' \
@@ -624,7 +611,6 @@ _sah__subcmd__help_commands() {
 'init:Set up sah for all detected AI coding agents (skills + MCP)' \
 'deinit:Remove sah from all detected AI coding agents (skills + MCP)' \
 'doctor:Diagnose configuration and setup issues' \
-'prompt:Manage and test prompts' \
 'completion:Generate shell completion scripts' \
 'validate:Validate prompt files for syntax and best practices' \
 'model:Manage and interact with models' \
@@ -695,11 +681,6 @@ _sah__subcmd__help__subcmd__model__subcmd__show_commands() {
 _sah__subcmd__help__subcmd__model__subcmd__use_commands() {
     local commands; commands=()
     _describe -t commands 'sah help model use commands' commands "$@"
-}
-(( $+functions[_sah__subcmd__help__subcmd__prompt_commands] )) ||
-_sah__subcmd__help__subcmd__prompt_commands() {
-    local commands; commands=()
-    _describe -t commands 'sah help prompt commands' commands "$@"
 }
 (( $+functions[_sah__subcmd__help__subcmd__serve_commands] )) ||
 _sah__subcmd__help__subcmd__serve_commands() {
@@ -807,11 +788,6 @@ _sah__subcmd__model__subcmd__show_commands() {
 _sah__subcmd__model__subcmd__use_commands() {
     local commands; commands=()
     _describe -t commands 'sah model use commands' commands "$@"
-}
-(( $+functions[_sah__subcmd__prompt_commands] )) ||
-_sah__subcmd__prompt_commands() {
-    local commands; commands=()
-    _describe -t commands 'sah prompt commands' commands "$@"
 }
 (( $+functions[_sah__subcmd__serve_commands] )) ||
 _sah__subcmd__serve_commands() {

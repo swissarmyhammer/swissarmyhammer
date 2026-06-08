@@ -172,8 +172,8 @@ pub async fn collect_all_health_checks() -> Vec<HealthCheck> {
     {
         use crate::mcp::tools::skill::register_skill_tools;
         use std::sync::Arc;
-        use swissarmyhammer_prompts::PromptLibrary;
         use swissarmyhammer_skills::SkillLibrary;
+        use swissarmyhammer_templating::TemplateLibrary;
         use tokio::sync::RwLock;
 
         let library = Arc::new(RwLock::new(SkillLibrary::new()));
@@ -181,7 +181,7 @@ pub async fn collect_all_health_checks() -> Vec<HealthCheck> {
             let mut lib = library.write().await;
             lib.load_defaults();
         }
-        let prompt_library = Arc::new(RwLock::new(PromptLibrary::default()));
+        let prompt_library = Arc::new(RwLock::new(TemplateLibrary::default()));
         register_skill_tools(&mut tool_registry, library, prompt_library);
     }
 

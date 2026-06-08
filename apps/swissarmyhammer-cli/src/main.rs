@@ -545,7 +545,6 @@ async fn route_subcommand(context: &CliContext, cli_tool_context: Arc<CliToolCon
         Some(("init", sub_matches)) => handle_init_command(sub_matches),
         Some(("deinit", sub_matches)) => handle_deinit_command(sub_matches),
         Some(("doctor", _)) => handle_doctor_command(context).await,
-        Some(("prompt", sub_matches)) => handle_prompt_command(sub_matches, context).await,
         Some(("validate", sub_matches)) => handle_validate_command(sub_matches, context).await,
         Some(("model", sub_matches)) => handle_model_command(sub_matches, context).await,
         Some(("agent", sub_matches)) => handle_agent_command(sub_matches, context).await,
@@ -1262,28 +1261,6 @@ fn handle_tools_command(matches: &clap::ArgMatches) -> i32 {
 
 async fn handle_doctor_command(cli_context: &CliContext) -> i32 {
     commands::doctor::handle_command(cli_context).await
-}
-
-/// Handle prompt command routing using the new CliContext-based architecture.
-///
-/// This function parses prompt subcommands using the new typed CLI system and routes
-/// them to appropriate handlers. It supports global arguments like --verbose, --format,
-/// and --debug through the CliContext parameter.
-///
-/// # Arguments
-/// * `matches` - Clap argument matches for the prompt subcommand
-/// * `context` - CliContext containing global configuration and prompt library access
-///
-/// # Returns
-/// Exit code (0 for success, non-zero for error)
-async fn handle_prompt_command(matches: &clap::ArgMatches, context: &CliContext) -> i32 {
-    use crate::commands::prompt::cli;
-
-    // Parse using the proper CLI parsing function
-    let command = cli::parse_prompt_command(matches);
-
-    // Use the new typed handler
-    commands::prompt::handle_command_typed(command, context).await
 }
 
 async fn handle_validate_command(matches: &clap::ArgMatches, cli_context: &CliContext) -> i32 {

@@ -683,16 +683,13 @@ fn test_stop_rulesets_count_matches_rulesets_not_files() {
 #[test]
 fn test_stop_validator_prompt_contains_changed_files_and_diffs() {
     use avp_common::turn::DIFF_TEXT_KEY;
-    use avp_common::validator::{Severity, Validator, ValidatorFrontmatter, ValidatorSource};
+    use avp_common::validator::{
+        system_prompt_library, Severity, Validator, ValidatorFrontmatter, ValidatorSource,
+    };
     use std::path::PathBuf;
-    use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 
-    // 1. Build a prompt library with builtin templates
-    let mut prompt_library = PromptLibrary::new();
-    let mut resolver = PromptResolver::new();
-    resolver
-        .load_all_prompts(&mut prompt_library)
-        .expect("Should load builtin prompts");
+    // 1. Build a prompt library with the avp-owned validator system templates
+    let prompt_library = system_prompt_library().expect("Should load validator system prompts");
 
     // 2. Create a test validator (simulating a Stop-triggered code-quality check)
     let validator = Validator {

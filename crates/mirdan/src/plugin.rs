@@ -33,7 +33,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use swissarmyhammer_agents::AgentResolver;
-use swissarmyhammer_prompts::PromptLibrary;
+use swissarmyhammer_templating::TemplateLibrary;
 use swissarmyhammer_skills::deploy::format_skill_md;
 use swissarmyhammer_skills::SkillResolver;
 
@@ -269,7 +269,7 @@ fn render_skills(
         .map(|(name, skill)| (name.clone(), skill.profiles.clone()))
         .collect();
 
-    let library = PromptLibrary::default();
+    let library = TemplateLibrary::default();
     let ctx = profile_template_context();
 
     let mut written = Vec::new();
@@ -303,7 +303,7 @@ fn render_agents(
     let available: HashMap<String, Vec<String>> =
         builtins.keys().map(|name| (name.clone(), Vec::new())).collect();
 
-    let library = PromptLibrary::default();
+    let library = TemplateLibrary::default();
     let ctx = profile_template_context();
 
     let agents_dir = plugin_dir.join("agents");

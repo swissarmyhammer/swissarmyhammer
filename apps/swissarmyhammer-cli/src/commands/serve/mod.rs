@@ -16,7 +16,7 @@
 
 use crate::context::CliContext;
 use crate::exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
-use swissarmyhammer_prompts::PromptLibrary;
+use swissarmyhammer_templating::TemplateLibrary;
 use swissarmyhammer_tools::mcp::unified_server::McpServerHandle;
 
 pub mod display;
@@ -254,7 +254,7 @@ async fn handle_stdio_serve(cli_context: &CliContext, model_override: Option<Str
 }
 
 /// Initialize prompt library for stdio mode
-fn initialize_prompt_library(cli_context: &CliContext) -> Result<(PromptLibrary, usize), i32> {
+fn initialize_prompt_library(cli_context: &CliContext) -> Result<(TemplateLibrary, usize), i32> {
     tracing::debug!("Starting unified MCP server in stdio mode");
 
     let library = cli_context.get_prompt_library().map_err(|e| {
@@ -280,7 +280,7 @@ fn initialize_prompt_library(cli_context: &CliContext) -> Result<(PromptLibrary,
 /// Start stdio server and return handle or error exit code
 async fn start_stdio_server(
     cli_context: &CliContext,
-    library: PromptLibrary,
+    library: TemplateLibrary,
     prompt_count: usize,
     model_override: Option<String>,
 ) -> Result<McpServerHandle, i32> {
@@ -401,7 +401,7 @@ fn display_basic_server_status(
         message.to_string(),
     )];
 
-    if let Err(e) = cli_context.display(basic_status) {
+    if let Err(e) = cli_context.display(&basic_status) {
         eprintln!("Failed to display status: {}", e);
     }
 }
@@ -434,7 +434,7 @@ fn display_verbose_server_status(
         message.to_string(),
     )];
 
-    if let Err(e) = cli_context.display(verbose_status) {
+    if let Err(e) = cli_context.display(&verbose_status) {
         eprintln!("Failed to display status: {}", e);
     }
 }

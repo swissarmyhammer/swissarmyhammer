@@ -18,10 +18,10 @@ use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use std::sync::Arc;
 use swissarmyhammer_operations::Operation;
-use swissarmyhammer_prompts::PromptLibrary;
 use swissarmyhammer_skills::{
     ExecutionResult, ListSkills, SearchSkill, SkillError, SkillLibrary, UseSkill,
 };
+use swissarmyhammer_templating::TemplateLibrary;
 use tokio::sync::RwLock;
 
 // Static operation instances for schema generation
@@ -49,14 +49,14 @@ pub struct SkillTool {
     /// Shared skill library
     library: Arc<RwLock<SkillLibrary>>,
     /// Prompt library for rendering skill templates with partials
-    prompt_library: Arc<RwLock<PromptLibrary>>,
+    prompt_library: Arc<RwLock<TemplateLibrary>>,
 }
 
 impl SkillTool {
     /// Create a new SkillTool with a pre-loaded skill library and prompt library for rendering
     pub fn new(
         library: Arc<RwLock<SkillLibrary>>,
-        prompt_library: Arc<RwLock<PromptLibrary>>,
+        prompt_library: Arc<RwLock<TemplateLibrary>>,
     ) -> Self {
         let description = build_description(&library);
         let description: &'static str = Box::leak(description.into_boxed_str());
@@ -192,7 +192,7 @@ impl McpTool for SkillTool {
 pub fn register_skill_tools(
     registry: &mut ToolRegistry,
     library: Arc<RwLock<SkillLibrary>>,
-    prompt_library: Arc<RwLock<PromptLibrary>>,
+    prompt_library: Arc<RwLock<TemplateLibrary>>,
 ) {
     registry.register(SkillTool::new(library, prompt_library));
 }
@@ -201,8 +201,8 @@ pub fn register_skill_tools(
 mod tests {
     use super::*;
 
-    fn default_prompt_library() -> Arc<RwLock<PromptLibrary>> {
-        Arc::new(RwLock::new(PromptLibrary::default()))
+    fn default_prompt_library() -> Arc<RwLock<TemplateLibrary>> {
+        Arc::new(RwLock::new(TemplateLibrary::default()))
     }
 
     #[tokio::test]

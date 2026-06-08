@@ -83,6 +83,9 @@ doc/book
 # AVP runtime state (self-manages its own .gitignore)
 .avp/
 
+# Validators runtime store (self-manages its own .gitignore)
+.validators/
+
 # Kanban perspective trash (local cleanup, not source)
 .kanban/perspectives/.trash/
 

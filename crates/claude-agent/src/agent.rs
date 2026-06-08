@@ -496,7 +496,7 @@ impl ClaudeAgent {
         let mut agent_library = swissarmyhammer_agents::AgentLibrary::new();
         agent_library.load_defaults();
 
-        let prompt_library = swissarmyhammer_prompts::PromptLibrary::new();
+        let prompt_library = swissarmyhammer_templating::TemplateLibrary::new();
         let mut template_context = swissarmyhammer_config::TemplateContext::new();
         template_context.set("version".to_string(), serde_json::json!(crate::VERSION));
 
@@ -521,7 +521,7 @@ impl ClaudeAgent {
     /// degrades to "literal text" rather than dropping the mode entirely.
     fn resolve_agent_system_prompt(
         agent: &swissarmyhammer_agents::Agent,
-        prompt_library: &swissarmyhammer_prompts::PromptLibrary,
+        prompt_library: &swissarmyhammer_templating::TemplateLibrary,
         template_context: &swissarmyhammer_config::TemplateContext,
     ) -> String {
         match prompt_library.render_text(&agent.instructions, template_context) {

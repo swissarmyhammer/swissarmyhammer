@@ -12,7 +12,7 @@
 //! `{% include 'partial-name' %}` to include partials from the `_partials/` directory.
 
 use agent_client_protocol::schema::StopReason;
-use swissarmyhammer_prompts::PromptLibrary;
+use swissarmyhammer_templating::TemplateLibrary;
 use swissarmyhammer_templating::{HashMapPartialLoader, PartialLoader, Template};
 
 use crate::types::HookType;
@@ -40,7 +40,7 @@ const CODE_FENCE_LEN: usize = 3;
 /// struct, making the API cleaner and more extensible.
 pub struct ValidatorRenderContext<'a, P: PartialLoader + Clone + 'static = HashMapPartialLoader> {
     /// The prompt library containing the validator prompt template.
-    pub prompt_library: &'a PromptLibrary,
+    pub prompt_library: &'a TemplateLibrary,
     /// The validator to render.
     pub validator: &'a Validator,
     /// The hook type that triggered validation.
@@ -56,7 +56,7 @@ pub struct ValidatorRenderContext<'a, P: PartialLoader + Clone + 'static = HashM
 impl<'a> ValidatorRenderContext<'a, HashMapPartialLoader> {
     /// Create a new render context with minimal required parameters.
     pub fn new(
-        prompt_library: &'a PromptLibrary,
+        prompt_library: &'a TemplateLibrary,
         validator: &'a Validator,
         hook_type: HookType,
         hook_context: &'a serde_json::Value,
@@ -75,7 +75,7 @@ impl<'a> ValidatorRenderContext<'a, HashMapPartialLoader> {
 impl<'a, P: PartialLoader + Clone + 'static> ValidatorRenderContext<'a, P> {
     /// Create a render context with a specific partial loader type.
     pub fn with_partials(
-        prompt_library: &'a PromptLibrary,
+        prompt_library: &'a TemplateLibrary,
         validator: &'a Validator,
         hook_type: HookType,
         hook_context: &'a serde_json::Value,
@@ -144,11 +144,60 @@ impl<'a, P: PartialLoader + Clone + 'static> ValidatorRenderContext<'a, P> {
 pub const VALIDATOR_PROMPT_NAME: &str = ".system/validator";
 
 /// Name of the rule prompt template in the prompts library.
-const RULE_PROMPT_NAME: &str = ".system/rule";
+pub const RULE_PROMPT_NAME: &str = ".system/rule";
+
+/// Embedded source of the `.system/validator` prompt template.
+///
+/// These two `.system/` templates are validator *infrastructure* — not the
+/// user-facing `sah prompt` feature — so avp-common owns them under its own
+/// `builtin/.system/` directory and compiles them straight into the binary
+/// via `include_str!`. They were historically resolved out of the shared
+/// `builtin/prompts/` tree, but that tree was removed; embedding them here
+/// makes [`VALIDATOR_PROMPT_NAME`] / [`RULE_PROMPT_NAME`] resolve without any
+/// dependency on `builtin/prompts/`.
+///
+/// Both templates `{% include "_partials/validator-tools" %}`. That partial
+/// still lives in the shared `builtin/_partials/` tree and is registered by
+/// [`PromptResolver::load_all_prompts`], so [`system_prompt_library`] layers
+/// these embedded prompts on top of the standard resolver pipeline rather than
+/// replacing it.
+const VALIDATOR_SYSTEM_PROMPT_SRC: &str = include_str!("../../builtin/.system/validator.md");
+
+/// Embedded source of the `.system/rule` prompt template. See
+/// [`VALIDATOR_SYSTEM_PROMPT_SRC`] for why these templates are embedded here.
+const RULE_SYSTEM_PROMPT_SRC: &str = include_str!("../../builtin/.system/rule.md");
+
+/// Build a [`TemplateLibrary`] that can render the validator system prompts.
+///
+/// Runs the standard [`PromptResolver`] pipeline first — which registers the
+/// shared `builtin/_partials/*` (including `_partials/validator-tools`) plus
+/// any user/local prompts — and then registers the two avp-owned `.system/`
+/// prompt templates ([`VALIDATOR_PROMPT_NAME`] and [`RULE_PROMPT_NAME`]) on top.
+///
+/// This is the single canonical constructor for the validator prompt library;
+/// both [`crate::validator::ValidatorRunner`] and [`render_rule_prompt`] use it
+/// so the system prompts are always available regardless of which render path
+/// runs.
+///
+/// # Errors
+///
+/// Returns an error if the resolver pipeline fails or if either embedded
+/// `.system/` template cannot be parsed.
+pub fn system_prompt_library() -> swissarmyhammer_common::Result<TemplateLibrary> {
+    let mut library = TemplateLibrary::new();
+    let mut resolver = swissarmyhammer_templating::PromptResolver::new();
+    resolver.load_all_prompts(&mut library)?;
+
+    let loader = swissarmyhammer_templating::TemplateLoader::new();
+    library.add(loader.load_from_string(VALIDATOR_PROMPT_NAME, VALIDATOR_SYSTEM_PROMPT_SRC)?)?;
+    library.add(loader.load_from_string(RULE_PROMPT_NAME, RULE_SYSTEM_PROMPT_SRC)?)?;
+
+    Ok(library)
+}
 
 /// Render a rule prompt using the `.system/rule` prompt template.
 ///
-/// Uses the shared prompt rendering pipeline (PromptLibrary + Liquid templates).
+/// Uses the shared prompt rendering pipeline (TemplateLibrary + Liquid templates).
 /// Falls back to a simple inline format if the template is unavailable.
 ///
 /// # Arguments
@@ -171,9 +220,7 @@ fn render_rule_prompt(
 ) -> String {
     use swissarmyhammer_config::TemplateContext;
 
-    let mut prompt_library = PromptLibrary::new();
-    let mut resolver = swissarmyhammer_prompts::PromptResolver::new();
-    if resolver.load_all_prompts(&mut prompt_library).is_ok() {
+    if let Ok(prompt_library) = system_prompt_library() {
         let mut ctx = TemplateContext::new();
         ctx.set("rule_name".to_string(), rule_name.to_string().into());
         ctx.set(
@@ -194,8 +241,8 @@ fn render_rule_prompt(
         }
 
         // Surface the changed-files list to the template. The Liquid template
-        // (`builtin/prompts/.system/rule.md`) renders a `## Files Changed This
-        // Turn` section when this array is present and non-empty.
+        // (`crates/avp-common/builtin/.system/rule.md`) renders a `## Files
+        // Changed This Turn` section when this array is present and non-empty.
         if let Some(files) = changed_files {
             if !files.is_empty() {
                 ctx.set(
@@ -353,7 +400,7 @@ where
 ///
 /// For more control, use [`ValidatorRenderContext`] directly.
 pub fn render_validator_prompt(
-    prompt_library: &PromptLibrary,
+    prompt_library: &TemplateLibrary,
     validator: &Validator,
     hook_type: HookType,
     context: &serde_json::Value,
@@ -365,7 +412,7 @@ pub fn render_validator_prompt(
 ///
 /// For more control, use [`ValidatorRenderContext`] directly.
 pub fn render_validator_prompt_with_partials<P>(
-    prompt_library: &PromptLibrary,
+    prompt_library: &TemplateLibrary,
     validator: &Validator,
     hook_type: HookType,
     context: &serde_json::Value,
@@ -382,7 +429,7 @@ where
 ///
 /// For more control, use [`ValidatorRenderContext`] directly.
 pub fn render_validator_prompt_with_partials_and_changed_files<P>(
-    prompt_library: &PromptLibrary,
+    prompt_library: &TemplateLibrary,
     validator: &Validator,
     hook_type: HookType,
     context: &serde_json::Value,
@@ -991,7 +1038,7 @@ mod tests {
     use super::*;
     use crate::validator::{Severity, ValidatorFrontmatter, ValidatorSource};
     use std::path::PathBuf;
-    use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
+    use swissarmyhammer_templating::TemplateLibrary;
 
     /// Default stop reason for tests - simulates a normal end turn.
     fn test_stop_reason() -> StopReason {
@@ -1028,12 +1075,9 @@ mod tests {
         }
     }
 
-    /// Create a prompt library loaded with all prompts.
-    fn create_prompt_library() -> PromptLibrary {
-        let mut prompt_library = PromptLibrary::new();
-        let mut resolver = PromptResolver::new();
-        let _ = resolver.load_all_prompts(&mut prompt_library);
-        prompt_library
+    /// Create a prompt library loaded with the validator system prompts.
+    fn create_prompt_library() -> TemplateLibrary {
+        super::system_prompt_library().expect("system_prompt_library should load")
     }
 
     #[test]
@@ -1322,10 +1366,8 @@ Here's my analysis:
             "file_path": "test.ts"
         });
 
-        // Create a prompt library with builtins loaded
-        let mut resolver = swissarmyhammer_prompts::PromptResolver::new();
-        let mut prompt_library = PromptLibrary::new();
-        resolver.load_all_prompts(&mut prompt_library).unwrap();
+        // Create a prompt library with the validator system prompts loaded
+        let prompt_library = super::system_prompt_library().unwrap();
 
         let prompt =
             render_validator_prompt(&prompt_library, &validator, HookType::PreToolUse, &context);
@@ -1335,6 +1377,20 @@ Here's my analysis:
         assert!(prompt_text.contains("Check for issues in the code."));
         assert!(prompt_text.contains("PreToolUse"));
         assert!(prompt_text.contains("tool_name"));
+
+        // The `{% include "_partials/validator-tools" %}` in the .system/validator
+        // template must resolve against the shared builtin partial — the rendered
+        // prompt should carry the partial's tool list, with no unresolved include.
+        assert!(
+            prompt_text.contains("## Available Tools") && prompt_text.contains("read_file"),
+            "validator-tools partial should be rendered into the prompt:\n{}",
+            prompt_text
+        );
+        assert!(
+            !prompt_text.contains("{% include"),
+            "no unresolved include should remain in the rendered prompt:\n{}",
+            prompt_text
+        );
     }
 
     #[test]

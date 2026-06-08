@@ -8,17 +8,7 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
 use swissarmyhammer_config::TemplateContext;
-use swissarmyhammer_prompts::{Prompt, PromptLibrary, PromptPartialAdapter};
-use swissarmyhammer_templating::Template;
-
-fn get_builtin_prompts_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("builtin/prompts")
-}
+use swissarmyhammer_templating::{PartialAdapter, Prompt, Template, TemplateLibrary};
 
 fn get_builtin_partials_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -30,7 +20,7 @@ fn get_builtin_partials_path() -> PathBuf {
 }
 
 /// Load shared partials from builtin/_partials/ into the library with _partials/ prefix
-fn load_shared_partials(library: &mut PromptLibrary) {
+fn load_shared_partials(library: &mut TemplateLibrary) {
     let partials_path = get_builtin_partials_path();
     for entry in walkdir::WalkDir::new(&partials_path)
         .into_iter()
@@ -62,11 +52,8 @@ fn test_skills_partial_renders_with_available_skills() {
         ]),
     );
 
-    // Load the prompt library with builtin prompts
-    let mut library = PromptLibrary::new();
-    library
-        .add_directory(get_builtin_prompts_path())
-        .expect("Failed to load builtin prompts");
+    // Load the prompt library with shared partials
+    let mut library = TemplateLibrary::new();
     load_shared_partials(&mut library);
 
     // Get the skills partial
@@ -75,7 +62,7 @@ fn test_skills_partial_renders_with_available_skills() {
         .expect("Failed to get skills partial");
 
     // Create partial adapter for rendering
-    let adapter = PromptPartialAdapter::new(Arc::new(library));
+    let adapter = PartialAdapter::new(Arc::new(library));
 
     // Create template with partial support
     let template =
@@ -113,11 +100,8 @@ fn test_skills_partial_hidden_when_no_skills() {
     let mut context = TemplateContext::new();
     context.set("available_skills".to_string(), json!([]));
 
-    // Load the prompt library with builtin prompts
-    let mut library = PromptLibrary::new();
-    library
-        .add_directory(get_builtin_prompts_path())
-        .expect("Failed to load builtin prompts");
+    // Load the prompt library with shared partials
+    let mut library = TemplateLibrary::new();
     load_shared_partials(&mut library);
 
     // Get the skills partial
@@ -125,7 +109,7 @@ fn test_skills_partial_hidden_when_no_skills() {
         .get("_partials/skills")
         .expect("Failed to get skills partial");
 
-    let adapter = PromptPartialAdapter::new(Arc::new(library));
+    let adapter = PartialAdapter::new(Arc::new(library));
     let template =
         Template::with_partials(&prompt.template, adapter).expect("Failed to create template");
 
@@ -172,13 +156,10 @@ fn test_agent_system_prompt_includes_skills_section() {
         .trim();
 
     // Load partials for template rendering
-    let mut library = PromptLibrary::new();
-    library
-        .add_directory(get_builtin_prompts_path())
-        .expect("Failed to load builtin prompts");
+    let mut library = TemplateLibrary::new();
     load_shared_partials(&mut library);
 
-    let adapter = PromptPartialAdapter::new(Arc::new(library));
+    let adapter = PartialAdapter::new(Arc::new(library));
     let template =
         Template::with_partials(instructions, adapter).expect("Failed to create template");
 

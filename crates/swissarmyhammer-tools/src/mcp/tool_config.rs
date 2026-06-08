@@ -386,7 +386,7 @@ mod tests {
         let agent_lib = Arc::new(RwLock::new(swissarmyhammer_agents::AgentLibrary::new()));
         let skill_lib = Arc::new(RwLock::new(swissarmyhammer_skills::SkillLibrary::new()));
         let prompt_lib = Arc::new(RwLock::new(
-            swissarmyhammer_prompts::PromptLibrary::default(),
+            swissarmyhammer_templating::TemplateLibrary::default(),
         ));
         register_agent_tools(&mut registry, agent_lib, prompt_lib.clone());
         register_skill_tools(&mut registry, skill_lib, prompt_lib);

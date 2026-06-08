@@ -18,7 +18,6 @@ categories = ["command-line-utilities", "development-tools"]
 
 swissarmyhammer-common = { workspace = true }
 swissarmyhammer-directory = { workspace = true }
-swissarmyhammer-prompts = { workspace = true }
 swissarmyhammer-config = { workspace = true }
 swissarmyhammer-git = { workspace = true }
 swissarmyhammer-kanban = { workspace = true }

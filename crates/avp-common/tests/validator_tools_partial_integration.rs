@@ -60,6 +60,22 @@ fn read_validator_tools_partial() -> String {
     read_builtin("_partials/validator-tools.md")
 }
 
+/// Read a `.system/` validator system-prompt template from avp-common's own
+/// `builtin/.system/` directory.
+///
+/// The `.system/validator` and `.system/rule` templates are validator
+/// infrastructure that avp-common owns and embeds via `include_str!` — they no
+/// longer live under the shared workspace `builtin/prompts/` tree (which was
+/// removed). The source of truth is `crates/avp-common/builtin/.system/`.
+fn read_avp_system_prompt(rel_path: &str) -> String {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("builtin")
+        .join(".system")
+        .join(rel_path);
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("Failed to read {}: {}", path.display(), e))
+}
+
 /// Extract the set of top-level tool identifiers mentioned in the partial.
 ///
 /// The partial's "Available Tools" section lists each tool as a markdown
@@ -201,7 +217,7 @@ fn test_validator_tools_partial_has_no_forbidden_tools() {
 /// silently — this test catches that.
 #[test]
 fn test_system_rule_template_includes_validator_tools_partial() {
-    let body = read_builtin("prompts/.system/rule.md");
+    let body = read_avp_system_prompt("rule.md");
     assert!(
         body.contains(r#"{% include "_partials/validator-tools" %}"#),
         ".system/rule.md must include the validator-tools partial.\n\
@@ -215,7 +231,7 @@ fn test_system_rule_template_includes_validator_tools_partial() {
 /// validator entry point alongside the rule template; both must agree.
 #[test]
 fn test_system_validator_template_includes_validator_tools_partial() {
-    let body = read_builtin("prompts/.system/validator.md");
+    let body = read_avp_system_prompt("validator.md");
     assert!(
         body.contains(r#"{% include "_partials/validator-tools" %}"#),
         ".system/validator.md must include the validator-tools partial.\n\

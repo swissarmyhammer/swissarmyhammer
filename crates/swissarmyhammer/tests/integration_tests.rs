@@ -8,7 +8,7 @@ use swissarmyhammer_config::TemplateContext;
 
 #[test]
 fn test_library_creation() {
-    let library = PromptLibrary::new();
+    let library = TemplateLibrary::new();
     let prompts = library.list().unwrap();
     assert!(prompts.is_empty());
 }
@@ -24,7 +24,7 @@ fn test_prompt_creation_and_rendering() {
     template_vars.insert("name".to_string(), json!("World"));
 
     let template_context = TemplateContext::with_template_vars(template_vars).unwrap();
-    let mut library = PromptLibrary::new();
+    let mut library = TemplateLibrary::new();
     library.add(prompt).unwrap();
     let rendered = library.render("greeting", &template_context).unwrap();
     assert_eq!(rendered, "Hello World!");
@@ -48,7 +48,7 @@ fn test_prompt_with_arguments() {
     template_vars.insert("name".to_string(), json!("Alice"));
 
     let template_context = TemplateContext::with_template_vars(template_vars).unwrap();
-    let mut library = PromptLibrary::new();
+    let mut library = TemplateLibrary::new();
     library.add(prompt.clone()).unwrap();
     let rendered = library.render("complex", &template_context).unwrap();
     assert_eq!(rendered, "Hello, Alice!");
@@ -69,7 +69,7 @@ fn test_missing_required_argument() {
 
     let template_vars = HashMap::new();
     let template_context = TemplateContext::with_template_vars(template_vars).unwrap();
-    let mut library = PromptLibrary::new();
+    let mut library = TemplateLibrary::new();
     library.add(prompt).unwrap();
     let result = library.render("test", &template_context);
     assert!(result.is_err());
@@ -99,7 +99,7 @@ Testing {{ subject }}!"#;
     fs::write(prompts_dir.join("test.md"), prompt_content).unwrap();
 
     // Load prompts from directory
-    let mut library = PromptLibrary::new();
+    let mut library = TemplateLibrary::new();
     let count = library.add_directory(prompts_dir).unwrap();
     assert_eq!(count, 1);
 
@@ -121,7 +121,7 @@ Testing {{ subject }}!"#;
 
 #[test]
 fn test_library_search() {
-    let mut library = PromptLibrary::new();
+    let mut library = TemplateLibrary::new();
 
     // Add some test prompts
     library
@@ -221,7 +221,7 @@ This is test prompt {i}!"#
     }
 
     // Load all prompts
-    let loader = PromptLoader::new();
+    let loader = TemplateLoader::new();
     let prompts = loader.load_directory(prompts_dir).unwrap();
     assert_eq!(prompts.len(), 3);
 
@@ -236,7 +236,7 @@ This is test prompt {i}!"#
 #[test]
 fn test_example_usage() {
     // Create a prompt library
-    let mut library = PromptLibrary::new();
+    let mut library = TemplateLibrary::new();
 
     // Create a prompt programmatically
     let greeting_prompt = Prompt::new("greeting", "Hello {{ name }}! Welcome to {{ place }}.")
@@ -292,7 +292,7 @@ This is the main content."#;
     fs::write(prompts_dir.join("main.liquid.md"), main_content).unwrap();
 
     // Load prompts from directory
-    let mut library = PromptLibrary::new();
+    let mut library = TemplateLibrary::new();
     let count = library.add_directory(prompts_dir).unwrap();
     assert!(count > 0);
 
@@ -347,7 +347,7 @@ Main content here.
     fs::write(prompts_dir.join("main.md"), main_content).unwrap();
 
     // Load prompts from directory
-    let mut library = PromptLibrary::new();
+    let mut library = TemplateLibrary::new();
     library.add_directory(prompts_dir).unwrap();
 
     // Get and render the main template with partial support
@@ -382,7 +382,7 @@ This is a regular md file"#;
     fs::write(prompts_dir.join("test2.md"), md_content).unwrap();
 
     // Load prompts from directory
-    let mut library = PromptLibrary::new();
+    let mut library = TemplateLibrary::new();
     let count = library.add_directory(prompts_dir).unwrap();
 
     println!("Loaded {count} prompts");
@@ -444,7 +444,7 @@ After partial"#;
     fs::write(prompts_dir.join("main.md"), main_content).unwrap();
 
     // Load prompts from directory
-    let mut library = PromptLibrary::new();
+    let mut library = TemplateLibrary::new();
     library.add_directory(prompts_dir).unwrap();
 
     // Debug: List what prompts were loaded
@@ -493,7 +493,7 @@ After partial"#;
     fs::write(prompts_dir.join("main.md"), main_content).unwrap();
 
     // Load prompts from directory
-    let mut library = PromptLibrary::new();
+    let mut library = TemplateLibrary::new();
     library.add_directory(prompts_dir).unwrap();
 
     // Get and render the main template with partial support

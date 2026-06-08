@@ -2,7 +2,7 @@
 //!
 //! This operation scans the filesystem to detect project types (Rust, Node.js, Python, etc.)
 //! and returns project metadata with language-specific guidelines rendered through the
-//! Liquid template engine via `PromptLibrary`.
+//! Liquid template engine via `TemplateLibrary`.
 
 use crate::mcp::tool_registry::{BaseToolImpl, ToolContext};
 use rmcp::model::CallToolResult;
@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use swissarmyhammer_common::utils::find_git_repository_root_from;
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_project_detection::{detect_projects, DetectedProject, ProjectType};
-use swissarmyhammer_prompts::PromptLibrary;
+use swissarmyhammer_templating::TemplateLibrary;
 
 /// Deserialize request parameters for project detection.
 #[derive(Deserialize, Default)]
@@ -80,7 +80,7 @@ fn partial_name_for_type(pt: ProjectType) -> Option<&'static str> {
 /// Build a Liquid template string that includes guidelines for the given project types.
 ///
 /// Constructs `{% include %}` directives for each unique project type, which will be
-/// resolved by the `PromptLibrary` partial adapter.
+/// resolved by the `TemplateLibrary` partial adapter.
 fn build_guidelines_template(project_types: &[ProjectType]) -> String {
     let mut template = String::from("## Project Guidelines\n\n");
     for pt in project_types {
@@ -97,7 +97,7 @@ fn build_guidelines_template(project_types: &[ProjectType]) -> String {
 /// rendering fails.
 fn render_guidelines(
     project_types: &[ProjectType],
-    prompt_library: Option<&PromptLibrary>,
+    prompt_library: Option<&TemplateLibrary>,
 ) -> Option<String> {
     let prompt_lib = prompt_library?;
     if project_types.is_empty() {
@@ -148,7 +148,7 @@ fn format_detected_projects(
     projects: &[DetectedProject],
     root: &Path,
     include_guidelines: bool,
-    prompt_library: Option<&PromptLibrary>,
+    prompt_library: Option<&TemplateLibrary>,
 ) -> String {
     if projects.is_empty() {
         return "## No Projects Detected\n\n\
@@ -315,7 +315,7 @@ mod tests {
 
     #[test]
     fn test_all_project_types_have_renderable_guidelines() {
-        let prompt_lib = PromptLibrary::default();
+        let prompt_lib = TemplateLibrary::default();
         let ctx = TemplateContext::new();
 
         let types = [
@@ -366,7 +366,7 @@ mod tests {
 
     #[test]
     fn test_render_project_guidelines_through_liquid() {
-        let prompt_lib = PromptLibrary::default();
+        let prompt_lib = TemplateLibrary::default();
 
         let types = vec![ProjectType::Rust];
         let rendered = render_guidelines(&types, Some(&prompt_lib));
@@ -417,7 +417,7 @@ mod tests {
 
     #[test]
     fn test_format_with_guidelines() {
-        let prompt_lib = PromptLibrary::default();
+        let prompt_lib = TemplateLibrary::default();
         let root = Path::new("/workspace");
         let projects = vec![DetectedProject {
             path: "/workspace".into(),
@@ -465,7 +465,7 @@ mod tests {
 
     #[test]
     fn test_guidelines_deduplication() {
-        let prompt_lib = PromptLibrary::default();
+        let prompt_lib = TemplateLibrary::default();
         let root = Path::new("/workspace");
         let projects = vec![
             DetectedProject {
@@ -519,7 +519,7 @@ mod tests {
         let mut context = crate::test_utils::create_test_context().await;
         // Wire in prompt library so guidelines render
         context.prompt_library = Some(std::sync::Arc::new(tokio::sync::RwLock::new(
-            PromptLibrary::default(),
+            TemplateLibrary::default(),
         )));
 
         let mut args = serde_json::Map::new();
@@ -611,7 +611,7 @@ mod tests {
 
     #[test]
     fn test_guidelines_deduplication_non_rust_types() {
-        let prompt_lib = PromptLibrary::default();
+        let prompt_lib = TemplateLibrary::default();
         let root = Path::new("/workspace");
 
         // Use NodeJs (non-Rust) to exercise the nodejs key path.
@@ -639,7 +639,7 @@ mod tests {
     #[test]
     fn test_render_guidelines_empty_types() {
         // When project_types is empty, render_guidelines should return None.
-        let prompt_lib = PromptLibrary::default();
+        let prompt_lib = TemplateLibrary::default();
         let rendered = render_guidelines(&[], Some(&prompt_lib));
         assert!(rendered.is_none(), "Empty types should return None");
     }
@@ -721,7 +721,7 @@ mod tests {
 
         let mut context = crate::test_utils::create_test_context().await;
         context.prompt_library = Some(std::sync::Arc::new(tokio::sync::RwLock::new(
-            PromptLibrary::default(),
+            TemplateLibrary::default(),
         )));
 
         let mut args = serde_json::Map::new();

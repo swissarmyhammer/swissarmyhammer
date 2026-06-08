@@ -16,7 +16,6 @@ brew install swissarmyhammer/tap/swissarmyhammer
 * [`swissarmyhammer init`↴](#swissarmyhammer-init)
 * [`swissarmyhammer deinit`↴](#swissarmyhammer-deinit)
 * [`swissarmyhammer doctor`↴](#swissarmyhammer-doctor)
-* [`swissarmyhammer prompt`↴](#swissarmyhammer-prompt)
 * [`swissarmyhammer completion`↴](#swissarmyhammer-completion)
 * [`swissarmyhammer validate`↴](#swissarmyhammer-validate)
 * [`swissarmyhammer model`↴](#swissarmyhammer-model)
@@ -34,33 +33,32 @@ brew install swissarmyhammer/tap/swissarmyhammer
 ## `swissarmyhammer`
 
 
-swissarmyhammer is an MCP (Model Context Protocol) server that manages
-prompts as markdown files. It supports file watching, template substitution,
-and seamless integration with Claude Code.
+swissarmyhammer is an MCP (Model Context Protocol) server that brings skills,
+workflows, and agents to AI coding tools. It supports template substitution
+and seamless integration with Claude Code and other ACP-compatible editors.
 
 Global arguments can be used with any command to control output and behavior:
   --verbose     Show detailed information and debug output
-  --format      Set output format (table, json, yaml) for commands that support it  
+  --format      Set output format (table, json, yaml) for commands that support it
   --debug       Enable debug mode with comprehensive tracing
   --quiet       Suppress all output except errors
   --model       Override model for all use cases (runtime only, doesn't modify config)
 
 Main commands:
   serve         Run as MCP server (default when invoked via stdio)
+  init          Set up sah for all detected AI coding agents (skills + MCP)
   doctor        Diagnose configuration and setup issues
-  prompt        Manage and test prompts with interactive capabilities
-  agent         Manage and interact with specialized agents for specific use cases
-  validate      Validate prompt files for syntax and best practices
+  agent         Manage and interact with the Agent Client Protocol server
+  model         Manage and interact with models
+  validate      Validate configuration files for syntax and best practices
   completion    Generate shell completion scripts
 
 Example usage:
   swissarmyhammer serve                           # Run as MCP server
+  swissarmyhammer init                            # Set up skills + MCP for detected agents
   swissarmyhammer doctor                          # Check configuration
-  swissarmyhammer --verbose prompt list          # List prompts with details
-  swissarmyhammer --format=json prompt list      # List prompts as JSON
-  swissarmyhammer --debug prompt test help       # Test prompt with debug info
-  swissarmyhammer agent list                     # List available agents
-  swissarmyhammer agent use claude-code          # Apply Claude Code agent to project
+  swissarmyhammer model list                      # List available models
+  swissarmyhammer agent acp                       # Start the ACP server
 
 
 **Usage:** `swissarmyhammer [OPTIONS] [COMMAND]`
@@ -71,7 +69,6 @@ Example usage:
 * `init` — Set up sah for all detected AI coding agents (skills + MCP)
 * `deinit` — Remove sah from all detected AI coding agents (skills + MCP)
 * `doctor` — Diagnose configuration and setup issues
-* `prompt` — Manage and test prompts
 * `completion` — Generate shell completion scripts
 * `validate` — Validate prompt files for syntax and best practices
 * `model` — Manage and interact with models
@@ -286,38 +283,6 @@ The doctor command gives you confidence that your development environment
 is properly configured and ready for AI-powered workflows.
 
 **Usage:** `swissarmyhammer doctor`
-
-
-
-## `swissarmyhammer prompt`
-
-
-Manage and test prompts with a clean, simplified interface.
-
-The prompt system provides two main commands:
-• list - Display all available prompts from all sources  
-• test - Test prompts interactively with sample data
-
-Use global arguments to control output:
-  --verbose         Show detailed information
-  --format FORMAT   Output format: table, json, yaml
-  --debug           Enable debug mode
-  --quiet           Suppress output except errors
-
-Examples:
-  sah prompt list                           # List all prompts
-  sah --verbose prompt list                 # Show detailed information
-  sah --format=json prompt list             # Output as JSON
-  sah prompt test code-review               # Interactive testing
-  sah prompt test help --var topic=git      # Test with parameters  
-  sah --debug prompt test plan              # Test with debug output
-
-
-**Usage:** `swissarmyhammer prompt [ARGS]...`
-
-###### **Arguments:**
-
-* `<ARGS>` — Subcommand and arguments for prompt (handled dynamically)
 
 
 

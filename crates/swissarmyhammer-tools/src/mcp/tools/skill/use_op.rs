@@ -6,15 +6,15 @@ use rmcp::ErrorData as McpError;
 use serde_json::Value;
 use std::sync::Arc;
 use swissarmyhammer_config::TemplateContext;
-use swissarmyhammer_prompts::PromptLibrary;
 use swissarmyhammer_skills::{Execute, ExecutionResult, SkillContext, SkillLibrary, UseSkill};
+use swissarmyhammer_templating::TemplateLibrary;
 use tokio::sync::RwLock;
 
 /// Execute the use skill operation, rendering templates through the prompt library
 pub async fn execute_use(
     arguments: serde_json::Map<String, serde_json::Value>,
     library: &Arc<RwLock<SkillLibrary>>,
-    prompt_library: &Arc<RwLock<PromptLibrary>>,
+    prompt_library: &Arc<RwLock<TemplateLibrary>>,
 ) -> Result<CallToolResult, McpError> {
     let name = arguments
         .get("name")
@@ -52,17 +52,9 @@ pub async fn execute_use(
 /// `{{arguments}}` in the template.
 async fn render_skill_instructions(
     mut value: Value,
-    prompt_library: &Arc<RwLock<PromptLibrary>>,
+    prompt_library: &Arc<RwLock<TemplateLibrary>>,
     arguments: Option<&str>,
 ) -> Value {
-    // The skill's `agent` frontmatter field gates the delegate-to-subagent
-    // partial (`{% if agent %}`). Capture it before borrowing `instructions`
-    // so the partial naming the delegated agent actually renders.
-    let agent = value
-        .get("agent")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-
     if let Some(instructions) = value.get("instructions").and_then(|v| v.as_str()) {
         let instructions = instructions.to_string();
         // Expose the skill's `agent` frontmatter to the template so the
@@ -74,9 +66,6 @@ async fn render_skill_instructions(
             .map(|s| s.to_string());
         let mut template_context = TemplateContext::new();
         template_context.set("version".to_string(), serde_json::json!(crate::VERSION));
-        if let Some(agent) = &agent {
-            template_context.set("agent".to_string(), serde_json::json!(agent));
-        }
         if let Some(args) = arguments {
             template_context.set("arguments".to_string(), serde_json::json!(args));
         }
@@ -101,7 +90,7 @@ async fn render_skill_instructions(
 #[cfg(test)]
 pub async fn render_skill_instructions_for_test(
     value: Value,
-    prompt_library: &Arc<RwLock<PromptLibrary>>,
+    prompt_library: &Arc<RwLock<TemplateLibrary>>,
     arguments: Option<&str>,
 ) -> Value {
     render_skill_instructions(value, prompt_library, arguments).await
@@ -111,8 +100,8 @@ pub async fn render_skill_instructions_for_test(
 mod tests {
     use super::*;
 
-    fn default_prompt_library() -> Arc<RwLock<PromptLibrary>> {
-        Arc::new(RwLock::new(PromptLibrary::default()))
+    fn default_prompt_library() -> Arc<RwLock<TemplateLibrary>> {
+        Arc::new(RwLock::new(TemplateLibrary::default()))
     }
 
     #[tokio::test]

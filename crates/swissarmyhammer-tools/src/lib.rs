@@ -20,12 +20,12 @@
 //!
 //! ```rust,no_run
 //! use swissarmyhammer_tools::{McpServer, ToolRegistry, ToolContext};
-//! use swissarmyhammer_prompts::PromptLibrary;
+//! use swissarmyhammer_templating::TemplateLibrary;
 //! use std::sync::Arc;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Initialize the prompt library
-//! let library = PromptLibrary::new();
+//! let library = TemplateLibrary::new();
 //!
 //! // Create the MCP server
 //! let server = McpServer::new(library).await?;

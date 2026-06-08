@@ -8,32 +8,22 @@
 //! proving: skill resolution → embedding → MCP tool registration → invocation → instruction delivery.
 
 use rmcp::model::CallToolRequestParams;
-use swissarmyhammer_tools::mcp::{
-    test_utils::create_test_client,
-    unified_server::{start_mcp_server_with_options, McpServerMode},
-};
+use swissarmyhammer_tools::mcp::test_utils::start_test_server_and_client;
 
 /// Helper to start a server and client.
 ///
-/// Uses a temp directory as working_dir so that local `.skills/` overrides
-/// (which contain pre-rendered templates) do not mask builtin skills that
-/// still have raw Liquid templates like `{{arguments}}`.
+/// Delegates to the shared [`start_test_server_and_client`] bootstrap so the
+/// temp-dir + start-server + connect-client sequence lives in exactly one place.
+/// The temp working_dir matters here for a second reason beyond startup speed:
+/// it keeps local `.skills/` overrides (which contain pre-rendered templates)
+/// from masking builtin skills that still have raw Liquid templates like
+/// `{{arguments}}`.
 async fn setup() -> (
     swissarmyhammer_tools::mcp::unified_server::McpServerHandle,
     rmcp::service::RunningService<rmcp::RoleClient, rmcp::model::ClientInfo>,
     tempfile::TempDir,
 ) {
-    let temp = tempfile::TempDir::new().expect("Failed to create temp dir");
-    let server = start_mcp_server_with_options(
-        McpServerMode::Http { port: None },
-        None,
-        None,
-        Some(temp.path().to_path_buf()),
-    )
-    .await
-    .expect("Failed to start MCP server");
-    let client = create_test_client(server.url()).await;
-    (server, client, temp)
+    start_test_server_and_client().await
 }
 
 /// Helper to teardown server and client

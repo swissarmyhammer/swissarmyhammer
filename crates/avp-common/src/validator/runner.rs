@@ -51,8 +51,8 @@ use std::sync::Arc;
 use agent_client_protocol::schema::SessionNotification;
 use agent_client_protocol::{Agent, ConnectionTo};
 use futures::stream::{FuturesUnordered, StreamExt};
-use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 use swissarmyhammer_templating::HashMapPartialLoader;
+use swissarmyhammer_templating::TemplateLibrary;
 use tokio::sync::{broadcast, Semaphore};
 
 use crate::error::AvpError;
@@ -782,7 +782,7 @@ struct ValidatorTask {
     /// Concurrency limiter for rate limit handling.
     concurrency: Arc<ConcurrencyLimiter>,
     /// Prompt library for template rendering.
-    prompt_library: Arc<PromptLibrary>,
+    prompt_library: Arc<TemplateLibrary>,
     /// Partial templates for Liquid includes.
     partials: HashMapPartialLoader,
     /// ACP connection to the agent for prompt execution.
@@ -882,7 +882,7 @@ impl ValidatorTask {
 /// streaming response content.
 pub struct ValidatorRunner {
     /// Prompt library containing the .validator prompt
-    prompt_library: Arc<PromptLibrary>,
+    prompt_library: Arc<TemplateLibrary>,
     /// Validator partials for template rendering
     partials: HashMapPartialLoader,
     /// ACP connection to the agent for executing prompts.
@@ -971,11 +971,13 @@ impl ValidatorRunner {
     }
 
     /// Load and validate the prompt library.
-    fn load_prompt_library() -> Result<PromptLibrary, AvpError> {
-        let mut prompt_library = PromptLibrary::new();
-        let mut resolver = PromptResolver::new();
-        resolver
-            .load_all_prompts(&mut prompt_library)
+    ///
+    /// Uses [`crate::validator::system_prompt_library`], which runs the standard
+    /// prompt resolver pipeline (registering the shared `_partials/*`, including
+    /// `_partials/validator-tools`) and then layers in the avp-owned
+    /// `.system/validator` and `.system/rule` templates.
+    fn load_prompt_library() -> Result<TemplateLibrary, AvpError> {
+        let prompt_library = crate::validator::system_prompt_library()
             .map_err(|e| AvpError::Agent(format!("Failed to load prompt library: {}", e)))?;
 
         // Verify .validator prompt exists

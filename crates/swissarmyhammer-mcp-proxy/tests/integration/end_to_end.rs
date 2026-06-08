@@ -1,12 +1,12 @@
 use std::sync::Arc;
 use swissarmyhammer_mcp_proxy::{start_proxy_server, FilteringMcpProxy, ToolFilter};
-use swissarmyhammer_prompts::PromptLibrary;
+use swissarmyhammer_templating::TemplateLibrary;
 use swissarmyhammer_tools::mcp::McpServer;
 
 #[tokio::test]
 async fn test_proxy_filters_tool_discovery() {
     // Create real SwissArmyHammer MCP server with all tools
-    let library = PromptLibrary::default();
+    let library = TemplateLibrary::default();
     let work_dir = tempfile::tempdir().unwrap();
     let server = McpServer::new_with_work_dir(library, work_dir.path().to_path_buf(), None)
         .await

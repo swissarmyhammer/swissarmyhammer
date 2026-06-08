@@ -10,7 +10,6 @@ pub mod dynamic_cli;
 pub mod dynamic_execution;
 pub mod error;
 pub mod exit_codes;
-pub mod list;
 pub mod mcp_integration;
 pub mod schema_conversion;
 pub mod schema_validation;

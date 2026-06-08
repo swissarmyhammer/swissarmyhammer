@@ -667,7 +667,7 @@ impl AvpContext {
 
         let handle = start_mcp_server_with_options(
             McpServerMode::Http { port: None }, // bind 127.0.0.1:0
-            None,                               // default PromptLibrary
+            None,                               // default TemplateLibrary
             None,                               // no model override
             Some(project_root),
         )

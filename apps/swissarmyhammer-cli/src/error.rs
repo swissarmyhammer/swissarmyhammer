@@ -19,10 +19,12 @@ pub struct CliError {
 }
 
 /// Result type alias for CLI operations
+#[allow(dead_code)]
 pub type CliResult<T> = Result<T, CliError>;
 
 impl CliError {
     /// Create a new CLI error with a message and exit code
+    #[allow(dead_code)]
     pub fn new(message: String, exit_code: i32) -> Self {
         Self {
             message,

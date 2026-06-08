@@ -38,7 +38,6 @@ swissarmyhammer-directory = { workspace = true }
 mirdan = { workspace = true }
 
 # Prompts and templating for validator execution
-swissarmyhammer-prompts = { workspace = true }
 swissarmyhammer-config = { workspace = true }
 swissarmyhammer-templating = { workspace = true }
 

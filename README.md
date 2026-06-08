@@ -187,13 +187,13 @@ You can write your own skills too -- drop a `SKILL.md` in `.sah/skills/my-skill/
 
 ## Architecture
 
-**Everything is markdown.** Skills, validators, workflows, prompts -- all markdown with YAML frontmatter and Liquid templating. No proprietary formats, no databases, no cloud lock-in. Everything lives in your repo or your home directory, fully version-controllable.
+**Everything is markdown.** Skills, validators, workflows, agents -- all markdown with YAML frontmatter and Liquid templating. No proprietary formats, no databases, no cloud lock-in. Everything lives in your repo or your home directory, fully version-controllable.
 
 ```
 ~/.sah/
   skills/           # Installed skills (markdown)
   validators/       # Installed validators (markdown)
-  prompts/          # Custom prompts (markdown + Liquid)
+  agents/           # Agent modes (markdown)
   workflows/        # State machine workflows (markdown + Mermaid)
 ```
 

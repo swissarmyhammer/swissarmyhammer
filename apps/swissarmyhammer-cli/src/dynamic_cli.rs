@@ -633,7 +633,7 @@ const BASE_CLI_LONG_ABOUT: &str = "
 SwissArmyHammer - The only coding assistant you'll ever need
 
 Commands are organized into two types:
-- Static commands (serve, init, deinit, doctor, validate, model, prompt, agent)
+- Static commands (serve, init, deinit, doctor, validate, model, agent)
 - Tool commands (git, kanban, shell, web, js, questions)
 
 Examples:
@@ -741,141 +741,6 @@ Examples:
   swissarmyhammer validate                 # Validate all prompts and skills
   swissarmyhammer validate --quiet         # CI/CD mode - only shows errors, hides warnings
   swissarmyhammer validate --format json   # JSON output for tooling
-";
-
-const PROMPT_COMMAND_LONG_ABOUT: &str = "
-Manage and test prompts with a clean, simplified interface.
-
-The prompt system provides two main commands:
-• list - Display all available prompts from all sources  
-• test - Test prompts interactively with sample data
-
-Use global arguments to control output:
-  --verbose         Show detailed information
-  --format FORMAT   Output format: table, json, yaml
-  --debug           Enable debug mode
-  --quiet           Suppress output except errors
-
-Examples:
-  sah prompt list                           # List all prompts
-  sah --verbose prompt list                 # Show detailed information
-  sah --format=json prompt list             # Output as JSON
-  sah prompt test code-review               # Interactive testing
-  sah prompt test help --var topic=git      # Test with parameters  
-  sah --debug prompt test plan              # Test with debug output
-";
-
-const PROMPT_LIST_LONG_ABOUT: &str = "
-Display all available prompts from all sources (built-in, user, local).
-
-## Global Options
-
-Control output using global arguments:
-
-  sah --verbose prompt list           # Show detailed information including descriptions
-  sah --format=json prompt list       # Output as JSON for scripting
-  sah --format=yaml prompt list       # Output as YAML for scripting  
-
-## Output
-
-### Standard Output (default)
-Shows prompt names and titles in a clean table format.
-
-### Verbose Output (--verbose)
-Shows additional information including:
-- Full descriptions
-- Source information (builtin, user, local)
-- Categories and tags
-- Parameter counts
-
-### Structured Output (--format=json|yaml)
-Machine-readable output suitable for scripting and automation.
-
-## Examples
-
-  # Basic list
-  sah prompt list
-
-  # Detailed information  
-  sah --verbose prompt list
-
-  # JSON output for scripts
-  sah --format=json prompt list | jq '.[] | .name'
-
-  # Save YAML output
-  sah --format=yaml prompt list > prompts.yaml
-
-## Notes
-
-- Partial templates (internal templates used by other prompts) are automatically filtered out
-- All available prompt sources are included automatically
-- Use global --quiet to suppress output except errors
-";
-
-const PROMPT_TEST_LONG_ABOUT: &str = "
-Test prompts interactively to see how they render with different arguments.
-Perfect for debugging template issues and previewing prompt output.
-
-## Usage
-  sah prompt test <PROMPT_NAME> [OPTIONS]
-  sah prompt test --file <FILE> [OPTIONS]
-
-## Arguments
-
-- <PROMPT_NAME> - Name of the prompt to test
-- --file <FILE> - Path to a local prompt file to test
-
-## Options
-
-- --var <KEY=VALUE> - Set template variables (can be used multiple times)
-- --raw - Output raw prompt without additional formatting
-- --copy - Copy rendered prompt to clipboard (if supported)
-- --save <FILE> - Save rendered prompt to file
-- --debug - Show debug information during processing
-
-## Global Options
-
-- --verbose - Show detailed execution information
-- --debug - Enable comprehensive debug output
-- --quiet - Suppress all output except the rendered prompt
-
-## Interactive Mode
-
-When variables are not provided via --var, the command prompts interactively:
-
-- Shows parameter descriptions and default values
-- Validates input according to parameter types
-- Supports boolean (true/false, yes/no, 1/0), numbers, choices
-- Detects non-interactive environments (CI/CD) and uses defaults
-
-## Examples
-
-### Basic Testing
-  # Interactive mode - prompts for all parameters
-  sah prompt test code-review
-
-  # Non-interactive with all parameters provided  
-  sah prompt test help --var topic=git --var format=markdown
-
-  # Test from file
-  sah prompt test --file ./my-prompt.md --var name=John
-
-### Advanced Usage
-  # Verbose output with debug information
-  sah --verbose --debug prompt test plan --var project=myapp
-
-  # Save output to file
-  sah prompt test help --var topic=testing --save help-output.md
-
-  # Raw output (no extra formatting)
-  sah prompt test summary --var title=\"Project Status\" --raw
-
-  # Multiple variables
-  sah prompt test code-review \\
-    --var author=Jane \\
-    --var version=2.1 \\
-    --var language=Python \\
-    --var files=src/main.py,tests/test_main.py
 ";
 
 const MODEL_COMMAND_LONG_ABOUT: &str = "
@@ -1745,7 +1610,7 @@ impl CliBuilder {
     ///
     /// Commands are organized into semantic groups for maintainability:
     /// - Server commands: serve, init, deinit, doctor, validate
-    /// - Content commands: prompt, model, agent
+    /// - Content commands: model, agent
     fn add_static_commands(cli: Command) -> Command {
         let cli = Self::add_server_commands(cli);
         Self::add_content_commands(cli)
@@ -1760,11 +1625,9 @@ impl CliBuilder {
             .subcommand(Self::build_validate_command())
     }
 
-    /// Add content management commands (prompt, model, agent, statusline,
-    /// completion).
+    /// Add content management commands (model, agent, statusline, completion).
     fn add_content_commands(cli: Command) -> Command {
-        cli.subcommand(Self::build_prompt_command())
-            .subcommand(Self::build_model_command())
+        cli.subcommand(Self::build_model_command())
             .subcommand(Self::build_agent_command())
             .subcommand(Self::build_statusline_command())
             .subcommand(Self::build_completion_command())
@@ -1802,169 +1665,6 @@ impl CliBuilder {
                     .help("Shell to generate completion for")
                     .required(true)
                     .value_parser(clap::builder::EnumValueParser::<clap_complete::Shell>::new()),
-            )
-    }
-
-    /// Build the prompt command with all its subcommands
-    fn build_prompt_command() -> Command {
-        Self::build_command_with_subcommands(
-            CommandConfig {
-                name: "prompt",
-                about: "Manage and test prompts",
-                long_about: PROMPT_COMMAND_LONG_ABOUT,
-            },
-            vec![
-                Self::build_prompt_list_subcommand(),
-                Self::build_prompt_test_subcommand(),
-                Self::build_prompt_render_subcommand(),
-                Self::build_prompt_new_subcommand(),
-                Self::build_prompt_show_subcommand(),
-                Self::build_prompt_edit_subcommand(),
-                Self::build_prompt_validate_subcommand(),
-            ],
-        )
-    }
-
-    /// Build the prompt list subcommand
-    fn build_prompt_list_subcommand() -> Command {
-        Command::new("list")
-            .about("Display all available prompts from all sources")
-            .long_about(PROMPT_LIST_LONG_ABOUT)
-    }
-
-    /// Build the prompt test subcommand
-    fn build_prompt_test_subcommand() -> Command {
-        let mut cmd = Command::new("test")
-            .about("Test prompts interactively with sample arguments")
-            .long_about(PROMPT_TEST_LONG_ABOUT);
-
-        for arg in Self::create_test_input_args() {
-            cmd = cmd.arg(arg);
-        }
-        for arg in Self::create_test_output_args() {
-            cmd = cmd.arg(arg);
-        }
-        for arg in Self::create_test_debug_args() {
-            cmd = cmd.arg(arg);
-        }
-
-        cmd
-    }
-
-    /// Create test input arguments (prompt_name, file, vars)
-    fn create_test_input_args() -> Vec<Arg> {
-        Self::build_args_from_specs(&[
-            ArgSpec::new("prompt_name", "Prompt name to test").value_name("PROMPT_NAME"),
-            ArgSpec::new("file", "Path to prompt file to test")
-                .short('f')
-                .long("file")
-                .value_name("FILE"),
-            ArgSpec::new("vars", "Variables as key=value pairs")
-                .long("var")
-                .value_name("KEY=VALUE")
-                .action(ArgSpecAction::Append),
-        ])
-    }
-
-    /// Create test output arguments (raw, copy, save)
-    fn create_test_output_args() -> Vec<Arg> {
-        Self::build_args_from_specs(&[
-            ArgSpec::new("raw", "Show raw output without formatting")
-                .long("raw")
-                .action(ArgSpecAction::SetTrue),
-            ArgSpec::new("copy", "Copy rendered prompt to clipboard")
-                .long("copy")
-                .action(ArgSpecAction::SetTrue),
-            ArgSpec::new("save", "Save rendered prompt to file")
-                .long("save")
-                .value_name("FILE"),
-        ])
-    }
-
-    /// Create test debug arguments (debug)
-    fn create_test_debug_args() -> Vec<Arg> {
-        Self::build_args_from_specs(&[ArgSpec::new("debug", "Show debug information")
-            .long("debug")
-            .action(ArgSpecAction::SetTrue)])
-    }
-
-    /// Build the prompt render subcommand (alias for test)
-    fn build_prompt_render_subcommand() -> Command {
-        let mut cmd = Command::new("render")
-            .about("Render a prompt template (alias for test)")
-            .long_about("Render a prompt template with variables. This is an alias for the 'test' subcommand.");
-
-        for arg in Self::create_test_input_args() {
-            cmd = cmd.arg(arg);
-        }
-        for arg in Self::create_test_output_args() {
-            cmd = cmd.arg(arg);
-        }
-        for arg in Self::create_test_debug_args() {
-            cmd = cmd.arg(arg);
-        }
-
-        cmd
-    }
-
-    /// Build the prompt new subcommand
-    fn build_prompt_new_subcommand() -> Command {
-        Command::new("new")
-            .about("Create a new prompt from a template")
-            .long_about("Scaffold a new prompt file. By default, calls the configured LLM to generate a rich skeleton with parameters, template logic, and documentation. Falls back to a static template if the model is unavailable.")
-            .arg(
-                Arg::new("name")
-                    .required(true)
-                    .help("Prompt name (kebab-case, e.g. code-review)"),
-            )
-            .arg(
-                Arg::new("user")
-                    .long("user")
-                    .help("Create in ~/.prompts/ instead of ./.prompts/")
-                    .action(ArgAction::SetTrue),
-            )
-            .arg(
-                Arg::new("static")
-                    .long("static")
-                    .help("Use a static template instead of AI generation")
-                    .action(ArgAction::SetTrue),
-            )
-    }
-
-    /// Build the prompt show subcommand
-    fn build_prompt_show_subcommand() -> Command {
-        Command::new("show")
-            .about("Display detailed information about a prompt")
-            .long_about("Show a prompt's metadata, parameters, source path, and template content.")
-            .arg(
-                Arg::new("prompt_name")
-                    .required(true)
-                    .help("Name of the prompt to show"),
-            )
-    }
-
-    /// Build the prompt edit subcommand
-    fn build_prompt_edit_subcommand() -> Command {
-        Command::new("edit")
-            .about("Open a prompt in your editor")
-            .long_about("Open a prompt's source file in $VISUAL or $EDITOR. Built-in prompts cannot be edited directly; use 'sah prompt new' to create an override.")
-            .arg(
-                Arg::new("prompt_name")
-                    .required(true)
-                    .help("Name of the prompt to edit"),
-            )
-    }
-
-    /// Build the prompt validate subcommand
-    fn build_prompt_validate_subcommand() -> Command {
-        Command::new("validate")
-            .about("Validate prompt files and skills")
-            .arg(
-                Arg::new("verbose")
-                    .short('v')
-                    .long("verbose")
-                    .help("Show verbose validation output")
-                    .action(ArgAction::SetTrue),
             )
     }
 
