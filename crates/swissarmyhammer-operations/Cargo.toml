@@ -9,6 +9,12 @@ repository.workspace = true
 homepage.workspace = true
 description = "Operation trait and metadata for SwissArmyHammer tools"
 
+[features]
+# Exposes `cli_gen::test_support` to downstream crates so their integration
+# tests can build a command tree from a schema and extract a parsed argument
+# map without re-declaring the same build-then-extract helper per crate.
+test-helpers = []
+
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true

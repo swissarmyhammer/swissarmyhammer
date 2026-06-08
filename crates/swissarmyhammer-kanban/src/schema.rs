@@ -464,6 +464,53 @@ mod tests {
         );
     }
 
+    /// Regression for the macro's required-flag derivation: operation fields
+    /// that are a non-`Option` type but carry `#[serde(default ...)]` are
+    /// genuinely optional at dispatch, so they must NOT appear in an op's
+    /// required-name signature. Before the fix the macro derived `required`
+    /// purely from `!Option<_>`, which wrongly marked `AddTask.assignees` /
+    /// `AddTask.depends_on` (`Vec`) and `AddActor.ensure` (`bool`) required and
+    /// made a schema-honoring CLI reject valid no-arg invocations.
+    #[test]
+    fn test_serde_defaulted_fields_excluded_from_required_signatures() {
+        let ops = test_operations();
+        let schema = generate_kanban_mcp_schema(&ops);
+        let sigs = schema["x-op-signatures"]
+            .as_object()
+            .expect("wire schema carries x-op-signatures");
+
+        let add_task: Vec<&str> = sigs["add task"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        // `title` is the only genuinely-required field.
+        assert_eq!(add_task, vec!["title"]);
+        assert!(
+            !add_task.contains(&"assignees"),
+            "serde-defaulted Vec field 'assignees' must not be required"
+        );
+        assert!(
+            !add_task.contains(&"depends_on"),
+            "serde-defaulted Vec field 'depends_on' must not be required"
+        );
+
+        let add_actor: Vec<&str> = sigs["add actor"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        // `id` and `name` are required; the serde-defaulted `ensure` bool is not.
+        assert!(add_actor.contains(&"id"));
+        assert!(add_actor.contains(&"name"));
+        assert!(
+            !add_actor.contains(&"ensure"),
+            "serde-defaulted bool field 'ensure' must not be required"
+        );
+    }
+
     #[test]
     fn test_kanban_operations_is_static() {
         let ops1 = kanban_operations();

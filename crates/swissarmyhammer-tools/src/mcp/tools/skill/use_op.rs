@@ -55,14 +55,6 @@ async fn render_skill_instructions(
     prompt_library: &Arc<RwLock<PromptLibrary>>,
     arguments: Option<&str>,
 ) -> Value {
-    // The skill's `agent` frontmatter field gates the delegate-to-subagent
-    // partial (`{% if agent %}`). Capture it before borrowing `instructions`
-    // so the partial naming the delegated agent actually renders.
-    let agent = value
-        .get("agent")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-
     if let Some(instructions) = value.get("instructions").and_then(|v| v.as_str()) {
         let instructions = instructions.to_string();
         // Expose the skill's `agent` frontmatter to the template so the
@@ -79,9 +71,6 @@ async fn render_skill_instructions(
         }
         if let Some(args) = arguments {
             template_context.set("arguments".to_string(), serde_json::json!(args));
-        }
-        if let Some(agent) = &agent {
-            template_context.set("agent".to_string(), serde_json::json!(agent));
         }
         let prompt_lib = prompt_library.read().await;
         match prompt_lib.render_text(&instructions, &template_context) {

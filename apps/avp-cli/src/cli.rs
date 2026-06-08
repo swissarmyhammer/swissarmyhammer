@@ -1,31 +1,15 @@
 //! CLI definition for the AVP command-line interface.
 //!
-//! This module is self-contained — it only depends on `clap` and `std` so that
-//! `build.rs` can compile it independently via `#[path = "src/cli.rs"]` to
-//! generate documentation, man pages, and shell completions at build time.
+//! `build.rs` compiles this module independently via `#[path = "src/cli.rs"]`
+//! to generate documentation, man pages, and shell completions at build time.
+//! Beyond `clap` and `std`, it depends only on the shared
+//! [`swissarmyhammer_cli_completions::lifecycle::InstallTarget`] enum, which is
+//! declared as a build dependency of this crate — so `build.rs`'s `#[path]`
+//! compilation has it available. `InstallTarget` is the single canonical
+//! install-scope type shared by every tool CLI, rather than a per-binary copy.
 
-use clap::{Parser, Subcommand, ValueEnum};
-
-/// Target location for install/uninstall operations.
-#[derive(Clone, Copy, Debug, ValueEnum)]
-pub enum InstallTarget {
-    /// Project-level settings (.claude/settings.json)
-    Project,
-    /// Local project settings, not committed (.claude/settings.local.json)
-    Local,
-    /// User-level settings (~/.claude/settings.json)
-    User,
-}
-
-impl std::fmt::Display for InstallTarget {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            InstallTarget::Project => write!(f, "project"),
-            InstallTarget::Local => write!(f, "local"),
-            InstallTarget::User => write!(f, "user"),
-        }
-    }
-}
+use clap::{Parser, Subcommand};
+pub use swissarmyhammer_cli_completions::lifecycle::InstallTarget;
 
 /// AVP - Agent Validator Protocol
 ///

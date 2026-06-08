@@ -1347,6 +1347,7 @@ dependencies = [
  "swissarmyhammer-directory",
  "swissarmyhammer-doctor",
  "swissarmyhammer-embedding",
+ "swissarmyhammer-operations",
  "swissarmyhammer-skills",
  "swissarmyhammer-tools",
  "tempfile",
@@ -4186,7 +4187,6 @@ dependencies = [
  "clap_mangen",
  "is-terminal",
  "mirdan",
- "once_cell",
  "open",
  "rmcp",
  "serde_json",
@@ -7655,6 +7655,7 @@ dependencies = [
  "swissarmyhammer-config",
  "swissarmyhammer-directory",
  "swissarmyhammer-doctor",
+ "swissarmyhammer-operations",
  "swissarmyhammer-shell",
  "swissarmyhammer-tools",
  "tempfile",
@@ -8173,6 +8174,9 @@ version = "0.14.0"
 dependencies = [
  "clap",
  "clap_complete",
+ "serde_json",
+ "swissarmyhammer-common",
+ "swissarmyhammer-operations",
  "tempfile",
 ]
 

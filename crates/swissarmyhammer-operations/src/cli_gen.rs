@@ -614,6 +614,70 @@ fn extract_value_from_matches(
     Ok(value)
 }
 
+#[cfg(any(test, feature = "test-helpers"))]
+pub mod test_support {
+    //! Reusable test helpers for CLIs built on the shared generator.
+    //!
+    //! Each consuming CLI's test module previously re-declared the same
+    //! "build the command tree from a schema, parse an argv, extract the
+    //! argument map" sequence. This helper lives next to
+    //! [`build_commands_from_schema`]/[`extract_noun_verb_arguments`] so the
+    //! round-trip is exercised through one shared path.
+
+    use super::{build_commands_from_schema, extract_noun_verb_arguments};
+    use clap::Command;
+    use serde_json::{Map, Value};
+    use std::collections::HashSet;
+
+    /// Build the command tree from `schema`, parse `argv` against it, and
+    /// extract the `{ "op": "verb noun", ...args }` argument map.
+    ///
+    /// `root_name` is the binary name the synthetic root command uses (e.g.
+    /// `"code-context"`); it only affects clap's error messages, not the
+    /// extracted args. Panics if `argv` does not parse or the matches cannot be
+    /// resolved to an op — appropriate for test code that controls both.
+    pub fn parse_argv(
+        root_name: &'static str,
+        schema: &Value,
+        argv: &[&str],
+    ) -> Map<String, Value> {
+        let mut cmd = Command::new(root_name);
+        for subcmd in build_commands_from_schema(schema) {
+            cmd = cmd.subcommand(subcmd);
+        }
+        let matches = cmd
+            .try_get_matches_from(argv)
+            .expect("argv should parse against the generated command tree");
+        extract_noun_verb_arguments(&matches, schema)
+            .expect("matches should resolve to a noun/verb op")
+    }
+
+    /// Collect the `"verb noun"` op strings reachable through a `noun → verb`
+    /// command tree.
+    ///
+    /// `nouns` is the set of top-level noun commands (either the `Vec<Command>`
+    /// returned by [`build_commands_from_schema`], or the `get_subcommands()` of
+    /// an assembled root). For each noun, every child verb yields the op string
+    /// `"<verb> <noun>"`, matching [`crate::Operation::op_string`].
+    ///
+    /// Every CLI's command-tree coverage test previously open-coded this nested
+    /// loop; sharing it here keeps the noun/verb convention in one place so the
+    /// coverage tests cannot drift apart.
+    pub fn collect_verb_noun_pairs<'a, I>(nouns: I) -> HashSet<String>
+    where
+        I: IntoIterator<Item = &'a Command>,
+    {
+        let mut pairs = HashSet::new();
+        for noun_cmd in nouns {
+            let noun = noun_cmd.get_name();
+            for verb_cmd in noun_cmd.get_subcommands() {
+                pairs.insert(format!("{} {}", verb_cmd.get_name(), noun));
+            }
+        }
+        pairs
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -881,14 +945,11 @@ mod tests {
     }
 
     /// Parse one invocation against the generated command tree and extract args.
+    ///
+    /// Thin wrapper over the shared [`super::test_support::parse_argv`] (which
+    /// downstream CLIs also use) pinned to the `"mock"` root used here.
     fn parse_and_extract(schema: &Value, argv: &[&str]) -> serde_json::Map<String, Value> {
-        let commands = build_commands_from_schema(schema);
-        let mut cmd = Command::new("mock");
-        for subcmd in commands {
-            cmd = cmd.subcommand(subcmd);
-        }
-        let matches = cmd.try_get_matches_from(argv).unwrap();
-        extract_noun_verb_arguments(&matches, schema).unwrap()
+        super::test_support::parse_argv("mock", schema, argv)
     }
 
     #[test]

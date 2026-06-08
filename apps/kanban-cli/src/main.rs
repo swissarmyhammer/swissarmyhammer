@@ -5,15 +5,14 @@
 
 mod banner;
 mod cli;
-mod cli_gen;
 mod commands;
-mod completions;
 mod logging;
 mod merge;
 
 use clap::Command;
 use serde_json::Value;
 use std::path::PathBuf;
+use swissarmyhammer_cli_completions::lifecycle;
 use swissarmyhammer_common::lifecycle::{InitRegistry, InitResult, InitScope, InitStatus};
 use swissarmyhammer_common::reporter::CliReporter;
 use tracing::error;
@@ -40,65 +39,25 @@ fn main() {
     dispatch(&matches, &schema);
 }
 
+/// The program name — used for the clap root command, completion target, and
+/// completion dispatch. Sourced once so a rename can't desync the three sites.
+const PROGRAM: &str = "kanban";
+
 /// Build the clap command tree for `kanban`.
 ///
-/// Combines the schema-driven noun/verb subcommands generated from the kanban
-/// operation schema with the hand-rolled subcommands (`open`, `merge`,
-/// `serve`, `init`, `deinit`, `doctor`). The lifecycle commands mirror the
-/// surface declared in `cli.rs` (consumed by `build.rs` for doc/manpage/
-/// completion generation).
+/// Starts from the shared [`lifecycle::standard_op_cli`] skeleton (root command +
+/// global `--debug` + schema-driven noun/verb subcommands + the five lifecycle
+/// subcommands serve/init/deinit/doctor/completion) and appends kanban's own
+/// app-specific subcommands `open` and `merge`. The lifecycle surface mirrors the
+/// static `cli.rs` definition consumed by `build.rs`.
 fn build_cli(schema: &Value) -> Command {
-    let mut cmd = Command::new("kanban")
-        .version(env!("CARGO_PKG_VERSION"))
-        .about("Kanban board CLI — manage tasks, boards, and columns")
-        .allow_external_subcommands(true);
-
-    for subcmd in cli_gen::build_commands_from_schema(schema) {
-        cmd = cmd.subcommand(subcmd);
-    }
-    cmd = cmd.subcommand(open_subcommand());
-    cmd = cmd.subcommand(merge::merge_command());
-    cmd = cmd.subcommand(serve_subcommand());
-    cmd = cmd.subcommand(init_subcommand());
-    cmd = cmd.subcommand(deinit_subcommand());
-    cmd = cmd.subcommand(doctor_subcommand());
-    cmd = cmd.subcommand(completion_subcommand());
-    cmd
-}
-
-/// `completion` — emit a shell completion script for `kanban`.
-///
-/// The positional `shell` argument is restricted to the four shells
-/// `clap_complete` knows how to render (bash, zsh, fish, powershell).
-/// Dispatch reconstructs the full runtime command tree before handing it
-/// to [`completions::print_completion`] so the generated script reflects
-/// the schema-driven noun/verb commands too — not just the lifecycle
-/// subcommands declared in `cli.rs`.
-fn completion_subcommand() -> Command {
-    Command::new("completion")
-        .about("Generate shell completion scripts")
-        .long_about(
-            "Generates shell completion scripts for various shells. Supports:\n\
-             - bash\n\
-             - zsh\n\
-             - fish\n\
-             - powershell\n\n\
-             Examples:\n  \
-             # Bash (add to ~/.bashrc or ~/.bash_profile)\n  \
-             kanban completion bash > ~/.local/share/bash-completion/completions/kanban\n\n  \
-             # Zsh (add to ~/.zshrc or a file in fpath)\n  \
-             kanban completion zsh > ~/.zfunc/_kanban\n\n  \
-             # Fish\n  \
-             kanban completion fish > ~/.config/fish/completions/kanban.fish\n\n  \
-             # PowerShell\n  \
-             kanban completion powershell >> $PROFILE",
-        )
-        .arg(
-            clap::Arg::new("shell")
-                .help("Shell to generate completion for")
-                .required(true)
-                .value_parser(clap::builder::EnumValueParser::<clap_complete::Shell>::new()),
-        )
+    lifecycle::standard_op_cli(
+        PROGRAM,
+        "Kanban board CLI — manage tasks, boards, and columns",
+        schema,
+    )
+    .subcommand(open_subcommand())
+    .subcommand(merge::merge_command())
 }
 
 /// `open` — launch the GUI app via deep-link for a project directory.
@@ -110,53 +69,6 @@ fn open_subcommand() -> Command {
                 .help("Path to the project directory (default: current directory)")
                 .default_value("."),
         )
-}
-
-/// `serve` — run the MCP server over stdio.
-fn serve_subcommand() -> Command {
-    Command::new("serve").about("Run MCP server over stdio, exposing kanban tools")
-}
-
-/// `init` — install the kanban MCP server into detected agent configs.
-fn init_subcommand() -> Command {
-    Command::new("init")
-        .about("Install kanban MCP server into detected agent configs")
-        .arg(install_target_arg(
-            "Where to install the server configuration",
-        ))
-}
-
-/// `deinit` — remove the kanban MCP server from detected agent configs.
-fn deinit_subcommand() -> Command {
-    Command::new("deinit")
-        .about("Remove kanban MCP server from detected agent configs")
-        .arg(install_target_arg(
-            "Where to remove the server configuration from",
-        ))
-}
-
-/// `doctor` — diagnose kanban setup with optional verbose output.
-fn doctor_subcommand() -> Command {
-    Command::new("doctor")
-        .about("Diagnose kanban configuration and setup")
-        .arg(
-            clap::Arg::new("verbose")
-                .short('v')
-                .long("verbose")
-                .help("Show detailed output including fix suggestions")
-                .action(clap::ArgAction::SetTrue),
-        )
-}
-
-/// Shared `[TARGET]` positional argument used by both `init` and `deinit`.
-///
-/// Restricts inputs to the three valid lifecycle scopes and defaults to
-/// `project` so a bare `kanban init` installs into the current project.
-fn install_target_arg(help: &'static str) -> clap::Arg {
-    clap::Arg::new("target")
-        .help(help)
-        .value_parser(["project", "local", "user"])
-        .default_value("project")
 }
 
 /// Route the parsed CLI invocation to the correct handler and exit.
@@ -178,12 +90,14 @@ fn dispatch(matches: &clap::ArgMatches, schema: &Value) -> ! {
         }
         Some(("merge", sub_m)) => std::process::exit(merge::handle_merge(sub_m)),
         Some(("serve", _)) => std::process::exit(run_serve()),
-        Some(("init", sub_m)) => std::process::exit(run_init(target_value(sub_m))),
-        Some(("deinit", sub_m)) => std::process::exit(run_deinit(target_value(sub_m))),
+        Some(("init", sub_m)) => std::process::exit(run_init(lifecycle::target_scope(sub_m))),
+        Some(("deinit", sub_m)) => std::process::exit(run_deinit(lifecycle::target_scope(sub_m))),
         Some(("doctor", sub_m)) => {
             std::process::exit(commands::doctor::run_doctor(sub_m.get_flag("verbose")))
         }
-        Some(("completion", sub_m)) => std::process::exit(run_completion(sub_m, schema)),
+        Some(("completion", sub_m)) => {
+            std::process::exit(lifecycle::run_completion(build_cli(schema), PROGRAM, sub_m))
+        }
         Some((name, sub_m)) => {
             if sub_m.subcommand().is_some() {
                 handle_kanban_command(matches, schema);
@@ -192,41 +106,15 @@ fn dispatch(matches: &clap::ArgMatches, schema: &Value) -> ! {
                 std::process::exit(0);
             } else {
                 error!("Unknown command or missing verb: {}", name);
-                error!("Run 'kanban {} --help' or 'kanban --help' for usage.", name);
+                error!("Run '{PROGRAM} {name} --help' or '{PROGRAM} --help' for usage.");
                 std::process::exit(1);
             }
             std::process::exit(0)
         }
         None => {
-            error!("No command specified. Run 'kanban --help' for usage information.");
+            error!("No command specified. Run '{PROGRAM} --help' for usage information.");
             std::process::exit(1);
         }
-    }
-}
-
-/// Read the `--target` argument from a lifecycle subcommand's matches.
-///
-/// Falls back to `"project"` only when clap has stripped the default for
-/// some reason — under normal use `default_value("project")` guarantees a
-/// value is present.
-fn target_value(matches: &clap::ArgMatches) -> &str {
-    matches
-        .get_one::<String>("target")
-        .map(|s| s.as_str())
-        .unwrap_or("project")
-}
-
-/// Map a `--target` string from the CLI to a lifecycle [`InitScope`].
-///
-/// The clap `value_parser` restricts inputs to `"project"`, `"local"`, and
-/// `"user"`, so any other value is a programmer error — the function panics
-/// rather than silently defaulting to `Project`.
-fn target_to_scope(target: &str) -> InitScope {
-    match target {
-        "project" => InitScope::Project,
-        "local" => InitScope::Local,
-        "user" => InitScope::User,
-        other => panic!("unexpected target value: {other}"),
     }
 }
 
@@ -239,29 +127,6 @@ fn any_init_error(results: &[InitResult]) -> bool {
     results.iter().any(|r| r.status == InitStatus::Error)
 }
 
-/// Generate a shell completion script for `kanban` and return an exit code.
-///
-/// Reconstructs the full runtime command tree from the kanban schema so
-/// the generated script reflects every subcommand — lifecycle commands
-/// (`serve`, `init`, `deinit`, `doctor`, `completion`) plus the
-/// schema-driven noun/verb operations (`task add`, `board init`, ...).
-///
-/// Returns 0 on success, 1 if the completion writer fails.
-fn run_completion(matches: &clap::ArgMatches, schema: &Value) -> i32 {
-    let shell = matches
-        .get_one::<clap_complete::Shell>("shell")
-        .copied()
-        .expect("clap enforces a required shell argument");
-
-    match completions::print_completion(build_cli(schema), shell) {
-        Ok(()) => 0,
-        Err(e) => {
-            error!("Error: {}", e);
-            1
-        }
-    }
-}
-
 /// Run the MCP `serve` loop and return a process exit code.
 ///
 /// Constructs a fresh tokio runtime — the top-level `fn main` is
@@ -269,7 +134,13 @@ fn run_completion(matches: &clap::ArgMatches, schema: &Value) -> i32 {
 /// and blocks on [`commands::serve::run_serve`] until the MCP client
 /// disconnects. Returns 0 on clean shutdown, 1 on fatal error.
 fn run_serve() -> i32 {
-    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            error!("Failed to create tokio runtime: {}", e);
+            return 1;
+        }
+    };
     match rt.block_on(commands::serve::run_serve()) {
         Ok(()) => 0,
         Err(e) => {
@@ -286,8 +157,7 @@ fn run_serve() -> i32 {
 /// tool-lifecycle components (`.kanban/` git merge drivers). Prints progress
 /// through [`CliReporter`] and returns 0 on full success or 1 if any result
 /// reported an error.
-fn run_init(target: &str) -> i32 {
-    let scope = target_to_scope(target);
+fn run_init(scope: InitScope) -> i32 {
     let reporter = CliReporter;
 
     let mut reg = InitRegistry::new();
@@ -312,8 +182,7 @@ fn run_init(target: &str) -> i32 {
 /// Mirrors [`run_init`]: deinits the genuine tool-lifecycle components, then
 /// runs the mirdan profile deinstaller (unregisters the MCP server and removes
 /// the `kanban`-profile skills).
-fn run_deinit(target: &str) -> i32 {
-    let scope = target_to_scope(target);
+fn run_deinit(scope: InitScope) -> i32 {
     let reporter = CliReporter;
 
     let mut reg = InitRegistry::new();
@@ -334,15 +203,22 @@ fn run_deinit(target: &str) -> i32 {
 }
 
 fn handle_kanban_command(matches: &clap::ArgMatches, schema: &Value) {
-    let arguments = match cli_gen::extract_noun_verb_arguments(matches, schema) {
-        Ok(args) => args,
+    let arguments =
+        match swissarmyhammer_operations::cli_gen::extract_noun_verb_arguments(matches, schema) {
+            Ok(args) => args,
+            Err(e) => {
+                error!("Error: {}", e);
+                std::process::exit(1);
+            }
+        };
+
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
         Err(e) => {
-            error!("Error: {}", e);
+            error!("Failed to create tokio runtime: {}", e);
             std::process::exit(1);
         }
     };
-
-    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
     let exit_code = rt.block_on(execute_kanban_operation(arguments));
     std::process::exit(exit_code);
 }

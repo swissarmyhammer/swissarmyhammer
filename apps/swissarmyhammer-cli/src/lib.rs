@@ -4,7 +4,6 @@ pub mod cli;
 pub mod cli_conversions;
 pub mod cli_executor;
 pub mod commands;
-pub mod completions;
 pub mod context;
 pub mod dynamic_cli;
 pub mod error;

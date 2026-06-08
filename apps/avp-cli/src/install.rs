@@ -14,15 +14,9 @@ pub fn settings_path(target: InstallTarget) -> Result<std::path::PathBuf, String
     avp_common::install::settings_path(target.into())
 }
 
-impl From<InstallTarget> for InitScope {
-    fn from(target: InstallTarget) -> Self {
-        match target {
-            InstallTarget::Project => InitScope::Project,
-            InstallTarget::Local => InitScope::Local,
-            InstallTarget::User => InitScope::User,
-        }
-    }
-}
+// The `From<InstallTarget> for InitScope` conversion is now provided by the
+// canonical shared `InstallTarget` in
+// `swissarmyhammer_cli_completions::lifecycle`, so it is not redeclared here.
 
 /// Install AVP hooks to the specified target.
 pub fn install(target: InstallTarget) -> Result<(), String> {

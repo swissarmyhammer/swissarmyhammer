@@ -1464,3 +1464,117 @@ fn test_build_serve_http_subcommand() {
     assert!(cmd.get_arguments().any(|a| a.get_id().as_str() == "port"));
     assert!(cmd.get_arguments().any(|a| a.get_id().as_str() == "host"));
 }
+
+// --- Tests for per-op precise args (operation-based tools) ---
+
+/// Build a CLI with the real `kanban` operation-based tool registered.
+///
+/// Returns the full clap `Command` so tests can navigate
+/// `tool -> kanban -> <noun> -> <verb>` and assert per-op arg scoping.
+fn cli_with_kanban() -> Command {
+    let registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
+    {
+        let mut lock = registry.try_write().unwrap();
+        swissarmyhammer_tools::register_kanban_tools(&mut lock);
+    }
+    CliBuilder::new(registry).build_cli()
+}
+
+/// Navigate to a verb subcommand (`tool kanban <noun> <verb>`) in a built CLI.
+fn kanban_verb_command<'a>(cli: &'a Command, noun: &str, verb: &str) -> &'a Command {
+    let tool = cli
+        .get_subcommands()
+        .find(|c| c.get_name() == "tool")
+        .expect("missing `tool` command");
+    let kanban = tool
+        .get_subcommands()
+        .find(|c| c.get_name() == "kanban")
+        .expect("missing `kanban` tool command");
+    let noun_cmd = kanban
+        .get_subcommands()
+        .find(|c| c.get_name() == noun)
+        .unwrap_or_else(|| panic!("missing `{}` noun under kanban", noun));
+    noun_cmd
+        .get_subcommands()
+        .find(|c| c.get_name() == verb)
+        .unwrap_or_else(|| panic!("missing `{}` verb under {}", verb, noun))
+}
+
+#[test]
+fn move_task_verb_advertises_only_its_own_params() {
+    let cli = cli_with_kanban();
+    let move_cmd = kanban_verb_command(&cli, "task", "move");
+    let arg_names: Vec<&str> = move_cmd
+        .get_arguments()
+        .map(|a| a.get_id().as_str())
+        .collect();
+
+    // `move task` requires id + column, and accepts ordering hints.
+    assert!(arg_names.contains(&"id"), "move task missing --id");
+    assert!(arg_names.contains(&"column"), "move task missing --column");
+
+    // It must NOT advertise params that belong only to other ops (the global
+    // union bug). `title` belongs to `add task`; `name` to `init board`.
+    assert!(
+        !arg_names.contains(&"title"),
+        "move task should not advertise --title (belongs to add task): {:?}",
+        arg_names
+    );
+    assert!(
+        !arg_names.contains(&"name"),
+        "move task should not advertise --name (belongs to init/board ops): {:?}",
+        arg_names
+    );
+}
+
+#[test]
+fn move_task_required_params_are_flagged_required() {
+    let cli = cli_with_kanban();
+    let move_cmd = kanban_verb_command(&cli, "task", "move");
+
+    let id_arg = move_cmd
+        .get_arguments()
+        .find(|a| a.get_id().as_str() == "id")
+        .expect("move task missing id arg");
+    assert!(
+        id_arg.is_required_set(),
+        "move task --id should be required"
+    );
+
+    let column_arg = move_cmd
+        .get_arguments()
+        .find(|a| a.get_id().as_str() == "column")
+        .expect("move task missing column arg");
+    assert!(
+        column_arg.is_required_set(),
+        "move task --column should be required"
+    );
+}
+
+#[test]
+fn move_task_rejects_missing_required_param() {
+    let cli = cli_with_kanban();
+    // `move task` requires both --id and --column; omitting --column must error.
+    let result = cli
+        .clone()
+        .try_get_matches_from(["sah", "tool", "kanban", "task", "move", "--id", "01ABC"]);
+    assert!(
+        result.is_err(),
+        "parsing `kanban task move` without --column should error"
+    );
+}
+
+#[test]
+fn move_task_rejects_foreign_param() {
+    let cli = cli_with_kanban();
+    // `--title` belongs to `add task`, not `move task`; clap must reject it as
+    // an unknown argument (per-op scoping, not the global union).
+    let result = cli.clone().try_get_matches_from([
+        "sah", "tool", "kanban", "task", "move", "--id", "01ABC", "--column", "doing", "--title",
+        "nope",
+    ]);
+    assert!(
+        result.is_err(),
+        "parsing `kanban task move --title` should error (foreign param)"
+    );
+}

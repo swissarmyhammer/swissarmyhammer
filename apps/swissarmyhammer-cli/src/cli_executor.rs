@@ -143,10 +143,14 @@ impl CliExecutor {
 
         // Build arguments from matches
         let arguments = if !operations.is_empty() {
-            // Operation-based tool with noun-grouped structure
-            match self.extract_noun_verb_arguments(matches, &schema) {
+            // Operation-based tool with noun-grouped structure. The shared
+            // generator navigates the noun/verb subcommands and maps matches
+            // back into `{ "op": "verb noun", ...scoped args }`, the same engine
+            // that builds the command tree.
+            match swissarmyhammer_operations::cli_gen::extract_noun_verb_arguments(matches, &schema)
+            {
                 Ok(args) => args,
-                Err(e) => return ExecutionResult::error(e),
+                Err(e) => return ExecutionResult::error(e.to_string()),
             }
         } else {
             // Schema-based tool
@@ -170,24 +174,6 @@ impl CliExecutor {
                 }
             }
             Err(e) => ExecutionResult::error(format!("Tool execution error: {}", e)),
-        }
-    }
-
-    /// Extract arguments for noun-verb structured operations
-    fn extract_noun_verb_arguments(
-        &self,
-        matches: &clap::ArgMatches,
-        schema: &Value,
-    ) -> Result<Map<String, Value>, String> {
-        match matches.subcommand() {
-            Some((noun, noun_matches)) => match noun_matches.subcommand() {
-                Some((verb, verb_matches)) => {
-                    let op_string = format!("{} {}", verb, noun);
-                    self.build_arguments_from_matches(verb_matches, &op_string, schema)
-                }
-                None => Err(format!("No verb specified for '{}'", noun)),
-            },
-            None => Err("No noun specified".to_string()),
         }
     }
 

@@ -18,23 +18,18 @@ use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResul
     noun = "board",
     description = "Retrieve the board with task counts"
 )]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct GetBoard {
     /// Whether to include task counts (default: true)
-    #[serde(default = "default_include_counts")]
-    pub include_counts: bool,
+    #[serde(default)]
+    pub include_counts: Option<bool>,
 }
 
-impl Default for GetBoard {
-    fn default() -> Self {
-        Self {
-            include_counts: true,
-        }
+impl GetBoard {
+    /// Whether task counts should be included, defaulting to `true` when unset.
+    fn include_counts(&self) -> bool {
+        self.include_counts.unwrap_or(true)
     }
-}
-
-fn default_include_counts() -> bool {
-    true
 }
 
 #[async_trait]
@@ -59,7 +54,7 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                 .sort_by_key(|s| s.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
 
             // If counts are not requested, return basic board structure
-            if !self.include_counts {
+            if !self.include_counts() {
                 let all_tags = ectx.list("tag").await?;
                 let columns_json: Vec<Value> =
                     all_columns.iter().map(column_entity_to_json).collect();
@@ -457,7 +452,7 @@ mod tests {
             .unwrap();
 
         let result = GetBoard {
-            include_counts: false,
+            include_counts: Some(false),
         }
         .execute(&ctx)
         .await
@@ -491,7 +486,7 @@ mod tests {
         );
 
         let basic = GetBoard {
-            include_counts: false,
+            include_counts: Some(false),
         }
         .execute(&ctx)
         .await
