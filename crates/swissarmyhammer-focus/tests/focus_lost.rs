@@ -222,35 +222,39 @@ fn focus_lost_emits_none_when_layer_is_empty() {
 }
 
 /// `focus_lost` on a non-focused FQM is a no-op.
+///
+/// Window-rooted fixtures (`/main/window/...`): the owning window "main" is
+/// the fq root segment, so the focus slot for `/main/window/a` lands under
+/// "main" — the path-derivation rule the kernel applies on every commit.
 #[test]
 fn focus_lost_on_unfocused_fq_is_noop() {
     let mut reg = SpatialRegistry::new();
-    reg.push_layer(layer_node("/L", "main", None));
+    reg.push_layer(layer_node("/main/window", "main", None));
     let mut state = SpatialState::new();
 
     let pre = NavSnapshot {
-        layer_fq: fq("/L"),
+        layer_fq: fq("/main/window"),
         scopes: vec![
-            snap("/L/a", None, rect(0.0, 0.0, 10.0, 10.0)),
-            snap("/L/b", None, rect(20.0, 0.0, 10.0, 10.0)),
+            snap("/main/window/a", None, rect(0.0, 0.0, 10.0, 10.0)),
+            snap("/main/window/b", None, rect(20.0, 0.0, 10.0, 10.0)),
         ],
     };
     state
-        .focus(&mut reg, &pre, fq("/L/a"), None)
+        .focus(&mut reg, &pre, fq("/main/window/a"), None)
         .expect("focus a");
 
     let post = NavSnapshot {
-        layer_fq: fq("/L"),
-        scopes: vec![snap("/L/a", None, rect(0.0, 0.0, 10.0, 10.0))],
+        layer_fq: fq("/main/window"),
+        scopes: vec![snap("/main/window/a", None, rect(0.0, 0.0, 10.0, 10.0))],
     };
 
-    // `/L/b` was never focused — focus_lost should be a no-op.
+    // `/main/window/b` was never focused — focus_lost should be a no-op.
     let event = state.focus_lost(
         &mut reg,
         &post,
-        &fq("/L/b"),
+        &fq("/main/window/b"),
         None,
-        &fq("/L"),
+        &fq("/main/window"),
         rect(20.0, 0.0, 10.0, 10.0),
         None,
     );
@@ -258,7 +262,7 @@ fn focus_lost_on_unfocused_fq_is_noop() {
     assert!(event.is_none());
     assert_eq!(
         state.focused_in(&WindowLabel::from_string("main")),
-        Some(&fq("/L/a")),
+        Some(&fq("/main/window/a")),
         "unrelated focus must not be perturbed",
     );
 }

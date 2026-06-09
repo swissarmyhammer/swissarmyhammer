@@ -51,33 +51,24 @@ import {
   type ReactNode,
 } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 /**
- * Lazy `getCurrentWindow().label` accessor.
+ * Read this window's Tauri label via the static `getCurrentWindow()` import.
  *
- * `@tauri-apps/api/window` transitively re-exports from
- * `@tauri-apps/api/core` and several other modules; tests that mock
- * `core` minimally (just `invoke`) break with
- * `SyntaxError: ... does not provide an export named 'SERIALIZE_TO_IPC_FN'`
- * if `window` lands in the static import graph of files those tests
- * pull in. Resolving `getCurrentWindow` through a `require`-style
- * dynamic lookup at call time keeps the static import graph minimal so
- * those tests still load.
- *
- * Falls back to `"main"` when the window API is unavailable (the test
- * harness mocks `@tauri-apps/api/window` to `{ getCurrentWindow: () => ({ label: "main" }) }`
- * in every test that drives spatial nav; this branch is purely a
- * defensive fallback).
+ * This is the SAME reliable accessor `App.tsx` (`WINDOW_ROOT_FQ`),
+ * `views-context.tsx`, and `perspective-context.tsx` use. The previous
+ * `require("@tauri-apps/api/window")` form THREW in the Vite ESM production
+ * bundle (`require` is undefined there) and silently fell back to `"main"`,
+ * which mislabeled every `set focus` / drill commit's window and broke
+ * cross-window focus routing. The kernel now derives the owning window from
+ * the window-rooted fq path (the root segment IS the label), so this value is
+ * no longer load-bearing for window resolution — but it must still be the real
+ * label, not a "main" fallback, so nothing downstream is misled by a wrong
+ * window arg. The static import is mocked in the spatial test harness exactly
+ * as the other window-aware contexts are.
  */
 function currentWindowLabel(): string {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const mod = require("@tauri-apps/api/window") as {
-      getCurrentWindow: () => { label: string };
-    };
-    return mod.getCurrentWindow().label;
-  } catch {
-    return "main";
-  }
+  return getCurrentWindow().label;
 }
 import {
   clearFocus as mcpClearFocus,

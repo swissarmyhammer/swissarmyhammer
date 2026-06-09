@@ -204,29 +204,29 @@ impl SpatialState {
         Self::default()
     }
 
-    /// Move focus to `fq`, scoped to `window`.
+    /// Move focus to `fq`, scoped to its owning window.
     ///
-    /// `window` is the **authoritative** owning window — the label the
-    /// adapter derived from the calling `tauri::Window`. Pass `Some(label)`
-    /// from any window-aware caller; the kernel uses it verbatim for the
-    /// emitted event and the per-window focus slot.
+    /// The owning window is derived from the ROOT SEGMENT of the
+    /// window-rooted `fq` — every focus FQM is `/<window-label>/window/...`,
+    /// so the first path segment IS the window label
+    /// ([`FullyQualifiedMoniker::root_segment`]). "The window is in the
+    /// path; when we nav we know where they are." This is the uniform rule
+    /// for every focus-mutating op ([`Self::navigate`] / [`Self::focus_from`]
+    /// for the drills all funnel their commit through here).
     ///
-    /// `None` falls back to the layer-derived window
-    /// (`registry.layer(snapshot.layer_fq).window_label`) for callers with
-    /// no ambient window. The React `focus-mcp` client now always sends an
-    /// explicit `window` (`set focus` carries it), so production never relies
-    /// on the fallback.
+    /// The explicit `window` arg is a FALLBACK ONLY for path-less callers —
+    /// it must NOT override a window the path carries, because the React
+    /// `focus-mcp` client sources it from a `require()` lookup that throws in
+    /// the Vite ESM bundle and silently degrades to the `"main"` fallback.
+    /// Preferring the path makes correctness independent of that broken side
+    /// channel. The resolution order is therefore: fq root segment → explicit
+    /// `window` arg → layer's `window_label` side field
+    /// (`registry.layer(snapshot.layer_fq)`).
     ///
-    /// Historically the fallback was unreliable across windows because every
-    /// window rooted its layer at the literal `/window`: the registry — keyed
-    /// by FQM — held whichever window pushed last, and a second window
-    /// clobbered the first's `window_label` (the "navigation moves focus in
-    /// the wrong window / both windows" bug). That is now fixed at the root:
-    /// each window roots its layer at its unique label (`/<label>/window`,
-    /// see `App.tsx`'s `WINDOW_ROOT_FQ`), so the FQM-keyed registry never
-    /// collides and the layer-derived window is also correct. The explicit
-    /// `window` arg remains the authoritative source so correctness does not
-    /// depend on the side field at all.
+    /// Historically the kernel preferred the explicit arg, which routed every
+    /// production focus/drill to `"main"` (jump didn't clear prior focus;
+    /// drill-in/out broke), while `navigate` already derived its window from
+    /// the path and worked — that inconsistency is what this rule unifies.
     ///
     /// The segment is the trailing path component of `fq`. The walk
     /// invoked by [`SpatialRegistry::record_focus`] reads scope ancestry
@@ -265,9 +265,17 @@ impl SpatialState {
             );
             return None;
         };
-        // The calling window is authoritative; fall back to the layer's
-        // (cross-window-ambiguous) label only for window-unaware callers.
-        let window = window.unwrap_or_else(|| layer.window_label.clone());
+        // The path is authoritative: the window-rooted `fq` carries the owning
+        // window as its root segment (`/<label>/window/...`). Prefer it over
+        // the explicit arg (which degrades to "main" in the production bundle)
+        // and the layer's (cross-window-ambiguous) side field. The explicit
+        // arg and the layer label remain ordered fallbacks for path-less or
+        // window-unaware callers.
+        let window = fq
+            .root_segment()
+            .map(|seg| WindowLabel::from_string(seg.as_str()))
+            .or(window)
+            .unwrap_or_else(|| layer.window_label.clone());
 
         let indexed = IndexedSnapshot::new(snapshot);
         if indexed.get(&fq).is_none() {
@@ -507,10 +515,32 @@ impl SpatialState {
         // inline path). Reconcile the kernel's per-window slot to it BEFORE the
         // commit so the emitted event reports the true `prev_fq` (and the slot
         // stays in sync with the UI-owned focus instead of a stale/empty value).
-        if let Some(w) = window.clone() {
+        // The slot's window is derived from `from`'s path root — the SAME rule
+        // `focus` applies to the target — so reconcile and commit land in the
+        // same window even when the explicit `window` arg is the wrong "main".
+        self.reconcile_slot(&from, window.clone());
+        self.focus(registry, snapshot, target_fq, window)
+    }
+
+    /// Reconcile the per-window focus slot to `from` before a navigate/drill
+    /// commit, so the resulting [`FocusChangedEvent`]'s `prev_fq` reflects the
+    /// true source focus.
+    ///
+    /// The owning window is derived from `from`'s root segment (the same
+    /// path-authoritative rule [`Self::focus`] applies to the target), falling
+    /// back to the explicit `window` arg only when the path carries no segment.
+    /// This keeps the reconcile slot and the subsequent commit in lockstep on
+    /// the same window even when the wire's explicit `window` is the broken
+    /// `"main"` fallback. A no-op when neither the path nor the arg yields a
+    /// window.
+    fn reconcile_slot(&mut self, from: &FullyQualifiedMoniker, window: Option<WindowLabel>) {
+        let resolved = from
+            .root_segment()
+            .map(|seg| WindowLabel::from_string(seg.as_str()))
+            .or(window);
+        if let Some(w) = resolved {
             self.focus_by_window.insert(w, from.clone());
         }
-        self.focus(registry, snapshot, target_fq, window)
     }
 
     /// Commit focus to a precomputed `target`, first reconciling the per-window
@@ -529,9 +559,7 @@ impl SpatialState {
         target: FullyQualifiedMoniker,
         window: Option<WindowLabel>,
     ) -> Option<FocusChangedEvent> {
-        if let Some(w) = window.clone() {
-            self.focus_by_window.insert(w, from);
-        }
+        self.reconcile_slot(&from, window.clone());
         self.focus(registry, snapshot, target, window)
     }
 
@@ -610,10 +638,13 @@ mod tests {
 
     #[test]
     fn focus_returns_event_with_window_and_segment() {
-        let (mut registry, layer_fq) = registry_with_layer("main", "/L");
-        let snapshot = snapshot_with_scope(layer_fq, "/L/k1");
+        // Window-rooted FQM (`/main/window/...`): the owning window is the
+        // root segment "main", derived from the path — not the explicit arg
+        // (here `None`) nor the layer side field.
+        let (mut registry, layer_fq) = registry_with_layer("main", "/main/window");
+        let snapshot = snapshot_with_scope(layer_fq, "/main/window/k1");
         let mut state = SpatialState::new();
-        let fq = FullyQualifiedMoniker::from_string("/L/k1");
+        let fq = FullyQualifiedMoniker::from_string("/main/window/k1");
 
         let event = state
             .focus(&mut registry, &snapshot, fq.clone(), None)
@@ -655,19 +686,22 @@ mod tests {
         assert!(state.focus(&mut registry, &snapshot, fq, None).is_none());
     }
 
-    /// Two windows whose root layers share the FQM `/L` (every window's
-    /// real root is `/window`, so the registry — keyed by FQM — holds only
-    /// the *last* pushed layer). The second push clobbers the first's
-    /// `window_label`, so the layer-derived window is "win-b" even for a
-    /// commit that came from "win-a". Passing the authoritative calling
-    /// window (`Some("win-a")`) must win: the event and the focus slot land
-    /// in "win-a", never "win-b". This is the regression guard for
-    /// "navigation moves focus in the wrong window / both windows".
+    /// The owning window is derived from the fq ROOT SEGMENT — it wins over
+    /// BOTH a clobbered layer side field AND a wrong explicit `window` arg.
+    ///
+    /// The window-rooted card `/win-a/window/k1` names "win-a" in its path.
+    /// Even when the registry layer reports "win-b" (a shared-root clobber)
+    /// and the wire passes the broken `Some("main")` explicit arg (the
+    /// production `currentWindowLabel()` fallback), the event and the focus
+    /// slot land in "win-a". This is the regression guard for "jump doesn't
+    /// clear prior focus / drill broke": path-derivation, not the side
+    /// channels, decides the window.
     #[test]
-    fn focus_uses_authoritative_window_over_clobbered_layer_label() {
-        let (mut registry, layer_fq) = registry_with_layer("win-a", "/L");
-        // Window B mounts and pushes the *same* root FQM — clobbering A's
-        // layer entry (and its window_label) in the FQM-keyed registry.
+    fn focus_derives_window_from_fq_root_over_clobber_and_explicit_arg() {
+        // The card is window-rooted at "win-a"; its layer is `/win-a/window`.
+        let (mut registry, layer_fq) = registry_with_layer("win-a", "/win-a/window");
+        // A second window clobbers the layer side field with "win-b" — the
+        // path must still win, so this clobber must NOT leak into the result.
         registry.push_layer(FocusLayer {
             fq: layer_fq.clone(),
             segment: SegmentMoniker::from_string("window"),
@@ -682,32 +716,38 @@ mod tests {
             "precondition: the registry layer now reports win-b (last push wins)",
         );
 
-        let snapshot = snapshot_with_scope(layer_fq, "/L/k1");
+        let snapshot = snapshot_with_scope(layer_fq, "/win-a/window/k1");
         let mut state = SpatialState::new();
-        let fq = FullyQualifiedMoniker::from_string("/L/k1");
+        let fq = FullyQualifiedMoniker::from_string("/win-a/window/k1");
 
         let event = state
             .focus(
                 &mut registry,
                 &snapshot,
                 fq.clone(),
-                Some(WindowLabel::from_string("win-a")),
+                // Wrong explicit arg — the production `require()` fallback.
+                Some(WindowLabel::from_string("main")),
             )
             .expect("focus emits an event");
         assert_eq!(
             event.window_label,
             WindowLabel::from_string("win-a"),
-            "the authoritative calling window must win over the clobbered layer label",
+            "the fq root segment must win over the clobbered layer label and the wrong arg",
         );
         assert_eq!(
             state.focused_in(&WindowLabel::from_string("win-a")),
             Some(&fq),
-            "the focus slot must be recorded under the authoritative window",
+            "the focus slot must be recorded under the path-derived window",
         );
         assert_eq!(
             state.focused_in(&WindowLabel::from_string("win-b")),
             None,
-            "the wrong (clobbered-label) window must not receive the focus",
+            "the clobbered-label window must not receive the focus",
+        );
+        assert_eq!(
+            state.focused_in(&WindowLabel::from_string("main")),
+            None,
+            "the wrong explicit-arg window must not receive the focus",
         );
     }
 }

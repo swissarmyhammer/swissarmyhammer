@@ -50,12 +50,14 @@ async fn push_root_layer(server: &FocusServer, layer_fq: &str, window: &str) {
 #[tokio::test]
 async fn set_focus_routes_and_emits_event() {
     let server = FocusServer::new();
-    push_root_layer(&server, "/L", "main").await;
+    // Window-rooted layer/fq (`/main/window/...`): the owning window "main"
+    // is derived from the fq root segment, exactly as production composes it.
+    push_root_layer(&server, "/main/window", "main").await;
 
     let res = call_tool(
         &server,
         "set focus",
-        json!({ "op": "set focus", "fq": "/L/k1", "snapshot": snapshot_one("/L", "/L/k1") }),
+        json!({ "op": "set focus", "fq": "/main/window/k1", "snapshot": snapshot_one("/main/window", "/main/window/k1") }),
     )
     .await
     .expect("set focus should succeed");
@@ -64,7 +66,7 @@ async fn set_focus_routes_and_emits_event() {
     let event = &res["event"];
     assert_eq!(event["window_label"], json!("main"));
     assert_eq!(event["prev_fq"], Value::Null);
-    assert_eq!(event["next_fq"], json!("/L/k1"));
+    assert_eq!(event["next_fq"], json!("/main/window/k1"));
     assert_eq!(event["next_segment"], json!("k1"));
 }
 
@@ -162,11 +164,13 @@ async fn navigate_focus_moves_in_direction() {
 #[tokio::test]
 async fn clear_focus_emits_clearing_event() {
     let server = FocusServer::new();
-    push_root_layer(&server, "/L", "main").await;
+    // Window-rooted so the `set focus` commit lands under "main" (the fq
+    // root segment) and the explicit-`window` `clear focus` matches it.
+    push_root_layer(&server, "/main/window", "main").await;
     call_tool(
         &server,
         "set focus",
-        json!({ "op": "set focus", "fq": "/L/k1", "snapshot": snapshot_one("/L", "/L/k1") }),
+        json!({ "op": "set focus", "fq": "/main/window/k1", "snapshot": snapshot_one("/main/window", "/main/window/k1") }),
     )
     .await
     .unwrap();
@@ -180,7 +184,7 @@ async fn clear_focus_emits_clearing_event() {
     .expect("clear focus should succeed");
 
     assert_eq!(res["ok"], json!(true));
-    assert_eq!(res["event"]["prev_fq"], json!("/L/k1"));
+    assert_eq!(res["event"]["prev_fq"], json!("/main/window/k1"));
     assert_eq!(res["event"]["next_fq"], Value::Null);
 
     // Idempotent: a second clear is a no-op (null event).

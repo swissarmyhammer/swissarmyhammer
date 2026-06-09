@@ -207,16 +207,18 @@ async fn navigate_pulls_focus_from_provider_when_kernel_slot_empty() {
 }
 
 /// A nested snapshot under `/L`: a focusable parent zone `/L/parent` and a
-/// child `/L/parent/child` whose `parent_zone` points back at the parent. A
-/// drill-out from the child must land on (and commit focus to) the parent.
+/// child `/main/window/parent/child` whose `parent_zone` points back at the
+/// parent. A drill-out from the child must land on (and commit focus to) the
+/// parent. Window-rooted (`/main/window/...`) so the owning window "main" is
+/// derived from the fq root segment, matching production composition.
 fn nested_snapshot() -> NavSnapshot {
     serde_json::from_value(json!({
-        "layer_fq": "/L",
+        "layer_fq": "/main/window",
         "scopes": [
-            { "fq": "/L/parent", "rect": { "x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0 },
+            { "fq": "/main/window/parent", "rect": { "x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0 },
               "parent_zone": null, "nav_override": {}, "focusable": true },
-            { "fq": "/L/parent/child", "rect": { "x": 10.0, "y": 10.0, "width": 20.0, "height": 20.0 },
-              "parent_zone": "/L/parent", "nav_override": {}, "focusable": true }
+            { "fq": "/main/window/parent/child", "rect": { "x": 10.0, "y": 10.0, "width": 20.0, "height": 20.0 },
+              "parent_zone": "/main/window/parent", "nav_override": {}, "focusable": true }
         ]
     }))
     .expect("nested snapshot literal should deserialize")
@@ -235,18 +237,20 @@ async fn drill_out_with_parent_zone_commits_focus_to_parent_and_emits_event() {
     let provider = FakeProvider {
         snapshot: nested_snapshot(),
         scope_chain: vec![
-            FullyQualifiedMoniker::from_string("/L"),
-            FullyQualifiedMoniker::from_string("/L/parent"),
-            FullyQualifiedMoniker::from_string("/L/parent/child"),
+            FullyQualifiedMoniker::from_string("/main/window"),
+            FullyQualifiedMoniker::from_string("/main/window/parent"),
+            FullyQualifiedMoniker::from_string("/main/window/parent/child"),
         ],
-        focus: Some(FullyQualifiedMoniker::from_string("/L/parent/child")),
+        focus: Some(FullyQualifiedMoniker::from_string(
+            "/main/window/parent/child",
+        )),
     };
     let server = FocusServer::new().with_provider(std::sync::Arc::new(provider));
     let state = server.state();
     call_tool(
         &server,
         "push layer",
-        json!({ "op": "push layer", "fq": "/L", "segment": "window",
+        json!({ "op": "push layer", "fq": "/main/window", "segment": "window",
                 "name": "window", "parent": null, "window": "main" }),
     )
     .await
@@ -257,7 +261,7 @@ async fn drill_out_with_parent_zone_commits_focus_to_parent_and_emits_event() {
     call_tool(
         &server,
         "set focus",
-        json!({ "op": "set focus", "fq": "/L/parent/child", "snapshot": nested_snapshot() }),
+        json!({ "op": "set focus", "fq": "/main/window/parent/child", "snapshot": nested_snapshot() }),
     )
     .await
     .expect("seed focus on the child");
@@ -267,7 +271,7 @@ async fn drill_out_with_parent_zone_commits_focus_to_parent_and_emits_event() {
             .await
             .focused_in(&WindowLabel::from_string("main"))
             .map(|fq| fq.to_string()),
-        Some("/L/parent/child".to_string()),
+        Some("/main/window/parent/child".to_string()),
         "precondition: the seeded focus is the child"
     );
 
@@ -278,7 +282,7 @@ async fn drill_out_with_parent_zone_commits_focus_to_parent_and_emits_event() {
         &server,
         "drill_out layer",
         json!({ "op": "drill_out layer", "window": "main",
-                "fq": "/L/parent/child", "focused_fq": "/L/parent/child" }),
+                "fq": "/main/window/parent/child", "focused_fq": "/main/window/parent/child" }),
     )
     .await
     .expect("drill_out should succeed");
@@ -287,7 +291,7 @@ async fn drill_out_with_parent_zone_commits_focus_to_parent_and_emits_event() {
     // The drill-out target is the child's parent_zone.
     assert_eq!(
         res["next_fq"],
-        json!("/L/parent"),
+        json!("/main/window/parent"),
         "drill_out from a scope with a parent_zone must target the parent"
     );
 
@@ -301,7 +305,7 @@ async fn drill_out_with_parent_zone_commits_focus_to_parent_and_emits_event() {
             .await
             .focused_in(&WindowLabel::from_string("main"))
             .map(|fq| fq.to_string()),
-        Some("/L/parent".to_string()),
+        Some("/main/window/parent".to_string()),
         "drill_out must commit focus to the parent zone, not merely return it"
     );
 }

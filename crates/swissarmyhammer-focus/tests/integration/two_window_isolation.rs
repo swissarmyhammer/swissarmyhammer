@@ -15,8 +15,10 @@
 //! Each test drives the real [`FocusServer`] end-to-end through `call_tool`,
 //! exactly as the React `focus-mcp.ts` client does.
 
+use std::sync::Arc;
+
 use serde_json::{json, Value};
-use swissarmyhammer_focus::{FocusServer, FullyQualifiedMoniker, WindowLabel};
+use swissarmyhammer_focus::{FocusServer, FullyQualifiedMoniker, RecordingSink, WindowLabel};
 
 use super::common::call_tool;
 
@@ -47,6 +49,21 @@ fn snapshot_one(layer_fq: &str, fq: &str) -> Value {
         "scopes": [
             { "fq": fq, "rect": { "x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0 },
               "parent_zone": null, "nav_override": {} }
+        ]
+    })
+}
+
+/// Build a zone+leaf snapshot under `layer_fq`: `zone` (no parent) and `leaf`
+/// (a child of `zone`). Used to exercise `drill_in` (zone → leaf) and
+/// `drill_out` (leaf → zone).
+fn snapshot_zone_leaf(layer_fq: &str, zone: &str, leaf: &str) -> Value {
+    json!({
+        "layer_fq": layer_fq,
+        "scopes": [
+            { "fq": zone, "rect": { "x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0 },
+              "parent_zone": null, "nav_override": {} },
+            { "fq": leaf, "rect": { "x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0 },
+              "parent_zone": zone, "nav_override": {} }
         ]
     })
 }
@@ -147,30 +164,32 @@ async fn unique_window_roots_isolate_focus_for_second_window() {
     assert_eq!(focused_in(&server, "winA").await, None);
 }
 
-/// `set focus` with an explicit `window` derives the target window from the
-/// arg, never from the layer side field. Even if the layer's `window_label`
-/// were clobbered (shared root), the explicit `window` must win.
+/// `set focus` derives the owning window from the ROOT SEGMENT of the
+/// window-rooted fq — NOT from the explicit `window` arg, which in production
+/// is sourced from a broken `require()` lookup and returns the "main"
+/// fallback. A card at `/winA/window/...` must emit `window_label == "winA"`
+/// even when the wire carries a wrong explicit `window: "main"`.
 ///
-/// This pins the "derive window from the explicit arg, stop peeking" contract:
-/// the `Focus` op must carry a `window` and thread it to `SpatialState::focus`.
+/// This is the regression guard for "jump doesn't clear prior focus":
+/// `emit_to("main")` missed the real `board-…` window. The path is
+/// authoritative — "when we nav we know where they are".
 #[tokio::test]
-async fn set_focus_honors_explicit_window_over_layer_side_field() {
+async fn set_focus_derives_window_from_fq_root_over_wrong_explicit_arg() {
     let server = FocusServer::new();
-    // Deliberately reproduce the OLD shared-root collision: both windows push
-    // the literal `/window`, so the registry holds only winB's layer (last
-    // push wins) and its `window_label` is "winB".
-    push_root_layer(&server, "/window", "winA").await;
-    push_root_layer(&server, "/window", "winB").await;
+    push_root_layer(&server, "/winA/window", "winA").await;
+    push_root_layer(&server, "/winB/window", "winB").await;
 
-    let card = "/window/board:b/task:t";
+    let card = "/winA/window/board:b/task:t";
     let res = call_tool(
         &server,
         "set focus",
         json!({
             "op": "set focus",
             "fq": card,
-            "window": "winA",
-            "snapshot": snapshot_one("/window", card),
+            // Wrong explicit window — exactly what the broken frontend
+            // `currentWindowLabel()` sends in production.
+            "window": "main",
+            "snapshot": snapshot_one("/winA/window", card),
         }),
     )
     .await
@@ -179,15 +198,178 @@ async fn set_focus_honors_explicit_window_over_layer_side_field() {
     assert_eq!(
         res["event"]["window_label"],
         json!("winA"),
-        "explicit window arg must win over the clobbered layer side field",
+        "the fq root segment must win over a wrong explicit window arg",
     );
     assert_eq!(
         focused_in(&server, "winA").await,
         Some(FullyQualifiedMoniker::from_string(card)),
     );
     assert_eq!(
-        focused_in(&server, "winB").await,
+        focused_in(&server, "main").await,
         None,
-        "the clobbered-label window must not receive the focus",
+        "the wrong explicit window must not receive the focus",
     );
+}
+
+/// A `set focus` that follows a prior focus in the SAME window emits
+/// `prev_fq = old` so the prior focus marker clears. The window for both
+/// commits is derived from the fq root, so the second commit reconciles
+/// against the first in `winA` (not a stale `main` slot).
+///
+/// Regression guard for "jump doesn't clear prior focus": the misrouted
+/// `emit_to("main")` never reached the real window, so the old marker stayed
+/// lit alongside the new one (double markers).
+#[tokio::test]
+async fn set_focus_following_prior_focus_clears_prior_marker() {
+    let server = FocusServer::new();
+    push_root_layer(&server, "/winA/window", "winA").await;
+
+    let first = "/winA/window/board:b/task:a";
+    let second = "/winA/window/board:b/task:b";
+
+    let res1 = call_tool(
+        &server,
+        "set focus",
+        json!({
+            "op": "set focus",
+            "fq": first,
+            "window": "main",
+            "snapshot": snapshot_one("/winA/window", first),
+        }),
+    )
+    .await
+    .expect("first set focus should succeed");
+    assert_eq!(res1["event"]["window_label"], json!("winA"));
+    assert_eq!(res1["event"]["prev_fq"], Value::Null);
+    assert_eq!(res1["event"]["next_fq"], json!(first));
+
+    let res2 = call_tool(
+        &server,
+        "set focus",
+        json!({
+            "op": "set focus",
+            "fq": second,
+            "window": "main",
+            "snapshot": snapshot_one("/winA/window", second),
+        }),
+    )
+    .await
+    .expect("second set focus should succeed");
+    assert_eq!(res2["event"]["window_label"], json!("winA"));
+    assert_eq!(
+        res2["event"]["prev_fq"],
+        json!(first),
+        "the second focus must clear the prior marker via prev_fq",
+    );
+    assert_eq!(res2["event"]["next_fq"], json!(second));
+    assert_eq!(
+        focused_in(&server, "winA").await,
+        Some(FullyQualifiedMoniker::from_string(second)),
+    );
+}
+
+/// `drill_in layer` commits focus into the zone's first child and emits a
+/// `focus-changed` (via the sink) whose `window_label` is derived from the fq
+/// ROOT — `winA`, not the wrong explicit `window: "main"`. Regression guard
+/// for "drill-in broke": the misrouted `emit_to("main")` never reached the
+/// real window. The drill JSON response carries only `next_fq`; the event is
+/// observed through a [`RecordingSink`], exactly as the production wiring
+/// forwards it to `emit_to(event.window_label, ...)`.
+#[tokio::test]
+async fn drill_in_derives_window_from_fq_root_over_wrong_explicit_arg() {
+    let sink = Arc::new(RecordingSink::new());
+    let server = FocusServer::new().with_sink(sink.clone());
+    push_root_layer(&server, "/winA/window", "winA").await;
+
+    let zone = "/winA/window/board:b/zone:z";
+    let leaf = "/winA/window/board:b/zone:z/task:t";
+    let res = call_tool(
+        &server,
+        "drill_in layer",
+        json!({
+            "op": "drill_in layer",
+            "fq": zone,
+            "focused_fq": zone,
+            // Wrong explicit window — what the broken frontend sends.
+            "window": "main",
+            "snapshot": snapshot_zone_leaf("/winA/window", zone, leaf),
+        }),
+    )
+    .await
+    .expect("drill_in layer should succeed");
+
+    assert_eq!(res["ok"], json!(true));
+    assert_eq!(res["next_fq"], json!(leaf));
+
+    let events = sink.drain();
+    assert_eq!(
+        events.len(),
+        1,
+        "drill-in must emit exactly one focus event"
+    );
+    assert_eq!(
+        events[0].window_label,
+        WindowLabel::from_string("winA"),
+        "drill-in must emit for the window in the fq root, not the explicit arg",
+    );
+    assert_eq!(
+        events[0].next_fq,
+        Some(FullyQualifiedMoniker::from_string(leaf)),
+    );
+    assert_eq!(
+        focused_in(&server, "winA").await,
+        Some(FullyQualifiedMoniker::from_string(leaf)),
+    );
+    assert_eq!(focused_in(&server, "main").await, None);
+}
+
+/// `drill_out layer` commits focus to the leaf's `parent_zone` and emits a
+/// `focus-changed` (via the sink) whose `window_label` is derived from the fq
+/// ROOT — `winA`, not the wrong explicit `window: "main"`. Regression guard
+/// for "drill-out broke" under the same misroute.
+#[tokio::test]
+async fn drill_out_derives_window_from_fq_root_over_wrong_explicit_arg() {
+    let sink = Arc::new(RecordingSink::new());
+    let server = FocusServer::new().with_sink(sink.clone());
+    push_root_layer(&server, "/winA/window", "winA").await;
+
+    let zone = "/winA/window/board:b/zone:z";
+    let leaf = "/winA/window/board:b/zone:z/task:t";
+    let res = call_tool(
+        &server,
+        "drill_out layer",
+        json!({
+            "op": "drill_out layer",
+            "fq": leaf,
+            "focused_fq": leaf,
+            "window": "main",
+            "snapshot": snapshot_zone_leaf("/winA/window", zone, leaf),
+        }),
+    )
+    .await
+    .expect("drill_out layer should succeed");
+
+    assert_eq!(res["ok"], json!(true));
+    assert_eq!(res["next_fq"], json!(zone));
+
+    let events = sink.drain();
+    assert_eq!(
+        events.len(),
+        1,
+        "drill-out must emit exactly one focus event"
+    );
+    assert_eq!(
+        events[0].window_label,
+        WindowLabel::from_string("winA"),
+        "drill-out must emit for the window in the fq root, not the explicit arg",
+    );
+    assert_eq!(
+        events[0].next_fq,
+        Some(FullyQualifiedMoniker::from_string(zone)),
+    );
+    assert_eq!(
+        focused_in(&server, "winA").await,
+        Some(FullyQualifiedMoniker::from_string(zone)),
+    );
+    assert_eq!(focused_in(&server, "main").await, None);
 }
