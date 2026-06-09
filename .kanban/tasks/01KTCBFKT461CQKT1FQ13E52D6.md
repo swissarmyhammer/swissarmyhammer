@@ -1,0 +1,31 @@
+---
+assignees:
+- claude-code
+depends_on:
+- 01KTCBDXJKQA68WPEE4MJW77ZH
+position_column: todo
+position_ordinal: '9680'
+project: cli-schema-gen
+title: Migrate kanban-cli onto the shared generator; delete its private cli_gen.rs
+---
+## What
+Switch kanban-cli to the shared `swissarmyhammer_operations::cli_gen` generator (card B) and delete the now-duplicate `apps/kanban-cli/src/cli_gen.rs`. This is a pure refactor — identical CLI behavior, one fewer copy of the engine.
+
+Changes:
+- `apps/kanban-cli/src/main.rs`: remove `mod cli_gen;` (line 8). Replace the two call sites — `cli_gen::build_commands_from_schema(schema)` in `build_cli` (line 54) and `cli_gen::extract_noun_verb_arguments(...)` in `dispatch` (used at `apps/kanban-cli/src/main.rs:335`) — with `swissarmyhammer_operations::cli_gen::build_commands_from_schema` / `::extract_noun_verb_arguments`.
+- Keep feeding the FULL schema in-process: `generate_kanban_mcp_schema(operations)` at `main.rs:34` must continue to produce the full schema (with `x-operation-schemas`) for the generator. After card D switches the per-tool wrapper to slim, ensure kanban-cli calls the `_full` variant (e.g. `generate_kanban_mcp_schema_full`) so its command tree keeps per-op precision. If E lands before D, no change needed yet; if after, point it at `_full`.
+- Delete `apps/kanban-cli/src/cli_gen.rs`.
+- `apps/kanban-cli/Cargo.toml` already depends on `swissarmyhammer-operations` (:27) — no dep change. `once_cell` (:44) may become unused if the interner moved out; drop it if so.
+
+## Acceptance Criteria
+- [ ] `apps/kanban-cli/src/cli_gen.rs` is deleted and `mod cli_gen;` removed from `main.rs`.
+- [ ] `kanban` CLI produces the identical noun/verb/arg command tree as before (same nouns, verbs, per-op required flags).
+- [ ] `cargo build -p kanban-cli` succeeds with no unused-dep/import warnings.
+
+## Tests
+- [ ] Add a golden command-tree test in `apps/kanban-cli` (e.g. `tests/cli_tree.rs`): build the clap command via the shared generator from the kanban full schema, walk noun→verb→args, and assert the expected nouns (`board`, `task`, `column`, `tag`, …) with each verb's scoped required args — mirroring the assertions ported in card B but exercised through kanban-cli's actual `build_cli`.
+- [ ] A regression check that `kanban task move` (or a known per-op-required case) enforces that op's required field and does NOT accept the global union.
+- [ ] `cargo nextest run -p kanban-cli` passes.
+
+## Workflow
+- Use `/tdd` — write the golden-tree test against the shared generator first, confirm it passes with the shared module, then delete the private `cli_gen.rs`.
