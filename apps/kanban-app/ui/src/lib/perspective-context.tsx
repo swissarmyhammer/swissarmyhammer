@@ -136,7 +136,14 @@ function useAutoCreateDefaultPerspective(
     autoCreatedForKindRef.current = viewKind;
     dispatchRef
       .current("perspective.save", {
-        args: { name: "Default", view: viewKind },
+        // `if_absent` makes the seed idempotent against the backend's
+        // authoritative perspective state. The local `perspectives` list can
+        // be transiently empty on a hot-reload / boot race (provider remounts
+        // with an empty list and a reset per-kind ref, firing before the
+        // refetch lands), which otherwise wrote a fresh duplicate "Default"
+        // YAML on every reload. With this flag the backend returns the
+        // existing perspective for the view scope instead of creating another.
+        args: { name: "Default", view: viewKind, if_absent: true },
       })
       .catch(console.error);
   }, [loaded, perspectives, viewKind, dispatchRef]);

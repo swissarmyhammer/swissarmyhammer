@@ -294,6 +294,28 @@ impl Command for SavePerspectiveCmd {
             validate_filter(f)?;
         }
 
+        // Idempotent "ensure" path used by the frontend auto-create of the
+        // "Default" perspective. The frontend list it guards on can be
+        // transiently empty on a hot reload / boot race (the provider remounts
+        // with an empty list and its per-kind ref reset, then fires before the
+        // refetch lands), which previously created a fresh duplicate "Default"
+        // YAML on every reload. The backend, unlike the frontend, always holds
+        // authoritative perspective state — so when `if_absent` is set we
+        // short-circuit to an existing perspective for this view scope instead
+        // of writing another one. No write means no store-changed notification,
+        // so the refetch loop is not re-triggered either.
+        if ctx
+            .arg("if_absent")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            if let Some(existing) =
+                first_perspective_for_view(&kanban, &view, view_id.as_deref()).await?
+            {
+                return Ok(crate::perspective::add::perspective_to_json(&existing));
+            }
+        }
+
         let name = match supplied_name {
             Some(n) => n.to_string(),
             None => generate_untitled_name(&kanban, &view, view_id.as_deref()).await?,
@@ -347,6 +369,34 @@ async fn generate_untitled_name(
     } else {
         format!("Untitled {}", untitled_count + 1)
     })
+}
+
+/// Return the first existing perspective belonging to a view scope, if any.
+///
+/// Uses the same view_id-first / kind-fallback matching rule as
+/// [`generate_untitled_name`] and the frontend perspective filter: when both
+/// sides carry a `view_id` they must match exactly; otherwise fall back to a
+/// view-kind match. Reads the perspective context once under its read lock.
+///
+/// Backs the idempotent `if_absent` ensure path in [`SavePerspectiveCmd`].
+async fn first_perspective_for_view(
+    kanban: &KanbanContext,
+    view: &str,
+    view_id: Option<&str>,
+) -> crate::commands_core::Result<Option<Perspective>> {
+    let pctx = kanban
+        .perspective_context()
+        .await
+        .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+    let pctx = pctx.read().await;
+    Ok(pctx
+        .all()
+        .iter()
+        .find(|p| match (view_id, p.view_id.as_deref()) {
+            (Some(vid), Some(pvid)) => vid == pvid,
+            _ => p.view == view,
+        })
+        .cloned())
 }
 
 /// Delete a perspective by name or scope chain.
@@ -1178,6 +1228,87 @@ mod tests {
         assert_eq!(perspectives[0]["view"], "board");
         // Each perspective should have an id
         assert!(perspectives[0]["id"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_save_if_absent_is_idempotent_for_view_kind() {
+        // Regression: hot reload / boot races re-fired the frontend
+        // auto-create of the "Default" perspective because the local list it
+        // guards on was transiently empty, writing a fresh duplicate YAML
+        // every reload. The `if_absent` ensure path short-circuits against the
+        // backend's authoritative state, so repeated seeds return the existing
+        // perspective instead of creating new ones.
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+
+        let seed = |kanban: Arc<KanbanContext>| async move {
+            let mut args = HashMap::new();
+            args.insert("name".into(), Value::String("Default".into()));
+            args.insert("view".into(), Value::String("board".into()));
+            args.insert("if_absent".into(), Value::Bool(true));
+            let cmd_ctx = make_ctx(kanban, args);
+            SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap()
+        };
+
+        // First seed creates the Default.
+        let first = seed(Arc::clone(&kanban)).await;
+        let first_id = first["id"].as_str().unwrap().to_string();
+
+        // Subsequent seeds return the SAME perspective — no new writes.
+        for _ in 0..3 {
+            let again = seed(Arc::clone(&kanban)).await;
+            assert_eq!(
+                again["id"].as_str().unwrap(),
+                first_id,
+                "if_absent must return the existing perspective, not create a new one",
+            );
+        }
+
+        // The board holds exactly one perspective for this view kind.
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), HashMap::new());
+        let result = ListPerspectivesCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(result["count"], 1, "no duplicate Default perspectives");
+    }
+
+    #[tokio::test]
+    async fn test_save_if_absent_scopes_by_view_id() {
+        // `if_absent` matches the existing perspective using the same
+        // view_id-first / kind-fallback rule as the rest of the perspective
+        // resolution. A seed scoped to a different view_id must still create.
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+
+        let seed = |kanban: Arc<KanbanContext>, view_id: &str| {
+            let view_id = view_id.to_string();
+            async move {
+                let mut args = HashMap::new();
+                args.insert("name".into(), Value::String("Default".into()));
+                args.insert("view".into(), Value::String("board".into()));
+                args.insert("view_id".into(), Value::String(view_id));
+                args.insert("if_absent".into(), Value::Bool(true));
+                let cmd_ctx = make_ctx(kanban, args);
+                SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap()
+            }
+        };
+
+        let a1 = seed(Arc::clone(&kanban), "view-a").await;
+        let a2 = seed(Arc::clone(&kanban), "view-a").await;
+        assert_eq!(
+            a1["id"].as_str().unwrap(),
+            a2["id"].as_str().unwrap(),
+            "same view_id must be idempotent",
+        );
+
+        let b1 = seed(Arc::clone(&kanban), "view-b").await;
+        assert_ne!(
+            a1["id"].as_str().unwrap(),
+            b1["id"].as_str().unwrap(),
+            "a distinct view_id must seed its own perspective",
+        );
+
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), HashMap::new());
+        let result = ListPerspectivesCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(result["count"], 2, "one Default per distinct view_id");
     }
 
     #[tokio::test]
