@@ -433,9 +433,7 @@ function CaptureRegistry({
 describe("<FocusLayer> + LayerScopeRegistry context", () => {
   it("provides a non-null registry inside a layer", async () => {
     const captured: { current: LayerScopeRegistry | null } = { current: null };
-    render(
-      wrapInProviders(<CaptureRegistry out={captured} />),
-    );
+    render(wrapInProviders(<CaptureRegistry out={captured} />));
     await flushSetup();
     expect(captured.current).not.toBeNull();
     expect(captured.current?.layerFq).toBe(fqRoot(asSegment("window")));
@@ -729,7 +727,11 @@ describe("<FocusScope> populates its enclosing LayerScopeRegistry", () => {
     // path which reads it through a ref and ignores changes.
     function Probe({ override }: { override: FocusOverrides | undefined }) {
       return (
-        <FocusScope moniker={asSegment("a")} navOverride={override} commands={[]}>
+        <FocusScope
+          moniker={asSegment("a")}
+          navOverride={override}
+          commands={[]}
+        >
           <span>a</span>
         </FocusScope>
       );
@@ -977,3 +979,95 @@ describe("kernel sync untouched by step 1", () => {
   });
 });
 
+/* -------------------------------------------------------------------------- */
+/* Window-rooted layer: push fq == snapshot layer_fq == registry key          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Pull the `fq` of every `push layer` focus-tool call out of the mocked
+ * MCP transport, tolerating both the post-cutover `command_tool_call`
+ * envelope (`{ tool: "focus", op: "push layer", params: { fq, ... } }`)
+ * and any legacy `spatial_push_layer` shape.
+ */
+function pushedLayerFqs(): string[] {
+  const out: string[] = [];
+  for (const call of mockInvoke.mock.calls) {
+    if (call[0] === "spatial_push_layer") {
+      out.push((call[1] as { fq: string }).fq);
+    } else if (call[0] === "command_tool_call") {
+      const bag = call[1] as {
+        tool?: string;
+        op?: string;
+        params?: { fq?: string };
+      };
+      if (bag.tool === "focus" && bag.op === "push layer" && bag.params?.fq) {
+        out.push(bag.params.fq);
+      }
+    }
+  }
+  return out;
+}
+
+describe("window-rooted <FocusLayer> identity (push fq == snapshot layer_fq)", () => {
+  // The window-root parent FQM the production `<App>` passes
+  // (`parentLayerFq={WINDOW_ROOT_FQ}`). `getCurrentWindow()` is mocked to
+  // `{ label: "main" }` at the top of this file, so the App-shaped root is
+  // `/main` and the composed window-layer FQM is `/main/window`.
+  const WINDOW_ROOT_FQ = fqRoot(asSegment("main"));
+  const EXPECTED_LAYER_FQ = composeFq(WINDOW_ROOT_FQ, asSegment("window"));
+
+  it("composes the window layer under the unique window label, not the bare /window root", async () => {
+    const captured: { current: LayerScopeRegistry | null } = { current: null };
+    render(
+      <SpatialFocusProvider>
+        <FocusLayer name={asSegment("window")} parentLayerFq={WINDOW_ROOT_FQ}>
+          <CaptureRegistry out={captured} />
+        </FocusLayer>
+      </SpatialFocusProvider>,
+    );
+    await flushSetup();
+
+    // The registry's `layerFq` IS the FQM `buildSnapshot` stamps as
+    // `snapshot.layer_fq`. Window-rooted, not the legacy shared `/window`.
+    expect(captured.current?.layerFq).toBe(EXPECTED_LAYER_FQ);
+    expect(captured.current?.layerFq.startsWith("/main/")).toBe(true);
+  });
+
+  it("the pushed layer fq, the registry layerFq, and the snapshot layer_fq are all identical and window-rooted", async () => {
+    const captured: { current: LayerScopeRegistry | null } = { current: null };
+    render(
+      <SpatialFocusProvider>
+        <FocusLayer name={asSegment("window")} parentLayerFq={WINDOW_ROOT_FQ}>
+          <CaptureRegistry out={captured} />
+          <FocusScope moniker={asSegment("task:T1")} commands={[]}>
+            <span>card</span>
+          </FocusScope>
+        </FocusLayer>
+      </SpatialFocusProvider>,
+    );
+    await flushSetup();
+
+    // 1. The fq pushed to the kernel via `push layer`.
+    const pushed = pushedLayerFqs();
+    expect(pushed).toContain(EXPECTED_LAYER_FQ);
+
+    // 2. The registry key (the value descendants compose against).
+    const registry = captured.current!;
+    expect(registry.layerFq).toBe(EXPECTED_LAYER_FQ);
+
+    // 3. The snapshot's `layer_fq` — what a focus/nav commit names. This is
+    //    the field that, in the prior breakage, diverged from the pushed fq
+    //    and caused "focus snapshot names an unregistered layer". Proven
+    //    equal here by construction (both derive from the same FocusLayer
+    //    `fq` memo): push fq == registry layerFq == snapshot layer_fq.
+    const snapshot = registry.buildSnapshot(registry.layerFq);
+    expect(snapshot.layer_fq).toBe(EXPECTED_LAYER_FQ);
+    expect(snapshot.layer_fq).toBe(registry.layerFq);
+    expect(pushed).toContain(snapshot.layer_fq);
+
+    // The child scope composes window-uniquely beneath the rooted layer.
+    expect(snapshot.scopes.map((s) => s.fq)).toContain(
+      composeFq(EXPECTED_LAYER_FQ, asSegment("task:T1")),
+    );
+  });
+});

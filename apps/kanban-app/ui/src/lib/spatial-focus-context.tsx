@@ -13,15 +13,17 @@
  * `kanban-app/src/commands.rs`), so a provider only ever receives events
  * for its own window and matches them against its registry by FQM.
  *
- * This targeted emit is load-bearing, NOT an optimization: FQMs are **not**
- * unique across windows. Every window's root layer is `/window` (composed
- * from the `"window"` segment with no window-label qualifier), so a card is
- * `/window/.../task:Z` in *every* window showing that board. If the kernel
- * broadcast `focus-changed` to all webviews (the old `window.emit`
- * behavior), focusing a scope in window A would match the identically-keyed
- * scope in window B and light up the same card in every window ("jump
- * highlights all windows"). Emitting only to `window_label` confines each
- * focus move to its originating window.
+ * This targeted emit is defense in depth. Each window now roots its focus
+ * layer at its UNIQUE label (`/<label>/window`, see `App.tsx`'s
+ * `WINDOW_ROOT_FQ`), so a card is `/<label>/.../task:Z` — window-unique by
+ * construction, and the kernel resolves the owning window from the explicit
+ * `window` the client sends (below) / the full path rather than a side
+ * field. Historically every window rooted at the bare `/window`, so a card
+ * was `/window/.../task:Z` in *every* window showing that board and a
+ * broadcast would light up the same card everywhere ("jump highlights all
+ * windows"); the kernel clobber on the shared root then sent events to the
+ * wrong window. Emitting only to `window_label` still confines each focus
+ * move to its originating window as a second line of defense.
  *
  * This file does **not** replace `entity-focus-context.tsx` — that
  * context still drives the entity scope registry and command-scope
@@ -550,7 +552,7 @@ function buildSpatialFocusActions(
 
   const focus: SpatialFocusActions["focus"] = async (fq) => {
     const snapshot = buildSnapshotForFocused(layerRegistriesRef, fq);
-    await mcpSetFocus(fq, snapshot);
+    await mcpSetFocus(fq, snapshot, currentWindowLabel());
   };
 
   const clearFocus: SpatialFocusActions["clearFocus"] = async () => {
@@ -565,7 +567,12 @@ function buildSpatialFocusActions(
     direction,
   ) => {
     const snapshot = buildSnapshotForFocused(layerRegistriesRef, focusedFq);
-    await mcpNavigateFocus(focusedFq, direction, snapshot);
+    await mcpNavigateFocus(
+      focusedFq,
+      direction,
+      snapshot,
+      currentWindowLabel(),
+    );
   };
 
   const registerLayerRegistry: SpatialFocusActions["registerLayerRegistry"] = (
@@ -657,7 +664,7 @@ function buildSpatialFocusActions(
     const nextFq = await mcpPopLayer(fq);
     if (nextFq !== null && nextFq !== undefined) {
       const snapshot = buildSnapshotForFocused(layerRegistriesRef, nextFq);
-      await mcpSetFocus(nextFq, snapshot);
+      await mcpSetFocus(nextFq, snapshot, currentWindowLabel());
     }
   };
 
@@ -668,12 +675,12 @@ function buildSpatialFocusActions(
 
   const drillIn: SpatialFocusActions["drillIn"] = async (fq, focusedFq) => {
     const snapshot = buildSnapshotForFocused(layerRegistriesRef, focusedFq);
-    return await mcpDrillIn(fq, focusedFq, snapshot);
+    return await mcpDrillIn(fq, focusedFq, snapshot, currentWindowLabel());
   };
 
   const drillOut: SpatialFocusActions["drillOut"] = async (fq, focusedFq) => {
     const snapshot = buildSnapshotForFocused(layerRegistriesRef, focusedFq);
-    return await mcpDrillOut(fq, focusedFq, snapshot);
+    return await mcpDrillOut(fq, focusedFq, snapshot, currentWindowLabel());
   };
 
   const focusedFq: SpatialFocusActions["focusedFq"] = () =>

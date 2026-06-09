@@ -58,9 +58,27 @@ import {
   fqRoot,
   type FullyQualifiedMoniker,
 } from "@/types/spatial";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 /** Identity-stable layer-name segment for the jump-to overlay layer. */
 const JUMP_TO_LAYER_NAME = asSegment("jump-to");
+
+/**
+ * Early-boot fallback FQM for the window-root layer of THIS window
+ * (`/<label>/window`), computed once at module load.
+ *
+ * Used by {@link useJumpTargets} only for the edge case where the overlay
+ * opens before any layer has registered (so `topLayerFq()` is null).
+ * Mirrors the window-rooted shape `<App>` pushes (`parentLayerFq` =
+ * `/<label>`, layer name `window`) so the fallback names the same layer the
+ * running app registers, rather than the legacy shared `/window`. Computed
+ * at module scope because the window label is constant for the webview's
+ * lifetime — never recompute inline.
+ */
+const WINDOW_LAYER_FALLBACK_FQ = composeFq(
+  fqRoot(asSegment(getCurrentWindow().label)),
+  asSegment("window"),
+);
 /** Identity-stable sentinel-scope segment inside the jump-to layer. */
 const JUMP_TO_SENTINEL_SEGMENT = asSegment("jump-to-sentinel");
 
@@ -649,10 +667,13 @@ function useJumpTargets(
   useEffect(() => {
     let cancelled = false;
     // Read the topmost layer FQM. The window layer is always pushed at
-    // app boot, so under normal conditions this is non-null. Fall back
-    // to `/window` defensively for the early-boot edge case where the
-    // overlay opens before any layer has registered.
-    const topLayerFq = spatial.topLayerFq() ?? fqRoot(asSegment("window"));
+    // app boot, so under normal conditions this is non-null and already
+    // window-rooted (`/<label>/window/...`). Fall back to this window's
+    // own window-root layer (`/<label>/window`) for the early-boot edge
+    // case where the overlay opens before any layer has registered — the
+    // window-rooted shape mirrors what `<App>` pushes so the fallback
+    // resolves the same layer rather than the legacy shared `/window`.
+    const topLayerFq = spatial.topLayerFq() ?? WINDOW_LAYER_FALLBACK_FQ;
     const allScopes = spatial.enumerateScopesInLayer(topLayerFq);
     // Tier filter: jump pills land on **top-tier focusables** only — the
     // navigation units (cards, toolbar/navbar buttons), i.e. focusable scopes

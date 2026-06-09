@@ -316,6 +316,7 @@ describe("SpatialFocusProvider", () => {
         focusedFq: key,
         direction: "right",
         snapshot: undefined,
+        window: "main",
       },
     });
 
@@ -335,10 +336,30 @@ describe("SpatialFocusProvider", () => {
 
     const focusedNode = document.createElement("div");
     focusedNode.getBoundingClientRect = () =>
-      ({ x: 10, y: 20, width: 30, height: 40, top: 20, right: 40, bottom: 60, left: 10, toJSON: () => "" }) as DOMRect;
+      ({
+        x: 10,
+        y: 20,
+        width: 30,
+        height: 40,
+        top: 20,
+        right: 40,
+        bottom: 60,
+        left: 10,
+        toJSON: () => "",
+      }) as DOMRect;
     const siblingNode = document.createElement("div");
     siblingNode.getBoundingClientRect = () =>
-      ({ x: 100, y: 20, width: 30, height: 40, top: 20, right: 130, bottom: 60, left: 100, toJSON: () => "" }) as DOMRect;
+      ({
+        x: 100,
+        y: 20,
+        width: 30,
+        height: 40,
+        top: 20,
+        right: 130,
+        bottom: 60,
+        left: 100,
+        toJSON: () => "",
+      }) as DOMRect;
 
     const registry = new LayerScopeRegistry(layerFq);
     registry.add(focused, {
@@ -401,7 +422,17 @@ describe("SpatialFocusProvider", () => {
 
     const targetNode = document.createElement("div");
     targetNode.getBoundingClientRect = () =>
-      ({ x: 10, y: 20, width: 30, height: 40, top: 20, right: 40, bottom: 60, left: 10, toJSON: () => "" }) as DOMRect;
+      ({
+        x: 10,
+        y: 20,
+        width: 30,
+        height: 40,
+        top: 20,
+        right: 40,
+        bottom: 60,
+        left: 10,
+        toJSON: () => "",
+      }) as DOMRect;
 
     const registry = new LayerScopeRegistry(layerFq);
     registry.add(target, {
@@ -454,7 +485,7 @@ describe("SpatialFocusProvider", () => {
       module: "focus",
       tool: "focus",
       op: "set focus",
-      params: { fq: target, snapshot: undefined },
+      params: { fq: target, snapshot: undefined, window: "main" },
     });
 
     unmount();
@@ -474,7 +505,17 @@ describe("SpatialFocusProvider", () => {
     // builds a populated snapshot for the restored FQ.
     const restoredNode = document.createElement("div");
     restoredNode.getBoundingClientRect = () =>
-      ({ x: 0, y: 0, width: 10, height: 10, top: 0, right: 10, bottom: 10, left: 0, toJSON: () => "" }) as DOMRect;
+      ({
+        x: 0,
+        y: 0,
+        width: 10,
+        height: 10,
+        top: 0,
+        right: 10,
+        bottom: 10,
+        left: 0,
+        toJSON: () => "",
+      }) as DOMRect;
     const registry = new LayerScopeRegistry(layerFq);
     registry.add(restored, {
       ref: { current: restoredNode },
@@ -542,9 +583,9 @@ describe("SpatialFocusProvider", () => {
     );
     expect(popIdx).toBeGreaterThanOrEqual(0);
     expect(focusIdx).toBeGreaterThanOrEqual(0);
-    expect(
-      mockInvoke.mock.invocationCallOrder[popIdx],
-    ).toBeLessThan(mockInvoke.mock.invocationCallOrder[focusIdx]);
+    expect(mockInvoke.mock.invocationCallOrder[popIdx]).toBeLessThan(
+      mockInvoke.mock.invocationCallOrder[focusIdx],
+    );
 
     dispose();
     unmount();
@@ -666,7 +707,13 @@ describe("drillIn", () => {
       module: "focus",
       tool: "focus",
       op: "drill_in layer",
-      params: { fq: key, focused_fq: focusedFq, focusedFq, snapshot: undefined },
+      params: {
+        fq: key,
+        focused_fq: focusedFq,
+        focusedFq,
+        snapshot: undefined,
+        window: "main",
+      },
     });
     expect(returned).toBe(targetMoniker);
 
@@ -722,7 +769,13 @@ describe("drillOut", () => {
       module: "focus",
       tool: "focus",
       op: "drill_out layer",
-      params: { fq: key, focused_fq: focusedFq, focusedFq, snapshot: undefined },
+      params: {
+        fq: key,
+        focused_fq: focusedFq,
+        focusedFq,
+        snapshot: undefined,
+        window: "main",
+      },
     });
     expect(returned).toBe(parentMoniker);
 

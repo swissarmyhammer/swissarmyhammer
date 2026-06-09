@@ -31,9 +31,13 @@
 //! The Tauri commands derived the owning [`crate::WindowLabel`] from the
 //! ambient `tauri::Window` parameter. There is no ambient window on the
 //! MCP wire, so `clear focus` and `push layer` take an explicit `window`
-//! field. `set focus` / `navigate focus` derive the window from the
-//! snapshot's layer (exactly as the kernel did), so they need no window
-//! field.
+//! field. `set focus` / `navigate focus` / the drill ops also take an
+//! explicit (optional) `window`: the React client knows its own window and
+//! sends it so the kernel derives the target window from the path / explicit
+//! arg rather than the layer's `window_label` side field (which is
+//! cross-window-ambiguous when two windows share a layer FQM). When `window`
+//! is omitted the kernel falls back to the layer-derived window for
+//! window-unaware callers.
 
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
@@ -67,6 +71,14 @@ pub struct Focus {
     /// (transient unmount race), exactly as the Tauri command did.
     #[serde(default)]
     pub snapshot: Option<NavSnapshot>,
+    /// Owning window for this focus commit. The React `focus-mcp.ts` client
+    /// knows its own window and sends it so the kernel derives the target
+    /// window from the path / explicit arg rather than the layer's
+    /// `window_label` side field — which is cross-window-ambiguous when two
+    /// windows share a layer FQM. `None` falls back to the layer-derived
+    /// window for window-unaware callers.
+    #[serde(default)]
+    pub window: Option<WindowLabel>,
 }
 
 /// Clear focus for a window.
@@ -394,6 +406,7 @@ fn proto_focus() -> Focus {
     Focus {
         fq: empty_fq(),
         snapshot: None,
+        window: None,
     }
 }
 

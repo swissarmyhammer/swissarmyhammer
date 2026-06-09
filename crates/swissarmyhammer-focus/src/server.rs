@@ -208,7 +208,9 @@ impl FocusServer {
             return Ok(serde_json::json!({ "ok": true, "event": Value::Null }));
         };
         let event = self
-            .with_spatial(|registry, state| state.focus(registry, &snapshot, req.fq.clone(), None))
+            .with_spatial(|registry, state| {
+                state.focus(registry, &snapshot, req.fq.clone(), req.window.clone())
+            })
             .await;
         self.forward_event(&event);
         Ok(serde_json::json!({ "ok": true, "event": event }))

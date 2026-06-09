@@ -213,13 +213,20 @@ impl SpatialState {
     ///
     /// `None` falls back to the layer-derived window
     /// (`registry.layer(snapshot.layer_fq).window_label`) for callers with
-    /// no ambient window (the MCP face). **The fallback is unreliable
-    /// across windows**: every window's root layer FQM is `/window`, so the
-    /// registry — keyed by FQM — holds whichever window pushed last, and a
-    /// second window clobbers the first's `window_label`. That is the
-    /// "navigation moves focus in the wrong window / both windows" bug.
-    /// The Tauri path always passes `Some(window)` so it never hits the
-    /// ambiguous fallback.
+    /// no ambient window. The React `focus-mcp` client now always sends an
+    /// explicit `window` (`set focus` carries it), so production never relies
+    /// on the fallback.
+    ///
+    /// Historically the fallback was unreliable across windows because every
+    /// window rooted its layer at the literal `/window`: the registry — keyed
+    /// by FQM — held whichever window pushed last, and a second window
+    /// clobbered the first's `window_label` (the "navigation moves focus in
+    /// the wrong window / both windows" bug). That is now fixed at the root:
+    /// each window roots its layer at its unique label (`/<label>/window`,
+    /// see `App.tsx`'s `WINDOW_ROOT_FQ`), so the FQM-keyed registry never
+    /// collides and the layer-derived window is also correct. The explicit
+    /// `window` arg remains the authoritative source so correctness does not
+    /// depend on the side field at all.
     ///
     /// The segment is the trailing path component of `fq`. The walk
     /// invoked by [`SpatialRegistry::record_focus`] reads scope ancestry
@@ -240,12 +247,15 @@ impl SpatialState {
     ) -> Option<FocusChangedEvent> {
         let Some(layer) = registry.layer(&snapshot.layer_fq) else {
             // The snapshot names a layer the kernel has never seen (or has
-            // already popped). This is the silent-drop path that made the
-            // window-root focus regression invisible: every board / toolbar
-            // click commits against `layer_fq = /window`, and if the window
-            // layer is not in the registry the commit vanishes with no event.
-            // Log it at `warn` so a layer/registry desync surfaces in
-            // `just logs` instead of presenting as "clicks do nothing".
+            // already popped). Commits now name a window-rooted layer
+            // (`/<label>/window/...`); if that layer is not in the registry
+            // (cold start before the React push, or popped out from under a
+            // live scope) the commit vanishes with no event. Log it at `warn`
+            // so a layer/registry desync surfaces in `just logs` instead of
+            // presenting as "clicks do nothing". (This is also the symptom the
+            // prior, churning inline-`parentLayerFq` rooting attempt produced —
+            // push fq and snapshot layer_fq diverged. The fix roots the window
+            // layer at a module-scope, identity-stable FQM; see `App.tsx`.)
             tracing::warn!(
                 op = "focus",
                 focused_fq = %fq,

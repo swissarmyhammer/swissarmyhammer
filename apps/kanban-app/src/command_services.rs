@@ -69,10 +69,12 @@ pub fn install_focus_event_app_handle(app_handle: AppHandle) {
 ///
 /// Ports the side-effecting `emit` the legacy `spatial_*` Tauri commands
 /// did (`apps/kanban-app/src/commands.rs::emit_focus_changed`). The
-/// kernel directs each event to a single window via `emit_to` —
-/// load-bearing because FQMs are not unique across windows (every
-/// window's root layer is `/window`), so a broadcast would light up the
-/// same scope in every window showing the same board.
+/// kernel directs each event to a single window via `emit_to`, keyed on
+/// the event's `window_label` — which is now derived from the explicit
+/// `window` the React client sends (or the window-rooted layer FQM,
+/// `/<label>/window`), never a clobbered side field. The targeted emit
+/// stays in place as defense in depth so a focus move only ever paints in
+/// its originating window.
 struct TauriFocusEventSink;
 
 impl FocusEventSink for TauriFocusEventSink {

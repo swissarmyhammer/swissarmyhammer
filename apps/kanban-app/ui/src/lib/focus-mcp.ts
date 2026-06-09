@@ -10,10 +10,14 @@
  *
  * 1:1 port of the legacy `spatial_*` Tauri commands. The Rust adapter
  * derived the owning `WindowLabel` from the ambient `tauri::Window`
- * parameter; the MCP wire has no ambient window, so `clearFocus` and
- * `pushLayer` take an explicit `window` field. `setFocus` /
- * `navigateFocus` derive the window from the snapshot's layer (exactly as
- * the kernel did), so they take no window field.
+ * parameter; the MCP wire has no ambient window, so every focus-mutating
+ * op takes an explicit `window` field. The React tree knows its own window
+ * (`getCurrentWindow().label`), so it sends it on `setFocus`,
+ * `navigateFocus`, `drillIn`, and `drillOut` — the kernel then derives the
+ * target window from that explicit arg / the focused path rather than the
+ * layer's `window_label` side field (which is cross-window-ambiguous when
+ * two windows share a layer FQM). `clearFocus` and `pushLayer` already
+ * carried an explicit `window`.
  *
  * The kernel's structured response includes the `FocusChangedEvent` the
  * old Tauri adapter emitted on the calling window. This is intentional —
@@ -60,15 +64,21 @@ export interface FocusRect {
  * Move focus to a scope (the `ui.setFocus` routing target).
  *
  * Ports `spatial_focus`: when `snapshot` is `undefined` the kernel drops
- * the commit silently (transient unmount race). The owning window is
- * derived from the snapshot's layer on the Rust side, so no `window`
- * field is needed here.
+ * the commit silently (transient unmount race). `window` is the calling
+ * window's label — the kernel uses it as the authoritative owning window
+ * for the commit and the emitted event, rather than the layer's
+ * (cross-window-ambiguous) `window_label` side field.
  */
 export async function setFocus(
   fq: FullyQualifiedMoniker,
   snapshot: NavSnapshot | undefined,
+  window: string,
 ): Promise<void> {
-  await callMcpTool<FocusEventResult>(FOCUS_TOOL, "set focus", { fq, snapshot });
+  await callMcpTool<FocusEventResult>(FOCUS_TOOL, "set focus", {
+    fq,
+    snapshot,
+    window,
+  });
 }
 
 /**
@@ -87,11 +97,16 @@ export async function clearFocus(window: string): Promise<void> {
  *
  * Ports `spatial_navigate`: `undefined` snapshot drops silently. The
  * Rust-side handler renames the field to `focused_fq` on the wire.
+ * `window` is the calling window's label — the kernel uses it as the
+ * authoritative owning window for the move (the `navigate` op already
+ * accepted `Option<WindowLabel>`; the inline path now always sends it so
+ * resolution never leans on the layer side field).
  */
 export async function navigateFocus(
   focusedFq: FullyQualifiedMoniker,
   direction: Direction,
   snapshot: NavSnapshot | undefined,
+  window: string,
 ): Promise<void> {
   await callMcpTool<FocusEventResult>(FOCUS_TOOL, "navigate focus", {
     // Send both wire shapes: the kernel reads `focused_fq` (snake_case),
@@ -102,6 +117,7 @@ export async function navigateFocus(
     focusedFq,
     direction,
     snapshot,
+    window,
   });
 }
 
@@ -187,12 +203,14 @@ export async function drillIn(
   fq: FullyQualifiedMoniker,
   focusedFq: FullyQualifiedMoniker,
   snapshot: NavSnapshot | undefined,
+  window: string,
 ): Promise<FullyQualifiedMoniker> {
   const result = await callMcpTool<FocusNextFqResult | null>(
     FOCUS_TOOL,
     "drill_in layer",
     // Send both wire shapes — kernel reads snake, tests assert camel.
-    { fq, focused_fq: focusedFq, focusedFq, snapshot },
+    // `window` is the authoritative owning window for the committed focus.
+    { fq, focused_fq: focusedFq, focusedFq, snapshot, window },
   );
   // `drill_in` is contractually total — it always returns an FQM (no
   // silent dropout). Fall back to `focusedFq` if the kernel surface ever
@@ -210,12 +228,14 @@ export async function drillOut(
   fq: FullyQualifiedMoniker,
   focusedFq: FullyQualifiedMoniker,
   snapshot: NavSnapshot | undefined,
+  window: string,
 ): Promise<FullyQualifiedMoniker> {
   const result = await callMcpTool<FocusNextFqResult>(
     FOCUS_TOOL,
     "drill_out layer",
     // Send both wire shapes — kernel reads snake, tests assert camel.
-    { fq, focused_fq: focusedFq, focusedFq, snapshot },
+    // `window` is the authoritative owning window for the committed focus.
+    { fq, focused_fq: focusedFq, focusedFq, snapshot, window },
   );
   return (result.next_fq ?? focusedFq) as FullyQualifiedMoniker;
 }

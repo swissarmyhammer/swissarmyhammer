@@ -8,4 +8,5 @@
 mod common;
 mod focus_server_e2e;
 mod meta_snapshot;
+mod two_window_isolation;
 mod ui_geometry_provider;
