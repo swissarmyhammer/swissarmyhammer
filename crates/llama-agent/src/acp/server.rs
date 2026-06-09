@@ -188,17 +188,32 @@ struct AgenticLoopLimits {
     max_iterations: usize,
     /// Maximum number of tool calls accepted from a single generation step.
     max_tool_calls_per_step: usize,
+    /// How many *consecutive* steps in which every tool call failed are
+    /// tolerated before the turn is aborted for making no progress. A single
+    /// all-failed step is recoverable — the model is re-prompted with the tool
+    /// error (e.g. "tool not found") and usually corrects course (picks the
+    /// right tool, or just answers in text). Only a sustained run of all-failed
+    /// steps is a true no-progress spin worth aborting.
+    max_consecutive_all_failed_steps: usize,
 }
 
 impl AgenticLoopLimits {
     /// Decide what the loop should do after a step, given the 1-based
-    /// `iteration` that just ran and the step's observed tool-call stats.
+    /// `iteration` that just ran, the step's observed tool-call stats, and the
+    /// running count of `consecutive_all_failed_steps` (this step included).
     ///
     /// Abort when, in order: the iteration cap is exceeded; a single step
-    /// emitted more than `max_tool_calls_per_step` tool calls; or the step
-    /// emitted tool calls and *every* one failed (no forward progress).
+    /// emitted more than `max_tool_calls_per_step` tool calls; or every tool
+    /// call has failed for `max_consecutive_all_failed_steps` consecutive steps
+    /// (a sustained no-progress spin). A *single* all-failed step is NOT an
+    /// abort — the model gets the tool error fed back and a chance to recover.
     /// Otherwise continue.
-    fn evaluate(&self, iteration: usize, step: &AgenticStep) -> AgenticLoopAction {
+    fn evaluate(
+        &self,
+        iteration: usize,
+        step: &AgenticStep,
+        consecutive_all_failed_steps: usize,
+    ) -> AgenticLoopAction {
         if iteration > self.max_iterations {
             return AgenticLoopAction::Abort(format!(
                 "agentic loop exceeded the per-turn iteration cap ({} iterations)",
@@ -211,11 +226,13 @@ impl AgenticLoopLimits {
                 step.tool_calls, self.max_tool_calls_per_step
             ));
         }
-        if step.tool_calls > 0 && step.failed_tool_calls == step.tool_calls {
+        if step.tool_calls > 0
+            && step.failed_tool_calls == step.tool_calls
+            && consecutive_all_failed_steps >= self.max_consecutive_all_failed_steps
+        {
             return AgenticLoopAction::Abort(format!(
-                "every one of the {} tool call(s) in this step failed; the loop is not making \
-                 progress",
-                step.tool_calls
+                "every tool call failed for {consecutive_all_failed_steps} consecutive step(s); \
+                 the loop is not making progress"
             ));
         }
         AgenticLoopAction::Continue
@@ -228,9 +245,14 @@ impl AgenticLoopLimits {
 /// more than a handful of re-prompts, but agentic plans can legitimately chain
 /// several tools. `max_tool_calls_per_step` catches the pathological single
 /// step (the production trace showed ~342 tool calls in one step).
+/// `max_consecutive_all_failed_steps` lets the model recover from an isolated
+/// bad tool call (a small model occasionally emits a wrong tool name) instead
+/// of crashing the user's turn with an opaque internal error, while still
+/// aborting a sustained no-progress spin well before the iteration cap.
 const AGENTIC_LOOP_LIMITS: AgenticLoopLimits = AgenticLoopLimits {
     max_iterations: 32,
     max_tool_calls_per_step: 16,
+    max_consecutive_all_failed_steps: 3,
 };
 
 impl AcpServer {
@@ -2568,6 +2590,12 @@ impl AcpServer {
         // 1-based count of generation steps in this turn, fed to the runaway
         // guard so a turn that keeps re-prompting cannot loop forever.
         let mut iteration = 0usize;
+        // Running count of consecutive steps in which every tool call failed.
+        // Reset the moment a step makes any progress (a success, a partial
+        // success, or no tool calls at all). The runaway guard aborts only once
+        // this sustains for `max_consecutive_all_failed_steps`, so an isolated
+        // bad tool call is recovered rather than crashing the turn.
+        let mut consecutive_all_failed_steps = 0usize;
 
         loop {
             iteration += 1;
@@ -2820,15 +2848,23 @@ impl AcpServer {
             }
 
             // Runaway-loop guard: a turn that re-prompts forever, a single step
-            // that emits an absurd number of tool calls, or a step where every
-            // tool call failed (no forward progress — e.g. all dispatches return
-            // -32602 "tool not found") must terminate with an error rather than
-            // hang the caller until its timeout fires.
+            // that emits an absurd number of tool calls, or a *sustained* run of
+            // steps where every tool call failed (no forward progress — e.g. all
+            // dispatches return -32602 "tool not found") must terminate with an
+            // error rather than hang the caller until its timeout fires. An
+            // isolated all-failed step is recoverable: track the consecutive run
+            // here and let the model react to the tool error first.
             let step = AgenticStep {
                 tool_calls: tool_calls_count,
                 failed_tool_calls,
             };
-            if let AgenticLoopAction::Abort(reason) = AGENTIC_LOOP_LIMITS.evaluate(iteration, &step)
+            if step.tool_calls > 0 && step.failed_tool_calls == step.tool_calls {
+                consecutive_all_failed_steps += 1;
+            } else {
+                consecutive_all_failed_steps = 0;
+            }
+            if let AgenticLoopAction::Abort(reason) =
+                AGENTIC_LOOP_LIMITS.evaluate(iteration, &step, consecutive_all_failed_steps)
             {
                 tracing::error!(
                     "Aborting agentic loop on iteration {}: {}",
@@ -4256,16 +4292,37 @@ mod tests {
         use super::super::{AgenticLoopAction, AgenticStep, AGENTIC_LOOP_LIMITS};
 
         #[test]
-        fn a_step_whose_every_tool_call_failed_aborts_the_loop() {
-            // The exact production pathology: a step emitted many tool calls and
-            // every one failed (e.g. -32602 "tool not found"). The loop made no
-            // progress, so re-prompting would only repeat the failure — abort.
+        fn a_single_all_failed_step_continues_so_the_model_can_recover() {
+            // The pathology that crashed real turns: a small model emits ONE bad
+            // tool call (e.g. a wrong tool name → -32602 "tool not found"). That
+            // is an isolated all-failed step, not a runaway spin. The loop must
+            // re-prompt the model with the tool error so it can correct course
+            // (pick the right tool, or just answer in text) — aborting here would
+            // surface an opaque internal error for a trivially recoverable miss.
             let step = AgenticStep {
-                tool_calls: 342,
-                failed_tool_calls: 342,
+                tool_calls: 1,
+                failed_tool_calls: 1,
             };
+            // First consecutive all-failed step (count == 1, below the cap).
             assert!(matches!(
-                AGENTIC_LOOP_LIMITS.evaluate(1, &step),
+                AGENTIC_LOOP_LIMITS.evaluate(1, &step, 1),
+                AgenticLoopAction::Continue
+            ));
+        }
+
+        #[test]
+        fn a_sustained_run_of_all_failed_steps_aborts_the_loop() {
+            // Recovery is bounded: once every tool call has failed for
+            // `max_consecutive_all_failed_steps` steps in a row, the model is
+            // genuinely spinning with no forward progress — abort rather than
+            // re-prompt with ever-growing context until the caller times out.
+            let step = AgenticStep {
+                tool_calls: 2,
+                failed_tool_calls: 2,
+            };
+            let at_cap = AGENTIC_LOOP_LIMITS.max_consecutive_all_failed_steps;
+            assert!(matches!(
+                AGENTIC_LOOP_LIMITS.evaluate(1, &step, at_cap),
                 AgenticLoopAction::Abort(_)
             ));
         }
@@ -4282,7 +4339,7 @@ mod tests {
                 failed_tool_calls: 0,
             };
             assert!(matches!(
-                AGENTIC_LOOP_LIMITS.evaluate(1, &step),
+                AGENTIC_LOOP_LIMITS.evaluate(1, &step, 0),
                 AgenticLoopAction::Continue
             ));
         }
@@ -4290,13 +4347,14 @@ mod tests {
         #[test]
         fn a_step_with_some_successful_tool_calls_continues() {
             // Partial failure is not runaway: at least one tool call succeeded, so
-            // the model has new information to act on. Continue the loop.
+            // the model has new information to act on. Continue the loop, and note
+            // this would reset the caller's consecutive-all-failed counter.
             let step = AgenticStep {
                 tool_calls: 3,
                 failed_tool_calls: 2,
             };
             assert!(matches!(
-                AGENTIC_LOOP_LIMITS.evaluate(1, &step),
+                AGENTIC_LOOP_LIMITS.evaluate(1, &step, 0),
                 AgenticLoopAction::Continue
             ));
         }
@@ -4305,7 +4363,8 @@ mod tests {
         fn a_single_step_exceeding_the_per_step_tool_cap_aborts() {
             // A single generation step that emits an absurd number of tool calls
             // is degenerate output even if some "succeed" — cap it per step so one
-            // runaway step cannot blow the turn budget on its own.
+            // runaway step cannot blow the turn budget on its own. This fires on
+            // the very first step regardless of the consecutive-failure count.
             let over_cap = AGENTIC_LOOP_LIMITS.max_tool_calls_per_step + 1;
             let step = AgenticStep {
                 tool_calls: over_cap,
@@ -4313,7 +4372,7 @@ mod tests {
                 failed_tool_calls: 0,
             };
             assert!(matches!(
-                AGENTIC_LOOP_LIMITS.evaluate(1, &step),
+                AGENTIC_LOOP_LIMITS.evaluate(1, &step, 0),
                 AgenticLoopAction::Abort(_)
             ));
         }
@@ -4328,7 +4387,7 @@ mod tests {
             };
             let over_cap = AGENTIC_LOOP_LIMITS.max_iterations + 1;
             assert!(matches!(
-                AGENTIC_LOOP_LIMITS.evaluate(over_cap, &step),
+                AGENTIC_LOOP_LIMITS.evaluate(over_cap, &step, 0),
                 AgenticLoopAction::Abort(_)
             ));
         }
@@ -4340,7 +4399,7 @@ mod tests {
                 failed_tool_calls: 0,
             };
             assert!(matches!(
-                AGENTIC_LOOP_LIMITS.evaluate(1, &step),
+                AGENTIC_LOOP_LIMITS.evaluate(1, &step, 0),
                 AgenticLoopAction::Continue
             ));
         }
