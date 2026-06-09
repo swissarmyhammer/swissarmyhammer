@@ -46,7 +46,6 @@ swissarmyhammer-skills = { workspace = true }
 swissarmyhammer-agent = { workspace = true }
 swissarmyhammer-agents = { workspace = true }
 swissarmyhammer-statusline = { workspace = true }
-avp-common = { workspace = true }
 swissarmyhammer-prompts = { workspace = true }
 mirdan = { workspace = true }
 swissarmyhammer-templating = { workspace = true }

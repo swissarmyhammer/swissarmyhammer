@@ -903,21 +903,13 @@ Examples:
   sah --debug model use qwen         # Use model with debug output
 ";
 
-const MODEL_USE_LONG_ABOUT: &str = "
-Apply a specific model configuration to the current project.
-
-This command finds the specified model by name and applies its configuration
-to the project by creating or updating .sah/sah.yaml.
-
-Model precedence (highest to lowest):
-• User models: ~/.models/<name>.yaml
-• Project models: ./models/<name>.yaml
-• Built-in models: embedded in the binary
-
-Examples:
-  sah model use claude-code                # Apply Claude Code model
-  sah model use qwen                       # Apply the Qwen model
-";
+/// Long help text for `sah model use`.
+///
+/// Re-exported from `crate::cli` so the static clap derive and this runtime
+/// command tree share a single source of truth. The canonical definition
+/// lives in `cli.rs` because that module is the one `build.rs` compiles
+/// standalone for doc generation.
+use crate::cli::MODEL_USE_LONG_ABOUT;
 
 /// Statistics about CLI tool validation results
 #[derive(Debug, Clone, Default)]
@@ -1988,12 +1980,20 @@ impl CliBuilder {
             SubcommandSpec::new("list", "List available models").args(vec![format_arg]),
             SubcommandSpec::new("use", "Use a specific model")
                 .long_about(MODEL_USE_LONG_ABOUT)
-                .args(vec![ArgSpec::new(
-                    "name",
-                    "Model name to apply to the project",
-                )
-                .value_name("NAME")
-                .required(true)]),
+                .args(vec![
+                    ArgSpec::new("name", "Model name to apply to the project")
+                        .value_name("NAME")
+                        .required(true),
+                    ArgSpec::new(
+                        "for",
+                        "Scope the model to a purpose (e.g. review); absent sets the global default",
+                    )
+                    .long("for")
+                    .value_name("PURPOSE")
+                    .value_parser(ArgSpecValueParser::Strings(
+                        crate::commands::model::use_command::supported_purpose_names(),
+                    )),
+                ]),
         ];
 
         Self::build_command_with_subcommands(

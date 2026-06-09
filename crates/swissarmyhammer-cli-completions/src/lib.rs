@@ -1,6 +1,6 @@
 //! Shared shell-completion helpers for SwissArmyHammer CLIs.
 //!
-//! Every workspace CLI (`avp`, `sah`, `code-context`, `kanban`, `mirdan`,
+//! Every workspace CLI (`sah`, `code-context`, `kanban`, `mirdan`,
 //! `shelltool`) needs to render a clap command tree into a shell-specific
 //! completion script and write it to stdout. Before this crate each CLI
 //! carried its own ~130-line `completions.rs` plus a near-identical
@@ -37,7 +37,7 @@ pub const SUPPORTED_SHELLS: [Shell; 4] = [Shell::Bash, Shell::Zsh, Shell::Fish, 
 /// types at the shell prompt, matching `[[bin]] name` in `Cargo.toml`).
 /// `shell` selects the rendering target. The script is written directly to
 /// `io::stdout()` so callers can redirect into a completion install path
-/// (`avp completion bash > /etc/bash_completion.d/avp`).
+/// (`shelltool completion bash > /etc/bash_completion.d/shelltool`).
 ///
 /// Used by the derive-based CLIs whose clap tree is fully known at compile
 /// time. CLIs that build their tree dynamically (`sah`, `kanban`) should

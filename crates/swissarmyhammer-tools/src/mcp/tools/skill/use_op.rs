@@ -55,36 +55,20 @@ async fn render_skill_instructions(
     prompt_library: &Arc<RwLock<PromptLibrary>>,
     arguments: Option<&str>,
 ) -> Value {
-    // The skill's `agent` frontmatter field gates the delegate-to-subagent
-    // partial (`{% if agent %}`). Capture it before borrowing `instructions`
-    // so the partial naming the delegated agent actually renders.
-    let agent = value
-        .get("agent")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-
     if let Some(instructions) = value.get("instructions").and_then(|v| v.as_str()) {
-        let instructions = instructions.to_string();
-        // Expose the skill's `agent` frontmatter to the template so the
-        // `delegate-to-subagent` partial (`{% if agent %}`) renders the
-        // delegation instruction naming the configured subagent.
-        let agent = value
-            .get("agent")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
         let mut template_context = TemplateContext::new();
         template_context.set("version".to_string(), serde_json::json!(crate::VERSION));
-        if let Some(agent) = &agent {
-            template_context.set("agent".to_string(), serde_json::json!(agent));
-        }
         if let Some(args) = arguments {
             template_context.set("arguments".to_string(), serde_json::json!(args));
         }
-        if let Some(agent) = &agent {
+        // Bind the skill's delegated agent so the `delegate-to-subagent` partial
+        // (`{% if agent %}{{ agent }}{% endif %}`) renders its dispatch block; an
+        // inline skill (no `agent`) leaves it unset and the block stays empty.
+        if let Some(agent) = value.get("agent").and_then(|v| v.as_str()) {
             template_context.set("agent".to_string(), serde_json::json!(agent));
         }
         let prompt_lib = prompt_library.read().await;
-        match prompt_lib.render_text(&instructions, &template_context) {
+        match prompt_lib.render_text(instructions, &template_context) {
             Ok(rendered) => {
                 value["instructions"] = Value::String(rendered);
             }

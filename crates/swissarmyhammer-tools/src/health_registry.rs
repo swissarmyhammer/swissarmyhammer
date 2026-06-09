@@ -10,8 +10,9 @@ use swissarmyhammer_common::health::{Doctorable, HealthCheck};
 
 use crate::mcp::tool_registry::ToolRegistry;
 use crate::mcp::{
-    register_file_tools, register_git_tools, register_kanban_tools, register_questions_tools,
-    register_shell_tools, register_web_tools,
+    register_code_context_tools, register_file_tools, register_git_tools, register_kanban_tools,
+    register_questions_tools, register_ralph_tools, register_review_tools, register_shell_tools,
+    register_web_tools,
 };
 
 /// Health checker for prompt directories and YAML front matter
@@ -160,18 +161,26 @@ pub async fn collect_all_health_checks() -> Vec<HealthCheck> {
     // Create MCP tool registry and register all tools
     let mut tool_registry = ToolRegistry::new();
 
-    // Register all MCP tools (same as server does)
+    // Register every MCP tool group (same set the server registers in
+    // `register_all_tools`) so `sah doctor` enumerates all tools, each
+    // surfacing at least one OK line via the Doctorable default.
     register_file_tools(&mut tool_registry);
     register_git_tools(&mut tool_registry);
     register_shell_tools(&mut tool_registry);
     register_kanban_tools(&mut tool_registry);
     register_questions_tools(&mut tool_registry);
     register_web_tools(&mut tool_registry);
+    register_code_context_tools(&mut tool_registry);
+    register_ralph_tools(&mut tool_registry);
+    register_review_tools(&mut tool_registry);
 
-    // Register skill tools with a default library
+    // Register tools that need libraries (skill, agent) with default
+    // libraries built here.
     {
+        use crate::mcp::tools::agent::register_agent_tools;
         use crate::mcp::tools::skill::register_skill_tools;
         use std::sync::Arc;
+        use swissarmyhammer_agents::AgentLibrary;
         use swissarmyhammer_prompts::PromptLibrary;
         use swissarmyhammer_skills::SkillLibrary;
         use tokio::sync::RwLock;
@@ -182,6 +191,9 @@ pub async fn collect_all_health_checks() -> Vec<HealthCheck> {
             lib.load_defaults();
         }
         let prompt_library = Arc::new(RwLock::new(PromptLibrary::default()));
+
+        let agent_library = Arc::new(RwLock::new(AgentLibrary::new()));
+        register_agent_tools(&mut tool_registry, agent_library, prompt_library.clone());
         register_skill_tools(&mut tool_registry, library, prompt_library);
     }
 
@@ -339,6 +351,64 @@ mod tests {
         assert!(
             brave_check.is_some(),
             "Should have Brave Search check from web tool. Checks: {:?}",
+            checks
+                .iter()
+                .map(|c| format!("{}/{}", c.category, c.name))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_all_tool_groups_enumerated() {
+        let checks = collect_all_health_checks().await;
+
+        // Every registered tool group should surface at least one check.
+        // code_context, ralph, and agent were previously omitted from the
+        // hand-picked subset. Ralph inherits the default OK check (name ==
+        // its Doctorable name "Ralph"); code_context and agent contribute
+        // their own checks under their category, so assert via category +
+        // representative names.
+        let names: Vec<&str> = checks.iter().map(|c| c.name.as_str()).collect();
+
+        // Ralph has no special checks, so the default OK check carries its name.
+        assert!(
+            names.contains(&"Ralph"),
+            "Expected default OK check named 'Ralph', got names: {:?}",
+            names
+        );
+
+        // code_context contributes an LSP-related check (e.g. "LSP servers"
+        // when no project type is detected). Previously this group was not
+        // registered at all.
+        assert!(
+            names.iter().any(|n| n.contains("LSP")),
+            "Expected a code_context LSP health check, got names: {:?}",
+            names
+        );
+
+        // agent contributes an "Agent library" check.
+        assert!(
+            names.iter().any(|n| n.contains("Agent library")),
+            "Expected an agent library health check, got names: {:?}",
+            names
+        );
+    }
+
+    #[tokio::test]
+    async fn test_review_validators_health_check_included() {
+        let checks = collect_all_health_checks().await;
+
+        // The review tool overrides the blanket OK default to lint validators;
+        // its check surfaces under the "validators" category named "Validators"
+        // (or "Validator <name/path>" for each problem). Confirm the review tool
+        // is enumerated and its validators check appears.
+        let validators_checks: Vec<_> = checks
+            .iter()
+            .filter(|c| c.category == "validators")
+            .collect();
+        assert!(
+            !validators_checks.is_empty(),
+            "the review tool's validators check must surface in `sah doctor`, got: {:?}",
             checks
                 .iter()
                 .map(|c| format!("{}/{}", c.category, c.name))

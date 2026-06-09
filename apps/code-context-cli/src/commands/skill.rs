@@ -29,6 +29,7 @@ pub fn run_skill() -> i32 {
         mcp_server: None,
         skills: Some(registry::skills_selector()),
         agents: None,
+        validators: None,
         statusline: false,
         preamble: false,
     };
