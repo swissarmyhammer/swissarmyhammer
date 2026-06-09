@@ -862,6 +862,14 @@ impl AcpServer {
                 if llama_to_acp.get(&state.llama_session_id) == Some(acp_id) {
                     llama_to_acp.remove(&state.llama_session_id);
                 }
+                // Reclaim the idle session's pinned context state from the
+                // shared worker cache. The durable record is retained on disk;
+                // only the in-memory KV blob is freed, which a later reload
+                // re-warms with a cold reprocess. Without this the worker's KV
+                // cache grows with every idle session that ages out.
+                self.agent_server
+                    .request_queue()
+                    .evict_session_state(&state.llama_session_id);
                 tracing::info!(
                     "Evicted idle session {} from in-memory cache (durable record retained)",
                     acp_id.0
@@ -2502,6 +2510,30 @@ impl AcpServer {
         &self,
         request: agent_client_protocol::schema::PromptRequest,
     ) -> Result<agent_client_protocol::schema::PromptResponse, agent_client_protocol::Error> {
+        let session_id = request.session_id.clone();
+        let result = self.prompt_inner(request).await;
+        // A turn that ends in an error leaves the session dead or inconsistent,
+        // but its per-step prompt-boundary saves have already pinned this
+        // session's context state — hundreds of MB of KV — in the process-wide
+        // worker cache, which otherwise only sheds under LRU/byte-budget
+        // pressure. Reclaim it now so a failed turn (agentic-loop abort,
+        // cancellation, or a mid-generation decode failure such as
+        // `NoKvCacheSlot`) cannot leak KV slots across turns and starve the
+        // worker. A clean turn keeps its state for cheap prefix reuse next turn.
+        if result.is_err() {
+            if let Some(acp_session) = self.get_session(&session_id).await {
+                self.agent_server
+                    .request_queue()
+                    .evict_session_state(&acp_session.llama_session_id);
+            }
+        }
+        result
+    }
+
+    async fn prompt_inner(
+        &self,
+        request: agent_client_protocol::schema::PromptRequest,
+    ) -> Result<agent_client_protocol::schema::PromptResponse, agent_client_protocol::Error> {
         self.log_request("prompt", &request);
         tracing::info!("Processing prompt for session {}", request.session_id.0);
 
@@ -3028,6 +3060,14 @@ impl AcpServer {
                 session_id.0
             );
         }
+
+        // Reclaim the cancelled session's pinned context state. A cancel ends
+        // the turn, so its KV blob in the shared worker cache would otherwise
+        // linger until the LRU/byte budget forces it out — the same leak the
+        // abort and idle-sweep paths now close.
+        self.agent_server
+            .request_queue()
+            .evict_session_state(&acp_session.llama_session_id);
 
         // Emit a final status update so a client cancelling a turn observes the
         // same notification stream from both agents.

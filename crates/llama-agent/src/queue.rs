@@ -233,6 +233,25 @@ impl SessionStateStore {
         self.entries.len()
     }
 
+    /// Reclaim a single session's cached state, returning whether an entry was
+    /// removed. Unlike [`evict`](Self::evict) this is lifecycle-driven, not
+    /// budget-driven: it deliberately bypasses the "keep at least one entry"
+    /// guard because the caller knows this specific session is gone (cancelled,
+    /// aborted, or idle-swept). Without it an ended session's full context-state
+    /// blob — hundreds of MB of KV — stays pinned until the 2 GiB LRU budget
+    /// forces it out, which with only one or two live sessions never happens, so
+    /// the worker eventually runs out of KV slots (`NoKvCacheSlot`).
+    fn remove(&mut self, id: &str) -> bool {
+        let Some(cached) = self.entries.remove(id) else {
+            return false;
+        };
+        self.cur_bytes = self.cur_bytes.saturating_sub(cached.byte_size());
+        if let Some(pos) = self.lru.iter().position(|k| k == id) {
+            self.lru.remove(pos);
+        }
+        true
+    }
+
     /// Drop all cached state (used on queue teardown).
     fn clear(&mut self) {
         self.entries.clear();
@@ -1105,6 +1124,24 @@ impl RequestQueue {
             debug!("No active request found for session: {}", session_id);
             false
         }
+    }
+
+    /// Reclaim a finished session's cached context state (its KV blob) from the
+    /// process-wide worker cache, returning whether an entry was freed.
+    ///
+    /// The cache otherwise only sheds entries under LRU/byte-budget pressure
+    /// ([`SessionStateStore::evict`]), so a session that has ended — cancelled,
+    /// its turn aborted, or idle-swept — keeps its full context state (hundreds
+    /// of MB) pinned indefinitely when there are too few live sessions to reach
+    /// the budget. That leak eventually exhausts the worker's KV slots
+    /// (`NoKvCacheSlot`). Callers on a session-teardown path invoke this so the
+    /// KV is released promptly. Cheap and idempotent: a no-op `false` when the
+    /// session has no cached state (e.g. it never reached a prompt boundary).
+    pub fn evict_session_state(&self, session_id: &crate::types::SessionId) -> bool {
+        self.session_state_cache
+            .lock()
+            .unwrap()
+            .remove(&session_id.to_string())
     }
 
     /// Convenience shortcut for `self.metrics.get_stats()` — returns a
@@ -3831,6 +3868,49 @@ mod tests {
             store.insert("solo".into(), state(1, 100), None, None);
             assert_eq!(store.len(), 1, "the only entry is never evicted");
             assert!(store.contains("solo"));
+        }
+
+        #[test]
+        fn store_remove_frees_one_session_and_its_bytes() {
+            // Lifecycle-driven reclamation: removing a single ended session drops
+            // exactly its entry, its bytes, and its LRU slot, leaving the rest.
+            let mut store = SessionStateStore::new(4, usize::MAX);
+            store.insert("A".into(), state(1, 10), None, None);
+            store.insert("B".into(), state(2, 20), None, None);
+            assert_eq!(store.cur_bytes, 30);
+
+            assert!(store.remove("A"), "removing a present session reports true");
+            assert!(!store.contains("A"), "removed session is gone");
+            assert!(store.contains("B"), "other sessions are untouched");
+            assert_eq!(
+                store.cur_bytes, 20,
+                "only the removed session's bytes are freed"
+            );
+            assert_eq!(store.len(), 1);
+        }
+
+        #[test]
+        fn store_remove_can_empty_the_store_bypassing_the_keep_one_guard() {
+            // Unlike budget eviction (which always keeps the MRU entry), explicit
+            // reclamation of a known-dead session must be able to empty the store
+            // — otherwise the last ended session's KV would stay pinned forever.
+            let mut store = SessionStateStore::new(4, usize::MAX);
+            store.insert("only".into(), state(1, 10), None, None);
+            assert!(store.remove("only"));
+            assert_eq!(store.len(), 0, "remove is not subject to keep-at-least-one");
+            assert_eq!(store.cur_bytes, 0, "byte accounting returns to zero");
+        }
+
+        #[test]
+        fn store_remove_absent_session_is_a_noop() {
+            let mut store = SessionStateStore::new(4, usize::MAX);
+            store.insert("A".into(), state(1, 10), None, None);
+            assert!(
+                !store.remove("missing"),
+                "removing an absent session is false"
+            );
+            assert_eq!(store.cur_bytes, 10, "byte accounting unchanged");
+            assert!(store.contains("A"));
         }
 
         #[test]
