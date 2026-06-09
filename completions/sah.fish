@@ -89,6 +89,7 @@ json\t''
 yaml\t''"
 complete -c sah -n "__fish_sah_using_subcommand model; and __fish_seen_subcommand_from show" -l model -d 'Override model for all use cases (runtime only, doesn\'t modify config)' -r
 complete -c sah -n "__fish_sah_using_subcommand model; and __fish_seen_subcommand_from show" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c sah -n "__fish_sah_using_subcommand model; and __fish_seen_subcommand_from use" -l for -d 'Purpose to scope the model to (e.g. `review`). Absent sets the global default model' -r
 complete -c sah -n "__fish_sah_using_subcommand model; and __fish_seen_subcommand_from use" -l model -d 'Override model for all use cases (runtime only, doesn\'t modify config)' -r
 complete -c sah -n "__fish_sah_using_subcommand model; and __fish_seen_subcommand_from use" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c sah -n "__fish_sah_using_subcommand model; and __fish_seen_subcommand_from help" -f -a "list" -d 'List available models'

@@ -16,6 +16,8 @@
 
 use crate::context::CliContext;
 use crate::exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
+use std::sync::Arc;
+use swissarmyhammer_config::model::ModelConfig;
 use swissarmyhammer_prompts::PromptLibrary;
 use swissarmyhammer_tools::mcp::unified_server::McpServerHandle;
 
@@ -35,17 +37,59 @@ pub mod display;
 ///
 /// A no-op when the handle exposes no server instance (it always does for the
 /// stdio/HTTP serve paths).
-async fn wire_review_factories(handle: &McpServerHandle, concurrency: Option<usize>) {
+///
+/// `review_override` is the resolved review-specific `ModelConfig` (from
+/// [`review_model_config`]); when `Some`, the review pool's agent factory is
+/// built from it instead of the server's global `agent_config`. When `None`
+/// (review model unset or unresolvable) the global default is used unchanged.
+async fn wire_review_factories(
+    handle: &McpServerHandle,
+    review_override: Option<Arc<ModelConfig>>,
+    concurrency: Option<usize>,
+) {
     use swissarmyhammer_agent::review_agent_factory;
 
     let Some(server) = handle.server() else {
         return;
     };
-    let model_config = server.tool_context.agent_config.clone();
+    let model_config = review_override.unwrap_or_else(|| server.tool_context.agent_config.clone());
     let factory = review_agent_factory(model_config);
     server
         .set_review_factories(factory, None, concurrency)
         .await;
+}
+
+/// Resolve the review-specific model override from config.
+///
+/// Reads `review.model` from the template context (mirroring
+/// [`review_concurrency`]). When set, resolves the named model to a
+/// [`ModelConfig`] via [`ModelManager::find_agent_by_name`] + [`parse_model_config`]
+/// and returns it wrapped in an `Arc`. Returns `None` when:
+/// - `review.model` is unset (the global `agent_config` is used unchanged), or
+/// - the name cannot be resolved or its config cannot be parsed — a warning is
+///   logged and resolution falls back to the global default rather than failing
+///   to wire the review pool.
+fn review_model_config(cli_context: &CliContext) -> Option<Arc<ModelConfig>> {
+    use swissarmyhammer_config::model::{parse_model_config, ModelManager};
+
+    let model_name = cli_context
+        .template_context
+        .get("review.model")
+        .and_then(|v| v.as_str())?;
+
+    match ModelManager::find_agent_by_name(model_name)
+        .and_then(|info| Ok(parse_model_config(&info.content)?))
+    {
+        Ok(config) => Some(Arc::new(config)),
+        Err(e) => {
+            tracing::warn!(
+                "review.model '{}' could not be resolved ({}); falling back to the global agent config",
+                model_name,
+                e
+            );
+            None
+        }
+    }
 }
 
 /// Read the `review.concurrency` config override (a positive integer pinning the
@@ -113,7 +157,12 @@ async fn handle_http_serve(
         Err(exit_code) => return exit_code,
     };
 
-    wire_review_factories(&server_handle, review_concurrency(cli_context)).await;
+    wire_review_factories(
+        &server_handle,
+        review_model_config(cli_context),
+        review_concurrency(cli_context),
+    )
+    .await;
 
     manage_http_server_lifecycle(cli_context, server_handle).await
 }
@@ -290,7 +339,12 @@ async fn handle_stdio_serve(cli_context: &CliContext, model_override: Option<Str
             Err(exit_code) => return exit_code,
         };
 
-    wire_review_factories(&server_handle, review_concurrency(cli_context)).await;
+    wire_review_factories(
+        &server_handle,
+        review_model_config(cli_context),
+        review_concurrency(cli_context),
+    )
+    .await;
 
     handle_stdio_server_shutdown(server_handle).await
 }
@@ -494,6 +548,88 @@ mod tests {
         assert!(
             DESCRIPTION.len() > 100,
             "Description should be comprehensive"
+        );
+    }
+
+    /// Build a `CliContext` whose template context carries the given
+    /// `review.model` (or none), with HOME/CWD isolated so config resolution
+    /// does not touch the host filesystem.
+    async fn cli_context_with_review_model(
+        review_model: Option<&str>,
+    ) -> (
+        crate::context::CliContext,
+        IsolatedTestEnvironment,
+        CurrentDirGuard,
+    ) {
+        use crate::cli::OutputFormat;
+        use crate::context::CliContext;
+        use serde_json::json;
+
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
+        let app = Command::new("test").arg(Arg::new("test").long("test"));
+        let matches = app.try_get_matches_from(vec!["test"]).unwrap();
+
+        let mut template_context = swissarmyhammer_config::TemplateContext::new();
+        if let Some(model) = review_model {
+            // `get("review.model")` navigates a nested `review` object, so the
+            // value must be stored under a nested `review` map, not the literal
+            // dotted key.
+            template_context.set("review".to_string(), json!({ "model": model }));
+        }
+
+        let cli_context = CliContext::new(
+            template_context,
+            OutputFormat::Table,
+            None,
+            false,
+            false,
+            false,
+            matches,
+        )
+        .await
+        .expect("Failed to create CliContext");
+
+        (cli_context, env, cwd)
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_review_model_config_resolves_configured_llama_model() {
+        use swissarmyhammer_config::model::ModelExecutorType;
+
+        let (cli_context, _env, _cwd) = cli_context_with_review_model(Some("qwen-0.6b-test")).await;
+
+        let resolved =
+            review_model_config(&cli_context).expect("a configured review.model must resolve");
+        assert_eq!(
+            resolved.executor_type(),
+            ModelExecutorType::LlamaAgent,
+            "qwen-0.6b-test must resolve to the llama-agent executor"
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_review_model_config_none_when_unset() {
+        let (cli_context, _env, _cwd) = cli_context_with_review_model(None).await;
+
+        assert!(
+            review_model_config(&cli_context).is_none(),
+            "an unset review.model must yield no override (global agent_config is used)"
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_review_model_config_unknown_falls_back_to_none() {
+        let (cli_context, _env, _cwd) =
+            cli_context_with_review_model(Some("definitely-not-a-real-model")).await;
+
+        assert!(
+            review_model_config(&cli_context).is_none(),
+            "an unresolvable review.model must fall back to None (warning path), not panic"
         );
     }
 

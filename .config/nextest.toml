@@ -114,6 +114,22 @@ test-group = "llama-embedding-serial"
 # 60s, hard-kill after 6 periods (6 minutes).
 slow-timeout = { period = "60s", terminate-after = 6 }
 
+# The swissarmyhammer-agent real-model review e2e drives the production review
+# pipeline over a real local model (qwen-0.6B chat) AND loads the real platform
+# embedder (qwen-embedding). It is the MINIMUM real end-to-end: scoped to a single
+# `function-length` validator over one root-level `.rs` file, it drives exactly ONE
+# fan-out generation and zero verify calls — well under a minute on the GPU. Put it
+# in the SAME global serial lane as the llama-agent / llama-embedding / kanban-app
+# real-model tests so at most one real-model test drives the GPU at a time (the
+# GPU's compute is time-sliced across processes; concurrent real-model turns blow
+# their hang budgets). Scoped to the binary so the fast, model-free `review_factory`
+# wiring test stays parallel. Warn every 60s, hard-kill after 5 periods (5 minutes)
+# to leave ample headroom under GPU contention.
+[[profile.default.overrides]]
+filter = "package(swissarmyhammer-agent) and binary(review_real_model_e2e)"
+test-group = "llama-embedding-serial"
+slow-timeout = { period = "60s", terminate-after = 5 }
+
 # Apply serial execution to llama-embedding tests
 [[profile.default.overrides]]
 filter = "package(llama-embedding)"

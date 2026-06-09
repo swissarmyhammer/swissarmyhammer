@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: 9a80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffff8a80
 project: local-review
 title: 'E2E: review runs over ACP against a real local model'
 ---
@@ -32,3 +32,11 @@ Gating: GPU-gate exactly like the existing llama-agent e2e tests (per project co
 
 ## Workflow
 - Use `/tdd` — write the failing e2e first (it fails because nothing drives review over a real local model), then make it pass.
+
+## Review Findings (2026-06-08 16:05)
+
+### Warnings
+- [x] `crates/swissarmyhammer-agent/tests/review_real_model_e2e.rs:218` — The `assert_eq!(counts.blockers + counts.warnings + counts.nits, counts.confirmed, ...)` asserts strict equality, but the two sides are counted at different stages of `synthesize`: `counts.confirmed` is `verified.iter().filter(|v| v.confirmed).count()` (pre-dedup, synthesize.rs:75), while the per-severity tallies are `section.len()` over the set returned by `dedup_exact` (synthesize.rs:79, 106-108). `dedup_exact` exists precisely to collapse exact-duplicate confirmed findings, so whenever the 0.6B model emits two identical confirmed findings (same file/line/validator/rule/claim — plausible for a small stochastic model on a tiny diff) the deduped sum is strictly less than `confirmed` and the assertion fails. It passed once on the GPU runner, but that does not prove the invariant always holds for a nondeterministic model — this is a latent flake. Assert the true invariant instead: `counts.blockers + counts.warnings + counts.nits <= counts.confirmed` (kept findings never exceed confirmed). The header-presence assertion already covers "well-formed, non-error markdown".
+
+### Nits
+- [x] `crates/swissarmyhammer-agent/Cargo.toml:35` — `model-embedding` is added as a dev-dependency but neither test in the crate (`review_real_model_e2e.rs`, `review_factory.rs`) references `model_embedding::` — the embedder is obtained opaquely via `default_embedder_factory()`. Rust does not warn on unused dev-deps, so it is harmless, but it is dead config; drop it unless a follow-up test needs it.

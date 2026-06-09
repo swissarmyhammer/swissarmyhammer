@@ -8,7 +8,10 @@ A validator is an AVP (Agent Validator Protocol) rule set: a collection of rules
 
 ## Built-in Validators
 
-SwissArmyHammer ships with four validator sets:
+SwissArmyHammer ships with a set of built-in validators, grouped below by the
+area they cover. The groups are illustrative rather than exhaustive — the
+authoritative list is the builtin validator tree itself, which evolves over
+time.
 
 ### Code Quality
 
@@ -63,6 +66,32 @@ Matching is on file globs only — a validator with no `match.files` applies to 
 ## Setting Up Validators
 
 Built-in validators are always available. Project-specific validators go in `./.validators/`, and user-wide validators in `$XDG_DATA_HOME/validators/` (default `~/.local/share/validators/`).
+
+## Configuring the Review Tool
+
+The review tool reads two optional keys from `.sah/sah.yaml`, both under a `review:` mapping:
+
+| Config key | What it controls | When unset |
+|------------|------------------|------------|
+| `review.model` | The model the review tool runs its validator agents with. | The global default model (top-level `model:`) is used. |
+| `review.concurrency` | The number of validator agents run in parallel. Must be a positive integer. | The platform default concurrency is used. |
+
+Set the review model with the `model use` command rather than editing the file by hand:
+
+```bash
+sah model use qwen --for review
+```
+
+This writes `review.model: qwen` and leaves the global default (`model:`) untouched, so only the review tool switches models. Omit `--for review` to set the global default that every tool — including review — falls back to.
+
+A configured `.sah/sah.yaml` looks like:
+
+```yaml
+model: claude-code      # global default for all tools
+review:
+  model: qwen           # review tool overrides the global default
+  concurrency: 4        # run 4 validator agents in parallel
+```
 
 ## Creating Custom Validators
 

@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KTMK4D4NV5FTM8V6YYCYHHGZ
-position_column: todo
-position_ordinal: '9980'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffff8b80
 project: local-review
 title: Wire the review pool to the review-specific model
 ---
@@ -19,14 +19,18 @@ Files: `apps/swissarmyhammer-cli/src/commands/serve/mod.rs`
 Keep the cycle-free boundary intact: resolution uses `swissarmyhammer_config::ModelManager` (already a dependency) and the existing `swissarmyhammer_agent::review_agent_factory`.
 
 ## Acceptance Criteria
-- [ ] With `review.model` set, the review pool's factory builds from that model's `ModelConfig` (its `executor_type()` matches the selected model).
-- [ ] With `review.model` unset, the factory uses the global `agent_config` exactly as before (no behavior change).
-- [ ] An unresolvable `review.model` logs a warning and falls back to the global config rather than failing to wire.
+- [x] With `review.model` set, the review pool's factory builds from that model's `ModelConfig` (its `executor_type()` matches the selected model).
+- [x] With `review.model` unset, the factory uses the global `agent_config` exactly as before (no behavior change).
+- [x] An unresolvable `review.model` logs a warning and falls back to the global config rather than failing to wire.
 
 ## Tests
-- [ ] Test in the serve module: given a `CliContext`/template-context with `review.model` set to a known builtin (e.g. `qwen-0.6b-test`), the resolved override `ModelConfig.executor_type()` is the llama-agent executor; with it unset the resolved config equals the global default's executor (`claude-code`).
-- [ ] Test: an unknown `review.model` resolves to the global fallback (no panic, warning path).
-- [ ] `cargo test -p swissarmyhammer-cli serve` is green.
+- [x] Test in the serve module: given a `CliContext`/template-context with `review.model` set to a known builtin (e.g. `qwen-0.6b-test`), the resolved override `ModelConfig.executor_type()` is the llama-agent executor; with it unset the resolved config equals the global default's executor (`claude-code`).
+- [x] Test: an unknown `review.model` resolves to the global fallback (no panic, warning path).
+- [x] `cargo test -p swissarmyhammer-cli serve` is green.
 
 ## Workflow
 - Use `/tdd` — write failing tests first, then implement to make them pass.
+
+## Implementation Notes
+- Resolution helper named `review_model_config(cli_context) -> Option<Arc<ModelConfig>>` (returns the resolved `ModelConfig` directly rather than the name string, since the caller needs the config; mirrors `review_concurrency`). Unset → `None`; unresolvable → warning + `None` so `wire_review_factories` falls back to the global `agent_config` via `unwrap_or_else`.
+- `wire_review_factories` gained a `review_override: Option<Arc<ModelConfig>>` parameter, threaded from both the stdio and HTTP serve call sites.

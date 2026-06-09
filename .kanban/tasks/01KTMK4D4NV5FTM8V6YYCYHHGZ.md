@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '9780'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffff8980
 project: local-review
 title: 'Config: store & resolve a review-specific model'
 ---
@@ -20,18 +20,18 @@ All work is in `crates/swissarmyhammer-config/src/model.rs`:
 Security: `use_agent_for` must run the same `validate_agent_name_security` + `validate_agent` checks as `use_agent`.
 
 ## Acceptance Criteria
-- [ ] `use_agent_for(name, ModelTarget::Review, paths)` writes `review.model` and leaves a pre-existing top-level `model:` and `review.concurrency` intact.
-- [ ] `get_review_agent` returns the review model name when set, `None` otherwise.
-- [ ] `resolve_review_agent_config` returns the review-specific model when set, else the global model, else `claude-code`.
-- [ ] `use_agent` behavior and signature unchanged (delegates to `use_agent_for` with `Default`).
-- [ ] Invalid/empty/unsafe names are rejected by `use_agent_for` exactly as by `use_agent`.
+- [x] `use_agent_for(name, ModelTarget::Review, paths)` writes `review.model` and leaves a pre-existing top-level `model:` and `review.concurrency` intact.
+- [x] `get_review_agent` returns the review model name when set, `None` otherwise.
+- [x] `resolve_review_agent_config` returns the review-specific model when set, else the global model, else `claude-code`.
+- [x] `use_agent` behavior and signature unchanged (delegates to `use_agent_for` with `Default`).
+- [x] Invalid/empty/unsafe names are rejected by `use_agent_for` exactly as by `use_agent`.
 
 ## Tests
-- [ ] Unit test in `model.rs`: `use_agent_for` review target writes `review.model`, asserting the YAML still contains the prior `model:` and `review.concurrency` keys.
-- [ ] Unit test: `resolve_review_agent_config` returns review model when set; returns global when only `model:` set; returns `claude-code` when neither set.
-- [ ] Unit test: `get_review_agent` returns `None` on a fresh/empty config and `Some(name)` after a review write.
-- [ ] Unit test: security validation rejects empty/`../`-bearing names via `use_agent_for`.
-- [ ] `cargo test -p swissarmyhammer-config model` is green.
+- [x] Unit test in `model.rs`: `use_agent_for` review target writes `review.model`, asserting the YAML still contains the prior `model:` and `review.concurrency` keys.
+- [x] Unit test: `resolve_review_agent_config` returns review model when set; returns global when only `model:` set; returns `claude-code` when neither set.
+- [x] Unit test: `get_review_agent` returns `None` on a fresh/empty config and `Some(name)` after a review write.
+- [x] Unit test: security validation rejects empty/`../`-bearing names via `use_agent_for`.
+- [x] `cargo test -p swissarmyhammer-config model` is green.
 
 ## Workflow
 - Use `/tdd` — write failing tests first, then implement to make them pass.
