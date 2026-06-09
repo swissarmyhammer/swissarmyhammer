@@ -140,6 +140,10 @@ impl McpTool for SkillTool {
         swissarmyhammer_skills::generate_skill_mcp_schema(&SKILL_OPERATIONS)
     }
 
+    fn schema_full(&self) -> serde_json::Value {
+        swissarmyhammer_skills::generate_skill_mcp_schema_full(&SKILL_OPERATIONS)
+    }
+
     fn operations(&self) -> &'static [&'static dyn Operation] {
         *SKILL_OPERATIONS
     }

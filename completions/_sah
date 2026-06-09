@@ -95,9 +95,9 @@ _arguments "${_arguments_options[@]}" : \
 '--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-'::target -- Where to install the MCP server configuration:((project\:"Project-level settings (.claude/settings.json)"
-local\:"Local project settings, not committed (.claude/settings.local.json)"
-user\:"User-level settings (~/.claude/settings.json)"))' \
+'::target -- Where to install the MCP server configuration:((project\:"Project-level configuration (committed to the repo)"
+local\:"Local project configuration that is not committed"
+user\:"User-wide (global) configuration"))' \
 && ret=0
 ;;
 (deinit)
@@ -106,9 +106,9 @@ _arguments "${_arguments_options[@]}" : \
 '--remove-directory[Also remove .sah/ project directory]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-'::target -- Where to remove the MCP server configuration from:((project\:"Project-level settings (.claude/settings.json)"
-local\:"Local project settings, not committed (.claude/settings.local.json)"
-user\:"User-level settings (~/.claude/settings.json)"))' \
+'::target -- Where to remove the MCP server configuration from:((project\:"Project-level configuration (committed to the repo)"
+local\:"Local project configuration that is not committed"
+user\:"User-wide (global) configuration"))' \
 && ret=0
 ;;
 (doctor)

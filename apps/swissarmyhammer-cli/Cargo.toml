@@ -114,6 +114,9 @@ clap = { workspace = true }
 clap-markdown = { workspace = true }
 clap_mangen = { workspace = true }
 clap_complete = { workspace = true }
+# `src/cli.rs` (compiled standalone here via `#[path]`) re-exports the canonical
+# `lifecycle::InstallTarget`, so the completions crate is a build-dep too.
+swissarmyhammer-cli-completions = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }

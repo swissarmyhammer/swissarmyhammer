@@ -20,6 +20,8 @@
 //! library consumer. A small dedicated crate keeps the dependency surface
 //! contained to the actual CLI crates that need it.
 
+pub mod lifecycle;
+
 use clap::{Command, CommandFactory};
 use clap_complete::{generate, generate_to, Shell};
 use std::io;

@@ -4,7 +4,6 @@ mod banner;
 mod cli;
 mod cli_conversions;
 mod commands;
-mod completions;
 mod context;
 mod dynamic_cli;
 mod error;
@@ -760,7 +759,6 @@ async fn handle_dynamic_tool_command(
 
     let arguments = match build_tool_arguments(
         matches,
-        tool_name,
         &full_tool_name,
         has_operations,
         &schema,
@@ -796,39 +794,33 @@ async fn tool_schema(
     let tool = registry
         .get_tool(full_tool_name)
         .ok_or_else(|| format!("Tool not found: {}", full_tool_name))?;
-    Ok(tool.schema())
+    // CLI argument extraction reads the schema's flat per-op `properties`, so
+    // the FULL schema is required, not the slim wire form from `schema()`.
+    Ok(tool.schema_full())
 }
 
 async fn build_tool_arguments(
     matches: &clap::ArgMatches,
-    tool_name: &str,
     full_tool_name: &str,
     has_operations: bool,
     schema: &serde_json::Value,
     cli_tool_context: &CliToolContext,
 ) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    // Render the underlying error with the alternate `{:#}` form so the full
+    // cause chain (everything the structured error's `source()` would walk) is
+    // preserved in the message, rather than flattening to just the top line.
     if !has_operations {
         return convert_matches_to_arguments(matches, full_tool_name, cli_tool_context)
             .await
-            .map_err(|e| format!("Error processing arguments: {}", e));
+            .map_err(|e| format!("Error processing arguments: {:#}", e));
     }
 
-    // Operation-based tool: tool -> noun -> verb (e.g., kanban -> board -> init)
-    let (noun, noun_matches) = matches.subcommand().ok_or_else(|| {
-        format!(
-            "No noun specified for '{}'. Use --help to see available nouns.",
-            tool_name
-        )
-    })?;
-    let (verb, verb_matches) = noun_matches.subcommand().ok_or_else(|| {
-        format!(
-            "No verb specified for '{}'. Use --help to see available operations for '{}'.",
-            noun, noun
-        )
-    })?;
-    let op_string = format!("{} {}", verb, noun);
-    convert_operation_matches_to_arguments(verb_matches, &op_string, schema)
-        .map_err(|e| format!("Error processing arguments: {}", e))
+    // Operation-based tool: tool -> noun -> verb (e.g., kanban -> board -> init).
+    // The shared generator navigates the noun/verb subcommands and maps matches
+    // back into `{ "op": "verb noun", ...scoped args }` — the same engine that
+    // builds the command tree, so build and dispatch stay in lockstep.
+    swissarmyhammer_operations::cli_gen::extract_noun_verb_arguments(matches, schema)
+        .map_err(|e| format!("Error processing arguments: {:#}", e))
 }
 
 async fn execute_tool_and_format(
@@ -943,44 +935,13 @@ async fn convert_matches_to_arguments(
         .get_tool(tool_name)
         .ok_or_else(|| format!("Tool not found: {}", tool_name))?;
 
-    let schema = tool.schema();
+    // Extract properties from the FULL schema — operation-based tools serve a
+    // slim wire schema from `schema()` that omits the flat per-op properties.
+    let schema = tool.schema_full();
 
     // Extract properties from schema
     if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
         for (prop_name, prop_schema) in properties {
-            if let Some(value) = extract_clap_value(matches, prop_name, prop_schema) {
-                arguments.insert(prop_name.clone(), value);
-            }
-        }
-    }
-
-    Ok(arguments)
-}
-
-/// Convert operation subcommand matches to JSON arguments for operation-based tools
-///
-/// This extracts arguments from a subcommand and adds the "op" parameter.
-/// Uses the tool's schema for argument extraction since that's what the MCP tool expects.
-fn convert_operation_matches_to_arguments(
-    matches: &clap::ArgMatches,
-    op_string: &str,
-    schema: &serde_json::Value,
-) -> Result<serde_json::Map<String, serde_json::Value>, Box<dyn std::error::Error>> {
-    let mut arguments = serde_json::Map::new();
-
-    // Set the op parameter
-    arguments.insert(
-        "op".to_string(),
-        serde_json::Value::String(op_string.to_string()),
-    );
-
-    // Extract arguments from schema properties (same as schema-based tools)
-    if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
-        for (prop_name, prop_schema) in properties {
-            // Skip "op" since we already set it
-            if prop_name == "op" {
-                continue;
-            }
             if let Some(value) = extract_clap_value(matches, prop_name, prop_schema) {
                 arguments.insert(prop_name.clone(), value);
             }
@@ -1158,32 +1119,22 @@ fn handle_init_command(matches: &clap::ArgMatches) -> i32 {
 
 /// Handle the `sah completion <shell>` command.
 ///
-/// Extracts the requested shell from clap matches, rebuilds the dynamic
-/// CLI tree (so the generated script reflects every registered MCP tool,
-/// not just the clap-derived static commands), and writes the completion
-/// script to stdout via [`completions::print_completion_for`]. Clap
-/// enforces a required `shell` argument, so the value is guaranteed to be
-/// present when this function is reached.
+/// Rebuilds the dynamic CLI tree (so the generated script reflects every
+/// registered MCP tool, not just the clap-derived static commands) and routes
+/// it through the shared
+/// [`swissarmyhammer_cli_completions::lifecycle::run_completion`] dispatcher —
+/// the same builder/renderer the other workspace CLIs use — which reads the
+/// required `shell` argument from `matches` and writes the completion script to
+/// stdout under the `sah` binary name. Returns 0 on success, 1 on render error.
 fn handle_completion_command(
     matches: &clap::ArgMatches,
     cli_tool_context: &Arc<CliToolContext>,
 ) -> i32 {
-    let shell = matches
-        .get_one::<clap_complete::Shell>("shell")
-        .copied()
-        .expect("clap enforces a required shell argument");
-
     let tool_registry = cli_tool_context.get_tool_registry_arc();
     let cli_builder = CliBuilder::new(tool_registry);
     let cli = cli_builder.build_cli();
 
-    match completions::print_completion_for(cli, shell) {
-        Ok(()) => EXIT_SUCCESS,
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            EXIT_ERROR
-        }
-    }
+    swissarmyhammer_cli_completions::lifecycle::run_completion(cli, "sah", matches)
 }
 
 fn handle_deinit_command(matches: &clap::ArgMatches) -> i32 {

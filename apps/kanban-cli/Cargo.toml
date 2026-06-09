@@ -41,7 +41,6 @@ open = "5"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 is-terminal = { workspace = true }
-once_cell = { workspace = true }
 
 [dev-dependencies]
 serial_test = { workspace = true }
@@ -55,3 +54,6 @@ clap = { workspace = true }
 clap-markdown = { workspace = true }
 clap_mangen = { workspace = true }
 clap_complete = { workspace = true }
+# `src/cli.rs` (compiled standalone here via `#[path]`) uses the canonical
+# `lifecycle::InstallTarget`, so the completions crate is a build-dep too.
+swissarmyhammer-cli-completions = { workspace = true }

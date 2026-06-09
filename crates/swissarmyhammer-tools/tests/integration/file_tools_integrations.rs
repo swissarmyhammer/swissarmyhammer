@@ -771,7 +771,9 @@ fn verify_tool_schema(
     required_properties: &[&str],
     optional_properties: &[&str],
 ) {
-    let schema = tool.schema();
+    // The per-op flat `properties` only exist on the FULL schema; the wire
+    // `schema()` carries just `op`. CLI-shaped assertions use `schema_full()`.
+    let schema = tool.schema_full();
     assert!(schema.is_object(), "Schema should be an object");
 
     let properties = schema["properties"].as_object().unwrap();

@@ -383,6 +383,11 @@ impl McpTool for KanbanTool {
         swissarmyhammer_kanban::schema::generate_kanban_mcp_schema(ops)
     }
 
+    fn schema_full(&self) -> serde_json::Value {
+        let ops = swissarmyhammer_kanban::schema::kanban_operations();
+        swissarmyhammer_kanban::schema::generate_kanban_mcp_schema_full(ops)
+    }
+
     fn operations(&self) -> &'static [&'static dyn swissarmyhammer_operations::Operation] {
         swissarmyhammer_kanban::schema::kanban_operations()
     }

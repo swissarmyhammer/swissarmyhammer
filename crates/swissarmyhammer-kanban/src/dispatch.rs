@@ -193,7 +193,7 @@ async fn execute_board_operation(
             processor.process(&cmd, ctx).await
         }
         Verb::Get => {
-            let include_counts = op.get_bool("include_counts").unwrap_or(true);
+            let include_counts = op.get_bool("include_counts");
             processor.process(&GetBoard { include_counts }, ctx).await
         }
         Verb::Update => {

@@ -809,6 +809,27 @@ pub trait McpTool:
     /// ```
     fn schema(&self) -> serde_json::Value;
 
+    /// Get the tool's FULL JSON schema for in-process CLI generation.
+    ///
+    /// Operation-based tools return a slim, model-facing schema from
+    /// [`McpTool::schema`] over the MCP wire — it carries only the `op` enum and
+    /// per-op required-field signatures, dropping the heavy `x-operation-schemas`
+    /// / `x-operation-groups` / `x-forgiving-input` / `examples` keys and the
+    /// flat per-parameter properties.
+    ///
+    /// The in-process CLI generator and argument extractor, however, build the
+    /// noun/verb command tree and map clap matches back to JSON arguments from
+    /// the schema's flat `properties`. Those consumers call `schema_full()` to
+    /// obtain the complete surface.
+    ///
+    /// # Default
+    ///
+    /// Returns [`McpTool::schema`] unchanged. Tools whose `schema()` is already
+    /// full (the non-operation, hand-written schemas) need not override this.
+    fn schema_full(&self) -> serde_json::Value {
+        self.schema()
+    }
+
     /// Execute the tool with the given arguments and context
     ///
     /// This is the main entry point for tool execution. The method receives:

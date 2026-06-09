@@ -61,7 +61,9 @@ use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use std::sync::Arc;
 use swissarmyhammer_common::health::{Doctorable, HealthCheck};
-use swissarmyhammer_operations::{generate_mcp_schema, Operation, SchemaConfig};
+use swissarmyhammer_operations::{
+    generate_mcp_schema_full, generate_mcp_schema_wire, Operation, SchemaConfig,
+};
 use swissarmyhammer_shell::config::{parse_shell_config, CompiledShellConfig, BUILTIN_CONFIG_YAML};
 use tokio::sync::Mutex;
 
@@ -489,6 +491,14 @@ fn remove_shell_dir(
     }
 }
 
+/// Shared schema config for the shell tool, so the wire and full generators
+/// stay in lockstep on the description.
+fn shell_schema_config() -> SchemaConfig {
+    SchemaConfig::new(
+        "Virtual shell with history and process management. Execute commands, grep output history, and manage running processes.",
+    )
+}
+
 #[async_trait]
 impl McpTool for ShellExecuteTool {
     fn name(&self) -> &'static str {
@@ -500,10 +510,11 @@ impl McpTool for ShellExecuteTool {
     }
 
     fn schema(&self) -> serde_json::Value {
-        let config = SchemaConfig::new(
-            "Virtual shell with history and process management. Execute commands, grep output history, and manage running processes.",
-        );
-        generate_mcp_schema(&SHELL_OPERATIONS, config)
+        generate_mcp_schema_wire(&SHELL_OPERATIONS, shell_schema_config())
+    }
+
+    fn schema_full(&self) -> serde_json::Value {
+        generate_mcp_schema_full(&SHELL_OPERATIONS, shell_schema_config())
     }
 
     fn operations(&self) -> &'static [&'static dyn swissarmyhammer_operations::Operation] {
@@ -691,12 +702,27 @@ mod tests {
         assert_eq!(McpTool::name(&tool), "shell");
         assert!(!tool.description().is_empty());
 
-        let schema = tool.schema();
-        assert!(schema.is_object());
-        assert!(schema["properties"]["command"].is_object());
-        assert!(schema["properties"]["op"].is_object());
-        assert!(schema["x-operation-schemas"].is_array());
-        assert!(schema["x-operation-groups"].is_object());
+        // Wire schema: only `op` in properties, heavy keys dropped, signatures kept.
+        let wire = tool.schema();
+        assert!(wire.is_object());
+        assert!(wire["properties"]["op"].is_object());
+        assert!(wire["x-op-signatures"].is_object());
+        let wire_obj = wire.as_object().unwrap();
+        for key in [
+            "x-operation-schemas",
+            "x-operation-groups",
+            "x-forgiving-input",
+            "examples",
+        ] {
+            assert!(!wire_obj.contains_key(key), "wire schema must omit {key:?}");
+        }
+
+        // Full schema: flat per-op properties plus the heavy CLI-facing keys.
+        let full = tool.schema_full();
+        assert!(full["properties"]["command"].is_object());
+        assert!(full["properties"]["op"].is_object());
+        assert!(full["x-operation-schemas"].is_array());
+        assert!(full["x-operation-groups"].is_object());
     }
 
     // =====================================================================
