@@ -124,7 +124,7 @@ fn plan_entry_to_acp_entry(entry: &Value) -> AcpPlanEntry {
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```rust
 /// use llama_agent::acp::plan::tasks_to_acp_plan;
 ///
 /// let tasks_json = serde_json::json!([

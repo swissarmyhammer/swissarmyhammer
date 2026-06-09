@@ -1,0 +1,2 @@
+description: 'Excise the "prompts" feature from SwissArmyHammer. Skills are strictly better and the builtin prompts are unused. Remove the prompt CLI commands, MCP prompt protocol surface, builtin/prompts, prompt-only types and loading. CRITICAL: the swissarmyhammer-prompts crate is the shared Liquid rendering engine that skills/agents depend on (PromptLibrary::render_text + builtin/_partials). The shared rendering engine must be preserved (renamed to a templating/skills engine), only the prompt-specific surface removed.'
+name: Remove Prompts Feature

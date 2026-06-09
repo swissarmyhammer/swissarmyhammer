@@ -12,6 +12,7 @@ use std::env;
 use std::path::PathBuf;
 
 use swissarmyhammer_doctor::{Check, CheckStatus, DoctorRunner};
+use swissarmyhammer_kanban::types::{find_short_id_collisions, TaskId};
 use swissarmyhammer_kanban::KanbanContext;
 
 /// Kanban diagnostic runner.
@@ -50,6 +51,7 @@ impl KanbanDoctor {
         self.check_git_repository();
         self.check_kanban_in_path();
         self.check_board_initialized();
+        self.check_short_id_uniqueness();
 
         self.get_exit_code()
     }
@@ -165,11 +167,98 @@ impl KanbanDoctor {
             });
         }
     }
+
+    /// Check that no two tasks on the board share a short id.
+    ///
+    /// The 7-char short id is enforced board-unique at task creation, but
+    /// tasks minted before that invariant existed could, with vanishingly
+    /// small probability, collide. This check is the safety net: it loads the
+    /// board's task ids and reports an `Error` if any short id is shared.
+    ///
+    /// Boards that are not initialized (or fail to load) are reported as `Ok`
+    /// — there are no tasks to collide, so the invariant holds vacuously, and
+    /// the missing-board condition is already surfaced by
+    /// [`check_board_initialized`].
+    fn check_short_id_uniqueness(&mut self) {
+        let cwd = env::current_dir().unwrap_or_default();
+        let kanban_root = cwd.join(".kanban");
+        let ctx = KanbanContext::new(&kanban_root);
+
+        if !ctx.is_initialized() {
+            self.add_check(short_id_uniqueness_check(&[]));
+            return;
+        }
+
+        let task_ids = match load_task_ids(&ctx) {
+            Ok(ids) => ids,
+            Err(message) => {
+                self.add_check(Check {
+                    name: "Short ID Uniqueness".to_string(),
+                    status: CheckStatus::Warning,
+                    message: format!("Could not load tasks: {message}"),
+                    fix: Some("Ensure the board under .kanban/ is readable".to_string()),
+                });
+                return;
+            }
+        };
+
+        self.add_check(short_id_uniqueness_check(&task_ids));
+    }
 }
 
 impl Default for KanbanDoctor {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Load all live task ids from the board behind `ctx`.
+///
+/// Drives the async entity-context read on a transient single-threaded tokio
+/// runtime, matching how the kanban CLI dispatches its other async work. The
+/// `Err` arm carries a human-readable message for the doctor to surface.
+fn load_task_ids(ctx: &KanbanContext) -> std::result::Result<Vec<TaskId>, String> {
+    let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    runtime.block_on(async {
+        let ectx = ctx.entity_context().await.map_err(|e| e.to_string())?;
+        let tasks = ectx.list("task").await.map_err(|e| e.to_string())?;
+        Ok(tasks
+            .iter()
+            .map(|task| TaskId::from_string(task.id.to_string()))
+            .collect())
+    })
+}
+
+/// Build the "Short ID Uniqueness" health check for a given set of task ids.
+///
+/// Pure over the supplied ids so it is trivially testable without a board on
+/// disk. Returns `Ok` when every short id is distinct, or `Error` naming the
+/// colliding short ids and the count of tasks involved otherwise.
+fn short_id_uniqueness_check(task_ids: &[TaskId]) -> Check {
+    let collisions = find_short_id_collisions(task_ids);
+    if collisions.is_empty() {
+        return Check {
+            name: "Short ID Uniqueness".to_string(),
+            status: CheckStatus::Ok,
+            message: format!("All {} task short ids are unique", task_ids.len()),
+            fix: None,
+        };
+    }
+
+    let detail = collisions
+        .iter()
+        .map(|(short, members)| format!("{short} ({} tasks)", members.len()))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    Check {
+        name: "Short ID Uniqueness".to_string(),
+        status: CheckStatus::Error,
+        message: format!("Colliding short ids: {detail}"),
+        fix: Some(
+            "Recreate one of each colliding pair of tasks so its short id is regenerated"
+                .to_string(),
+        ),
     }
 }
 
@@ -340,20 +429,77 @@ mod tests {
         );
     }
 
-    /// `run_diagnostics` must run all three checks and yield a valid exit
-    /// code in `0..=2`. The three checks are the documented suite; bumping
-    /// past three should be a deliberate change flagged by this test.
+    /// A board whose tasks all have distinct short ids must yield an `Ok`
+    /// short-id uniqueness check.
+    #[test]
+    fn short_id_uniqueness_check_ok_on_distinct_short_ids() {
+        use swissarmyhammer_kanban::types::TaskId;
+
+        // The real board siblings share a 7-char prefix but distinct suffixes,
+        // so their short ids are all distinct.
+        let ids = [
+            "01KT6R6HR3KJT6JVNDRAJV8V4T",
+            "01KT6SAMJAJ40XVQ9Y7JRAJ9VG",
+            "01KT6SA4911JQPK09YQRC9RB4G",
+        ]
+        .into_iter()
+        .map(TaskId::from_string)
+        .collect::<Vec<_>>();
+
+        let check = short_id_uniqueness_check(&ids);
+        assert_eq!(check.name, "Short ID Uniqueness");
+        assert_eq!(
+            check.status,
+            CheckStatus::Ok,
+            "distinct short ids must pass, got {:?} ({})",
+            check.status,
+            check.message,
+        );
+    }
+
+    /// When two tasks share a short id, the uniqueness check must fail with an
+    /// `Error` status whose message names the colliding short id.
+    #[test]
+    fn short_id_uniqueness_check_errors_on_collision() {
+        use swissarmyhammer_kanban::types::TaskId;
+
+        // Two ULIDs with identical last-7 chars collide on short id.
+        let ids = ["01KT6R6HR3KJT6JVNDR0123456", "01KT6SAMJAJ40XVQ9YJ0123456"]
+            .into_iter()
+            .map(TaskId::from_string)
+            .collect::<Vec<_>>();
+
+        let check = short_id_uniqueness_check(&ids);
+        assert_eq!(check.name, "Short ID Uniqueness");
+        assert_eq!(
+            check.status,
+            CheckStatus::Error,
+            "a shared short id must error, got {:?} ({})",
+            check.status,
+            check.message,
+        );
+        assert!(
+            check.message.contains("0123456"),
+            "error message must name the colliding short id, got: {}",
+            check.message,
+        );
+    }
+
+    /// `run_diagnostics` must run all checks and yield a valid exit
+    /// code in `0..=2`. The four checks are the documented suite; bumping
+    /// the count should be a deliberate change flagged by this test.
     ///
-    /// `run_diagnostics` runs `check_git_repository` and
-    /// `check_board_initialized`, both of which read process-global CWD —
-    /// so this test joins the crate-wide `cwd` serialization group.
+    /// `run_diagnostics` runs `check_git_repository`,
+    /// `check_board_initialized`, and `check_short_id_uniqueness`, all of
+    /// which read process-global CWD — so this test joins the crate-wide
+    /// `cwd` serialization group.
     #[test]
     #[serial_test::serial(cwd)]
-    fn run_diagnostics_runs_all_three_checks() {
+    fn run_diagnostics_runs_all_checks() {
         let mut doctor = KanbanDoctor::new();
         let exit_code = doctor.run_diagnostics();
 
-        assert_eq!(doctor.checks().len(), 3);
+        assert_eq!(doctor.checks().len(), 4);
         assert!(exit_code <= 2);
     }
 

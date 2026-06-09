@@ -37,18 +37,17 @@ use tokio::sync::broadcast;
 ///
 /// # Example
 ///
-/// ```ignore
-/// use agent_client_protocol::Agent;
+/// ```no_run
 /// use agent_client_protocol_extras::TracingAgent;
 ///
-/// let inner = Agent
-///     .builder()
-///     .name("my-agent")
-///     // ... handlers ...
-///     ;
+/// // `inner` is any component implementing `ConnectTo<Client>` — typically an
+/// // `Agent` built via `Agent.builder()` or another middleware.
+/// # struct Inner;
+/// let inner = Inner;
 /// let traced = TracingAgent::new(inner, "my-agent");
-/// // `traced` itself is `ConnectTo<Client>` and can be `connect_to`'d
-/// // to a client transport (stdio, ByteStreams, etc.).
+/// // `traced` itself is `ConnectTo<Client>` (when `inner` is) and can be
+/// // `connect_to`'d to a client transport (stdio, ByteStreams, etc.).
+/// # let _ = traced;
 /// ```
 pub struct TracingAgent<A> {
     inner: A,

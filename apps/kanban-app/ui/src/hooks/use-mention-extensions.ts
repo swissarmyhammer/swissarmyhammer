@@ -78,19 +78,40 @@ function getTooltipInfra(prefix: string, entityType: string) {
 /**
  * Build a slug→MentionMeta map for a mentionable entity type.
  *
- * Populates color, displayName (the raw un-slugified name), and optional
- * description. Used by both decoration and tooltip extensions.
+ * Two shapes, selected by whether the entity type declares a slug field
+ * (`mention_slug_field`):
+ *
+ * - **No slug field** (tags, actors — ids already slug-shaped): keyed by
+ *   `slugify(displayField)`, with `displayName` = the raw un-slugified value
+ *   and `description` from the entity's `description` field. Legacy behavior.
+ *
+ * - **With a slug field** (tasks → `short_id`): keyed by the slug value
+ *   verbatim, with `displayName` = the slug (so the pill labels with the short
+ *   handle) and `description` = the display-field value (the long-form title),
+ *   so the hover tooltip shows the title. This is the intentional task
+ *   asymmetry — `^<short>` on the pill, the sentence-like title in the tooltip.
+ *
+ * Used by both decoration and tooltip extensions.
  */
 export function buildMentionMetaMap(
   entities: Entity[],
   displayField: string,
+  slugField?: string,
 ): Map<string, MentionMeta> {
   const map = new Map<string, MentionMeta>();
   for (const e of entities) {
-    const raw = getStr(e, displayField);
     const color = getStr(e, "color", "888888");
-    const description = getStr(e, "description") || undefined;
-    if (raw) map.set(slugify(raw), { color, displayName: raw, description });
+    if (slugField) {
+      const slug = getStr(e, slugField);
+      if (!slug) continue;
+      // displayName = slug (pill label), description = display value (tooltip).
+      const title = getStr(e, displayField) || undefined;
+      map.set(slug, { color, displayName: slug, description: title });
+    } else {
+      const raw = getStr(e, displayField);
+      const description = getStr(e, "description") || undefined;
+      if (raw) map.set(slugify(raw), { color, displayName: raw, description });
+    }
   }
   return map;
 }
@@ -102,10 +123,18 @@ function buildAsyncSearch(
   const rawSearch = async (query: string): Promise<MentionSearchResult[]> => {
     try {
       const results = await invoke<
-        Array<{ id: string; display_name: string; color: string }>
+        Array<{
+          id: string;
+          display_name: string;
+          color: string;
+          slug?: string;
+        }>
       >("search_mentions", { entityType, query });
       return results.map((r) => ({
-        slug: slugify(r.display_name),
+        // Prefer the backend-supplied slug (e.g. a task's 7-char short id);
+        // fall back to slugify(display_name) for tag/actor types whose ids
+        // are already slug-shaped and ship no explicit slug.
+        slug: r.slug ?? slugify(r.display_name),
         displayName: r.display_name,
         color: r.color,
       }));
@@ -174,6 +203,15 @@ interface MentionDatum {
  * Builds decoration, autocomplete, and tooltip extensions for each mentionable
  * type. Merges virtual tags (using backend metadata) and filter sigil sources
  * when the corresponding options are enabled.
+ *
+ * Decoration and tooltip extensions are gated on a non-empty meta map — they
+ * decorate text against the locally-loaded entity set, so there is nothing to
+ * render when none are loaded. The autocomplete completion source is NOT gated
+ * that way: it queries the backend (`search_mentions`) independently of the
+ * local store, so it stays wired for every mentionable type. That is what lets
+ * a `^` task picker work in a freshly-opened description editor before any task
+ * entity has been mirrored locally — the source the description editor relies
+ * on comes from this loop, not the filter-sigils branch below.
  */
 function buildMentionExtensions(
   mentionData: MentionDatum[],
@@ -185,6 +223,9 @@ function buildMentionExtensions(
   const completionSources: Array<
     ReturnType<typeof createMentionCompletionSource>
   > = [];
+  // Prefixes already given a completion source by the data-driven loop, so the
+  // filter-sigils branch never registers a second source for the same prefix.
+  const sourcedPrefixes = new Set<string>();
 
   for (const md of mentionData) {
     const addVirtual =
@@ -193,25 +234,36 @@ function buildMentionExtensions(
       ? mergeVirtualTagMeta(md.metaMap, vtMeta)
       : md.metaMap;
 
-    if (metaMap.size === 0) continue;
-    exts.push(getDecoInfra(md.prefix, md.entityType).extension(metaMap));
+    // Decoration + tooltip render against locally-loaded entities only.
+    if (metaMap.size > 0) {
+      exts.push(getDecoInfra(md.prefix, md.entityType).extension(metaMap));
+      exts.push(getTooltipInfra(md.prefix, md.entityType).extension(metaMap));
+    }
 
+    // The completion source is backend-backed and always wired.
     const baseSearch = buildAsyncSearch(md.entityType);
     const search = addVirtual
       ? buildVirtualTagSearch(baseSearch, vtMeta)
       : baseSearch;
     completionSources.push(createMentionCompletionSource(md.prefix, search));
-
-    exts.push(getTooltipInfra(md.prefix, md.entityType).extension(metaMap));
+    sourcedPrefixes.add(md.prefix);
   }
 
+  // Filter-sigil fallback: ensure `@actor` and `^task` autocomplete exist in
+  // the filter editor even when the schema does not register those prefixes as
+  // mentionable types. When it does (the default schema), the loop above has
+  // already added the source, so these are skipped — no double registration.
   if (includeFilterSigils) {
-    completionSources.push(
-      createMentionCompletionSource("@", buildAsyncSearch("actor")),
-    );
-    completionSources.push(
-      createMentionCompletionSource("^", buildAsyncSearch("task")),
-    );
+    if (!sourcedPrefixes.has("@")) {
+      completionSources.push(
+        createMentionCompletionSource("@", buildAsyncSearch("actor")),
+      );
+    }
+    if (!sourcedPrefixes.has("^")) {
+      completionSources.push(
+        createMentionCompletionSource("^", buildAsyncSearch("task")),
+      );
+    }
   }
   if (completionSources.length > 0) {
     exts.push(createMentionAutocomplete(completionSources));
@@ -244,7 +296,7 @@ export function useMentionExtensions(
       const entities = getEntities(mt.entityType);
       return {
         ...mt,
-        metaMap: buildMentionMetaMap(entities, mt.displayField),
+        metaMap: buildMentionMetaMap(entities, mt.displayField, mt.slugField),
       };
     });
   }, [mentionableTypes, getEntities]);

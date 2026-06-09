@@ -10,7 +10,6 @@
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use tokio::sync::broadcast;
 
 use crate::helpers;
 
@@ -252,9 +251,12 @@ async fn session_start_matcher_filters_by_source() {
 // Unexpected exit code on notification-pipeline event
 // ---------------------------------------------------------------------------
 
-/// Exit code 1 on PreToolUse should be treated as Allow — no cancel or context.
+/// Exit code 1 on PreToolUse should be treated as Allow — Proceed with no
+/// updatedInput and no context (neither deny nor stop-turn).
 #[tokio::test]
 async fn unexpected_exit_code_treated_as_allow_on_pre_tool_use() {
+    use agent_client_protocol_extras::PreToolUseOutcome;
+
     let tmp = tempfile::TempDir::new().unwrap();
     let script = helpers::write_exit_code_script(tmp.path(), "hook.sh", 1);
 
@@ -264,30 +266,24 @@ async fn unexpected_exit_code_treated_as_allow_on_pre_tool_use() {
 
     let _session_id = helpers::init_session(&agent).await;
 
-    let (tx, rx) = broadcast::channel(16);
-    let (_forwarded_rx, mut cancel_rx, mut context_rx) = agent.intercept_notifications(rx);
+    let outcome = helpers::fire_pre_tool_use(&agent, "Bash").await;
 
-    helpers::send_named_tool_notification(&tx, "test-session", "Bash", "call-1").await;
-
-    // Hook should have fired
+    // Hook should have fired.
     let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
     assert!(captured.is_some(), "PreToolUse hook should fire");
 
-    // Hook already finished (wait_for_stdin_capture confirmed it), so any
-    // channel sends would have already occurred.  Use a short timeout for
-    // negative assertions.
-    let short = std::time::Duration::from_millis(200);
-    let cancel = tokio::time::timeout(short, cancel_rx.recv()).await;
-    assert!(
-        cancel.is_err(),
-        "Unexpected exit code should not produce cancel"
-    );
-
-    let ctx = tokio::time::timeout(short, context_rx.recv()).await;
-    assert!(
-        ctx.is_err(),
-        "Unexpected exit code should not produce context"
-    );
+    // An unexpected exit code is treated as Allow: the call proceeds with no
+    // rewrite and no injected context.
+    match outcome {
+        PreToolUseOutcome::Proceed {
+            updated_input,
+            context,
+        } => {
+            assert!(updated_input.is_none(), "exit 1 must not rewrite input");
+            assert!(context.is_none(), "exit 1 must not inject context");
+        }
+        other => panic!("expected Proceed (Allow), got {other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -43,7 +43,8 @@ fn all_event_kinds_is_exhaustive() {
     );
 }
 
-/// PreToolUse matcher "Bash" should fire for Bash but not Write tool calls.
+/// PreToolUse matcher "Bash" should fire for Bash but not Write tool calls, at
+/// the dispatch seam.
 #[tokio::test]
 async fn matcher_filters_by_tool_name() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -56,25 +57,19 @@ async fn matcher_filters_by_tool_name() {
 
     let _session_id = helpers::init_session(&agent).await;
 
-    let (tx, rx) = broadcast::channel(16);
-    let (_forwarded_rx, _cancel_rx, _context_rx) = agent.intercept_notifications(rx);
-
-    // Send Bash tool call — hook should fire
-    helpers::send_named_tool_notification(&tx, "test-session", "Bash", "call-1").await;
-
+    // Fire PreToolUse for Bash — the matching hook runs.
+    let _ = helpers::fire_pre_tool_use(&agent, "Bash").await;
     let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
     assert!(
         captured.is_some(),
         "Hook should fire for matching tool name 'Bash'"
     );
 
-    // Clear capture file
+    // Clear capture file.
     helpers::clear_stdin_capture(tmp.path(), "hook.sh");
 
-    // Send Write tool call — hook should NOT fire
-    helpers::send_named_tool_notification(&tx, "test-session", "Write", "call-2").await;
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
+    // Fire PreToolUse for Write — the matcher does not apply, so no hook runs.
+    let _ = helpers::fire_pre_tool_use(&agent, "Write").await;
     let captured = helpers::read_stdin_capture(tmp.path(), "hook.sh");
     assert!(
         captured.is_none(),
@@ -228,10 +223,9 @@ async fn stdin_json_shape_pre_tool_use() {
 
     let _session_id = helpers::init_session(&agent).await;
 
-    let (tx, rx) = broadcast::channel(16);
-    let (_forwarded_rx, _cancel_rx, _context_rx) = agent.intercept_notifications(rx);
-
-    helpers::send_named_tool_notification(&tx, "test-session", "Bash", "call-1").await;
+    // Fire PreToolUse at the dispatch seam; the command hook receives the
+    // Claude-shaped JSON on stdin.
+    let _ = helpers::fire_pre_tool_use(&agent, "Bash").await;
 
     let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
     assert!(captured.is_some(), "PreToolUse hook should run");

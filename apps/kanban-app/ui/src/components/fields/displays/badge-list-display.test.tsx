@@ -48,24 +48,39 @@ const mockTags = [
   },
 ];
 
+// Task mention pills label with the derived 7-char short id (`short_id`),
+// reserving the long title for the hover tooltip — the intentional task
+// asymmetry shared with inline `^` body pills.
 const mockTasks = [
   {
     id: "task-dep-1",
     entity_type: "task",
     moniker: "task:task-dep-1",
-    fields: { title: "Refactor login flow", color: "3366ff" },
+    fields: {
+      short_id: "aaaaaa1",
+      title: "Refactor login flow",
+      color: "3366ff",
+    },
   },
   {
     id: "task-dep-2",
     entity_type: "task",
     moniker: "task:task-dep-2",
-    fields: { title: "Add password reset", color: "33ccff" },
+    fields: {
+      short_id: "aaaaaa2",
+      title: "Add password reset",
+      color: "33ccff",
+    },
   },
   {
     id: "task-dep-3",
     entity_type: "task",
     moniker: "task:task-dep-3",
-    fields: { title: "Document auth module", color: "33ff66" },
+    fields: {
+      short_id: "aaaaaa3",
+      title: "Document auth module",
+      color: "33ff66",
+    },
   },
 ];
 
@@ -87,7 +102,12 @@ vi.mock("@/lib/schema-context", () => ({
     getFieldDef: () => undefined,
     mentionableTypes: [
       { entityType: "tag", prefix: "#", displayField: "tag_name" },
-      { entityType: "task", prefix: "^", displayField: "title" },
+      {
+        entityType: "task",
+        prefix: "^",
+        displayField: "title",
+        slugField: "short_id",
+      },
     ],
     loading: false,
   }),
@@ -269,7 +289,7 @@ describe("BadgeListDisplay", () => {
     expect(hint?.textContent).toBe("Add tags");
   });
 
-  it("renders depends_on task IDs as CM6 pills with clipped display names", async () => {
+  it("renders depends_on task IDs as ^<short> CM6 pills", async () => {
     const dependsEntity: Entity = {
       id: "task-parent",
       entity_type: "task",
@@ -288,11 +308,11 @@ describe("BadgeListDisplay", () => {
     const widgets = getPillWidgets(container);
     expect(widgets.length).toBe(3);
     const texts = widgets.map((w) => w.textContent ?? "");
-    // Each pill shows the task's title (prefixed by "^") — the CM6 widget
-    // pipeline produces the display name, not the slug.
-    expect(texts).toContain("^Refactor login flow");
-    expect(texts).toContain("^Add password reset");
-    expect(texts).toContain("^Document auth module");
+    // Each pill labels with the task's short id (prefixed by "^"); the long
+    // title rides in the hover tooltip, not inline.
+    expect(texts).toContain("^aaaaaa1");
+    expect(texts).toContain("^aaaaaa2");
+    expect(texts).toContain("^aaaaaa3");
 
     // And one FocusScope per item with a task moniker (derived from entity id).
     const scopes = getScopes(container);

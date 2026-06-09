@@ -33,6 +33,7 @@ pub mod glob_utils;
 pub mod health;
 pub mod id_types;
 pub mod interactive_prompts;
+pub mod json;
 pub mod lifecycle;
 pub mod logging;
 pub mod mcp_errors;
@@ -87,6 +88,9 @@ pub use rate_limiter::{
     RateLimiterConfig, DEFAULT_EXPENSIVE_OPERATION_LIMIT, DEFAULT_GLOBAL_RATE_LIMIT,
     DEFAULT_PER_CLIENT_RATE_LIMIT,
 };
+
+// Re-export the shared JSONC reader primitive for convenience
+pub use json::{parse_jsonc, read_json_file, JsonFileError};
 
 // Re-export glob utilities for convenience
 pub use glob_utils::{

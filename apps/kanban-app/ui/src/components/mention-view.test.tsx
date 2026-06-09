@@ -223,6 +223,46 @@ describe("MentionView — single mode", () => {
     expect(scope).toBeTruthy();
   });
 
+  it("renders a task reference as a ^<short> pill keyed on the short id", async () => {
+    // The depends_on field passes a full ULID `id`; the task mention type
+    // declares `slugField: short_id`, so MentionView must label the pill with
+    // the derived short id (NOT slugify(title)) and keep the title for the
+    // tooltip. This keeps the field pill consistent with inline `^` body pills.
+    mockEntities = {
+      task: [
+        {
+          id: "01KT4CNAYW7JG0X8F8W28RFP1R",
+          entity_type: "task",
+          moniker: "task:01KT4CNAYW7JG0X8F8W28RFP1R",
+          fields: {
+            short_id: "28rfp1r",
+            title: "Long Sentence-Like Task Title",
+            color: "00ff00",
+          },
+        },
+      ],
+    };
+    mockMentionableTypes = [
+      {
+        entityType: "task",
+        prefix: "^",
+        displayField: "title",
+        slugField: "short_id",
+      },
+    ];
+
+    const { container } = render(
+      <Providers>
+        <MentionView entityType="task" id="01KT4CNAYW7JG0X8F8W28RFP1R" />
+      </Providers>,
+    );
+    await flush();
+
+    const widget = container.querySelector(".cm-mention-pill");
+    expect(widget).toBeTruthy();
+    expect(widget?.textContent).toBe("^28rfp1r");
+  });
+
   it("falls back to raw id with muted mark styling when entity is missing", async () => {
     mockEntities = { project: [] };
     const { container } = render(

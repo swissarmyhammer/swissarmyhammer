@@ -104,12 +104,16 @@ pub struct RecordedSession {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use agent_client_protocol_extras::RecordingAgent;
 ///
-/// let inner = /* something implementing ConnectTo<Client> */;
+/// // `inner` is any component implementing `ConnectTo<Client>`.
+/// # struct Inner;
+/// let inner = Inner;
 /// let recorder = RecordingAgent::new(inner, std::path::PathBuf::from("rec.json"));
-/// // `recorder` is itself ConnectTo<Client> and can be wired to a client transport.
+/// // `recorder` is itself `ConnectTo<Client>` (when `inner` is) and can be
+/// // wired to a client transport.
+/// # let _ = recorder;
 /// ```
 pub struct RecordingAgent<A> {
     inner: A,
