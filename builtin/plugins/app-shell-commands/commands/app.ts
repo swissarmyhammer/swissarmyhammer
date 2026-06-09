@@ -108,13 +108,20 @@ export function appCommands(
     },
 
     // ─── app.dismiss ────────────────────────────────────────────────────────
-    // YAML: keys vim:Escape / cua:Escape / emacs:Escape. Routes to ui_state
-    // `dismiss ui` (layered close — palette first, then inspector) for the
-    // window.
+    // Routes to ui_state `dismiss ui` (layered close — palette first, then
+    // inspector) for the window.
+    //
+    // No longer keyed to Escape (card `01KTPDTH772HSEV5F7R1DKYDNJ`): Escape is
+    // owned globally by `nav.drillOut`, which drills out one focus level and,
+    // at a layer-root edge, falls through to this same `dismiss ui` op. Binding
+    // Escape here too made `app.dismiss` a competing Escape owner that the
+    // first-id-wins keymap layer could pick over `nav.drillOut`. The command id
+    // survives — it is still dispatched programmatically (inspector backdrop
+    // click, quick-capture) and discoverable in the palette — just unbound from
+    // Escape.
     {
       id: "app.dismiss",
       name: "Dismiss",
-      keys: { vim: "Escape", cua: "Escape", emacs: "Escape" },
       execute: async (rawCtx: unknown) => {
         const ctx = (rawCtx ?? {}) as CommandContext;
         return await uiState.ui_state.ui_state.ui.dismiss({

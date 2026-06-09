@@ -462,6 +462,31 @@ async fn nav_commands_plugin_registers_and_routes_to_focus() {
         "nav.drillOut at a layer-root edge (no parent_zone) must fall through to \
          ui_state dismiss and close the open palette"
     );
+
+    // ── (3e) nav.drillOut at a layer-root edge closes the inspector ─────────
+    // Card `01KTPDTH772HSEV5F7R1DKYDNJ` removed the `ui.inspector.close`
+    // Escape binding, so Escape no longer closes the inspector directly — it
+    // closes via nav.drillOut's dismiss fall-through (the `dismiss ui` op is a
+    // LAYERED close: palette first, then pop the topmost inspector). With the
+    // palette already closed, a drill-out at the layer-root edge must now pop
+    // the open inspector. This pins the inspector's Escape-close path post-fix.
+    ui_state.inspect(WINDOW, "task:probe");
+    assert_eq!(
+        ui_state.inspector_stack(WINDOW),
+        vec!["task:probe".to_string()],
+        "precondition: the inspector is open before nav.drillOut"
+    );
+    execute_ok(
+        &service,
+        "nav.drillOut",
+        json!({ "scope_chain": window_scope() }),
+    )
+    .await;
+    assert!(
+        ui_state.inspector_stack(WINDOW).is_empty(),
+        "nav.drillOut at a layer-root edge must fall through to ui_state dismiss \
+         and pop the open inspector (the inspector's Escape-close path)"
+    );
 }
 
 // ───────────────────────────────────────────────────────────────────────────

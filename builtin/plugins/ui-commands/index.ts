@@ -104,7 +104,7 @@ interface WindowDispatch {
   window: {
     window: {
       window: {
-        new(args: Record<string, unknown>): Promise<unknown>;
+        new (args: Record<string, unknown>): Promise<unknown>;
       };
     };
   };
@@ -168,11 +168,20 @@ export default class UiCommandsPlugin extends Plugin {
       },
 
       // ─── ui.inspector.close ─────────────────────────────────────────────
-      // ui.yaml: keys cua:Escape / vim:q. Routes to ui_state `close inspector`.
+      // Routes to ui_state `close inspector`.
+      //
+      // No longer keyed to cua:Escape (card `01KTPDTH772HSEV5F7R1DKYDNJ`):
+      // Escape is owned globally by `nav.drillOut`, which drills out one focus
+      // level inside the inspector and, at the inspector layer root, falls
+      // through to `ui_state dismiss ui` — a layered close that pops the
+      // topmost inspector entry. So Escape still closes the inspector, via
+      // drill-out, without `ui.inspector.close` competing for the Escape key.
+      // The vim `q` binding stays (a direct close), and the inspector's x
+      // button keeps dispatching this id via onClick.
       {
         id: "ui.inspector.close",
         name: "Close Inspector",
-        keys: { cua: "Escape", vim: "q" },
+        keys: { vim: "q" },
         execute: async (rawCtx: unknown) => {
           const ctx = (rawCtx ?? {}) as CommandContext;
           return await uiState.ui_state.ui_state.inspector.close({

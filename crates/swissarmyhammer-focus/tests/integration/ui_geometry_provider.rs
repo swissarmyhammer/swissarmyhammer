@@ -206,6 +206,106 @@ async fn navigate_pulls_focus_from_provider_when_kernel_slot_empty() {
     assert_eq!(res["event"]["next_fq"], json!("/L/k2"));
 }
 
+/// A nested snapshot under `/L`: a focusable parent zone `/L/parent` and a
+/// child `/L/parent/child` whose `parent_zone` points back at the parent. A
+/// drill-out from the child must land on (and commit focus to) the parent.
+fn nested_snapshot() -> NavSnapshot {
+    serde_json::from_value(json!({
+        "layer_fq": "/L",
+        "scopes": [
+            { "fq": "/L/parent", "rect": { "x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0 },
+              "parent_zone": null, "nav_override": {}, "focusable": true },
+            { "fq": "/L/parent/child", "rect": { "x": 10.0, "y": 10.0, "width": 20.0, "height": 20.0 },
+              "parent_zone": "/L/parent", "nav_override": {}, "focusable": true }
+        ]
+    }))
+    .expect("nested snapshot literal should deserialize")
+}
+
+/// Drill-out from a scope WITH a `parent_zone` commits focus to the parent and
+/// emits a `focus-changed` event (card `01KTPDTH772HSEV5F7R1DKYDNJ`). This is
+/// the symmetric counterpart to drill-in: Escape → `nav.drillOut` relies on the
+/// kernel actually MOVING focus to the parent zone (not just returning a
+/// `next_fq`), so the UI follows. The kernel pulls geometry from the provider,
+/// reads the focused child from its `focus_by_window` slot, computes the parent
+/// via `navigate::drill_out`, commits it via `focus_from`, and forwards the
+/// event.
+#[tokio::test]
+async fn drill_out_with_parent_zone_commits_focus_to_parent_and_emits_event() {
+    let provider = FakeProvider {
+        snapshot: nested_snapshot(),
+        scope_chain: vec![
+            FullyQualifiedMoniker::from_string("/L"),
+            FullyQualifiedMoniker::from_string("/L/parent"),
+            FullyQualifiedMoniker::from_string("/L/parent/child"),
+        ],
+        focus: Some(FullyQualifiedMoniker::from_string("/L/parent/child")),
+    };
+    let server = FocusServer::new().with_provider(std::sync::Arc::new(provider));
+    let state = server.state();
+    call_tool(
+        &server,
+        "push layer",
+        json!({ "op": "push layer", "fq": "/L", "segment": "window",
+                "name": "window", "parent": null, "window": "main" }),
+    )
+    .await
+    .expect("push layer should succeed");
+
+    // Seed the kernel's per-window focus on the child (with the nested
+    // snapshot so the kernel records geometry), establishing the drill source.
+    call_tool(
+        &server,
+        "set focus",
+        json!({ "op": "set focus", "fq": "/L/parent/child", "snapshot": nested_snapshot() }),
+    )
+    .await
+    .expect("seed focus on the child");
+    assert_eq!(
+        state
+            .lock()
+            .await
+            .focused_in(&WindowLabel::from_string("main"))
+            .map(|fq| fq.to_string()),
+        Some("/L/parent/child".to_string()),
+        "precondition: the seeded focus is the child"
+    );
+
+    // Drill out: `fq` is the scope being drilled out OF — the focused child.
+    // No focused_fq on the wire, so the kernel resolves the source from its own
+    // per-window slot and pulls geometry from the provider.
+    let res = call_tool(
+        &server,
+        "drill_out layer",
+        json!({ "op": "drill_out layer", "window": "main",
+                "fq": "/L/parent/child", "focused_fq": "/L/parent/child" }),
+    )
+    .await
+    .expect("drill_out should succeed");
+
+    assert_eq!(res["ok"], json!(true));
+    // The drill-out target is the child's parent_zone.
+    assert_eq!(
+        res["next_fq"],
+        json!("/L/parent"),
+        "drill_out from a scope with a parent_zone must target the parent"
+    );
+
+    // And the kernel must have COMMITTED that focus into its per-window slot —
+    // proving `focus_from` ran (and, with it, the `focus-changed` forward),
+    // not merely a pure-query `next_fq`. This is what makes the UI follow the
+    // Escape → nav.drillOut keystroke.
+    assert_eq!(
+        state
+            .lock()
+            .await
+            .focused_in(&WindowLabel::from_string("main"))
+            .map(|fq| fq.to_string()),
+        Some("/L/parent".to_string()),
+        "drill_out must commit focus to the parent zone, not merely return it"
+    );
+}
+
 /// When the provider yields no snapshot (window closed / responder absent),
 /// a host-driven navigate drops silently with a null event — never panics,
 /// never holds a lock across the pull.

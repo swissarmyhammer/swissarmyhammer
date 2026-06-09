@@ -4,6 +4,7 @@ import {
   BINDING_TABLES,
   createKeyHandler,
   extractScopeBindings,
+  extractKeymapBindings,
 } from "./keybindings";
 
 /* ---------- helpers ---------- */
@@ -1109,5 +1110,96 @@ describe("cross-cutting command keybinding dispatch", () => {
     );
     handler(fakeKeyEvent(":"));
     expect(executeCommand).toHaveBeenCalledWith("app.palette.open");
+  });
+});
+
+/* ---------- Escape = nav.drillOut (full production resolution) ---------- */
+
+// These pin the load-bearing claim of card
+// `01KTPDTH772HSEV5F7R1DKYDNJ`: with the production wiring — the global
+// keybinding layer built from the metadata-driven Command registry
+// (`extractKeymapBindings(registryCommands, mode)`) merged under the focused
+// scope chain (`extractScopeBindings(focusedScope, mode)`) — Escape must
+// resolve to `nav.drillOut`, NOT `app.dismiss` and NOT `ui.inspector.close`.
+//
+// The fixtures mirror the ACTUAL plugin sources after the fix:
+//   - `app.ts` `app.dismiss` carries no Escape key.
+//   - `ui-commands/index.ts` `ui.inspector.close` keeps only vim `q`.
+//   - `app-shell.tsx` `STATIC_GLOBAL_COMMANDS` no longer contains an
+//     `app.dismiss` Escape entry, so the root command scope surfaces no
+//     Escape binding to shadow the global `nav.drillOut`.
+// To stay an honest RED-first guard, the fixtures here are kept in lockstep
+// with those sources: a regression that re-adds an Escape key to any of the
+// three legacy bindings would make this `expect` fail.
+describe("Escape resolves to nav.drillOut (production registry + scope wiring)", () => {
+  let executeCommand: (id: string) => Promise<boolean>;
+
+  beforeEach(() => {
+    executeCommand = vi.fn(async () => true) as (
+      id: string,
+    ) => Promise<boolean>;
+  });
+
+  /**
+   * The Escape-bearing slice of the live command registry, in the order
+   * `useCommandList` returns it. After the fix `nav.drillOut` is the sole
+   * Escape owner; `app.dismiss` carries no key and `ui.inspector.close` keeps
+   * only its vim `q`.
+   */
+  const REGISTRY = [
+    {
+      id: "nav.drillOut",
+      name: "Drill Out",
+      keys: { cua: "Escape", vim: "Escape", emacs: "Escape" },
+    },
+    { id: "ui.inspector.close", name: "Close Inspector", keys: { vim: "q" } },
+    { id: "app.dismiss", name: "Dismiss" },
+    {
+      id: "ui.inspector.close_all",
+      name: "Close All",
+      keys: { cua: "Mod+Escape", vim: "Q" },
+    },
+  ] as const;
+
+  for (const mode of ["cua", "vim", "emacs"] as const) {
+    it(`${mode}: Escape resolves to nav.drillOut from the global registry layer`, () => {
+      const globalBindings = extractKeymapBindings([...REGISTRY], mode);
+      // The registry global layer must bind Escape to nav.drillOut and to
+      // nothing else.
+      expect(globalBindings["Escape"]).toBe("nav.drillOut");
+
+      const handler = createKeyHandler(
+        mode,
+        executeCommand,
+        undefined,
+        globalBindings,
+      );
+      handler(fakeKeyEvent("Escape"));
+      expect(executeCommand).toHaveBeenCalledWith("nav.drillOut");
+    });
+  }
+
+  it("cua: Escape resolves to nav.drillOut with the root scope focused (no app.dismiss shadow)", () => {
+    // The root command scope (`globalCommands` in app-shell.tsx) must NOT
+    // carry an `app.dismiss` Escape binding — that scope-level binding beat
+    // the global `nav.drillOut` (scope wins over global in `createKeyHandler`,
+    // which merges `{...global, ...scope}`). The fix removes `app.dismiss`
+    // from `STATIC_GLOBAL_COMMANDS`, so the root scope surfaces no Escape
+    // binding and Escape falls through to the global `nav.drillOut`.
+    const rootScope = makeScope([
+      { id: "app.palette.open", keys: { cua: "Mod+K", vim: ":" } },
+      { id: "app.undo", keys: { cua: "Mod+z", vim: "u" } },
+      { id: "entity.inspect", keys: { cua: "Space", vim: "Space" } },
+      // No app.dismiss — the legacy Escape scope binding is gone.
+    ]);
+    const globalBindings = extractKeymapBindings([...REGISTRY], "cua");
+    const handler = createKeyHandler(
+      "cua",
+      executeCommand,
+      () => extractScopeBindings(rootScope, "cua"),
+      globalBindings,
+    );
+    handler(fakeKeyEvent("Escape"));
+    expect(executeCommand).toHaveBeenCalledWith("nav.drillOut");
   });
 });

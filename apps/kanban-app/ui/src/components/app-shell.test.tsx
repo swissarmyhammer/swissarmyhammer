@@ -380,20 +380,25 @@ describe("AppShell", () => {
 
     mockInvoke.mockClear();
 
-    // Press Escape — this dispatches app.dismiss through the focused scope
+    // Press Escape — this now dispatches `nav.drillOut` (card
+    // `01KTPDTH772HSEV5F7R1DKYDNJ`): the legacy `app.dismiss` Escape
+    // scope binding was removed from `STATIC_GLOBAL_COMMANDS`, so the
+    // root scope no longer shadows the global `nav.drillOut`. The
+    // dismiss-at-root still happens, but as `nav.drillOut`'s backend
+    // fall-through, not a direct `app.dismiss` dispatch.
     await act(async () => {
       fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
     });
 
-    const dismissCall = mockInvoke.mock.calls.find(
+    const drillOutCall = mockInvoke.mock.calls.find(
       (c: unknown[]) =>
         c[0] === "dispatch_command" &&
-        (c[1] as Record<string, unknown>)?.cmd === "app.dismiss",
+        (c[1] as Record<string, unknown>)?.cmd === "nav.drillOut",
     );
-    expect(dismissCall).toBeTruthy();
+    expect(drillOutCall).toBeTruthy();
 
     // The scopeChain must be present and include the window moniker
-    const params = dismissCall![1] as Record<string, unknown>;
+    const params = drillOutCall![1] as Record<string, unknown>;
     expect(params.scopeChain).toBeTruthy();
     expect(Array.isArray(params.scopeChain)).toBe(true);
     const chain = params.scopeChain as string[];
@@ -403,13 +408,72 @@ describe("AppShell", () => {
     expect(chain.length).toBeGreaterThan(0);
   });
 
+  it("Escape resolves to nav.drillOut, not app.dismiss, from a focused card scope", async () => {
+    // Regression for card `01KTPDTH772HSEV5F7R1DKYDNJ`: with a scope
+    // focused, the root command scope (`STATIC_GLOBAL_COMMANDS`) used to
+    // surface an `app.dismiss` Escape binding that — because scope wins
+    // over global in `createKeyHandler` — shadowed the global
+    // `nav.drillOut`. The trace showed Escape resolving to `app.dismiss`,
+    // so drill-out never fired. After removing the legacy `app.dismiss`
+    // Escape binding (and the registry `app.dismiss` / `ui.inspector.close`
+    // Escape keys), `nav.drillOut` is the sole Escape owner. The focused
+    // card claims no Escape of its own, so Escape falls through to the
+    // global `nav.drillOut`.
+    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
+
+    function FocusedCard() {
+      const { setFocus } = useEntityFocus();
+      return (
+        <FocusScope moniker={asSegment("task:drill")} commands={[]}>
+          <button onClick={() => setFocus(asFq("task:drill"))}>
+            Focus Drill Card
+          </button>
+        </FocusScope>
+      );
+    }
+
+    await renderShell(<FocusedCard />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Focus Drill Card"));
+    });
+
+    mockInvoke.mockClear();
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+    });
+
+    const drillOutCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as Record<string, unknown>)?.cmd === "nav.drillOut",
+    );
+    expect(drillOutCall, "Escape must dispatch nav.drillOut").toBeTruthy();
+
+    // And it must NOT dispatch the legacy app.dismiss directly — the
+    // dismiss-at-root is nav.drillOut's backend concern now.
+    const dismissCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as Record<string, unknown>)?.cmd === "app.dismiss",
+    );
+    expect(
+      dismissCall,
+      "Escape must NOT dispatch app.dismiss anymore",
+    ).toBeFalsy();
+  });
+
   it("keybinding handler resolves commands from focused scope", async () => {
     const focusedFn = vi.fn();
 
     /**
-     * A component that sets up a focused scope with a custom app.dismiss
-     * command. When focused, pressing Escape should resolve to this override
-     * instead of the global app.dismiss.
+     * A component that sets up a focused scope claiming Escape via a
+     * `dialog.cancel`-style command — a focused subtree can still claim
+     * Escape back for its own semantics (scope wins over global). The
+     * command declares `keys.cua: Escape` so `extractScopeBindings`
+     * surfaces it; pressing Escape resolves to it instead of the global
+     * `nav.drillOut`.
      */
     function FocusedChild() {
       const { setFocus } = useEntityFocus();
@@ -418,8 +482,9 @@ describe("AppShell", () => {
           moniker={asSegment("task:test")}
           commands={[
             {
-              id: "app.dismiss",
-              name: "Focused Dismiss",
+              id: "dialog.cancel",
+              name: "Cancel Dialog",
+              keys: { vim: "Escape", cua: "Escape", emacs: "Escape" },
               execute: focusedFn,
             },
           ]}
@@ -436,8 +501,8 @@ describe("AppShell", () => {
       fireEvent.click(screen.getByText("Focus Me"));
     });
 
-    // Press Escape (which maps to app.dismiss in CUA binding table).
-    // Should resolve from the focused scope's app.dismiss, not the root one.
+    // Press Escape — the focused scope claims Escape via `dialog.cancel`,
+    // shadowing the global `nav.drillOut`, so the scope command fires.
     await act(async () => {
       fireEvent.keyDown(document, {
         key: "Escape",

@@ -200,10 +200,19 @@ const STATIC_GLOBAL_COMMANDS: CommandDef[] = [
     name: "Redo",
     keys: { vim: "Mod+R", cua: "Mod+Shift+Z" },
   },
+  // `app.dismiss` carries NO Escape binding (card
+  // `01KTPDTH772HSEV5F7R1DKYDNJ`). Escape is owned globally by
+  // `nav.drillOut`: drill out one focus level, and at a layer-root edge fall
+  // through to the contextual dismiss (`ui_state dismiss ui` on the host side,
+  // the jump overlay's own capture-phase Escape handler). A scope-level
+  // `app.dismiss: Escape` here used to shadow `nav.drillOut` (scope wins over
+  // global in `createKeyHandler`), so drill-out never fired — the bug this
+  // card fixes. The command id stays in the root scope so it remains
+  // discoverable and dispatchable programmatically (inspector backdrop click,
+  // quick-capture); it is simply unbound from Escape.
   {
     id: "app.dismiss",
     name: "Dismiss",
-    keys: { vim: "Escape", cua: "Escape", emacs: "Escape" },
   },
   {
     id: "app.search",
