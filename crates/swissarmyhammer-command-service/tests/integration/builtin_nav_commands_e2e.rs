@@ -43,6 +43,7 @@ use swissarmyhammer_focus::{
 use swissarmyhammer_plugin::{
     CallerId, InProcessServer, McpServer as PluginMcpServer, PluginHost, PLUGINS_SUBDIR,
 };
+use swissarmyhammer_ui_state::{UIState, UiStateServer};
 use tempfile::TempDir;
 
 use crate::support::{call_command, execute_result, try_call_command};
@@ -226,6 +227,25 @@ async fn expose_focus(
     state
 }
 
+/// Expose a real `ui_state` server under id `"ui_state"`, returning the shared
+/// [`UIState`] so the test can drive and observe it. `nav.drillOut` needs this
+/// backend: its `ensureServices` requires `ui_state`, and its dismiss
+/// fallthrough (echo / no-parent_zone) routes to the `dismiss ui` op here.
+async fn expose_ui_state(host: &PluginHost, dir: &Path) -> Arc<UIState> {
+    let ui_state = Arc::new(UIState::load(dir.join("ui_state.yaml")));
+    let server = UiStateServer::new(Arc::clone(&ui_state));
+    let module = InProcessServer::new(server)
+        .await
+        .expect("wrapping the ui_state server in an InProcessServer should succeed");
+    host.expose_rust_module(
+        "ui_state".to_string(),
+        Arc::new(module) as Arc<dyn PluginMcpServer>,
+    )
+    .await
+    .expect("exposing the ui_state module should succeed");
+    ui_state
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // Result-shape helpers
 // ───────────────────────────────────────────────────────────────────────────
@@ -295,11 +315,16 @@ async fn nav_commands_plugin_registers_and_routes_to_focus() {
         .await
         .expect("install_commands_module must succeed");
 
-    // Expose the focus backend BEFORE discovery so the plugin's
-    // `ensureServices(this, ["commands", "focus"])` finds it already exposed.
+    // Expose the focus + ui_state backends BEFORE discovery so the plugin's
+    // `ensureServices(this, ["commands", "focus", "ui_state"])` finds them
+    // already exposed.
+    let ui_state_dir = TempDir::new().expect("ui_state temp dir");
     let state = tokio::time::timeout(TIMEOUT, expose_focus(&host))
         .await
         .expect("exposing the focus backend should not hang");
+    let ui_state = tokio::time::timeout(TIMEOUT, expose_ui_state(&host, ui_state_dir.path()))
+        .await
+        .expect("exposing the ui_state backend should not hang");
 
     let loaded = tokio::time::timeout(TIMEOUT, host.discover_and_load_all::<KanbanConfig>())
         .await
@@ -410,6 +435,32 @@ async fn nav_commands_plugin_registers_and_routes_to_focus() {
     assert!(
         jump_sc.get("event").is_none() && jump_sc.get("next_fq").is_none(),
         "nav.jump must not route to the focus kernel (no `event` / `next_fq`); got {jump}"
+    );
+
+    // ── (3d) nav.drillOut at a layer-root edge dismisses the modal layer ────
+    // The seed scopes carry NO `parent_zone` (`scope(..)` sets it `None`) and
+    // the provider's focus is `/L/a`, so the kernel drill_out echoes the
+    // focused FQM — there is nothing to drill out TO. Per the ported
+    // `buildDrillCommands` contract, nav.drillOut then falls through to
+    // `ui_state` `dismiss ui`, closing the topmost modal layer. Open the
+    // palette first so the dismiss has something to close, then assert it
+    // closed — a real-path proof the echo→dismiss fallthrough reaches ui_state
+    // (not just a return-value check).
+    ui_state.set_palette_open(WINDOW, true);
+    assert!(
+        ui_state.palette_open(WINDOW),
+        "precondition: the palette is open before nav.drillOut"
+    );
+    execute_ok(
+        &service,
+        "nav.drillOut",
+        json!({ "scope_chain": window_scope() }),
+    )
+    .await;
+    assert!(
+        !ui_state.palette_open(WINDOW),
+        "nav.drillOut at a layer-root edge (no parent_zone) must fall through to \
+         ui_state dismiss and close the open palette"
     );
 }
 

@@ -1973,11 +1973,25 @@ fn emit_ui_state_change_if_needed(app: &AppHandle, state: &AppState, result: &Va
     let Some(kind) = ui_state_change_kind(result) else {
         return;
     };
-    tracing::debug!(kind, "emitting ui-state-changed");
-    let _ = app.emit(
-        "ui-state-changed",
-        serde_json::json!({ "kind": kind, "state": state.ui_state.to_json() }),
-    );
+    let payload = serde_json::json!({ "kind": kind, "state": state.ui_state.to_json() });
+    // Deliver per-window with `emit_to`, NOT the global `app.emit`. In Tauri v2
+    // a global `Emitter::emit` does NOT reach the dynamically-created board
+    // webviews' `listen("ui-state-changed")` subscribers (the same reason the
+    // focus kernel uses `emit_to(window_label, "focus-changed", …)` and the
+    // per-board notification forwarder uses `emit_to`). With a global emit the
+    // backend would pop the inspector stack / close the palette but the webview
+    // never hears it, so the panel stays open — the keystone behind "Esc / the
+    // (x) button don't close the inspector" and "the palette won't open".
+    //
+    // The payload carries the FULL per-window-keyed UIState snapshot plus the
+    // `kind` discriminator, and each window's `UIStateProvider` reads only its
+    // own `windows[<label>]` slice — so emitting the snapshot to every webview
+    // is correct (each window self-selects) and introduces no cross-window
+    // leakage.
+    tracing::debug!(kind, "emitting ui-state-changed to all webviews");
+    for label in app.webview_windows().keys() {
+        let _ = app.emit_to(label.as_str(), "ui-state-changed", &payload);
+    }
 }
 
 /// Classify a command result into a `ui-state-changed` discriminator, or
@@ -1993,12 +2007,24 @@ fn emit_ui_state_change_if_needed(app: &AppHandle, state: &AppState, result: &Va
 ///   `UIStateProvider` renders.
 fn ui_state_change_kind(result: &Value) -> Option<&'static str> {
     // Commands dispatched through the CommandService / builtin plugins return
-    // an `{ ok, change }` envelope; the typed `UIStateChange` lives under
-    // `change` (and is `null` when the command made no UI-state change). The
-    // legacy Rust-impl and test paths return the bare `UIStateChange` (or a
-    // `BoardSwitch` / `BoardClose` side-effect shape) directly — so unwrap the
-    // envelope when present, falling back to the raw result otherwise.
-    let change_candidate = result.get("change").unwrap_or(result);
+    // a `CallToolResult`-shaped value: `{ content, structuredContent: { ok,
+    // change } }`, where the typed `UIStateChange` lives at
+    // `structuredContent.change` (and is `null` when the command made no
+    // UI-state change). Some paths return the bare `{ ok, change }` envelope,
+    // and the legacy Rust-impl / test paths return the bare `UIStateChange`
+    // (or a `BoardSwitch` / `BoardClose` side-effect shape) directly. Unwrap in
+    // that order — `structuredContent.change` → `change` → the raw result.
+    //
+    // Looking only at the top-level `change` (the previous behavior) missed the
+    // `structuredContent.change` produced by every plugin/command-service
+    // dispatch, so `ui_state_change_kind` returned `None` and NO
+    // `ui-state-changed` event was emitted — the keystone behind the palette
+    // not opening and the inspector / views not updating.
+    let change_candidate = result
+        .get("structuredContent")
+        .and_then(|sc| sc.get("change"))
+        .or_else(|| result.get("change"))
+        .unwrap_or(result);
     if let Ok(change) =
         serde_json::from_value::<swissarmyhammer_ui_state::UIStateChange>(change_candidate.clone())
     {

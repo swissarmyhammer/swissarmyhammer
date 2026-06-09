@@ -82,6 +82,25 @@ interface FocusDispatch {
   };
 }
 
+/**
+ * The dispatch surface for the `ui_state` server's `dismiss ui` op —
+ * `this.ui_state.ui_state.ui.dismiss`, mirroring `app.dismiss` in
+ * `builtin/plugins/app-shell-commands/commands/app.ts`. `nav.drillOut` falls
+ * through to this when the kernel drill is a no-op (the focused scope has no
+ * `parent_zone` — a layer-root edge — or there is no focus at all), closing
+ * the topmost modal layer (palette → inspector). This preserves the
+ * Escape-chain semantics the removed React `buildDrillCommands` had.
+ */
+interface UiStateDispatch {
+  ui_state: {
+    ui_state: {
+      ui: {
+        dismiss(args: Record<string, unknown>): Promise<unknown>;
+      };
+    };
+  };
+}
+
 /** One directional nav command's identity + metadata + wire direction. */
 interface NavDirSpec {
   id: string;
@@ -167,9 +186,10 @@ export default class NavCommandsPlugin extends Plugin {
    * nine nav commands.
    */
   async load(): Promise<void> {
-    await ensureServices(this, ["commands", "focus"]);
+    await ensureServices(this, ["commands", "focus", "ui_state"]);
 
     const focus = this as unknown as FocusDispatch;
+    const uiState = this as unknown as UiStateDispatch;
 
     const directional = NAV_DIRECTIONS.map((spec) => ({
       id: spec.id,
@@ -221,8 +241,16 @@ export default class NavCommandsPlugin extends Plugin {
       },
 
       // ─── nav.drillOut ───────────────────────────────────────────────────
-      // nav.yaml: keys vim/cua/emacs all Escape, menu Navigation/2/1. Same
-      // host-driven shape as nav.drillIn.
+      // nav.yaml: keys vim/cua/emacs all Escape, menu Navigation/2/1.
+      // Two-stage, porting the removed React `buildDrillCommands` contract:
+      //   1. Resolve focus + drill out via the kernel. If the focused scope has
+      //      a `parent_zone`, the kernel commits focus to it and emits
+      //      `focus-changed` (the UI moves) and returns the parent as `next_fq`.
+      //   2. DISMISS fallthrough: if there is no focus, or the kernel echoed
+      //      the focused FQM (no `parent_zone` — a layer-root edge), there is
+      //      nothing to drill out TO, so close the topmost modal layer
+      //      (palette → inspector) via `ui_state` `dismiss ui` — the same
+      //      Escape-chain behavior the old React closure had.
       {
         id: "nav.drillOut",
         name: "Drill Out",
@@ -232,13 +260,32 @@ export default class NavCommandsPlugin extends Plugin {
         execute: async (rawCtx: unknown) => {
           const ctx = (rawCtx ?? {}) as CommandContext;
           const window = scopeId(ctx, "window");
+          const scopeChain = ctx.scope_chain ?? [];
           const fq = await this.focusedFq(focus, window);
-          if (fq === undefined) return { ok: true, next_fq: null };
-          return await focus.focus.focus.layer.drill_out({
+          // No spatial focus → nothing to drill out of; dismiss the topmost
+          // modal layer (honours the Escape chain).
+          if (fq === undefined) {
+            return await uiState.ui_state.ui_state.ui.dismiss({
+              scope_chain: scopeChain,
+            });
+          }
+          const result = await focus.focus.focus.layer.drill_out({
             window,
             fq,
             focused_fq: fq,
           });
+          const nextFq = unwrapResult<{ next_fq?: unknown }>(result).next_fq;
+          // Kernel echoed the focused FQM (or returned nothing) → layer-root
+          // edge / no parent_zone: fall through to dismiss, matching the legacy
+          // `result === focusedFq` behavior.
+          if (nextFq === null || nextFq === undefined || nextFq === fq) {
+            return await uiState.ui_state.ui_state.ui.dismiss({
+              scope_chain: scopeChain,
+            });
+          }
+          // Parent zone resolved — the kernel already committed focus + emitted
+          // `focus-changed`; just surface the result.
+          return result;
         },
       },
 
