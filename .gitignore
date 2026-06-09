@@ -154,6 +154,10 @@ ane-embedding/convert/output/
 # SAH runtime state
 **/.sah/
 
+# Validators runtime store (definitions live in builtin/validators/)
+/.validators/
+**/.validators/
+
 
 # Shell tool runtime state
 **/.shell/

@@ -410,7 +410,7 @@ Defined in `swissarmyhammer-tools`. The core tool interface:
 - `execute(arguments, context)` — the actual tool logic
 - `operations()` — for operation-based tools, returns the verb/noun operation list
 
-Two convenience macros reduce boilerplate: `impl_empty_doctorable!` and `impl_empty_initializable!` for tools that don't need health checks or lifecycle.
+Two convenience macros reduce boilerplate: `impl_default_doctorable!` and `impl_empty_initializable!` for tools that don't need custom health checks or lifecycle. `impl_default_doctorable!` inherits the trait's default OK check so the tool still appears in `sah doctor`.
 
 ### Tool Registration and Discovery
 
@@ -445,7 +445,7 @@ Tools that handle multiple verbs on the same noun (like the kanban tool handling
 
 ### Practices
 
-1. **Every tool implements all three traits.** Use `impl_empty_doctorable!` / `impl_empty_initializable!` if a tool has no health checks or lifecycle, but never skip the traits.
+1. **Every tool implements all three traits.** Use `impl_default_doctorable!` / `impl_empty_initializable!` if a tool has no custom health checks or lifecycle, but never skip the traits.
 2. **init/deinit runs `Initializable` components in priority order.** Don't add setup logic outside the `Initializable` trait.
 3. **Doctor collects from the tool registry.** Don't add health checks outside the `Doctorable` trait.
 

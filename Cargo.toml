@@ -34,8 +34,7 @@ members = [
     "crates/agent-client-protocol-extras",
     "crates/model-context-protocol-extras",
     "crates/swissarmyhammer-project-detection",
-    "crates/avp-common",
-    "apps/avp-cli",
+    "crates/swissarmyhammer-validators",
     "crates/swissarmyhammer-doctor",
     "crates/swissarmyhammer-treesitter",
     "crates/swissarmyhammer-leader-election",
@@ -267,7 +266,6 @@ swissarmyhammer-operations-macros = { path = "crates/swissarmyhammer-operations-
 
 # Workspace crate cross-references
 agent-client-protocol-extras = { path = "crates/agent-client-protocol-extras" }
-avp-common = { path = "crates/avp-common" }
 claude-agent = { path = "crates/claude-agent" }
 mirdan = { path = "crates/mirdan" }
 model-context-protocol-extras = { path = "crates/model-context-protocol-extras" }
@@ -302,6 +300,7 @@ swissarmyhammer-store = { path = "crates/swissarmyhammer-store" }
 swissarmyhammer-templating = { path = "crates/swissarmyhammer-templating" }
 swissarmyhammer-tools = { path = "crates/swissarmyhammer-tools" }
 swissarmyhammer-treesitter = { path = "crates/swissarmyhammer-treesitter" }
+swissarmyhammer-validators = { path = "crates/swissarmyhammer-validators" }
 swissarmyhammer-views = { path = "crates/swissarmyhammer-views" }
 swissarmyhammer-web = { path = "crates/swissarmyhammer-web" }
 swissarmyhammer = { path = "crates/swissarmyhammer" }

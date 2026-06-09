@@ -90,6 +90,6 @@ Every layer is extensible:
 - **Skills** are markdown files. Drop a new one into `.claude/skills/` or install one via `mirdan install`.
 - **Agent modes** are markdown files in the modes directory. Customize existing ones or create new specialized roles.
 - **Tools** are MCP server endpoints. SwissArmyHammer's built-in tools cover the common cases; add more via MCP server configuration.
-- **Validators** are AVP rule sets. Create project-specific rules with `avp new` or install shared ones via `mirdan install`.
+- **Validators** are AVP rule sets. Add project-specific rules under `.avp/validators/` or install shared ones via `mirdan install`.
 
 The package manager (`mirdan`) ties extensibility to shareability — anything you create can be published to a registry and installed by others.

@@ -118,13 +118,9 @@ pub fn run_new_validator(name: &str, global: bool) -> Result<(), RegistryError> 
     }
 
     let base_dir = if global {
-        ManagedDirectory::<AvpConfig>::xdg_data()
-            .map_err(|e| {
-                RegistryError::Validation(format!("Could not resolve XDG data dir: {}", e))
-            })?
-            .root()
-            .join("validators")
-            .join(name)
+        // Global validators live in the shared home-dotfile store `~/.validators/`
+        // (consistent with skills/agents/tools), not XDG.
+        crate::store::validators_store_dir(true).join(name)
     } else {
         PathBuf::from(name)
     };

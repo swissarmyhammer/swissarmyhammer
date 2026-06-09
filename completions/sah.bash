@@ -827,12 +827,16 @@ _sah() {
             return 0
             ;;
         sah__subcmd__model__subcmd__use)
-            opts="-h --model --help <name>"
+            opts="-h --for --model --help <name>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --for)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --model)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0

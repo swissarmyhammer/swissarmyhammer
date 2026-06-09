@@ -178,6 +178,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (use)
 _arguments "${_arguments_options[@]}" : \
+'--for=[Purpose to scope the model to (e.g. \`review\`). Absent sets the global default model]:PURPOSE:_default' \
 '--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \

@@ -30,6 +30,12 @@ When you 'use' a model, it creates or updates .sah/sah.yaml in your
 project with the model's configuration. This configures how SwissArmyHammer 
 executes AI workflows in your project.
 
+By default 'use' sets the global default model. Pass '--for <purpose>' to scope
+the model to a single tool instead. The only supported purpose today is
+'review': 'sah model use <name> --for review' writes review.model and runs the
+review tool's validator agents with that model, leaving the global default
+untouched. When review.model is unset, the review tool uses the global default.
+
 COMMON WORKFLOWS
 
 1. Explore available models:

@@ -442,10 +442,10 @@ impl McpServerHandle {
         // at INFO for non-MCP-mode invocations, so promoting this line to
         // info would leak MCP-internal jargon into every CLI subprocess's
         // stderr — see the integration test
-        // `error_scenarios::test_error_message_consistency`. Validators
-        // (`avp-cli`) that want this line in `.avp/log` widen their file
-        // layer to capture `swissarmyhammer_tools::mcp::unified_server` at
-        // debug.
+        // `error_scenarios::test_error_message_consistency`. A validator
+        // process (such as the now-removed hook-processor binary) that wants
+        // this line in its log widens its file layer to capture
+        // `swissarmyhammer_tools::mcp::unified_server` at debug.
         if let Some(stats) = &self.stats {
             let bound_for = stats.started_at.elapsed();
             let session_count = stats.seen_sessions.lock().map(|s| s.len()).unwrap_or(0);

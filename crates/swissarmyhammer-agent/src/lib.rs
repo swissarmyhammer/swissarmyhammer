@@ -396,6 +396,44 @@ pub async fn create_agent_with_options(
     }
 }
 
+/// Build the production `review` agent factory from a session's `ModelConfig`.
+///
+/// This is the cycle-free wiring seam: `swissarmyhammer-tools` defines the
+/// [`AgentFactory`](swissarmyhammer_tools::mcp::tools::review::review_op::AgentFactory)
+/// type but cannot depend on this crate (which depends on it), so the production
+/// factory is constructed here — the tier that may name both — and injected into
+/// the server via
+/// [`McpServer::set_review_factories`](swissarmyhammer_tools::McpServer::set_review_factories).
+///
+/// The returned factory mints a *fresh* ACP agent per review run by calling
+/// [`create_agent`] with the configured backend and no MCP server (the review
+/// engine drives prompts and collects findings directly; the fan-out/verify
+/// agents do not call tools back). It maps the resulting [`AcpAgentHandle`] —
+/// whose `agent` + `notification_rx` are exactly the shape the engine driver
+/// expects — into a
+/// [`AgentHandle`](swissarmyhammer_tools::mcp::tools::review::review_op::AgentHandle).
+/// A backend that fails to start
+/// (e.g. the Claude CLI is not installed) surfaces as the factory's `String`
+/// error, which the tool reports.
+pub fn review_agent_factory(
+    config: Arc<ModelConfig>,
+) -> swissarmyhammer_tools::mcp::tools::review::review_op::AgentFactory {
+    use swissarmyhammer_tools::mcp::tools::review::review_op::AgentHandle;
+
+    Arc::new(move || {
+        let config = Arc::clone(&config);
+        Box::pin(async move {
+            let handle = create_agent(&config, None)
+                .await
+                .map_err(|e| format!("failed to create review agent: {e}"))?;
+            Ok(AgentHandle {
+                agent: handle.agent,
+                notification_rx: handle.notification_rx,
+            })
+        })
+    })
+}
+
 /// Wrap a `claude_agent::ClaudeAgent` into a `DynConnectTo<Client>`
 /// component for ACP 0.11.
 ///

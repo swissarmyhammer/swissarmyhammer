@@ -245,8 +245,8 @@ impl GitChangesTool {
     }
 }
 
-// No health checks needed
-crate::impl_empty_doctorable!(GitChangesTool);
+// No special health checks; inherits the default OK check.
+crate::impl_default_doctorable!(GitChangesTool);
 crate::impl_empty_initializable!(GitChangesTool);
 
 /// Shared schema config for the git tool, so the wire and full generators stay

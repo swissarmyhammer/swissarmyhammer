@@ -66,8 +66,8 @@ pub use lsp_worker::{
     new_shutdown_flag, spawn_lsp_indexing_worker, LspWorkerConfig, SharedLspClient, ShutdownFlag,
 };
 pub use ops::find_duplicates::{
-    find_duplicates, ChunkRef, DuplicateGroup, DuplicateMatch, FindDuplicatesOptions,
-    FindDuplicatesResult,
+    find_duplicates, find_duplicates_in, ChunkRef, DuplicateGroup, DuplicateMatch,
+    FindDuplicatesOptions, FindDuplicatesResult,
 };
 pub use ops::get_blastradius::{
     get_blastradius, AffectedSymbol, BlastRadius, BlastRadiusOptions, HopLevel,
@@ -112,8 +112,8 @@ pub use ops::list_symbol::list_symbols;
 pub use ops::lsp_helpers::parse_lsp_range;
 pub use ops::query_ast::{query_ast, AstCapture, AstMatch, QueryAstOptions, QueryAstResult};
 pub use ops::search_code::{
-    search_code, serialize_embedding, IndexingProgress, SearchCodeMatch, SearchCodeOptions,
-    SearchCodeResult,
+    load_all_embedded_chunks, search_code, search_loaded, serialize_embedding, IndexingProgress,
+    LoadedChunk, SearchCodeMatch, SearchCodeOptions, SearchCodeResult,
 };
 pub use ops::search_symbol::{search_symbol, SearchSymbolMatch, SearchSymbolOptions};
 pub use ops::status::{
