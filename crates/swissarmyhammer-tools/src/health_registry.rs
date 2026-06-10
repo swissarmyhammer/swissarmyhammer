@@ -193,6 +193,10 @@ pub async fn collect_all_health_checks() -> Vec<HealthCheck> {
         let prompt_library = Arc::new(RwLock::new(PromptLibrary::default()));
 
         let agent_library = Arc::new(RwLock::new(AgentLibrary::new()));
+        {
+            let mut lib = agent_library.write().await;
+            lib.load_defaults();
+        }
         register_agent_tools(&mut tool_registry, agent_library, prompt_library.clone());
         register_skill_tools(&mut tool_registry, library, prompt_library);
     }
