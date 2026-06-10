@@ -719,13 +719,21 @@ impl CommandService {
     ///
     /// # Returns
     ///
-    /// `{ "ok": true, "commands": [<CommandMetadata>, …] }`. The metadata
-    /// projection omits the [`CallbackMarker`] fields — those are
-    /// dispatch-time concerns, not discovery data.
+    /// `{ "ok": true, "commands": [<CommandMetadata>, …] }`, sorted by
+    /// command id. The metadata projection omits the [`CallbackMarker`]
+    /// fields — those are dispatch-time concerns, not discovery data.
+    ///
+    /// The sort is load-bearing: [`crate::registry::CommandRegistry::list`]
+    /// iterates an unordered map, and consumers derive order-sensitive
+    /// state from this response — the webview builds its global keybinding
+    /// table first-id-wins per key, so an unordered response made same-key
+    /// ownership differ between plugin runtimes (the third-window drill
+    /// regression, card `01KTQ6QZNB3VN4MAND7VPASM21`). Sorting by id makes
+    /// every runtime see the identical sequence.
     ///
     /// This verb does not invoke any callbacks; it is a pure registry read.
     fn handle_list(&self, _caller: CallerId, req: ListCommand) -> Result<Value, McpError> {
-        let commands: Vec<CommandMetadata> = self.with_registry(|registry| {
+        let mut commands: Vec<CommandMetadata> = self.with_registry(|registry| {
             registry
                 .list()
                 .into_iter()
@@ -733,6 +741,7 @@ impl CommandService {
                 .map(|entry| CommandMetadata::from_registration(&entry.registration))
                 .collect()
         });
+        commands.sort_by(|a, b| a.id.cmp(&b.id));
 
         Ok(serde_json::json!({
             "ok": true,

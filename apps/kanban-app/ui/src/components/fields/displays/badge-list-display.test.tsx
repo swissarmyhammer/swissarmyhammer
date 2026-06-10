@@ -105,10 +105,15 @@ vi.mock("@/components/window-container", () => ({
 
 import { BadgeListDisplay } from "./badge-list-display";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import {
+  EntityFocusProvider,
+  useFocusActions,
+  type FocusActions,
+} from "@/lib/entity-focus-context";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
 import { asSegment } from "@/types/spatial";
+import { createKeyHandler, extractScopeBindings } from "@/lib/keybindings";
 
 import type { Entity, FieldDef } from "@/types/kanban";
 
@@ -303,5 +308,103 @@ describe("BadgeListDisplay", () => {
     expect(segments).toContain("task:task-dep-1");
     expect(segments).toContain("task:task-dep-2");
     expect(segments).toContain("task:task-dep-3");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Keyboard untag — the tag pill scope must carry task.untag's registry keys
+// ---------------------------------------------------------------------------
+//
+// The registry `task.untag` (`builtin/plugins/task-commands/index.ts`) is
+// scope-gated (`scope: ["entity:tag", "entity:task"]`) with
+// `keys: { vim: "x", cua: "Delete" }`. Scope-gated commands contribute NO
+// global keybinding (`extractKeymapBindings` skips them — card
+// `01KTQ6QZNB3VN4MAND7VPASM21`), so the ONLY carrier for those keys is the
+// scope-level `CommandDef` this component registers on each tag pill's
+// `<FocusScope>` — the exact pattern `ScopedPerspectiveTab` uses for
+// `ui.entity.startRename`'s Enter. These tests pin that the pill scope's
+// `task.untag` mirrors the registry keys end-to-end through the real
+// component render → entity-focus scope registry → `extractScopeBindings`
+// → `createKeyHandler` dispatch.
+
+/** Minimal KeyboardEvent-like object targeting a non-editable element. */
+function fakeKeyEvent(key: string): KeyboardEvent {
+  return {
+    key,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    target: document.createElement("div"),
+    preventDefault: vi.fn(),
+    stopPropagation: vi.fn(),
+  } as unknown as KeyboardEvent;
+}
+
+describe("tag pill keyboard untag", () => {
+  /** Render one tag pill and return its registered CommandScope. */
+  async function renderPillScope() {
+    let actions: FocusActions | null = null;
+    function CaptureFocusActions() {
+      actions = useFocusActions();
+      return null;
+    }
+    const { container } = render(
+      <Providers>
+        <CaptureFocusActions />
+        <BadgeListDisplay
+          field={tagField}
+          value={["bugfix"]}
+          entity={taskEntity}
+          mode="full"
+        />
+      </Providers>,
+    );
+    await flush();
+
+    const scopes = getScopes(container);
+    expect(scopes.length).toBe(1);
+    const fq = scopes[0].getAttribute("data-moniker");
+    expect(fq).toBeTruthy();
+    const scope = actions!.getScope(fq!);
+    expect(scope).toBeTruthy();
+    return scope!;
+  }
+
+  it("the pill scope binds task.untag to the registry keys (vim x / cua Delete)", async () => {
+    const scope = await renderPillScope();
+    expect(extractScopeBindings(scope, "vim")).toMatchObject({
+      x: "task.untag",
+    });
+    expect(extractScopeBindings(scope, "cua")).toMatchObject({
+      Delete: "task.untag",
+    });
+  });
+
+  it("pressing the bound key with the pill scope focused dispatches task.untag", async () => {
+    const scope = await renderPillScope();
+
+    // vim: `x` dispatches through the scope path (empty global table —
+    // scope-gated commands never claim a global key).
+    const vimExec = vi.fn(async () => true);
+    const vimHandler = createKeyHandler(
+      "vim",
+      vimExec,
+      () => extractScopeBindings(scope, "vim"),
+      {},
+    );
+    vimHandler(fakeKeyEvent("x"));
+    expect(vimExec).toHaveBeenCalledWith("task.untag");
+
+    // cua: `Delete` dispatches the same way.
+    const cuaExec = vi.fn(async () => true);
+    const cuaHandler = createKeyHandler(
+      "cua",
+      cuaExec,
+      () => extractScopeBindings(scope, "cua"),
+      {},
+    );
+    cuaHandler(fakeKeyEvent("Delete"));
+    expect(cuaExec).toHaveBeenCalledWith("task.untag");
   });
 });

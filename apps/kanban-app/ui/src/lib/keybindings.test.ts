@@ -1203,3 +1203,73 @@ describe("Escape resolves to nav.drillOut (production registry + scope wiring)",
     expect(executeCommand).toHaveBeenCalledWith("nav.drillOut");
   });
 });
+
+/* ---------- Enter = nav.drillIn regardless of registry order ---------- */
+
+// Third-window drill regression (card 01KTQ6QZNB3VN4MAND7VPASM21).
+//
+// The Command service's `list command` returns commands in UNSPECIFIED order
+// (`CommandRegistry::list()`: "Order is unspecified … callers that need a
+// stable order must sort"). Each per-board plugin runtime owns its own
+// registry instance, so each board gets its own iteration order. TWO registry
+// commands declare an Enter key: the GLOBAL `nav.drillIn` and the SCOPE-GATED
+// `ui.entity.startRename` (scope `["entity:perspective"]`, ui-commands). With
+// first-id-wins extraction and no scope awareness, whichever id happened to
+// iterate first claimed Enter — drill-in worked in the two windows sharing
+// one board runtime and silently died in the third window (a DIFFERENT board,
+// therefore a different runtime whose order put `ui.entity.startRename`
+// first; that id resolves to the root-scope client-side `triggerStartRename`
+// and never reaches the backend, so the live log showed no `nav.drillIn`
+// dispatch at all for that window).
+//
+// The contract pinned here: a command carrying a non-empty `scope` filter
+// contributes NO global keybinding — its keys apply only through the
+// focused-scope walk (`extractScopeBindings`), exactly as the ui-commands
+// source comments intend ("The scope filter keeps Enter from claiming
+// nav.drillIn on board/column/card focus"). Global key ownership is therefore
+// order-independent.
+describe("Enter resolves to nav.drillIn regardless of registry order (third-window regression)", () => {
+  /** The Enter-bearing registry slice in the THIRD window's adverse order:
+   * the scope-gated rename command iterates before the global drill. */
+  const ADVERSE_ORDER = [
+    {
+      id: "ui.entity.startRename",
+      name: "Rename Perspective",
+      scope: ["entity:perspective"],
+      keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
+    },
+    {
+      id: "nav.drillIn",
+      name: "Drill In",
+      keys: { vim: "Enter", cua: "Enter", emacs: "Enter" },
+    },
+  ] as const;
+
+  /** The same slice in the order the two working windows happened to see. */
+  const FAVORABLE_ORDER = [ADVERSE_ORDER[1], ADVERSE_ORDER[0]] as const;
+
+  for (const mode of ["cua", "vim", "emacs"] as const) {
+    it(`${mode}: Enter binds to nav.drillIn even when the scoped rename command iterates first`, () => {
+      const bindings = extractKeymapBindings([...ADVERSE_ORDER], mode);
+      expect(bindings["Enter"]).toBe("nav.drillIn");
+    });
+  }
+
+  it("global extraction is registry-order independent", () => {
+    for (const mode of ["cua", "vim", "emacs"] as const) {
+      expect(extractKeymapBindings([...ADVERSE_ORDER], mode)).toEqual(
+        extractKeymapBindings([...FAVORABLE_ORDER], mode),
+      );
+    }
+  });
+
+  it("an empty scope list is global — its keys still bind", () => {
+    // `scope: []` means global (mirrors the service's list_filter_matches:
+    // None | Some([]) both match every scope filter).
+    const bindings = extractKeymapBindings(
+      [{ id: "nav.drillIn", scope: [], keys: { cua: "Enter" } }],
+      "cua",
+    );
+    expect(bindings["Enter"]).toBe("nav.drillIn");
+  });
+});

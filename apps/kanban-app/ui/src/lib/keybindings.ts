@@ -472,24 +472,45 @@ export function extractScopeBindings(
  * metadata-driven command registry.
  *
  * This is the registry-sourced replacement for the static `BINDING_TABLES`
- * global layer: every command in the active `list command` result that
- * declares a `keys[mode]` contributes one binding. First-id-wins on a key
- * collision so the iteration order is deterministic (the registry returns a
- * stable top-of-stack order). The result is fed to {@link createKeyHandler} as
- * its `globalBindings`, so when the registry changes or the keymap switches
- * (itself a `settings.keymap.*` command) the caller rebuilds the table and
- * re-creates the handler — no command-id list is hardcoded in the hotkey path.
+ * global layer: every GLOBAL command in the active `list command` result that
+ * declares a `keys[mode]` contributes one binding. The result is fed to
+ * {@link createKeyHandler} as its `globalBindings`, so when the registry
+ * changes or the keymap switches (itself a `settings.keymap.*` command) the
+ * caller rebuilds the table and re-creates the handler — no command-id list
+ * is hardcoded in the hotkey path.
+ *
+ * Scope-gated commands (a non-empty `scope` list, e.g.
+ * `ui.entity.startRename`'s `["entity:perspective"]`) contribute NO global
+ * binding: their keys apply only when a matching scope is in the focused
+ * chain, via {@link extractScopeBindings}. This is load-bearing for
+ * determinism — `list command` returns commands in UNSPECIFIED order (the
+ * service registry is a hash map and each per-board plugin runtime owns its
+ * own instance), so letting a scoped command compete with a global one for
+ * the same key (Enter: `ui.entity.startRename` vs `nav.drillIn`) made key
+ * ownership a per-board coin toss. That was the "drill-in works in two
+ * windows, silently dead in the third (different board)" bug — card
+ * `01KTQ6QZNB3VN4MAND7VPASM21`.
+ *
+ * First-id-wins is retained for any residual same-key collision between two
+ * GLOBAL commands so a single fetch stays self-consistent.
  *
  * @param commands - The active command list (from `useCommandList`).
  * @param mode - The keymap mode to extract bindings for.
  * @returns A flat BindingTable mapping canonical key strings to command IDs.
  */
 export function extractKeymapBindings(
-  commands: readonly { id: string; keys?: Record<string, string> }[],
+  commands: readonly {
+    id: string;
+    keys?: Record<string, string>;
+    scope?: readonly string[];
+  }[],
   mode: KeymapMode,
 ): BindingTable {
   const result: BindingTable = {};
   for (const cmd of commands) {
+    // Scope-gated commands never claim a global key — empty/absent scope
+    // means global (mirroring the service's `list_filter_matches`).
+    if (cmd.scope !== undefined && cmd.scope.length > 0) continue;
     const key = cmd.keys?.[mode];
     if (key && !(key in result)) {
       result[key] = cmd.id;

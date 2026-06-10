@@ -326,6 +326,57 @@ async fn list_returns_callback_free_metadata_projection() {
     }
 }
 
+/// Drive `list command` and return the ids in RESPONSE ORDER (a `Vec`, not a
+/// set) so ordering itself can be asserted.
+async fn list_ids_in_order(
+    service: &CommandService,
+    arguments: Value,
+    caller: &CallerId,
+) -> Vec<String> {
+    let result = call_tool(service, "list command", arguments, caller)
+        .await
+        .expect("list should succeed");
+    let structured = result
+        .structured_content
+        .expect("list response should carry structured content");
+    assert_eq!(structured["ok"], json!(true));
+    structured["commands"]
+        .as_array()
+        .expect("`commands` should be an array")
+        .iter()
+        .map(|entry| {
+            entry["id"]
+                .as_str()
+                .expect("each entry should carry a string id")
+                .to_string()
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn list_returns_commands_in_deterministic_id_order() {
+    // Regression for card 01KTQ6QZNB3VN4MAND7VPASM21 ("drill-in/Escape dead
+    // in the third window"). `CommandRegistry::list()` documents that its
+    // order is unspecified and that callers needing a stable order must
+    // sort — and `handle_list` is exactly such a caller: the webview builds
+    // its GLOBAL keybinding table from this response with first-id-wins per
+    // key, so an unordered response makes same-key ownership (e.g. Enter:
+    // `nav.drillIn` vs `ui.entity.startRename`) a coin toss that lands
+    // differently in each per-board plugin runtime. The response must
+    // therefore be sorted by id — identical for every runtime, every time.
+    let service = CommandService::new();
+    let caller = CallerId::Plugin(PluginId::new("plugin-a"));
+    register_fixture(&service, &caller).await;
+
+    let got = list_ids_in_order(&service, json!({ "op": "list command" }), &caller).await;
+    let mut sorted = got.clone();
+    sorted.sort();
+    assert_eq!(
+        got, sorted,
+        "`list command` must return commands sorted by id, got {got:?}",
+    );
+}
+
 #[tokio::test]
 async fn list_with_unmatched_filter_returns_empty_array() {
     let service = CommandService::new();
