@@ -66,7 +66,7 @@ pub fn init_tracing(debug: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swissarmyhammer_common::logging::{open_log_file, LOG_FILE_NAME};
+    use swissarmyhammer_common::logging::{log_file_name, open_log_file};
     use swissarmyhammer_common::test_utils::CurrentDirGuard;
     use tempfile::TempDir;
 
@@ -97,8 +97,8 @@ mod tests {
         init_tracing(false);
 
         assert!(
-            kanban_dir.join(LOG_FILE_NAME).exists(),
-            "init_tracing should create .kanban/mcp.log when .kanban/ exists"
+            kanban_dir.join(log_file_name()).exists(),
+            "init_tracing should create .kanban/mcp.<pid>.log when .kanban/ exists"
         );
     }
 

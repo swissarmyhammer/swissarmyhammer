@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: '8380'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffff9680
 title: 'Review memory: route code-context ranked retrieval through the search crate (bounded top-k ~128)'
 ---
 ## Problem

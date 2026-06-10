@@ -668,6 +668,11 @@ pub(crate) struct ModelManagerExecutor {
     chat_template: Arc<ChatTemplateEngine>,
     session_config: crate::types::SessionConfig,
     session_state_cache: SessionStateCache,
+    /// Machine-wide cross-process GPU lock. The in-process worker is already
+    /// one-turn-at-a-time; this extends "one at a time" across every `sah serve`
+    /// process sharing the single local GPU. Keyed on the model-source identity
+    /// so it is data-driven, not a second hardcoded path.
+    gpu_lock: crate::gpu_lock::GpuLock,
 }
 
 impl ModelManagerExecutor {
@@ -678,12 +683,30 @@ impl ModelManagerExecutor {
         session_config: crate::types::SessionConfig,
         session_state_cache: SessionStateCache,
     ) -> Self {
+        let gpu_lock =
+            crate::gpu_lock::GpuLock::for_model(&model_manager.get_config().compute_model_hash());
         Self {
             model_manager,
             chat_template,
             session_config,
             session_state_cache,
+            gpu_lock,
         }
+    }
+
+    /// Acquire the machine-wide GPU lock without stalling the async executor.
+    ///
+    /// [`crate::gpu_lock::GpuLock::acquire_blocking`] is a blocking
+    /// `flock(LOCK_EX)` that parks the thread while another process holds the
+    /// GPU, so it must run on a blocking thread. The returned guard is held
+    /// across the synchronous generation turn and dropped immediately after,
+    /// releasing the lock for the next process (or the next in-process turn).
+    async fn acquire_gpu(&self) -> Result<crate::gpu_lock::GpuLockGuard, QueueError> {
+        let lock = self.gpu_lock.clone();
+        tokio::task::spawn_blocking(move || lock.acquire_blocking())
+            .await
+            .map_err(|e| QueueError::WorkerError(format!("GPU lock task panicked: {}", e)))?
+            .map_err(|e| QueueError::WorkerError(format!("GPU lock acquisition failed: {}", e)))
     }
 }
 
@@ -699,6 +722,10 @@ impl QueueExecutor for ModelManagerExecutor {
         }
         let request_id = queued_request.id.clone();
         let start_time = Instant::now();
+        // Hold the machine-wide GPU lock for the whole decode turn — one GPU,
+        // one generation at a time across all serve processes. Dropped at the
+        // end of this method, releasing it for the next turn/process.
+        let _gpu_guard = self.acquire_gpu().await?;
         let result = self
             .model_manager
             .with_model(|model| {
@@ -736,6 +763,9 @@ impl QueueExecutor for ModelManagerExecutor {
             return Err(QueueError::WorkerError("Model not loaded".to_string()));
         }
         let request_id = queued_request.id.clone();
+        // Hold the machine-wide GPU lock for the whole streaming decode turn,
+        // same as the batch path. Released when this method returns.
+        let _gpu_guard = self.acquire_gpu().await?;
         let result = self
             .model_manager
             .with_model(|model| {
@@ -783,6 +813,40 @@ pub struct QueuedRequest {
     pub cancellation_token: CancellationToken,
 }
 
+/// Map of in-flight sessions to the [`CancellationToken`] that aborts each.
+///
+/// Shared between [`RequestQueue`] and [`ActiveRequestGuard`] so the guard can
+/// clear an entry on any exit path.
+type ActiveRequests = Arc<TokioMutex<HashMap<crate::types::SessionId, CancellationToken>>>;
+
+/// RAII guard that removes a session's entry from `active_requests` when the
+/// submit future is dropped — i.e. on **every** exit path of
+/// [`RequestQueue::submit_request`]: success, error, and cancellation.
+///
+/// The map is a long-lived `tokio::Mutex`, and `Drop` cannot `.await`, so the
+/// guard spawns a tiny detached task to take the lock and remove the key. This
+/// avoids the leak the old success-only cleanup left behind: any early `?`
+/// return (`enqueue_request` failing/cancelled, the response channel closing)
+/// previously skipped the removal, so failed/cancelled requests accumulated
+/// stale entries on the cached shared server.
+struct ActiveRequestGuard {
+    active_requests: ActiveRequests,
+    session_id: crate::types::SessionId,
+}
+
+impl Drop for ActiveRequestGuard {
+    fn drop(&mut self) {
+        let active_requests = self.active_requests.clone();
+        let session_id = self.session_id;
+        // `Drop` is synchronous and the map is behind a `tokio::Mutex`; spawn
+        // the removal so it never blocks the dropping task. The submit future
+        // is always polled inside the Tokio runtime, so a handle is available.
+        tokio::spawn(async move {
+            active_requests.lock().await.remove(&session_id);
+        });
+    }
+}
+
 /// Bounded, multi-worker queue that routes `QueuedRequest`s through the
 /// llama.cpp model and streams responses back to the caller.
 pub struct RequestQueue {
@@ -792,7 +856,7 @@ pub struct RequestQueue {
     _chat_template: Arc<ChatTemplateEngine>,
     _session_config: crate::types::SessionConfig,
     /// Track active requests by session ID for cancellation support
-    active_requests: Arc<TokioMutex<HashMap<crate::types::SessionId, CancellationToken>>>,
+    active_requests: ActiveRequests,
     /// Kept alive for duration of queue - workers hold references to this cache
     #[allow(dead_code)]
     session_state_cache: SessionStateCache,
@@ -892,10 +956,13 @@ impl RequestQueue {
         }
     }
 
-    /// Enqueue a batch request without awaiting its response, returning only the
-    /// enqueue outcome. Used by capacity tests to fill the bounded channel and
-    /// observe `QueueError::Full` at — and only at — capacity, exercising
-    /// [`RequestQueue::enqueue_request`] directly.
+    /// Enqueue a batch request without awaiting its response or applying
+    /// backpressure, returning only the non-blocking enqueue outcome. Used by
+    /// capacity tests to fill the bounded channel and observe
+    /// `QueueError::Full` at — and only at — capacity. Mirrors the
+    /// non-blocking `try_send` the streaming submit path uses; the
+    /// production batch path ([`RequestQueue::enqueue_request`]) instead waits
+    /// for capacity.
     #[cfg(test)]
     fn try_enqueue_for_test(&self, session: &Session) -> Result<(), QueueError> {
         let (response_sender, _response_receiver) = oneshot::channel();
@@ -916,7 +983,12 @@ impl RequestQueue {
             cancellation_token: CancellationToken::new(),
         };
         self.metrics.record_request_submitted();
-        self.enqueue_request(queued_request)
+        let sender = self.sender.as_ref().expect("test queue sender present");
+        if sender.try_send(queued_request).is_err() {
+            self.metrics.record_request_failed();
+            return Err(QueueError::Full);
+        }
+        Ok(())
     }
 
     /// Build a `RequestQueue` whose workers run turns through a caller-supplied
@@ -972,8 +1044,15 @@ impl RequestQueue {
     }
 
     /// Submit a batch (non-streaming) generation request and await the full
-    /// `GenerationResponse`. Returns [`QueueError::Full`] if the queue is at
-    /// capacity and [`QueueError::WorkerError`] if the worker fails.
+    /// `GenerationResponse`.
+    ///
+    /// A saturated queue does **not** return [`QueueError::Full`]: this path
+    /// applies backpressure, awaiting a free slot (see [`enqueue_request`]) so
+    /// work is never silently dropped. Returns [`QueueError::WorkerError`] if
+    /// the worker fails, the queue is shutting down, or the request is
+    /// cancelled (its [`CancellationToken`] fires) while waiting for capacity.
+    ///
+    /// [`enqueue_request`]: RequestQueue::enqueue_request
     pub async fn submit_request(
         &self,
         request: GenerationRequest,
@@ -985,6 +1064,12 @@ impl RequestQueue {
 
         self.track_cancellation_token(session_id, cancellation_token.clone())
             .await;
+        // Clear the tracked entry on every exit path (success, error, cancel),
+        // not just success: any early `?` return below would otherwise leak it.
+        let _guard = ActiveRequestGuard {
+            active_requests: self.active_requests.clone(),
+            session_id,
+        };
 
         let queued_request = QueuedRequest {
             id: Ulid::new().to_string(),
@@ -998,13 +1083,13 @@ impl RequestQueue {
         debug!("Submitting request to queue: {}", queued_request.id);
         self.metrics.record_request_submitted();
 
-        self.enqueue_request(queued_request)?;
+        self.enqueue_request(queued_request).await?;
 
         let result = response_receiver
             .await
             .map_err(|_| QueueError::WorkerError("Response channel closed".to_string()))?;
-        self.active_requests.lock().await.remove(&session_id);
         result
+        // `_guard` drops here, clearing the `active_requests` entry.
     }
 
     /// Register a cancellation token for this session so concurrent cancels can
@@ -1018,20 +1103,46 @@ impl RequestQueue {
         active.insert(session_id, token);
     }
 
-    /// Push the fully-built request onto the worker queue, translating channel
-    /// errors into queue-level errors and updating metrics on failure.
-    fn enqueue_request(&self, queued_request: QueuedRequest) -> Result<(), QueueError> {
+    /// Push the fully-built request onto the worker queue, applying
+    /// backpressure when the bounded channel is full instead of dropping the
+    /// request.
+    ///
+    /// A saturated local model (the review fan-out's single shared server) used
+    /// to overflow the bounded queue and `try_send` would reject the task with
+    /// [`QueueError::Full`], silently dropping work — the review then reported
+    /// zero findings. Awaiting `send` makes the submitter WAIT for a worker to
+    /// free a slot, which is the correct response to a busy model.
+    ///
+    /// The wait is cancellation-aware: the request's own
+    /// [`CancellationToken`] aborts the `send` via `tokio::select!`, so a
+    /// cancelled request never wedges the submitter against a permanently-full
+    /// queue. `Full` is still returned for the unbounded streaming path's
+    /// non-blocking submit (see [`RequestQueue::submit_streaming_request`]) and
+    /// the capacity tests, so the variant is preserved.
+    async fn enqueue_request(&self, queued_request: QueuedRequest) -> Result<(), QueueError> {
         let sender = self.sender.as_ref().ok_or_else(|| {
             warn!("Queue is shutting down, rejecting request");
             self.metrics.record_request_failed();
             QueueError::WorkerError("Queue is shutting down".to_string())
         })?;
-        if sender.try_send(queued_request).is_err() {
-            warn!("Queue is full, rejecting request");
-            self.metrics.record_request_failed();
-            return Err(QueueError::Full);
+        let cancellation_token = queued_request.cancellation_token.clone();
+        tokio::select! {
+            send_result = sender.send(queued_request) => {
+                if send_result.is_err() {
+                    warn!("Queue sender closed, rejecting request");
+                    self.metrics.record_request_failed();
+                    return Err(QueueError::WorkerError(
+                        "Queue is shutting down".to_string(),
+                    ));
+                }
+                Ok(())
+            }
+            _ = cancellation_token.cancelled() => {
+                warn!("Request cancelled while waiting for queue capacity");
+                self.metrics.record_request_cancelled();
+                Err(QueueError::WorkerError("Request cancelled".to_string()))
+            }
         }
-        Ok(())
     }
 
     /// Submit a streaming generation request and receive an `mpsc::Receiver`
@@ -3190,6 +3301,89 @@ mod tests {
             (queue, turns_run)
         }
 
+        /// A single-worker queue whose every turn parks on a release gate until
+        /// the test fires it, so the bounded channel can be saturated
+        /// deterministically. Mirrors [`scripted_queue`] for the gated path:
+        /// returns the queue alongside the `gate` (fire with `notify_waiters`)
+        /// and the `entered` counter (turns the worker has begun).
+        fn gated_queue(
+            max_queue_size: usize,
+        ) -> (RequestQueue, Arc<tokio::sync::Notify>, Arc<AtomicUsize>) {
+            let gate = Arc::new(tokio::sync::Notify::new());
+            let entered = Arc::new(AtomicUsize::new(0));
+            let config = QueueConfig {
+                max_queue_size,
+                worker_threads: 1,
+            };
+            let queue = RequestQueue::with_executor(
+                config,
+                Arc::new(GatedExecutor {
+                    gate: gate.clone(),
+                    entered: entered.clone(),
+                }),
+            );
+            (queue, gate, entered)
+        }
+
+        /// Handles to a saturated single-slot gated queue, ready for a
+        /// backpressure assertion. See [`saturated_gated_queue`].
+        struct SaturatedGatedQueue {
+            queue: Arc<RequestQueue>,
+            gate: Arc<tokio::sync::Notify>,
+            entered: Arc<AtomicUsize>,
+            session: Session,
+            /// The submit that occupies the worker, parked on the gate.
+            first: JoinHandle<Result<GenerationResponse, QueueError>>,
+            /// The submit that fills the single channel slot behind the worker.
+            filler: JoinHandle<Result<GenerationResponse, QueueError>>,
+        }
+
+        /// Build the shared backpressure fixture used by the saturation tests: a
+        /// single-worker, single-slot gated queue with the worker parked on the
+        /// gate and the lone channel slot already filled. After this returns the
+        /// queue is fully saturated, so the next `submit_request` must wait on
+        /// backpressure rather than be dropped — which is exactly what the
+        /// callers assert (one releases the gate, the other cancels).
+        async fn saturated_gated_queue() -> SaturatedGatedQueue {
+            let (queue, gate, entered) = gated_queue(1);
+            let queue = Arc::new(queue);
+            let session = create_test_session();
+
+            // Occupy the worker: the first turn dequeues and parks on the gate.
+            let first = {
+                let queue = queue.clone();
+                let session = session.clone();
+                tokio::spawn(async move {
+                    queue
+                        .submit_request(streaming_request(&session, 8), &session)
+                        .await
+                })
+            };
+            await_worker_parked(&entered).await;
+
+            // Fill the single channel slot behind the parked worker so the next
+            // submit has no capacity and must block on backpressure.
+            let filler = {
+                let queue = queue.clone();
+                let session = session.clone();
+                tokio::spawn(async move {
+                    queue
+                        .submit_request(streaming_request(&session, 8), &session)
+                        .await
+                })
+            };
+            tokio::time::sleep(Duration::from_millis(20)).await;
+
+            SaturatedGatedQueue {
+                queue,
+                gate,
+                entered,
+                session,
+                first,
+                filler,
+            }
+        }
+
         fn streaming_request(session: &Session, max_tokens: u32) -> GenerationRequest {
             GenerationRequest {
                 session_id: session.id,
@@ -3210,6 +3404,21 @@ mod tests {
                     return;
                 }
                 tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }
+
+        /// Spin until the gated worker has dequeued a turn and parked on its
+        /// gate (`entered == 1`) or the budget runs out. Owns the park-poll
+        /// timing in one place so the gated tests stay in lockstep — retuning
+        /// for a slow CI box is a single edit here.
+        async fn await_worker_parked(entered: &AtomicUsize) {
+            const PARK_POLL_ATTEMPTS: usize = 40;
+            const PARK_POLL_INTERVAL: Duration = Duration::from_millis(5);
+            for _ in 0..PARK_POLL_ATTEMPTS {
+                if entered.load(AtomicOrdering::SeqCst) == 1 {
+                    return;
+                }
+                tokio::time::sleep(PARK_POLL_INTERVAL).await;
             }
         }
 
@@ -3469,20 +3678,8 @@ mod tests {
             // Park the single worker on a gated turn, then fill the bounded
             // channel to exactly capacity and prove the next enqueue — and only
             // it — returns Full, while every enqueue up to capacity succeeds.
-            let gate = Arc::new(tokio::sync::Notify::new());
-            let entered = Arc::new(AtomicUsize::new(0));
             let max_queue_size = 3;
-            let config = QueueConfig {
-                max_queue_size,
-                worker_threads: 1,
-            };
-            let queue = RequestQueue::with_executor(
-                config,
-                Arc::new(GatedExecutor {
-                    gate: gate.clone(),
-                    entered: entered.clone(),
-                }),
-            );
+            let (queue, gate, entered) = gated_queue(max_queue_size);
             let session = create_test_session();
 
             // First request reaches the worker and parks on the gate, removing
@@ -3523,6 +3720,238 @@ mod tests {
             );
 
             // Release the worker so the test shuts down cleanly.
+            gate.notify_waiters();
+        }
+
+        // --- Backpressure: batch submit waits when saturated, never drops ---
+
+        #[tokio::test]
+        async fn batch_submit_applies_backpressure_when_saturated() {
+            // Regression for the review "Queue is full → silent drop" bug. A
+            // saturated single-worker queue must make a non-streaming
+            // `submit_request` WAIT for capacity, not reject it with
+            // `QueueError::Full`. We park the worker on a gate and fill the
+            // bounded channel to capacity, then submit one more request and
+            // assert it stays pending (backpressure) until we release the gate,
+            // after which it completes successfully.
+            let SaturatedGatedQueue {
+                queue,
+                gate,
+                entered,
+                session,
+                first,
+                filler,
+            } = saturated_gated_queue().await;
+            assert_eq!(
+                entered.load(AtomicOrdering::SeqCst),
+                1,
+                "the worker should be parked on the first turn"
+            );
+
+            // The backpressured submit: capacity is exhausted, so this must
+            // wait rather than drop. Prove it stays pending while saturated.
+            let backpressured = {
+                let queue = queue.clone();
+                let session = session.clone();
+                tokio::spawn(async move {
+                    queue
+                        .submit_request(streaming_request(&session, 8), &session)
+                        .await
+                })
+            };
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            assert!(
+                !backpressured.is_finished(),
+                "a saturated batch submit must WAIT for capacity, not return immediately"
+            );
+
+            // Release the worker for every turn. The single worker parks on the
+            // gate at the start of each turn, so we notify repeatedly until all
+            // three submits resolve. None may be dropped with Full.
+            let drain = async {
+                let mut pending = vec![
+                    ("first", first),
+                    ("filler", filler),
+                    ("backpressured", backpressured),
+                ];
+                let mut results = Vec::new();
+                while !pending.is_empty() {
+                    gate.notify_waiters();
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    let mut still = Vec::new();
+                    for (label, handle) in pending {
+                        if handle.is_finished() {
+                            results.push((label, handle.await.expect("join")));
+                        } else {
+                            still.push((label, handle));
+                        }
+                    }
+                    pending = still;
+                }
+                results
+            };
+            let results = tokio::time::timeout(Duration::from_secs(5), drain)
+                .await
+                .expect("all backpressured submits must eventually complete");
+            for (label, result) in results {
+                assert!(
+                    !matches!(result, Err(QueueError::Full)),
+                    "{label} submit must not be dropped with Full under backpressure: {:?}",
+                    result.err()
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn batch_submit_backpressure_honors_cancellation() {
+            // A backpressured (waiting) batch submit must remain abortable via
+            // its cancellation token, so a cancelled request does not wedge the
+            // submitter forever when the queue is saturated.
+            //
+            // `_first`/`_filler` keep the worker parked and the lone channel
+            // slot occupied for the lifetime of the test; `session` belongs to
+            // those occupants — the backpressured submit below uses a separate
+            // session so it can be cancelled in isolation.
+            let SaturatedGatedQueue {
+                queue,
+                gate,
+                entered: _entered,
+                session: _session,
+                first: _first,
+                filler: _filler,
+            } = saturated_gated_queue().await;
+
+            // Submit one more on a DIFFERENT session so it blocks on
+            // backpressure, then cancel that session. The waiting submit must
+            // unblock with an error rather than hang.
+            let cancel_session = create_test_session();
+            let cancel_id = cancel_session.id;
+            let backpressured = {
+                let queue = queue.clone();
+                tokio::spawn(async move {
+                    queue
+                        .submit_request(streaming_request(&cancel_session, 8), &cancel_session)
+                        .await
+                })
+            };
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            assert!(
+                !backpressured.is_finished(),
+                "the third submit must be waiting on backpressure before we cancel"
+            );
+
+            assert!(
+                queue.cancel_session(&cancel_id).await,
+                "cancelling the waiting session's token must find an active request"
+            );
+
+            let result = tokio::time::timeout(Duration::from_secs(5), backpressured)
+                .await
+                .expect("cancelled backpressured submit must not wedge forever")
+                .expect("join");
+            assert!(
+                result.is_err(),
+                "a cancelled backpressured submit must return an error, got Ok"
+            );
+            gate.notify_waiters();
+        }
+
+        // --- active_requests cleanup on every exit path ---------------------
+
+        /// Wait until `active_requests` holds no entry for `session_id`, or the
+        /// budget runs out. The cleanup guard removes the entry from a spawned
+        /// task on drop, so callers must give that task a chance to run rather
+        /// than reading the map synchronously the instant a submit resolves.
+        async fn await_session_cleared(
+            queue: &RequestQueue,
+            session_id: &crate::types::SessionId,
+        ) -> bool {
+            for _ in 0..200 {
+                if queue.active_requests.lock().await.get(session_id).is_none() {
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            false
+        }
+
+        #[tokio::test]
+        async fn submit_request_clears_active_requests_on_success() {
+            // The happy path must still remove the session's entry once the
+            // response resolves, so a healthy server never accumulates entries.
+            let (queue, _turns) = scripted_queue(TurnOutcome::Scripted(ScriptedModel::new([
+                ScriptToken::EndOfSequence,
+            ])));
+            let session = create_test_session();
+
+            let response = queue
+                .submit_request(streaming_request(&session, 8), &session)
+                .await;
+            assert!(response.is_ok(), "scripted success turn must resolve Ok");
+
+            assert!(
+                await_session_cleared(&queue, &session.id).await,
+                "active_requests must be empty after a successful submit"
+            );
+        }
+
+        #[tokio::test]
+        async fn submit_request_clears_active_requests_on_cancellation() {
+            // A submit that is cancelled while waiting for queue capacity (the
+            // m8zac70 backpressure arm) early-returns from `enqueue_request`
+            // before the old success-only cleanup. We fire the token directly
+            // through `active_requests` — NOT via `cancel_session`, which would
+            // remove the entry itself and mask the leak — so the only thing that
+            // can clear the entry is `submit_request`'s own cleanup.
+            let SaturatedGatedQueue {
+                queue,
+                gate,
+                entered: _entered,
+                session: _session,
+                first: _first,
+                filler: _filler,
+            } = saturated_gated_queue().await;
+
+            let cancel_session = create_test_session();
+            let cancel_id = cancel_session.id;
+            let backpressured = {
+                let queue = queue.clone();
+                tokio::spawn(async move {
+                    queue
+                        .submit_request(streaming_request(&cancel_session, 8), &cancel_session)
+                        .await
+                })
+            };
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            assert!(
+                !backpressured.is_finished(),
+                "the waiting submit must be parked on backpressure before we cancel"
+            );
+
+            // Fire the request's own token without removing its map entry, so
+            // the cancellation arm of `enqueue_request` returns an error and the
+            // submit unwinds through its early-return path.
+            let token = queue
+                .active_requests
+                .lock()
+                .await
+                .get(&cancel_id)
+                .cloned()
+                .expect("the waiting submit must have tracked its cancellation token");
+            token.cancel();
+
+            let result = tokio::time::timeout(Duration::from_secs(5), backpressured)
+                .await
+                .expect("cancelled backpressured submit must not wedge forever")
+                .expect("join");
+            assert!(
+                result.is_err(),
+                "a cancelled backpressured submit must return an error, got Ok"
+            );
+            assert!(
+                await_session_cleared(&queue, &cancel_id).await,
+                "active_requests must not retain the cancelled session's entry"
+            );
             gate.notify_waiters();
         }
 
@@ -3740,20 +4169,7 @@ mod tests {
         async fn streaming_submit_returns_full_at_capacity() {
             // The streaming submit path has its own try_send + Full branch.
             // Park the worker and fill the bounded channel to prove it fires.
-            let gate = Arc::new(tokio::sync::Notify::new());
-            let entered = Arc::new(AtomicUsize::new(0));
-            let max_queue_size = 2;
-            let config = QueueConfig {
-                max_queue_size,
-                worker_threads: 1,
-            };
-            let queue = RequestQueue::with_executor(
-                config,
-                Arc::new(GatedExecutor {
-                    gate: gate.clone(),
-                    entered: entered.clone(),
-                }),
-            );
+            let (queue, gate, entered) = gated_queue(2);
             let session = create_test_session();
 
             // Occupy the worker with one streaming turn parked on the gate.
@@ -3761,12 +4177,7 @@ mod tests {
                 .submit_streaming_request(streaming_request(&session, 8), &session)
                 .await
                 .expect("first streaming request occupies the worker");
-            for _ in 0..40 {
-                if entered.load(AtomicOrdering::SeqCst) == 1 {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
+            await_worker_parked(&entered).await;
 
             // Fill the channel; eventually streaming submit must return Full.
             let mut held = Vec::new();

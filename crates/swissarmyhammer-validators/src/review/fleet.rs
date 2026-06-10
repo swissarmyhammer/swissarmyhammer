@@ -73,6 +73,25 @@ impl FleetConfig {
     }
 }
 
+/// The result of a fan-out run: the merged findings plus the task tally.
+///
+/// A task that errors, is dropped, or returns unparseable content still
+/// degrades to zero findings (one bad task never aborts the rest), but unlike
+/// the findings — which simply omit it — the tally records that it was both
+/// `attempted` and `failed`. A review where most tasks fail therefore renders an
+/// empty findings set with a non-zero `failed` count, which is exactly what
+/// distinguishes a wedged run from a genuinely clean diff.
+#[derive(Debug, Default)]
+pub struct FleetOutcome {
+    /// The merged, validator-tagged findings from every task that succeeded.
+    pub findings: Vec<Finding>,
+    /// How many `(validator, batch-of-files)` tasks were submitted.
+    pub attempted: usize,
+    /// How many of those tasks failed (errored, were dropped, or did not parse)
+    /// and so degraded to zero findings.
+    pub failed: usize,
+}
+
 /// Fan a [`WorkList`] out across the shared [`AgentPool`] and collect the merged,
 /// validator-tagged findings.
 ///
@@ -90,13 +109,16 @@ impl FleetConfig {
 /// and skipped rather than rendered with empty instructions.
 ///
 /// The returned findings are ordered by validator (work-list order), then by the
-/// order the pool delivered each batch.
+/// order the pool delivered each batch. Alongside them, the returned
+/// [`FleetOutcome`] carries the task tally — how many tasks were attempted and
+/// how many failed — so a saturated run (most tasks rejected) is distinguishable
+/// from a genuinely clean diff rather than both rendering an empty findings set.
 pub async fn run_fleet(
     work: &WorkList,
     loader: &ValidatorLoader,
     pool: &AgentPool,
     config: FleetConfig,
-) -> Vec<Finding> {
+) -> FleetOutcome {
     let batch_size = config.effective_batch_size();
 
     // Build every (validator, batch) task and submit it. Submission is
@@ -150,22 +172,38 @@ pub async fn run_fleet(
 
     // Collect every task. The pool drains them in parallel up to its worker
     // count; we await them in submission order, which is fine because each
-    // receiver resolves independently.
+    // receiver resolves independently. The attempted count is the number of
+    // tasks submitted; each task that degrades to zero findings on failure also
+    // bumps the failed count so the report can flag an incomplete run.
+    let attempted = pending.len();
     let mut findings: Vec<Finding> = Vec::new();
+    let mut failed = 0usize;
     for task in pending {
-        let parsed = collect_task(task.rx.await, &task.validator, &task.files);
-        findings.extend(parsed);
+        match collect_task(task.rx.await, &task.validator, &task.files) {
+            Ok(parsed) => findings.extend(parsed),
+            Err(()) => failed += 1,
+        }
     }
-    findings
+    FleetOutcome {
+        findings,
+        attempted,
+        failed,
+    }
 }
 
-/// Resolve one task's delivered result into tagged findings, degrading any
-/// failure to an empty vec.
+/// Resolve one task's delivered result into tagged findings.
+///
+/// Returns `Ok(findings)` for a task that delivered a parseable response (the
+/// findings may legitimately be empty), and `Err(())` for any failure — a task
+/// error, a dropped channel, or a response that did not parse. A failure is
+/// logged and degrades the batch to zero findings (one bad task never aborts the
+/// rest); the `Err` lets the caller tally it as failed rather than silently
+/// conflating it with a clean batch.
 fn collect_task(
     delivered: Result<crate::validators::PromptResult, tokio::sync::oneshot::error::RecvError>,
     validator: &str,
     files: &[String],
-) -> Vec<Finding> {
+) -> Result<Vec<Finding>, ()> {
     let response = match delivered {
         Ok(Ok(response)) => response,
         Ok(Err(err)) => {
@@ -175,7 +213,7 @@ fn collect_task(
                 error = %err,
                 "fleet task failed; yielding zero findings for this batch"
             );
-            return Vec::new();
+            return Err(());
         }
         Err(_) => {
             tracing::warn!(
@@ -183,12 +221,12 @@ fn collect_task(
                 files = ?files,
                 "fleet task result was dropped before delivery; yielding zero findings"
             );
-            return Vec::new();
+            return Err(());
         }
     };
 
     match parse_findings(&response.content) {
-        Ok(parsed) => tag_findings(parsed, validator),
+        Ok(parsed) => Ok(tag_findings(parsed, validator)),
         Err(err) => {
             tracing::warn!(
                 validator = %validator,
@@ -196,7 +234,7 @@ fn collect_task(
                 error = %err,
                 "fleet task response did not parse into findings; yielding zero findings"
             );
-            Vec::new()
+            Err(())
         }
     }
 }
@@ -826,7 +864,9 @@ mod tests {
 
         // batch_size=1 → file-grain: 2 validators × 2 files = 4 tasks.
         let findings = with_pool(agent, PoolConfig::remote(4), move |pool| async move {
-            run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 1 }).await
+            run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 1 })
+                .await
+                .findings
         })
         .await;
 
@@ -977,19 +1017,58 @@ mod tests {
             ),
         ]);
 
-        let findings = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
+        let outcome = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
             run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 1 }).await
         })
         .await;
 
         // The erroring task contributed nothing; the good one still returned.
         assert_eq!(
-            findings.len(),
+            outcome.findings.len(),
             1,
             "the failing task degrades to zero findings"
         );
-        assert_eq!(findings[0].claim, "real issue");
-        assert_eq!(findings[0].validator, "val");
+        assert_eq!(outcome.findings[0].claim, "real issue");
+        assert_eq!(outcome.findings[0].validator, "val");
+        // The tally records both tasks attempted and exactly the one that failed.
+        assert_eq!(
+            outcome.attempted, 2,
+            "two (validator, file) tasks attempted"
+        );
+        assert_eq!(outcome.failed, 1, "the erroring task is counted as failed");
+    }
+
+    #[tokio::test]
+    async fn all_tasks_failing_yields_zero_findings_and_a_full_failure_tally() {
+        let rs = ruleset("val", "mandate", &[("r", "body")]);
+        let loader = loader_with(vec![rs]);
+
+        let work = WorkList {
+            change_purpose: "purpose".to_string(),
+            validators: vec![validator_work(
+                "val",
+                vec![
+                    file_work("src/a.rs", "a", "src/x.rs"),
+                    file_work("src/b.rs", "b", "src/y.rs"),
+                    file_work("src/c.rs", "c", "src/z.rs"),
+                ],
+            )],
+        };
+
+        // Every (validator, file) task errors.
+        let agent = ScriptedAgent::new(vec![("## File:".to_string(), None)]);
+
+        let outcome = with_pool(agent, PoolConfig::remote(3), move |pool| async move {
+            run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 1 }).await
+        })
+        .await;
+
+        assert!(
+            outcome.findings.is_empty(),
+            "every task failed, so there are no findings"
+        );
+        assert_eq!(outcome.attempted, 3, "three tasks attempted");
+        assert_eq!(outcome.failed, 3, "all three failed");
     }
 
     #[tokio::test]
@@ -1007,15 +1086,20 @@ mod tests {
         let agent = ScriptedAgent::new(vec![]);
         let agent_probe = Arc::clone(&agent);
 
-        let findings = with_pool(agent, PoolConfig::remote(1), move |pool| async move {
+        let outcome = with_pool(agent, PoolConfig::remote(1), move |pool| async move {
             run_fleet(&work, &loader, &pool, FleetConfig::default()).await
         })
         .await;
 
         assert!(
-            findings.is_empty(),
+            outcome.findings.is_empty(),
             "an unknown validator yields no findings"
         );
+        assert_eq!(
+            outcome.attempted, 0,
+            "no task is attempted for a validator missing from the loader"
+        );
+        assert_eq!(outcome.failed, 0);
         assert!(
             agent_probe.seen_prompts().is_empty(),
             "no task is submitted for a validator missing from the loader"

@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffff9480
 title: 'Review OOM: probe runner re-loads the entire embedding index per file/function'
 ---
 ## Symptom
