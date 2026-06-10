@@ -149,7 +149,8 @@ pub struct ResolvedCommand {
 /// Parameters for template resolution in command names.
 #[derive(Debug, Clone, Default)]
 pub struct TemplateParams<'a> {
-    /// Entity type (e.g. "task") — resolved as capitalized for `{{entity.type}}`.
+    /// Entity type (e.g. "task") — display-cased for `{{entity.type}}`
+    /// ("task" → "Task", "saved_search" → "Saved Search").
     pub entity_type: &'a str,
     /// Entity display name (e.g. the entity's `name` field value).
     /// Resolves `{{entity.display_name}}`; empty string if not set.
@@ -162,7 +163,11 @@ pub struct TemplateParams<'a> {
 /// Resolve template variables in a command name or menu_name.
 ///
 /// Supported variables:
-/// - `{{entity.type}}` → capitalized entity type (e.g. "Task")
+/// - `{{entity.type}}` → display-cased entity type via the shared
+///   [`swissarmyhammer_command_service::display_case`] helper (e.g. "Task",
+///   "Saved Search") — the same casing rule the command-service caption
+///   renderer applies, so the OS menu's focus-driven refresh and the palette
+///   can never drift apart on casing.
 /// - `{{entity.display_name}}` → entity name field value
 /// - `{{entity.context.display_name}}` → context path stem
 ///
@@ -173,12 +178,7 @@ pub fn resolve_name_template(name: &str, params: &TemplateParams<'_>) -> String 
     }
     let mut result = name.to_string();
     if result.contains("{{entity.type}}") {
-        let entity_type = params.entity_type;
-        let capitalized = if entity_type.is_empty() {
-            String::new()
-        } else {
-            format!("{}{}", &entity_type[..1].to_uppercase(), &entity_type[1..])
-        };
+        let capitalized = swissarmyhammer_command_service::display_case(params.entity_type);
         result = result.replace("{{entity.type}}", &capitalized);
     }
     // Note: context.display_name must be checked before display_name to avoid
@@ -1342,4 +1342,41 @@ mod tests {
     // module. The end-to-end coverage now lives in the per-plugin e2e tests
     // under `swissarmyhammer-command-service/tests/integration/builtin_*_commands_e2e.rs`
     // and the new `full_baseline_e2e` integration test.
+
+    use super::{resolve_name_template, TemplateParams};
+    use swissarmyhammer_command_service::{render_caption, CommandContext as ServiceContext};
+
+    /// Lockstep guard: this module's `{{entity.type}}` arm and the shared
+    /// caption renderer in `swissarmyhammer-command-service` resolve the SAME
+    /// placeholder on two live display surfaces — the OS menu's focus-driven
+    /// refresh goes through `resolve_name_template`, the palette through
+    /// `render_caption`. If their display-casing ever diverges, two surfaces
+    /// show different labels for the same focused entity. This test fails the
+    /// moment the two resolvers disagree on any entity type shape, including
+    /// multi-word snake_case / kebab-case types.
+    #[test]
+    fn entity_type_captions_match_the_shared_caption_renderer() {
+        for entity_type in ["task", "tag", "saved_search", "kanban-card"] {
+            for template in ["Inspect {{entity.type}}", "New {{entity.type}}"] {
+                let legacy = resolve_name_template(
+                    template,
+                    &TemplateParams {
+                        entity_type,
+                        ..Default::default()
+                    },
+                );
+                let ctx = ServiceContext {
+                    scope_chain: vec![format!("{entity_type}:01X")],
+                    ..Default::default()
+                };
+                let shared = render_caption(template, &ctx);
+                assert_eq!(
+                    legacy, shared,
+                    "resolve_name_template and render_caption diverged for \
+                     entity type {entity_type:?} on template {template:?} — \
+                     the OS menu and the palette would show different labels"
+                );
+            }
+        }
+    }
 }

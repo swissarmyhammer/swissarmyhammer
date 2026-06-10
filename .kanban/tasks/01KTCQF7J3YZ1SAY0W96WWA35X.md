@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: d080
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffff8980
 title: Jump (s) cannot target the (i) inspect and (x) close buttons
 ---
 REOPENED 2026-06-06 — prior fix was WRONG and discarded.

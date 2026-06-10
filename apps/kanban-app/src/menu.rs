@@ -4,6 +4,7 @@ use crate::state::{resolve_kanban_path, AppState, MenuItemHandle};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use swissarmyhammer_command_service::{render_caption, CommandContext};
 use swissarmyhammer_common::WindowInfo;
 use swissarmyhammer_kanban::commands_core::{CommandDef, CommandsRegistry};
 use swissarmyhammer_kanban::{
@@ -98,9 +99,16 @@ fn collect_menu_entries(
         let key = placement.path.join("/");
         let accelerator = resolve_accelerator(cmd, &keymap_mode);
         let checked = resolve_checked(cmd, ui_state);
+        // The registry façade stores the plugin-declared caption templates
+        // (e.g. "Cut {{entity.type}}"). The menu is built without a focused
+        // entity, so render with the empty context — the generic fallback
+        // ("Cut") — rather than leaking a raw placeholder. The existing
+        // focus-driven refresh (`apply_menu_item_state`) overwrites these
+        // labels with scope-resolved names as focus moves.
+        let template = cmd.menu_name.as_deref().unwrap_or(&cmd.name);
         menus.entry(key).or_default().push(MenuEntry {
             id: cmd.id.clone(),
-            name: cmd.menu_name.clone().unwrap_or_else(|| cmd.name.clone()),
+            name: render_caption(template, &CommandContext::default()),
             group: placement.group,
             order: placement.order,
             accelerator,
@@ -600,7 +608,10 @@ fn apply_menu_item_state(state: &AppState, resolved_map: &HashMap<String, (Strin
             let _ = menu_item.set_enabled(false);
             if let Some(ref reg) = registry {
                 if let Some(def) = reg.get(cmd_id) {
-                    let clean = def.name.replace(" {{entity.type}}", "");
+                    // No scope context for an unavailable command — render
+                    // the caption template with the generic fallback (the
+                    // shared renderer guarantees no raw `{{...}}` leaks).
+                    let clean = render_caption(&def.name, &CommandContext::default());
                     let _ = menu_item.set_text(&clean);
                 }
             }
@@ -934,6 +945,11 @@ mod tests {
     /// Built from `build_registry_from_metadata(service.list_metadata())`
     /// (the `nav-commands` plugin's metadata), NOT a hand-built
     /// `compose_registry!` — so this is the real menu-composition path.
+    ///
+    /// The plugin's tenth command, the programmatic `nav.focus`, carries NO
+    /// menu placement (it was never in the retired `nav.yaml`), so the
+    /// Navigation submenu stays at exactly these nine — the id-set equality
+    /// below pins that.
     #[tokio::test]
     async fn navigation_submenu_contains_all_nine_nav_commands() {
         let (registry, _user, _cache, _global) = runtime_registry().await;

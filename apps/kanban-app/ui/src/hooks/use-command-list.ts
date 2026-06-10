@@ -20,10 +20,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  callCommandTool,
-  subscribeCommandsChanged,
-} from "@/lib/mcp-transport";
+import { callCommandTool, subscribeCommandsChanged } from "@/lib/mcp-transport";
 
 /** Trailing debounce (ms) applied to `commands/changed` — matches the server. */
 export const COMMANDS_CHANGED_DEBOUNCE_MS = 100;
@@ -71,7 +68,7 @@ export interface CommandMetadata {
 }
 
 /** Envelope returned by the `list command` verb. */
-interface ListCommandResult {
+export interface ListCommandResult {
   ok: boolean;
   commands: CommandMetadata[];
 }
@@ -87,6 +84,14 @@ export interface UseCommandListOptions {
   category?: string;
   /** Keep only commands whose id starts with this prefix (e.g. `"task."`). */
   idPrefix?: string;
+  /**
+   * Focused scope chain (innermost first, e.g. `["task:01ABC", "board:01X"]`)
+   * forwarded as the list `ctx` so the service renders caption templates
+   * (`{{entity.type}}`) against the focused object. Not a filter — purely
+   * display-render context. Absent means the service applies its generic
+   * fallback (placeholders dropped, never raw).
+   */
+  scopeChain?: string[];
 }
 
 /** What {@link useCommandList} returns. */
@@ -115,6 +120,9 @@ function buildListParams(
   if (options.scope !== undefined) params.scope = options.scope;
   if (options.category !== undefined) params.category = options.category;
   if (options.idPrefix !== undefined) params.id_prefix = options.idPrefix;
+  if (options.scopeChain !== undefined && options.scopeChain.length > 0) {
+    params.ctx = { scope_chain: options.scopeChain };
+  }
   return params;
 }
 
@@ -136,10 +144,21 @@ export function useCommandList(
 
   // Snapshot the filters into a ref so the fetch callback stays reference
   // stable while still reading the latest filter values at call time. The
-  // primitive filter fields drive the effect's re-fetch dependency below.
-  const { scope, category, idPrefix } = options;
-  const optionsRef = useRef<UseCommandListOptions>({ scope, category, idPrefix });
-  optionsRef.current = { scope, category, idPrefix };
+  // primitive filter fields drive the effect's re-fetch dependency below;
+  // the scope chain (an array, so reference-unstable across renders) is
+  // keyed by its JSON serialization. A plain join would be ambiguous —
+  // monikers can contain any separator character (path-shaped attachment
+  // ids contain spaces, slashes, colons), so two distinct chains could
+  // collide on the joined key and suppress a caption re-fetch.
+  const { scope, category, idPrefix, scopeChain } = options;
+  const scopeChainKey = scopeChain && JSON.stringify(scopeChain);
+  const optionsRef = useRef<UseCommandListOptions>({
+    scope,
+    category,
+    idPrefix,
+    scopeChain,
+  });
+  optionsRef.current = { scope, category, idPrefix, scopeChain };
 
   // Guards against stale resolves clobbering a newer fetch's result.
   const fetchIdRef = useRef(0);
@@ -164,11 +183,11 @@ export function useCommandList(
     }
   }, []);
 
-  // Initial fetch + re-fetch when the filters change.
+  // Initial fetch + re-fetch when the filters or the render context change.
   useEffect(() => {
     setLoading(true);
     void fetchCommands();
-  }, [fetchCommands, scope, category, idPrefix]);
+  }, [fetchCommands, scope, category, idPrefix, scopeChainKey]);
 
   // Subscribe to `commands/changed`, debounced ~100ms to match the server's
   // coalescing window so a burst of notifications triggers one re-fetch.

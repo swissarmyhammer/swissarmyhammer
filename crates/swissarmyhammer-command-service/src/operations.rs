@@ -213,6 +213,13 @@ pub struct ListCommand {
     /// (e.g. `"task."`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id_prefix: Option<String>,
+    /// Display-render context (scope chain, target). Caption templates in
+    /// the registered `name` / `menu_name` (e.g. `"Inspect {{entity.type}}"`)
+    /// are rendered against the focused object this context identifies;
+    /// when absent, placeholders fall back to a clean generic form. Raw
+    /// `{{...}}` never reaches a display surface.
+    #[serde(default)]
+    pub ctx: CommandContext,
 }
 
 /// Return the param schema for one registered command.

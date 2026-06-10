@@ -1,8 +1,15 @@
-import { useCallback, useContext, useMemo, useRef } from "react";
+import { useCallback, useContext, useRef } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { callMcpTool } from "@/lib/mcp-transport";
+import {
+  callCommandTool,
+  callMcpTool,
+  LIST_COMMAND_OP,
+} from "@/lib/mcp-transport";
 import { CommandScopeContext, scopeChainFromScope } from "@/lib/command-scope";
-import { useCommandList, type CommandMetadata } from "@/hooks/use-command-list";
+import type {
+  CommandMetadata,
+  ListCommandResult,
+} from "@/hooks/use-command-list";
 
 /** Shape sent to the `window` server's `show context menu` op. Self-contained dispatch info. */
 interface ContextMenuItem {
@@ -69,26 +76,109 @@ function contextMenuSortKey(cmd: CommandMetadata): [number, number] {
 }
 
 /**
+ * Monotonic token guarding against a stale click's in-flight fetch popping
+ * its menu after a newer right-click (the use-command-list.ts `fetchIdRef`
+ * pattern). Module scope, not a per-hook ref: rapid right-clicks may come
+ * from different hook instances (different components), but the native menu
+ * is one global resource — only the newest click may pop it.
+ */
+let openId = 0;
+
+/**
+ * Fetch the command registry rendered against the right-click point and pop
+ * the native context menu.
+ *
+ * The `list command` call carries the click point's context — `target` (the
+ * innermost moniker, i.e. the right-clicked entity) plus the full
+ * `scope_chain` — the same `ctx` wire shape the palette sends, so the Command
+ * service renders caption templates (`{{entity.type}}`) against the clicked
+ * entity and every caption arrives display-ready ("Delete Task" on a task,
+ * "Delete Tag" on a tag). Zero template logic in React. An empty chain sends
+ * no ctx; the service then applies its generic fallback ("Delete", never a
+ * raw placeholder).
+ *
+ * The response is filtered to `context_menu: true` commands whose `scope`
+ * matches the chain, sorted into context-menu groups, and handed to the
+ * native menu as self-contained dispatch items.
+ *
+ * @param scopeChain - The right-click point's scope chain, innermost first.
+ */
+async function openContextMenu(scopeChain: string[]): Promise<void> {
+  const myId = ++openId;
+  const params: Record<string, unknown> =
+    scopeChain.length > 0
+      ? { ctx: { target: scopeChain[0], scope_chain: scopeChain } }
+      : {};
+  const result = await callCommandTool<ListCommandResult>(
+    LIST_COMMAND_OP,
+    params,
+  );
+  if (myId !== openId) return; // a newer right-click superseded this one
+
+  const matching = (result?.commands ?? [])
+    .filter((cmd) => cmd.context_menu === true && scopeMatches(cmd, scopeChain))
+    .sort((a, b) => {
+      const [ag, ao] = contextMenuSortKey(a);
+      const [bg, bo] = contextMenuSortKey(b);
+      return ag !== bg ? ag - bg : ao - bo;
+    });
+
+  if (matching.length === 0) return;
+
+  const items: ContextMenuItem[] = [];
+  let lastGroup: number | undefined;
+  for (const cmd of matching) {
+    const group = cmd.context_menu_group;
+    if (lastGroup !== undefined && group !== lastGroup && items.length > 0) {
+      items.push({ name: "", cmd: "", separator: true, scope_chain: [] });
+    }
+    items.push({
+      name: cmd.menu_name ?? cmd.name,
+      cmd: cmd.id,
+      // The innermost chain moniker is the entity the right-click targets;
+      // the dispatcher resolves the command against it (and the full
+      // `scope_chain` rides alongside for backend scope resolution).
+      target: scopeChain[0],
+      scope_chain: scopeChain,
+      separator: false,
+    });
+    lastGroup = group;
+  }
+
+  // Render the native context menu via the app-wide `window` MCP server.
+  // Pass our own window label so the shell pops the menu on the *calling*
+  // window (deterministic targeting; the MCP wire has no ambient "calling
+  // window" the old native command relied on). Selection delivery is
+  // unchanged: the Rust menu-event handler decodes the chosen item and emits
+  // `context-menu-command`, which `KeybindingHandler` dispatches — so this
+  // call is fire-and-forget, exactly as the prior `invoke("show_context_menu",
+  // …)` was.
+  const windowLabel = getCurrentWindow().label;
+  await callMcpTool("window", "show context menu", {
+    items,
+    window_label: windowLabel,
+  });
+}
+
+/**
  * Hook that returns an onContextMenu handler.
  *
- * Commands are sourced from the metadata-driven Command registry via
- * {@link useCommandList} — no command id list is hardcoded here. The handler
- * filters that live list for `context_menu: true` commands whose `scope`
- * matches the right-click point's scope chain, sorts them into context-menu
- * groups, and hands self-contained dispatch items to the native menu. When the
- * registry changes (`commands/changed`), `useCommandList` re-fetches and the
- * next right-click sees the new set.
+ * Commands are sourced from the metadata-driven Command registry — no command
+ * id list is hardcoded here. The handler fetches `list command` at click time
+ * with the right-click point's ctx (see {@link openContextMenu}), so captions
+ * arrive rendered against the clicked entity and every right-click sees the
+ * current registry by construction.
  *
  * The hook is called from high-multiplier render sites (one per grid cell, one
- * per data-table row, one per grid body) so both the returned handler and the
- * scope-chain walk must stay off the render hot path:
+ * per data-table row, one per grid body) so everything must stay off the
+ * render hot path:
  *
  * - The handler is memoised with empty deps so its identity is stable across
  *   renders. Downstream components memoised on prop identity keep their
  *   skip-children fast path.
- * - The current scope and the latest command list are kept in refs, updated
- *   every render. The handler reads them at click time, so the scope-chain
- *   walk and the filter run exactly once per right-click — never on render.
+ * - The current scope is kept in a ref, updated every render. The handler
+ *   reads it at click time, so the scope-chain walk and the registry fetch
+ *   run exactly once per right-click — never on render.
  *
  * @returns Event handler to attach to onContextMenu.
  */
@@ -96,17 +186,6 @@ export function useContextMenu(): (e: React.MouseEvent) => void {
   const scope = useContext(CommandScopeContext);
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
-
-  // Only `context_menu`-tagged commands can ever reach this surface, so narrow
-  // the live registry to them. Scope matching happens at click time against
-  // the right-click point's chain (the hook itself is scope-agnostic).
-  const { commands } = useCommandList();
-  const contextMenuCommands = useMemo(
-    () => commands.filter((cmd) => cmd.context_menu === true),
-    [commands],
-  );
-  const commandsRef = useRef(contextMenuCommands);
-  commandsRef.current = contextMenuCommands;
 
   return useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -116,49 +195,6 @@ export function useContextMenu(): (e: React.MouseEvent) => void {
     // is written on every commit, so this always reflects the scope that
     // was committed at the most recent render.
     const scopeChain = scopeChainFromScope(scopeRef.current);
-
-    const matching = commandsRef.current
-      .filter((cmd) => scopeMatches(cmd, scopeChain))
-      .sort((a, b) => {
-        const [ag, ao] = contextMenuSortKey(a);
-        const [bg, bo] = contextMenuSortKey(b);
-        return ag !== bg ? ag - bg : ao - bo;
-      });
-
-    if (matching.length === 0) return;
-
-    const items: ContextMenuItem[] = [];
-    let lastGroup: number | undefined;
-    for (const cmd of matching) {
-      const group = cmd.context_menu_group;
-      if (lastGroup !== undefined && group !== lastGroup && items.length > 0) {
-        items.push({ name: "", cmd: "", separator: true, scope_chain: [] });
-      }
-      items.push({
-        name: cmd.menu_name ?? cmd.name,
-        cmd: cmd.id,
-        // The innermost chain moniker is the entity the right-click targets;
-        // the dispatcher resolves the command against it (and the full
-        // `scope_chain` rides alongside for backend scope resolution).
-        target: scopeChain[0],
-        scope_chain: scopeChain,
-        separator: false,
-      });
-      lastGroup = group;
-    }
-
-    // Render the native context menu via the app-wide `window` MCP server.
-    // Pass our own window label so the shell pops the menu on the *calling*
-    // window (deterministic targeting; the MCP wire has no ambient "calling
-    // window" the old native command relied on). Selection delivery is
-    // unchanged: the Rust menu-event handler decodes the chosen item and emits
-    // `context-menu-command`, which `KeybindingHandler` dispatches — so this
-    // call is fire-and-forget, exactly as the prior `invoke("show_context_menu",
-    // …)` was.
-    const windowLabel = getCurrentWindow().label;
-    callMcpTool("window", "show context menu", {
-      items,
-      window_label: windowLabel,
-    }).catch(console.error);
+    openContextMenu(scopeChain).catch(console.error);
   }, []);
 }

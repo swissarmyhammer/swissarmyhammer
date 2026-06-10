@@ -5,9 +5,23 @@ import { render, screen, fireEvent } from "@testing-library/react";
 // Mocks — must be declared before importing the component under test
 // ---------------------------------------------------------------------------
 
+import { answerListCommand } from "@/test/mock-command-list";
+
+// The right-click context menu fetches the Command registry at click time
+// (`list command` via `command_tool_call`); drive it through `mockRegistry`.
+let mockRegistry: Array<Record<string, unknown>> = [];
+
+/**
+ * Default `invoke` implementation: serve the click-time `list command` fetch
+ * from `mockRegistry`, resolve `"ok"` for everything else. Tests that swap
+ * implementations restore this one.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const defaultInvoke = (...args: any[]): Promise<any> =>
+  answerListCommand(args[0], args[1], mockRegistry) ?? Promise.resolve("ok");
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockInvoke = vi.fn(
-  (..._args: any[]): Promise<any> => Promise.resolve("ok"),
+  (...args: any[]): Promise<any> => defaultInvoke(...args),
 );
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: any[]) => mockInvoke(...args),
@@ -24,16 +38,6 @@ vi.mock("@tauri-apps/api/webview", () => ({
 }));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
-}));
-// The right-click context menu now reads commands from the Command registry
-// via `useCommandList`; drive it through `mockRegistry`.
-let mockRegistry: Array<Record<string, unknown>> = [];
-vi.mock("@/hooks/use-command-list", () => ({
-  useCommandList: () => ({
-    commands: mockRegistry,
-    loading: false,
-    refresh: vi.fn(),
-  }),
 }));
 // ---------------------------------------------------------------------------
 
@@ -260,7 +264,7 @@ describe("AttachmentItem", () => {
         scope: ["attachment"],
       },
     ];
-    mockInvoke.mockImplementation(() => Promise.resolve("ok"));
+    mockInvoke.mockImplementation(defaultInvoke);
     const { container } = render(
       <Wrapper>
         <AttachmentItem attachment={imageAttachment} />
@@ -291,7 +295,7 @@ describe("AttachmentItem", () => {
       );
     });
     // Restore default mock
-    mockInvoke.mockImplementation(() => Promise.resolve("ok"));
+    mockInvoke.mockImplementation(defaultInvoke);
   });
 
   it("forwards Open, Show in Finder, Delete, Cut, Copy, Paste from list_commands_for_scope into show_context_menu", async () => {
@@ -363,7 +367,7 @@ describe("AttachmentItem", () => {
         scope: ["attachment"],
       },
     ];
-    mockInvoke.mockImplementation(() => Promise.resolve("ok"));
+    mockInvoke.mockImplementation(defaultInvoke);
     const { container } = render(
       <Wrapper>
         <AttachmentItem attachment={imageAttachment} />
@@ -413,7 +417,7 @@ describe("AttachmentItem", () => {
         false,
       ]);
     });
-    mockInvoke.mockImplementation(() => Promise.resolve("ok"));
+    mockInvoke.mockImplementation(defaultInvoke);
   });
 
   it("scope chain includes attachment moniker on right-click", async () => {
@@ -428,7 +432,7 @@ describe("AttachmentItem", () => {
         scope: ["attachment"],
       },
     ];
-    mockInvoke.mockImplementation(() => Promise.resolve("ok"));
+    mockInvoke.mockImplementation(defaultInvoke);
     const { container } = render(
       <Wrapper>
         <AttachmentItem attachment={imageAttachment} />
@@ -450,7 +454,7 @@ describe("AttachmentItem", () => {
       const first = items.find((i) => !i.separator)!;
       expect(first.scope_chain[0]).toBe(`attachment:${imageAttachment.path}`);
     });
-    mockInvoke.mockImplementation(() => Promise.resolve("ok"));
+    mockInvoke.mockImplementation(defaultInvoke);
   });
 
   it("nested inside parent FocusScope: right-click fires attachment scope, not parent", async () => {
@@ -464,7 +468,7 @@ describe("AttachmentItem", () => {
         scope: ["attachment"],
       },
     ];
-    mockInvoke.mockImplementation(() => Promise.resolve("ok"));
+    mockInvoke.mockImplementation(defaultInvoke);
     const FocusScope = (await import("@/components/focus-scope")).FocusScope;
     const { container } = render(
       <Wrapper>
@@ -492,7 +496,7 @@ describe("AttachmentItem", () => {
       expect(scope_chain[0]).toBe(`attachment:${imageAttachment.path}`);
       expect(scope_chain[1]).toBe("task:01ABC");
     });
-    mockInvoke.mockImplementation(() => Promise.resolve("ok"));
+    mockInvoke.mockImplementation(defaultInvoke);
   });
 });
 

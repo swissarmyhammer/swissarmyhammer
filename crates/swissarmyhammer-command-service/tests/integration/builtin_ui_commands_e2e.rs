@@ -699,11 +699,9 @@ fn assert_single_param(cmd: &Value, id: &str, name: &str, from: &str) {
 /// `ui.inspect` — ui.yaml: context_menu (group 3, order 0); param
 /// moniker(target); no keys/menu.
 fn assert_ui_inspect(cmd: &Value) {
-    assert_eq!(
-        cmd["name"],
-        json!("Inspect {{entity.type}}"),
-        "ui.inspect name"
-    );
+    // Registered as "Inspect {{entity.type}}" — rendered to the generic
+    // fallback by `list command` (no ctx supplied here).
+    assert_eq!(cmd["name"], json!("Inspect"), "ui.inspect name");
     assert_eq!(cmd["context_menu"], json!(true), "ui.inspect context_menu");
     assert_eq!(
         cmd["context_menu_group"],
@@ -720,7 +718,10 @@ fn assert_ui_inspect(cmd: &Value) {
     assert_no_menu(cmd, "ui.inspect");
 }
 
-/// `ui.inspector.close` — ui.yaml: keys cua:Escape / vim:q; no menu.
+/// `ui.inspector.close` — keys vim:q only; cua:Escape was removed (card
+/// 01KTPDTH772HSEV5F7R1DKYDNJ): inspector Escape-close flows through
+/// `nav.drillOut` → `dismiss ui`, while vim `q` remains a direct close;
+/// no menu.
 fn assert_inspector_close(cmd: &Value) {
     assert_eq!(
         cmd["name"],
@@ -729,7 +730,7 @@ fn assert_inspector_close(cmd: &Value) {
     );
     assert_eq!(
         cmd["keys"],
-        json!({ "cua": "Escape", "vim": "q" }),
+        json!({ "vim": "q" }),
         "ui.inspector.close keys"
     );
     assert_no_menu(cmd, "ui.inspector.close");

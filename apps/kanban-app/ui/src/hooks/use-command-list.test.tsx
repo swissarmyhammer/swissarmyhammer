@@ -80,6 +80,53 @@ describe("useCommandList", () => {
     );
   });
 
+  it("forwards the scope chain as the list ctx for caption rendering", async () => {
+    resolveListWith([meta("ui.inspect", { name: "Inspect Task" })]);
+
+    renderHook(() =>
+      useCommandList({ scopeChain: ["task:01ABC", "board:01X"] }),
+    );
+
+    await waitFor(() =>
+      expect(mockCallCommandTool).toHaveBeenCalledWith("list command", {
+        ctx: { scope_chain: ["task:01ABC", "board:01X"] },
+      }),
+    );
+  });
+
+  it("omits ctx when the scope chain is empty", async () => {
+    resolveListWith([]);
+
+    renderHook(() => useCommandList({ scopeChain: [] }));
+
+    await waitFor(() =>
+      expect(mockCallCommandTool).toHaveBeenCalledWith("list command", {}),
+    );
+  });
+
+  it("re-fetches when the scope chain changes, even when a space-join of the monikers would collide", async () => {
+    resolveListWith([]);
+
+    // Path-shaped attachment monikers can contain spaces, so these two
+    // distinct chains flatten to the same string under a naive `join(" ")`.
+    const { rerender } = renderHook(
+      ({ scopeChain }: { scopeChain: string[] }) =>
+        useCommandList({ scopeChain }),
+      { initialProps: { scopeChain: ["attachment:/a b", "task:01X"] } },
+    );
+
+    await waitFor(() => expect(mockCallCommandTool).toHaveBeenCalledTimes(1));
+
+    rerender({ scopeChain: ["attachment:/a", "b task:01X"] });
+
+    await waitFor(() =>
+      expect(mockCallCommandTool).toHaveBeenCalledWith("list command", {
+        ctx: { scope_chain: ["attachment:/a", "b task:01X"] },
+      }),
+    );
+    expect(mockCallCommandTool).toHaveBeenCalledTimes(2);
+  });
+
   it("re-fetches and re-renders on a commands/changed notification", async () => {
     resolveListWith([meta("task.move")]);
 
@@ -111,9 +158,7 @@ describe("useCommandList", () => {
     resolveListWith([meta("a")]);
     renderHook(() => useCommandList());
 
-    await waitFor(() =>
-      expect(mockCallCommandTool).toHaveBeenCalledTimes(1),
-    );
+    await waitFor(() => expect(mockCallCommandTool).toHaveBeenCalledTimes(1));
 
     await waitFor(() => expect(changedCallback).not.toBeNull());
 
@@ -124,9 +169,7 @@ describe("useCommandList", () => {
       changedCallback?.();
     });
 
-    await waitFor(() =>
-      expect(mockCallCommandTool).toHaveBeenCalledTimes(2),
-    );
+    await waitFor(() => expect(mockCallCommandTool).toHaveBeenCalledTimes(2));
     // Give the debounce window time to (not) fire again; count stays at 2.
     await new Promise((r) => setTimeout(r, 150));
     expect(mockCallCommandTool).toHaveBeenCalledTimes(2);

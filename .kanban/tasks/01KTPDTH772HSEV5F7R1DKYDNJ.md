@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: '8680'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffe80
 project: ui-command-cleanup
 title: Escape = nav.drillOut with contextual dismiss-at-root (untangle app.dismiss)
 ---
@@ -40,3 +40,17 @@ NOTE: UI changes hot-reload; the Rust/plugin changes (app.ts, ui-commands, nav u
 
 ## Workflow
 - Used `/tdd`. Depends on the webview handler bus (Card B, landed). Relates to Card I (STATIC_GLOBAL_COMMANDS) and nav-regression 01KTESYQ49JYJB2YT1WXYKK0W4. #bug
+
+## Review Findings (2026-06-10 06:45)
+
+Verified at HEAD: the keybinding metadata change is INTENTIONAL and CORRECT — `app.dismiss` (builtin/plugins/app-shell-commands/commands/app.ts) carries no `keys`, `ui.inspector.close` (builtin/plugins/ui-commands/index.ts) carries `{ vim: "q" }` only, `ui.inspector.close_all` keeps `{ cua: "Mod+Escape", vim: "Q" }`, and the `STATIC_GLOBAL_COMMANDS` `app.dismiss` entry is key-less; all four sites have comments citing this card. Escape→nav.drillOut survived 541e85ce3 (keybindings.test.ts "Escape resolves to nav.drillOut" suite green; scoped vitest on keybindings.test.ts + app-shell.test.tsx: 101/101 pass). builtin_nav_commands_e2e 3/3 pass including sections 3d (palette dismiss fall-through) and 3e (inspector pop at layer-root edge) — drill-out intent survives the 4a3a2c780 server-resolved-source/moved-flag refinement. `cargo nextest run -p swissarmyhammer-command-service`: 104/106 pass; the ONLY 2 failures are this card's collateral — e2e metadata-fidelity expectations never updated to the intended new key state. Do NOT change the plugin metadata; fix the test expectations (declared == actual).
+
+### Blockers
+- [x] `crates/swissarmyhammer-command-service/tests/integration/builtin_app_shell_commands_e2e.rs:594` — `assert_app_dismiss` still asserts the OLD keys `{ "vim": "Escape", "cua": "Escape", "emacs": "Escape" }`; actual registered metadata at HEAD is no `keys` (Null). Test fails: `app_shell_commands_plugin_registers_and_executes`. Fix: assert no keys (the file already has an `assert_no_keys` helper — reuse it) and update the stale doc comment above the fn ("app.yaml: keys vim:Escape / cua:Escape / emacs:Escape") to state that `app.dismiss` is intentionally unbound from Escape per this card (Escape is owned by `nav.drillOut`). — FIXED 2026-06-10: `assert_app_dismiss` now uses `assert_no_keys`; doc comment rewritten to cite this card and `nav.drillOut` ownership. Test green.
+- [x] `crates/swissarmyhammer-command-service/tests/integration/builtin_ui_commands_e2e.rs:724` — `assert_inspector_close` still asserts the OLD keys `{ "cua": "Escape", "vim": "q" }`; actual registered metadata at HEAD is `{ "vim": "q" }` only. Test fails: `ui_commands_plugin_registers_and_executes`. Fix: assert `json!({ "vim": "q" })` and update the stale doc comment ("ui.yaml: keys cua:Escape / vim:q") to note cua:Escape was removed per this card (inspector Escape-close flows through `nav.drillOut` → `dismiss ui`; vim `q` remains a direct close). — FIXED 2026-06-10: asserts `json!({ "vim": "q" })`; doc comment rewritten per the finding. Test green.
+
+### Nits
+- [x] `apps/kanban-app/ui/src/components/app-shell.tsx:361-375` — the `buildDynamicGlobalCommands` docblock still says drill commands must come first "so they shadow the static `app.dismiss: Escape` binding" / "to claim Escape away from `app.dismiss`". That static Escape binding no longer exists (this card stripped it); the ordering rationale described is stale. Reword to the current reality (e.g. ordering keeps drill commands first in `extractScopeBindings`'s first-key-wins walk, with no app.dismiss Escape to contend with) or drop the obsolete shadow justification. — FIXED 2026-06-10: docblock reworded — ordering rationale is now the first-key-wins walk in `extractScopeBindings` guaranteeing `nav.drillOut: Escape` reaches the scope map first, with an explicit note that the static `app.dismiss` entry is key-less (comment-only change).
+
+## Fix Verification (2026-06-10)
+`cargo nextest run -p swissarmyhammer-command-service`: 106 tests run, 106 passed, 0 skipped (was 104/106). Both `app_shell_commands_plugin_registers_and_executes` and `ui_commands_plugin_registers_and_executes` confirmed PASS individually. No plugin metadata touched; app-shell.tsx change is comment-only (no vitest/tsc needed).

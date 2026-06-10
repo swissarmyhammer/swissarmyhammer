@@ -1,8 +1,8 @@
 ---
 depends_on:
 - 01KTEFP1RMM2G65GR1PH9YQWEZ
-position_column: review
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffff8180
 project: ui-command-cleanup
 title: Card A blocker (≈ Card F2) — Kernel-authoritative focus + on-demand geometry via the F1 host→UI channel
 ---
@@ -25,11 +25,11 @@ The reconciliation of "nav.* server-side" + "geometry on-demand": the nav comman
 4. **Lock discipline (inherited from F1):** the host must DROP all `AppState`/spatial locks before awaiting the F1 reply, then re-acquire — see F1's deadlock rule.
 
 ## Acceptance Criteria
-- [ ] `navigate focus` / `drill_in layer` / `drill_out layer` no longer require `focused_fq` on the wire — current focus resolved server-side. **(Reconcile kernel `focus_by_window` vs webview `focus.current` per the regression card before closing.)**
-- [ ] The nav op's `NavSnapshot` is obtained per call via the F1 host→UI request/reply channel, built on-demand in the webview (`getBoundingClientRect`) — NO kernel-held geometry, NO cache, NO push model, NO webview-local handler owning the nav logic.
-- [ ] nav.* are host-driven plugin commands whose `execute` resolves focus + fetches geometry via F1; Card A wires them to this path.
-- [ ] No `AppState`/spatial lock is held across the F1 await (deadlock-safe).
-- [ ] Existing spatial-nav behavior (beam search, drill, focus-lost fallback) preserved — full spatial test suite green, AND a real-path (non-fake-provider) nav test passes (see regression card).
+- [x] `navigate focus` / `drill_in layer` / `drill_out layer` no longer require `focused_fq` on the wire — current focus resolved server-side. **(Reconcile kernel `focus_by_window` vs webview `focus.current` per the regression card before closing.)** ✅ Verified at HEAD 541e85ce3: `operations.rs` Navigate/DrillIn/DrillOut carry optional `focused_fq`/`snapshot`/`window`; `server.rs::resolve_nav_source`/`resolve_drill_source` resolve wire `focused_fq` → pulled webview `focus.current` (authoritative, gated by `ui_focus_owned_by_window` root-segment ownership check) → kernel `focus_by_window` slot as last-resort fallback. This is the regression-card reconciliation, landed in efbdf3783 + 4a3a2c780.
+- [x] The nav op's `NavSnapshot` is obtained per call via the F1 host→UI request/reply channel, built on-demand in the webview (`getBoundingClientRect`) — NO kernel-held geometry, NO cache, NO push model, NO webview-local handler owning the nav logic. ✅ Verified: `TauriUiGeometryProvider::pull` (apps/kanban-app/src/command_services.rs) issues `focus.geometry` over `request_from_ui` per call; the webview responder (spatial-focus-context.tsx) builds via `buildSnapshotForFocused` → `getBoundingClientRect` at request time, nothing cached; the focus kernel state holds no geometry field. Owner constraint honored.
+- [x] nav.* are host-driven plugin commands whose `execute` resolves focus + fetches geometry via F1; Card A wires them to this path. ✅ Verified: builtin/plugins/nav-commands/index.ts — up/down/left/right/first/last → `navigate focus` `{window, direction}`; drillIn/drillOut → `drill_in`/`drill_out layer` `{window}` (drillOut with `moved`-flag dismiss fallthrough); window derived from the dispatch scope-chain `window:` root; focus + geometry resolved kernel-side via the provider.
+- [x] No `AppState`/spatial lock is held across the F1 await (deadlock-safe). ✅ Verified: `focused_in_window` and `ui_focus_owned_by_window` each acquire+release the spatial lock internally; every provider `.await` in `resolve_nav_source`/`resolve_drill_source` runs lock-free; the `with_spatial` mutation runs only after the pull completes.
+- [x] Existing spatial-nav behavior (beam search, drill, focus-lost fallback) preserved — full spatial test suite green, AND a real-path (non-fake-provider) nav test passes (see regression card). ✅ Verified 2026-06-10: `cargo nextest run -p swissarmyhammer-focus` 121/121; `-p swissarmyhammer-command-service` 106/106 — including `drill_resolves_source_via_kernel_slot_when_ui_focus_is_absent` (GapProvider: UI reports no focus, kernel slot resolves) and the two-window focus-pollution test exercising the `ui_focus_owned_by_window` guard. User live-verified nav/drill/jump/focus across multi-window configs this session.
 
 ## Depends on
 - `01KTEFP1RMM2G65GR1PH9YQWEZ` — Card F1 (host→UI request/reply channel). This card rides on it.
@@ -46,3 +46,11 @@ Card A asks the nine `nav.*` to become PLUGIN commands whose `execute` routes to
 2. **`snapshot: NavSnapshot` is live DOM geometry** built React-side by `spatial-focus-context.tsx::buildSnapshotForFocused` → `LayerScopeRegistry.buildSnapshot` via `getBoundingClientRect()` at call time; the Rust kernel has no DOM. → this is WHY geometry stays on-demand and is fetched via the F1 channel rather than cached.
 
 #bug
+
+## Review Findings (2026-06-10 06:55)
+
+Reviewed at HEAD 541e85ce3 (F1 dependency 01KTEFP1RMM2G65GR1PH9YQWEZ done). Zero blockers, zero warnings — all five ACs verified and checked above with evidence.
+
+Quality gate (01KTESYQ49JYJB2YT1WXYKK0W4): resolved in substance at HEAD — the stale-`focus_by_window`-origin bug is gone by construction (provider-first `focus.current` resolution with the `ui_focus_owned_by_window` ownership guard, commits efbdf3783 → 4a3a2c780), the fixture-only-test gap is covered by the GapProvider fallback test and the two-window pollution test (both green), and the user live-verified nav/drill/jump/focus across multi-window configs. Note: that card still sits in `doing` on the board and should be closed on its own merits.
+
+Non-blocking doc-drift nit (no action required to close): the directional-execute comment in builtin/plugins/nav-commands/index.ts and the `Navigate` doc in operations.rs still describe focus resolution as "from `focus_by_window[window]`" — at HEAD that map is only the last-resort fallback behind the provider-first `focus.current` pull (accurately documented in server.rs::resolve_nav_source).

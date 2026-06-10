@@ -577,12 +577,12 @@ fn assert_entity_update_field_metadata(cmd: &Value) {
 
 /// `entity.delete` — entity.yaml: undoable, context_menu (group 2, order 0),
 /// keys cua:Mod+Backspace; param moniker(target).
+///
+/// The plugin registers the caption template `"Delete {{entity.type}}"`;
+/// `list command` renders it at display time (generic fallback here — no
+/// `ctx` is supplied), so the listed name is the clean "Delete".
 fn assert_entity_delete_metadata(cmd: &Value) {
-    assert_eq!(
-        cmd["name"],
-        json!("Delete {{entity.type}}"),
-        "entity.delete name"
-    );
+    assert_eq!(cmd["name"], json!("Delete"), "entity.delete name");
     assert_eq!(cmd["undoable"], json!(true), "entity.delete undoable");
     assert_eq!(
         cmd["context_menu"],
@@ -614,11 +614,9 @@ fn assert_entity_delete_metadata(cmd: &Value) {
 /// `entity.archive` — entity.yaml: undoable, context_menu (group 2, order 1),
 /// keys vim:dd; param moniker(target).
 fn assert_entity_archive_metadata(cmd: &Value) {
-    assert_eq!(
-        cmd["name"],
-        json!("Archive {{entity.type}}"),
-        "entity.archive name"
-    );
+    // Registered as "Archive {{entity.type}}" — rendered to the generic
+    // fallback by `list command` (no ctx supplied here).
+    assert_eq!(cmd["name"], json!("Archive"), "entity.archive name");
     assert_eq!(cmd["undoable"], json!(true), "entity.archive undoable");
     assert_eq!(
         cmd["context_menu"],
@@ -646,11 +644,9 @@ fn assert_entity_archive_metadata(cmd: &Value) {
 /// `entity.unarchive` — entity.yaml: undoable, context_menu (group 2, order 2),
 /// no keys; param moniker(target).
 fn assert_entity_unarchive_metadata(cmd: &Value) {
-    assert_eq!(
-        cmd["name"],
-        json!("Unarchive {{entity.type}}"),
-        "entity.unarchive name"
-    );
+    // Registered as "Unarchive {{entity.type}}" — rendered to the generic
+    // fallback by `list command` (no ctx supplied here).
+    assert_eq!(cmd["name"], json!("Unarchive"), "entity.unarchive name");
     assert_eq!(cmd["undoable"], json!(true), "entity.unarchive undoable");
     assert_eq!(
         cmd["context_menu"],
@@ -683,7 +679,9 @@ fn assert_entity_unarchive_metadata(cmd: &Value) {
 /// cua:Mod+X / vim:x, menu {path:[Edit], group:1, order:0}; param
 /// moniker(target).
 fn assert_entity_cut_metadata(cmd: &Value) {
-    assert_eq!(cmd["name"], json!("Cut {{entity.type}}"), "entity.cut name");
+    // Registered as "Cut {{entity.type}}" — rendered to the generic
+    // fallback by `list command` (no ctx supplied here).
+    assert_eq!(cmd["name"], json!("Cut"), "entity.cut name");
     assert_eq!(cmd["undoable"], json!(true), "entity.cut undoable");
     assert_eq!(cmd["context_menu"], json!(true), "entity.cut context_menu");
     assert_eq!(
@@ -717,11 +715,9 @@ fn assert_entity_cut_metadata(cmd: &Value) {
 /// keys cua:Mod+C / vim:y, menu {path:[Edit], group:1, order:1}; param
 /// moniker(target).
 fn assert_entity_copy_metadata(cmd: &Value) {
-    assert_eq!(
-        cmd["name"],
-        json!("Copy {{entity.type}}"),
-        "entity.copy name"
-    );
+    // Registered as "Copy {{entity.type}}" — rendered to the generic
+    // fallback by `list command` (no ctx supplied here).
+    assert_eq!(cmd["name"], json!("Copy"), "entity.copy name");
     assert_eq!(cmd["undoable"], json!(false), "entity.copy undoable:false");
     assert_eq!(cmd["context_menu"], json!(true), "entity.copy context_menu");
     assert_eq!(
@@ -755,11 +751,9 @@ fn assert_entity_copy_metadata(cmd: &Value) {
 /// keys cua:Mod+V / vim:p, menu {path:[Edit], group:1, order:2}; param
 /// moniker(target).
 fn assert_entity_paste_metadata(cmd: &Value) {
-    assert_eq!(
-        cmd["name"],
-        json!("Paste {{entity.type}}"),
-        "entity.paste name"
-    );
+    // Registered as "Paste {{entity.type}}" — rendered to the generic
+    // fallback by `list command` (no ctx supplied here).
+    assert_eq!(cmd["name"], json!("Paste"), "entity.paste name");
     assert_eq!(cmd["undoable"], json!(true), "entity.paste undoable");
     assert_eq!(
         cmd["context_menu"],

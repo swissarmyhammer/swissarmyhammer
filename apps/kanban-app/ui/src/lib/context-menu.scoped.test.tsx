@@ -2,38 +2,37 @@
  * Context-menu wiring via the metadata-driven Command registry (card
  * `01KS36XGKCQ36QM7P6MH3FHMBJ`).
  *
- * `useContextMenu` sources commands from `useCommandList` and, at right-click
- * time, surfaces only those flagged `context_menu: true` whose `scope` matches
- * the right-click point's scope chain. These tests mock the list seam and the
- * `window` MCP transport and assert that exactly the `context_menu`-tagged,
- * scope-matched commands reach `show context menu` — global-scoped commands
- * included, non-context-menu and out-of-scope commands excluded.
+ * `useContextMenu` fetches the registry at right-click time (`list command`
+ * with the click point's ctx) and surfaces only commands flagged
+ * `context_menu: true` whose `scope` matches the right-click point's scope
+ * chain. These tests mock the Command transport (`callCommandTool`) and the
+ * `window` MCP transport (`callMcpTool`) and assert that exactly the
+ * `context_menu`-tagged, scope-matched commands reach `show context menu` —
+ * global-scoped commands included, non-context-menu and out-of-scope commands
+ * excluded.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { callMcpTool } from "@/lib/mcp-transport";
+import { callMcpTool, callCommandTool } from "@/lib/mcp-transport";
 import type { CommandMetadata } from "@/hooks/use-command-list";
 
 vi.mock("@/lib/mcp-transport", async (importActual) => ({
-  // Preserve the real module's other exports (e.g. `callCommandTool`, consumed
-  // transitively by `command-scope`); only `callMcpTool` is stubbed.
+  // Preserve the real module's other exports; `callMcpTool` is stubbed to
+  // capture the `show context menu` payload and `callCommandTool` to serve
+  // the click-time `list command` registry.
   ...(await importActual<typeof import("@/lib/mcp-transport")>()),
   callMcpTool: vi.fn(),
+  callCommandTool: vi.fn(),
 }));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
 }));
 
-// Drive the command source. The registry is set per-test via REGISTRY.
+// Drive the command source. The registry is set per-test via REGISTRY and
+// served through the hook's click-time `list command` fetch (the
+// implementation reads REGISTRY at call time).
 let REGISTRY: CommandMetadata[] = [];
-vi.mock("@/hooks/use-command-list", () => ({
-  useCommandList: () => ({
-    commands: REGISTRY,
-    loading: false,
-    refresh: vi.fn(),
-  }),
-}));
 
 import { useContextMenu } from "./context-menu";
 import { CommandScopeContext, type CommandScope } from "./command-scope";
@@ -75,6 +74,10 @@ describe("useContextMenu registry wiring", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (callMcpTool as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (callCommandTool as ReturnType<typeof vi.fn>).mockImplementation(
+      async (op: string) =>
+        op === "list command" ? { ok: true, commands: REGISTRY } : undefined,
+    );
   });
 
   it("shows only context_menu:true commands matching the task scope", async () => {

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, waitFor, act } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
+import { answerListCommand } from "@/test/mock-command-list";
 
 // Capture focus-changed listeners so the kernel-emit simulation below can
 // fire them when the test invokes `spatial_focus`. The default invoke
@@ -26,16 +27,10 @@ vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
 }));
 
-// `useContextMenu` reads commands from the Command registry via
-// `useCommandList`; drive it through `mockRegistry`.
+// `useContextMenu` fetches the Command registry at right-click time
+// (`list command` via `command_tool_call`); drive it through `mockRegistry` —
+// both invoke implementations below answer the list op from it.
 let mockRegistry: Array<Record<string, unknown>> = [];
-vi.mock("@/hooks/use-command-list", () => ({
-  useCommandList: () => ({
-    commands: mockRegistry,
-    loading: false,
-    refresh: vi.fn(),
-  }),
-}));
 
 /**
  * Default invoke implementation that emits a synthetic `focus-changed`
@@ -46,6 +41,8 @@ vi.mock("@/hooks/use-command-list", () => ({
 function emitFocusChangedDefault() {
   (invoke as ReturnType<typeof vi.fn>).mockImplementation(
     (cmd: string, args?: unknown) => {
+      const listResult = answerListCommand(cmd, args, mockRegistry);
+      if (listResult) return listResult;
       if (cmd === "spatial_focus") {
         const a = (args ?? {}) as { fq?: string };
         const fq = a.fq ?? null;
@@ -103,8 +100,9 @@ interface ResolvedCommand {
 }
 
 /**
- * Helper: configure invoke mock to return the given commands when
- * `list_commands_for_scope` is called, and resolve for everything else.
+ * Helper: publish the given commands into `mockRegistry` (served to the
+ * context menu's click-time `list command` fetch) and configure the invoke
+ * mock to resolve for everything else.
  */
 function mockListCommands(commands: ResolvedCommand[]) {
   // Publish the commands as global (unscoped) context-menu rows so they match
@@ -124,6 +122,8 @@ function mockListCommands(commands: ResolvedCommand[]) {
   });
   (invoke as ReturnType<typeof vi.fn>).mockImplementation(
     (cmd: string, args?: unknown) => {
+      const listResult = answerListCommand(cmd, args, mockRegistry);
+      if (listResult) return listResult;
       if (cmd === "spatial_focus") {
         const a = (args ?? {}) as { fq?: string };
         const fq = a.fq ?? null;
@@ -457,12 +457,8 @@ describe("FocusScope", () => {
       // Different targets -> both accumulate
       const commandItems = items.filter((i) => !i.separator);
       expect(commandItems).toHaveLength(2);
-      expect(
-        commandItems.find((i) => i.name === "Inspect tag"),
-      ).toBeTruthy();
-      expect(
-        commandItems.find((i) => i.name === "Inspect task"),
-      ).toBeTruthy();
+      expect(commandItems.find((i) => i.name === "Inspect tag")).toBeTruthy();
+      expect(commandItems.find((i) => i.name === "Inspect task")).toBeTruthy();
     });
   });
 

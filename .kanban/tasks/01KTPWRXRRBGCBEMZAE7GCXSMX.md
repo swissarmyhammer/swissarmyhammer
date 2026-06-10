@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: '8880'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffc80
 project: ui-command-cleanup
 title: Derive focus window from the fq root segment, not currentWindowLabel()→main
 ---

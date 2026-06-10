@@ -16,10 +16,17 @@ import { TooltipProvider } from "@/components/ui/tooltip";
  * scope-chain → resolver loop.
  */
 
+import { answerListCommand } from "@/test/mock-command-list";
+
+// `useContextMenu` fetches the Command registry at right-click time
+// (`list command` via `command_tool_call`); drive it through `mockRegistry`.
+let mockRegistry: Array<Record<string, unknown>> = [];
+
 // Mock Tauri APIs before importing any modules that use them.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockInvoke = vi.fn<(...args: any[]) => Promise<unknown>>(() =>
-  Promise.resolve(null),
+const mockInvoke = vi.fn<(...args: any[]) => Promise<unknown>>(
+  (cmd, args) =>
+    answerListCommand(cmd, args, mockRegistry) ?? Promise.resolve(null),
 );
 vi.mock("@tauri-apps/api/core", () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -32,17 +39,6 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
-}));
-
-// `useContextMenu` now sources commands from the Command registry via
-// `useCommandList`; drive it through `mockRegistry`.
-let mockRegistry: Array<Record<string, unknown>> = [];
-vi.mock("@/hooks/use-command-list", () => ({
-  useCommandList: () => ({
-    commands: mockRegistry,
-    loading: false,
-    refresh: vi.fn(),
-  }),
 }));
 
 vi.mock("@tauri-apps/plugin-log", () => ({

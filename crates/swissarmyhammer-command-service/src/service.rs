@@ -732,6 +732,13 @@ impl CommandService {
     /// every runtime see the identical sequence.
     ///
     /// This verb does not invoke any callbacks; it is a pure registry read.
+    ///
+    /// Caption templates in each command's `name` / `menu_name` (e.g.
+    /// `"Inspect {{entity.type}}"`) are rendered against `req.ctx` — the
+    /// focused object's scope chain / target supplied by the listing
+    /// surface — via [`crate::render_caption`], so the response only ever
+    /// carries display-ready strings (generic fallback when no context is
+    /// supplied, never a raw `{{...}}` placeholder).
     fn handle_list(&self, _caller: CallerId, req: ListCommand) -> Result<Value, McpError> {
         let mut commands: Vec<CommandMetadata> = self.with_registry(|registry| {
             registry
@@ -742,6 +749,12 @@ impl CommandService {
                 .collect()
         });
         commands.sort_by(|a, b| a.id.cmp(&b.id));
+        for command in &mut commands {
+            command.name = crate::render_caption(&command.name, &req.ctx);
+            if let Some(menu_name) = &command.menu_name {
+                command.menu_name = Some(crate::render_caption(menu_name, &req.ctx));
+            }
+        }
 
         Ok(serde_json::json!({
             "ok": true,

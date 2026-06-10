@@ -993,8 +993,12 @@ describe("CommandPalette scope chain sourcing", () => {
       await Promise.resolve();
     });
 
-    // Scope A: palette asked useCommandList to filter by A's innermost scope.
-    expect(useCommandListCalls).toContainEqual({ scope: "task:AAA" });
+    // Scope A: palette asked useCommandList to filter by A's innermost scope
+    // and forwarded the full chain as the caption-render context.
+    expect(useCommandListCalls).toContainEqual({
+      scope: "task:AAA",
+      scopeChain: ["task:AAA", "board:my-board"],
+    });
 
     // Simulate focus moving to scope B while the palette is still open.
     await act(async () => {
@@ -1013,7 +1017,11 @@ describe("CommandPalette scope chain sourcing", () => {
       await Promise.resolve();
     });
 
-    // Scope B: palette re-filtered for B's innermost scope.
-    expect(useCommandListCalls).toContainEqual({ scope: "task:BBB" });
+    // Scope B: palette re-filtered for B's innermost scope and updated the
+    // caption-render context to B's chain.
+    expect(useCommandListCalls).toContainEqual({
+      scope: "task:BBB",
+      scopeChain: ["task:BBB", "board:my-board"],
+    });
   });
 });

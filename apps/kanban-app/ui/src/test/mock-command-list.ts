@@ -64,3 +64,29 @@ export function commandToolCall(args: unknown): Promise<unknown> {
     return Promise.resolve({ ok: true, available: true });
   return Promise.resolve(null);
 }
+
+/**
+ * Drop-in `invoke` branch answering the Command service's `list command` op
+ * with a caller-supplied registry — the seam `useContextMenu`'s click-time
+ * fetch rides on (`invoke("command_tool_call", { op: "list command", … })`).
+ *
+ * Returns the `{ ok, commands }` envelope promise when the call is a
+ * `list command`, and `undefined` for every other invoke so the host mock can
+ * fall through to its own handling:
+ *
+ * ```ts
+ * invoke: vi.fn((cmd, args) =>
+ *   answerListCommand(cmd, args, mockRegistry) ?? Promise.resolve(null),
+ * )
+ * ```
+ */
+export function answerListCommand(
+  cmd: string,
+  args: unknown,
+  commands: unknown[],
+): Promise<unknown> | undefined {
+  if (cmd !== "command_tool_call") return undefined;
+  const op = (args as { op?: string } | undefined)?.op;
+  if (op !== "list command") return undefined;
+  return Promise.resolve({ ok: true, commands });
+}

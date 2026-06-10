@@ -8,14 +8,22 @@ import type { ViewDef } from "@/types/kanban";
 // transitively pull them in through context providers.
 // ---------------------------------------------------------------------------
 
+import { answerListCommand } from "@/test/mock-command-list";
+
+// The right-click context menu fetches the Command registry at click time
+// (`list command` via `command_tool_call`); drive it through `mockRegistry`.
+let mockRegistry: Array<Record<string, unknown>> = [];
+
 /**
  * Records and controls `invoke` calls. Tests assert on the argument list of
- * each call — particularly `list_commands_for_scope` (right-click builds
- * the menu) and `show_context_menu` (the native menu that actually pops up).
+ * each call — particularly the `list command` fetch (right-click builds the
+ * menu from it) and `show context menu` (the native menu that actually pops
+ * up).
  */
 const mockInvoke = vi.fn(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (_cmd: string, _args?: any): Promise<unknown> => Promise.resolve(null),
+  (cmd: string, args?: any): Promise<unknown> =>
+    answerListCommand(cmd, args, mockRegistry) ?? Promise.resolve(null),
 );
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -29,17 +37,6 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
-}));
-
-// The right-click context menu reads commands from the Command registry via
-// `useCommandList`; drive it through `mockRegistry`.
-let mockRegistry: Array<Record<string, unknown>> = [];
-vi.mock("@/hooks/use-command-list", () => ({
-  useCommandList: () => ({
-    commands: mockRegistry,
-    loading: false,
-    refresh: vi.fn(),
-  }),
 }));
 
 vi.mock("@tauri-apps/plugin-log", () => ({
@@ -117,10 +114,9 @@ describe("LeftNav — right-click context menu", () => {
   });
 
   /**
-   * Right-click on a view button must call `list_commands_for_scope` with
-   * that view's moniker in the scope chain. This is what the Rust backend
-   * uses to emit only the matching `view.switch:{id}` as a context-menu
-   * entry.
+   * Right-click on a view button must build its menu items with that view's
+   * moniker in the scope chain. This is what the dispatcher resolves the
+   * chosen command against.
    */
   it("right-click on a view button builds a menu carrying that view's scope", async () => {
     // A global context-menu command so the menu renders; the item it produces
@@ -136,8 +132,9 @@ describe("LeftNav — right-click context menu", () => {
 
     fireEvent.contextMenu(buttons[0]);
 
-    await Promise.resolve();
-    await Promise.resolve();
+    // `useContextMenu` fetches `list command` at click time and then awaits
+    // the `show context menu` op — give the async chain a tick to settle.
+    await new Promise((r) => setTimeout(r, 10));
 
     const showCall = mockInvoke.mock.calls.find(
       ([cmd, args]) =>
@@ -177,11 +174,10 @@ describe("LeftNav — right-click context menu", () => {
     const buttons = screen.getAllByRole("button");
     fireEvent.contextMenu(buttons[0]);
 
-    // `useContextMenu` filters the registry then awaits the `show context
-    // menu` op call; flush microtasks so the invoke has happened by the time
-    // we assert.
-    await Promise.resolve();
-    await Promise.resolve();
+    // `useContextMenu` fetches `list command` at click time, filters, then
+    // awaits the `show context menu` op call; give the async chain a tick so
+    // the invoke has happened by the time we assert.
+    await new Promise((r) => setTimeout(r, 10));
 
     const showCall = mockInvoke.mock.calls.find(
       ([cmd, args]) =>

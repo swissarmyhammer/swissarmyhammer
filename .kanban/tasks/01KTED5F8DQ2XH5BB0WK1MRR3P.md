@@ -1,6 +1,6 @@
 ---
-position_column: review
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffff8380
 project: ui-command-cleanup
 title: Card B — Generalize a webview command handler-bus
 ---
@@ -23,15 +23,28 @@ A bus handler is PURE PRESENTATION — it may touch live webview state (DOM focu
 - [x] `webview-command-bus.ts` exists with register (id-keyed, ownership-guarded cleanup), lookup, has-check, and test-reset.
 - [x] `useDispatchCommand` consults the bus before backend dispatch; a registered webview handler short-circuits the backend call for that id.
 - [x] The bus is independent of AI specifics — generic over any plugin command id.
-- [ ] `ai/commands.ts` either re-expressed on top of the generic bus OR left as-is with a doc note that it is the precedent (do not regress AI behavior — keep its tests green).
+- [x] `ai/commands.ts` either re-expressed on top of the generic bus OR left as-is with a doc note that it is the precedent (do not regress AI behavior — keep its tests green). *(Option B taken 2026-06-10: precedent doc note added to the "# Why a module-level registry" section referencing `@/lib/webview-command-bus`; `ai/commands.test.ts` green.)*
 - [x] No command is DEFINED by the bus; it only routes execution of plugin-owned ids.
 - [x] GUARD shipped: the presentation-only invariant is documented in the bus module and enforced by `webview-command-bus.guard.node.test.ts` (self-proving detector + live scan; green). Cards C–F each carry a matching acceptance line.
 
 ## Tests
 - [x] New unit test `apps/kanban-app/ui/src/lib/webview-command-bus.test.ts`: register handler for an id → lookup returns it; cleanup clears only the owned slot; a remount registration is not wiped by an older cleanup (mirror the ai/commands ownership test).
-- [ ] Dispatch test (extend `apps/kanban-app/ui/src/lib/command-scope` test or add `command-scope.webview-bus.test.tsx`): a command id with a registered webview handler dispatches to the handler and does NOT call the backend; an id without a handler falls through to backend dispatch.
-- [x] Guard test `apps/kanban-app/ui/src/lib/webview-command-bus.guard.node.test.ts`: detector is unit-proven (flags an mcp-transport import, ignores unrelated imports), the bus module stays transport-free, and no handler-registration site imports the transport. `npm test` green.
-- [ ] `npm test` (vitest) for the new/changed UI test files is green.
+- [x] Dispatch test (extend `apps/kanban-app/ui/src/lib/command-scope` test or add `command-scope.webview-bus.test.tsx`): a command id with a registered webview handler dispatches to the handler and does NOT call the backend; an id without a handler falls through to backend dispatch. *(Verified satisfied by 2026-06-10 review: `command-scope.webview-bus.test.tsx` exists and covers short-circuit, fallthrough, return-value propagation, cleanup fallback, and execute fast-path precedence.)*
+- [x] `npm test` (vitest) for the new/changed UI test files is green. *(Re-verified 2026-06-10 after the doc-note + nit edits: scoped vitest over webview-command-bus.test.ts, webview-command-bus.guard.node.test.ts, command-scope.webview-bus.test.tsx, command-scope.test.tsx, ai/commands.test.ts — 5 files, 75/75 passed; `npx tsc --noEmit` exit 0.)*
 
 ## Workflow
 - Use `/tdd` — write the failing bus + dispatch tests first, then implement. Automated tests only (vitest/browser harness).
+
+## Review Findings (2026-06-10 07:05)
+
+Unchecked-item dispositions at current HEAD (verified by reading the files and running the scoped vitest suite — `tsc --noEmit && vitest run` over `webview-command-bus.test.ts`, `webview-command-bus.guard.node.test.ts`, `command-scope.webview-bus.test.tsx`, `command-scope.test.tsx`, `ai/commands.test.ts`: 5 files, 75/75 tests passed):
+
+- **AC "ai/commands.ts re-expressed OR doc-noted as precedent"** — NOT satisfied. `src/ai/` contains zero uses of `registerWebviewCommandHandler` (not re-expressed), and `ai/commands.ts` contains no mention of `webview-command-bus` or "precedent" — its header still cites `perspective-tab-bar.tsx` as "the established pattern". The cross-reference is one-directional (bus → ai only). AI behavior is NOT regressed: `src/ai/commands.test.ts` is green. Only the doc-note artifact is missing — check this AC after adding it. *(RESOLVED 2026-06-10: doc note added.)*
+- **Test "dispatch test"** — SATISFIED. `apps/kanban-app/ui/src/lib/command-scope.webview-bus.test.tsx` exists and covers: registered handler short-circuits the backend (`callCommandTool` not invoked), unregistered id falls through to backend dispatch, handler return value propagated, unregistered-after-cleanup falls back to backend, and scope `execute` fast-path still wins over the bus. All green. Check this box. *(Box checked.)*
+- **Test "npm test green"** — SATISFIED for the new/changed UI test files (75/75 passed, typecheck clean). Check this box once the doc-note edit above lands and the scoped run is re-verified. *(Re-verified post-edits: 75/75, tsc clean. Box checked.)*
+
+### Warnings
+- [x] `apps/kanban-app/ui/src/ai/commands.ts:1` — Missing the AC-required doc note. The module doc-comment should state that this AI module-bus is the precedent the generic `webview-command-bus.ts` was generalized from, and that it is intentionally left on its own purpose-keyed registry (window-layer `execute` closures call `triggerAi*` directly) rather than migrated onto the id-keyed bus. Add a short paragraph in the "# Why a module-level registry" section referencing `@/lib/webview-command-bus`. Doc-only change; keep `ai/commands.test.ts` green. *(FIXED 2026-06-10: precedent paragraph added after the `perspective-tab-bar.tsx` paragraph; doc-only, `ai/commands.test.ts` green.)*
+
+### Nits
+- [x] `apps/kanban-app/ui/src/lib/command-scope.tsx:521` — `if (hasWebviewCommandHandler(cmdId)) { return getWebviewCommandHandler(cmdId)!(opts); }` does two map lookups and needs a non-null assertion. `const webviewHandler = getWebviewCommandHandler(cmdId); if (webviewHandler) { return webviewHandler(opts); }` is one lookup and assertion-free. *(FIXED 2026-06-10: collapsed to single `getWebviewCommandHandler` lookup with null check; the now-unused `hasWebviewCommandHandler` import removed from command-scope.tsx — the export itself remains in the bus module per AC.)*

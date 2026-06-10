@@ -5,11 +5,11 @@
 //! `ai.yaml`) and retired the legacy dispatch fallback; the follow-up
 //! card 01KT6WWYYWFQ2F4PGQ358SAHY7 then ported the final `ai.yaml`
 //! window-layer commands onto the `ai-commands` builtin plugin; Card A
-//! then ported the nine `nav.*` commands onto the `nav-commands` builtin
+//! then ported the `nav.*` commands onto the `nav-commands` builtin
 //! plugin, retiring the last YAML command source (`nav.yaml`).
 //! `CommandService` (fed by the 9 builtin command plugins at app startup)
 //! is now the sole source of every command's metadata. This test pins the
-//! "all 76 commands wire through the new path" gate the cut-over depends on.
+//! "all 77 commands wire through the new path" gate the cut-over depends on.
 //!
 //! Scope delivered: **registration coverage** end-to-end.
 //!
@@ -23,7 +23,7 @@
 //!    helper lands on the service.
 //! 4. Discover and load every plugin.
 //! 5. Assert the union of registered commands matches the locked
-//!    76-id baseline (set-equality with order-stable diff so missing,
+//!    77-id baseline (set-equality with order-stable diff so missing,
 //!    extra, or renamed ids surface explicitly).
 //!
 //! Dispatch coverage (per-command real effects against the matching
@@ -34,7 +34,7 @@
 //! one of its commands, the sort of drop the per-plugin tests cannot
 //! catch because each only stages one bundle in isolation.
 //!
-//! The 76 commands across the 9 builtin command plugins (matches each
+//! The 77 commands across the 9 builtin command plugins (matches each
 //! plugin's `registerCommands(...)` call set):
 //!
 //! - `app-shell-commands` (15): help, about, quit, command, search,
@@ -56,11 +56,13 @@
 //! - `ai-commands` (5): ai.{toggle,focus,newChat,model,cancel} — webview-
 //!   reactive no-ops; the metadata surfaces in the unified registry while the
 //!   AI panel React tree owns the live effect.
-//! - `nav-commands` (9): nav.{up,down,left,right,first,last,drillIn,drillOut,
-//!   jump} — directional/drill route to the focus kernel (host-driven), jump
-//!   is webview-bus handled. Ported from the retired `nav.yaml` overlay.
+//! - `nav-commands` (10): nav.{up,down,left,right,first,last,drillIn,drillOut,
+//!   jump,focus} — directional/drill route to the focus kernel (host-driven),
+//!   jump is webview-bus handled, focus routes to the focus `set focus` op.
+//!   The first nine are ported from the retired `nav.yaml` overlay; `nav.focus`
+//!   is the programmatic focus-claim command (no keys, no menu).
 //!
-//! TOTAL: 76 commands.
+//! TOTAL: 77 commands.
 
 #![allow(dead_code)]
 
@@ -301,7 +303,8 @@ fn expected_command_ids() -> BTreeSet<String> {
         "ai.model",
         "ai.newChat",
         "ai.toggle",
-        // nav-commands (9)
+        // nav-commands (10) — `nav.focus` is the programmatic focus-claim
+        // command (never in nav.yaml: no keys, no menu placement).
         "nav.up",
         "nav.down",
         "nav.left",
@@ -311,19 +314,26 @@ fn expected_command_ids() -> BTreeSet<String> {
         "nav.drillIn",
         "nav.drillOut",
         "nav.jump",
+        "nav.focus",
     ]
     .iter()
     .map(|s| s.to_string())
     .collect()
 }
 
-/// Boot a real `PluginHost` against a temp builtin-layer with all 8
-/// committed builtin command plugins staged, install the commands
-/// module, stub every other backend the plugins reach for, load every
-/// plugin, and assert the union of registered commands equals the
-/// locked baseline.
-#[tokio::test]
-async fn all_nine_builtin_command_plugins_register_their_full_command_set() {
+/// Everything [`boot_all_builtin_plugins`] hands back. The temp dirs ride
+/// along so the staged builtin layer stays alive for the test's duration.
+struct BootedBuiltins {
+    service: Arc<swissarmyhammer_command_service::CommandService>,
+    _host: PluginHost,
+    _user_root: TempDir,
+    _builtin_root: TempDir,
+}
+
+/// Boot a real `PluginHost` against a temp builtin-layer with all 9
+/// committed builtin command plugins staged, install the commands module,
+/// stub every other backend the plugins reach for, and load every plugin.
+async fn boot_all_builtin_plugins() -> BootedBuiltins {
     let user_root = TempDir::new().expect("user root temp dir");
     let builtin_root = TempDir::new().expect("builtin layer root temp dir");
 
@@ -356,10 +366,25 @@ async fn all_nine_builtin_command_plugins_register_their_full_command_set() {
         .await
         .expect("discover_and_load_all should not hang");
 
+    BootedBuiltins {
+        service,
+        _host: host,
+        _user_root: user_root,
+        _builtin_root: builtin_root,
+    }
+}
+
+/// Boot all 9 committed builtin command plugins and assert the union of
+/// registered commands equals the locked baseline.
+#[tokio::test]
+async fn all_nine_builtin_command_plugins_register_their_full_command_set() {
+    let booted = boot_all_builtin_plugins().await;
+    let service = &booted.service;
+
     // List every registered command and compare the id-set against
     // the locked baseline.
     let listed = call_command(
-        &service,
+        service,
         CallerId::HostInternal,
         json!({ "op": "list command" }),
     )
@@ -386,7 +411,60 @@ async fn all_nine_builtin_command_plugins_register_their_full_command_set() {
 
     assert_eq!(
         got.len(),
-        76,
-        "the 9 builtin command plugins must collectively register exactly 76 commands"
+        77,
+        "the 9 builtin command plugins must collectively register exactly 77 commands"
     );
+}
+
+/// Guard: no command surfaced by `list command` may ever carry a raw
+/// `{{...}}` placeholder in its display captions (`name` / `menu_name`) —
+/// neither with a focused-entity context (placeholders render against the
+/// focused object) nor without one (placeholders fall back to a clean
+/// generic form).
+///
+/// Sweeps every command registered by all 9 committed builtin plugins, so a
+/// future plugin caption that introduces a placeholder the renderer cannot
+/// resolve fails here instead of leaking into the palette / menus
+/// (regression guard for kanban card 01KTRMXRNH66GZCWSNR1YGE28E).
+#[tokio::test]
+async fn no_surfaced_display_caption_contains_raw_placeholders() {
+    let booted = boot_all_builtin_plugins().await;
+    let service = &booted.service;
+
+    // Both flavors of listing context: a focused task (the palette with a
+    // card focused) and no context at all (a context-free surface).
+    let arguments = [
+        json!({
+            "op": "list command",
+            "ctx": { "scope_chain": ["task:01HTASK", "view:01HVIEW", "board:01HBOARD"] },
+        }),
+        json!({ "op": "list command" }),
+    ];
+
+    for args in arguments {
+        let listed = call_command(service, CallerId::HostInternal, args.clone()).await;
+        let commands = listed
+            .get("structuredContent")
+            .and_then(|sc| sc.get("commands"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            !commands.is_empty(),
+            "the builtin plugins must register commands for the sweep to be meaningful"
+        );
+
+        for cmd in &commands {
+            let id = cmd.get("id").and_then(Value::as_str).unwrap_or("<no id>");
+            for field in ["name", "menu_name"] {
+                if let Some(caption) = cmd.get(field).and_then(Value::as_str) {
+                    assert!(
+                        !caption.contains("{{"),
+                        "command {id:?} surfaced a raw placeholder in its {field}: \
+                         {caption:?} (args: {args})"
+                    );
+                }
+            }
+        }
+    }
 }

@@ -13,6 +13,7 @@
 
 pub mod bootstrap;
 mod callbacks;
+mod caption;
 mod invoke;
 mod latency;
 mod lifecycle;
@@ -24,6 +25,7 @@ mod txn;
 mod types;
 
 pub use callbacks::CallbackHandle;
+pub use caption::{display_case, render_caption};
 pub use invoke::{
     CallbackDispatcher, CallbackInvokeError, NoopCallbackDispatcher, SharedCallbackDispatcher,
 };

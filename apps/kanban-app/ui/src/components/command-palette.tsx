@@ -101,8 +101,13 @@ export function CommandPalette({
   // Source commands from the metadata-driven Command registry rather than a
   // hardcoded list — re-fetched live on `commands/changed`. The palette only
   // renders in command mode, so the list is unused (but cheap) in search mode.
+  // The focused scope chain rides along as the list ctx so the service
+  // renders caption templates ({{entity.type}}) against the focused object —
+  // "Inspect Task", never a raw placeholder.
   const { commands: registryCommands, epoch: registryEpoch } = useCommandList(
-    currentScope !== undefined ? { scope: currentScope } : {},
+    currentScope !== undefined
+      ? { scope: currentScope, scopeChain }
+      : { scopeChain },
   );
 
   // Adapt registry commands to the shape the palette renders (CommandAtDepth).

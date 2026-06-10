@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: '8380'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffff80
 project: ui-command-cleanup
 title: Card F1 — Host→UI request/reply channel (correlation-id, lock-safe)
 ---

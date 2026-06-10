@@ -172,7 +172,10 @@ pub struct ParamDef {
 /// and the free-form args bag the palette / popover / menu populated.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct CommandContext {
-    /// Active scope monikers (e.g. `["board:01ABC", "task:42"]`).
+    /// Active scope monikers, ordered innermost first (e.g.
+    /// `["task:42", "board:01ABC"]` when a task inside a board is focused).
+    /// Caption rendering reads `scope_chain.first()` as the focused entity,
+    /// so the innermost-first ordering is load-bearing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scope_chain: Vec<String>,
     /// Context-menu target moniker (the entity the menu fired over).

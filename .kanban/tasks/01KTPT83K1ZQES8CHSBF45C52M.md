@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: '8780'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffd80
 project: ui-command-cleanup
 title: 'Unique window-rooted focus path: derive window from the full fq, stop peeking at side fields'
 ---
