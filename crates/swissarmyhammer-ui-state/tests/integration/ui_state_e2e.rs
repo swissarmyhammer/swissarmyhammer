@@ -414,6 +414,138 @@ async fn dismiss_closes_open_palette_first() {
     assert!(h.ui_state.inspector_stack("main").is_empty());
 }
 
+/// Every per-window mutation op is REJECTED when the scope chain carries no
+/// `window:` moniker — it must never silently fall back to the `main` window
+/// slot (the regression class a2002c330 fixed: palette/inspector state written
+/// to a window no board reads).
+#[tokio::test]
+async fn per_window_ops_reject_scope_chain_without_window_moniker() {
+    let h = Harness::new();
+    let service = h.service();
+
+    // A plausible-but-broken producer chain: monikers present, window absent.
+    let chain = serde_json::json!(["task:01ABC", "board:foo"]);
+
+    let calls: Vec<(&str, serde_json::Value)> = vec![
+        (
+            "inspect inspector",
+            json!({ "op": "inspect inspector", "scope_chain": chain, "moniker": "task:01XYZ" }),
+        ),
+        (
+            "close inspector",
+            json!({ "op": "close inspector", "scope_chain": chain }),
+        ),
+        (
+            "close_all inspector",
+            json!({ "op": "close_all inspector", "scope_chain": chain }),
+        ),
+        (
+            "set_width inspector",
+            json!({ "op": "set_width inspector", "scope_chain": chain, "width": 540 }),
+        ),
+        (
+            "open palette",
+            json!({ "op": "open palette", "scope_chain": chain, "mode": "command" }),
+        ),
+        (
+            "close palette",
+            json!({ "op": "close palette", "scope_chain": chain }),
+        ),
+        (
+            "set active_view",
+            json!({ "op": "set active_view", "scope_chain": chain, "view_id": "board-view" }),
+        ),
+        (
+            "show command",
+            json!({ "op": "show command", "scope_chain": chain }),
+        ),
+        (
+            "show palette",
+            json!({ "op": "show palette", "scope_chain": chain }),
+        ),
+        (
+            "show search",
+            json!({ "op": "show search", "scope_chain": chain }),
+        ),
+        (
+            "dismiss ui",
+            json!({ "op": "dismiss ui", "scope_chain": chain }),
+        ),
+    ];
+
+    for (op, args) in calls {
+        match call_tool(&service, op, args).await {
+            Ok(res) => panic!("op {op:?} must error without a window: moniker, got: {res}"),
+            Err(err) => assert!(
+                err.message.contains("window:"),
+                "op {op:?} error should name the missing `window:` moniker: {}",
+                err.message
+            ),
+        }
+    }
+
+    // Nothing was mutated: no window slot (not even "main") was created.
+    assert!(
+        h.ui_state.all_windows().is_empty(),
+        "rejected ops must not create or mutate any window slot, got: {:?}",
+        h.ui_state.all_windows().keys().collect::<Vec<_>>()
+    );
+}
+
+/// An EMPTY scope chain is also rejected on the per-window path — the
+/// historical `unwrap_or("main")` default would have silently targeted `main`.
+#[tokio::test]
+async fn per_window_op_rejects_empty_scope_chain() {
+    let h = Harness::new();
+    let service = h.service();
+
+    let err = call_tool(
+        &service,
+        "open palette",
+        json!({ "op": "open palette", "scope_chain": [], "mode": "command" }),
+    )
+    .await
+    .expect_err("open palette with an empty scope chain must error");
+
+    assert!(
+        err.message.contains("window:"),
+        "error should name the missing `window:` moniker: {}",
+        err.message
+    );
+    assert!(
+        !h.ui_state.palette_open("main"),
+        "the main slot must not be touched by the rejected op"
+    );
+    assert!(h.ui_state.all_windows().is_empty());
+}
+
+/// A per-window op with a non-"main" `window:` moniker mutates THAT window's
+/// slot and leaves `main` untouched (the positive half of the hardening).
+#[tokio::test]
+async fn per_window_op_targets_the_scope_chain_window_not_main() {
+    let h = Harness::new();
+    let service = h.service();
+
+    call_tool(
+        &service,
+        "set active_view",
+        json!({
+            "op": "set active_view",
+            "scope_chain": ["view:v1", "window:board-2"],
+            "view_id": "grid-view",
+        }),
+    )
+    .await
+    .expect("set active_view with a window: moniker should succeed");
+
+    assert_eq!(h.ui_state.active_view_id("board-2"), "grid-view");
+    assert_eq!(
+        h.ui_state.active_view_id("main"),
+        "",
+        "the main slot must stay untouched"
+    );
+}
+
 /// An unknown op surfaces a structured `invalid_params` error.
 #[tokio::test]
 async fn unknown_op_errors() {

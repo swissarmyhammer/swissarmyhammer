@@ -44,24 +44,41 @@ const MIN_INSPECTOR_WIDTH: u32 = 320;
 /// Mirrors the original `MAX_INSPECTOR_WIDTH` constant.
 const MAX_INSPECTOR_WIDTH: u32 = 800;
 
-/// The window label used when a scope chain carries no `window:` moniker.
-///
-/// Matches the `ctx.window_label_from_scope().unwrap_or("main")` fallback the
-/// original command layer used.
-const DEFAULT_WINDOW_LABEL: &str = "main";
-
 /// Resolve the target window label from a scope chain.
 ///
 /// The window is carried in the scope chain as a `window:<label>` moniker — the
 /// scope chain is the single structured parameter every per-window op receives,
 /// so the window is read from it rather than from a redundant denormalized
-/// `window_label` field. Returns the first `window:` moniker's label, or
-/// [`DEFAULT_WINDOW_LABEL`] when the chain carries none.
-fn window_from_scope(scope_chain: &[String]) -> &str {
+/// `window_label` field. Returns the first `window:` moniker's label.
+///
+/// # Errors
+///
+/// Returns an `invalid_params` rmcp error when the chain carries no `window:`
+/// moniker. There is deliberately NO default: the historical
+/// `unwrap_or("main")` fallback silently wrote per-window state to a window no
+/// board reads (the a2002c330 regression class — `:` never opened the palette,
+/// inspect never opened the inspector). A missing window is a producer bug and
+/// must fail loudly instead of mutating the wrong window's state. The
+/// rejection is also traced so it is observable in the unified log
+/// (`subsystem == "com.swissarmyhammer.kanban"`).
+fn window_from_scope<'a>(scope_chain: &'a [String], op: &str) -> Result<&'a str, McpError> {
     scope_chain
         .iter()
         .find_map(|m| m.strip_prefix("window:"))
-        .unwrap_or(DEFAULT_WINDOW_LABEL)
+        .ok_or_else(|| {
+            tracing::error!(
+                op,
+                scope_chain = ?scope_chain,
+                "per-window ui_state op rejected: scope chain has no `window:` moniker"
+            );
+            McpError::invalid_params(
+                format!(
+                    "op {op:?} requires a `window:<label>` moniker in scope_chain \
+                     (got {scope_chain:?}); refusing to default to the main window"
+                ),
+                None,
+            )
+        })
 }
 
 /// In-process `rmcp::ServerHandler` for the `ui_state` operation tool.
@@ -116,28 +133,28 @@ impl UiStateServer {
 
     /// Handle `inspect inspector` — push a moniker onto the window's stack.
     fn handle_inspect(&self, req: Inspect) -> Result<Value, McpError> {
-        let window = window_from_scope(&req.scope_chain);
+        let window = window_from_scope(&req.scope_chain, "inspect inspector")?;
         let change = self.ui_state.inspect(window, &req.moniker);
         Ok(serde_json::json!({ "ok": true, "change": change }))
     }
 
     /// Handle `close inspector` — pop the topmost entry.
     fn handle_inspector_close(&self, req: InspectorClose) -> Result<Value, McpError> {
-        let window = window_from_scope(&req.scope_chain);
+        let window = window_from_scope(&req.scope_chain, "close inspector")?;
         let change = self.ui_state.inspector_close(window);
         Ok(serde_json::json!({ "ok": true, "change": change }))
     }
 
     /// Handle `close_all inspector` — clear the stack.
     fn handle_inspector_close_all(&self, req: InspectorCloseAll) -> Result<Value, McpError> {
-        let window = window_from_scope(&req.scope_chain);
+        let window = window_from_scope(&req.scope_chain, "close_all inspector")?;
         let change = self.ui_state.inspector_close_all(window);
         Ok(serde_json::json!({ "ok": true, "change": change }))
     }
 
     /// Handle `set_width inspector` — persist the clamped panel width.
     fn handle_inspector_set_width(&self, req: InspectorSetWidth) -> Result<Value, McpError> {
-        let window = window_from_scope(&req.scope_chain);
+        let window = window_from_scope(&req.scope_chain, "set_width inspector")?;
         let width = req.width.clamp(MIN_INSPECTOR_WIDTH, MAX_INSPECTOR_WIDTH);
         let change = self.ui_state.set_inspector_width(window, width);
         Ok(serde_json::json!({ "ok": true, "change": change }))
@@ -145,7 +162,7 @@ impl UiStateServer {
 
     /// Handle `open palette` — open the palette in the requested mode.
     fn handle_palette_open(&self, req: PaletteOpen) -> Result<Value, McpError> {
-        let window = window_from_scope(&req.scope_chain);
+        let window = window_from_scope(&req.scope_chain, "open palette")?;
         let change = self
             .ui_state
             .set_palette_open_with_mode(window, true, &req.mode);
@@ -154,7 +171,7 @@ impl UiStateServer {
 
     /// Handle `close palette` — close the palette.
     fn handle_palette_close(&self, req: PaletteClose) -> Result<Value, McpError> {
-        let window = window_from_scope(&req.scope_chain);
+        let window = window_from_scope(&req.scope_chain, "close palette")?;
         let change = self.ui_state.set_palette_open(window, false);
         Ok(serde_json::json!({ "ok": true, "change": change }))
     }
@@ -178,7 +195,7 @@ impl UiStateServer {
     /// palette / context menu keep offering commands for whichever view was last
     /// in scope, so `entity.add:{type}` and friends fan out from the stale view.
     fn handle_set_active_view(&self, req: SetActiveView) -> Result<Value, McpError> {
-        let window = window_from_scope(&req.scope_chain);
+        let window = window_from_scope(&req.scope_chain, "set active_view")?;
         let change = self.ui_state.set_active_view(window, &req.view_id);
 
         let mut chain = self.ui_state.scope_chain();
@@ -237,7 +254,7 @@ impl UiStateServer {
 
     /// Handle `show command` — open the palette in command mode.
     fn handle_show_command(&self, req: ShowCommand) -> Result<Value, McpError> {
-        let window = window_from_scope(&req.scope_chain);
+        let window = window_from_scope(&req.scope_chain, "show command")?;
         let change = self
             .ui_state
             .set_palette_open_with_mode(window, true, "command");
@@ -246,14 +263,14 @@ impl UiStateServer {
 
     /// Handle `show palette` — open the palette without forcing a mode.
     fn handle_show_palette(&self, req: ShowPalette) -> Result<Value, McpError> {
-        let window = window_from_scope(&req.scope_chain);
+        let window = window_from_scope(&req.scope_chain, "show palette")?;
         let change = self.ui_state.set_palette_open(window, true);
         Ok(serde_json::json!({ "ok": true, "change": change }))
     }
 
     /// Handle `show search` — open the palette in search mode.
     fn handle_show_search(&self, req: ShowSearch) -> Result<Value, McpError> {
-        let window = window_from_scope(&req.scope_chain);
+        let window = window_from_scope(&req.scope_chain, "show search")?;
         let change = self
             .ui_state
             .set_palette_open_with_mode(window, true, "search");
@@ -262,7 +279,7 @@ impl UiStateServer {
 
     /// Handle `dismiss ui` — layered close: palette first, then inspector.
     fn handle_dismiss(&self, req: Dismiss) -> Result<Value, McpError> {
-        let window = window_from_scope(&req.scope_chain);
+        let window = window_from_scope(&req.scope_chain, "dismiss ui")?;
         // Layer 1: close the palette if open in this window.
         if self.ui_state.palette_open(window) {
             let change = self.ui_state.set_palette_open(window, false);
