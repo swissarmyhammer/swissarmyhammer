@@ -464,8 +464,13 @@ function useTaskDragEscapeCancel(
  *
  * Board identity is resolved from the scope chain by `useDispatchCommand` —
  * callers only need to pass the drop descriptor and task id.
+ *
+ * Exported so `board-drag-drop.test.tsx` can pin the dispatch wire shape
+ * (`target: "task:<id>"`, args `{ id, column, before_id | after_id }`) the
+ * `task-commands` plugin's `task.move` accepts — the two sides drifting apart
+ * is exactly the bug that silently broke every internal drag drop.
  */
-function usePersistTaskMove(): (
+export function usePersistTaskMove(): (
   descriptor: DropZoneDescriptor,
   taskId: string,
 ) => Promise<void> {

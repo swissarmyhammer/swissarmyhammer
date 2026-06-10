@@ -544,6 +544,118 @@ async fn task_move_with_drop_index_positions_in_column() {
     );
 }
 
+/// Executing `task.move` with the board-view DROP dispatch shape reorders a
+/// task within its column.
+///
+/// `usePersistTaskMove` (board-view.tsx) dispatches `task.move` with
+/// `target: "task:<dragged>"` and args `{ id, column, before_id | after_id }`
+/// — the legacy `MoveTaskCmd` contract — while the ambient scope chain still
+/// carries whatever card happens to be FOCUSED (not necessarily the dragged
+/// one). The plugin must (a) pass the availability recheck on this shape and
+/// (b) move the task named by `args.id`, not the focused task.
+#[tokio::test]
+async fn task_move_with_drop_dispatch_shape_reorders_within_column() {
+    let (_user, _builtin, _board, host, service, kanban) = boot_with_task_commands().await;
+
+    kanban
+        .call(json!({ "op": "init board", "name": "Drop Reorder Board" }))
+        .await;
+
+    let a = add_task_in_column(&kanban, "A", "todo").await;
+    let b = add_task_in_column(&kanban, "B", "todo").await;
+    let c = add_task_in_column(&kanban, "C", "todo").await;
+
+    tokio::time::timeout(TIMEOUT, host.discover_and_load_all::<KanbanConfig>())
+        .await
+        .expect("discovery should not hang")
+        .expect("discovering the task-commands builtin plugin should succeed");
+
+    // Drag C and drop it on the before-B zone while A is the focused card.
+    let executed = call_command(
+        &service,
+        CallerId::HostInternal,
+        json!({
+            "op": "execute command",
+            "id": "task.move",
+            "ctx": {
+                "scope_chain": [format!("task:{a}")],
+                "target": format!("task:{c}"),
+                "args": { "id": c, "column": "todo", "before_id": b },
+            },
+        }),
+    )
+    .await;
+    assert_eq!(
+        executed["structuredContent"]["ok"],
+        json!(true),
+        "executing task.move with the drop dispatch shape should succeed, got {executed}"
+    );
+
+    let after = kanban.call(json!({ "op": "list tasks" })).await;
+    assert_eq!(
+        column_task_order(&after, "todo"),
+        vec![a.clone(), c.clone(), b.clone()],
+        "dropping C before B must reorder todo to (A, C, B), got {after}"
+    );
+}
+
+/// Executing `task.move` with the board-view DROP dispatch shape moves a task
+/// to ANOTHER column at the dropped position (`after_id` placement).
+///
+/// Same wire shape as the reorder test — `target: "task:<dragged>"`, args
+/// `{ id, column, after_id }` — proving the cross-column half of the drag
+/// path and the `after_id` passthrough.
+#[tokio::test]
+async fn task_move_with_drop_dispatch_shape_moves_across_columns() {
+    let (_user, _builtin, _board, host, service, kanban) = boot_with_task_commands().await;
+
+    kanban
+        .call(json!({ "op": "init board", "name": "Drop Cross Column Board" }))
+        .await;
+
+    let x = add_task_in_column(&kanban, "X", "doing").await;
+    let y = add_task_in_column(&kanban, "Y", "doing").await;
+    let mover = add_task_in_column(&kanban, "Mover", "todo").await;
+
+    tokio::time::timeout(TIMEOUT, host.discover_and_load_all::<KanbanConfig>())
+        .await
+        .expect("discovery should not hang")
+        .expect("discovering the task-commands builtin plugin should succeed");
+
+    // Drag the mover from todo and drop it on the after-X zone in doing.
+    let executed = call_command(
+        &service,
+        CallerId::HostInternal,
+        json!({
+            "op": "execute command",
+            "id": "task.move",
+            "ctx": {
+                "scope_chain": [format!("task:{mover}")],
+                "target": format!("task:{mover}"),
+                "args": { "id": mover, "column": "doing", "after_id": x },
+            },
+        }),
+    )
+    .await;
+    assert_eq!(
+        executed["structuredContent"]["ok"],
+        json!(true),
+        "executing task.move with the cross-column drop shape should succeed, got {executed}"
+    );
+
+    let after = kanban.call(json!({ "op": "list tasks" })).await;
+    assert_eq!(
+        task_column(&after, &mover).as_deref(),
+        Some("doing"),
+        "the mover must land in doing, got {after}"
+    );
+    assert_eq!(
+        column_task_order(&after, "doing"),
+        vec![x.clone(), mover.clone(), y.clone()],
+        "dropping the mover after X must order doing as (X, Mover, Y), got {after}"
+    );
+}
+
 /// Executing `task.doThisNext` MOVES the scoped task to the FRONT of the first
 /// column — it is an undoable mutation, not a read-only "next task" query.
 ///

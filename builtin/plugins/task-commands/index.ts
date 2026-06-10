@@ -74,6 +74,17 @@ async function sortedColumnTasks(
 }
 
 /**
+ * Read a string-valued entry out of the dispatch context's args bag.
+ *
+ * Returns `undefined` when the args bag is absent, the key is missing, or the
+ * value is not a string — the signal to fall back to scope/target resolution.
+ */
+function strArg(ctx: CommandContext, key: string): string | undefined {
+  const value = ctx.args?.[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+/**
  * The task-commands builtin plugin.
  *
  * Registers the three `task`-entity commands ported from `task.yaml`, each
@@ -102,8 +113,14 @@ export default class TaskCommandsPlugin extends Plugin {
     await registerCommands(this, [
       // ─── task.move ──────────────────────────────────────────────────────
       // YAML: scope entity:task, undoable, params task(scope_chain) /
-      // column(target) / drop_index(args). Needs a task in scope AND a column
-      // target to move into.
+      // column(target) / drop_index(args). Needs a task (in scope or as the
+      // `id` arg) AND a column to move into (target moniker or `column` arg).
+      //
+      // The args fallbacks mirror the legacy Rust `MoveTaskCmd`
+      // (`resolve_move_task_args`): the board-view drop path
+      // (`usePersistTaskMove`) dispatches `target: "task:<dragged>"` with
+      // args `{ id, column, before_id | after_id }` — no column target
+      // moniker — so dropping the fallbacks broke every internal drag drop.
       {
         id: "task.move",
         name: "Move Task",
@@ -116,38 +133,54 @@ export default class TaskCommandsPlugin extends Plugin {
         ],
         available: (rawCtx) => {
           const ctx = (rawCtx ?? {}) as CommandContext;
-          if (scopeId(ctx, "task") === undefined) {
+          if (scopeId(ctx, "task") === undefined && strArg(ctx, "id") === undefined) {
             return { ok: false, reason: "Select a task first" } satisfies Availability;
           }
-          if (targetId(ctx, "column") === undefined) {
+          if (
+            targetId(ctx, "column") === undefined &&
+            strArg(ctx, "column") === undefined
+          ) {
             return { ok: false, reason: "Drop the task onto a column" } satisfies Availability;
           }
           return { ok: true } satisfies Availability;
         },
         execute: async (rawCtx) => {
           const ctx = (rawCtx ?? {}) as CommandContext;
-          const id = scopeId(ctx, "task");
-          const column = targetId(ctx, "column");
+          // An explicit `id` arg wins over the ambient scope chain: the drop
+          // path names the DRAGGED task in args while focus (the scope chain)
+          // may still sit on a different card.
+          const id = strArg(ctx, "id") ?? scopeId(ctx, "task");
+          const column = targetId(ctx, "column") ?? strArg(ctx, "column");
           const args: Record<string, unknown> = { id, column };
 
-          // `drop_index` is a NUMERIC index into the target column, but the
-          // `move task` op only understands an `ordinal` FractionalIndex STRING
-          // or a `before_id` / `after_id` neighbor reference. Translate the
-          // index into a neighbor reference (the legacy `MoveTaskCmd` computed
-          // the ordinal server-side via `compute_ordinal_for_drop`; the
-          // `before_id` path computes the SAME ordinal from the same neighbor
-          // list inside `MoveTask::execute`). Passing the raw number as
-          // `ordinal` would parse to a garbage FractionalIndex and mis-position
-          // the task — the regression this replaces.
+          // Placement precedence mirrors the legacy `MoveTaskCmd`:
+          // ordinal > before_id > after_id > drop_index > append.
+          // `before_id` / `after_id` neighbor references pass straight through
+          // — the canonical `MoveTask::execute` computes the ordinal from the
+          // neighbor, exactly as the legacy `compute_ordinal_for_drop` did.
+          const ordinal = strArg(ctx, "ordinal");
+          const beforeId = strArg(ctx, "before_id");
+          const afterId = strArg(ctx, "after_id");
           const dropIndex = ctx.args?.drop_index;
-          if (typeof dropIndex === "number" && column !== undefined) {
+          if (ordinal !== undefined) {
+            args.ordinal = ordinal;
+          } else if (beforeId !== undefined) {
+            args.before_id = beforeId;
+          } else if (afterId !== undefined) {
+            args.after_id = afterId;
+          } else if (typeof dropIndex === "number" && column !== undefined) {
+            // `drop_index` is a NUMERIC index into the target column, but the
+            // `move task` op only understands an `ordinal` FractionalIndex
+            // STRING or a `before_id` / `after_id` neighbor reference.
+            // Translate the index into a neighbor reference. Passing the raw
+            // number as `ordinal` would parse to a garbage FractionalIndex and
+            // mis-position the task — the regression this replaces.
             const neighbors = await sortedColumnTasks(this, column, id);
             // index 0 → before the first; 0 < i < len → before the task that
             // currently sits at the index (it shifts right); i >= len → append
             // (no neighbor reference, MoveTask appends at the end).
             if (dropIndex < neighbors.length) {
-              const beforeId = neighbors[Math.max(0, dropIndex)].id;
-              args.before_id = beforeId;
+              args.before_id = neighbors[Math.max(0, dropIndex)].id;
             }
           }
           return await this.kanban.kanban.task.move(args);
