@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, fireEvent, act } from "@testing-library/react";
+import { render as rtlRender, fireEvent, act } from "@testing-library/react";
+import type { ReactElement } from "react";
 
 // ---------------------------------------------------------------------------
 // Tauri API mocks — must come before importing the component under test.
@@ -10,14 +11,43 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
+  emit: vi.fn(() => Promise.resolve()),
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
-vi.mock("@/lib/command-scope", () => ({
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({
+    label: "main",
+    listen: vi.fn(() => Promise.resolve(() => {})),
+  }),
+}));
+
+// Stub only the dispatcher; keep the real CommandScopeContext /
+// EMPTY_COMMANDS exports that `<FocusScope>` (mounted by the close
+// button's `<Pressable>`) imports from the same module.
+vi.mock("@/lib/command-scope", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/command-scope")>()),
   useDispatchCommand: () => vi.fn(() => Promise.resolve()),
 }));
 
 import { SlidePanel } from "./slide-panel";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
+import { asSegment } from "@/types/spatial";
+
+/**
+ * Render `ui` inside the spatial provider stack the panel's close
+ * `<Pressable>` leaf requires (`<FocusScope>` composes its FQM from the
+ * enclosing `<FocusLayer>`'s context). Mirrors the production shape:
+ * the inspector renders panels inside a focus layer.
+ */
+function render(ui: ReactElement) {
+  return rtlRender(
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>{ui}</FocusLayer>
+    </SpatialFocusProvider>,
+  );
+}
 
 /**
  * Force `window.innerWidth` to a known value so the upper-bound clamp

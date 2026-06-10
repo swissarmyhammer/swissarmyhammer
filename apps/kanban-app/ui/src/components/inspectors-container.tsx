@@ -415,6 +415,12 @@ function InspectorPanel({
       width={width}
       onResize={onResize}
       onResizeEnd={onResizeEnd}
+      // Per-panel unique moniker so each stacked panel's (x) close leaf
+      // registers a distinct FQM in the inspector layer (jump pills and
+      // arrow nav can reach the close button of the topmost panel).
+      closeMoniker={asSegment(
+        `inspector.close:${entry.entityType}:${entry.entityId}`,
+      )}
     >
       {body}
     </SlidePanel>

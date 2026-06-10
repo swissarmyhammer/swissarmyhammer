@@ -99,6 +99,30 @@ function installInvokeStub(jumpCodes: string[]) {
   const registeredScopes: Array<{ fq: string; layerFq: string }> = [];
   mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
     const a = (args ?? {}) as Record<string, unknown>;
+    // The React tree reaches the kernel through the MCP wire
+    // (`command_tool_call` against the `focus` tool); translate the ops
+    // this test consumes onto the recording handlers below and wrap the
+    // result in the `{ ok, ... }` envelope `focus-mcp.ts` unwraps.
+    if (cmd === "command_tool_call" && a.tool === "focus") {
+      const opToLegacy: Record<string, string> = {
+        "push layer": "spatial_push_layer",
+        "pop layer": "spatial_pop_layer",
+        "generate sneak_codes": "generate_jump_codes",
+      };
+      const op = String(a.op);
+      const legacy = opToLegacy[op];
+      if (legacy !== undefined) {
+        const result = await mockInvoke(legacy, a.params);
+        if (op === "generate sneak_codes") {
+          return { ok: true, codes: result ?? [] };
+        }
+        if (op === "pop layer") {
+          return { ok: true, next_fq: result ?? null };
+        }
+        return { ok: true, event: null };
+      }
+      return { ok: true, event: null };
+    }
     if (cmd === "generate_jump_codes") {
       const count = (a.count as number) ?? 0;
       return jumpCodes.slice(0, count);

@@ -367,17 +367,24 @@ describe("<FocusDebugOverlay> — layer-aware z-index", () => {
     //      (`focus-layer.tsx`) so the inspector overlay still sits
     //      above the new SlidePanel z-index.
     //   3. Update the regex in this test to match the new class.
+    // The panel mounts inside the spatial provider stack because its
+    // (x) close button is a `<Pressable>` leaf that registers with the
+    // enclosing `<FocusLayer>` — mirrors the production shape (the
+    // inspector renders panels inside a focus layer).
     const { container, unmount } = render(
-      <SlidePanel open onClose={() => {}}>
-        <span>panel body</span>
-      </SlidePanel>,
+      <SpatialFocusProvider>
+        <FocusLayer name={asSegment("window")}>
+          <SlidePanel open onClose={() => {}}>
+            <span>panel body</span>
+          </SlidePanel>
+        </FocusLayer>
+      </SpatialFocusProvider>,
     );
     await flushSetup();
 
-    // `<SlidePanel>` renders a single fixed root `<div>` whose
-    // className carries the z-tier. It is the only top-level element
-    // in the rendered output.
-    const root = container.firstElementChild as HTMLElement;
+    // `<SlidePanel>` renders a fixed root `<div data-slide-panel>` whose
+    // className carries the z-tier.
+    const root = container.querySelector("[data-slide-panel]") as HTMLElement;
     expect(root).toBeTruthy();
     expect(root.className).toMatch(/\bz-30\b/);
 

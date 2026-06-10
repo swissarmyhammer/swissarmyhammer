@@ -675,29 +675,23 @@ function useJumpTargets(
     // resolves the same layer rather than the legacy shared `/window`.
     const topLayerFq = spatial.topLayerFq() ?? WINDOW_LAYER_FALLBACK_FQ;
     const allScopes = spatial.enumerateScopesInLayer(topLayerFq);
-    // Tier filter: jump pills land on **top-tier focusables** only — the
-    // navigation units (cards, toolbar/navbar buttons), i.e. focusable scopes
-    // whose nearest focusable ancestor is none. Nested focusables (a card's
-    // title / badge / inspect fields) are reached by drill-in (Enter), not by
-    // jump, mirroring the kernel's tier-locked arrow nav so jump and arrows
-    // agree on what an "item" is. Built from the enumerated set so the walk
-    // sees the same scopes the overlay is laying out.
-    const byFq = new Map(allScopes.map((s) => [s.fq, s]));
-    const isTopTierFocusable = (s: (typeof allScopes)[number]): boolean => {
-      if (!s.focusable) return false;
-      const seen = new Set<FullyQualifiedMoniker>();
-      let cursor = s.parentZone;
-      while (cursor !== null) {
-        const parent = byFq.get(cursor);
-        if (parent && parent.focusable) return false; // has a focusable ancestor
-        if (seen.has(cursor)) break;
-        seen.add(cursor);
-        cursor = parent ? parent.parentZone : null;
-      }
-      return true;
-    };
+    // Jump pills land on every **focusable** scope in the layer — anything
+    // the user can visibly claim focus on is a legitimate jump target
+    // (vim-sneak / AceJump: "jump to whatever you can see"). That includes
+    // focusable leaves nested inside another focusable scope, e.g. a card's
+    // (i) inspect button or its fields. Only structural zones
+    // (`showFocus={false}` — columns, the board well) are skipped: focus on
+    // them has no visible indicator, so a pill there would land the user
+    // nowhere discernible.
+    //
+    // NOTE: deliberately NOT tier-filtered. An earlier change filtered jump
+    // down to top-tier focusables (mirroring the kernel's tier-locked arrow
+    // nav), which silently removed nested actionable buttons — the card (i)
+    // inspect and inspector (x) close leaves — from the jump-target set.
+    // Arrow-nav tier locking is a kernel concern (`navigate.rs`) and is
+    // unaffected by jump landing focus on a nested leaf.
     const enumerated = allScopes
-      .filter(isTopTierFocusable)
+      .filter((s) => s.focusable)
       // First pass: drop collapsed (zero-area) scopes — they have no
       // meaningful anchor to hit-test.
       .filter((s) => s.rect.width > 0 && s.rect.height > 0)
@@ -713,11 +707,18 @@ function useJumpTargets(
     generateSneakCodes(enumerated.length)
       .then((codes: string[]) => {
         if (cancelled) return;
-        const paired: JumpTarget[] = enumerated.map((s, i) => ({
-          fq: s.fq,
-          rect: s.rect,
-          code: codes[i],
-        }));
+        // Pair only the targets that actually received a code. A degraded
+        // generator response (fewer codes than requested) must never
+        // produce a target with `code: undefined` — the key matcher's
+        // prefix test (`c.startsWith(...)`) would crash on the first
+        // keystroke.
+        const paired: JumpTarget[] = enumerated
+          .slice(0, codes.length)
+          .map((s, i) => ({
+            fq: s.fq,
+            rect: s.rect,
+            code: codes[i],
+          }));
         setTargets(paired);
       })
       .catch((err) => {
