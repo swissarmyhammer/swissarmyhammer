@@ -1,5 +1,6 @@
-import { icons, LayoutGrid } from "lucide-react";
+import { LayoutGrid } from "lucide-react";
 import { useViews } from "@/lib/views-context";
+import { viewIcon } from "@/components/view-icon";
 import { CommandScopeProvider, useDispatchCommand } from "@/lib/command-scope";
 import { useContextMenu } from "@/lib/context-menu";
 import { moniker } from "@/lib/moniker";
@@ -13,22 +14,6 @@ import {
 } from "@/components/ui/tooltip";
 import { asSegment } from "@/types/spatial";
 import type { ViewDef } from "@/types/kanban";
-
-/** Convert kebab-case icon name to PascalCase key for lucide-react lookup. */
-function kebabToPascal(s: string): string {
-  return s.replace(/(^|-)([a-z])/g, (_, _dash, c: string) => c.toUpperCase());
-}
-
-/** Resolve a view's icon from its YAML `icon` property via dynamic lucide lookup. */
-function viewIcon(view: ViewDef) {
-  const name = view.icon ?? view.kind;
-  if (name) {
-    const key = kebabToPascal(name);
-    const Icon = icons[key as keyof typeof icons];
-    if (Icon) return <Icon className="h-4 w-4" />;
-  }
-  return <LayoutGrid className="h-4 w-4" />;
-}
 
 /**
  * Left-nav sidebar listing every known view as an icon button.
@@ -121,6 +106,9 @@ function ScopedViewButton({ view, isActive }: ScopedViewButtonProps) {
 function ViewButton({ view, isActive }: ScopedViewButtonProps) {
   const dispatch = useDispatchCommand("view.set");
   const handleContextMenu = useContextMenu();
+  // Dumb lookup of the metadata-declared icon; LayoutGrid is the single
+  // documented fallback for views whose metadata declares no (known) icon.
+  const Icon = viewIcon(view) ?? LayoutGrid;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -142,7 +130,7 @@ function ViewButton({ view, isActive }: ScopedViewButtonProps) {
                 : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
             )}
           >
-            {viewIcon(view)}
+            <Icon className="h-4 w-4" />
           </button>
         </Pressable>
       </TooltipTrigger>

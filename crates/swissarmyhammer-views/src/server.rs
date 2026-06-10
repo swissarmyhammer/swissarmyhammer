@@ -560,6 +560,9 @@ fn views_error_to_mcp(err: ViewsError) -> McpError {
         ViewsError::ViewNotFoundByName { name } => {
             McpError::invalid_params(message, Some(json!({ "name": name })))
         }
+        ViewsError::InvalidViewDef { id, reason } => {
+            McpError::invalid_params(message, Some(json!({ "id": id, "reason": reason })))
+        }
         _ => McpError::internal_error(message, None),
     }
 }
