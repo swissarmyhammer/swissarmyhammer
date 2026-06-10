@@ -1,7 +1,6 @@
 # Install all CLI binaries and the Tauri apps
 install:
     cargo install --path apps/swissarmyhammer-cli
-    cargo install --path apps/avp-cli
     cargo install --path apps/mirdan-cli
     cargo install --path apps/kanban-cli
     cargo install --path apps/shelltool-cli

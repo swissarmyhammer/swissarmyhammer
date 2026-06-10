@@ -21,6 +21,12 @@ test-helpers = []
 [dependencies]
 clap = { workspace = true }
 clap_complete = { workspace = true }
+swissarmyhammer-common = { workspace = true }
+# The shared root-command constructor (`lifecycle::standard_op_cli`) appends the
+# schema-driven `noun → verb` operation subcommands via `cli_gen`, so the
+# completion helpers crate consumes the operations crate's CLI generator.
+swissarmyhammer-operations = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

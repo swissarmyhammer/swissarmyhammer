@@ -61,11 +61,11 @@ Install kanban MCP server into Claude Code settings
 
   Possible values:
   - `project`:
-    Project-level settings (.claude/settings.json)
+    Project-level configuration (committed to the repo)
   - `local`:
-    Local project settings, not committed (.claude/settings.local.json)
+    Local project configuration that is not committed
   - `user`:
-    User-level settings (~/.claude/settings.json)
+    User-wide (global) configuration
 
 
 
@@ -84,11 +84,11 @@ Remove kanban from Claude Code settings
 
   Possible values:
   - `project`:
-    Project-level settings (.claude/settings.json)
+    Project-level configuration (committed to the repo)
   - `local`:
-    Local project settings, not committed (.claude/settings.local.json)
+    Local project configuration that is not committed
   - `user`:
-    User-level settings (~/.claude/settings.json)
+    User-wide (global) configuration
 
 
 

@@ -179,11 +179,11 @@ Examples:
 
   Possible values:
   - `project`:
-    Project-level settings (.claude/settings.json)
+    Project-level configuration (committed to the repo)
   - `local`:
-    Local project settings, not committed (.claude/settings.local.json)
+    Local project configuration that is not committed
   - `user`:
-    User-level settings (~/.claude/settings.json)
+    User-wide (global) configuration
 
 
 
@@ -212,11 +212,11 @@ Examples:
 
   Possible values:
   - `project`:
-    Project-level settings (.claude/settings.json)
+    Project-level configuration (committed to the repo)
   - `local`:
-    Local project settings, not committed (.claude/settings.local.json)
+    Local project configuration that is not committed
   - `user`:
-    User-level settings (~/.claude/settings.json)
+    User-wide (global) configuration
 
 
 ###### **Options:**
@@ -710,6 +710,12 @@ When you 'use' a model, it creates or updates .sah/sah.yaml in your
 project with the model's configuration. This configures how SwissArmyHammer 
 executes AI workflows in your project.
 
+By default 'use' sets the global default model. Pass '--for <purpose>' to scope
+the model to a single tool instead. The only supported purpose today is
+'review': 'sah model use <name> --for review' writes review.model and runs the
+review tool's validator agents with that model, leaving the global default
+untouched. When review.model is unset, the review tool uses the global default.
+
 COMMON WORKFLOWS
 
 1. Explore available models:
@@ -828,35 +834,36 @@ Examples:
 Apply a specific model configuration to the current project.
 
 This command finds the specified model by name and applies its configuration
-to the project by creating or updating .sah/sah.yaml. The model
-configuration determines how SwissArmyHammer executes AI workflows in your
-project, including which AI model to use and how to execute tools.
+to the project by creating or updating .sah/sah.yaml.
 
 Model precedence (highest to lowest):
 • User models: ~/.models/<name>.yaml
 • Project models: ./models/<name>.yaml
 • Built-in models: embedded in the binary
 
-The command preserves any existing configuration sections while updating
-only the model configuration. This allows you to maintain project-specific
-settings alongside model configurations.
+By default the model is applied as the global default (top-level `model:`).
+Use `--for <purpose>` to scope the model to a specific tool instead; the value
+is written under that purpose's mapping (e.g. `--for review` writes
+`review.model:`) and leaves the global default untouched.
 
-Common model types:
-• claude-code    - Uses Claude Code CLI for AI execution
-• qwen           - Uses the local Qwen3.6 MoE model with in-process execution
-• custom models  - User-defined configurations for specialized workflows
+`--for review` sets the model the review tool runs its validator agents with.
+When `review.model` is unset, the review tool uses the global default model.
 
 Examples:
-  sah model use claude-code                # Apply Claude Code model
-  sah model use qwen                       # Apply the Qwen model
-  sah --debug model use claude-code        # Apply with debug output
+  sah model use claude-code                # Apply Claude Code as the default model
+  sah model use qwen                       # Apply the Qwen model as the default
+  sah model use qwen --for review          # Set the review-tool model only
 
 
-**Usage:** `swissarmyhammer model use <name>`
+**Usage:** `swissarmyhammer model use [OPTIONS] <name>`
 
 ###### **Arguments:**
 
 * `<name>` — Model name to apply to the project
+
+###### **Options:**
+
+* `--for <PURPOSE>` — Purpose to scope the model to (e.g. `review`). Absent sets the global default model
 
 
 

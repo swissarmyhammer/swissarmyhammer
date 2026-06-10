@@ -16,6 +16,8 @@ swissarmyhammer-config = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+# Process-wide embedding-inference serialization gate (one per process).
+tokio = { workspace = true, features = ["sync"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 ane-embedding = { workspace = true }

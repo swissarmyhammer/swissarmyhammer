@@ -1,7 +1,7 @@
 //! Mirdan Install/Uninstall - Type-aware package deployment.
 //!
 //! Skills -> agent skill directories (one copy per detected agent)
-//! Validators -> .avp/validators/ (project) or ~/.avp/validators/ (global)
+//! Validators -> ./.validators/ (project) or ~/.validators/ (global)
 //! Tools -> .tools/ store + agent MCP config files
 //! Plugins -> agent plugin directories (e.g. .claude/plugins/)
 
@@ -38,7 +38,7 @@ fn sanitize_dir_name(name: &str) -> String {
 ///
 /// Auto-detects type from contents:
 /// - SKILL.md -> deploy to each detected agent's skill directory
-/// - VALIDATOR.md + rules/ -> deploy to .avp/validators/
+/// - VALIDATOR.md + rules/ -> deploy to ./.validators/
 pub async fn run_install(
     package_spec: &str,
     agent_filter: Option<&str>,
@@ -950,6 +950,13 @@ pub struct Profile {
     pub skills: Option<Selector>,
     /// Which builtin agents to render and deploy, if any.
     pub agents: Option<Selector>,
+    /// Which builtin validator sets to materialize onto disk, if any.
+    ///
+    /// Like tools (which deploy store-only, no symlink), validators are
+    /// materialized through the shared mirdan store into the validators store
+    /// directory (`~/.validators/` global or `./.validators/` project) as a
+    /// read-only reference copy that the loader reads at lowest precedence.
+    pub validators: Option<Selector>,
     /// Whether to install the Claude Code statusline (`sah statusline`).
     pub statusline: bool,
     /// Whether to ensure the CLAUDE.md preamble is present.
@@ -1149,6 +1156,163 @@ fn install_profile_agents(
         });
     }
     Ok(targets)
+}
+
+/// Materialize the profile's selected builtin validator sets onto disk through
+/// the shared mirdan store mechanism.
+///
+/// Builtin validators are embedded in the binary (see
+/// [`crate::builtin_validators`]). Each selected set is staged into a temp
+/// directory as a real tree and copied into the validators store
+/// (`~/.validators/<set>/` global or `./.validators/<set>/` project) with the
+/// shared [`copy_dir_recursive`], rooted at `root` for project scope so the
+/// operation never reads `current_dir()`. This is the same store-only path
+/// [`deploy_tool`] uses (no symlink — the validator loader reads the store
+/// directly).
+///
+/// # Reference-copy policy
+///
+/// Builtin-owned files are OWNED by the installer: every embedded file is
+/// copied (overwritten) on each install so builtin updates always propagate,
+/// exactly like the generated `.skills/` reference copy. Crucially the copy is
+/// additive at the destination — [`copy_dir_recursive`] writes the embedded
+/// files but never deletes the set directory wholesale — so a user-authored
+/// validator added inside a builtin set dir, and any entirely user-created set,
+/// survive untouched. To customize a builtin, a user creates a NEW validator
+/// that wins by loader precedence rather than editing the deployed reference in
+/// place.
+///
+/// Returns the set names that were materialized.
+fn install_profile_validators(
+    selector: &Selector,
+    scope: InitScope,
+    root: Option<&Path>,
+    reporter: &dyn InitReporter,
+) -> Result<Vec<String>, RegistryError> {
+    let sets = crate::builtin_validators::builtin_validators_by_set();
+
+    // Validators carry no profile-membership tags, so expose an empty tag list
+    // for each set — the same shape `install_profile_agents` uses.
+    let available: std::collections::HashMap<String, Vec<String>> = sets
+        .keys()
+        .map(|name| (name.to_string(), Vec::new()))
+        .collect();
+
+    let global = scope_is_global(scope);
+    let target_root = rooted(root, global, store::validators_store_dir(global));
+
+    let selected = selector.select(&available);
+    let mut materialized: Vec<String> = Vec::new();
+    for set in &selected {
+        let files = &sets[set.as_str()];
+
+        // Stage the set's embedded files into a temp dir as a real tree (set
+        // prefix stripped so the temp holds the set's *contents*), then copy
+        // that tree into the store via the shared helper — the same store-only
+        // deploy `deploy_tool` performs.
+        let staged = stage_validator_set(set, files)?;
+        let dest_set_dir = target_root.join(set);
+        copy_dir_recursive(staged.path(), &dest_set_dir)?;
+
+        materialized.push(set.clone());
+    }
+
+    if !materialized.is_empty() {
+        reporter.emit(&InitEvent::Action {
+            verb: "Deployed".to_string(),
+            message: format!(
+                "{} validator set(s) to {}",
+                materialized.len(),
+                target_root.display()
+            ),
+        });
+    }
+    Ok(materialized)
+}
+
+/// Stage one builtin validator set's embedded files into a temp directory as a
+/// real directory tree, returning the temp dir whose root holds the set's
+/// contents (`VALIDATOR.md`, `rules/*.md`, …) with the leading `<set>/` prefix
+/// stripped.
+///
+/// The returned [`tempfile::TempDir`] must be kept alive until the copy into the
+/// store completes; dropping it removes the staged tree.
+fn stage_validator_set(
+    set: &str,
+    files: &[(&'static str, &'static str)],
+) -> Result<tempfile::TempDir, RegistryError> {
+    let staged = tempfile::tempdir()
+        .map_err(|e| RegistryError::Validation(format!("failed to create temp dir: {e}")))?;
+    let set_prefix = format!("{set}/");
+    for (embedded_name, content) in files {
+        // Embedded names are set-prefixed (e.g. `dead-code/rules/x.md`); strip
+        // the `<set>/` prefix so the staged tree is the set's *contents*.
+        let relative = embedded_name
+            .strip_prefix(&set_prefix)
+            .unwrap_or(embedded_name);
+        let dest = staged.path().join(relative);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                RegistryError::Validation(format!("failed to create {}: {e}", parent.display()))
+            })?;
+        }
+        std::fs::write(&dest, content).map_err(|e| {
+            RegistryError::Validation(format!("failed to write {}: {e}", dest.display()))
+        })?;
+    }
+    Ok(staged)
+}
+
+/// Remove the builtin-owned validator files the selector resolves to, mirroring
+/// [`install_profile_validators`].
+///
+/// Only the specific embedded file paths are removed via [`store::remove_if_exists`]
+/// — never a set directory wholesale — so user-authored validators added inside
+/// a builtin set, and entirely user-created sets, survive. A set directory (and
+/// its `rules/` subdir) is removed only when it is left empty after the builtin
+/// files are gone, so a set that still holds user files is preserved.
+///
+/// Returns the set names whose builtin files were removed.
+fn deinit_profile_validators(
+    selector: &Selector,
+    scope: InitScope,
+    root: Option<&Path>,
+) -> Vec<String> {
+    let sets = crate::builtin_validators::builtin_validators_by_set();
+    let available: std::collections::HashMap<String, Vec<String>> = sets
+        .keys()
+        .map(|name| (name.to_string(), Vec::new()))
+        .collect();
+
+    let global = scope_is_global(scope);
+    let target_root = rooted(root, global, store::validators_store_dir(global));
+
+    let selected = selector.select(&available);
+    let mut removed: Vec<String> = Vec::new();
+    for set in &selected {
+        let files = &sets[set.as_str()];
+        let mut any_removed = false;
+        // Remove the builtin files, then prune the now-empty directories they
+        // lived in — climbing from each file's parent up toward `target_root`
+        // (exclusive) so a set that still holds user files is preserved.
+        // `remove_empty_dirs_up_to` stops at the first non-empty ancestor, which
+        // is exactly the guard we want, and generalizes to builtin sets nested
+        // more than one directory deep.
+        for (embedded_name, _) in files {
+            let dest = target_root.join(embedded_name);
+            if dest.exists() {
+                let _ = store::remove_if_exists(&dest);
+                any_removed = true;
+            }
+            if let Some(parent) = dest.parent() {
+                remove_empty_dirs_up_to(parent, &target_root);
+            }
+        }
+        if any_removed {
+            removed.push(set.clone());
+        }
+    }
+    removed
 }
 
 /// Stage `content` as `<tmp>/<name>/<file_name>` and deploy it via the store +
@@ -1613,6 +1777,17 @@ pub fn init_profile(
         }
     }
 
+    if let Some(ref selector) = profile.validators {
+        match install_profile_validators(selector, scope, root, reporter) {
+            Ok(sets) if !sets.is_empty() => results.push(InitResult::ok(
+                "profile-validators",
+                format!("Materialized validator set(s): {}", sets.join(", ")),
+            )),
+            Ok(_) => {}
+            Err(e) => results.push(InitResult::error("profile-validators", e.to_string())),
+        }
+    }
+
     if profile.statusline {
         results.extend(apply_profile_statusline(true, scope, root, reporter));
     }
@@ -1691,6 +1866,16 @@ pub fn deinit_profile(
             results.push(InitResult::ok(
                 "profile-agents",
                 format!("Removed {} agent(s)", names.len()),
+            ));
+        }
+    }
+
+    if let Some(ref selector) = profile.validators {
+        let removed = deinit_profile_validators(selector, scope, root);
+        if !removed.is_empty() {
+            results.push(InitResult::ok(
+                "profile-validators",
+                format!("Removed {} validator set(s)", removed.len()),
             ));
         }
     }
@@ -1774,7 +1959,7 @@ fn resolved_agent_names(selector: &Selector) -> Vec<String> {
     selector.select(&available)
 }
 
-/// Deploy a validator to .avp/validators/.
+/// Deploy a validator to ./.validators/.
 fn deploy_validator(
     name: &str,
     source_dir: &Path,
@@ -2585,15 +2770,12 @@ pub fn parse_package_spec(spec: &str) -> (String, Option<String>) {
 }
 
 /// Get the validators directory path.
+///
+/// Delegates to [`store::validators_store_dir`] so validators use the same
+/// home-dotfile store convention as skills/agents/tools: `~/.validators/`
+/// (global) and `./.validators/` (project).
 pub fn validators_dir(global: bool) -> PathBuf {
-    if global {
-        dirs::home_dir()
-            .expect("Could not find home directory")
-            .join(".avp")
-            .join("validators")
-    } else {
-        PathBuf::from(".avp").join("validators")
-    }
+    store::validators_store_dir(global)
 }
 
 /// Extract a ZIP archive to a target directory with path traversal protection.
@@ -2643,6 +2825,34 @@ fn extract_zip(data: &[u8], target_dir: &Path) -> Result<(), RegistryError> {
     }
 
     Ok(())
+}
+
+/// Remove now-empty directories walking up from `start` toward `boundary`.
+///
+/// Starting at `start`, removes the directory if it is empty, then repeats for
+/// its parent, climbing the ancestry chain. The walk stops at (and never
+/// removes) `boundary` itself, anything above it, or the first directory that is
+/// not empty. `std::fs::remove_dir` fails on a non-empty directory, which is the
+/// guard that preserves any user-authored files: a directory that still holds
+/// content is left intact and halts the climb.
+///
+/// This generalizes empty-dir cleanup to arbitrary nesting depth, so a builtin
+/// set whose embedded files live more than one subdirectory deep does not leave
+/// empty intermediate directories behind. `start` must be a descendant of
+/// `boundary`; if it is not, the function is a no-op.
+fn remove_empty_dirs_up_to(start: &Path, boundary: &Path) {
+    let mut current = start.to_path_buf();
+    while current.starts_with(boundary) && current != *boundary {
+        // `remove_dir` only succeeds on an empty directory; a non-empty dir
+        // (user files present) errors out and stops the climb.
+        if std::fs::remove_dir(&current).is_err() {
+            break;
+        }
+        match current.parent() {
+            Some(parent) => current = parent.to_path_buf(),
+            None => break,
+        }
+    }
 }
 
 /// Recursively copy a directory.
@@ -2953,6 +3163,8 @@ mod applier_tests {
 mod tests {
     use super::*;
     use serial_test::serial;
+    use swissarmyhammer_common::reporter::NullReporter;
+    use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
     #[test]
     fn test_parse_package_spec_name_only() {
@@ -2971,15 +3183,142 @@ mod tests {
     #[test]
     fn test_validators_dir_local() {
         let dir = validators_dir(false);
-        assert_eq!(dir, PathBuf::from(".avp/validators"));
+        assert_eq!(dir, PathBuf::from(".validators"));
     }
 
     #[test]
     fn test_validators_dir_global() {
+        // The global validators store is the home dotfile `~/.validators`,
+        // resolved through the shared mirdan store mechanism — not XDG
+        // `~/.local/share/validators`.
         let dir = validators_dir(true);
-        assert!(dir.ends_with(".avp/validators"));
+        assert!(dir.ends_with(".validators"));
+        assert!(!dir.ends_with(".avp/validators"));
         let home = dirs::home_dir().unwrap();
         assert!(dir.starts_with(home));
+    }
+
+    /// A profile that only materializes every builtin validator set — no MCP
+    /// server, skills, or agents — so the validators path is exercised in
+    /// isolation (no agent detection required).
+    fn validators_only_profile() -> Profile {
+        Profile {
+            validators: Some(Selector::All),
+            ..Profile::default()
+        }
+    }
+
+    /// `init_profile` materializes the embedded builtin validators under
+    /// `~/.validators/<set>/` (the global store, via the shared mirdan store
+    /// mechanism) with their full structure (VALIDATOR.md + rules/*.md),
+    /// matching the embedded source.
+    #[test]
+    #[serial(cwd)]
+    fn init_profile_materializes_builtin_validators_to_home_store() {
+        let env = IsolatedTestEnvironment::new().unwrap();
+
+        let reporter = NullReporter;
+        let results = init_profile(&validators_only_profile(), InitScope::User, None, &reporter);
+        assert!(
+            results
+                .iter()
+                .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error),
+            "init_profile must not error: {results:?}"
+        );
+
+        let validators_root = env.home_path().join(".validators");
+        // Every embedded builtin set is materialized with its manifest. The old
+        // multi-rule security-rules set was split into focused validators
+        // (no-secrets / injection / command-safety).
+        for set in ["dead-code", "no-secrets", "test-integrity"] {
+            let manifest = validators_root.join(set).join("VALIDATOR.md");
+            assert!(
+                manifest.is_file(),
+                "builtin set `{set}` must materialize a VALIDATOR.md at {manifest:?}"
+            );
+        }
+
+        // A nested rule file is materialized and matches the embedded content.
+        let rule = validators_root.join("dead-code/rules/dead-code.md");
+        assert!(
+            rule.is_file(),
+            "nested rule file must materialize: {rule:?}"
+        );
+        let embedded = crate::builtin_validators::get_builtin_validators()
+            .into_iter()
+            .find(|(name, _)| *name == "dead-code/rules/dead-code.md")
+            .map(|(_, content)| content)
+            .expect("embedded builtin must include dead-code/rules/dead-code.md");
+        assert_eq!(
+            std::fs::read_to_string(&rule).unwrap(),
+            embedded,
+            "materialized rule must byte-match the embedded source"
+        );
+    }
+
+    /// Reference-copy policy: re-running the install is idempotent and
+    /// authoritative for builtin-owned files (a hand-edited builtin file is
+    /// restored to embedded content), while user-authored validators and
+    /// user-created sets under the same directory survive untouched.
+    #[test]
+    #[serial(cwd)]
+    fn init_profile_validators_idempotent_refreshes_builtin_preserves_user() {
+        let env = IsolatedTestEnvironment::new().unwrap();
+        let reporter = NullReporter;
+        let validators_root = env.home_path().join(".validators");
+
+        // First install.
+        init_profile(&validators_only_profile(), InitScope::User, None, &reporter);
+
+        // 1. Hand-edit a builtin-deployed file (simulating a user tampering with
+        //    the read-only reference copy).
+        let tampered = validators_root.join("dead-code/VALIDATOR.md");
+        std::fs::write(&tampered, "TAMPERED").unwrap();
+
+        // 2. Add a user-authored validator *inside* a builtin set dir.
+        let user_file_in_builtin = validators_root.join("dead-code/rules/my-rule.md");
+        std::fs::write(&user_file_in_builtin, "USER RULE").unwrap();
+
+        // 3. Add an entirely user-created set.
+        let user_set = validators_root.join("my-team-rules");
+        std::fs::create_dir_all(&user_set).unwrap();
+        let user_set_manifest = user_set.join("VALIDATOR.md");
+        std::fs::write(&user_set_manifest, "USER SET").unwrap();
+
+        // Second install — idempotent refresh.
+        let results = init_profile(&validators_only_profile(), InitScope::User, None, &reporter);
+        assert!(
+            results
+                .iter()
+                .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error),
+            "second install must not error: {results:?}"
+        );
+
+        // The tampered builtin file is restored to the embedded content.
+        let embedded_manifest = crate::builtin_validators::get_builtin_validators()
+            .into_iter()
+            .find(|(name, _)| *name == "dead-code/VALIDATOR.md")
+            .map(|(_, content)| content)
+            .expect("embedded builtin must include dead-code/VALIDATOR.md");
+        assert_eq!(
+            std::fs::read_to_string(&tampered).unwrap(),
+            embedded_manifest,
+            "builtin-owned file must be refreshed/overwritten on reinstall"
+        );
+
+        // The user-authored validator inside the builtin set survives untouched.
+        assert_eq!(
+            std::fs::read_to_string(&user_file_in_builtin).unwrap(),
+            "USER RULE",
+            "a user file added under a builtin set must never be touched"
+        );
+
+        // The user-created set survives untouched.
+        assert_eq!(
+            std::fs::read_to_string(&user_set_manifest).unwrap(),
+            "USER SET",
+            "a user-created set must never be touched"
+        );
     }
 
     #[test]
@@ -3103,6 +3442,62 @@ mod tests {
             std::fs::read_to_string(dst_path.join("file.txt")).unwrap(),
             "hello"
         );
+    }
+
+    #[test]
+    fn remove_empty_dirs_up_to_climbs_arbitrary_depth_and_stops_at_nonempty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let boundary = tmp.path().join("store");
+
+        // Deeply nested empty tree below the boundary: store/set/a/b/c.
+        let deep = boundary.join("set/a/b/c");
+        std::fs::create_dir_all(&deep).unwrap();
+
+        // A sibling set that holds a user file must survive untouched.
+        let user_set = boundary.join("user-set");
+        std::fs::create_dir_all(&user_set).unwrap();
+        std::fs::write(user_set.join("keep.md"), "USER").unwrap();
+
+        remove_empty_dirs_up_to(&deep, &boundary);
+
+        // Every empty intermediate directory up to (but not including) the
+        // boundary is gone — not just the leaf and its immediate parent.
+        assert!(!boundary.join("set/a/b/c").exists());
+        assert!(!boundary.join("set/a/b").exists());
+        assert!(!boundary.join("set/a").exists());
+        assert!(!boundary.join("set").exists());
+
+        // The boundary itself is never removed, and a non-empty sibling set is
+        // preserved (the non-empty guard stops the climb at the right place).
+        assert!(boundary.exists(), "boundary must be preserved");
+        assert!(
+            user_set.join("keep.md").exists(),
+            "a set holding user files must survive"
+        );
+    }
+
+    #[test]
+    fn remove_empty_dirs_up_to_halts_at_first_nonempty_ancestor() {
+        let tmp = tempfile::tempdir().unwrap();
+        let boundary = tmp.path().join("store");
+
+        // store/set/rules/<empty leaf>, but the set dir also holds a user file,
+        // so the climb must stop once it reaches the non-empty `set` dir.
+        let leaf = boundary.join("set/rules");
+        std::fs::create_dir_all(&leaf).unwrap();
+        std::fs::write(boundary.join("set/user.md"), "USER").unwrap();
+
+        remove_empty_dirs_up_to(&leaf, &boundary);
+
+        assert!(
+            !boundary.join("set/rules").exists(),
+            "empty leaf is removed"
+        );
+        assert!(
+            boundary.join("set").exists(),
+            "non-empty set dir halts the climb"
+        );
+        assert!(boundary.join("set/user.md").exists(), "user file survives");
     }
 
     // --- local skill: create, detect, read frontmatter, deploy as validator ---
@@ -3773,12 +4168,12 @@ work with files in a controlled directory.
         let src = work.path().join("src-val");
         make_local_validator(&src, "test-val", "1.0.0");
 
-        // Deploy it (non-global → .avp/validators/)
+        // Deploy it (non-global → .validators/)
         let targets = deploy_validator("test-val", &src, false).unwrap();
         assert_eq!(targets.len(), 1);
 
         // Verify files exist on disk
-        let deployed = work.path().join(".avp/validators/test-val");
+        let deployed = work.path().join(".validators/test-val");
         assert!(deployed.join("VALIDATOR.md").exists());
         assert!(deployed.join("rules/no-secrets.md").exists());
 
@@ -3797,7 +4192,7 @@ work with files in a controlled directory.
         make_local_validator(&src, "test-val", "1.0.0");
         deploy_validator("test-val", &src, false).unwrap();
 
-        let deployed = work.path().join(".avp/validators/test-val");
+        let deployed = work.path().join(".validators/test-val");
         assert!(deployed.exists());
 
         // Uninstall
@@ -3857,7 +4252,7 @@ work with files in a controlled directory.
                 resolved: "https://registry.example.com/other-pkg-0.1.0.zip".to_string(),
                 integrity: "sha512-abc".to_string(),
                 installed_at: "2026-02-16T00:00:00Z".to_string(),
-                targets: vec![".avp/validators/".to_string()],
+                targets: vec![".validators/".to_string()],
             },
         );
 
@@ -3998,7 +4393,7 @@ work with files in a controlled directory.
         lf.save(work.path()).unwrap();
 
         // Verify on disk
-        let deployed = work.path().join(".avp/validators/e2e-val");
+        let deployed = work.path().join(".validators/e2e-val");
         assert!(deployed.join("VALIDATOR.md").exists());
 
         // Lockfile has the entry
@@ -4058,7 +4453,7 @@ work with files in a controlled directory.
         assert!(work.path().join(".skills/test-skill/SKILL.md").exists());
         assert!(work
             .path()
-            .join(".avp/validators/test-val/VALIDATOR.md")
+            .join(".validators/test-val/VALIDATOR.md")
             .exists());
         assert!(work.path().join(".tools/test-tool/TOOL.md").exists());
         assert!(work
@@ -4123,7 +4518,7 @@ work with files in a controlled directory.
             "Skill should survive tool uninstall"
         );
         assert!(
-            work.path().join(".avp/validators/test-val").exists(),
+            work.path().join(".validators/test-val").exists(),
             "Validator should survive tool uninstall"
         );
         assert!(
@@ -4139,7 +4534,7 @@ work with files in a controlled directory.
         );
 
         uninstall_validator("test-val", false).unwrap();
-        assert!(!work.path().join(".avp/validators/test-val").exists());
+        assert!(!work.path().join(".validators/test-val").exists());
         assert!(
             work.path().join(".skills/test-skill/SKILL.md").exists(),
             "Skill should survive validator uninstall"
@@ -4270,7 +4665,7 @@ work with files in a controlled directory.
                 resolved: format!("git+{}", source.clone_url),
                 integrity: String::new(),
                 installed_at: chrono::Utc::now().to_rfc3339(),
-                targets: vec![".avp/validators/".to_string()],
+                targets: vec![".validators/".to_string()],
             },
         );
         lf.save(work.path()).unwrap();
@@ -4278,7 +4673,7 @@ work with files in a controlled directory.
         // Verify deploy
         let deployed = work
             .path()
-            .join(".avp/validators")
+            .join(".validators")
             .join(sanitize_dir_name(&pkg.name));
         assert!(deployed.exists());
 
@@ -4643,6 +5038,7 @@ mod profile_tests {
             mcp_server: Some(ProfileMcpServer::serve("sample")),
             skills: Some(Selector::Single("commit".to_string())),
             agents: Some(Selector::Single("reviewer".to_string())),
+            validators: None,
             statusline: false,
             preamble: false,
         }
@@ -5057,6 +5453,7 @@ mod profile_consistency_tests {
             mcp_server: Some(ProfileMcpServer::serve("sah")),
             skills: Some(Selector::All),
             agents: Some(Selector::All),
+            validators: Some(Selector::All),
             statusline: true,
             preamble: true,
         }

@@ -204,6 +204,22 @@ impl ModelPaths {
     }
 }
 
+/// Which configured model a write or read targets.
+///
+/// The config supports a global default model (`model:` at the top level) and
+/// purpose-specific overrides (currently only the `review` tool, stored under
+/// `review.model:`). `ModelTarget` selects which of these a `ModelManager`
+/// operation reads or writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelTarget {
+    /// The global default model, written as the top-level `model:` scalar.
+    Default,
+    /// The review-tool model, written under the `review:` mapping as
+    /// `review.model:`. Other keys in the `review:` mapping (e.g.
+    /// `concurrency`) are preserved.
+    Review,
+}
+
 /// Runtime platform for executor selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -1804,6 +1820,55 @@ impl ModelManager {
         Ok(ModelConfig::claude_code())
     }
 
+    /// Get the configured review-tool model name from config
+    ///
+    /// Reads the config file and returns the model name configured under
+    /// `review.model`. Returns `None` if no review model is configured. A
+    /// top-level `model:` is not read by this method.
+    ///
+    /// # Returns
+    /// * `Result<Option<String>, ModelError>` - Review model name if configured, None otherwise
+    pub fn get_review_agent(paths: &ModelPaths) -> Result<Option<String>, ModelError> {
+        let config_path = Self::ensure_config_structure(paths)?;
+
+        if !config_path.exists() {
+            return Ok(None);
+        }
+
+        let config_content = std::fs::read_to_string(&config_path).map_err(ModelError::IoError)?;
+        let config_value: serde_yaml_ng::Value = serde_yaml_ng::from_str(&config_content)?;
+
+        // Read review.model (nested)
+        if let Some(model_name) = config_value
+            .get("review")
+            .and_then(|review| review.get("model"))
+            .and_then(|name| name.as_str())
+        {
+            return Ok(Some(model_name.to_string()));
+        }
+
+        Ok(None)
+    }
+
+    /// Resolve complete review-tool agent configuration
+    ///
+    /// Returns the `ModelConfig` for the review tool with fallback:
+    /// 1. Review-specific model (`review.model`, if set)
+    /// 2. The global default via [`resolve_agent_config`] (top-level `model:`,
+    ///    then the `claude-code` default)
+    ///
+    /// # Returns
+    /// * `Result<ModelConfig, ModelError>` - Resolved review agent configuration
+    pub fn resolve_review_agent_config(paths: &ModelPaths) -> Result<ModelConfig, ModelError> {
+        if let Some(name) = Self::get_review_agent(paths)? {
+            let agent_info = Self::find_agent_by_name(&name)?;
+            return Ok(parse_model_config(&agent_info.content)?);
+        }
+
+        tracing::debug!("No review model configured, falling back to global default");
+        Self::resolve_agent_config(paths)
+    }
+
     /// Apply a model configuration to the project
     ///
     /// Finds the specified model by name, loads or creates the project configuration file,
@@ -1825,10 +1890,48 @@ impl ModelManager {
     /// # Ok::<(), swissarmyhammer_config::model::ModelError>(())
     /// ```
     pub fn use_agent(agent_name: &str, paths: &ModelPaths) -> Result<(), ModelError> {
+        Self::use_agent_for(agent_name, ModelTarget::Default, paths)
+    }
+
+    /// Apply a model configuration to the project for a specific target
+    ///
+    /// Like [`use_agent`], but selects which configured model is written via
+    /// `target`. `ModelTarget::Default` writes the top-level `model:` scalar;
+    /// `ModelTarget::Review` writes `model` inside the `review:` mapping,
+    /// creating it if absent and preserving any existing keys (e.g.
+    /// `concurrency`).
+    ///
+    /// Runs the same name-security and agent-existence validation as
+    /// [`use_agent`] regardless of target.
+    ///
+    /// # Arguments
+    /// * `agent_name` - Name of the model to apply
+    /// * `target` - Which configured model to write
+    /// * `paths` - Config file location
+    ///
+    /// # Returns
+    /// * `Result<(), ModelError>` - Success or error details
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use swissarmyhammer_config::model::{ModelManager, ModelTarget, ModelPaths};
+    ///
+    /// ModelManager::use_agent_for("qwen", ModelTarget::Review, &ModelPaths::sah())?;
+    /// # Ok::<(), swissarmyhammer_config::model::ModelError>(())
+    /// ```
+    pub fn use_agent_for(
+        agent_name: &str,
+        target: ModelTarget,
+        paths: &ModelPaths,
+    ) -> Result<(), ModelError> {
         // Security: Validate agent name to prevent injection
         Self::validate_agent_name_security(agent_name)?;
 
-        tracing::info!("Attempting to set model to '{}' (user request)", agent_name);
+        tracing::info!(
+            "Attempting to set {:?} model to '{}' (user request)",
+            target,
+            agent_name
+        );
 
         Self::validate_agent(agent_name)?;
         let config_path = Self::ensure_config_structure(paths)?;
@@ -1837,11 +1940,12 @@ impl ModelManager {
 
         let mut config_value = Self::load_or_create_config(&validated_config_path)?;
 
-        Self::update_config_with_agent(&mut config_value, agent_name)?;
+        Self::update_config_with_agent(&mut config_value, agent_name, target)?;
         Self::save_config(&validated_config_path, &config_value)?;
 
         tracing::info!(
-            "Successfully set model to '{}' in {}",
+            "Successfully set {:?} model to '{}' in {}",
+            target,
             agent_name,
             validated_config_path.display()
         );
@@ -2006,16 +2110,47 @@ impl ModelManager {
         }
     }
 
-    /// Update config with agent for use case
+    /// Update config with agent for the given target
+    ///
+    /// `ModelTarget::Default` sets the top-level `model:` scalar.
+    /// `ModelTarget::Review` sets `model` inside the `review:` mapping, creating
+    /// the `review:` mapping if absent and preserving its other keys.
     fn update_config_with_agent(
         config: &mut serde_yaml_ng::Value,
         agent_name: &str,
+        target: ModelTarget,
     ) -> Result<(), ModelError> {
-        if let Some(map) = config.as_mapping_mut() {
-            map.insert(
-                serde_yaml_ng::Value::String("model".to_string()),
-                serde_yaml_ng::Value::String(agent_name.to_string()),
-            );
+        let Some(map) = config.as_mapping_mut() else {
+            return Ok(());
+        };
+
+        let model_value = serde_yaml_ng::Value::String(agent_name.to_string());
+
+        match target {
+            ModelTarget::Default => {
+                map.insert(
+                    serde_yaml_ng::Value::String("model".to_string()),
+                    model_value,
+                );
+            }
+            ModelTarget::Review => {
+                let review_key = serde_yaml_ng::Value::String("review".to_string());
+                // Reuse the existing review mapping (preserving keys like
+                // `concurrency`); replace any non-mapping or absent value with a
+                // fresh mapping.
+                let review_entry = map
+                    .entry(review_key)
+                    .or_insert_with(|| serde_yaml_ng::Value::Mapping(Default::default()));
+                if !review_entry.is_mapping() {
+                    *review_entry = serde_yaml_ng::Value::Mapping(Default::default());
+                }
+                if let Some(review_map) = review_entry.as_mapping_mut() {
+                    review_map.insert(
+                        serde_yaml_ng::Value::String("model".to_string()),
+                        model_value,
+                    );
+                }
+            }
         }
 
         Ok(())
@@ -3768,6 +3903,228 @@ model: qwen
                 "Should fall back to claude-code when config has no model key"
             );
         }
+
+        // ====================================================================
+        // Review-specific model target tests
+        // ====================================================================
+
+        // use_agent_for with ModelTarget::Review writes review.model and leaves a
+        // pre-existing top-level `model:` and `review.concurrency` intact.
+        #[test]
+        #[serial_test::serial(cwd)]
+        fn test_use_agent_for_review_preserves_existing_keys() {
+            let temp_dir = setup_test_env();
+            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
+            std::fs::write(
+                &config_path,
+                "model: claude-code\nreview:\n  concurrency: 4\n",
+            )
+            .unwrap();
+
+            ModelManager::use_agent_for("qwen", ModelTarget::Review, &ModelPaths::sah()).unwrap();
+
+            let content = std::fs::read_to_string(&config_path).unwrap();
+            let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content).unwrap();
+
+            // Top-level model: preserved
+            assert_eq!(
+                value.get("model").and_then(|v| v.as_str()),
+                Some("claude-code"),
+                "Top-level model: must be preserved"
+            );
+            // review.model written
+            let review = value.get("review").expect("review mapping must exist");
+            assert_eq!(
+                review.get("model").and_then(|v| v.as_str()),
+                Some("qwen"),
+                "review.model must be set"
+            );
+            // review.concurrency preserved
+            assert_eq!(
+                review.get("concurrency").and_then(|v| v.as_u64()),
+                Some(4),
+                "review.concurrency must be preserved"
+            );
+        }
+
+        // use_agent_for with ModelTarget::Review creates the review: mapping when
+        // it is absent.
+        #[test]
+        #[serial_test::serial(cwd)]
+        fn test_use_agent_for_review_creates_review_mapping() {
+            let temp_dir = setup_test_env();
+            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
+            std::fs::write(&config_path, "model: claude-code\n").unwrap();
+
+            ModelManager::use_agent_for("qwen", ModelTarget::Review, &ModelPaths::sah()).unwrap();
+
+            let content = std::fs::read_to_string(&config_path).unwrap();
+            let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content).unwrap();
+            assert_eq!(
+                value
+                    .get("review")
+                    .and_then(|r| r.get("model"))
+                    .and_then(|v| v.as_str()),
+                Some("qwen"),
+                "review.model must be set even when review: was absent"
+            );
+        }
+
+        // use_agent_for with ModelTarget::Default behaves like use_agent: writes
+        // the top-level model: scalar.
+        #[test]
+        #[serial_test::serial(cwd)]
+        fn test_use_agent_for_default_writes_top_level_model() {
+            let temp_dir = setup_test_env();
+            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
+
+            ModelManager::use_agent_for("qwen", ModelTarget::Default, &ModelPaths::sah()).unwrap();
+
+            let content = std::fs::read_to_string(&config_path).unwrap();
+            let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content).unwrap();
+            assert_eq!(
+                value.get("model").and_then(|v| v.as_str()),
+                Some("qwen"),
+                "Default target must write top-level model:"
+            );
+            assert!(
+                value.get("review").is_none(),
+                "Default target must not create a review: mapping"
+            );
+        }
+
+        // get_review_agent returns None on a fresh/empty config and Some(name)
+        // after a review write.
+        #[test]
+        #[serial_test::serial(cwd)]
+        fn test_get_review_agent_none_then_some() {
+            let temp_dir = setup_test_env();
+            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+            assert_eq!(
+                ModelManager::get_review_agent(&ModelPaths::sah()).unwrap(),
+                None,
+                "Fresh config must have no review model"
+            );
+
+            ModelManager::use_agent_for("qwen", ModelTarget::Review, &ModelPaths::sah()).unwrap();
+
+            assert_eq!(
+                ModelManager::get_review_agent(&ModelPaths::sah()).unwrap(),
+                Some("qwen".to_string()),
+                "get_review_agent must return the review model after a write"
+            );
+        }
+
+        // get_review_agent returns None when a top-level model: is set but no
+        // review.model exists.
+        #[test]
+        #[serial_test::serial(cwd)]
+        fn test_get_review_agent_none_when_only_global_set() {
+            let temp_dir = setup_test_env();
+            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
+            std::fs::write(&config_path, "model: claude-code\n").unwrap();
+
+            assert_eq!(
+                ModelManager::get_review_agent(&ModelPaths::sah()).unwrap(),
+                None,
+                "A global model: must not be read as the review model"
+            );
+        }
+
+        // resolve_review_agent_config returns the review-specific model when set.
+        #[test]
+        #[serial_test::serial(cwd)]
+        fn test_resolve_review_agent_config_uses_review_model() {
+            let temp_dir = setup_test_env();
+            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
+            // Global is llama (qwen); review explicitly claude-code.
+            std::fs::write(&config_path, "model: qwen\nreview:\n  model: claude-code\n").unwrap();
+
+            let config = ModelManager::resolve_review_agent_config(&ModelPaths::sah()).unwrap();
+            assert_eq!(
+                config.executor_type(),
+                ModelExecutorType::ClaudeCode,
+                "Should resolve the review-specific model, not the global one"
+            );
+        }
+
+        // resolve_review_agent_config falls back to the global model: when no
+        // review model is set.
+        #[test]
+        #[serial_test::serial(cwd)]
+        fn test_resolve_review_agent_config_falls_back_to_global() {
+            let temp_dir = setup_test_env();
+            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
+            std::fs::write(&config_path, "model: claude-code\n").unwrap();
+
+            let config = ModelManager::resolve_review_agent_config(&ModelPaths::sah()).unwrap();
+            assert_eq!(
+                config.executor_type(),
+                ModelExecutorType::ClaudeCode,
+                "Should fall back to the global model when no review model is set"
+            );
+        }
+
+        // resolve_review_agent_config falls back to claude-code when neither a
+        // review model nor a global model is set.
+        #[test]
+        #[serial_test::serial(cwd)]
+        fn test_resolve_review_agent_config_falls_back_to_default() {
+            let temp_dir = setup_test_env();
+            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+            let config = ModelManager::resolve_review_agent_config(&ModelPaths::sah()).unwrap();
+            assert_eq!(
+                config.executor_type(),
+                ModelExecutorType::ClaudeCode,
+                "Should fall back to claude-code when nothing is configured"
+            );
+        }
+
+        // Security validation rejects empty and path-traversal names via
+        // use_agent_for, exactly as use_agent does.
+        #[test]
+        #[serial_test::serial(cwd)]
+        fn test_use_agent_for_rejects_unsafe_names() {
+            let temp_dir = setup_test_env();
+            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+            let empty = ModelManager::use_agent_for("", ModelTarget::Review, &ModelPaths::sah());
+            match empty {
+                Err(ModelError::ConfigError(msg)) => {
+                    assert!(msg.contains("empty"), "Error should mention empty");
+                }
+                other => panic!("Expected ConfigError for empty name, got {:?}", other),
+            }
+
+            let traversal = ModelManager::use_agent_for(
+                "../malicious",
+                ModelTarget::Review,
+                &ModelPaths::sah(),
+            );
+            match traversal {
+                Err(ModelError::ConfigError(msg)) => {
+                    assert!(
+                        msg.contains("invalid pattern"),
+                        "Error should mention invalid pattern"
+                    );
+                }
+                other => panic!("Expected ConfigError for path traversal, got {:?}", other),
+            }
+        }
     }
 
     // ========================================================================
@@ -4875,7 +5232,11 @@ quiet: false
     fn test_update_config_with_agent() {
         // update_config_with_agent should insert a "model" key into the mapping.
         let mut config = serde_yaml_ng::Value::Mapping(Default::default());
-        let result = ModelManager::update_config_with_agent(&mut config, "llama-agent");
+        let result = ModelManager::update_config_with_agent(
+            &mut config,
+            "llama-agent",
+            ModelTarget::Default,
+        );
         assert!(result.is_ok());
 
         let map = config.as_mapping().unwrap();
@@ -4889,8 +5250,10 @@ quiet: false
     fn test_update_config_with_agent_overwrites_existing() {
         // Calling update_config_with_agent twice should overwrite the previous value.
         let mut config = serde_yaml_ng::Value::Mapping(Default::default());
-        ModelManager::update_config_with_agent(&mut config, "first-agent").unwrap();
-        ModelManager::update_config_with_agent(&mut config, "second-agent").unwrap();
+        ModelManager::update_config_with_agent(&mut config, "first-agent", ModelTarget::Default)
+            .unwrap();
+        ModelManager::update_config_with_agent(&mut config, "second-agent", ModelTarget::Default)
+            .unwrap();
 
         let map = config.as_mapping().unwrap();
         assert_eq!(
@@ -5584,7 +5947,8 @@ max_sequence_length: 512
     #[test]
     fn test_update_config_with_agent_coverage() {
         let mut config = serde_yaml_ng::Value::Mapping(Default::default());
-        ModelManager::update_config_with_agent(&mut config, "test-agent").unwrap();
+        ModelManager::update_config_with_agent(&mut config, "test-agent", ModelTarget::Default)
+            .unwrap();
         let map = config.as_mapping().unwrap();
         let model_key = serde_yaml_ng::Value::String("model".to_string());
         assert_eq!(

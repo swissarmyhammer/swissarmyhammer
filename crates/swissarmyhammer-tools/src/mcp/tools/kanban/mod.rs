@@ -185,8 +185,8 @@ fn is_task_modifying_operation(verb: Verb, noun: Noun) -> bool {
     )
 }
 
-// No health checks needed
-crate::impl_empty_doctorable!(KanbanTool);
+// No special health checks; inherits the default OK check.
+crate::impl_default_doctorable!(KanbanTool);
 
 impl swissarmyhammer_common::lifecycle::Initializable for KanbanTool {
     fn name(&self) -> &str {
@@ -381,6 +381,11 @@ impl McpTool for KanbanTool {
     fn schema(&self) -> serde_json::Value {
         let ops = swissarmyhammer_kanban::schema::kanban_operations();
         swissarmyhammer_kanban::schema::generate_kanban_mcp_schema(ops)
+    }
+
+    fn schema_full(&self) -> serde_json::Value {
+        let ops = swissarmyhammer_kanban::schema::kanban_operations();
+        swissarmyhammer_kanban::schema::generate_kanban_mcp_schema_full(ops)
     }
 
     fn operations(&self) -> &'static [&'static dyn swissarmyhammer_operations::Operation] {

@@ -68,6 +68,7 @@ mod yaml_expander;
 // Re-export main types
 pub use config::{
     AvpConfig, CodeContextConfig, DirectoryConfig, RalphConfig, ShellConfig, SwissarmyhammerConfig,
+    ValidatorsConfig,
 };
 pub use directory::{
     find_git_repository_root, find_git_repository_root_from, warn_legacy_paths, xdg_state_dir,

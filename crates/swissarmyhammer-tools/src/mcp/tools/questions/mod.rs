@@ -57,6 +57,10 @@ impl McpTool for QuestionTool {
         schema::generate_question_mcp_schema(&QUESTION_OPERATIONS)
     }
 
+    fn schema_full(&self) -> serde_json::Value {
+        schema::generate_question_mcp_schema_full(&QUESTION_OPERATIONS)
+    }
+
     fn operations(&self) -> &'static [&'static dyn swissarmyhammer_operations::Operation] {
         let ops: &[&'static dyn Operation] = &QUESTION_OPERATIONS;
         // SAFETY: QUESTION_OPERATIONS is a static Lazy<Vec<...>> initialized once and lives for 'static
@@ -161,9 +165,10 @@ mod tests {
     }
 
     #[test]
-    fn test_question_tool_schema_has_op_field() {
+    fn test_question_tool_wire_schema_has_op_field_and_omits_heavy_keys() {
         let tool = QuestionTool::new();
         let schema = tool.schema();
+        let obj = schema.as_object().unwrap();
 
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"]["op"].is_object());
@@ -173,12 +178,23 @@ mod tests {
             .expect("op should have enum");
         assert!(op_enum.contains(&serde_json::json!("ask question")));
         assert!(op_enum.contains(&serde_json::json!("summarize questions")));
+
+        // Wire schema carries per-op signatures and drops the heavy keys.
+        assert!(schema["x-op-signatures"].is_object());
+        for key in [
+            "x-operation-schemas",
+            "x-operation-groups",
+            "x-forgiving-input",
+            "examples",
+        ] {
+            assert!(!obj.contains_key(key), "wire schema must omit {key:?}");
+        }
     }
 
     #[test]
-    fn test_question_tool_schema_has_operation_schemas() {
+    fn test_question_tool_full_schema_has_operation_schemas() {
         let tool = QuestionTool::new();
-        let schema = tool.schema();
+        let schema = tool.schema_full();
 
         let op_schemas = schema["x-operation-schemas"]
             .as_array()
@@ -187,9 +203,9 @@ mod tests {
     }
 
     #[test]
-    fn test_question_tool_schema_has_all_parameters() {
+    fn test_question_tool_full_schema_has_all_parameters() {
         let tool = QuestionTool::new();
-        let schema = tool.schema();
+        let schema = tool.schema_full();
 
         let props = schema["properties"].as_object().unwrap();
         // Ask params
@@ -199,9 +215,9 @@ mod tests {
     }
 
     #[test]
-    fn test_question_tool_schema_has_examples() {
+    fn test_question_tool_full_schema_has_examples() {
         let tool = QuestionTool::new();
-        let schema = tool.schema();
+        let schema = tool.schema_full();
 
         assert!(schema["examples"].is_array());
         assert_eq!(schema["examples"].as_array().unwrap().len(), 3);

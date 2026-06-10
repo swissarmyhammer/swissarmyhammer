@@ -56,6 +56,10 @@ impl McpTool for WebTool {
         schema::generate_web_mcp_schema(&WEB_OPERATIONS)
     }
 
+    fn schema_full(&self) -> serde_json::Value {
+        schema::generate_web_mcp_schema_full(&WEB_OPERATIONS)
+    }
+
     fn cli_category(&self) -> Option<&'static str> {
         Some("web")
     }
@@ -208,14 +212,26 @@ mod tests {
     }
 
     #[test]
-    fn test_web_tool_schema_has_operation_schemas() {
+    fn test_web_tool_full_schema_has_operation_schemas() {
         let tool = WebTool::new();
-        let schema = tool.schema();
+        let schema = tool.schema_full();
 
         let op_schemas = schema["x-operation-schemas"]
             .as_array()
             .expect("should have x-operation-schemas");
         assert_eq!(op_schemas.len(), 2);
+    }
+
+    #[test]
+    fn test_web_tool_wire_schema_omits_operation_schemas() {
+        let tool = WebTool::new();
+        let schema = tool.schema();
+
+        assert!(
+            schema.get("x-operation-schemas").is_none(),
+            "wire schema must omit x-operation-schemas"
+        );
+        assert!(schema["x-op-signatures"].is_object());
     }
 
     #[tokio::test]
