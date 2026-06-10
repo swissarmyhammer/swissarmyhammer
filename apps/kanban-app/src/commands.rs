@@ -3225,6 +3225,40 @@ mod tests {
         assert_eq!(ui_state_change_kind(&value), None);
     }
 
+    #[test]
+    fn ui_state_change_kind_call_tool_result_structured_content_palette_open() {
+        // The FULL `CallToolResult` envelope produced by PluginHost / the
+        // CommandService dispatch path: `{ content, structuredContent: { ok,
+        // change }, isError }`. This is the keystone of the "palette won't
+        // open" fix — before it, `ui_state_change_kind` never looked inside
+        // `structuredContent`, returned `None` for every plugin-command
+        // result, and NO `ui-state-changed` event was ever emitted (the
+        // backend flipped `palette_open` but no webview re-rendered).
+        let value = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "{\"ok\":true,\"change\":{\"PaletteOpen\":true}}",
+            }],
+            "structuredContent": { "ok": true, "change": { "PaletteOpen": true } },
+            "isError": false,
+        });
+        assert_eq!(ui_state_change_kind(&value), Some("palette_open"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_call_tool_result_null_change_is_none() {
+        // The same `CallToolResult` envelope when the command made no
+        // UI-state change (`structuredContent.change: null`) must NOT
+        // trigger an emit — the unwrap must land on the null change, not
+        // fall through and misclassify the envelope itself.
+        let value = serde_json::json!({
+            "content": [{ "type": "text", "text": "{\"ok\":true,\"change\":null}" }],
+            "structuredContent": { "ok": true, "change": serde_json::Value::Null },
+            "isError": false,
+        });
+        assert_eq!(ui_state_change_kind(&value), None);
+    }
+
     // ── context-menu round-trip parity ────────────────────────────
     //
     // Two `ContextMenuItem` structs sit on opposite sides of the JSON menu-id

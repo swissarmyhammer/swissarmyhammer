@@ -359,20 +359,18 @@ function buildRootInspectCommand(
 }
 
 /**
- * Build the dynamic global commands — drill commands first (so they
- * shadow the static `app.dismiss: Escape` binding when their
- * scope-level `keys` are merged into the global key handler), nav
+ * Build the dynamic global commands — drill commands first, nav
  * commands next, plus the ui.entity.startRename command which exists in
  * the backend registry for palette discovery but runs locally via
  * `triggerStartRename`.
  *
- * Drill commands MUST come before `STATIC_GLOBAL_COMMANDS`-derived
- * entries in the iteration order seen by `extractScopeBindings`: that
- * walk uses "first key wins per scope", so to claim Escape away from
- * `app.dismiss` the drill command's `CommandDef` must reach the scope
- * map first. Putting them at the head of the dynamic batch — which
- * AppShell prepends to the static batch in the spread — orders them
- * correctly.
+ * Drill commands come before `STATIC_GLOBAL_COMMANDS`-derived entries
+ * in the iteration order seen by `extractScopeBindings`: that walk uses
+ * "first key wins per scope", so keeping them at the head of the
+ * dynamic batch — which AppShell prepends to the static batch in the
+ * spread — guarantees their bindings (notably `nav.drillOut: Escape`)
+ * reach the scope map first. (The static `app.dismiss` entry is
+ * key-less, so there is no Escape contender among the static commands.)
  *
  * The root-scope `entity.inspect` (Space) lives here too — same
  * reasoning: shadowed by the per-`<Inspectable>` scope command when an

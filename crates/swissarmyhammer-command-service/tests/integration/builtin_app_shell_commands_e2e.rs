@@ -589,15 +589,13 @@ fn assert_app_search(cmd: &Value) {
     );
 }
 
-/// `app.dismiss` — app.yaml: keys vim:Escape / cua:Escape / emacs:Escape; no
-/// menu.
+/// `app.dismiss` — intentionally unbound from Escape (card
+/// 01KTPDTH772HSEV5F7R1DKYDNJ): Escape is owned by `nav.drillOut`, while
+/// `app.dismiss` remains a keyless command for per-surface dispatch
+/// (backdrop click, quick-capture); no keys, no menu.
 fn assert_app_dismiss(cmd: &Value) {
     assert_eq!(cmd["name"], json!("Dismiss"), "app.dismiss name");
-    assert_eq!(
-        cmd["keys"],
-        json!({ "vim": "Escape", "cua": "Escape", "emacs": "Escape" }),
-        "app.dismiss keys"
-    );
+    assert_no_keys(cmd, "app.dismiss");
     assert_no_menu(cmd, "app.dismiss");
 }
 
