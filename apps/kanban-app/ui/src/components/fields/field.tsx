@@ -55,7 +55,7 @@ import {
 import { useEntityStore, useFieldValue } from "@/lib/entity-store-context";
 import { useFieldUpdate } from "@/lib/field-update-context";
 import { useDebouncedSave } from "@/lib/use-debounced-save";
-import { resolveEditor } from "@/components/fields/editors";
+import { isFieldEditable, resolveEditor } from "@/components/fields/editors";
 import type { EditorProps } from "@/components/fields/editors";
 import { FocusScope } from "@/components/focus-scope";
 import { Inspectable } from "@/components/inspectable";
@@ -471,8 +471,18 @@ function FieldDisplayContent(props: {
  * shadowing the global `nav.drillIn: Enter` only for editable field
  * zones, leaving the drill-in default in place for every other
  * focusable. In edit mode the command is NOT registered (the editor
- * element owns Enter via its own keymap); for non-editable fields the
- * command is also not registered (no `onEdit`), so Enter is a no-op.
+ * element owns Enter via its own keymap).
+ *
+ * # Read-only/computed metadata gate
+ *
+ * Editability is metadata-driven: a field whose YAML declares no
+ * editor (`editor: "none"` — the shape of computed fields like
+ * `status_date` and `virtual_tags`) is display-only. The interpreter
+ * enforces this in one place, regardless of what the caller passes:
+ * the `onEdit` prop is dropped (so neither click-to-edit nor the
+ * `field.edit` Enter closure can arm editing) and the `editing` prop
+ * is ignored (so an armed read-only field still renders its display
+ * instead of a missing editor that would blank the value).
  */
 export function Field({
   fieldDef,
@@ -480,7 +490,7 @@ export function Field({
   entityId,
   mode,
   editing,
-  onEdit,
+  onEdit: onEditProp,
   onDone,
   onCancel,
   handleEvents = true,
@@ -488,6 +498,22 @@ export function Field({
   withIcon = false,
   register = true,
 }: FieldProps) {
+  // Metadata gate — the single interpreter-level editability check.
+  // A field whose YAML metadata declares no editor (`editor: "none"`,
+  // the shape of computed/read-only fields like `status_date` and
+  // `virtual_tags`) must never enter edit mode, regardless of what the
+  // caller passes:
+  //   - `onEdit` is dropped, so neither the click-to-edit surface nor
+  //     the `field.edit` Enter closure can arm editing.
+  //   - `editing` is ignored, so a caller that arms it anyway still
+  //     renders the display. Pre-gate, an armed read-only field mounted
+  //     `FieldEditor`, which resolved no registered editor and rendered
+  //     `null` — blanking the value with no editor left to fire
+  //     onDone/onCancel and restore it.
+  const editable = isFieldEditable(fieldDef);
+  const onEdit = editable ? onEditProp : undefined;
+  const isEditing = editing && editable;
+
   const value = useFieldValue(entityType, entityId, fieldDef.name);
   const entity = useEntityStore().getEntity(entityType, entityId);
   const { handleCommit, handleDisplayCommit, handleCancel, debouncedOnChange } =
@@ -534,7 +560,7 @@ export function Field({
   // is belt-and-suspenders for the case where a non-editable element
   // holds focus while `editing` is true.
   const editCommands = useMemo<readonly CommandDef[]>(() => {
-    if (editing) return EMPTY_COMMANDS;
+    if (isEditing) return EMPTY_COMMANDS;
     // No `onEdit` AND no spatial provider to drill into → nothing the
     // command could do, leave Enter to global `nav.drillIn`.
     if (!onEdit && !spatialActions) return EMPTY_COMMANDS;
@@ -603,9 +629,9 @@ export function Field({
         execute: editClosure,
       },
     ];
-  }, [editing, onEdit, spatialActions, dispatchNavFocus]);
+  }, [isEditing, onEdit, spatialActions, dispatchNavFocus]);
 
-  const inner = editing ? (
+  const inner = isEditing ? (
     <FieldEditor
       fieldDef={fieldDef}
       value={value}

@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { resolveEditor } from "@/components/fields/editors";
+import { isFieldEditable } from "@/components/fields/editors";
 import {
   Field,
   getDisplayIsEmpty,
@@ -107,7 +107,7 @@ export function EntityInspector({ entity }: EntityInspectorProps) {
 function useVisibleFields(entity: Entity, fields: FieldDef[]): FieldDef[] {
   return useMemo(() => {
     return fields.filter((field) => {
-      if (resolveEditor(field) !== "none") return true;
+      if (isFieldEditable(field)) return true;
       const isEmpty = getDisplayIsEmpty(field.display ?? "");
       if (!isEmpty) return true;
       return !isEmpty(entity.fields[field.name]);
@@ -324,7 +324,7 @@ function FieldRow({
   onExitEdit,
   onEnterEdit,
 }: FieldRowProps) {
-  const editable = isEditable(field);
+  const editable = isFieldEditable(field);
   const scopeMoniker = fieldMoniker(entity.entity_type, entity.id, field.name);
   const isFocused = useIsFocused(scopeMoniker);
   const shouldEdit = isFocused && inspectorMode === "edit" && editable;
@@ -397,9 +397,4 @@ function useFieldEditing(
   }, [onExitEdit]);
 
   return { editing, handleEdit, handleDone, handleCancel };
-}
-
-/** Check if a field is editable in the inspector — driven by the field's editor property. */
-function isEditable(field: FieldDef): boolean {
-  return resolveEditor(field) !== "none";
 }

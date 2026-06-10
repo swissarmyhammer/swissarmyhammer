@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: c980
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffff8c80
 title: 'Bug: Drag-and-drop does not move tasks (neither reorder within a column nor across columns)'
 ---
 ## What
@@ -10,32 +10,31 @@ Reported by user (two symptoms, same drop path):
 1. Dragging a task does **not reorder** it within its column.
 2. Dragging a task does **not move** it to another column.
 
-Both flow through the same code in `apps/kanban-app/ui/src/components/board-view.tsx`:
-- `handleZoneDrop` (board-view.tsx:525) parses the drop payload and, for a same-board drop, calls `persistMove(descriptor, entity.id)`.
-- `usePersistTaskMove` (board-view.tsx:468) dispatches `task.move` with `{ id, column, before_id?, after_id? }` and `target: task:<id>` (board-view.tsx:476–482).
-- Drop descriptors / neighbor ids come from `apps/kanban-app/ui/src/lib/drop-zones.ts` and `apps/kanban-app/ui/src/lib/neighbor-ids.ts`.
+Both flow through `apps/kanban-app/ui/src/components/board-view.tsx`: `handleZoneDrop` → `usePersistTaskMove` → dispatch `task.move` with `{ id, column, before_id?, after_id? }` and `target: task:<id>`.
 
-Because BOTH reorder and cross-column fail, the break is likely shared and upstream of the column/ordinal distinction. Candidate root causes to check, in order:
-1. **Drop never fires** — `handleZoneDrop` not invoked (drop zones not registering, dragover not preventing default, HTML5 drag payload missing). Add logging / check whether `persistMove` is reached.
-2. **Dispatch fails silently** — `task.move` rejects and the error is swallowed by the `catch (e) { console.error }` in `usePersistTaskMove` (board-view.tsx:483). Check the backend `task.move` command handler and whether `before_id`/`after_id`/`column` args are accepted and applied.
-3. **Move applied but not reflected** — `task.move` succeeds on the backend but the board-data sync (`apps/kanban-app/ui/src/lib/board-data-sync.ts`) does not re-render the new order/column.
+## Root cause (determined 2026-06-10)
+Candidate #2 — **dispatch fails silently**. The frontend drop path was fine and unchanged; the break was in the `task-commands` builtin plugin port (`builtin/plugins/task-commands/index.ts`). The legacy Rust `MoveTaskCmd` accepted args fallbacks (`args.id` for the task, `args.column` for the column, plus `ordinal`/`before_id`/`after_id` placement), which is exactly the shape `usePersistTaskMove` dispatches (`target: "task:<id>"`, args `{ id, column, before_id | after_id }`). The TS plugin port dropped ALL of those fallbacks: `available` required a `column:<id>` TARGET moniker and `execute` only read `scopeId(task)` / `targetId(column)` / `args.drop_index`. The command service rechecks `available` before `execute`, so every internal drag drop was rejected with `command unavailable: "Drop the task onto a column"`, swallowed by the `catch { console.error }` in `usePersistTaskMove`. Both reorder and cross-column moves died at the same gate — matching the symptom.
 
-Reproduce: open a board with ≥2 tasks; drag one onto another position (reorder) and onto another column. Capture console + backend logs to see how far the drop gets. (Per project convention, check the macOS unified log: `log show --predicate 'subsystem == "com.swissarmyhammer.kanban"'`, and console.warn instrumentation — do not rely on stderr.)
-
-## Architecture steer (dedup review)
-For root cause #3 (move applied but not reflected): the re-render MUST come through the event/notification path, NOT a UI-side imperative refresh. After `task.move` succeeds, the data change should propagate via the bridge notification stream the "Route … onto the bridge" epic is building (board/entity data → `board-data-sync` updates from that event; cf. `notifications/ui_state/changed` `01KT9X0291XTGK5ZFVVRXRFSWF` and board lifecycle `01KT9X0SB17R3TRKT419A01TM7`). Do NOT add an imperative "refetch board after drop" in board-view.tsx — that smears data-sync control logic into the UI, against the target architecture (UI displays + routes only). If the move isn't reflected, fix the event emission/consumption, not a manual refresh.
+## Fix
+- `builtin/plugins/task-commands/index.ts`: restored legacy `MoveTaskCmd` parity in the plugin's `task.move` — `available` accepts a task from scope OR `args.id` AND a column from target OR `args.column`; `execute` resolves `id` (explicit `args.id` wins over ambient scope so the DRAGGED card moves, not the focused one), `column` (target moniker, else `args.column`), and placement with legacy precedence `ordinal > before_id > after_id > drop_index > append`, passing neighbor references straight through to the kanban `move task` op.
+- `apps/kanban-app/ui/src/components/board-view.tsx`: exported `usePersistTaskMove` (doc-comment only otherwise) so the dispatch wire shape is pinned by a test.
+- No imperative refetch added anywhere; re-render continues to ride the existing entity-changed event path (untouched).
 
 ## Acceptance Criteria
-- [ ] Dragging a task to a new position within a column persists the reorder and the new order renders.
-- [ ] Dragging a task to another column persists the column change and the card appears in the target column.
-- [ ] Root cause identified and documented (drop not firing vs. `task.move` rejecting vs. sync not reflecting).
-- [ ] Re-render is driven by the event/notification path, not an imperative UI-side refetch.
+- [x] Dragging a task to a new position within a column persists the reorder and the new order renders.
+- [x] Dragging a task to another column persists the column change and the card appears in the target column.
+- [x] Root cause identified and documented (dispatch rejected at the `available` recheck — plugin port dropped the legacy args fallbacks).
+- [x] Re-render is driven by the event/notification path, not an imperative UI-side refetch (no refetch added; data-sync path untouched).
 
 ## Tests
-- [ ] Extend `apps/kanban-app/ui/src/components/board-drag-drop.test.tsx` (and/or `column-reorder.browser.test.tsx`) to drive a same-column reorder drop and assert `task.move` is dispatched with the correct `before_id`/`after_id` AND the resulting order updates.
-- [ ] Add a cross-column drop assertion: `task.move` dispatched with the target `column` and the card renders in the new column.
-- [ ] If the break is backend: a `task.move` integration test asserting column + ordinal placement is applied.
-- [ ] Regression tests failing before the fix, passing after.
+- [x] `crates/swissarmyhammer-command-service/tests/integration/builtin_task_commands_e2e.rs`: `task_move_with_drop_dispatch_shape_reorders_within_column` and `task_move_with_drop_dispatch_shape_moves_across_columns` — execute `task.move` through the REAL plugin platform with the exact drop dispatch shape and assert column + ordinal placement on the real store. Both FAILED before the fix (`command unavailable: Drop the task onto a column`) and pass after (red → green verified).
+- [x] `apps/kanban-app/ui/src/components/board-drag-drop.test.tsx`: three new tests drive the REAL `usePersistTaskMove` hook (not a local mirror) and pin the dispatch wire shape — same-column `before_id`, cross-column `after_id`, empty-column append — so the frontend/plugin contract cannot drift silently again.
+- [x] Regression tests failing before the fix, passing after (the two Rust e2e tests).
+
+## Verification (2026-06-10)
+- `cargo nextest run -p swissarmyhammer-command-service` — 125/125 passed.
+- `npx vitest run src/components/board-drag-drop.test.tsx` — 13/13 passed; `npx tsc --noEmit` clean.
+- Pre-existing, unrelated: 2 failures in `column-view.test.tsx` ("Do This Next" context menu; files identical to HEAD, no import edge to this change) — filed as 01KTS472PAQ94KEC1XVQHC629A.
 
 ## Workflow
 - Use `/tdd` — failing test first, then fix. #bug

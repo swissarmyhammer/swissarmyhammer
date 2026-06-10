@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: cc80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffff9080
 title: 'Bug: Read-only/computed fields can be entered and blanked (created-date summary + virtual tags)'
 ---
 ## What
@@ -12,29 +12,29 @@ MERGED card (2026-06-06): unifies the read-only-date-field blank bug with the vi
 1. **Read-only date summary** — `apps/kanban-app/ui/src/components/fields/displays/status-date-display.tsx` (created/updated date). Pressing Enter focuses in and blanks it.
 2. **Computed virtual tags** — READY/BLOCKED/BLOCKING, rendered via the `virtual-badge-list` adapter (`apps/kanban-app/ui/src/components/fields/registrations/virtual-badge-list.tsx` → `displays/virtual-tag-display.tsx`), computed by the backend `VirtualTagRegistry` and surfaced via `useBoardData().virtualTagMeta`. This display has **no registered editor**, so drill-in flips to a missing/empty editor that overwrites the value and never reverts.
 
-## Mechanism (Field layer)
-Editability is governed by `apps/kanban-app/ui/src/components/fields/field.tsx`:
-- Intended contract (field.tsx:464–475, 524–535): a field registers the scope-level `field.edit` Enter command **only when in display mode AND it has an `onEdit` callback**; "for non-editable fields the command is also not registered (no `onEdit`), so Enter is a no-op."
-- `editCommands` (field.tsx:536) registers the drill-in/edit closure when `onEdit || spatialActions` is present (field.tsx:540) — so a display with spatial children (pills) or a wrongly-supplied `onEdit` still enters edit.
+## Root cause (found during implementation)
+The metadata existed all along (`editor: none` in `status_date.yaml` / `virtual_tags.yaml`), but the `<Field>` interpreter ignored it:
+- `entity-card.tsx`'s `CardFields` passes `onEdit` **unconditionally** to every card field (no editability check, unlike the inspector's `FieldRow`).
+- `field.tsx`'s `field.edit` Enter closure fell through to `onEdit?.()`, arming `editing` for an `editor: none` field.
+- With `editing=true`, `FieldEditor` resolves `editorRegistry.get("none")` → `undefined` → renders `null` — the value blanks, and with no editor mounted nothing can ever fire `onDone`/`onCancel`, so it never restores.
 
-Likely causes (one fix at the Field layer covers both cases):
-1. A caller (entity inspector / field row) passes `onEdit` to a field whose metadata is read-only/computed → gate `onEdit` on a read-only/computed metadata flag.
-2. The display has spatial children (date pills / tag pills) so drill-in enters edit and a subsequent commit blanks.
-3. No read-only flag exists in Field metadata at all → the metadata-driven UI principle requires the field metadata to declare read-only and the Field/editor to honor it (single source of truth).
-
-The unified fix: **read-only/computed fields must not register `field.edit`, must not enter edit mode on drill-in, and must never commit an empty overwrite** — driven by field metadata, not per-call-site guesswork.
+## Fix (one metadata-driven gate in the interpreter)
+- New `isFieldEditable(field)` in `fields/editors/index.ts` (single source of truth: `resolveEditor(field) !== "none"`).
+- `field.tsx`'s `Field` gates once at the top: `onEdit` is dropped and `editing` is ignored when the metadata says non-editable — covers Enter, click-to-edit, and any caller that arms `editing` directly (card, grid, inspector).
+- `entity-inspector.tsx`'s private duplicate `isEditable` removed; it now consumes the shared `isFieldEditable`.
+- No Rust change needed — the YAML schema already declares `editor: none` for computed fields.
 
 ## Acceptance Criteria
-- [ ] A read-only/computed field cannot enter edit mode via Enter/drill-in (Enter is a no-op or simply marks focus).
-- [ ] A read-only/computed field can never be blanked — its displayed value is preserved before, during, and after any focus/Enter interaction (date stays; READY/BLOCKED/BLOCKING pills stay).
-- [ ] Read-only-ness is driven by field metadata (single source of truth), not per-call-site guesswork.
-- [ ] Root cause identified (caller passing `onEdit` vs. missing read-only metadata vs. spatial-children drill-in path).
+- [x] A read-only/computed field cannot enter edit mode via Enter/drill-in (Enter is a no-op or simply marks focus).
+- [x] A read-only/computed field can never be blanked — its displayed value is preserved before, during, and after any focus/Enter interaction (date stays; READY/BLOCKED/BLOCKING pills stay).
+- [x] Read-only-ness is driven by field metadata (single source of truth), not per-call-site guesswork.
+- [x] Root cause identified (caller passing `onEdit` vs. missing read-only metadata vs. spatial-children drill-in path) — it was the caller passing `onEdit` + the interpreter honoring armed `editing` despite `editor: none`.
 
 ## Tests
-- [ ] Browser test (case 1): render the created-date / status-date-display field, press Enter → no editor opens, value unchanged (near `field.enter-edit.browser.test.tsx`).
-- [ ] Browser test (case 2): drive Enter on a `virtual-badge-list` field → the READY/BLOCKED/BLOCKING pills remain rendered (extend `displays/virtual-tag-display.test.tsx`).
-- [ ] Metadata test: a field marked read-only never receives/registers `field.edit`.
-- [ ] Regression tests failing before the fix (fields blank), passing after.
+- [x] Browser test (case 1): render the status-date field, press Enter → no edit, value unchanged (`fields/field.read-only.browser.test.tsx`, harness mirrors `field.enter-edit.browser.test.tsx`).
+- [x] Browser test (case 2): drive Enter on a `virtual-badge-list` field → READY/BLOCKING pills remain rendered (`field.read-only.browser.test.tsx`, with the `useBoardData` stub from `displays/virtual-tag-display.test.tsx`).
+- [x] Metadata test: a field marked read-only never arms `field.edit` — `onEdit` is dropped by the metadata gate even when the caller wires it unconditionally (cardfields-shaped harness).
+- [x] Regression tests failing before the fix (all 3 RED: onEdit armed + value blanked), passing after (GREEN: 3/3; full field suite 66/66; tsc clean). The 29 failures in inspector/grid suites are pre-existing on this branch — verified identical with the fix reverted to HEAD.
 
 ## Workflow
 - Use `/tdd` — failing test first, then fix. #bug
