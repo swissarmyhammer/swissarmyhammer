@@ -373,3 +373,205 @@ async fn drill_out_derives_window_from_fq_root_over_wrong_explicit_arg() {
     );
     assert_eq!(focused_in(&server, "main").await, None);
 }
+
+/// A full drill-in → drill-out ROUND TRIP through the server: drill into a zone
+/// (zone → leaf), then drill back out (leaf → zone). Each step must commit the
+/// new focus into the SAME window's slot and emit a `focus-changed` whose
+/// `prev_fq` reports the step's true source — so the prior marker clears as the
+/// UI follows the keystroke. The window is derived from the fq root throughout
+/// even though the wire carries the broken `window: "main"`.
+///
+/// Single-step drill tests cover each direction from a FRESH server; this pins
+/// the regression that drill no longer COMMITS/MOVES focus correctly across a
+/// real Enter-then-Escape sequence (the kernel slot carries state between the
+/// two drills, and the second drill's `reconcile_slot` must read the same
+/// window the first drill committed under, not the stale "main" arg).
+#[tokio::test]
+async fn drill_in_then_out_round_trip_commits_and_clears_each_step() {
+    let sink = Arc::new(RecordingSink::new());
+    let server = FocusServer::new().with_sink(sink.clone());
+    push_root_layer(&server, "/winA/window", "winA").await;
+
+    let zone = "/winA/window/board:b/zone:z";
+    let leaf = "/winA/window/board:b/zone:z/task:t";
+
+    // Seed focus on the zone (where the user is before pressing Enter).
+    call_tool(
+        &server,
+        "set focus",
+        json!({
+            "op": "set focus",
+            "fq": zone,
+            "window": "main",
+            "snapshot": snapshot_zone_leaf("/winA/window", zone, leaf),
+        }),
+    )
+    .await
+    .expect("seed focus on the zone should succeed");
+    sink.drain();
+    assert_eq!(
+        focused_in(&server, "winA").await,
+        Some(FullyQualifiedMoniker::from_string(zone)),
+        "precondition: focus seeded on the zone in winA",
+    );
+
+    // STEP 1 — drill IN (Enter): zone → leaf.
+    let res_in = call_tool(
+        &server,
+        "drill_in layer",
+        json!({
+            "op": "drill_in layer",
+            "fq": zone,
+            "focused_fq": zone,
+            "window": "main",
+            "snapshot": snapshot_zone_leaf("/winA/window", zone, leaf),
+        }),
+    )
+    .await
+    .expect("drill_in layer should succeed");
+    assert_eq!(res_in["next_fq"], json!(leaf));
+
+    let in_events = sink.drain();
+    assert_eq!(in_events.len(), 1, "drill-in emits exactly one event");
+    assert_eq!(
+        in_events[0].window_label,
+        WindowLabel::from_string("winA"),
+        "drill-in must emit for the fq-root window, not the \"main\" arg",
+    );
+    assert_eq!(
+        in_events[0].prev_fq,
+        Some(FullyQualifiedMoniker::from_string(zone)),
+        "drill-in must clear the zone marker via prev_fq",
+    );
+    assert_eq!(
+        in_events[0].next_fq,
+        Some(FullyQualifiedMoniker::from_string(leaf)),
+    );
+    assert_eq!(
+        focused_in(&server, "winA").await,
+        Some(FullyQualifiedMoniker::from_string(leaf)),
+        "drill-in must commit the leaf into winA's slot",
+    );
+
+    // STEP 2 — drill OUT (Escape): leaf → zone.
+    let res_out = call_tool(
+        &server,
+        "drill_out layer",
+        json!({
+            "op": "drill_out layer",
+            "fq": leaf,
+            "focused_fq": leaf,
+            "window": "main",
+            "snapshot": snapshot_zone_leaf("/winA/window", zone, leaf),
+        }),
+    )
+    .await
+    .expect("drill_out layer should succeed");
+    assert_eq!(res_out["next_fq"], json!(zone));
+
+    let out_events = sink.drain();
+    assert_eq!(out_events.len(), 1, "drill-out emits exactly one event");
+    assert_eq!(
+        out_events[0].window_label,
+        WindowLabel::from_string("winA"),
+        "drill-out must emit for the fq-root window, not the \"main\" arg",
+    );
+    assert_eq!(
+        out_events[0].prev_fq,
+        Some(FullyQualifiedMoniker::from_string(leaf)),
+        "drill-out must clear the leaf marker via prev_fq",
+    );
+    assert_eq!(
+        out_events[0].next_fq,
+        Some(FullyQualifiedMoniker::from_string(zone)),
+    );
+    assert_eq!(
+        focused_in(&server, "winA").await,
+        Some(FullyQualifiedMoniker::from_string(zone)),
+        "drill-out must commit the zone back into winA's slot",
+    );
+    assert_eq!(focused_in(&server, "main").await, None);
+}
+
+/// Two windows on the SAME board, each with its own focus: a drill in window A
+/// moves A's focus only — window B's focus slot is untouched and B receives no
+/// `focus-changed` event. This is the drill counterpart to
+/// [`unique_window_roots_isolate_focus_across_windows`]: the window is derived
+/// from the fq root on the drill commit, so cross-window contamination cannot
+/// occur even when the wire carries the wrong `window: "main"`.
+#[tokio::test]
+async fn drill_in_window_a_leaves_window_b_focus_untouched() {
+    let sink = Arc::new(RecordingSink::new());
+    let server = FocusServer::new().with_sink(sink.clone());
+    push_root_layer(&server, "/winA/window", "winA").await;
+    push_root_layer(&server, "/winB/window", "winB").await;
+
+    let zone_a = "/winA/window/board:b/zone:z";
+    let leaf_a = "/winA/window/board:b/zone:z/task:t";
+    let card_b = "/winB/window/board:b/task:t";
+
+    // Seed B's focus on a card, and A's focus on the zone it will drill into.
+    call_tool(
+        &server,
+        "set focus",
+        json!({
+            "op": "set focus",
+            "fq": card_b,
+            "window": "main",
+            "snapshot": snapshot_one("/winB/window", card_b),
+        }),
+    )
+    .await
+    .expect("seed B focus should succeed");
+    call_tool(
+        &server,
+        "set focus",
+        json!({
+            "op": "set focus",
+            "fq": zone_a,
+            "window": "main",
+            "snapshot": snapshot_zone_leaf("/winA/window", zone_a, leaf_a),
+        }),
+    )
+    .await
+    .expect("seed A focus should succeed");
+    sink.drain();
+
+    // Drill in window A.
+    let res = call_tool(
+        &server,
+        "drill_in layer",
+        json!({
+            "op": "drill_in layer",
+            "fq": zone_a,
+            "focused_fq": zone_a,
+            "window": "main",
+            "snapshot": snapshot_zone_leaf("/winA/window", zone_a, leaf_a),
+        }),
+    )
+    .await
+    .expect("drill_in layer should succeed");
+    assert_eq!(res["next_fq"], json!(leaf_a));
+
+    // A moved to the leaf.
+    assert_eq!(
+        focused_in(&server, "winA").await,
+        Some(FullyQualifiedMoniker::from_string(leaf_a)),
+        "drill in A must move A's focus to the leaf",
+    );
+    // B is untouched.
+    assert_eq!(
+        focused_in(&server, "winB").await,
+        Some(FullyQualifiedMoniker::from_string(card_b)),
+        "drill in A must NOT perturb B's focus",
+    );
+
+    // Only winA received an event.
+    let events = sink.drain();
+    assert_eq!(events.len(), 1, "exactly one drill event");
+    assert_eq!(
+        events[0].window_label,
+        WindowLabel::from_string("winA"),
+        "the drill event targets winA, never winB or the \"main\" arg",
+    );
+}

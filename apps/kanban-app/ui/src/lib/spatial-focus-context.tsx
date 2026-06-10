@@ -8,22 +8,26 @@
  * previously focused FQM's callback and `true` to the newly focused one's.
  *
  * Each Tauri window has its own React tree and therefore its own claim
- * registry. The kernel directs each `focus-changed` to a SINGLE window via
- * `emit_to(event.window_label, ...)` (see `emit_focus_changed` in
- * `kanban-app/src/commands.rs`), so a provider only ever receives events
- * for its own window and matches them against its registry by FQM.
+ * registry. The kernel directs each `focus-changed` at a SINGLE window via
+ * `emit_to(event.window_label, ...)`, but `emit_to` is NOT reliably confined
+ * in a multi-window app — every window's global `listen` receives the event
+ * regardless of target (the same Tauri behavior the `ui/request` responder
+ * bus guards against). The provider's listener therefore filters by
+ * `payload.window_label === getCurrentWindow().label` and ignores other
+ * windows' events. Without that filter, another window's focus event
+ * overwrote `focusedFqRef` (the value the kernel's `focus.current` /
+ * `focus.geometry` pulls answer from) and a host-driven drill resolved the
+ * WRONG window's focus when two windows showed the same board.
  *
- * This targeted emit is defense in depth. Each window now roots its focus
- * layer at its UNIQUE label (`/<label>/window`, see `App.tsx`'s
- * `WINDOW_ROOT_FQ`), so a card is `/<label>/.../task:Z` — window-unique by
- * construction, and the kernel resolves the owning window from the explicit
- * `window` the client sends (below) / the full path rather than a side
- * field. Historically every window rooted at the bare `/window`, so a card
- * was `/window/.../task:Z` in *every* window showing that board and a
+ * Each window also roots its focus layer at its UNIQUE label
+ * (`/<label>/window`, see `App.tsx`'s `WINDOW_ROOT_FQ`), so a card is
+ * `/<label>/.../task:Z` — window-unique by construction, and the kernel
+ * resolves the owning window from the window-rooted fq path rather than a
+ * side field. Historically every window rooted at the bare `/window`, so a
+ * card was `/window/.../task:Z` in *every* window showing that board and a
  * broadcast would light up the same card everywhere ("jump highlights all
  * windows"); the kernel clobber on the shared root then sent events to the
- * wrong window. Emitting only to `window_label` still confines each focus
- * move to its originating window as a second line of defense.
+ * wrong window.
  *
  * This file does **not** replace `entity-focus-context.tsx` — that
  * context still drives the entity scope registry and command-scope
@@ -69,6 +73,24 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
  */
 function currentWindowLabel(): string {
   return getCurrentWindow().label;
+}
+
+/**
+ * Read this window's Tauri label, or `null` when it is unknowable.
+ *
+ * `getCurrentWindow()` throws outside a real Tauri webview (no
+ * `__TAURI_INTERNALS__`), which is the normal state for unit tests that do
+ * not mock `@tauri-apps/api/window`. The `focus-changed` window guard uses
+ * this safe form and — mirroring `handleUiRequest`'s own-window guard —
+ * falls through to ACCEPTING the event when the label cannot be resolved,
+ * so window-agnostic harnesses keep their pre-guard behavior.
+ */
+function currentWindowLabelOrNull(): string | null {
+  try {
+    return getCurrentWindow().label;
+  } catch {
+    return null;
+  }
 }
 import {
   clearFocus as mcpClearFocus,
@@ -358,6 +380,22 @@ export function SpatialFocusProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
 
     listen<FocusChangedPayload>("focus-changed", ({ payload }) => {
+      // Window scoping: the kernel targets one window via `emit_to`, but a
+      // multi-window app's global `listen` receives events for EVERY window
+      // (same Tauri behavior the `ui/request` responder bus guards against).
+      // Without this filter, another window's focus event overwrites
+      // `focusedFqRef` — the value the kernel's `focus.current` /
+      // `focus.geometry` pulls answer from — so a host-driven drill in THIS
+      // window resolved the OTHER window's focus (the two-windows-on-one-board
+      // "drill-in/Escape do nothing" bug). The event's `window_label` is
+      // derived by the kernel from the window-rooted fq chain, so it is the
+      // authoritative owner; only our own window's events apply here. When the
+      // label is unknowable (window-agnostic test harness) fall through and
+      // accept, matching `handleUiRequest`'s own-window guard.
+      const ownLabel = currentWindowLabelOrNull();
+      if (ownLabel !== null && payload.window_label !== ownLabel) {
+        return;
+      }
       const registry = registryRef.current;
       if (payload.prev_fq !== null) {
         registry.get(payload.prev_fq)?.(false);
@@ -612,6 +650,31 @@ function buildSpatialFocusActions(
     };
   };
 
+  // Serialize the kernel layer ops (push / pop). Each op is dispatched
+  // only after the previous one has FULLY completed on the host, so the
+  // kernel registry observes layer mutations in React lifecycle order.
+  //
+  // Why this matters: the host handles each MCP call as an independent
+  // async task (contending on the per-board platform lock), so two calls
+  // issued back-to-back can complete out of order. React StrictMode's
+  // double-invoked effects make `<FocusLayer>` fire push(fq) → pop(fq) →
+  // push(fq) microseconds apart; when the cleanup pop was processed AFTER
+  // the remount push, the window-root layer was deleted permanently and
+  // every later focus commit in that window dropped with "focus snapshot
+  // names an unregistered layer" — the two-windows-on-one-board "no focus
+  // markers in the second window" bug. Window-unique layer FQs
+  // (`/<label>/window`) made the lost push fatal: under the old shared
+  // `/window` root the sibling window's surviving push masked it.
+  //
+  // The chain swallows rejections so one failed op never wedges the
+  // queue; each caller still observes its own op's rejection.
+  let layerOpChain: Promise<unknown> = Promise.resolve();
+  const enqueueLayerOp = <T,>(op: () => Promise<T>): Promise<T> => {
+    const run = layerOpChain.then(op, op);
+    layerOpChain = run.catch(() => undefined);
+    return run;
+  };
+
   const pushLayer: SpatialFocusActions["pushLayer"] = async (
     fq,
     segment,
@@ -635,13 +698,15 @@ function buildSpatialFocusActions(
     // MCP wire has no ambient `tauri::Window` — pass this window's
     // label explicitly (the legacy `spatial_push_layer` Tauri command
     // derived it from the `Window` param on the host side).
-    await mcpPushLayer({
-      fq,
-      segment,
-      name,
-      parent,
-      window: currentWindowLabel(),
-    });
+    await enqueueLayerOp(() =>
+      mcpPushLayer({
+        fq,
+        segment,
+        name,
+        parent,
+        window: currentWindowLabel(),
+      }),
+    );
   };
 
   const popLayer: SpatialFocusActions["popLayer"] = async (fq) => {
@@ -652,7 +717,7 @@ function buildSpatialFocusActions(
     const stack = layerStackRef.current;
     const idx = stack.indexOf(fq);
     if (idx !== -1) stack.splice(idx, 1);
-    const nextFq = await mcpPopLayer(fq);
+    const nextFq = await enqueueLayerOp(() => mcpPopLayer(fq));
     if (nextFq !== null && nextFq !== undefined) {
       const snapshot = buildSnapshotForFocused(layerRegistriesRef, nextFq);
       await mcpSetFocus(nextFq, snapshot, currentWindowLabel());

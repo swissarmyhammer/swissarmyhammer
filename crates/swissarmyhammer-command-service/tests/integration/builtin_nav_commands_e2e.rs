@@ -28,17 +28,17 @@
 //!    (a real `FocusChangedEvent`); dispatching `nav.drillIn` drives the focus
 //!    `drill_in` op. `nav.jump` does NOT touch the focus kernel.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use swissarmyhammer_command_service::bootstrap::install_commands_module;
 use swissarmyhammer_directory::KanbanConfig;
 use swissarmyhammer_focus::{
-    FocusLayer, FocusServer, FullyQualifiedMoniker, LayerName, NavSnapshot, Pixels, Rect,
-    SegmentMoniker, SnapshotScope, UiGeometryProvider, WindowLabel,
+    FocusLayer, FocusServer, FullyQualifiedMoniker, LayerName, NavSnapshot, Pixels, RecordingSink,
+    Rect, SegmentMoniker, SnapshotScope, UiGeometryProvider, WindowLabel,
 };
 use swissarmyhammer_plugin::{
     CallerId, InProcessServer, McpServer as PluginMcpServer, PluginHost, PLUGINS_SUBDIR,
@@ -57,11 +57,18 @@ const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 const WINDOW: &str = "board-test";
 
 /// The window-root layer FQM the seed snapshot lives under.
-const LAYER_FQ: &str = "/L";
+///
+/// Window-rooted at `WINDOW` (`/<label>/window`, the shape `App.tsx`'s
+/// `WINDOW_ROOT_FQ` mints): the kernel derives the owning window from the fq
+/// ROOT SEGMENT, so the root segment here MUST equal `WINDOW` for nav/drill
+/// commits to land in the `board-test` window. A non-window-rooted fixture
+/// (e.g. `/L`) would commit focus under window "L" instead, and the
+/// `focused_in(WINDOW)` assertions below would read `None`.
+const LAYER_FQ: &str = "/board-test/window";
 /// The upper focusable scope — the seed focus.
-const SCOPE_TOP: &str = "/L/a";
+const SCOPE_TOP: &str = "/board-test/window/a";
 /// The lower focusable scope — the `nav.down` target.
-const SCOPE_BOTTOM: &str = "/L/b";
+const SCOPE_BOTTOM: &str = "/board-test/window/b";
 
 /// The production-shape scope chain a real dispatch carries: a `window:<label>`
 /// moniker plus the `engine` root.
@@ -176,13 +183,65 @@ impl UiGeometryProvider for SeedProvider {
     }
 }
 
+/// A [`UiGeometryProvider`] that serves geometry but reports NO focus —
+/// reproducing the live UI-provider gap where the webview answers a `query
+/// geometry` round-trip but `query focus` resolves nothing (transient unmount,
+/// no focus responder mounted for the window, or a window-mismatch).
+///
+/// This is the asymmetry-exposing provider for the drill regression: the kernel
+/// `focus_by_window` slot IS seeded (see [`expose_focus_with_provider`]), so the
+/// server's `resolve_nav_source` / `resolve_drill_source` kernel-slot fallback
+/// can still resolve the source. The DIFFERENCE the live bug turns on is whether
+/// the caller (the plugin) consults that fallback at all:
+///
+/// - `nav.down` (navigate) sends only `{ window, direction }` and lets the
+///   server fall back to the kernel slot → it MOVES.
+/// - `nav.drillIn` (pre-fix) FIRST calls `query focus` → this provider → `None`
+///   → bails to a `{ next_fq: null }` no-op, NEVER reaching the server drill op
+///   and its kernel-slot fallback → it does NOT move.
+///
+/// Once the plugin stops pre-resolving focus and lets the server resolve the
+/// drill source (with the same kernel-slot fallback navigate uses), drill MOVES
+/// too — symmetric with navigate.
+struct GapProvider;
+
+#[async_trait]
+impl UiGeometryProvider for GapProvider {
+    async fn snapshot(&self, _window: &WindowLabel) -> Option<NavSnapshot> {
+        Some(seed_snapshot())
+    }
+
+    async fn scope_chain(&self, _window: &WindowLabel) -> Vec<FullyQualifiedMoniker> {
+        Vec::new()
+    }
+
+    async fn focus(&self, _window: &WindowLabel) -> Option<FullyQualifiedMoniker> {
+        // The UI provider gap: the webview reports no focus even though the
+        // kernel's per-window slot is set. `query focus` resolves `None`.
+        None
+    }
+}
+
 /// Expose a real `focus` server (seeded with a window-root layer and a focused
 /// top scope) under id `"focus"`, returning the spatial-state handle so the test
-/// can read the focused slot back.
+/// can read the focused slot back. Uses the default [`SeedProvider`].
 async fn expose_focus(
     host: &PluginHost,
 ) -> Arc<tokio::sync::Mutex<swissarmyhammer_focus::SpatialState>> {
-    let focus_server = FocusServer::new().with_provider(Arc::new(SeedProvider));
+    expose_focus_with_provider(host, Arc::new(SeedProvider)).await
+}
+
+/// Expose a real `focus` server over a caller-supplied [`UiGeometryProvider`].
+///
+/// Seeds the same window-root layer + focused top scope as [`expose_focus`], so
+/// the kernel's `focus_by_window[WINDOW]` slot is set regardless of what the
+/// provider reports — letting a test inject a provider whose `focus()` reports
+/// nothing while the kernel slot still resolves the source.
+async fn expose_focus_with_provider(
+    host: &PluginHost,
+    provider: Arc<dyn UiGeometryProvider>,
+) -> Arc<tokio::sync::Mutex<swissarmyhammer_focus::SpatialState>> {
+    let focus_server = FocusServer::new().with_provider(provider);
     let registry = focus_server.registry();
     let state = focus_server.state();
 
@@ -439,7 +498,7 @@ async fn nav_commands_plugin_registers_and_routes_to_focus() {
 
     // ── (3d) nav.drillOut at a layer-root edge dismisses the modal layer ────
     // The seed scopes carry NO `parent_zone` (`scope(..)` sets it `None`) and
-    // the provider's focus is `/L/a`, so the kernel drill_out echoes the
+    // the provider's focus is `SCOPE_TOP`, so the kernel drill_out echoes the
     // focused FQM — there is nothing to drill out TO. Per the ported
     // `buildDrillCommands` contract, nav.drillOut then falls through to
     // `ui_state` `dismiss ui`, closing the topmost modal layer. Open the
@@ -486,6 +545,489 @@ async fn nav_commands_plugin_registers_and_routes_to_focus() {
         ui_state.inspector_stack(WINDOW).is_empty(),
         "nav.drillOut at a layer-root edge must fall through to ui_state dismiss \
          and pop the open inspector (the inspector's Escape-close path)"
+    );
+}
+
+/// The LIVE drill regression: with the UI provider reporting NO focus
+/// (`GapProvider::focus` → `None`) while the kernel's `focus_by_window` slot IS
+/// seeded, `nav.down` (navigate) still MOVES — but pre-fix `nav.drillIn` /
+/// `nav.drillOut` (drill) do NOT, because the plugin pre-resolves focus through
+/// `query focus` (provider-only, no kernel-slot fallback) and bails before ever
+/// reaching the server drill op.
+///
+/// This reproduces the user-reported asymmetric signature — "navigate works,
+/// drill/Escape broke" — that the symmetric kernel-property tests in
+/// `two_window_isolation.rs` cannot: those put `focused_fq` inline on the wire,
+/// short-circuiting the very source-resolution path the bug lives in. Here the
+/// plugin is driven HOST-DRIVEN end-to-end (no inline `focused_fq`), so the
+/// drill source resolution runs for real.
+///
+/// Contract:
+/// - Navigate MUST move (kernel-slot fallback in `resolve_nav_source`).
+/// - Drill MUST move too (symmetric: the fix routes the drill source through
+///   the same kernel-slot fallback). Pre-fix this assertion FAILS — drill
+///   no-ops, leaving focus on the top scope.
+#[tokio::test]
+async fn drill_resolves_source_via_kernel_slot_when_ui_focus_is_absent() {
+    let user_root = TempDir::new().expect("user root temp dir");
+    let builtin_root = TempDir::new().expect("builtin layer root temp dir");
+
+    stage_nav_commands(builtin_root.path());
+
+    let host = PluginHost::new(
+        Some(builtin_root.path().to_path_buf()),
+        user_root.path().to_path_buf(),
+        None,
+        user_root.path().to_path_buf(),
+        false,
+        user_root.path().to_path_buf(),
+    );
+
+    let service = install_commands_module(&host)
+        .await
+        .expect("install_commands_module must succeed");
+
+    // The focus backend uses the GAP provider: geometry is served, but
+    // `query focus` reports nothing — the live UI-provider gap. The kernel slot
+    // is still seeded (focus committed on SCOPE_TOP).
+    let ui_state_dir = TempDir::new().expect("ui_state temp dir");
+    let state = tokio::time::timeout(
+        TIMEOUT,
+        expose_focus_with_provider(&host, Arc::new(GapProvider)),
+    )
+    .await
+    .expect("exposing the focus backend should not hang");
+    let _ui_state = tokio::time::timeout(TIMEOUT, expose_ui_state(&host, ui_state_dir.path()))
+        .await
+        .expect("exposing the ui_state backend should not hang");
+
+    tokio::time::timeout(TIMEOUT, host.discover_and_load_all::<KanbanConfig>())
+        .await
+        .expect("discovery should not hang")
+        .expect("discovering the nav-commands builtin plugin should succeed");
+
+    // Precondition: the kernel slot holds the top scope even though the provider
+    // reports no focus.
+    assert_eq!(
+        state
+            .lock()
+            .await
+            .focused_in(&WindowLabel::from_string(WINDOW))
+            .map(|fq| fq.to_string()),
+        Some(SCOPE_TOP.to_string()),
+        "precondition: the kernel focus slot is seeded on the top scope",
+    );
+
+    // ── Navigate MOVES via the kernel-slot fallback (the control) ───────────
+    execute_ok(
+        &service,
+        "nav.down",
+        json!({ "scope_chain": window_scope() }),
+    )
+    .await;
+    assert_eq!(
+        state
+            .lock()
+            .await
+            .focused_in(&WindowLabel::from_string(WINDOW))
+            .map(|fq| fq.to_string()),
+        Some(SCOPE_BOTTOM.to_string()),
+        "navigate must move via the kernel-slot fallback even when the UI \
+         provider reports no focus",
+    );
+
+    // Re-seed focus back to the top scope so drill starts from the same place
+    // navigate did, isolating the drill assertion from the navigate move above.
+    execute_ok(&service, "nav.up", json!({ "scope_chain": window_scope() })).await;
+    assert_eq!(
+        state
+            .lock()
+            .await
+            .focused_in(&WindowLabel::from_string(WINDOW))
+            .map(|fq| fq.to_string()),
+        Some(SCOPE_TOP.to_string()),
+        "precondition for drill: focus back on the top scope",
+    );
+
+    // ── Drill MUST be symmetric — it must MOVE too ──────────────────────────
+    // The seed snapshot has SCOPE_BOTTOM with no parent_zone and SCOPE_TOP with
+    // no children, so a drill-in from the top scope can't descend; to give drill
+    // a real target we seed a parent/child relationship. Instead of rebuilding
+    // the fixture, assert drill REACHES the server drill op (which it cannot
+    // pre-fix): drill-in from a leaf echoes its own FQM, but the op COMMITS that
+    // focus and the kernel slot is touched. The decisive, drill-specific
+    // assertion is that the kernel processed a drill at all — pre-fix the plugin
+    // bails to a `{ next_fq: null }` no-op WITHOUT calling the server, so
+    // `next_fq` is `null`; post-fix the server resolves the source from the
+    // kernel slot and echoes the resolved focus.
+    let drill = execute_ok(
+        &service,
+        "nav.drillIn",
+        json!({ "scope_chain": window_scope() }),
+    )
+    .await;
+    assert_eq!(
+        drill["structuredContent"]["next_fq"],
+        json!(SCOPE_TOP),
+        "drill-in must resolve its source from the kernel slot (the focused top \
+         scope) and reach the server drill op — pre-fix the plugin pre-resolves \
+         via `query focus` (provider-only, here `None`) and bails to a \
+         `next_fq: null` no-op, never reaching the server; got {drill}",
+    );
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Two windows on the SAME board — the live window/board conflation regression
+// ───────────────────────────────────────────────────────────────────────────
+
+/// The two windows of the same-board configuration. Each roots its FQMs at its
+/// own unique label (`/<label>/window/...`) with an IDENTICAL board structure
+/// beneath (`board:b/zone:z/task:t`) — exactly what two Tauri windows showing
+/// one board produce.
+const WIN_A: &str = "win-a";
+const WIN_B: &str = "win-b";
+
+/// The window-root layer FQM for `window`.
+fn win_layer(window: &str) -> String {
+    format!("/{window}/window")
+}
+
+/// The zone scope (a card-like container) for `window`'s board view.
+fn win_zone(window: &str) -> String {
+    format!("/{window}/window/board:b/zone:z")
+}
+
+/// The leaf scope (a field-like child of the zone) for `window`'s board view.
+fn win_leaf(window: &str) -> String {
+    format!("/{window}/window/board:b/zone:z/task:t")
+}
+
+/// The production-shape scope chain for a dispatch invoked in `window`.
+fn scope_for(window: &str) -> Value {
+    json!([format!("window:{window}"), "engine"])
+}
+
+/// The zone+leaf snapshot for `window` — the geometry that window's webview
+/// serves for its OWN scopes. The zone has no `parent_zone` (it sits at the
+/// layer root); the leaf nests inside it.
+fn two_window_snapshot(window: &str) -> NavSnapshot {
+    let zone = win_zone(window);
+    let leaf = win_leaf(window);
+    NavSnapshot {
+        layer_fq: FullyQualifiedMoniker::from_string(&win_layer(window)),
+        scopes: vec![
+            SnapshotScope {
+                fq: FullyQualifiedMoniker::from_string(&zone),
+                rect: Rect {
+                    x: Pixels::new(0.0),
+                    y: Pixels::new(0.0),
+                    width: Pixels::new(200.0),
+                    height: Pixels::new(100.0),
+                },
+                parent_zone: None,
+                nav_override: Default::default(),
+                focusable: true,
+            },
+            SnapshotScope {
+                fq: FullyQualifiedMoniker::from_string(&leaf),
+                rect: Rect {
+                    x: Pixels::new(10.0),
+                    y: Pixels::new(10.0),
+                    width: Pixels::new(50.0),
+                    height: Pixels::new(20.0),
+                },
+                parent_zone: Some(FullyQualifiedMoniker::from_string(&zone)),
+                nav_override: Default::default(),
+                focusable: true,
+            },
+        ],
+    }
+}
+
+/// A [`UiGeometryProvider`] modelling the TWO webviews of the two-window
+/// configuration, including the LIVE pollution: each window's `focus.current`
+/// answer comes from a per-window ref that — in the production bug — holds
+/// ANOTHER window's FQ (every window's global `focus-changed` listener
+/// receives `emit_to`-targeted events for all windows and overwrites its ref).
+///
+/// `snapshot(window)` always serves the asking window's OWN geometry (the
+/// webview can always sample its own DOM), so the test isolates the focus
+/// pollution from geometry availability.
+struct TwoWindowWebviewProvider {
+    /// Per-window `focus.current` answer — seeded with the polluted state.
+    focus_refs: StdMutex<HashMap<String, String>>,
+}
+
+#[async_trait]
+impl UiGeometryProvider for TwoWindowWebviewProvider {
+    async fn snapshot(&self, window: &WindowLabel) -> Option<NavSnapshot> {
+        Some(two_window_snapshot(window.as_str()))
+    }
+
+    async fn scope_chain(&self, _window: &WindowLabel) -> Vec<FullyQualifiedMoniker> {
+        Vec::new()
+    }
+
+    async fn focus(&self, window: &WindowLabel) -> Option<FullyQualifiedMoniker> {
+        self.focus_refs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(window.as_str())
+            .map(|s| FullyQualifiedMoniker::from_string(s))
+    }
+}
+
+/// Expose a `focus` server seeded for the two-window-same-board configuration:
+/// both window-root layers registered, window A focused on its zone, window B
+/// focused on its leaf. Returns the spatial-state handle and the recording sink.
+async fn expose_focus_two_windows(
+    host: &PluginHost,
+    provider: Arc<dyn UiGeometryProvider>,
+) -> (
+    Arc<tokio::sync::Mutex<swissarmyhammer_focus::SpatialState>>,
+    Arc<RecordingSink>,
+) {
+    let sink = Arc::new(RecordingSink::new());
+    let focus_server = FocusServer::new()
+        .with_provider(provider)
+        .with_sink(sink.clone());
+    let registry = focus_server.registry();
+    let state = focus_server.state();
+
+    {
+        let mut reg = registry.lock().await;
+        for window in [WIN_A, WIN_B] {
+            reg.push_layer(FocusLayer {
+                fq: FullyQualifiedMoniker::from_string(&win_layer(window)),
+                segment: SegmentMoniker::from_string("window"),
+                name: LayerName::from_string("window"),
+                parent: None,
+                window_label: WindowLabel::from_string(window),
+                last_focused: None,
+            });
+        }
+    }
+    {
+        let mut reg = registry.lock().await;
+        let mut st = state.lock().await;
+        st.focus(
+            &mut reg,
+            &two_window_snapshot(WIN_A),
+            FullyQualifiedMoniker::from_string(&win_zone(WIN_A)),
+            None,
+        );
+        st.focus(
+            &mut reg,
+            &two_window_snapshot(WIN_B),
+            FullyQualifiedMoniker::from_string(&win_leaf(WIN_B)),
+            None,
+        );
+    }
+
+    let module = InProcessServer::new(focus_server)
+        .await
+        .expect("wrapping the focus server in an InProcessServer should succeed");
+    host.expose_rust_module(
+        "focus".to_string(),
+        Arc::new(module) as Arc<dyn PluginMcpServer>,
+    )
+    .await
+    .expect("exposing the focus module should succeed");
+
+    (state, sink)
+}
+
+/// Read the focused FQM for `window` as a `String`, for terse assertions.
+async fn focused_string(
+    state: &Arc<tokio::sync::Mutex<swissarmyhammer_focus::SpatialState>>,
+    window: &str,
+) -> Option<String> {
+    state
+        .lock()
+        .await
+        .focused_in(&WindowLabel::from_string(window))
+        .map(|fq| fq.to_string())
+}
+
+/// THE LIVE BUG (two windows, same board): host-driven drill-in / drill-out in
+/// window A must derive the owning window exclusively from the window-rooted
+/// FQ chain. Pre-fix, the provider's `focus.current` answer for window A is
+/// another window's FQ (the webview ref polluted by a leaked `focus-changed`),
+/// and the drill path TRUSTS it:
+///
+/// - drill-in echoes the FOREIGN-rooted FQ as `next_fq` (the exact live log
+///   signature: a dispatch with `window:win-a` in the scope chain resolving
+///   `/win-b/...`), commits nothing in window A, and — unlike navigate, which
+///   early-returns before touching any slot — `focus_from`'s unconditional
+///   reconcile writes the STALE foreign FQ into WINDOW B's kernel slot.
+/// - drill-out does the same and then, with `moved: false`, falls through to
+///   the dismiss chain, spuriously closing window A's palette (the live
+///   "Escape doesn't drill out" symptom).
+///
+/// Navigate in the SAME polluted configuration is harmless cross-window (the
+/// control), matching the user-observed asymmetry. Post-fix the kernel rejects
+/// the foreign-rooted provider answer, falls back to its own per-window slot,
+/// and drill commits real moves in window A while window B stays untouched.
+#[tokio::test]
+async fn drill_ignores_foreign_window_focus_in_two_window_same_board() {
+    let user_root = TempDir::new().expect("user root temp dir");
+    let builtin_root = TempDir::new().expect("builtin layer root temp dir");
+
+    stage_nav_commands(builtin_root.path());
+
+    let host = PluginHost::new(
+        Some(builtin_root.path().to_path_buf()),
+        user_root.path().to_path_buf(),
+        None,
+        user_root.path().to_path_buf(),
+        false,
+        user_root.path().to_path_buf(),
+    );
+
+    let service = install_commands_module(&host)
+        .await
+        .expect("install_commands_module must succeed");
+
+    // The polluted webview state: window A's `focus.current` ref holds WINDOW
+    // B's zone FQ (stale — B has since moved to its leaf), exactly what the
+    // unfiltered cross-window `focus-changed` listener produces live. Window
+    // B's ref is its own, correct focus.
+    let provider = Arc::new(TwoWindowWebviewProvider {
+        focus_refs: StdMutex::new(HashMap::from([
+            (WIN_A.to_string(), win_zone(WIN_B)),
+            (WIN_B.to_string(), win_leaf(WIN_B)),
+        ])),
+    });
+
+    let ui_state_dir = TempDir::new().expect("ui_state temp dir");
+    let (state, sink) = tokio::time::timeout(
+        TIMEOUT,
+        expose_focus_two_windows(&host, provider as Arc<dyn UiGeometryProvider>),
+    )
+    .await
+    .expect("exposing the focus backend should not hang");
+    let ui_state = tokio::time::timeout(TIMEOUT, expose_ui_state(&host, ui_state_dir.path()))
+        .await
+        .expect("exposing the ui_state backend should not hang");
+
+    tokio::time::timeout(TIMEOUT, host.discover_and_load_all::<KanbanConfig>())
+        .await
+        .expect("discovery should not hang")
+        .expect("discovering the nav-commands builtin plugin should succeed");
+
+    // ── Preconditions ────────────────────────────────────────────────────────
+    assert_eq!(
+        focused_string(&state, WIN_A).await,
+        Some(win_zone(WIN_A)),
+        "precondition: window A's kernel slot holds its zone"
+    );
+    assert_eq!(
+        focused_string(&state, WIN_B).await,
+        Some(win_leaf(WIN_B)),
+        "precondition: window B's kernel slot holds its leaf"
+    );
+    sink.drain();
+
+    // ── CONTROL: navigate in A is harmless cross-window (the live asymmetry) ─
+    execute_ok(
+        &service,
+        "nav.down",
+        json!({ "scope_chain": scope_for(WIN_A) }),
+    )
+    .await;
+    assert_eq!(
+        focused_string(&state, WIN_B).await,
+        Some(win_leaf(WIN_B)),
+        "navigate in window A must never perturb window B's focus slot"
+    );
+
+    // ── Drill-in (Enter) in window A ─────────────────────────────────────────
+    let drill = execute_ok(
+        &service,
+        "nav.drillIn",
+        json!({ "scope_chain": scope_for(WIN_A) }),
+    )
+    .await;
+    assert_eq!(
+        drill["structuredContent"]["next_fq"],
+        json!(win_leaf(WIN_A)),
+        "drill-in invoked in window A must resolve window A's focus from the \
+         window-rooted FQ chain and descend into A's leaf — NOT echo the \
+         foreign window's FQ the polluted provider reported; got {drill}"
+    );
+    assert_eq!(
+        focused_string(&state, WIN_A).await,
+        Some(win_leaf(WIN_A)),
+        "drill-in must commit the move in window A's slot"
+    );
+    assert_eq!(
+        focused_string(&state, WIN_B).await,
+        Some(win_leaf(WIN_B)),
+        "drill-in in window A must leave window B's slot untouched (pre-fix \
+         the unconditional reconcile clobbers it with the stale foreign FQ)"
+    );
+    let in_events = sink.drain();
+    assert!(
+        !in_events.is_empty(),
+        "drill-in in window A must emit a focus-changed event"
+    );
+    assert!(
+        in_events
+            .iter()
+            .all(|e| e.window_label == WindowLabel::from_string(WIN_A)),
+        "every drill event must target window A, never window B; got {in_events:?}"
+    );
+
+    // ── Drill-out (Escape) in window A ───────────────────────────────────────
+    // Open A's palette first: pre-fix the foreign-focus echo reports
+    // `moved: false` and the plugin falls through to dismiss, spuriously
+    // closing it — the live "Escape doesn't drill out" symptom.
+    ui_state.set_palette_open(WIN_A, true);
+    execute_ok(
+        &service,
+        "nav.drillOut",
+        json!({ "scope_chain": scope_for(WIN_A) }),
+    )
+    .await;
+    assert_eq!(
+        focused_string(&state, WIN_A).await,
+        Some(win_zone(WIN_A)),
+        "drill-out must move window A's focus back to its zone"
+    );
+    assert!(
+        ui_state.palette_open(WIN_A),
+        "a real drill-out move must NOT fall through to dismiss — window A's \
+         palette must stay open"
+    );
+    assert_eq!(
+        focused_string(&state, WIN_B).await,
+        Some(win_leaf(WIN_B)),
+        "drill-out in window A must leave window B's slot untouched"
+    );
+    let out_events = sink.drain();
+    assert!(
+        out_events
+            .iter()
+            .all(|e| e.window_label == WindowLabel::from_string(WIN_A)),
+        "every drill-out event must target window A; got {out_events:?}"
+    );
+
+    // ── Window B drills independently (its own ref is healthy) ──────────────
+    execute_ok(
+        &service,
+        "nav.drillOut",
+        json!({ "scope_chain": scope_for(WIN_B) }),
+    )
+    .await;
+    assert_eq!(
+        focused_string(&state, WIN_B).await,
+        Some(win_zone(WIN_B)),
+        "drill-out in window B must move B's focus to its own zone"
+    );
+    assert_eq!(
+        focused_string(&state, WIN_A).await,
+        Some(win_zone(WIN_A)),
+        "window B's drill must leave window A's slot untouched"
     );
 }
 

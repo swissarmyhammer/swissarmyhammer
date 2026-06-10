@@ -237,6 +237,40 @@ impl FocusServer {
         state.focused_in(window).cloned()
     }
 
+    /// Pull the UI focus for `window` and accept it only when it BELONGS to
+    /// that window — the fully-qualified chain is the single source of window
+    /// identity, so the pulled FQ's root segment must equal the requested
+    /// window label.
+    ///
+    /// A foreign-rooted answer is another window's state: with several windows
+    /// open the webview's focus ref can hold a different window's FQ (every
+    /// window's global `focus-changed` listener receives `emit_to`-targeted
+    /// events for all windows and overwrites its ref). Trusting it routed
+    /// drill commits and slot reconciles to the WRONG window — the
+    /// two-windows-on-one-board "drill-in/Escape do nothing while navigate
+    /// works" bug. Rejecting it here makes the host-driven resolution fall
+    /// back to the kernel's own per-window slot, which is window-rooted by
+    /// construction.
+    async fn ui_focus_owned_by_window(
+        &self,
+        window: &WindowLabel,
+    ) -> Option<FullyQualifiedMoniker> {
+        let pulled = self.provider.focus(window).await?;
+        let owned = pulled
+            .root_segment()
+            .is_some_and(|seg| seg.as_str() == window.as_str());
+        if !owned {
+            tracing::warn!(
+                window = %window,
+                pulled_fq = %pulled,
+                "provider focus is rooted at another window — rejecting the \
+                 pulled focus and falling back to the kernel's per-window slot"
+            );
+            return None;
+        }
+        Some(pulled)
+    }
+
     /// Resolve the geometry source for a host-driven nav op without holding
     /// any spatial lock across the pull.
     ///
@@ -277,15 +311,16 @@ impl FocusServer {
         // the kernel's per-window slot is routinely empty in the running app
         // (React drives focus, and the kernel `focus_by_window` commit drops
         // when no snapshot accompanies the set-focus). So resolve focus as:
-        // explicit wire `focused_fq` → PULLED UI focus (provider, authoritative)
-        // → kernel slot (last-resort fallback). Every await runs with NO spatial
-        // lock held (`provider.focus`/`focused_in_window` each acquire+release
+        // explicit wire `focused_fq` → PULLED UI focus (provider, authoritative
+        // — but only when its fq is ROOTED at the requested window; see
+        // `ui_focus_owned_by_window`) → kernel slot (last-resort fallback).
+        // Every await runs with NO spatial lock held
+        // (`ui_focus_owned_by_window`/`focused_in_window` each acquire+release
         // internally).
         let from = match focused_fq {
             Some(from) => from,
             None => match self
-                .provider
-                .focus(&window)
+                .ui_focus_owned_by_window(&window)
                 .await
                 .or(self.focused_in_window(&window).await)
             {
@@ -418,11 +453,14 @@ impl FocusServer {
             // Inline path with no snapshot: echo the wire focused_fq.
             return (focused_fq, None);
         };
+        // Same focus-resolution chain as `resolve_nav_source`, including the
+        // window-ownership guard on the pulled UI focus: a foreign-rooted
+        // answer would make the drill echo (and reconcile) ANOTHER window's
+        // FQ — the two-windows-on-one-board drill bug.
         let resolved = match focused_fq {
             Some(f) => f,
             None => match self
-                .provider
-                .focus(&window)
+                .ui_focus_owned_by_window(&window)
                 .await
                 .or(self.focused_in_window(&window).await)
             {
@@ -454,17 +492,25 @@ impl FocusServer {
         // Previously this only returned `next_fq` without committing or
         // forwarding the event, so the UI never moved focus on drill.
         let echo = focused_fq.clone();
+        // The scope to drill into: the explicit `fq` on the inline path, else
+        // the resolved focus (the focused scope IS what you drill into) — so the
+        // host-driven plugin path needs no client-side focus pre-resolution.
+        let drill_fq = req.fq.clone().unwrap_or_else(|| focused_fq.clone());
         let event = self
             .with_spatial(|registry, state| {
                 let view = IndexedSnapshot::new(&snapshot);
-                let target =
-                    crate::navigate::drill_in(&view, registry, req.fq.clone(), &focused_fq);
+                let target = crate::navigate::drill_in(&view, registry, drill_fq, &focused_fq);
                 state.focus_from(registry, &snapshot, focused_fq, target, window)
             })
             .await;
         self.forward_event(&event);
+        // `moved` is true exactly when focus actually changed (an event was
+        // produced). The host-driven plugin uses it to decide whether a drill
+        // committed a real move or echoed (layer-root edge / leaf) — without
+        // having to pre-resolve and compare the source FQM client-side.
+        let moved = event.is_some();
         let next_fq = event.and_then(|e| e.next_fq).unwrap_or(echo);
-        Ok(serde_json::json!({ "ok": true, "next_fq": next_fq }))
+        Ok(serde_json::json!({ "ok": true, "next_fq": next_fq, "moved": moved }))
     }
 
     /// Handle a `generate sneak_codes` call. Ports `generate_jump_codes`.
@@ -502,16 +548,25 @@ impl FocusServer {
         // Previously this only returned `next_fq` without committing or
         // forwarding the event, so the UI never moved focus on drill.
         let echo = focused_fq.clone();
+        // The scope to drill out of: the explicit `fq` on the inline path, else
+        // the resolved focus — symmetric with `handle_drill_in` and removing the
+        // need for client-side focus pre-resolution on the host-driven path.
+        let drill_fq = req.fq.clone().unwrap_or_else(|| focused_fq.clone());
         let event = self
             .with_spatial(|registry, state| {
                 let view = IndexedSnapshot::new(&snapshot);
-                let target = crate::navigate::drill_out(&view, req.fq.clone(), &focused_fq);
+                let target = crate::navigate::drill_out(&view, drill_fq, &focused_fq);
                 state.focus_from(registry, &snapshot, focused_fq, target, window)
             })
             .await;
         self.forward_event(&event);
+        // `moved` is true exactly when focus actually changed (a parent zone was
+        // resolved and committed). A layer-root edge (no parent_zone) produces no
+        // event → `moved: false`, the signal the host-driven plugin uses to fall
+        // through to its dismiss (Escape-chain) behavior.
+        let moved = event.is_some();
         let next_fq = event.and_then(|e| e.next_fq).unwrap_or(echo);
-        Ok(serde_json::json!({ "ok": true, "next_fq": next_fq }))
+        Ok(serde_json::json!({ "ok": true, "next_fq": next_fq, "moved": moved }))
     }
 }
 

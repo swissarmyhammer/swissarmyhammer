@@ -242,8 +242,12 @@ pub struct PopLayer {
 )]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DrillIn {
-    /// Scope being drilled into.
-    pub fq: FullyQualifiedMoniker,
+    /// Scope being drilled into. The inline (React) path sends it explicitly;
+    /// the host-driven plugin path omits it and the kernel drills the scope it
+    /// resolves as the current focus (the focused scope IS what you drill into),
+    /// keeping drill's source resolution symmetric with `navigate focus`.
+    #[serde(default)]
+    pub fq: Option<FullyQualifiedMoniker>,
     /// Currently focused scope (the no-op return value). Omitted on the
     /// host-driven pull path.
     #[serde(default)]
@@ -272,8 +276,12 @@ pub struct DrillIn {
 )]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DrillOut {
-    /// Scope being drilled out of.
-    pub fq: FullyQualifiedMoniker,
+    /// Scope being drilled out of. The inline (React) path sends it explicitly;
+    /// the host-driven plugin path omits it and the kernel drills out of the
+    /// scope it resolves as the current focus, keeping drill's source resolution
+    /// symmetric with `navigate focus`.
+    #[serde(default)]
+    pub fq: Option<FullyQualifiedMoniker>,
     /// Currently focused scope (the no-op return value). Omitted on the
     /// host-driven pull path.
     #[serde(default)]
@@ -454,7 +462,7 @@ fn proto_pop_layer() -> PopLayer {
 
 fn proto_drill_in() -> DrillIn {
     DrillIn {
-        fq: empty_fq(),
+        fq: None,
         focused_fq: None,
         snapshot: None,
         window: None,
@@ -463,7 +471,7 @@ fn proto_drill_in() -> DrillIn {
 
 fn proto_drill_out() -> DrillOut {
     DrillOut {
-        fq: empty_fq(),
+        fq: None,
         focused_fq: None,
         snapshot: None,
         window: None,

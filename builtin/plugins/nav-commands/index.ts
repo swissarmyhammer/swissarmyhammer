@@ -25,9 +25,11 @@
 //   nav.up/down/left/right/first/last → focus `navigate focus`
 //     (this.focus.focus.focus.navigate) with `{ window, direction }`.
 //   nav.drillIn                       → focus `drill_in layer`
-//     (this.focus.focus.layer.drill_in) with `{ window, fq, focused_fq }`.
+//     (this.focus.focus.layer.drill_in) with `{ window }` — the kernel resolves
+//     the focused scope (provider focus → kernel-slot fallback, like navigate).
 //   nav.drillOut                      → focus `drill_out layer`
-//     (this.focus.focus.layer.drill_out) with `{ window, fq, focused_fq }`.
+//     (this.focus.focus.layer.drill_out) with `{ window }`; same source
+//     resolution, with a `moved` flag driving the dismiss fall-through.
 //
 // The ninth — `nav.jump` — has NO backend op: the webview registers a handler
 // on the command bus (`webview-command-bus.ts`, Card B) that opens the
@@ -63,7 +65,6 @@ import {
  * single tool name are both `"focus"`; the noun/verb pairs come straight from
  * `crates/swissarmyhammer-focus/src/operations.rs`:
  *   `navigate focus`  → this.focus.focus.focus.navigate
- *   `query focus`     → this.focus.focus.focus.query
  *   `drill_in layer`  → this.focus.focus.layer.drill_in
  *   `drill_out layer` → this.focus.focus.layer.drill_out
  */
@@ -72,7 +73,6 @@ interface FocusDispatch {
     focus: {
       focus: {
         navigate(args: Record<string, unknown>): Promise<unknown>;
-        query(args: Record<string, unknown>): Promise<unknown>;
       };
       layer: {
         drill_in(args: Record<string, unknown>): Promise<unknown>;
@@ -217,10 +217,15 @@ export default class NavCommandsPlugin extends Plugin {
 
       // ─── nav.drillIn ────────────────────────────────────────────────────
       // nav.yaml: keys vim/cua/emacs all Enter, menu Navigation/2/0. Host-
-      // driven drill: pull the focused FQM for the window, then drill into it.
-      // The kernel needs `fq` (the scope being drilled into) — which is the
-      // focused scope — so we resolve focus first, then thread it as both `fq`
-      // and `focused_fq` and let the kernel pull the snapshot for `window`.
+      // driven drill: send ONLY `{ window }` and let the kernel resolve the
+      // current focus the SAME way `navigate focus` does — provider focus, then
+      // the kernel `focus_by_window` slot fallback. The focused scope IS the
+      // scope being drilled into, so the kernel uses the resolved focus as both
+      // the drill target and the no-op echo; the plugin no longer pre-resolves
+      // focus client-side (the old `query focus` → `provider.focus` ONLY path
+      // had no kernel-slot fallback, so it silently no-op'd whenever the UI
+      // reported no focus while the kernel slot was set — drilling broke while
+      // navigate kept working).
       {
         id: "nav.drillIn",
         name: "Drill In",
@@ -230,27 +235,26 @@ export default class NavCommandsPlugin extends Plugin {
         execute: async (rawCtx: unknown) => {
           const ctx = (rawCtx ?? {}) as CommandContext;
           const window = scopeId(ctx, "window");
-          const fq = await this.focusedFq(focus, window);
-          if (fq === undefined) return { ok: true, next_fq: null };
-          return await focus.focus.focus.layer.drill_in({
-            window,
-            fq,
-            focused_fq: fq,
-          });
+          return await focus.focus.focus.layer.drill_in({ window });
         },
       },
 
       // ─── nav.drillOut ───────────────────────────────────────────────────
       // nav.yaml: keys vim/cua/emacs all Escape, menu Navigation/2/1.
       // Two-stage, porting the removed React `buildDrillCommands` contract:
-      //   1. Resolve focus + drill out via the kernel. If the focused scope has
-      //      a `parent_zone`, the kernel commits focus to it and emits
-      //      `focus-changed` (the UI moves) and returns the parent as `next_fq`.
-      //   2. DISMISS fallthrough: if there is no focus, or the kernel echoed
-      //      the focused FQM (no `parent_zone` — a layer-root edge), there is
-      //      nothing to drill out TO, so close the topmost modal layer
-      //      (palette → inspector) via `ui_state` `dismiss ui` — the same
-      //      Escape-chain behavior the old React closure had.
+      //   1. Drill out host-driven: send ONLY `{ window }` and let the kernel
+      //      resolve the current focus (provider focus → kernel-slot fallback,
+      //      symmetric with navigate) and drill out of it. If the focused scope
+      //      has a `parent_zone`, the kernel commits focus to it, emits
+      //      `focus-changed` (the UI moves), and reports `moved: true`.
+      //   2. DISMISS fallthrough: if the kernel did NOT move focus
+      //      (`moved: false` — no resolvable focus, or a layer-root edge with no
+      //      `parent_zone`), there is nothing to drill out TO, so close the
+      //      topmost modal layer (palette → inspector) via `ui_state`
+      //      `dismiss ui` — the same Escape-chain behavior the old React closure
+      //      had. The `moved` flag replaces the old client-side
+      //      `next_fq === focusedFq` echo check, which required pre-resolving
+      //      focus (the source of the drill regression).
       {
         id: "nav.drillOut",
         name: "Drill Out",
@@ -261,31 +265,18 @@ export default class NavCommandsPlugin extends Plugin {
           const ctx = (rawCtx ?? {}) as CommandContext;
           const window = scopeId(ctx, "window");
           const scopeChain = ctx.scope_chain ?? [];
-          const fq = await this.focusedFq(focus, window);
-          // No spatial focus → nothing to drill out of; dismiss the topmost
-          // modal layer (honours the Escape chain).
-          if (fq === undefined) {
-            return await uiState.ui_state.ui_state.ui.dismiss({
-              scope_chain: scopeChain,
-            });
+          const result = await focus.focus.focus.layer.drill_out({ window });
+          const moved = unwrapResult<{ moved?: unknown }>(result).moved;
+          // Focus moved to a parent zone — the kernel already committed focus +
+          // emitted `focus-changed`; just surface the result.
+          if (moved === true) {
+            return result;
           }
-          const result = await focus.focus.focus.layer.drill_out({
-            window,
-            fq,
-            focused_fq: fq,
+          // No move (no resolvable focus, or a layer-root edge) → fall through
+          // to dismiss the topmost modal layer, honouring the Escape chain.
+          return await uiState.ui_state.ui_state.ui.dismiss({
+            scope_chain: scopeChain,
           });
-          const nextFq = unwrapResult<{ next_fq?: unknown }>(result).next_fq;
-          // Kernel echoed the focused FQM (or returned nothing) → layer-root
-          // edge / no parent_zone: fall through to dismiss, matching the legacy
-          // `result === focusedFq` behavior.
-          if (nextFq === null || nextFq === undefined || nextFq === fq) {
-            return await uiState.ui_state.ui_state.ui.dismiss({
-              scope_chain: scopeChain,
-            });
-          }
-          // Parent zone resolved — the kernel already committed focus + emitted
-          // `focus-changed`; just surface the result.
-          return result;
         },
       },
 
@@ -319,26 +310,5 @@ export default class NavCommandsPlugin extends Plugin {
     this.log.info(
       "nav-commands: registered 9 nav.* (up/down/left/right/first/last → focus navigate; drillIn/drillOut → focus drill; jump → webview bus)",
     );
-  }
-
-  /**
-   * Pull the FQM currently focused in `window` from the focus kernel.
-   *
-   * Drill needs the focused scope as its `fq`; the host-driven contract has
-   * the kernel resolve focus from `focus_by_window`, but it does not echo that
-   * FQM back into `fq`, so the plugin pulls it explicitly via `query focus`.
-   * Returns `undefined` when the window is unknown or has no focused slot — the
-   * caller then no-ops (nothing to drill from).
-   */
-  private async focusedFq(
-    focus: FocusDispatch,
-    window: string | undefined,
-  ): Promise<string | undefined> {
-    if (window === undefined) return undefined;
-    // In-process op tools answer with a CallToolResult whose `content[0].text`
-    // carries the op's JSON payload (`{ ok, focus }`); `unwrapResult` parses it.
-    const result = await focus.focus.focus.focus.query({ window });
-    const fq = unwrapResult<{ focus?: unknown }>(result).focus;
-    return typeof fq === "string" ? fq : undefined;
   }
 }

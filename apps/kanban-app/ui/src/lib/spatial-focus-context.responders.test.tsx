@@ -170,6 +170,61 @@ describe("SpatialFocusProvider host→UI geometry responders", () => {
     expect(snapshot!.scopes.map((s) => s.fq)).toContain(focusedFq);
   });
 
+  it("ignores focus-changed events targeted at another window", async () => {
+    // THE two-windows-on-one-board drill bug (live): `emit_to`-targeted
+    // Tauri events are received by EVERY window's global `listen`, so
+    // window B's `focus-changed` reached window A's provider and overwrote
+    // `focusedFqRef` with B's FQ. The kernel's next `focus.current` pull for
+    // window A then resolved ANOTHER window's focus, and drill-in/Escape
+    // echoed/committed against the wrong window. The provider must answer
+    // only for events whose `window_label` is its own window.
+    const captured: { current: LayerScopeRegistry | null } = { current: null };
+
+    render(
+      <SpatialFocusProvider>
+        <FocusLayer name={asSegment("window")}>
+          <CaptureRegistry out={captured} />
+        </FocusLayer>
+      </SpatialFocusProvider>,
+    );
+    await flushSetup();
+
+    const layerFq = fqRoot(asSegment("window"));
+    const ownFocus = composeFq(layerFq, asSegment("k1"));
+    captured.current!.add(
+      ownFocus,
+      makeEntry(layerFq, { x: 0, y: 0, width: 10, height: 10 }),
+    );
+
+    // Own-window focus event: recorded.
+    await act(async () => {
+      listenHandlers["focus-changed"]?.({
+        payload: {
+          window_label: "main",
+          prev_fq: null,
+          next_fq: ownFocus,
+          next_segment: "k1",
+        },
+      });
+    });
+    expect(await callResponder("focus.current")).toBe(ownFocus);
+
+    // ANOTHER window's focus event leaks in through the global listener:
+    // it must be IGNORED — `focus.current` keeps answering this window's
+    // own focus, never the foreign window's FQ.
+    await act(async () => {
+      listenHandlers["focus-changed"]?.({
+        payload: {
+          window_label: "board-other",
+          prev_fq: null,
+          next_fq: "/board-other/window/board:b/zone:z",
+          next_segment: "zone:z",
+        },
+      });
+    });
+    expect(await callResponder("focus.current")).toBe(ownFocus);
+  });
+
   it("focus.current and focus.geometry return null when nothing is focused", async () => {
     render(
       <SpatialFocusProvider>
