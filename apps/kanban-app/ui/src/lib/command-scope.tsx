@@ -8,10 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { callCommandTool } from "@/lib/mcp-transport";
-import {
-  getWebviewCommandHandler,
-  hasWebviewCommandHandler,
-} from "./webview-command-bus";
+import { getWebviewCommandHandler } from "./webview-command-bus";
 
 // ---------------------------------------------------------------------------
 // ActiveBoardPath context — per-window board path for multi-window dispatch
@@ -518,8 +515,9 @@ export function useDispatchCommand(presetCmd?: string) {
       // registered a live handler for this plugin command id. A registered
       // handler is the signal that the id is "handled in webview": run it and
       // skip the backend. See `webview-command-bus.ts`.
-      if (hasWebviewCommandHandler(cmdId)) {
-        return getWebviewCommandHandler(cmdId)!(opts);
+      const webviewHandler = getWebviewCommandHandler(cmdId);
+      if (webviewHandler) {
+        return webviewHandler(opts);
       }
 
       // Command service dispatch — `execute command` with busy tracking.

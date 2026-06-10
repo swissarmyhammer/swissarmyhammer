@@ -5,28 +5,35 @@
 //! `swissarmyhammer-focus/builtin/commands/nav.yaml` overlay (whose execution
 //! lived in React closures) INTO the `builtin/plugins/nav-commands/` bundle, so
 //! the OS menu is built FROM the CommandService catalogue and nav execution is
-//! a real backend/plugin path.
+//! a real backend/plugin path — plus the tenth nav command, `nav.focus`, the
+//! programmatic focus-claim id (never in `nav.yaml`, so it carries no keys and
+//! no menu placement).
 //!
-//! Eight of the nine commands route to the `focus` server
+//! Eight of the nine `nav.yaml` commands route to the `focus` server
 //! (`swissarmyhammer-focus::FocusServer` over a real `SpatialRegistry` /
 //! `SpatialState`), exposed under id `"focus"`, host-driven (the kernel pulls
 //! the live geometry from an injected [`UiGeometryProvider`] — here a recording
 //! stub that serves a fixed two-scope snapshot). The ninth — `nav.jump` — has
 //! NO backend op: its effect is presentation-only (open the jump overlay via
-//! the webview command bus), so its host `execute` is an inert no-op.
+//! the webview command bus), so its host `execute` is an inert no-op. The
+//! tenth — `nav.focus` — routes to the focus `set focus` op with the dispatch
+//! `args.fq`.
 //!
 //! What a passing run proves:
 //!
-//! 1. **Discovery + registration** — after load, all nine `nav.*` commands are
-//!    registered, and exactly those nine.
-//! 2. **Metadata fidelity** — each command's `name` / `keys` / `menu` match the
-//!    retired `nav.yaml` baseline 1:1 (table test), and every nav command lands
-//!    under the `Navigation` menu path.
+//! 1. **Discovery + registration** — after load, all ten `nav.*` commands are
+//!    registered, and exactly those ten.
+//! 2. **Metadata fidelity** — each `nav.yaml`-ported command's `name` / `keys`
+//!    / `menu` match the retired `nav.yaml` baseline 1:1 (table test), and
+//!    every one of those nine lands under the `Navigation` menu path;
+//!    `nav.focus` matches its React-def baseline (name `Focus Scope`, no keys,
+//!    no menu, not palette-visible).
 //! 3. **Focus-op routing (real effect)** — with the kernel seeded (a focused
 //!    scope) and the provider serving a snapshot, dispatching `nav.down` drives
 //!    the focus `navigate` op host-driven and moves focus to the lower scope
 //!    (a real `FocusChangedEvent`); dispatching `nav.drillIn` drives the focus
-//!    `drill_in` op. `nav.jump` does NOT touch the focus kernel.
+//!    `drill_in` op; dispatching `nav.focus` drives the `set focus` op.
+//!    `nav.jump` does NOT touch the focus kernel.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -395,7 +402,7 @@ async fn nav_commands_plugin_registers_and_routes_to_focus() {
         "exactly the one nav-commands builtin plugin should be discovered, got {loaded:?}"
     );
 
-    // ── (1) Discovery + registration: exactly the nine nav.* ids ────────────
+    // ── (1) Discovery + registration: exactly the ten nav.* ids ─────────────
     let listed = call_command(
         &service,
         CallerId::HostInternal,
@@ -412,8 +419,8 @@ async fn nav_commands_plugin_registers_and_routes_to_focus() {
     }
     assert_eq!(
         commands.len(),
-        9,
-        "exactly the 9 nav.* commands should be registered, got {:?}",
+        10,
+        "exactly the 10 nav.* commands should be registered, got {:?}",
         commands.keys().collect::<Vec<_>>()
     );
 
@@ -422,7 +429,7 @@ async fn nav_commands_plugin_registers_and_routes_to_focus() {
         let cmd = &commands[spec.id];
         assert_eq!(cmd["keys"], spec.keys, "{} keys", spec.id);
         assert_eq!(cmd["menu"], spec.menu, "{} menu", spec.id);
-        // Every nav command lands under the Navigation top-level menu.
+        // Every nav.yaml-ported command lands under the Navigation menu.
         assert_eq!(
             cmd["menu"]["path"],
             json!(["Navigation"]),
@@ -430,6 +437,31 @@ async fn nav_commands_plugin_registers_and_routes_to_focus() {
             spec.id
         );
     }
+
+    // ── (2b) nav.focus metadata: the programmatic focus-claim command ───────
+    // `nav.focus` was never in `nav.yaml` — it has no key binding and no menu
+    // placement (the Navigation submenu stays at the nine nav.yaml entries),
+    // and it is not palette-visible (it requires a target `args.fq`, like the
+    // programmatic `ui.setFocus` / `ui.mode.set`). Name matches the React
+    // scope defs (`Focus Scope`).
+    let focus_cmd = &commands["nav.focus"];
+    assert_eq!(focus_cmd["name"], json!("Focus Scope"), "nav.focus name");
+    assert_eq!(
+        focus_cmd["visible"],
+        json!(false),
+        "nav.focus must not be palette-visible (it requires args.fq)"
+    );
+    assert!(
+        focus_cmd.get("keys").is_none() || focus_cmd["keys"] == json!({}),
+        "nav.focus carries no keys (it was never in nav.yaml), got {}",
+        focus_cmd["keys"]
+    );
+    assert!(
+        focus_cmd.get("menu").is_none() || focus_cmd["menu"].is_null(),
+        "nav.focus carries no menu placement (the Navigation submenu stays at \
+         the nine nav.yaml entries), got {}",
+        focus_cmd["menu"]
+    );
 
     // ── (3a) nav.down drives the focus navigate op and moves focus ──────────
     // Precondition: the kernel's focused slot is the top scope (seeded).
@@ -545,6 +577,51 @@ async fn nav_commands_plugin_registers_and_routes_to_focus() {
         ui_state.inspector_stack(WINDOW).is_empty(),
         "nav.drillOut at a layer-root edge must fall through to ui_state dismiss \
          and pop the open inspector (the inspector's Escape-close path)"
+    );
+
+    // ── (3f) nav.focus routes to the focus `set focus` op ───────────────────
+    // The host execute sends `{ fq: args.fq, window }` — the same wire shape
+    // `focus-mcp.ts::setFocus` uses, minus the snapshot (the host has no
+    // geometry of its own). The `set focus` op's envelope distinctively
+    // carries an `event` key (like navigate; nav.jump's plain `{ ok }` does
+    // not), proving the dispatch reached the focus kernel. Per `handle_focus`'s
+    // contract a snapshot-less commit DROPS silently (`event: null`, slot
+    // untouched) — in production the webview's `nav.focus` scope defs take the
+    // execute fast-path and supply the snapshot; this plugin def is the
+    // catalogue/routing owner.
+    let focused_before = state
+        .lock()
+        .await
+        .focused_in(&WindowLabel::from_string(WINDOW))
+        .map(|fq| fq.to_string());
+    let focus_result = execute_ok(
+        &service,
+        "nav.focus",
+        json!({
+            "scope_chain": window_scope(),
+            "args": { "fq": SCOPE_TOP },
+        }),
+    )
+    .await;
+    assert!(
+        focus_result["structuredContent"].get("event").is_some(),
+        "nav.focus must route to the focus `set focus` op (envelope carries \
+         `event`); got {focus_result}"
+    );
+    assert_eq!(
+        focus_result["structuredContent"]["event"],
+        Value::Null,
+        "a snapshot-less host dispatch must drop the commit silently \
+         (event: null); got {focus_result}"
+    );
+    assert_eq!(
+        state
+            .lock()
+            .await
+            .focused_in(&WindowLabel::from_string(WINDOW))
+            .map(|fq| fq.to_string()),
+        focused_before,
+        "the snapshot-less drop must leave the kernel focus slot untouched"
     );
 }
 
@@ -1032,10 +1109,12 @@ async fn drill_ignores_foreign_window_focus_in_two_window_same_board() {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// The nine nav ids + their locked metadata (mirrors the retired nav.yaml)
+// The ten nav ids + the locked metadata of the nine nav.yaml-ported ones
 // ───────────────────────────────────────────────────────────────────────────
 
-/// The nine nav command ids, in no particular order.
+/// The ten nav command ids, in no particular order. The first nine are the
+/// `nav.yaml`-ported set; `nav.focus` is the programmatic focus-claim command
+/// (never in `nav.yaml` — no keys, no menu).
 const NAV_IDS: &[&str] = &[
     "nav.up",
     "nav.down",
@@ -1046,6 +1125,7 @@ const NAV_IDS: &[&str] = &[
     "nav.drillIn",
     "nav.drillOut",
     "nav.jump",
+    "nav.focus",
 ];
 
 /// One row of the metadata-fidelity table: a nav id with its expected `keys`

@@ -19,6 +19,15 @@
  * `triggerStartRename` module bus — the established pattern for a
  * window-layer command whose effect lives in a sibling subtree.
  *
+ * This module-bus is the PRECEDENT that the generic webview command bus
+ * (`@/lib/webview-command-bus`) was generalized from: the id-keyed
+ * `registerWebviewCommandHandler` registry copies this module's
+ * ownership-guarded cleanup and test-reset semantics. The AI registry is
+ * intentionally left as-is on its own purpose-keyed map rather than migrated
+ * onto the id-keyed bus — the window-layer `execute` closures call the
+ * `triggerAi*` functions directly, and the registry additionally owns the
+ * turn-status store below, which the generic bus deliberately does not model.
+ *
  * # Turn status — gates `ai.cancel` and feeds the bottom bar
  *
  * The conversation reports its full ACP turn status here via

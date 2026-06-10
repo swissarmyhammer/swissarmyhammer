@@ -675,8 +675,8 @@ describe("createKeyHandler", () => {
     //   - `field.edit`      — vim `i` (also cua `Enter`)
     //   - `field.editEnter` — vim `Enter`
     // Nav commands (`nav.up`, `nav.down`, …) are global, not scope-
-    // bound — vim `j`/`k` resolve through `BINDING_TABLES.vim` and
-    // `app-shell.tsx`'s `NAV_COMMAND_SPEC`, never through scope.
+    // bound — vim `j`/`k` resolve through `BINDING_TABLES.vim` and the
+    // `nav-commands` builtin plugin's catalogue, never through scope.
     const scopeBindings = () => ({
       i: "field.edit",
       Enter: "field.editEnter",
@@ -715,8 +715,9 @@ describe("extractScopeBindings", () => {
   // deleted the inspector edit commands and the
   // `<InspectorFocusBridge>` itself. Under the unified-nav contract
   // every Up/Down/Left/Right/Home/End/Tab/Shift+Tab resolves through
-  // the global keymap in `BINDING_TABLES.cua` plus `app-shell.tsx`'s
-  // `NAV_COMMAND_SPEC` — there are no inspector-scoped nav variants.
+  // the global keymap in `BINDING_TABLES.cua` plus the `nav-commands`
+  // builtin plugin's catalogue — there are no inspector-scoped nav
+  // variants.
   // Edit-mode entry on the focused inspector field zone is owned by
   // the field-zone-scoped commands `field.edit` / `field.editEnter`.
 

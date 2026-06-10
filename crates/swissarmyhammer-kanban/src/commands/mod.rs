@@ -142,6 +142,11 @@ fn register_ui(map: &mut CmdMap) {
         "ui.inspector.set_width".into(),
         Arc::new(ui_commands::InspectorSetWidthCmd),
     );
+    // LEGACY ID — the live catalogue registers the palette opener as
+    // `app.palette.open` (ui.*→app.* rename fold, Card A
+    // 01KTCQFH7AEQDZD0QETSMCMGP0). This map has no production callers
+    // (test-only); renaming the ids here is deferred to the repo-wide
+    // `ui.*` sweep owned by mop-up card 01KTEBZSVGAZ881RAZZWWZXGPE.
     map.insert(
         "ui.palette.open".into(),
         Arc::new(ui_commands::PaletteOpenCmd),

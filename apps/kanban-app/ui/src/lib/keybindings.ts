@@ -78,9 +78,10 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     Escape: "nav.drillOut",
     "Mod+w": "file.closeBoard",
     // Tab / Shift+Tab cycle to the next / previous spatial sibling.
-    // `nav.right` / `nav.left` are global commands defined in
-    // `app-shell.tsx`'s `NAV_COMMAND_SPEC`; their execute closures
-    // dispatch `spatial_navigate(focusedKey, "right" | "left")`. The
+    // `nav.right` / `nav.left` are catalogue commands defined in the
+    // `nav-commands` builtin plugin (`builtin/plugins/nav-commands/index.ts`);
+    // their executes route to the focus kernel's `navigate focus` op
+    // host-driven ("right" | "left"). The
     // Rust kernel's cascade (iter 0: same-kind siblings, iter 1:
     // escalate to parent zone) picks the next focusable. Inside an
     // inspector the vertical layout means iter 0 finds no horizontal

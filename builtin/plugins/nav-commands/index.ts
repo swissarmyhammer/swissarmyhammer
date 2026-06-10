@@ -1,4 +1,4 @@
-// nav-commands — builtin plugin owning the nine universal spatial-navigation
+// nav-commands — builtin plugin owning the universal spatial-navigation
 // commands (`nav.*`). It REPLACES the retired
 // `crates/swissarmyhammer-focus/builtin/commands/nav.yaml` overlay (whose
 // execution lived in React closures in `app-shell.tsx`) so the nav metadata
@@ -12,16 +12,17 @@
 //   2. `load()` calls `ensureServices(this, ["commands", "focus"])` FIRST — so
 //      the `commands` registry and the `focus` kernel are both live before any
 //      registration — THEN `registerCommands`.
-//   3. Each registration carries the FULL UI metadata from the source
-//      `nav.yaml` — `keys` + `menu:{path:["Navigation"],group,order}` — 1:1, so
-//      the OS menu renders identically to the YAML-driven version.
+//   3. Each nav.yaml-ported registration carries the FULL UI metadata from the
+//      source `nav.yaml` — `keys` + `menu:{path:["Navigation"],group,order}` —
+//      1:1, so the OS menu renders identically to the YAML-driven version.
+//      `nav.focus` (never in nav.yaml) carries neither: no keys, no menu.
 //   4. The plugin holds NO business logic. Each directional / drill command
 //      makes exactly ONE host-driven MCP call into the `focus` kernel; the
 //      kernel pulls the live geometry + focus from the webview on demand (Card
 //      F2), so NO snapshot crosses the wire.
 //
-// Backend routing — eight of the nine nav.* commands route to the `focus`
-// kernel (`crates/swissarmyhammer-focus/src/operations.rs`), host-driven:
+// Backend routing — eight of the nine nav.yaml-ported commands route to the
+// `focus` kernel (`crates/swissarmyhammer-focus/src/operations.rs`), host-driven:
 //   nav.up/down/left/right/first/last → focus `navigate focus`
 //     (this.focus.focus.focus.navigate) with `{ window, direction }`.
 //   nav.drillIn                       → focus `drill_in layer`
@@ -36,6 +37,16 @@
 // `<JumpToOverlay>`. This plugin owns its id / name / keys / menu so it appears
 // in the OS menu and palette, but its EXECUTION is presentation-only and runs
 // in the webview (`useDispatchCommand` consults the bus before the backend).
+//
+// The tenth — `nav.focus` — is the programmatic focus-claim command (it was
+// never in nav.yaml: no keys, no menu, not palette-visible). It routes to
+//   focus `set focus` (this.focus.focus.focus.set) with `{ fq: args.fq, window }`
+// — the same wire shape `focus-mcp.ts::setFocus` uses, minus the snapshot
+// (the host has no geometry; a snapshot-less commit drops silently per the
+// kernel's transient-unmount contract). In the webview the two `nav.focus`
+// scope defs (`entity-focus-context.tsx` / `spatial-focus-context.tsx`) take
+// the execute fast-path and supply the snapshot; their dedup is Card G. This
+// plugin def makes the catalogue the single registration owner.
 //
 // # Resolving the window
 //
@@ -64,6 +75,7 @@ import {
  * `server.tool.noun.verb`. For the `focus` server the server name and the
  * single tool name are both `"focus"`; the noun/verb pairs come straight from
  * `crates/swissarmyhammer-focus/src/operations.rs`:
+ *   `set focus`       → this.focus.focus.focus.set
  *   `navigate focus`  → this.focus.focus.focus.navigate
  *   `drill_in layer`  → this.focus.focus.layer.drill_in
  *   `drill_out layer` → this.focus.focus.layer.drill_out
@@ -72,6 +84,7 @@ interface FocusDispatch {
   focus: {
     focus: {
       focus: {
+        set(args: Record<string, unknown>): Promise<unknown>;
         navigate(args: Record<string, unknown>): Promise<unknown>;
       };
       layer: {
@@ -168,9 +181,10 @@ const NAV_DIRECTIONS: readonly NavDirSpec[] = [
 /**
  * The nav-commands builtin plugin.
  *
- * Registers the nine `nav.*` commands ported from `nav.yaml`. Eight route to
- * the `focus` kernel (host-driven, no snapshot); `nav.jump` is webview-bus
- * handled. Identity is the bundle directory name (`nav-commands`); `name` /
+ * Registers the ten `nav.*` commands: the nine ported from `nav.yaml` (eight
+ * route to the `focus` kernel host-driven, no snapshot; `nav.jump` is
+ * webview-bus handled) plus the programmatic `nav.focus` (focus `set focus`).
+ * Identity is the bundle directory name (`nav-commands`); `name` /
  * `description` are descriptive metadata only.
  */
 export default class NavCommandsPlugin extends Plugin {
@@ -183,7 +197,7 @@ export default class NavCommandsPlugin extends Plugin {
 
   /**
    * Activate the `commands` registry and the `focus` kernel, then register the
-   * nine nav commands.
+   * ten nav commands.
    */
   async load(): Promise<void> {
     await ensureServices(this, ["commands", "focus", "ui_state"]);
@@ -305,10 +319,38 @@ export default class NavCommandsPlugin extends Plugin {
           return { ok: true };
         },
       },
+
+      // ─── nav.focus ──────────────────────────────────────────────────────
+      // The programmatic focus-claim command — never in nav.yaml, so it
+      // carries NO keys and NO menu placement (the Navigation submenu stays
+      // at the nine nav.yaml entries), and it is not palette-visible (it
+      // requires a target `args.fq`, like the programmatic `ui.setFocus`).
+      // Routes to the focus kernel's `set focus` op with `{ fq, window }` —
+      // the wire shape `focus-mcp.ts::setFocus` uses, minus the snapshot:
+      // the host has no geometry of its own, and the kernel drops a
+      // snapshot-less commit silently (its transient-unmount contract). In
+      // production the webview's two `nav.focus` scope defs
+      // (`entity-focus-context.tsx` / `spatial-focus-context.tsx`) shadow
+      // this def on the execute fast-path and supply the snapshot; their
+      // dedup is Card G — this plugin def owns the catalogue registration.
+      {
+        id: "nav.focus",
+        name: "Focus Scope",
+        visible: false,
+        undoable: false,
+        execute: async (rawCtx: unknown) => {
+          const ctx = (rawCtx ?? {}) as CommandContext;
+          const window = scopeId(ctx, "window");
+          return await focus.focus.focus.focus.set({
+            fq: ctx.args?.fq,
+            window,
+          });
+        },
+      },
     ]);
 
     this.log.info(
-      "nav-commands: registered 9 nav.* (up/down/left/right/first/last → focus navigate; drillIn/drillOut → focus drill; jump → webview bus)",
+      "nav-commands: registered 10 nav.* (up/down/left/right/first/last → focus navigate; drillIn/drillOut → focus drill; jump → webview bus; focus → focus set)",
     );
   }
 }
