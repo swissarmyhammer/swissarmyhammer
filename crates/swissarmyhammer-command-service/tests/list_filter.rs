@@ -361,7 +361,7 @@ async fn list_returns_commands_in_deterministic_id_order() {
     // sort — and `handle_list` is exactly such a caller: the webview builds
     // its GLOBAL keybinding table from this response with first-id-wins per
     // key, so an unordered response makes same-key ownership (e.g. Enter:
-    // `nav.drillIn` vs `ui.entity.startRename`) a coin toss that lands
+    // `nav.drillIn` vs `app.entity.startRename`) a coin toss that lands
     // differently in each per-board plugin runtime. The response must
     // therefore be sorted by id — identical for every runtime, every time.
     let service = CommandService::new();

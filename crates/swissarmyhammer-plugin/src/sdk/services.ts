@@ -147,7 +147,7 @@ export const RUST_MODULE_IDS: Readonly<Record<string, string>> = Object.freeze({
   /**
    * The focus operation tool: the spatial-navigation focus kernel
    * (`SpatialRegistry` / `SpatialState`) that owns per-window focus state.
-   * Backs `ui.setFocus` (`set focus`). Exposed under id `"focus"` by the
+   * Backs `app.setFocus` (`set focus`). Exposed under id `"focus"` by the
    * host's `expose_rust_module` wiring (the kanban app wraps a
    * `swissarmyhammer_focus::FocusServer` in an `InProcessServer`). A builtin
    * plugin asks for it by the public name `"focus"` and reaches it as

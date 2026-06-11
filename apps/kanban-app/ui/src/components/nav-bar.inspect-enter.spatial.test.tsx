@@ -1,6 +1,6 @@
 /**
  * Browser-mode test: Enter on the focused `ui:navbar.inspect` leaf
- * dispatches `ui.inspect` exactly once.
+ * dispatches `app.inspect` exactly once.
  *
  * Source of truth for the inspect-button half of card
  * `01KQM9BGN0HFQSC168YD9G82Z2` (Add `<Pressable>` primitive). Pins the
@@ -15,11 +15,11 @@
  *      via `extractChainBindings(focusedScope)`, sees `pressable.activate`
  *      bound to Enter, dispatches it through `useDispatchCommand`.
  *   5. The CommandDef's `execute` fires `onPress` → which dispatches
- *      `ui.inspect` against the board's moniker via the real dispatch
+ *      `app.inspect` against the board's moniker via the real dispatch
  *      chain (no mock layer in between).
  *
  * Assertions: `dispatch_command` is invoked exactly once with
- * `cmd: "ui.inspect"` and `target` set to the board's moniker.
+ * `cmd: "app.inspect"` and `target` set to the board's moniker.
  *
  * Distinct from `nav-bar.spatial-nav.test.tsx`: that file mocks
  * `useDispatchCommand`, so it cannot prove keyboard activation drives
@@ -47,7 +47,7 @@ const currentFocusKey: { key: string | null } = { key: null };
 const listenCallbacks: Record<string, (event: unknown) => void> = {};
 
 function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
-  // The pressable activation commands are DEFINED by the `ui-commands`
+  // The pressable activation commands are DEFINED by the `app-shell-commands`
   // builtin plugin (`pressable.activate` / `pressable.activateSpace`,
   // scope ["ui:pressable"]) — their Enter / Space keys reach the keymap
   // layer only through the `useCommandList` seam, so answer `list command`
@@ -274,7 +274,7 @@ function dispatchCommandCalls(): Array<Record<string, unknown>> {
     .map((c: unknown[]) => c[1] as Record<string, unknown>);
 }
 
-describe("NavBar inspect button — Enter activates ui.inspect via Pressable", () => {
+describe("NavBar inspect button — Enter activates app.inspect via Pressable", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     monikerToKey.clear();
@@ -287,7 +287,7 @@ describe("NavBar inspect button — Enter activates ui.inspect via Pressable", (
     mockActiveBoardPath.mockReturnValue("/boards/a/.kanban");
   });
 
-  it("seeds focus on ui:navbar.inspect → Enter dispatches ui.inspect once", async () => {
+  it("seeds focus on ui:navbar.inspect → Enter dispatches app.inspect once", async () => {
     await renderNavBar();
     await flushSetup();
 
@@ -326,15 +326,15 @@ describe("NavBar inspect button — Enter activates ui.inspect via Pressable", (
     });
 
     const inspectCalls = dispatchCommandCalls().filter(
-      (c) => c.cmd === "ui.inspect",
+      (c) => c.cmd === "app.inspect",
     );
     expect(
       inspectCalls.length,
-      "Enter on the focused inspect leaf must dispatch ui.inspect exactly once",
+      "Enter on the focused inspect leaf must dispatch app.inspect exactly once",
     ).toBe(1);
     expect(
       inspectCalls[0].target,
-      "ui.inspect must carry the board's moniker as target",
+      "app.inspect must carry the board's moniker as target",
     ).toBe("board:b1");
   });
 });

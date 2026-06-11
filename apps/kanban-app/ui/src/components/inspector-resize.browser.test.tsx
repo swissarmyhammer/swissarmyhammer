@@ -9,7 +9,7 @@
  *
  *   - The panel's `style.width` after `mousemove` reflects the new
  *     value (transient drag state, no backend round-trip).
- *   - `ui.inspector.set_width` was dispatched exactly once on
+ *   - `app.inspector.set_width` was dispatched exactly once on
  *     `mouseup` with the final value.
  *
  * Pins the persistence cadence the task requires: live React state
@@ -273,61 +273,58 @@ describe("Inspector resize drag interaction", () => {
       .map((c) => c[1] as { cmd: string; args?: { width?: number } });
   }
 
-  it(
-    "drag emits live width on mousemove and dispatches set_width once on mouseup",
-    async () => {
-      renderInspectorChain();
-      await flushSetup();
-      // Wait until the panel has rendered.
-      const panel = await waitFor(() => {
-        const p = document.querySelector(
-          "[data-slide-panel]",
-        ) as HTMLElement | null;
-        if (!p) throw new Error("panel not yet rendered");
-        return p;
-      });
-      const handle = document.querySelector(
-        "[data-inspector-resize-handle]",
-      ) as HTMLElement;
-      expect(handle, "drag handle must exist").not.toBeNull();
+  it("drag emits live width on mousemove and dispatches set_width once on mouseup", async () => {
+    renderInspectorChain();
+    await flushSetup();
+    // Wait until the panel has rendered.
+    const panel = await waitFor(() => {
+      const p = document.querySelector(
+        "[data-slide-panel]",
+      ) as HTMLElement | null;
+      if (!p) throw new Error("panel not yet rendered");
+      return p;
+    });
+    const handle = document.querySelector(
+      "[data-inspector-resize-handle]",
+    ) as HTMLElement;
+    expect(handle, "drag handle must exist").not.toBeNull();
 
-      // Default width = 420 px. Drag the LEFT edge LEFT by 120 px to
-      // grow the panel to 540 px. Choose startX so the math is
-      // unambiguous regardless of the panel's actual screen position.
-      const startX = 1180;
-      const endX = startX - 120; // -120 deltaX → +120 width
+    // Default width = 420 px. Drag the LEFT edge LEFT by 120 px to
+    // grow the panel to 540 px. Choose startX so the math is
+    // unambiguous regardless of the panel's actual screen position.
+    const startX = 1180;
+    const endX = startX - 120; // -120 deltaX → +120 width
 
-      act(() => {
-        fireEvent.mouseDown(handle, { clientX: startX, button: 0 });
-      });
-      act(() => {
-        fireEvent.mouseMove(window, { clientX: endX });
-      });
+    act(() => {
+      fireEvent.mouseDown(handle, { clientX: startX, button: 0 });
+    });
+    act(() => {
+      fireEvent.mouseMove(window, { clientX: endX });
+    });
 
-      // After mousemove the panel must already be at the new width —
-      // transient state, no backend round-trip yet.
-      expect(panel.style.width).toBe("540px");
+    // After mousemove the panel must already be at the new width —
+    // transient state, no backend round-trip yet.
+    expect(panel.style.width).toBe("540px");
 
-      // No dispatch yet — the persistence cadence is "fire on mouseup
-      // only".
-      expect(
-        dispatchedCommands().filter((c) => c.cmd === "ui.inspector.set_width"),
-      ).toHaveLength(0);
+    // No dispatch yet — the persistence cadence is "fire on mouseup
+    // only".
+    expect(
+      dispatchedCommands().filter((c) => c.cmd === "app.inspector.set_width"),
+    ).toHaveLength(0);
 
-      act(() => {
-        fireEvent.mouseUp(window, { clientX: endX });
-      });
+    act(() => {
+      fireEvent.mouseUp(window, { clientX: endX });
+    });
 
-      // Wait for the dispatch — useDispatchCommand defers via
-      // useCallback closure but no microtask is needed; still a
-      // waitFor keeps this resilient if a future change adds one.
-      await waitFor(() => {
-        const setWidthCalls = dispatchedCommands().filter(
-          (c) => c.cmd === "ui.inspector.set_width",
-        );
-        expect(setWidthCalls).toHaveLength(1);
-        expect(setWidthCalls[0]?.args?.width).toBe(540);
-      });
-    },
-  );
+    // Wait for the dispatch — useDispatchCommand defers via
+    // useCallback closure but no microtask is needed; still a
+    // waitFor keeps this resilient if a future change adds one.
+    await waitFor(() => {
+      const setWidthCalls = dispatchedCommands().filter(
+        (c) => c.cmd === "app.inspector.set_width",
+      );
+      expect(setWidthCalls).toHaveLength(1);
+      expect(setWidthCalls[0]?.args?.width).toBe(540);
+    });
+  });
 });

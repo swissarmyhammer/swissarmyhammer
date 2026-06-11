@@ -194,7 +194,7 @@ pub struct SetKeymapMode {
 
 // Focus operation ─────────────────────────────────────────────────────────
 
-/// Set the focus scope chain (the routing target for `ui.setFocus`).
+/// Set the focus scope chain (the routing target for `app.setFocus`).
 ///
 /// Ports [`crate::state::UIState::set_scope_chain`]. The frontend computes the
 /// chain by walking the focus registry from the focused scope to the root
@@ -202,7 +202,7 @@ pub struct SetKeymapMode {
 /// drives command gating's scope fallback and the `scope_chain` UI-state echo.
 ///
 /// This is the UI-state scope chain — distinct from the spatial `focus` kernel,
-/// which the separate `focus` MCP server owns. `ui.setFocus` consumes the
+/// which the separate `focus` MCP server owns. `app.setFocus` consumes the
 /// `scope_chain` the frontend already sends; there is no separate `fq` to
 /// supply (the focus target is the chain's leaf).
 ///
@@ -210,7 +210,7 @@ pub struct SetKeymapMode {
 #[operation(
     verb = "set",
     noun = "scope_chain",
-    description = "Set the focus scope chain (routing target for ui.setFocus)"
+    description = "Set the focus scope chain (routing target for app.setFocus)"
 )]
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SetScopeChain {
@@ -226,7 +226,7 @@ pub struct SetScopeChain {
 /// Ports [`crate::state::UIState::set_active_view`]: records the per-window
 /// active view id AND rewrites every `view:*` moniker in the recorded focus
 /// scope chain to point at the new view, so the palette / context menu keep
-/// offering the right view-scoped commands until the next `ui.setFocus`. The
+/// offering the right view-scoped commands until the next `app.setFocus`. The
 /// target window is resolved from the scope chain's `window:` moniker — there
 /// is no separate `window_label`.
 ///
@@ -421,7 +421,7 @@ pub struct Dismiss {
 /// `_meta` generator (`generate_operations_meta`) are driven from this single
 /// slice via the `operation_tool!` macro, so there is one source of truth for
 /// what the `ui_state` tool exposes. The `set scope_chain` op records the
-/// UI-state focus scope chain (the `ui.setFocus` routing target); it is NOT a
+/// UI-state focus scope chain (the `app.setFocus` routing target); it is NOT a
 /// spatial focus op — the separate `focus` MCP server owns the focus kernel.
 static UI_STATE_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(|| {
     vec![

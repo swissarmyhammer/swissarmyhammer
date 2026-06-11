@@ -371,7 +371,7 @@ describe("perspective-tab-bar — Group command migration", () => {
     });
 
     // Filter for the `perspective.group` dispatch specifically — the
-    // popover-close path also dispatches `ui.setFocus` to restore focus,
+    // popover-close path also dispatches `app.setFocus` to restore focus,
     // and that is orthogonal to the picker contract this test pins.
     const dispatchCalls = mockInvoke.mock.calls.filter(
       (c) =>

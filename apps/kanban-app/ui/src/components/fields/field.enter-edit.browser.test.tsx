@@ -21,7 +21,7 @@
  *   3. Enter inside the editor (already editing) does NOT call
  *      `onEdit` again — the editor's keymap owns Enter.
  *   4. Enter on a non-editable field zone (no `onEdit` provided) is
- *      a no-op — `editing` stays false and no `ui.inspect` dispatch
+ *      a no-op — `editing` stays false and no `app.inspect` dispatch
  *      fires.
  *
  * Mock pattern matches `inspector-field.space-inspect.browser.test.tsx`
@@ -225,7 +225,7 @@ async function defaultInvokeImpl(
   cmd: string,
   args?: unknown,
 ): Promise<unknown> {
-  // The field-edit commands are DEFINED by the `ui-commands` builtin plugin
+  // The field-edit commands are DEFINED by the `app-shell-commands` builtin plugin
   // (`field.edit` / `field.editEnter`, scope `["ui:field"]`) — in production
   // their keys reach the keymap layer through the CommandService registry,
   // so the harness publishes the same metadata through the `useCommandList`
@@ -287,12 +287,12 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
     .map((c) => c[1] as Record<string, unknown>);
 }
 
-/** Filter `dispatch_command` calls down to those for `ui.inspect`. */
+/** Filter `dispatch_command` calls down to those for `app.inspect`. */
 function inspectDispatches(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "dispatch_command")
     .map((c) => c[1] as Record<string, unknown>)
-    .filter((p) => p.cmd === "ui.inspect");
+    .filter((p) => p.cmd === "app.inspect");
 }
 
 /**
@@ -478,7 +478,7 @@ describe("Field — Enter on focused field zone enters edit mode", () => {
 
   // -------------------------------------------------------------------------
   // #1b: The edit behavior routes through the webview command bus (Card D) —
-  // the `field.edit` / `field.editEnter` DEFINITIONS live in the `ui-commands`
+  // the `field.edit` / `field.editEnter` DEFINITIONS live in the `app-shell-commands`
   // plugin; the Field registers the live handlers only while its zone is the
   // spatial focus, so a dispatched id always reaches the focused field.
   // -------------------------------------------------------------------------
@@ -748,7 +748,7 @@ describe("Field — Enter on focused field zone enters edit mode", () => {
     expect(onEditSpy).not.toHaveBeenCalled();
     expect(
       inspectDispatches().length,
-      "Enter on a non-editable field must NOT dispatch ui.inspect",
+      "Enter on a non-editable field must NOT dispatch app.inspect",
     ).toBe(0);
 
     unmount();

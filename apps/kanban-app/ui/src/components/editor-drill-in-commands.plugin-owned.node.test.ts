@@ -1,14 +1,18 @@
 /**
  * Architectural guard: the three editor drill-in commands are DEFINED only by
- * the `ui-commands` builtin plugin — no client-built `CommandDef` in the
- * webview may define `filter_editor.drillIn`, `ui.ai-panel.composer.drillIn`,
- * or `ui.ai-panel.elicitation.field.drillIn` (including the retired per-field
- * minted form `ui.ai-panel.elicitation.field.drillIn:{key}`).
+ * the `app-shell-commands` builtin plugin — no client-built `CommandDef` in
+ * the webview may define `filter_editor.drillIn`,
+ * `app.ai-panel.composer.drillIn`, or
+ * `app.ai-panel.elicitation.field.drillIn` (in either the live `app.*` or the
+ * retired `ui.*` spelling, including the retired per-field minted form
+ * `...elicitation.field.drillIn:{key}`).
  *
  * Card E of the ui-command-cleanup project moved the drill-in definitions
  * (id / name / keys / scope) out of `perspective-tab-bar.tsx`,
- * `ai-prompt-composer.tsx`, and `ai-elements/elicitation.tsx` into
- * `builtin/plugins/ui-commands/index.ts` (`UI_SURFACE_COMMANDS`). The React
+ * `ai-prompt-composer.tsx`, and `ai-elements/elicitation.tsx` into the
+ * builtin plugin layer; the ui.*→app.* rename then folded the bundle into
+ * `builtin/plugins/app-shell-commands/commands/ui.ts`
+ * (`UI_SURFACE_COMMANDS`). The React
  * tree's only remaining role is BEHAVIOR: each editor surface registers a
  * webview-bus handler for its id while spatial focus is within its subtree
  * (`useFocusedWebviewCommandHandlers`). A drill-in `CommandDef` reappearing
@@ -17,7 +21,7 @@
  * The structural smell is an object-literal `id:` property holding one of the
  * drill-in ids — the shape every `CommandDef` construction uses, in any quote
  * style including a template literal (the retired elicitation def minted its
- * id as `` `ui.ai-panel.elicitation.field.drillIn:${key}` ``; see
+ * id as `` `app.ai-panel.elicitation.field.drillIn:${key}` ``; see
  * `@/test/plugin-owned-guard`). Bus registrations pass the id as a bare call
  * argument / record key, never as an `id:` property, so
  * handler-registration sites do not trip the scan.
@@ -32,8 +36,10 @@ import {
   findCommandDefinitionOffenders,
 } from "@/test/plugin-owned-guard";
 
-/** Regex source for the guarded id family: the three editor drill-in ids. */
-const DRILL_IN_ID_PATTERN = String.raw`filter_editor\.drillIn|ui\.ai-panel\.composer\.drillIn|ui\.ai-panel\.elicitation\.field\.drillIn`;
+/** Regex source for the guarded id family: the three editor drill-in ids.
+ * Matches BOTH the live `app.ai-panel.*` ids and the retired `ui.ai-panel.*`
+ * spellings, so neither form may ever reappear as a client `CommandDef`. */
+const DRILL_IN_ID_PATTERN = String.raw`filter_editor\.drillIn|(?:ui|app)\.ai-panel\.composer\.drillIn|(?:ui|app)\.ai-panel\.elicitation\.field\.drillIn`;
 
 /** Whether `source` defines a command object with an editor drill-in id. */
 function definesEditorDrillInCommand(source: string): boolean {
@@ -48,12 +54,12 @@ describe("editor drill-in command definitions are plugin-owned", () => {
       ),
     ).toBe(true);
     expect(
-      definesEditorDrillInCommand("{ id: 'ui.ai-panel.composer.drillIn' }"),
+      definesEditorDrillInCommand("{ id: 'app.ai-panel.composer.drillIn' }"),
     ).toBe(true);
     // The retired per-field minted template-literal form must also trip it.
     expect(
       definesEditorDrillInCommand(
-        "{ id: `ui.ai-panel.elicitation.field.drillIn:${key}` }",
+        "{ id: `app.ai-panel.elicitation.field.drillIn:${key}` }",
       ),
     ).toBe(true);
   });
@@ -66,7 +72,7 @@ describe("editor drill-in command definitions are plugin-owned", () => {
     ).toBe(false);
     expect(
       definesEditorDrillInCommand(
-        '{ "ui.ai-panel.composer.drillIn": handler }',
+        '{ "app.ai-panel.composer.drillIn": handler }',
       ),
     ).toBe(false);
     expect(definesEditorDrillInCommand('{ id: "nav.drillIn" }')).toBe(false);
@@ -80,8 +86,8 @@ describe("editor drill-in command definitions are plugin-owned", () => {
     const offenders = findCommandDefinitionOffenders(DRILL_IN_ID_PATTERN);
 
     // A drill-in id defined in React re-splits command ownership. Define it in
-    // `builtin/plugins/ui-commands/index.ts` and register the behavior via
-    // `useFocusedWebviewCommandHandlers` instead.
+    // `builtin/plugins/app-shell-commands/commands/ui.ts` and register the
+    // behavior via `useFocusedWebviewCommandHandlers` instead.
     expect(offenders).toEqual([]);
   });
 });

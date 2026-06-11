@@ -152,9 +152,9 @@ export const GRID_PLUGIN_COMMANDS: CommandMetadata[] = [
 ];
 
 /**
- * Key metadata for the `ui-commands` builtin plugin's seven UI-surface
+ * Key metadata for the `app-shell-commands` builtin plugin's seven UI-surface
  * commands, mirrored 1:1 from
- * `builtin/plugins/ui-commands/index.ts::UI_SURFACE_COMMANDS` (Cards D + E —
+ * `builtin/plugins/app-shell-commands/commands/ui.ts::UI_SURFACE_COMMANDS` (Cards D + E —
  * the field-edit / pressable-activation / editor drill-in command
  * DEFINITIONS live in the plugin; the owning React components only register
  * webview-bus handlers for the ids while spatial focus is within their
@@ -210,13 +210,13 @@ export const UI_SURFACE_PLUGIN_COMMANDS: CommandMetadata[] = [
     keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
   },
   {
-    id: "ui.ai-panel.composer.drillIn",
+    id: "app.ai-panel.composer.drillIn",
     name: "Edit Prompt",
     scope: ["ui:ai-panel.composer"],
     keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
   },
   {
-    id: "ui.ai-panel.elicitation.field.drillIn",
+    id: "app.ai-panel.elicitation.field.drillIn",
     name: "Edit Field",
     scope: ["ui:ai-panel.elicitation.field"],
     keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
@@ -270,7 +270,7 @@ export const BOARD_PLUGIN_COMMANDS: CommandMetadata[] = [
  * Build the global command registry from `BINDING_TABLES` (one command per id,
  * each carrying its `keys` map keyed by keymap mode) plus the
  * `nav-commands` plugin's directional commands, the `grid-commands`
- * plugin's grid commands, the `ui-commands` plugin's UI-surface
+ * plugin's grid commands, the `app-shell-commands` plugin's UI-surface
  * commands, and the `board-commands` plugin's board commands, which carry
  * their keys on the plugin catalogue rather than the static tables.
  *

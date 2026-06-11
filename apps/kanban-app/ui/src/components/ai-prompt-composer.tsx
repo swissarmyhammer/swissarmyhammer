@@ -43,8 +43,8 @@
  *
  * Drill-in actually moving the cursor in is NOT automatic: a bare
  * `<FocusScope>` only registers the scope as a nav target. The
- * `ui.ai-panel.composer.drillIn` command DEFINITION (id / name / keys /
- * scope) lives in the `ui-commands` builtin plugin (Card E), scope-gated to
+ * `app.ai-panel.composer.drillIn` command DEFINITION (id / name / keys /
+ * scope) lives in the `app-shell-commands` builtin plugin (Card E), scope-gated to
  * the composer scope's own constant `ui:ai-panel.composer` moniker — the
  * keymap layer's chain walk claims Enter for it (shadowing the global
  * `nav.drillIn: Enter`) while the composer scope is in the focused chain.
@@ -576,7 +576,7 @@ export function AiPromptComposer({
   // Pure presentation: the handler touches only the live editor handle.
   const drillInHandlers = useMemo(
     () => ({
-      "ui.ai-panel.composer.drillIn": () => {
+      "app.ai-panel.composer.drillIn": () => {
         editorRef.current?.focus();
       },
     }),
@@ -624,8 +624,8 @@ export function AiPromptComposer({
       {/* Only the CM6 editor body is a focus scope — `ui:ai-panel.composer`
           under the panel zone. Landing on it and drilling in (Enter)
           focuses the CM6 prompt, exactly like the filter formula bar's
-          `filter_editor:${id}` scope. The `ui.ai-panel.composer.drillIn`
-          command DEFINITION lives in the `ui-commands` builtin plugin
+          `filter_editor:${id}` scope. The `app.ai-panel.composer.drillIn`
+          command DEFINITION lives in the `app-shell-commands` builtin plugin
           (Card E), scope-gated to this scope's own constant moniker; the
           component registers only the live BEHAVIOR — focus the CM6
           editor — on the webview command bus while spatial focus is

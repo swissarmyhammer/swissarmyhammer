@@ -50,6 +50,13 @@ vi.mock("@/lib/ui-state-context", () => ({
 
 // ---------------------------------------------------------------------------
 // Mock useDispatchCommand to capture dispatched commands.
+//
+// Built on the STRICT factory (`@/test/strict-dispatch-mock`): every id the
+// rendered tree requests must be enumerated below — captures for the ids
+// the tests assert on, explicit no-ops for the ids the tree legitimately
+// dispatches but these tests ignore. Any other id (retired, renamed,
+// typo'd — e.g. the old `ui.inspector.close`) throws and fails the test,
+// instead of the historical silent no-op fallback.
 // ---------------------------------------------------------------------------
 
 const mockDispatchClose = vi.hoisted(() => vi.fn(() => Promise.resolve()));
@@ -58,14 +65,20 @@ const mockDispatchAppDismiss = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
 vi.mock("@/lib/command-scope", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/command-scope")>();
+  const { strictUseDispatchCommand } =
+    await import("@/test/strict-dispatch-mock");
   return {
     ...actual,
-    useDispatchCommand: (cmd: string) => {
-      if (cmd === "ui.inspector.close") return mockDispatchClose;
-      if (cmd === "ui.inspector.close_all") return mockDispatchCloseAll;
-      if (cmd === "app.dismiss") return mockDispatchAppDismiss;
-      return vi.fn(() => Promise.resolve());
-    },
+    useDispatchCommand: strictUseDispatchCommand({
+      "app.inspector.close": mockDispatchClose,
+      "app.inspector.close_all": mockDispatchCloseAll,
+      "app.dismiss": mockDispatchAppDismiss,
+      // Requested by the tree but not asserted on here: the container's
+      // resize-persist dispatch and the focus-claim choke point that
+      // `<FocusScope>` / `<EntityInspector>` pre-bind.
+      "app.inspector.set_width": () => Promise.resolve(),
+      "nav.focus": () => Promise.resolve(),
+    }),
   };
 });
 
@@ -323,11 +336,11 @@ describe("InspectorsContainer", () => {
     // backdrop's "click outside, close the topmost layer" gesture is
     // routed through `app.dismiss` — the single top-layer-aware
     // command — rather than the layer-specific
-    // `ui.inspector.close_all`. The backend's `app.dismiss` handler
+    // `app.inspector.close_all`. The backend's `app.dismiss` handler
     // decides which layer to close based on the topmost-layer rule
     // (palette → inspector → no-op when only window is mounted).
     //
-    // Replaces the earlier hard-coded `ui.inspector.close_all`
+    // Replaces the earlier hard-coded `app.inspector.close_all`
     // dispatch, which assumed the inspector was always the active
     // layer.
     mockUIState.mockReturnValue(uiStateWithStack(["task:t1"]));

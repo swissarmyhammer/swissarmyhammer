@@ -322,7 +322,7 @@ describe("BadgeListDisplay", () => {
 // `01KTQ6QZNB3VN4MAND7VPASM21`), so the ONLY carrier for those keys is the
 // scope-level `CommandDef` this component registers on each tag pill's
 // `<FocusScope>` — the exact pattern `ScopedPerspectiveTab` uses for
-// `ui.entity.startRename`'s Enter. These tests pin that the pill scope's
+// `app.entity.startRename`'s Enter. These tests pin that the pill scope's
 // `task.untag` mirrors the registry keys end-to-end through the real
 // component render → entity-focus scope registry → `extractChainBindings`
 // → `createKeyHandler` dispatch.

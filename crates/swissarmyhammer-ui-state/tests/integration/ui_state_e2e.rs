@@ -140,7 +140,7 @@ async fn set_keymap_mode_sets_active_keymap() {
 }
 
 /// `set scope_chain` records the focus scope chain the frontend sends — the
-/// `ui.setFocus` routing target. The op consumes `scope_chain` directly; there
+/// `app.setFocus` routing target. The op consumes `scope_chain` directly; there
 /// is no `fq`.
 #[tokio::test]
 async fn set_scope_chain_records_the_focus_scope_chain() {

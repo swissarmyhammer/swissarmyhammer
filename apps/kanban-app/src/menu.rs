@@ -638,7 +638,7 @@ pub fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     }
 
     // Window list items — focus the named window; menu rebuild happens
-    // when the frontend re-dispatches ui.setFocus on window focus.
+    // when the frontend re-dispatches app.setFocus on window focus.
     if let Some(label) = id.strip_prefix("window.focus:") {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.unminimize();
@@ -872,7 +872,7 @@ mod tests {
     ///
     /// Mirrors `AppState::install_apphandle_shells` exactly: spin up the real
     /// plugin platform over temp roots (which discovers every `builtin/plugins/`
-    /// bundle, including `nav-commands` and `ui-commands`), pull the live
+    /// bundle, including `nav-commands` and `app-shell-commands`), pull the live
     /// `CommandService` catalogue via `list_metadata`, and project it onto the
     /// `CommandsRegistry` façade through [`build_registry_from_metadata`] — the
     /// exact snapshot `collect_menu_entries` consumes when the native menu is

@@ -61,7 +61,7 @@ export interface FocusRect {
 }
 
 /**
- * Move focus to a scope (the `ui.setFocus` routing target).
+ * Move focus to a scope (the `app.setFocus` routing target).
  *
  * Ports `spatial_focus`: when `snapshot` is `undefined` the kernel drops
  * the commit silently (transient unmount race). `window` is the calling

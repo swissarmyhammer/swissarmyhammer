@@ -5,7 +5,7 @@
  *
  * Background: double-clicking a perspective tab used to open the inspector
  * because every `<FocusScope>` / `<FocusScope>` unconditionally dispatched
- * `ui.inspect` on double-click. Perspectives are not entities, so that was
+ * `app.inspect` on double-click. Perspectives are not entities, so that was
  * an architectural mismatch. The first fix made the dispatch opt-in via
  * an `inspectOnDoubleClick` boolean prop on the primitives; the second
  * fix replaced that prop with a dedicated `<Inspectable>` wrapper
@@ -20,11 +20,11 @@
  * user-visible behavior — so they continue to pass after the wrapper
  * refactor:
  *
- *   1. **Regression**: dblclick on a tab does NOT dispatch `ui.inspect`
+ *   1. **Regression**: dblclick on a tab does NOT dispatch `app.inspect`
  *      against `perspective_tab:*`, but the inline rename editor still
  *      mounts because the tab button's own handler runs.
  *   2. **Bar background**: dblclick on the `ui:perspective-bar` zone
- *      whitespace also does NOT dispatch `ui.inspect`.
+ *      whitespace also does NOT dispatch `app.inspect`.
  *   3. **Single-click still focuses**: a single click on a tab still
  *      fires `spatial_focus(key)` — we did not regress the focus path.
  *
@@ -227,12 +227,18 @@ function dispatchCommandCalls(): Array<Record<string, unknown>> {
 /** Collect every `spatial_focus` call's args, in order. */
 function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
-    .filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))
+    .filter(
+      (c) =>
+        c[0] === "spatial_focus" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "set focus"),
+    )
     .map((c) => {
       const outer = c[1] as Record<string, unknown>;
       const args = (outer?.params ?? outer) as { fq: FullyQualifiedMoniker };
       return args;
-    })
+    });
 }
 
 /** Collect every `spatial_register_scope` invocation argument bag. */
@@ -281,7 +287,7 @@ describe("PerspectiveTabBar — perspective is NOT an entity (regression)", () =
   // Test 1 — Regression: dblclick on perspective tab does NOT inspect
   // -------------------------------------------------------------------------
 
-  it("dblclick on a perspective tab does NOT dispatch ui.inspect", async () => {
+  it("dblclick on a perspective tab does NOT dispatch app.inspect", async () => {
     const { container, queryByRole, unmount } = renderBar();
     await flushSetup();
 
@@ -305,10 +311,10 @@ describe("PerspectiveTabBar — perspective is NOT an entity (regression)", () =
       expect(queryByRole("textbox")).not.toBeNull();
     });
 
-    // No ui.inspect dispatch — neither via dispatch_command nor against
+    // No app.inspect dispatch — neither via dispatch_command nor against
     // any `perspective_tab:*` target.
     const inspectCalls = dispatchCommandCalls().filter(
-      (c) => c.cmd === "ui.inspect",
+      (c) => c.cmd === "app.inspect",
     );
     expect(inspectCalls).toHaveLength(0);
 
@@ -328,7 +334,7 @@ describe("PerspectiveTabBar — perspective is NOT an entity (regression)", () =
   // Test 2 — Regression: dblclick on the bar background does NOT inspect
   // -------------------------------------------------------------------------
 
-  it("dblclick on the ui:perspective-bar zone background does NOT dispatch ui.inspect", async () => {
+  it("dblclick on the ui:perspective-bar zone background does NOT dispatch app.inspect", async () => {
     const { container, unmount } = renderBar();
     await flushSetup();
 
@@ -343,7 +349,7 @@ describe("PerspectiveTabBar — perspective is NOT an entity (regression)", () =
     fireEvent.doubleClick(barNode!);
 
     const inspectCalls = dispatchCommandCalls().filter(
-      (c) => c.cmd === "ui.inspect",
+      (c) => c.cmd === "app.inspect",
     );
     expect(inspectCalls).toHaveLength(0);
 

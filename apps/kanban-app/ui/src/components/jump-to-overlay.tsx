@@ -22,7 +22,7 @@
  * The sentinel's `commands` prop registers an `app.dismiss` shadow whose
  * `execute` calls the overlay's `handleDismiss` — restore prior focus,
  * then `onClose`. This is the same shadow pattern the inspector layer
- * uses (`ui.inspector.close`) but keyed on `app.dismiss` because the
+ * uses (`app.inspector.close`) but keyed on `app.dismiss` because the
  * overlay has no "first close just one panel" notion.
  *
  * # Dismiss paths

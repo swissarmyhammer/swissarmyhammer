@@ -342,7 +342,7 @@ export const ColumnView = memo(function ColumnView(props: ColumnViewProps) {
   // The column body wraps a real entity (`column:<id>` moniker), so
   // double-clicking the column whitespace should open the inspector
   // for that column. The `<Inspectable>` wrapper owns the
-  // `useDispatchCommand("ui.inspect")` hook and its `onDoubleClick`
+  // `useDispatchCommand("app.inspect")` hook and its `onDoubleClick`
   // handler; the spatial primitive `<FocusZone>` stays pure-spatial.
   // The architectural guard
   // (`focus-architecture.guards.node.test.ts`, Guards B + C) enforces

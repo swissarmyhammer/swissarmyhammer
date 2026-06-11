@@ -5,7 +5,7 @@
 // reaches the OS menu THROUGH the CommandService catalogue, and nav execution
 // is a real backend/plugin path — not a React closure, not a YAML merge.
 //
-// This mirrors the `file-commands` / `ui-commands` template:
+// This mirrors the `file-commands` / `app-shell-commands` template:
 //
 //   1. A `Plugin` subclass carries `name` / `description` as descriptive class
 //      props (plugin identity is the bundle directory name — `nav-commands`).
@@ -329,7 +329,7 @@ export default class NavCommandsPlugin extends Plugin {
       // The programmatic focus-claim command — never in nav.yaml, so it
       // carries NO keys and NO menu placement (the Navigation submenu stays
       // at the nine nav.yaml entries), and it is not palette-visible (it
-      // requires a target `args.fq`, like the programmatic `ui.setFocus`).
+      // requires a target `args.fq`, like the programmatic `app.setFocus`).
       // Routes to the focus kernel's `set focus` op with `{ fq, window }` —
       // the wire shape `focus-mcp.ts::setFocus` uses, minus the snapshot:
       // the host has no geometry of its own, and the kernel drops a

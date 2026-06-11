@@ -7,10 +7,10 @@
  *
  * Background. Before card 01KQ7GE3KY91X2YR6BX5AY40VK the rename trigger
  * `triggerStartRename()` had only two callers: the command palette's
- * `ui.entity.startRename` row and the `onDoubleClick` handler on each tab.
+ * `app.entity.startRename` row and the `onDoubleClick` handler on each tab.
  * Pressing Enter while a perspective tab was the spatial focus fell through
  * to the global `nav.drillIn: Enter` binding, which is a no-op for a leaf
- * scope. That card scoped a fresh `ui.entity.startRename` `CommandDef`
+ * scope. That card scoped a fresh `app.entity.startRename` `CommandDef`
  * (with `keys: { cua: "Enter", vim: "Enter", emacs: "Enter" }`) onto the
  * active tab's `<CommandScopeProvider>` so `extractChainBindings` claims
  * Enter away from the global drill-in binding while the active perspective
@@ -34,7 +34,7 @@
  *    perspective tab whose `id !== activePerspective.id` and pressing
  *    Enter dispatches `perspective.switch` for that tab AND mounts the
  *    inline rename editor on that same tab. (Card 01KQAXPRTCNH8ARTYJJEBTYWW0
- *    extended the per-tab `ui.entity.startRename: Enter` binding to every
+ *    extended the per-tab `app.entity.startRename: Enter` binding to every
  *    tab, not just the active one, with an activate-then-rename execute.)
  * 3. **Enter outside perspective scope still drills** — focusing a non-
  *    perspective leaf and pressing Enter dispatches the `nav.drillIn`
@@ -240,7 +240,7 @@ async function defaultInvokeImpl(
   // the metadata-driven Command registry via `useCommandList`, which fetches
   // through the `command_tool_call` bridge's `list command` op. Synthesize
   // that registry from `BINDING_TABLES` so global bindings resolve — the
-  // scope-pinned `ui.entity.startRename: Enter` must shadow a REAL global
+  // scope-pinned `app.entity.startRename: Enter` must shadow a REAL global
   // `nav.drillIn: Enter`, not an empty table.
   if (cmd === "command_tool_call") {
     return commandToolCall(_args);
@@ -321,7 +321,7 @@ async function fireFocusChanged({
  * Render the bar inside the full `<AppShell>` provider stack.
  *
  * AppShell wires the global keydown listener that drives the
- * `nav.drillIn` / `ui.entity.startRename` commands, so tests for
+ * `nav.drillIn` / `app.entity.startRename` commands, so tests for
  * keystroke → rename / drill-in need that wiring to fire on
  * `userEvent.keyboard()`.
  */
@@ -457,7 +457,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     });
 
     // Press Enter at the document level — the global keymap handler picks
-    // it up and dispatches `ui.entity.startRename`, which the AppShell's
+    // it up and dispatches `app.entity.startRename`, which the AppShell's
     // execute closure forwards to `triggerStartRename()`.
     await pressKeyInAct("{Enter}");
     await flushSetup();
@@ -504,7 +504,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     await pressKeyInAct("{Enter}");
     await flushSetup();
 
-    // The scope-pinned `ui.entity.startRename` on the inactive tab fires
+    // The scope-pinned `app.entity.startRename` on the inactive tab fires
     // its execute closure, which (per card 01KQAXPRTCNH8ARTYJJEBTYWW0):
     //   1. Dispatches `perspective.switch` for the focused (inactive) tab.
     //   2. Calls `triggerStartRename(p2.id)` so the rename editor mounts
@@ -542,7 +542,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     // perspective bar so the test can drive focus to a leaf that has
     // nothing to do with the perspective scope chain. Enter while that
     // leaf is focused MUST hit the global `nav.drillIn` binding — proving
-    // the new `ui.entity.startRename: Enter` binding is scope-local and
+    // the new `app.entity.startRename: Enter` binding is scope-local and
     // does not leak to other focus contexts.
     const { container, unmount } = await renderInAppShell(
       <FocusScope moniker={asSegment("task:01ABC")} commands={[]}>
@@ -943,7 +943,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
   //
   // After the Enter-drill-in card removed `board.inspect`'s vim Enter
   // binding and added a per-field-zone `field.edit: Enter` binding, the
-  // perspective tab's scope-pinned `ui.entity.startRename: Enter` must
+  // perspective tab's scope-pinned `app.entity.startRename: Enter` must
   // continue to fire on the active tab regardless of which keymap is
   // active. The pre-existing cua / vim / emacs tests above already
   // assert this; this additional case pins the regression explicitly so
@@ -951,7 +951,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
   // (field zone or board) cannot silently swallow this one.
   // -------------------------------------------------------------------------
 
-  it("regression: scope-pinned ui.entity.startRename: vim Enter still fires after Enter-drill-in card", async () => {
+  it("regression: scope-pinned app.entity.startRename: vim Enter still fires after Enter-drill-in card", async () => {
     mockKeymapMode = "vim";
     const { container, unmount } = await renderInAppShell();
     await flushSetup();
@@ -974,10 +974,10 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     await flushSetup();
 
     // The active perspective tab's scope still carries the
-    // `ui.entity.startRename: Enter` binding; pressing Enter mounts
+    // `app.entity.startRename: Enter` binding; pressing Enter mounts
     // the inline rename editor inside the tab. Regression failure
     // would manifest either as no editor mounting (drill-in or
-    // field.edit shadowed it) or as a `ui.inspect` dispatch (a
+    // field.edit shadowed it) or as a `app.inspect` dispatch (a
     // resurrected `board.inspect` shadow).
     await waitFor(() => {
       const renameEditor = container.querySelector(
@@ -986,9 +986,9 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
       expect(renameEditor).not.toBeNull();
     });
 
-    // No `ui.inspect` dispatch must appear — Enter belongs to rename
+    // No `app.inspect` dispatch must appear — Enter belongs to rename
     // here, not inspect.
-    expect(dispatchedCommand("ui.inspect")).toBe(false);
+    expect(dispatchedCommand("app.inspect")).toBe(false);
 
     unmount();
   });

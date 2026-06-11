@@ -977,7 +977,7 @@ describe("CommandPalette per-entity-type rendering", () => {
 //
 // Regression guard for 01KPZREKCQXN5AX0SMEE2X0ZWR: the palette must source
 // its scope chain from `FocusedScopeContext`, not from `useUIState()`. The
-// backend suppresses the `scope_chain` echo on every `ui.setFocus`, so the
+// backend suppresses the `scope_chain` echo on every `app.setFocus`, so the
 // palette would break if it still read from UIState.
 // ---------------------------------------------------------------------------
 

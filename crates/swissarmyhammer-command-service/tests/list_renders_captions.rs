@@ -75,7 +75,7 @@ async fn list_renders_entity_type_from_focused_scope_chain() {
     register_templated(
         &service,
         &caller,
-        "ui.inspect",
+        "app.inspect",
         "Inspect {{entity.type}}",
         None,
     )
@@ -94,7 +94,7 @@ async fn list_renders_entity_type_from_focused_scope_chain() {
     .await;
 
     assert_eq!(
-        find(&commands, "ui.inspect")["name"],
+        find(&commands, "app.inspect")["name"],
         json!("Inspect Task"),
         "the {{{{entity.type}}}} placeholder must render against the focused object",
     );
@@ -107,7 +107,7 @@ async fn list_without_context_falls_back_to_clean_generic_caption() {
     register_templated(
         &service,
         &caller,
-        "ui.inspect",
+        "app.inspect",
         "Inspect {{entity.type}}",
         None,
     )
@@ -118,7 +118,7 @@ async fn list_without_context_falls_back_to_clean_generic_caption() {
     let commands = list_commands(&service, json!({ "op": "list command" }), &caller).await;
 
     assert_eq!(
-        find(&commands, "ui.inspect")["name"],
+        find(&commands, "app.inspect")["name"],
         json!("Inspect"),
         "without context the placeholder must be dropped cleanly (trimmed)",
     );

@@ -333,7 +333,7 @@ describe("PerspectiveTabBar — registry-driven CommandButton rendering", () => 
         // tab_button intentionally absent.
       },
       {
-        id: "ui.entity.delete",
+        id: "app.entity.delete",
         name: "Delete",
         group: "global",
         context_menu: true,

@@ -316,8 +316,8 @@ async function bootstrapInvokeImpl(
     if (a.cmd === "perspective.save") return { result: null, undoable: false };
     if (a.cmd === "perspective.rename") return { result: null, undoable: true };
     if (a.cmd === "view.set") return { result: null, undoable: false };
-    if (a.cmd === "ui.inspect") return { result: null, undoable: false };
-    if (a.cmd === "ui.setFocus") return { result: null, undoable: false };
+    if (a.cmd === "app.inspect") return { result: null, undoable: false };
+    if (a.cmd === "app.setFocus") return { result: null, undoable: false };
     if (a.cmd === "file.switchBoard") return { result: null, undoable: false };
     return { result: null, undoable: false };
   }

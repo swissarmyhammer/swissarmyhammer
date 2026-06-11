@@ -24,7 +24,7 @@
 //! | `drill_in layer` | `spatial_drill_in` | [`crate::drill_in`]                     |
 //! | `drill_out layer`| `spatial_drill_out`| [`crate::drill_out`]                    |
 //!
-//! `ui.setFocus` (in the ui-commands plugin) routes to the `set focus` op.
+//! `app.setFocus` (in the app-shell-commands plugin) routes to the `set focus` op.
 //!
 //! # The `window` parameter
 //!
@@ -48,7 +48,7 @@ use crate::types::{
     Direction, FullyQualifiedMoniker, LayerName, Pixels, Rect, SegmentMoniker, WindowLabel,
 };
 
-/// Move focus to a scope (the `ui.setFocus` routing target).
+/// Move focus to a scope (the `app.setFocus` routing target).
 ///
 /// Ports `spatial_focus`: when `snapshot` is `None` the call drops the
 /// commit silently (transient unmount race), matching the Tauri command.
@@ -61,7 +61,7 @@ use crate::types::{
 #[operation(
     verb = "set",
     noun = "focus",
-    description = "Move focus to a scope (routing target for ui.setFocus)"
+    description = "Move focus to a scope (routing target for app.setFocus)"
 )]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Focus {

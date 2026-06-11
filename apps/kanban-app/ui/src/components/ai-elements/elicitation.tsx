@@ -26,8 +26,8 @@
  * `ui:ai-panel.elicitation.field:{key}.option:{value}` for one multiselect
  * option. Text-like inputs register the live Enter "drill-in" BEHAVIOR on the
  * webview command bus while focused ({@link useFieldDrillIn} — the
- * `ui.ai-panel.elicitation.field.drillIn` DEFINITION lives in the
- * `ui-commands` builtin plugin, Card E) so Enter hands DOM focus to the
+ * `app.ai-panel.elicitation.field.drillIn` DEFINITION lives in the
+ * `app-shell-commands` builtin plugin, Card E) so Enter hands DOM focus to the
  * input, and an Escape "drill-out" keydown handler that
  * blurs the input and returns spatial focus to the field leaf so the input
  * stops trapping keys (mirroring the composer's `ComposerEditorDrillOutWiring`);
@@ -270,9 +270,9 @@ function fieldSegment(key: string): string {
  *
  * Field leaves carry dynamic per-key monikers
  * (`ui:ai-panel.elicitation.field:{key}`), so the plugin-defined
- * `ui.ai-panel.elicitation.field.drillIn` command cannot be scope-gated on a
+ * `app.ai-panel.elicitation.field.drillIn` command cannot be scope-gated on a
  * literal leaf moniker. The marker gives every field leaf one shared literal
- * moniker; the `ui-commands` plugin declares
+ * moniker; the `app-shell-commands` plugin declares
  * `scope: ["ui:ai-panel.elicitation.field"]` against it, so its Enter key
  * binds exactly while a text-like field leaf is in the focused chain — and
  * nowhere else. Mirrors `FIELD_COMMAND_SCOPE` in `fields/field.tsx` (Card D).
@@ -283,8 +283,8 @@ export const ELICITATION_FIELD_COMMAND_SCOPE = "ui:ai-panel.elicitation.field";
  * Register the live Enter "drill-in" BEHAVIOR for a text-like field on the
  * webview command bus.
  *
- * The `ui.ai-panel.elicitation.field.drillIn` command DEFINITION (id / name /
- * keys / scope) lives in the `ui-commands` builtin plugin (Card E), gated to
+ * The `app.ai-panel.elicitation.field.drillIn` command DEFINITION (id / name /
+ * keys / scope) lives in the `app-shell-commands` builtin plugin (Card E), gated to
  * the {@link ELICITATION_FIELD_COMMAND_SCOPE} marker each text-like field
  * mounts above its `<AiPanelFocusScope>`. ONE base id serves every field:
  * the per-field variation is carried by THIS focus-gated registration — the
@@ -307,7 +307,7 @@ function useFieldDrillIn(
 ): void {
   const handlers = useMemo(
     () => ({
-      "ui.ai-panel.elicitation.field.drillIn": () => {
+      "app.ai-panel.elicitation.field.drillIn": () => {
         inputRef.current?.focus();
       },
     }),

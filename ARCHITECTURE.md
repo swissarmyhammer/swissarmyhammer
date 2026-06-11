@@ -224,7 +224,7 @@ body_field: body
 search_display_field: title
 mention_prefix: "^"
 commands:
-  - id: ui.inspect
+  - id: app.inspect
     context_menu: true
 fields:
   - title
@@ -632,7 +632,7 @@ For example, when a user right-clicks a task card in the "To Do" column of the m
   ↑ innermost                                                                      outermost ↑
 ```
 
-The key innovation: **a command knows _where_ in the app it is being invoked**, not just what arguments it was given. The same `"ui.inspect"` command behaves differently when invoked from a task card (inspects the task) versus from a column header (inspects the column) — because the scope chain tells it the context. Commands don't need explicit arguments for information that's implicit in the user's focus. The scope chain, an explicit target moniker, and explicit params combine to give every command full situational awareness.
+The key innovation: **a command knows _where_ in the app it is being invoked**, not just what arguments it was given. The same `"app.inspect"` command behaves differently when invoked from a task card (inspects the task) versus from a column header (inspects the column) — because the scope chain tells it the context. Commands don't need explicit arguments for information that's implicit in the user's focus. The scope chain, an explicit target moniker, and explicit params combine to give every command full situational awareness.
 
 Commands use the scope chain in three ways:
 

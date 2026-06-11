@@ -567,7 +567,7 @@ describe("FocusScope", () => {
     expect(ctxCalls).toHaveLength(0);
   });
 
-  // Double-click → `ui.inspect` is no longer a `<FocusScope>` concern.
+  // Double-click → `app.inspect` is no longer a `<FocusScope>` concern.
   // It moved to the `<Inspectable>` wrapper component (see
   // `inspectable.tsx`); the unit tests for the dispatch contract live
   // alongside it in `inspectable.spatial.test.tsx`. `<FocusScope>` is

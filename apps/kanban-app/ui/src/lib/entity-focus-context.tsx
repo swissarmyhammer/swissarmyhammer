@@ -336,7 +336,7 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
   if (storeRef.current === null) storeRef.current = new FocusStore();
   const store = storeRef.current;
 
-  const dispatch = useDispatchCommand("ui.setFocus");
+  const dispatch = useDispatchCommand("app.setFocus");
 
   // Scope registry: ref so registrations don't cause re-renders
   const registryRef = useRef<Map<string, CommandScope>>(new Map());
@@ -375,7 +375,7 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
       dispatchRef
         .current({ args: { scope_chain: chain } })
         .catch((error) =>
-          console.error("ui.setFocus (window focus) failed:", error),
+          console.error("app.setFocus (window focus) failed:", error),
         );
     };
     window.addEventListener("focus", handleWindowFocus);
@@ -386,7 +386,7 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
   // kernel PULLS the current focus scope chain from the webview on demand
   // over the F1 channel; this provider is the natural source because it owns
   // the focused moniker (`store`) and the scope registry (`registryRef`) the
-  // chain is composed from — the same `buildScopeChain` the `ui.setFocus`
+  // chain is composed from — the same `buildScopeChain` the `app.setFocus`
   // bridge forwards on every focus change. Built ON DEMAND at request time,
   // never cached. (`focus.geometry` / `focus.current` are registered by
   // `SpatialFocusProvider`, which owns the live geometry + focused FQM.)
@@ -431,7 +431,7 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
       dispatchRef
         .current({ args: { scope_chain: chain } })
         .catch((error) =>
-          console.error("ui.setFocus (kernel bridge) failed:", error),
+          console.error("app.setFocus (kernel bridge) failed:", error),
         );
     });
   }, [spatialFocus, store]);
@@ -522,12 +522,12 @@ function buildFocusActions(deps: FocusActionsDeps): FocusActions {
     }
 
     // Test-harness fallback: no kernel available, so write the store
-    // directly and dispatch `ui.setFocus` like the pre-refactor flow.
+    // directly and dispatch `app.setFocus` like the pre-refactor flow.
     store.set(fq);
     const chain = fq ? buildScopeChain(fq, registryRef.current) : [];
     dispatchRef
       .current({ args: { scope_chain: chain } })
-      .catch((error) => console.error("ui.setFocus failed:", error));
+      .catch((error) => console.error("app.setFocus failed:", error));
   };
 
   const registerScope = (moniker: string, scope: CommandScope): void => {

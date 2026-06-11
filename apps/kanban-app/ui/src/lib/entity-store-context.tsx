@@ -220,7 +220,7 @@ export function useEntityStore(): EntityStoreContextValue {
  * whenever the backend emits a `notifications/store/changed` MCP
  * notification (see the store-change reducer in `rust-engine-container.tsx`
  * — `applyStoreChangeBatch` patches entities in place from the batched MCP
- * stream). Navigation dispatches `ui.setFocus` only — no `list_entities`,
+ * stream). Navigation dispatches `app.setFocus` only — no `list_entities`,
  * `get_entity`, `get_board_data`, or `perspective.list`. The regression test
  * `grid-view.nav-is-eventdriven.test.tsx` enforces this invariant.
  *

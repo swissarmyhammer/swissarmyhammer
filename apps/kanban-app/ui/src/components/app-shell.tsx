@@ -121,7 +121,7 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
     //   2. Scoped REGISTRY bindings — plugin-defined commands whose `scope`
     //      names a zone moniker literally present in the focused chain (the
     //      `grid-commands` plugin's `scope: ["ui:grid"]`, Card C; the
-    //      `ui-commands` plugin's `ui:field` / `ui:pressable` markers,
+    //      `app-shell-commands` plugin's `ui:field` / `ui:pressable` markers,
     //      Card D). Their behaviors live on the webview command bus,
     //      registered by the zone's component, so a literal-moniker match
     //      implies the handler is live.
@@ -200,7 +200,7 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
 // There is NO static global command list here (Card I deleted
 // `STATIC_GLOBAL_COMMANDS`). Every global command — app.*, settings.keymap.*,
 // file.*, window.new, ai.* — is DEFINED by a builtin plugin
-// (`builtin/plugins/app-shell-commands`, `file-commands`, `ui-commands`,
+// (`builtin/plugins/app-shell-commands`, `file-commands`, `app-shell-commands`,
 // `ai-commands`, …) and surfaces through the Command service catalogue: the
 // palette and menus read `useCommandList`, and the hotkey layer derives its
 // global table from the same registry via `extractKeymapBindings`. The
@@ -223,7 +223,7 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
 
 /**
  * Build the dynamic global commands — currently just the
- * ui.entity.startRename command, which exists in the backend registry for
+ * app.entity.startRename command, which exists in the backend registry for
  * palette discovery but runs locally via `triggerStartRename`.
  *
  * The directional / first-last / drill `nav.*` commands no longer live
@@ -234,7 +234,7 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
  *
  * The root-scope `entity.inspect` (Space) no longer lives here either
  * (Card G): the plugin-owned `entity.inspect`
- * (`builtin/plugins/ui-commands/index.ts`) carries the Space keys
+ * (`builtin/plugins/app-shell-commands/commands/ui.ts`) carries the Space keys
  * GLOBALLY, so the binding always resolves (the keybinding handler still
  * `preventDefault()`s and the browser never page-scrolls on Space), and
  * its execute resolves the focused entity SERVER-SIDE from the dispatched
@@ -244,7 +244,7 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
 function buildDynamicGlobalCommands(): CommandDef[] {
   return [
     {
-      id: "ui.entity.startRename",
+      id: "app.entity.startRename",
       name: "Rename Perspective",
       execute: () => {
         triggerStartRename();
@@ -412,7 +412,7 @@ export function AppShell({ children, onSwitchBoard }: AppShellProps) {
 
   usePaletteModeSync(paletteOpen);
 
-  // The window-layer scope carries ONLY `ui.entity.startRename` (see
+  // The window-layer scope carries ONLY `app.entity.startRename` (see
   // `buildDynamicGlobalCommands`) — every other global command is
   // plugin-defined and resolves from the Command service catalogue (Card I
   // deleted the static client-side list and the `ai.*` scope defs; the ai
@@ -424,7 +424,7 @@ export function AppShell({ children, onSwitchBoard }: AppShellProps) {
   // `focus` kernel (so `useDispatchCommand` routes a dispatched `nav.*` id to
   // the backend), and `nav.jump`'s webview-bus handler (registered above)
   // opens the jump overlay. `entity.inspect` is likewise plugin-owned
-  // (Card G, `builtin/plugins/ui-commands/index.ts`).
+  // (Card G, `builtin/plugins/app-shell-commands/commands/ui.ts`).
   const globalCommands: CommandDef[] = useMemo(
     () => buildDynamicGlobalCommands(),
     [],

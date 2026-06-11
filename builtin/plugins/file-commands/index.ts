@@ -21,7 +21,7 @@
 //   file.openBoard   → window `open board`   (this.window.window.board.open)
 //
 // (Note: `window.new` is NOT here — it is sourced from `ui.yaml` and ported by
-// the ui-commands plugin task.)
+// the app-shell-commands plugin task.)
 
 import {
   CommandContext,

@@ -329,7 +329,7 @@ impl Command for SetActiveViewCmd {
         //
         // Rewrite every `view:*` element in the current chain to point at the
         // new active view. When the user later focuses a FocusScope inside the
-        // new view, `ui.setFocus` will rebuild the full chain from scratch —
+        // new view, `app.setFocus` will rebuild the full chain from scratch —
         // this bridge makes the palette work in the interim.
         let mut chain = ui.scope_chain();
         let mut mutated = false;
@@ -363,7 +363,7 @@ mod tests {
         let ui = Arc::new(UIState::new());
         let mut args = HashMap::new();
         args.insert("mode".to_string(), serde_json::json!(mode));
-        CommandContext::new("ui.mode.set", vec!["window:main".to_string()], None, args)
+        CommandContext::new("app.mode.set", vec!["window:main".to_string()], None, args)
             .with_ui_state(ui)
     }
 
@@ -400,7 +400,7 @@ mod tests {
     async fn set_active_view_rewrites_view_moniker_in_scope_chain() {
         let ui = Arc::new(UIState::new());
         // Simulate the user having focused a task card on the board, which
-        // landed this chain in UIState via a prior ui.setFocus dispatch.
+        // landed this chain in UIState via a prior app.setFocus dispatch.
         ui.set_scope_chain(vec![
             "task:01ABC".to_string(),
             "column:todo".to_string(),
@@ -433,7 +433,7 @@ mod tests {
 
     /// If no `view:*` moniker is in the current scope_chain, changing the
     /// active view must not synthesise one — the scope_chain stays untouched
-    /// and the next ui.setFocus rebuild populates it. This guards against
+    /// and the next app.setFocus rebuild populates it. This guards against
     /// spurious scope changes when the user hasn't focused anything yet.
     #[tokio::test]
     async fn set_active_view_leaves_scope_chain_alone_when_no_view_moniker() {
@@ -489,7 +489,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("mode".to_string(), serde_json::json!("search"));
         let ctx = CommandContext::new(
-            "ui.mode.set",
+            "app.mode.set",
             vec!["window:secondary".to_string()],
             None,
             args,
@@ -510,7 +510,7 @@ mod tests {
         // not be available — it has nothing to rename.
         let ui = Arc::new(UIState::new());
         let ctx = CommandContext::new(
-            "ui.entity.startRename",
+            "app.entity.startRename",
             vec!["window:main".to_string()],
             None,
             HashMap::new(),
@@ -532,7 +532,7 @@ mod tests {
         );
     }
 
-    /// Helper: build a CommandContext for `ui.inspector.set_width` with the
+    /// Helper: build a CommandContext for `app.inspector.set_width` with the
     /// given `width` arg. The arg is stored as a `serde_json::Value`, so
     /// passing `serde_json::json!(540)` produces a number, while
     /// `serde_json::json!(-5)` produces a negative number that exercises
@@ -542,7 +542,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("width".to_string(), width);
         CommandContext::new(
-            "ui.inspector.set_width",
+            "app.inspector.set_width",
             vec!["window:main".to_string()],
             None,
             args,
@@ -586,7 +586,7 @@ mod tests {
         // No `width` key in args at all → MissingArg.
         let ui = Arc::new(UIState::new());
         let ctx = CommandContext::new(
-            "ui.inspector.set_width",
+            "app.inspector.set_width",
             vec!["window:main".to_string()],
             None,
             HashMap::new(),
@@ -675,7 +675,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("width".to_string(), serde_json::json!(540));
         let ctx = CommandContext::new(
-            "ui.inspector.set_width",
+            "app.inspector.set_width",
             vec!["window:secondary".to_string()],
             None,
             args,
@@ -697,7 +697,7 @@ mod tests {
         ui.set_active_perspective("main", "p1");
 
         let ctx_secondary = CommandContext::new(
-            "ui.entity.startRename",
+            "app.entity.startRename",
             vec!["window:secondary".to_string()],
             None,
             HashMap::new(),

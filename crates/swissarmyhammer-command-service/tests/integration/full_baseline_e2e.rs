@@ -34,12 +34,27 @@
 //! one of its commands, the sort of drop the per-plugin tests cannot
 //! catch because each only stages one bundle in isolation.
 //!
-//! The 99 commands across the 11 builtin command plugins (matches each
+//! The 99 commands across the 10 builtin command plugins (matches each
 //! plugin's `registerCommands(...)` call set):
 //!
-//! - `app-shell-commands` (15): help, about, quit, command, search,
+//! - `app-shell-commands` (33): help, about, quit, command, search,
 //!   palette, dismiss, undo, redo, drag.{start,cancel,complete},
-//!   settings.keymap.{vim,cua,emacs}.
+//!   settings.keymap.{vim,cua,emacs}, plus the former `ui-commands`
+//!   bundle folded in by the ui.*→app.* rename (mop-up card
+//!   01KTEBZSVGAZ881RAZZWWZXGPE): app.inspect,
+//!   app.inspector.{close,close_all,set_width},
+//!   app.palette.{open,close}, app.entity.startRename, app.mode.set,
+//!   app.setFocus, window.new, the Card D UI-surface commands
+//!   field.{edit,editEnter} and pressable.{activate,activateSpace}, the
+//!   Card E editor drill-in commands filter_editor.drillIn,
+//!   app.ai-panel.composer.drillIn, and
+//!   app.ai-panel.elicitation.field.drillIn — all webview-bus handled
+//!   (the owning React components register the live handlers while
+//!   focused; the host executes are inert no-ops) — and the Card G
+//!   consolidated entity.inspect (the global Space inspect command:
+//!   explicit target, else the innermost inspectable scope-chain
+//!   moniker, else an inert no-op; routes to ui_state
+//!   `inspect inspector`).
 //! - `entity-commands` (8): entity.add, entity.update_field, entity.delete,
 //!   entity.archive, entity.unarchive, entity.copy, entity.cut, entity.paste.
 //! - `file-commands` (4): file.{switchBoard,closeBoard,newBoard,openBoard}.
@@ -49,19 +64,6 @@
 //!   load,save,list,next,prev,filter,filter.focus,clearFilter,group,
 //!   clearGroup,sort.set,sort.clear,sort.toggle}.
 //! - `task-commands` (3): task.{move,untag,doThisNext}.
-//! - `ui-commands` (18): ui.inspect, ui.inspector.{close,close_all,set_width},
-//!   app.palette.open, ui.palette.close, ui.entity.startRename, ui.mode.set,
-//!   ui.setFocus, window.new, plus the Card D UI-surface commands
-//!   field.{edit,editEnter} and pressable.{activate,activateSpace} and the
-//!   Card E editor drill-in commands filter_editor.drillIn,
-//!   ui.ai-panel.composer.drillIn, and ui.ai-panel.elicitation.field.drillIn —
-//!   all webview-bus handled (the owning React components register the live
-//!   handlers while focused; the host executes are inert no-ops) — and the
-//!   Card G consolidated entity.inspect (the global Space inspect command:
-//!   explicit target, else the innermost inspectable scope-chain moniker,
-//!   else an inert no-op; routes to ui_state `inspect inspector`). (The
-//!   palette opener is `app.palette.open` after the ui.*→app.* rename fold;
-//!   `ui.palette.open` is retired.)
 //! - `ai-commands` (5): ai.{toggle,focus,newChat,model,cancel} — webview-
 //!   reactive no-ops; the metadata surfaces in the unified registry while the
 //!   AI panel React tree owns the live effect.
@@ -105,9 +107,11 @@ use crate::support::call_command;
 /// rest of the suite.
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
-/// The 11 builtin command plugins, in the order the app loads them.
+/// The 10 builtin command plugins, in the order the app loads them.
 /// The grand union of their command registrations is the 99 ids asserted
-/// below.
+/// below. (The former `ui-commands` bundle was folded into
+/// `app-shell-commands` by the ui.*→app.* rename — there is no `ui.*`
+/// command namespace.)
 const BUILTIN_COMMAND_PLUGINS: &[&str] = &[
     "app-shell-commands",
     "entity-commands",
@@ -115,7 +119,6 @@ const BUILTIN_COMMAND_PLUGINS: &[&str] = &[
     "kanban-misc-commands",
     "perspective-commands",
     "task-commands",
-    "ui-commands",
     "ai-commands",
     "nav-commands",
     "grid-commands",
@@ -238,7 +241,7 @@ fn registered_ids(list_result: &Value) -> BTreeSet<String> {
         .collect()
 }
 
-/// The locked 62-id baseline.
+/// The locked 99-id baseline.
 ///
 /// Mirrors the actual union of each plugin's `registerCommands(...)`
 /// calls as of the Stage 4 cut-over. If a plugin's command set
@@ -246,7 +249,9 @@ fn registered_ids(list_result: &Value) -> BTreeSet<String> {
 /// per-bundle `builtin_*_commands_e2e.rs` test.
 fn expected_command_ids() -> BTreeSet<String> {
     [
-        // app-shell-commands (15)
+        // app-shell-commands (33) — the 15 platform-shell commands plus the
+        // former ui-commands bundle folded in by the ui.*→app.* rename
+        // (mop-up card 01KTEBZSVGAZ881RAZZWWZXGPE).
         "app.about",
         "app.command",
         "app.dismiss",
@@ -262,6 +267,34 @@ fn expected_command_ids() -> BTreeSet<String> {
         "settings.keymap.cua",
         "settings.keymap.emacs",
         "settings.keymap.vim",
+        // ...the former ui-commands set, every id now app.* (the `ui.*`
+        // command namespace is retired). field.* / pressable.* are the
+        // Card D UI-surface commands: webview-bus handled, host executes
+        // inert.
+        "app.entity.startRename",
+        "app.inspect",
+        "app.inspector.close",
+        "app.inspector.close_all",
+        "app.inspector.set_width",
+        "app.mode.set",
+        "app.palette.close",
+        "app.palette.open",
+        "app.setFocus",
+        "window.new",
+        "field.edit",
+        "field.editEnter",
+        "pressable.activate",
+        "pressable.activateSpace",
+        // ...and the Card E editor drill-in commands: webview-bus handled,
+        // host executes inert. ONE base elicitation id — the per-field
+        // variation lives in the focus-gated bus registration, not minted ids.
+        "filter_editor.drillIn",
+        "app.ai-panel.composer.drillIn",
+        "app.ai-panel.elicitation.field.drillIn",
+        // ...and the Card G consolidated global Space inspect command:
+        // explicit target, else the innermost inspectable scope-chain
+        // moniker, else an inert no-op.
+        "entity.inspect",
         // entity-commands (8)
         "entity.add",
         "entity.archive",
@@ -304,34 +337,6 @@ fn expected_command_ids() -> BTreeSet<String> {
         "task.doThisNext",
         "task.move",
         "task.untag",
-        // ui-commands (14) — the palette opener is now `app.palette.open`
-        // (folded ui.*→app.* rename); `ui.palette.open` is fully retired.
-        // field.* / pressable.* are the Card D UI-surface commands: webview-
-        // bus handled, host executes inert.
-        "ui.entity.startRename",
-        "ui.inspect",
-        "ui.inspector.close",
-        "ui.inspector.close_all",
-        "ui.inspector.set_width",
-        "ui.mode.set",
-        "ui.palette.close",
-        "app.palette.open",
-        "ui.setFocus",
-        "window.new",
-        "field.edit",
-        "field.editEnter",
-        "pressable.activate",
-        "pressable.activateSpace",
-        // ...and the Card E editor drill-in commands: webview-bus handled,
-        // host executes inert. ONE base elicitation id — the per-field
-        // variation lives in the focus-gated bus registration, not minted ids.
-        "filter_editor.drillIn",
-        "ui.ai-panel.composer.drillIn",
-        "ui.ai-panel.elicitation.field.drillIn",
-        // ...and the Card G consolidated global Space inspect command:
-        // explicit target, else the innermost inspectable scope-chain
-        // moniker, else an inert no-op.
-        "entity.inspect",
         // ai-commands (5)
         "ai.cancel",
         "ai.focus",
@@ -385,7 +390,7 @@ struct BootedBuiltins {
     _builtin_root: TempDir,
 }
 
-/// Boot a real `PluginHost` against a temp builtin-layer with all 11
+/// Boot a real `PluginHost` against a temp builtin-layer with all 10
 /// committed builtin command plugins staged, install the commands module,
 /// stub every other backend the plugins reach for, and load every plugin.
 async fn boot_all_builtin_plugins() -> BootedBuiltins {
@@ -429,10 +434,10 @@ async fn boot_all_builtin_plugins() -> BootedBuiltins {
     }
 }
 
-/// Boot all 11 committed builtin command plugins and assert the union of
+/// Boot all 10 committed builtin command plugins and assert the union of
 /// registered commands equals the locked baseline.
 #[tokio::test]
-async fn all_eleven_builtin_command_plugins_register_their_full_command_set() {
+async fn all_builtin_command_plugins_register_their_full_command_set() {
     let booted = boot_all_builtin_plugins().await;
     let service = &booted.service;
 
@@ -467,7 +472,34 @@ async fn all_eleven_builtin_command_plugins_register_their_full_command_set() {
     assert_eq!(
         got.len(),
         99,
-        "the 11 builtin command plugins must collectively register exactly 99 commands"
+        "the 10 builtin command plugins must collectively register exactly 99 commands"
+    );
+}
+
+/// Guard (mop-up card 01KTEBZSVGAZ881RAZZWWZXGPE): the `ui.*` command
+/// namespace is retired — every former `ui.*` command is an `app.*` command.
+/// The command-id namespace is independent of which MCP server backs the
+/// command (the `ui_state` SERVER keeps its name; only command ids are
+/// covered here). No registered command id may ever begin with `ui.` again.
+#[tokio::test]
+async fn no_registered_command_id_starts_with_the_retired_ui_prefix() {
+    let booted = boot_all_builtin_plugins().await;
+
+    let listed = call_command(
+        &booted.service,
+        CallerId::HostInternal,
+        json!({ "op": "list command" }),
+    )
+    .await;
+    let offenders: Vec<String> = registered_ids(&listed)
+        .into_iter()
+        .filter(|id| id.starts_with("ui."))
+        .collect();
+
+    assert!(
+        offenders.is_empty(),
+        "the `ui.*` command namespace is retired — every UI-surface command \
+         is an `app.*` command; offending registrations: {offenders:?}"
     );
 }
 
@@ -477,7 +509,7 @@ async fn all_eleven_builtin_command_plugins_register_their_full_command_set() {
 /// focused object) nor without one (placeholders fall back to a clean
 /// generic form).
 ///
-/// Sweeps every command registered by all 11 committed builtin plugins, so a
+/// Sweeps every command registered by all 10 committed builtin plugins, so a
 /// future plugin caption that introduces a placeholder the renderer cannot
 /// resolve fails here instead of leaking into the palette / menus
 /// (regression guard for kanban card 01KTRMXRNH66GZCWSNR1YGE28E).

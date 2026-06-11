@@ -233,14 +233,17 @@ export function RustEngineContainer({ children }: RustEngineContainerProps) {
 // entity data) must NEVER trigger a backend data-fetch. The grid body
 // stays in sync exclusively through this reducer: field cells subscribe via
 // `useFieldValue` (see `entity-store-context.tsx`) and redraw from the store
-// when this code patches an entity in place. On navigation only `ui.setFocus`
+// when this code patches an entity in place. On navigation only `app.setFocus`
 // is dispatched — no `list_entities`, `get_entity`, `get_board_data`, or
 // `perspective.list`. The regression test `grid-view.nav-is-eventdriven.test.tsx`
 // enforces this invariant.
 // ---------------------------------------------------------------------------
 
 /** Stores whose changes are reload-item signals, not field patches. */
-const RELOAD_ITEM_STORES: ReadonlySet<string> = new Set(["view", "perspective"]);
+const RELOAD_ITEM_STORES: ReadonlySet<string> = new Set([
+  "view",
+  "perspective",
+]);
 
 /** Structural entity types whose changes require a full board refresh. */
 const STRUCTURAL_TYPES: ReadonlySet<string> = new Set(["column"]);

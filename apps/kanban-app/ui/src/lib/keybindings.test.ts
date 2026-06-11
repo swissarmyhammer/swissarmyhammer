@@ -741,12 +741,12 @@ describe("extractChainBindings — component defs only", () => {
   it("extracts keys for the given mode", () => {
     const scope = makeScope([
       { id: "field.edit", keys: { vim: "i", cua: "Enter" } },
-      { id: "ui.entity.startRename", keys: { vim: "F2", cua: "F2" } },
+      { id: "app.entity.startRename", keys: { vim: "F2", cua: "F2" } },
     ]);
     const bindings = extractChainBindings([], "cua", scope);
     expect(bindings).toEqual({
       Enter: "field.edit",
-      F2: "ui.entity.startRename",
+      F2: "app.entity.startRename",
     });
   });
 
@@ -807,11 +807,11 @@ describe("extractChainBindings — component defs only", () => {
     expect(extractChainBindings([], "cua", null)).toEqual({});
   });
 
-  /* ---------- ui.entity.startRename — perspective-scoped Enter binding ---------- */
+  /* ---------- app.entity.startRename — perspective-scoped Enter binding ---------- */
   //
   // The active perspective tab's `<CommandScopeProvider>` (in
   // `kanban-app/ui/src/components/perspective-tab-bar.tsx`) registers
-  // `ui.entity.startRename` with `keys: { cua: "Enter", vim: "Enter", emacs: "Enter" }`
+  // `app.entity.startRename` with `keys: { cua: "Enter", vim: "Enter", emacs: "Enter" }`
   // when the tab is the currently active perspective. The YAML mirror
   // (`swissarmyhammer-commands/builtin/commands/ui.yaml`) carries the same
   // `keys` block plus `scope: "entity:perspective"` so the palette / context
@@ -819,48 +819,48 @@ describe("extractChainBindings — component defs only", () => {
   //
   // These three guards pin the React-side contract: from any perspective scope
   // that surfaces the command, `extractChainBindings` must return
-  // `{ Enter: "ui.entity.startRename" }` for cua, vim, AND emacs. The
+  // `{ Enter: "app.entity.startRename" }` for cua, vim, AND emacs. The
   // cross-cutting tests below pin the dispatch side; here we pin the
   // extraction side independently so a future regression that drops one of
   // the three modes from the React-side `keys` block fails this assertion
   // before any browser test runs.
 
-  it("ui.entity.startRename surfaces Enter on a perspective scope (cua)", () => {
+  it("app.entity.startRename surfaces Enter on a perspective scope (cua)", () => {
     const scope = makeScope([
       {
-        id: "ui.entity.startRename",
+        id: "app.entity.startRename",
         keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
       },
     ]);
     const bindings = extractChainBindings([], "cua", scope);
-    expect(bindings).toEqual({ Enter: "ui.entity.startRename" });
+    expect(bindings).toEqual({ Enter: "app.entity.startRename" });
   });
 
-  it("ui.entity.startRename surfaces Enter on a perspective scope (vim)", () => {
+  it("app.entity.startRename surfaces Enter on a perspective scope (vim)", () => {
     const scope = makeScope([
       {
-        id: "ui.entity.startRename",
+        id: "app.entity.startRename",
         keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
       },
     ]);
     const bindings = extractChainBindings([], "vim", scope);
-    expect(bindings).toEqual({ Enter: "ui.entity.startRename" });
+    expect(bindings).toEqual({ Enter: "app.entity.startRename" });
   });
 
-  it("ui.entity.startRename surfaces Enter on a perspective scope (emacs)", () => {
+  it("app.entity.startRename surfaces Enter on a perspective scope (emacs)", () => {
     const scope = makeScope([
       {
-        id: "ui.entity.startRename",
+        id: "app.entity.startRename",
         keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
       },
     ]);
     const bindings = extractChainBindings([], "emacs", scope);
-    expect(bindings).toEqual({ Enter: "ui.entity.startRename" });
+    expect(bindings).toEqual({ Enter: "app.entity.startRename" });
   });
 
-  it("ui.entity.startRename's Enter shadows a parent nav.drillIn: Enter", () => {
+  it("app.entity.startRename's Enter shadows a parent nav.drillIn: Enter", () => {
     // The global drill-in binding lives at the AppShell root — a perspective
-    // scope that registers `ui.entity.startRename: Enter` must shadow it so
+    // scope that registers `app.entity.startRename: Enter` must shadow it so
     // Enter inside the perspective scope chain triggers rename, not drill-in.
     // `extractChainBindings` walks innermost-first with first-key-wins
     // semantics, so the inner perspective scope's command claims `Enter`
@@ -869,14 +869,14 @@ describe("extractChainBindings — component defs only", () => {
     const inner = makeScope(
       [
         {
-          id: "ui.entity.startRename",
+          id: "app.entity.startRename",
           keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
         },
       ],
       outer,
     );
     const bindings = extractChainBindings([], "cua", inner);
-    expect(bindings.Enter).toBe("ui.entity.startRename");
+    expect(bindings.Enter).toBe("app.entity.startRename");
   });
 });
 
@@ -892,7 +892,7 @@ describe("extractChainBindings — component defs only", () => {
 //   - `entity.cut`     — cua `Mod+X`, vim `x`
 //   - `entity.copy`    — cua `Mod+C`, vim `y`
 //   - `entity.paste`   — cua `Mod+V`, vim `p`
-//   - `ui.inspector.close` — cua `Escape`, vim `q`
+//   - `app.inspector.close` — cua `Escape`, vim `q`
 //   - `app.palette.open`   — cua `Mod+K`, vim `:`
 //
 // Cross-cutting commands auto-emit into the scope chain for every entity
@@ -1066,29 +1066,29 @@ describe("cross-cutting command keybinding dispatch", () => {
     expect(executeCommand).toHaveBeenCalledWith("entity.paste");
   });
 
-  it("cua: Escape dispatches ui.inspector.close when its scope claims it", () => {
-    // `ui.inspector.close` declares `keys.cua: Escape` — when an inspector
+  it("cua: Escape dispatches app.inspector.close when its scope claims it", () => {
+    // `app.inspector.close` declares `keys.cua: Escape` — when an inspector
     // scope is focused, its Escape binding shadows the global
     // `app.dismiss` that would otherwise fire.
     const scope = makeScope([
-      { id: "ui.inspector.close", keys: { cua: "Escape", vim: "q" } },
+      { id: "app.inspector.close", keys: { cua: "Escape", vim: "q" } },
     ]);
     const handler = createKeyHandler("cua", executeCommand, () =>
       extractChainBindings([], "cua", scope),
     );
     handler(fakeKeyEvent("Escape"));
-    expect(executeCommand).toHaveBeenCalledWith("ui.inspector.close");
+    expect(executeCommand).toHaveBeenCalledWith("app.inspector.close");
   });
 
-  it("vim: q dispatches ui.inspector.close from an inspector scope", () => {
+  it("vim: q dispatches app.inspector.close from an inspector scope", () => {
     const scope = makeScope([
-      { id: "ui.inspector.close", keys: { cua: "Escape", vim: "q" } },
+      { id: "app.inspector.close", keys: { cua: "Escape", vim: "q" } },
     ]);
     const handler = createKeyHandler("vim", executeCommand, () =>
       extractChainBindings([], "vim", scope),
     );
     handler(fakeKeyEvent("q"));
-    expect(executeCommand).toHaveBeenCalledWith("ui.inspector.close");
+    expect(executeCommand).toHaveBeenCalledWith("app.inspector.close");
   });
 
   it("cua: Mod+K dispatches app.palette.open when a scope claims it", () => {
@@ -1138,11 +1138,11 @@ describe("cross-cutting command keybinding dispatch", () => {
 // keybinding layer built from the metadata-driven Command registry
 // (`extractKeymapBindings(registryCommands, mode)`) merged under the focused
 // scope chain (`extractChainBindings(registryCommands, mode, focusedScope)`) — Escape must
-// resolve to `nav.drillOut`, NOT `app.dismiss` and NOT `ui.inspector.close`.
+// resolve to `nav.drillOut`, NOT `app.dismiss` and NOT `app.inspector.close`.
 //
 // The fixtures mirror the ACTUAL plugin sources after the fix:
 //   - `app.ts` `app.dismiss` carries no Escape key.
-//   - `ui-commands/index.ts` `ui.inspector.close` keeps only vim `q`.
+//   - `app-shell-commands/commands/ui.ts` `app.inspector.close` keeps only vim `q`.
 //   - `app-shell.tsx` registers no static global defs at all (Card I deleted
 //     `STATIC_GLOBAL_COMMANDS` outright), so the root command scope surfaces
 //     no Escape binding to shadow the global `nav.drillOut`.
@@ -1161,7 +1161,7 @@ describe("Escape resolves to nav.drillOut (production registry + scope wiring)",
   /**
    * The Escape-bearing slice of the live command registry, in the order
    * `useCommandList` returns it. After the fix `nav.drillOut` is the sole
-   * Escape owner; `app.dismiss` carries no key and `ui.inspector.close` keeps
+   * Escape owner; `app.dismiss` carries no key and `app.inspector.close` keeps
    * only its vim `q`.
    */
   const REGISTRY = [
@@ -1170,10 +1170,10 @@ describe("Escape resolves to nav.drillOut (production registry + scope wiring)",
       name: "Drill Out",
       keys: { cua: "Escape", vim: "Escape", emacs: "Escape" },
     },
-    { id: "ui.inspector.close", name: "Close Inspector", keys: { vim: "q" } },
+    { id: "app.inspector.close", name: "Close Inspector", keys: { vim: "q" } },
     { id: "app.dismiss", name: "Dismiss" },
     {
-      id: "ui.inspector.close_all",
+      id: "app.inspector.close_all",
       name: "Close All",
       keys: { cua: "Mod+Escape", vim: "Q" },
     },
@@ -1231,18 +1231,18 @@ describe("Escape resolves to nav.drillOut (production registry + scope wiring)",
 // stable order must sort"). Each per-board plugin runtime owns its own
 // registry instance, so each board gets its own iteration order. TWO registry
 // commands declare an Enter key: the GLOBAL `nav.drillIn` and the SCOPE-GATED
-// `ui.entity.startRename` (scope `["entity:perspective"]`, ui-commands). With
+// `app.entity.startRename` (scope `["entity:perspective"]`, app-shell-commands). With
 // first-id-wins extraction and no scope awareness, whichever id happened to
 // iterate first claimed Enter — drill-in worked in the two windows sharing
 // one board runtime and silently died in the third window (a DIFFERENT board,
-// therefore a different runtime whose order put `ui.entity.startRename`
+// therefore a different runtime whose order put `app.entity.startRename`
 // first; that id resolves to the root-scope client-side `triggerStartRename`
 // and never reaches the backend, so the live log showed no `nav.drillIn`
 // dispatch at all for that window).
 //
 // The contract pinned here: a command carrying a non-empty `scope` filter
 // contributes NO global keybinding — its keys apply only through the
-// focused-scope walk (`extractChainBindings`), exactly as the ui-commands
+// focused-scope walk (`extractChainBindings`), exactly as the app-shell-commands
 // source comments intend ("The scope filter keeps Enter from claiming
 // nav.drillIn on board/column/card focus"). Global key ownership is therefore
 // order-independent.
@@ -1251,7 +1251,7 @@ describe("Enter resolves to nav.drillIn regardless of registry order (third-wind
    * the scope-gated rename command iterates before the global drill. */
   const ADVERSE_ORDER = [
     {
-      id: "ui.entity.startRename",
+      id: "app.entity.startRename",
       name: "Rename Perspective",
       scope: ["entity:perspective"],
       keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
@@ -1442,7 +1442,7 @@ describe("scoped registry bindings shadow globals inside the zone", () => {
 
 /* ---------- extractChainBindings — depth-interleaved chain walk ---------- */
 
-// Card D (ui-commands plugin UI-surface commands): the two binding layers —
+// Card D (app-shell-commands plugin UI-surface commands): the two binding layers —
 // component-registered `CommandDef`s and scope-gated registry commands — must
 // resolve as ONE inner-first walk over the focused chain, not as two flat
 // layers where every component def beats every registry binding. The failure

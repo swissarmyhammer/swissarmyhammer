@@ -1,7 +1,7 @@
 /**
  * Inspectable-entity moniker prefixes — the webview-side copy of the
  * `INSPECTABLE_ENTITY_PREFIXES` list declared in
- * `builtin/plugins/ui-commands/index.ts` (the server-side filter
+ * `builtin/plugins/app-shell-commands/commands/ui.ts` (the server-side filter
  * `entity.inspect` uses to resolve its target from a dispatch's scope chain).
  *
  * The plugin module is NOT importable from vitest — it imports

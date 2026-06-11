@@ -328,7 +328,7 @@ describe("window moniker in scope chain", () => {
     expect(invoke).toHaveBeenCalledWith(
       "dispatch_command",
       expect.objectContaining({
-        cmd: "ui.setFocus",
+        cmd: "app.setFocus",
         args: { scope_chain: ["task:abc", "column:col1", "window:main"] },
       }),
     );

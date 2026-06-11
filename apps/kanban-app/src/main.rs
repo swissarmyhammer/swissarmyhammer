@@ -480,7 +480,7 @@ fn on_window_geometry_changed(window: &tauri::Window, label: &str) {
 
 /// When a board window gains focus, update `most_recent_board_path` so quick
 /// capture and commands without an explicit `board_path` target the right
-/// board. Menu rebuild is handled by the frontend re-dispatching `ui.setFocus`
+/// board. Menu rebuild is handled by the frontend re-dispatching `app.setFocus`
 /// on window focus.
 fn on_window_focused(window: &tauri::Window, label: &str) {
     let state = window.app_handle().state::<AppState>();

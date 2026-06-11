@@ -7,7 +7,7 @@
  *
  *   - The webview dispatches `view.set` with the view id in `args.view_id`
  *     (LeftNav's `ViewButton`, plugin definition in
- *     `builtin/plugins/ui-commands/index.ts`).
+ *     `builtin/plugins/app-shell-commands/commands/ui.ts`).
  *   - The palette's per-view "Switch to <ViewName>" rows are emitted by Rust
  *     (`swissarmyhammer_kanban::scope_commands::emit_view_switch`) as
  *     `view.set` rows with pre-filled args — never as `view.switch:*` ids.

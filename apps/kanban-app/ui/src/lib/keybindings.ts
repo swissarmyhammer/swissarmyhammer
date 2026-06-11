@@ -92,7 +92,7 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     Tab: "nav.right",
     "Shift+Tab": "nav.left",
     // Space → `entity.inspect` — the plugin-owned global inspect
-    // command (Card G, `builtin/plugins/ui-commands/index.ts`). The
+    // command (Card G, `builtin/plugins/app-shell-commands/commands/ui.ts`). The
     // dispatch carries the focused scope chain to the backend, where
     // the plugin resolves the INNERMOST inspectable-entity moniker
     // (or no-ops on chrome / no focus). A scope-gated claim of Space
@@ -463,7 +463,7 @@ export interface RegistryKeyCommand {
  *      `ai.*`, …).
  *   2. **Scope-gated registry commands** — plugin-defined commands whose
  *      `scope` expression LITERALLY equals this chain scope's moniker (the
- *      `grid-commands` plugin's `ui:grid`, Card C; the `ui-commands` plugin's
+ *      `grid-commands` plugin's `ui:grid`, Card C; the `app-shell-commands` plugin's
  *      `ui:field` / `ui:pressable` markers, Card D). Their behaviors live on
  *      the webview command bus, registered by the matching component, so a
  *      literal-moniker match implies the handler is live.
@@ -549,13 +549,13 @@ export function extractChainBindings(
  * is hardcoded in the hotkey path.
  *
  * Scope-gated commands (a non-empty `scope` list, e.g.
- * `ui.entity.startRename`'s `["entity:perspective"]`) contribute NO global
+ * `app.entity.startRename`'s `["entity:perspective"]`) contribute NO global
  * binding: their keys apply only when a matching scope is in the focused
  * chain, via {@link extractChainBindings}. This is load-bearing for
  * determinism — `list command` returns commands in UNSPECIFIED order (the
  * service registry is a hash map and each per-board plugin runtime owns its
  * own instance), so letting a scoped command compete with a global one for
- * the same key (Enter: `ui.entity.startRename` vs `nav.drillIn`) made key
+ * the same key (Enter: `app.entity.startRename` vs `nav.drillIn`) made key
  * ownership a per-board coin toss. That was the "drill-in works in two
  * windows, silently dead in the third (different board)" bug — card
  * `01KTQ6QZNB3VN4MAND7VPASM21`.

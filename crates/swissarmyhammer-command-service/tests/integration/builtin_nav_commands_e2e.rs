@@ -442,7 +442,7 @@ async fn nav_commands_plugin_registers_and_routes_to_focus() {
     // `nav.focus` was never in `nav.yaml` — it has no key binding and no menu
     // placement (the Navigation submenu stays at the nine nav.yaml entries),
     // and it is not palette-visible (it requires a target `args.fq`, like the
-    // programmatic `ui.setFocus` / `ui.mode.set`). Name matches the React
+    // programmatic `app.setFocus` / `app.mode.set`). Name matches the React
     // scope defs (`Focus Scope`).
     let focus_cmd = &commands["nav.focus"];
     assert_eq!(focus_cmd["name"], json!("Focus Scope"), "nav.focus name");
@@ -555,7 +555,7 @@ async fn nav_commands_plugin_registers_and_routes_to_focus() {
     );
 
     // ── (3e) nav.drillOut at a layer-root edge closes the inspector ─────────
-    // Card `01KTPDTH772HSEV5F7R1DKYDNJ` removed the `ui.inspector.close`
+    // Card `01KTPDTH772HSEV5F7R1DKYDNJ` removed the `app.inspector.close`
     // Escape binding, so Escape no longer closes the inspector directly — it
     // closes via nav.drillOut's dismiss fall-through (the `dismiss ui` op is a
     // LAYERED close: palette first, then pop the topmost inspector). With the

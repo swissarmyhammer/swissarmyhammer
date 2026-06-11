@@ -314,7 +314,7 @@ pub async fn install_app_command_services(
 /// 1. From inside [`install_app_command_services`] with `None`/`None` (the
 ///    no-AppHandle bootstrap) — a no-op.
 /// 2. From the `setup_app` hook with the constructed shells, BEFORE the global
-///    host's deferred plugin discovery, so the `file-commands` / `ui-commands`
+///    host's deferred plugin discovery, so the `file-commands` / `app-shell-commands`
 ///    / `kanban-misc-commands` / `app-shell-commands` builtin plugins find
 ///    their `window` / `app` backends already exposed at `ensureServices` time.
 ///
@@ -479,7 +479,7 @@ mod registry_population_tests {
         keys.insert("cua".to_string(), "Mod+Shift+P".to_string());
 
         let meta = CommandMetadata {
-            id: "ui.setFocus".to_string(),
+            id: "app.setFocus".to_string(),
             name: "Set Focus".to_string(),
             menu_name: None,
             description: Some("dropped".to_string()),
@@ -498,7 +498,7 @@ mod registry_population_tests {
         };
 
         let def = command_metadata_to_def(&meta).expect("metadata should map");
-        assert_eq!(def.id, "ui.setFocus");
+        assert_eq!(def.id, "app.setFocus");
         assert_eq!(def.name, "Set Focus");
         // scope vec is comma-joined into the CommandsRegistry grammar.
         assert_eq!(def.scope.as_deref(), Some("entity:task,entity:column"));

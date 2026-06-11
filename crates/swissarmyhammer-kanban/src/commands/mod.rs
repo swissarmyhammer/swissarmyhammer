@@ -129,38 +129,38 @@ fn register_column(map: &mut CmdMap) {
 }
 
 fn register_ui(map: &mut CmdMap) {
-    map.insert("ui.inspect".into(), Arc::new(ui_commands::InspectCmd));
+    map.insert("app.inspect".into(), Arc::new(ui_commands::InspectCmd));
     map.insert(
-        "ui.inspector.close".into(),
+        "app.inspector.close".into(),
         Arc::new(ui_commands::InspectorCloseCmd),
     );
     map.insert(
-        "ui.inspector.close_all".into(),
+        "app.inspector.close_all".into(),
         Arc::new(ui_commands::InspectorCloseAllCmd),
     );
     map.insert(
-        "ui.inspector.set_width".into(),
+        "app.inspector.set_width".into(),
         Arc::new(ui_commands::InspectorSetWidthCmd),
     );
-    // LEGACY ID — the live catalogue registers the palette opener as
-    // `app.palette.open` (ui.*→app.* rename fold, Card A
+    // The ids here match the live catalogue's `app.*` names (the `ui.*`
+    // command namespace was retired by mop-up card 01KTEBZSVGAZ881RAZZWWZXGPE;
+    // the palette opener adopted `app.palette.open` at move time in Card A
     // 01KTCQFH7AEQDZD0QETSMCMGP0). This map has no production callers
-    // (test-only); renaming the ids here is deferred to the repo-wide
-    // `ui.*` sweep owned by mop-up card 01KTEBZSVGAZ881RAZZWWZXGPE.
+    // (test-only).
     map.insert(
-        "ui.palette.open".into(),
+        "app.palette.open".into(),
         Arc::new(ui_commands::PaletteOpenCmd),
     );
     map.insert(
-        "ui.palette.close".into(),
+        "app.palette.close".into(),
         Arc::new(ui_commands::PaletteCloseCmd),
     );
     map.insert(
-        "ui.entity.startRename".into(),
+        "app.entity.startRename".into(),
         Arc::new(ui_commands::StartRenamePerspectiveCmd),
     );
-    map.insert("ui.setFocus".into(), Arc::new(ui_commands::SetFocusCmd));
-    map.insert("ui.mode.set".into(), Arc::new(ui_commands::SetAppModeCmd));
+    map.insert("app.setFocus".into(), Arc::new(ui_commands::SetFocusCmd));
+    map.insert("app.mode.set".into(), Arc::new(ui_commands::SetAppModeCmd));
 }
 
 /// Register `view.*` kanban commands.
@@ -679,7 +679,7 @@ mod tests {
     #[test]
     fn inspect_available_with_target() {
         let cmds = register_commands();
-        let cmd = cmds.get("ui.inspect").unwrap();
+        let cmd = cmds.get("app.inspect").unwrap();
         let ctx = ctx_with(&[], Some("task:01ABC"), None);
         assert!(cmd.available(&ctx));
     }
@@ -687,7 +687,7 @@ mod tests {
     #[test]
     fn inspect_available_with_scope() {
         let cmds = register_commands();
-        let cmd = cmds.get("ui.inspect").unwrap();
+        let cmd = cmds.get("app.inspect").unwrap();
         let ctx = ctx_scope(&["task:01ABC"]);
         assert!(cmd.available(&ctx));
     }
@@ -695,7 +695,7 @@ mod tests {
     #[test]
     fn inspect_not_available_without_target_or_scope() {
         let cmds = register_commands();
-        let cmd = cmds.get("ui.inspect").unwrap();
+        let cmd = cmds.get("app.inspect").unwrap();
         let ctx = ctx_scope(&[]);
         assert!(!cmd.available(&ctx));
     }
@@ -703,7 +703,7 @@ mod tests {
     #[tokio::test]
     async fn inspect_executes_updates_ui_state() {
         let cmds = register_commands();
-        let cmd = cmds.get("ui.inspect").unwrap();
+        let cmd = cmds.get("app.inspect").unwrap();
         let ui = Arc::new(UIState::new());
         let ctx = ctx_with(&[], Some("task:01XYZ"), Some(Arc::clone(&ui)));
 
@@ -716,7 +716,7 @@ mod tests {
     #[tokio::test]
     async fn inspector_close_executes() {
         let cmds = register_commands();
-        let cmd = cmds.get("ui.inspector.close").unwrap();
+        let cmd = cmds.get("app.inspector.close").unwrap();
         let ui = Arc::new(UIState::new());
         ui.inspect("main", "task:01XYZ");
         ui.inspect("main", "tag:01TAG");
@@ -730,7 +730,7 @@ mod tests {
     #[tokio::test]
     async fn inspector_close_all_executes() {
         let cmds = register_commands();
-        let cmd = cmds.get("ui.inspector.close_all").unwrap();
+        let cmd = cmds.get("app.inspector.close_all").unwrap();
         let ui = Arc::new(UIState::new());
         ui.inspect("main", "task:01XYZ");
         ui.inspect("main", "tag:01TAG");
@@ -744,7 +744,7 @@ mod tests {
     #[tokio::test]
     async fn palette_open_executes() {
         let cmds = register_commands();
-        let cmd = cmds.get("ui.palette.open").unwrap();
+        let cmd = cmds.get("app.palette.open").unwrap();
         let ui = Arc::new(UIState::new());
         assert!(!ui.palette_open("main"));
 
@@ -757,7 +757,7 @@ mod tests {
     #[tokio::test]
     async fn palette_close_executes() {
         let cmds = register_commands();
-        let cmd = cmds.get("ui.palette.close").unwrap();
+        let cmd = cmds.get("app.palette.close").unwrap();
         let ui = Arc::new(UIState::new());
         ui.set_palette_open("main", true);
 
@@ -783,7 +783,7 @@ mod tests {
     #[tokio::test]
     async fn set_focus_cmd_sets_scope_chain() {
         let cmds = register_commands();
-        let cmd = cmds.get("ui.setFocus").unwrap();
+        let cmd = cmds.get("app.setFocus").unwrap();
         let ui = Arc::new(UIState::new());
         assert!(ui.scope_chain().is_empty());
 
@@ -792,7 +792,7 @@ mod tests {
             "scope_chain".to_string(),
             serde_json::json!(["task:01XYZ", "column:todo"]),
         );
-        let mut ctx = CommandContext::new("ui.setFocus", vec![], None, args);
+        let mut ctx = CommandContext::new("app.setFocus", vec![], None, args);
         ctx.ui_state = Some(Arc::clone(&ui));
 
         let result = cmd.execute(&ctx).await;
@@ -803,13 +803,13 @@ mod tests {
     #[tokio::test]
     async fn set_focus_cmd_clears_scope_chain_with_empty_arg() {
         let cmds = register_commands();
-        let cmd = cmds.get("ui.setFocus").unwrap();
+        let cmd = cmds.get("app.setFocus").unwrap();
         let ui = Arc::new(UIState::new());
         ui.set_scope_chain(vec!["task:01XYZ".to_string()]);
 
         let mut args = std::collections::HashMap::new();
         args.insert("scope_chain".to_string(), serde_json::json!([]));
-        let mut ctx = CommandContext::new("ui.setFocus", vec![], None, args);
+        let mut ctx = CommandContext::new("app.setFocus", vec![], None, args);
         ctx.ui_state = Some(Arc::clone(&ui));
 
         let result = cmd.execute(&ctx).await;
@@ -820,13 +820,13 @@ mod tests {
     #[tokio::test]
     async fn set_focus_cmd_defaults_to_empty_when_no_arg() {
         let cmds = register_commands();
-        let cmd = cmds.get("ui.setFocus").unwrap();
+        let cmd = cmds.get("app.setFocus").unwrap();
         let ui = Arc::new(UIState::new());
         ui.set_scope_chain(vec!["task:01XYZ".to_string()]);
 
         // No scope_chain arg — should default to empty
         let ctx_empty: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
-        let mut ctx = CommandContext::new("ui.setFocus", vec![], None, ctx_empty);
+        let mut ctx = CommandContext::new("app.setFocus", vec![], None, ctx_empty);
         ctx.ui_state = Some(Arc::clone(&ui));
 
         let result = cmd.execute(&ctx).await;
@@ -1063,8 +1063,8 @@ mod tests {
         let cmds = register_commands();
         let ui = Arc::new(UIState::new());
 
-        // Dispatch ui.inspect with a target
-        let cmd = cmds.get("ui.inspect").unwrap();
+        // Dispatch app.inspect with a target
+        let cmd = cmds.get("app.inspect").unwrap();
         let ctx = ctx_with(&["task:01ABC"], Some("task:01ABC"), Some(Arc::clone(&ui)));
 
         assert!(cmd.available(&ctx), "inspect should be available");
@@ -1073,8 +1073,8 @@ mod tests {
         // ctx has no window_label set, so falls back to "main"
         assert_eq!(ui.inspector_stack("main"), vec!["task:01ABC"]);
 
-        // Dispatch ui.inspector.close
-        let cmd = cmds.get("ui.inspector.close").unwrap();
+        // Dispatch app.inspector.close
+        let cmd = cmds.get("app.inspector.close").unwrap();
         let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
         assert!(cmd.available(&ctx));
         cmd.execute(&ctx).await.unwrap();

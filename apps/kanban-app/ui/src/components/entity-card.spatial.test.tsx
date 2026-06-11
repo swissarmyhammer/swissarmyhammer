@@ -61,10 +61,10 @@
  *     verified indirectly by the legacy-nav-stripped assertions below.
  *   - **#5 Space → inspect**: NOT covered here. Space is bound at
  *     `<AppShell>` (or its scope-binding pipeline) to a card-scoped
- *     `ui.inspect` command. The card itself owns no Space handler.
+ *     `app.inspect` command. The card itself owns no Space handler.
  *     Verified indirectly by the legacy-nav-stripped assertions and by
  *     the existing `entity-card.test.tsx` suite that pins the
- *     `ui.inspect` dispatch shape on the (i) button.
+ *     `app.inspect` dispatch shape on the (i) button.
  *   - **#6 Enter → drill-in**: NOT covered here. Enter is bound at
  *     `<AppShell>` to `nav.drillIn`, which reads the focused
  *     `FullyQualifiedMoniker` and invokes `spatial_drill_in`. Covered in
@@ -444,12 +444,18 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 /** Collect every `spatial_focus` call's args, in order. */
 function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
-    .filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))
+    .filter(
+      (c) =>
+        c[0] === "spatial_focus" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "set focus"),
+    )
     .map((c) => {
       const outer = c[1] as Record<string, unknown>;
       const args = (outer?.params ?? outer) as { fq: FullyQualifiedMoniker };
       return args;
-    })
+    });
 }
 
 /** Collect every `spatial_unregister_scope` call's args, in order. */
@@ -664,7 +670,7 @@ describe("EntityCard — browser spatial behaviour", () => {
   // ---------------------------------------------------------------------
   // #5 Space → inspect (deferred — covered by app-shell scope bindings)
   // ---------------------------------------------------------------------
-  // Space is a card-scoped command (`ui.inspect` for cards). Binding
+  // Space is a card-scoped command (`app.inspect` for cards). Binding
   // happens through the CommandScope chain that AppShell's keymap
   // pipeline reads. The card side of the contract is "do nothing on
   // raw Space — let the global handler resolve the binding from scope".
@@ -686,7 +692,11 @@ describe("EntityCard — browser spatial behaviour", () => {
     await flushSetup();
 
     const navigateCalls = mockInvoke.mock.calls.filter(
-      (c) => (c[0] === "spatial_navigate" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "navigate focus")),
+      (c) =>
+        c[0] === "spatial_navigate" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "navigate focus"),
     );
     expect(navigateCalls).toEqual([]);
 
@@ -717,7 +727,11 @@ describe("EntityCard — browser spatial behaviour", () => {
     // No card-owned drill-in — the global handler is what wires Enter,
     // and it is not mounted in this harness.
     const drillCalls = mockInvoke.mock.calls.filter(
-      (c) => (c[0] === "spatial_drill_in" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "drill_in layer")),
+      (c) =>
+        c[0] === "spatial_drill_in" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "drill_in layer"),
     );
     expect(drillCalls).toEqual([]);
 

@@ -209,7 +209,7 @@ async function defaultInvokeImpl(
   cmd: string,
   args?: unknown,
 ): Promise<unknown> {
-  // The field-edit commands are DEFINED by the `ui-commands` builtin plugin
+  // The field-edit commands are DEFINED by the `app-shell-commands` builtin plugin
   // (`field.edit` / `field.editEnter`, scope ["ui:field"]) — their Enter /
   // `i` keys reach the keymap layer only through the `useCommandList` seam,
   // so answer `list command` with the shared mock registry. Non-list
@@ -381,10 +381,10 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
  * Collect every `spatial_focus` invocation. Under the production
  * pathway (`SpatialFocusProvider` mounted), `FocusActions.setFocus(fq)`
  * routes through `spatial.focus(fq)` → `invoke("spatial_focus", { fq })`
- * rather than dispatching a `ui.setFocus` command. The kernel echoes
+ * rather than dispatching a `app.setFocus` command. The kernel echoes
  * a `focus-changed` event the bridge mirrors into the entity-focus
  * store. Tests that observe a drill / setFocus fanout assert on this
- * IPC, not on a `dispatch_command(ui.setFocus, ...)` call.
+ * IPC, not on a `dispatch_command(app.setFocus, ...)` call.
  */
 function spatialFocusCalls(): Array<{ fq?: string }> {
   return mockInvoke.mock.calls
@@ -396,12 +396,12 @@ function spatialFocusCalls(): Array<{ fq?: string }> {
     });
 }
 
-/** Filter `dispatch_command` calls down to those for `ui.inspect`. */
+/** Filter `dispatch_command` calls down to those for `app.inspect`. */
 function inspectDispatches(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "dispatch_command")
     .map((c) => c[1] as Record<string, unknown>)
-    .filter((p) => p.cmd === "ui.inspect");
+    .filter((p) => p.cmd === "app.inspect");
 }
 
 /** Filter `spatial_drill_in` calls. */
@@ -824,7 +824,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
   // `onEdit`) and `display: "text"` (no pills).
   // `spatial_drill_in(idKey)` returns null. The field.edit closure
   // falls through to `onEdit?.()` which is undefined → silently
-  // returns. No editor mounts; no `ui.inspect` dispatch fires.
+  // returns. No editor mounts; no `app.inspect` dispatch fires.
   // -------------------------------------------------------------------------
 
   it("enter_on_non_editable_field_with_no_pills_is_noop", async () => {
@@ -867,7 +867,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     // No inspect dispatch fires.
     expect(
       inspectDispatches().length,
-      "Enter on a non-editable field must NOT dispatch ui.inspect",
+      "Enter on a non-editable field must NOT dispatch app.inspect",
     ).toBe(0);
 
     unmount();
@@ -935,11 +935,11 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
       ).toBe("true");
     });
 
-    // `ui.inspect` must NOT fire — Enter is for drill-in/edit, not
+    // `app.inspect` must NOT fire — Enter is for drill-in/edit, not
     // for inspecting.
     expect(
       inspectDispatches().length,
-      "Enter on an empty pill field must NOT dispatch ui.inspect",
+      "Enter on an empty pill field must NOT dispatch app.inspect",
     ).toBe(0);
 
     unmount();

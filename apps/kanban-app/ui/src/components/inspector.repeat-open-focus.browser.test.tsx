@@ -279,7 +279,7 @@ async function defaultInvokeImpl(
   if (cmd === "log_command") return null;
   if (cmd === "dispatch_command") {
     const a = (args ?? {}) as { cmd?: string };
-    if (a.cmd === "ui.inspector.close" || a.cmd === "app.dismiss") {
+    if (a.cmd === "app.inspector.close" || a.cmd === "app.dismiss") {
       backendState.inspector_stack.pop();
       emitUiStateChanged("InspectorClosed");
       return null;
@@ -441,7 +441,13 @@ describe("Inspector — auto-focus on every inspect (not only the first)", () =>
     // Helper: every spatial_focus dispatch in the order it fired.
     const focusCalls = () =>
       mockInvoke.mock.calls
-        .filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))
+        .filter(
+          (c) =>
+            c[0] === "spatial_focus" ||
+            (c[0] === "command_tool_call" &&
+              (c[1] as any)?.tool === "focus" &&
+              (c[1] as any)?.op === "set focus"),
+        )
         .map((c) => (c[1] as { fq?: string } | undefined)?.fq ?? "?");
 
     /** Simulate a card click: nav.focus(card_fq) then inspect open. */
@@ -454,7 +460,7 @@ describe("Inspector — auto-focus on every inspect (not only the first)", () =>
       await act(async () => {
         await dispatchRef.current!(cardFq);
       });
-      // Step 2: the Inspectable's gesture dispatches `ui.inspect`,
+      // Step 2: the Inspectable's gesture dispatches `app.inspect`,
       // which (in production) round-trips through the backend and
       // mutates `inspector_stack`. The test fakes the backend mutation
       // by pushing the entity moniker onto the stack and emitting

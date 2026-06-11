@@ -39,7 +39,7 @@
  * Family ↔ regression mapping:
  *
  *   - **Family 6** (dblclick policy) catches `01KQ7GM77B1E6YH8Z893K05VKY`
- *     — dblclick on a perspective tab dispatching `ui.inspect`.
+ *     — dblclick on a perspective tab dispatching `app.inspect`.
  *   - **Family 5** (Enter → rename on perspective tab) catches
  *     `01KQ7GE3KY91X2YR6BX5AY40VK` — Enter falling through to no-op
  *     drill-in instead of triggering rename.
@@ -323,8 +323,8 @@ function makeBootstrapInvokeImpl(
       if (a.cmd === "perspective.rename")
         return { result: null, undoable: true };
       if (a.cmd === "view.set") return { result: null, undoable: false };
-      if (a.cmd === "ui.inspect") return { result: null, undoable: false };
-      if (a.cmd === "ui.setFocus") return { result: null, undoable: false };
+      if (a.cmd === "app.inspect") return { result: null, undoable: false };
+      if (a.cmd === "app.setFocus") return { result: null, undoable: false };
       if (a.cmd === "file.switchBoard")
         return { result: null, undoable: false };
       return { result: null, undoable: false };
@@ -448,7 +448,7 @@ async function flushAppMount() {
 /**
  * Capture every `dispatch_command` call's args. Tests use this to
  * assert that a gesture dispatched (or did NOT dispatch) a specific
- * command id like `ui.inspect` or `perspective.rename`.
+ * command id like `app.inspect` or `perspective.rename`.
  */
 function dispatchCalls(): Array<{
   cmd: string;
@@ -999,10 +999,10 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
   // Family 4 — Space → inspect
   //
   // Space on a focused card routes the plugin-owned `entity.inspect`
-  // (Card G, `builtin/plugins/ui-commands/index.ts`) to the BACKEND with
+  // (Card G, `builtin/plugins/app-shell-commands/commands/ui.ts`) to the BACKEND with
   // the focused scope chain — the plugin resolves the card's moniker
   // server-side. Space on a focused perspective tab must NOT produce a
-  // `ui.inspect` — perspective tabs are chrome, not entities, so the
+  // `app.inspect` — perspective tabs are chrome, not entities, so the
   // plugin's server-side prefix filter no-ops on the dispatched chain.
   // =========================================================================
 
@@ -1036,14 +1036,14 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
         inspectCalls.some((c) => c.scopeChain?.[0] === "task:T1"),
         "the dispatched chain must be led by task:T1",
       ).toBe(true);
-      // The webview must NOT synthesize a `ui.inspect` of its own — the
+      // The webview must NOT synthesize a `app.inspect` of its own — the
       // backend owns the inspect (single-plugin path).
-      expect(dispatchCallsFor("ui.inspect").length).toBe(0);
+      expect(dispatchCallsFor("app.inspect").length).toBe(0);
 
       unmount();
     });
 
-    it("Space on a focused perspective tab does NOT dispatch ui.inspect", async () => {
+    it("Space on a focused perspective tab does NOT dispatch app.inspect", async () => {
       const { unmount } = renderApp();
       await flushAppMount();
 
@@ -1062,18 +1062,18 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       fireEvent.keyDown(document.body, { key: " " });
       await flushAppMount();
 
-      // Perspective is not an entity — no ui.inspect should fire when
+      // Perspective is not an entity — no app.inspect should fire when
       // Space is pressed while a perspective tab is focused.
-      const inspectCalls = dispatchCallsFor("ui.inspect");
+      const inspectCalls = dispatchCallsFor("app.inspect");
       expect(
         inspectCalls.length,
-        "Space on a perspective tab must NOT dispatch ui.inspect",
+        "Space on a perspective tab must NOT dispatch app.inspect",
       ).toBe(0);
 
       unmount();
     });
 
-    it("Space at app open with no kernel focus preventDefaults (no page scroll) and does NOT dispatch ui.inspect", async () => {
+    it("Space at app open with no kernel focus preventDefaults (no page scroll) and does NOT dispatch app.inspect", async () => {
       // E2E pin for card 01KQJHFX0HADZH74P7KJQRFM4E: with the full
       // board mount (every Inspectable / FocusScope registered) but
       // no kernel focus claimed, Space MUST be claimed by the GLOBAL
@@ -1081,7 +1081,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       // `preventDefault()` fires (the browser's page-scroll default
       // is suppressed). The dispatched chain carries no inspectable
       // entity, so the plugin no-ops server-side — meaning no
-      // `ui.inspect` either.
+      // `app.inspect` either.
       //
       // Companion to the synthetic-event test in
       // `inspectable.space.browser.test.tsx`. This e2e flavour
@@ -1125,10 +1125,10 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
         "Space at app open must preventDefault so the browser does not scroll",
       ).toBe(true);
 
-      const inspectCalls = dispatchCallsFor("ui.inspect");
+      const inspectCalls = dispatchCallsFor("app.inspect");
       expect(
         inspectCalls.length,
-        "Space with no kernel focus must NOT dispatch ui.inspect",
+        "Space with no kernel focus must NOT dispatch app.inspect",
       ).toBe(0);
 
       unmount();
@@ -1192,12 +1192,12 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
           inspectCalls.some((c) => c.scopeChain?.[0] === "task:T1"),
           "the dispatched chain in vim mode must be led by task:T1",
         ).toBe(true);
-        expect(dispatchCallsFor("ui.inspect").length).toBe(0);
+        expect(dispatchCallsFor("app.inspect").length).toBe(0);
 
         unmount();
       });
 
-      it("vim mode: Space on a focused perspective tab does NOT dispatch ui.inspect but DOES preventDefault", async () => {
+      it("vim mode: Space on a focused perspective tab does NOT dispatch app.inspect but DOES preventDefault", async () => {
         const { unmount } = renderApp();
         await flushAppMount();
 
@@ -1227,16 +1227,16 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
           "Space on a perspective tab in vim mode must preventDefault (no scroll)",
         ).toBe(true);
 
-        const inspectCalls = dispatchCallsFor("ui.inspect");
+        const inspectCalls = dispatchCallsFor("app.inspect");
         expect(
           inspectCalls.length,
-          "Space on a perspective tab in vim mode must NOT dispatch ui.inspect",
+          "Space on a perspective tab in vim mode must NOT dispatch app.inspect",
         ).toBe(0);
 
         unmount();
       });
 
-      it("vim mode: Space at app open with no kernel focus preventDefaults (no page scroll) and does NOT dispatch ui.inspect", async () => {
+      it("vim mode: Space at app open with no kernel focus preventDefaults (no page scroll) and does NOT dispatch app.inspect", async () => {
         const { unmount } = renderApp();
         await flushAppMount();
 
@@ -1267,10 +1267,10 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
           "Space at app open in vim mode must preventDefault so the browser does not scroll",
         ).toBe(true);
 
-        const inspectCalls = dispatchCallsFor("ui.inspect");
+        const inspectCalls = dispatchCallsFor("app.inspect");
         expect(
           inspectCalls.length,
-          "Space with no kernel focus in vim mode must NOT dispatch ui.inspect",
+          "Space with no kernel focus in vim mode must NOT dispatch app.inspect",
         ).toBe(0);
 
         unmount();
@@ -1313,7 +1313,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       fireEvent.keyDown(document.body, { key: "Enter" });
       await flushAppMount();
 
-      // The active-tab-only `ui.entity.startRename: Enter` binding mounts
+      // The active-tab-only `app.entity.startRename: Enter` binding mounts
       // an inline `<InlineRenameEditor>` (a CodeMirror `.cm-editor`)
       // inside the tab.
       await waitFor(() => {
@@ -1334,13 +1334,13 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
   // Family 6 — dblclick policy
   //
   // Pins `01KQ7GM77B1E6YH8Z893K05VKY`: double-click on a perspective
-  // tab does NOT dispatch `ui.inspect`. Cards do dispatch (inspectable).
+  // tab does NOT dispatch `app.inspect`. Cards do dispatch (inspectable).
   // Chrome leaves (nav-bar background, perspective bar background, view
   // chrome) do NOT dispatch.
   // =========================================================================
 
   describe("Family 6 — dblclick policy", () => {
-    it("dblclick on a card dispatches ui.inspect against that task's moniker", async () => {
+    it("dblclick on a card dispatches app.inspect against that task's moniker", async () => {
       const { container, unmount } = renderApp();
       await flushAppMount();
 
@@ -1353,10 +1353,10 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       fireEvent.doubleClick(t1Node!);
       await flushAppMount();
 
-      const inspectCalls = dispatchCallsFor("ui.inspect");
+      const inspectCalls = dispatchCallsFor("app.inspect");
       expect(
         inspectCalls.length,
-        "dblclick on a card must dispatch ui.inspect",
+        "dblclick on a card must dispatch app.inspect",
       ).toBeGreaterThan(0);
       const hasTaskTarget = inspectCalls.some((c) => {
         const inArgs = (c.args as { target?: unknown })?.target === "task:T1";
@@ -1365,13 +1365,13 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       });
       expect(
         hasTaskTarget,
-        "ui.inspect dispatched from dblclick must target task:T1",
+        "app.inspect dispatched from dblclick must target task:T1",
       ).toBe(true);
 
       unmount();
     });
 
-    it("dblclick on a perspective tab does NOT dispatch ui.inspect", async () => {
+    it("dblclick on a perspective tab does NOT dispatch app.inspect", async () => {
       const { container, unmount } = renderApp();
       await flushAppMount();
 
@@ -1384,10 +1384,10 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       fireEvent.doubleClick(tabNode!);
       await flushAppMount();
 
-      const inspectCalls = dispatchCallsFor("ui.inspect");
+      const inspectCalls = dispatchCallsFor("app.inspect");
       expect(
         inspectCalls.length,
-        "dblclick on a perspective tab must NOT dispatch ui.inspect — perspective is chrome, not an entity",
+        "dblclick on a perspective tab must NOT dispatch app.inspect — perspective is chrome, not an entity",
       ).toBe(0);
 
       // Defensive: scan ALL invokes for any inspect-like command name.
@@ -1404,7 +1404,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       unmount();
     });
 
-    it("dblclick on the perspective bar background does NOT dispatch ui.inspect", async () => {
+    it("dblclick on the perspective bar background does NOT dispatch app.inspect", async () => {
       const { container, unmount } = renderApp();
       await flushAppMount();
 
@@ -1417,16 +1417,16 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       fireEvent.doubleClick(barNode!);
       await flushAppMount();
 
-      const inspectCalls = dispatchCallsFor("ui.inspect");
+      const inspectCalls = dispatchCallsFor("app.inspect");
       expect(
         inspectCalls.length,
-        "dblclick on perspective bar chrome must NOT dispatch ui.inspect",
+        "dblclick on perspective bar chrome must NOT dispatch app.inspect",
       ).toBe(0);
 
       unmount();
     });
 
-    it("dblclick on the nav-bar background does NOT dispatch ui.inspect", async () => {
+    it("dblclick on the nav-bar background does NOT dispatch app.inspect", async () => {
       // The nav bar is a plain `<div role="banner">` — not a `<FocusScope>`
       // — so there is no `[data-segment='ui:navbar']` element to query
       // (the outer wrapper was removed because it swallowed clicks and
@@ -1445,10 +1445,10 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       fireEvent.doubleClick(navNode!);
       await flushAppMount();
 
-      const inspectCalls = dispatchCallsFor("ui.inspect");
+      const inspectCalls = dispatchCallsFor("app.inspect");
       expect(
         inspectCalls.length,
-        "dblclick on nav-bar chrome must NOT dispatch ui.inspect",
+        "dblclick on nav-bar chrome must NOT dispatch app.inspect",
       ).toBe(0);
 
       unmount();
@@ -1572,7 +1572,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
   //     `01KQJDYJ4SDKK2G8FTAQ348ZHG`.
   //   - Each `column:*` carries `parent_zone` equal to `ui:board`'s key.
   //   - `<Inspectable>`-wrapped entities are the only path to
-  //     `ui.inspect` dispatch (architectural guard A).
+  //     `app.inspect` dispatch (architectural guard A).
   //
   // The cross-column-nav test does the per-card `parent_zone` audit;
   // here we focus on the App-level registrations the cross-column

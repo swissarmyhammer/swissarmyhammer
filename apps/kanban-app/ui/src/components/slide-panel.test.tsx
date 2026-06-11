@@ -24,11 +24,22 @@ vi.mock("@tauri-apps/api/window", () => ({
 
 // Stub only the dispatcher; keep the real CommandScopeContext /
 // EMPTY_COMMANDS exports that `<FocusScope>` (mounted by the close
-// button's `<Pressable>`) imports from the same module.
-vi.mock("@/lib/command-scope", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/command-scope")>()),
-  useDispatchCommand: () => vi.fn(() => Promise.resolve()),
-}));
+// button's `<Pressable>`) imports from the same module. The strict mock
+// enumerates the ids the tree legitimately requests — the panel's own
+// close dispatch and `<FocusScope>`'s focus-claim — so a retired or
+// typo'd command id throws instead of silently no-opping.
+vi.mock("@/lib/command-scope", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/command-scope")>();
+  const { strictUseDispatchCommand } =
+    await import("@/test/strict-dispatch-mock");
+  return {
+    ...actual,
+    useDispatchCommand: strictUseDispatchCommand({
+      "app.inspector.close": () => Promise.resolve(),
+      "nav.focus": () => Promise.resolve(),
+    }),
+  };
+});
 
 import { SlidePanel } from "./slide-panel";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
@@ -190,7 +201,7 @@ describe("SlidePanel resize bounds", () => {
     // A mousedown → mouseup with zero intervening mousemove (or movement
     // that never crosses a clamp boundary) is a tap, not a drag. It must
     // NOT fire `onResizeEnd`, because doing so would dispatch
-    // `ui.inspector.set_width { width: 420 }` and flip the persisted
+    // `app.inspector.set_width { width: 420 }` and flip the persisted
     // `inspector_width` from `None` to `Some(420)` for a no-op
     // interaction. Regression guard for the 2026-05-09 review finding.
     const onResize = vi.fn();

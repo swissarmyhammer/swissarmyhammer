@@ -65,7 +65,7 @@ function useMentionItems(
  * card `01KTQ6QZNB3VN4MAND7VPASM21`), so this scope-level `CommandDef` is
  * the sole carrier of those keys: `extractChainBindings` picks them up
  * when a tag pill's `<FocusScope>` is the spatial focus. Same pattern as
- * `ScopedPerspectiveTab`'s per-tab `ui.entity.startRename` Enter binding.
+ * `ScopedPerspectiveTab`'s per-tab `app.entity.startRename` Enter binding.
  */
 function useTagUntagCommands(
   targetEntityType: string | undefined,

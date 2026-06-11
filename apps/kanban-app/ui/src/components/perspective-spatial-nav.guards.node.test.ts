@@ -93,7 +93,7 @@ describe("PerspectiveTabBar source-level guards", () => {
     // `perspective_tab:${id}` wrapper (an inactive tab's only content is
     // the name button — same x, y, width, height). The outer
     // `perspective_tab` is itself the focusable target now; Enter-on-focus
-    // routes through the existing `ui.entity.startRename` CommandDef. A
+    // routes through the existing `app.entity.startRename` CommandDef. A
     // regression that re-introduces the inner scope would re-create the
     // needless-nesting warning the kernel emits for overlapping rects.
     expect(SRC).not.toMatch(/asSegment\(`perspective_tab\.name:\$\{id\}`\)/);

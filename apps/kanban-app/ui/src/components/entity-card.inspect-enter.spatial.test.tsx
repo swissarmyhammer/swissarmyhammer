@@ -1,6 +1,6 @@
 /**
  * Spatial-nav test: Enter on the focused `card.inspect:{id}` leaf
- * dispatches `ui.inspect` exactly once with the card's moniker as
+ * dispatches `app.inspect` exactly once with the card's moniker as
  * target — and clicking the (i) button does the same thing without
  * also triggering the parent card's click handler.
  *
@@ -11,9 +11,9 @@
  * landed on the leaf but Enter did NOTHING (the kernel's drillIn echoes
  * the focused FQM for a leaf, `setFocus` is idempotent, the visible
  * effect is a no-op). The Pressable migration adds the missing
- * scope-level CommandDef so Enter / Space dispatches `ui.inspect`.
+ * scope-level CommandDef so Enter / Space dispatches `app.inspect`.
  *
- * Two parallel paths must both fire `ui.inspect` exactly once and
+ * Two parallel paths must both fire `app.inspect` exactly once and
  * neither must propagate to the parent card's click handler:
  *
  *   1. Keyboard: focus the leaf, press Enter.
@@ -80,7 +80,7 @@ const TASK_SCHEMA = {
 } as unknown as EntitySchema;
 
 function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
-  // The pressable activation commands are DEFINED by the `ui-commands`
+  // The pressable activation commands are DEFINED by the `app-shell-commands`
   // builtin plugin (`pressable.activate` / `pressable.activateSpace`,
   // scope ["ui:pressable"]) — their Enter / Space keys reach the keymap
   // layer only through the `useCommandList` seam, so answer `list command`
@@ -277,7 +277,7 @@ function dispatchCommandCalls(): Array<Record<string, unknown>> {
     .map((c: unknown[]) => c[1] as Record<string, unknown>);
 }
 
-describe("EntityCard inspect button — Enter activates ui.inspect via Pressable", () => {
+describe("EntityCard inspect button — Enter activates app.inspect via Pressable", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     monikerToKey.clear();
@@ -287,7 +287,7 @@ describe("EntityCard inspect button — Enter activates ui.inspect via Pressable
     }
   });
 
-  it("seeds focus on card.inspect:{id} → Enter dispatches ui.inspect once with card moniker", async () => {
+  it("seeds focus on card.inspect:{id} → Enter dispatches app.inspect once with card moniker", async () => {
     await renderCard();
     await flushSetup();
 
@@ -326,19 +326,19 @@ describe("EntityCard inspect button — Enter activates ui.inspect via Pressable
     });
 
     const inspectCalls = dispatchCommandCalls().filter(
-      (c) => c.cmd === "ui.inspect",
+      (c) => c.cmd === "app.inspect",
     );
     expect(
       inspectCalls.length,
-      "Enter on the focused inspect leaf must dispatch ui.inspect exactly once",
+      "Enter on the focused inspect leaf must dispatch app.inspect exactly once",
     ).toBe(1);
     expect(
       inspectCalls[0].target,
-      "ui.inspect must carry the card's moniker as target",
+      "app.inspect must carry the card's moniker as target",
     ).toBe("task:task-1");
   });
 
-  it("clicking the (i) button dispatches ui.inspect once and does NOT bubble to the card zone's spatial_focus", async () => {
+  it("clicking the (i) button dispatches app.inspect once and does NOT bubble to the card zone's spatial_focus", async () => {
     // The card body is wrapped in a `<FocusScope>` whose onClick handler
     // calls `focus(cardFq)` to make the card the spatial focus. If a
     // click on the (i) button bubbled up, the card zone's onClick would
@@ -375,11 +375,11 @@ describe("EntityCard inspect button — Enter activates ui.inspect via Pressable
     });
 
     const inspectCalls = dispatchCommandCalls().filter(
-      (c) => c.cmd === "ui.inspect",
+      (c) => c.cmd === "app.inspect",
     );
     expect(
       inspectCalls.length,
-      "Clicking (i) must dispatch ui.inspect exactly once",
+      "Clicking (i) must dispatch app.inspect exactly once",
     ).toBe(1);
     expect(inspectCalls[0].target).toBe("task:task-1");
 

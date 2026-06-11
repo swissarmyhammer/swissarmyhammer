@@ -10,7 +10,7 @@
  * board scope — Space did nothing on a focused field.
  *
  * After Card G the Space owner is the SINGLE plugin-owned `entity.inspect`
- * (`builtin/plugins/ui-commands/index.ts`): a global binding whose dispatch
+ * (`builtin/plugins/app-shell-commands/commands/ui.ts`): a global binding whose dispatch
  * carries the focused scope chain to the backend, where the plugin resolves
  * the innermost inspectable moniker. A focused field zone leads its own
  * chain, so the field inspects regardless of layer.
@@ -19,7 +19,7 @@
  * spatial kernel emitting a `focus-changed` event for the title field,
  * fires `keydown { key: " " }` at the document, and asserts exactly one
  * `dispatch_command` IPC fires for `entity.inspect` whose scope chain is
- * led by the field moniker (and zero webview-side `ui.inspect`).
+ * led by the field moniker (and zero webview-side `app.inspect`).
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -209,12 +209,12 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
     .map((c) => c[1] as Record<string, unknown>);
 }
 
-/** Filter `dispatch_command` calls down to those for `ui.inspect`. */
+/** Filter `dispatch_command` calls down to those for `app.inspect`. */
 function inspectDispatches(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "dispatch_command")
     .map((c) => c[1] as Record<string, unknown>)
-    .filter((p) => p.cmd === "ui.inspect");
+    .filter((p) => p.cmd === "app.inspect");
 }
 
 /**
@@ -298,7 +298,7 @@ function renderInspector(entity: Entity = makeTask({ title: "Hello" })) {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("Inspector field — Space → ui.inspect", () => {
+describe("Inspector field — Space → app.inspect", () => {
   beforeEach(() => {
     mockInvoke.mockClear();
     mockListen.mockClear();
@@ -361,7 +361,7 @@ describe("Inspector field — Space → ui.inspect", () => {
     ).toBe("field:task:T1.title");
     expect(
       inspectDispatches().length,
-      "Space must not synthesize a webview-side ui.inspect — the backend owns the inspect",
+      "Space must not synthesize a webview-side app.inspect — the backend owns the inspect",
     ).toBe(0);
 
     unmount();

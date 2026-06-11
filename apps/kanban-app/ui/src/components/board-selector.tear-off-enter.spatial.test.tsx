@@ -38,7 +38,7 @@ const currentFocusKey: { key: string | null } = { key: null };
 const listenCallbacks: Record<string, (event: unknown) => void> = {};
 
 function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
-  // The pressable activation commands are DEFINED by the `ui-commands`
+  // The pressable activation commands are DEFINED by the `app-shell-commands`
   // builtin plugin (`pressable.activate` / `pressable.activateSpace`,
   // scope ["ui:pressable"]) — their Enter / Space keys reach the keymap
   // layer only through the `useCommandList` seam, so answer `list command`

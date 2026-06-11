@@ -4,18 +4,18 @@
  *
  * Companion to `inspectable.spatial.test.tsx`, which pins the dblclick
  * dispatch path. After Card G consolidated `entity.inspect` into its single
- * plugin definition (`builtin/plugins/ui-commands/index.ts`), Space routes
+ * plugin definition (`builtin/plugins/app-shell-commands/commands/ui.ts`), Space routes
  * the GLOBAL `entity.inspect` binding to the BACKEND — one
  * `dispatch_command` carrying the focused scope chain — and the plugin
  * resolves the target server-side (innermost inspectable moniker in the
- * chain). No React `CommandDef` synthesizes a `ui.inspect` dispatch
+ * chain). No React `CommandDef` synthesizes a `app.inspect` dispatch
  * anymore; the per-`<Inspectable>` wrapper owns only the dblclick gesture.
  *
  * The tests below pin:
  *
  *   1. Space on a focused inspectable fires EXACTLY ONE backend
  *      `entity.inspect` dispatch whose scope chain leads with the focused
- *      entity's moniker — and ZERO webview-side `ui.inspect` dispatches
+ *      entity's moniker — and ZERO webview-side `app.inspect` dispatches
  *      (the single-plugin path; the backend owns the `ui_state` inspect).
  *   2. Nested `<Inspectable>`s — the focused (closest) entity leads the
  *      dispatched chain, so the server-side innermost-wins resolution
@@ -26,15 +26,15 @@
  *      `isEditableTarget` gate.
  *   4. Same exclusion for `[contenteditable]`.
  *   5. Regression guard — dblclick on an `<Inspectable>` still dispatches
- *      `ui.inspect` against the wrapper's moniker (the wrapper's one
+ *      `app.inspect` against the wrapper's moniker (the wrapper's one
  *      remaining job).
  *   6. Space at app open (no kernel focus) MUST `preventDefault` so the
  *      browser does not scroll the page (the global `entity.inspect`
- *      binding resolves), and must NOT produce any `ui.inspect` — the
+ *      binding resolves), and must NOT produce any `app.inspect` — the
  *      backend no-ops on a chain with no inspectable entity.
  *   7. Space with kernel focus on a non-Inspectable scope (e.g. a
  *      perspective tab) MUST `preventDefault` and must NOT produce any
- *      `ui.inspect` — the plugin's server-side prefix filter (`task:`,
+ *      `app.inspect` — the plugin's server-side prefix filter (`task:`,
  *      `tag:`, `column:`, `board:`, `field:`, `attachment:`) no-ops on
  *      chrome.
  *   8. Space inside an editable surface (`<input>`, `<textarea>`,
@@ -167,7 +167,7 @@ const currentFocusKey: { key: string | null } = { key: null };
  * machinery. The cua / emacs / vim binding-table parity for `Space`
  * lives in `lib/keybindings.ts`; the plugin-owned `entity.inspect`
  * carries the same three-mode `keys: { vim, cua, emacs }` block in
- * `builtin/plugins/ui-commands/index.ts`.
+ * `builtin/plugins/app-shell-commands/commands/ui.ts`.
  *
  * @param keymapMode - The keymap mode to advertise; defaults to `"cua"`.
  */
@@ -346,9 +346,9 @@ function dispatchCommandCalls(): Array<Record<string, unknown>> {
     .map((c) => c[1] as Record<string, unknown>);
 }
 
-/** Filter `dispatch_command` calls down to those for `ui.inspect`. */
+/** Filter `dispatch_command` calls down to those for `app.inspect`. */
 function inspectDispatches(): Array<Record<string, unknown>> {
-  return dispatchCommandCalls().filter((c) => c.cmd === "ui.inspect");
+  return dispatchCommandCalls().filter((c) => c.cmd === "app.inspect");
 }
 
 /**
@@ -472,10 +472,10 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
     expect(dispatches[0].target).toBeUndefined();
     expect(dispatches[0].scopeChain?.[0]).toBe("task:T1");
     // The single-plugin path: the webview must NOT synthesize a
-    // `ui.inspect` of its own (that was the retired React fast-path).
+    // `app.inspect` of its own (that was the retired React fast-path).
     expect(
       inspectDispatches().length,
-      "Space must not dispatch ui.inspect from the webview — the backend owns the inspect",
+      "Space must not dispatch app.inspect from the webview — the backend owns the inspect",
     ).toBe(0);
 
     unmount();
@@ -558,7 +558,7 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
 
     expect(
       inspectDispatches().length,
-      "Space inside an <input> must NOT dispatch ui.inspect",
+      "Space inside an <input> must NOT dispatch app.inspect",
     ).toBe(0);
     expect(
       entityInspectDispatches().length,
@@ -604,7 +604,7 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
 
     expect(
       inspectDispatches().length,
-      "Space inside a [contenteditable] host must NOT dispatch ui.inspect",
+      "Space inside a [contenteditable] host must NOT dispatch app.inspect",
     ).toBe(0);
     expect(
       entityInspectDispatches().length,
@@ -649,13 +649,13 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
   //
   // The user opens the app, kernel focus is null (`<body>` carries DOM
   // focus). Pressing Space MUST NOT scroll the page; it MUST NOT
-  // produce a `ui.inspect` either.
+  // produce a `app.inspect` either.
   //
   // The global `entity.inspect` binding (plugin-owned, Card G) resolves,
   // so the keybinding handler calls `preventDefault()`. The dispatch
   // reaches the backend with a chain that carries no inspectable entity,
   // where the plugin's server-side resolution no-ops — no `ui_state`
-  // inspect, and certainly no webview-side `ui.inspect`.
+  // inspect, and certainly no webview-side `app.inspect`.
 
   it("space_at_app_open_with_no_kernel_focus_preventDefaults_and_does_not_dispatch_inspect", async () => {
     const { unmount } = render(
@@ -687,7 +687,7 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
     ).toBe(true);
     expect(
       inspectDispatches().length,
-      "Space with no kernel focus must NOT dispatch ui.inspect",
+      "Space with no kernel focus must NOT dispatch app.inspect",
     ).toBe(0);
 
     unmount();
@@ -699,7 +699,7 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
   //
   // A focused perspective tab / filter editor / other UI chrome is not
   // an inspectable entity. Pressing Space MUST NOT scroll the page and
-  // MUST NOT produce `ui.inspect` — the plugin's server-side resolution
+  // MUST NOT produce `app.inspect` — the plugin's server-side resolution
   // filters by the inspectable-entity prefix set (`task:`, `tag:`,
   // `column:`, `board:`, `field:`, `attachment:`) and no-ops on chrome.
   // The keybinding handler still claims the keystroke (preventDefault)
@@ -739,7 +739,7 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
     ).toBe(true);
     expect(
       inspectDispatches().length,
-      "Space on a non-Inspectable focused scope must NOT dispatch ui.inspect",
+      "Space on a non-Inspectable focused scope must NOT dispatch app.inspect",
     ).toBe(0);
 
     unmount();
@@ -784,7 +784,7 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
     ).toBe(false);
     expect(
       inspectDispatches().length,
-      "Space inside an <input> must NOT dispatch ui.inspect",
+      "Space inside an <input> must NOT dispatch app.inspect",
     ).toBe(0);
 
     unmount();
@@ -848,7 +848,7 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
   // `get_ui_state` mock advertising `keymap_mode: "vim"` instead of
   // `"cua"`. Each was a hard failure before vim was added to the two
   // `keys` maps (`BINDING_TABLES.vim` and the plugin-owned
-  // `entity.inspect` `keys` in `builtin/plugins/ui-commands/index.ts`).
+  // `entity.inspect` `keys` in `builtin/plugins/app-shell-commands/commands/ui.ts`).
 
   describe("Vim-mode parity — Space inspects in all three keymaps", () => {
     beforeEach(() => {
@@ -881,7 +881,7 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
       ).toBe(true);
       expect(
         inspectDispatches().length,
-        "Space with no kernel focus in vim mode must NOT dispatch ui.inspect",
+        "Space with no kernel focus in vim mode must NOT dispatch app.inspect",
       ).toBe(0);
 
       unmount();
@@ -916,7 +916,7 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
       ).toBe(true);
       expect(
         inspectDispatches().length,
-        "Space on a non-Inspectable focused scope in vim mode must NOT dispatch ui.inspect",
+        "Space on a non-Inspectable focused scope in vim mode must NOT dispatch app.inspect",
       ).toBe(0);
 
       unmount();

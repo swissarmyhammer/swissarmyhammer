@@ -104,7 +104,7 @@ function useOptionalFilterEditorFqRef(): FilterEditorFqRef | null {
  *
  * Receives an optional explicit perspective id. When `id` is undefined the
  * subscriber falls back to the active perspective — this is the path taken
- * by the global command palette's `ui.entity.startRename`, which has no
+ * by the global command palette's `app.entity.startRename`, which has no
  * specific tab in mind. When `id` is supplied it targets that perspective
  * directly — this is the path taken by per-tab Enter, where the focused tab
  * (active or inactive) is the explicit rename target.
@@ -118,7 +118,7 @@ const startRenameCallbacks = new Set<StartRenameCallback>();
  * Subscribe to "start rename" signals.
  *
  * Called by `usePerspectiveTabBar` to enter rename mode when the command
- * palette (or any other source) dispatches `ui.entity.startRename`.
+ * palette (or any other source) dispatches `app.entity.startRename`.
  *
  * @returns An unsubscribe function.
  */
@@ -234,7 +234,7 @@ function usePerspectiveTabBar() {
 
   // Subscribe to the module-level start-rename signal so the command palette
   // (via AppShell's global command) AND per-tab Enter (via the scope-pinned
-  // `ui.entity.startRename` on each `<ScopedPerspectiveTab>`) can trigger
+  // `app.entity.startRename` on each `<ScopedPerspectiveTab>`) can trigger
   // inline rename mode.
   //
   // When the broadcaster supplies an explicit `id` (per-tab path) we honor
@@ -757,7 +757,7 @@ interface ScopedPerspectiveTabProps {
  * spatial-nav target — there is no inner `perspective_tab.name` leaf
  * because that would register at the exact same rect as the outer
  * wrapper and trip the kernel's needless-nesting warning. Enter on a
- * focused tab triggers rename via the `ui.entity.startRename` command
+ * focused tab triggers rename via the `app.entity.startRename` command
  * this component registers, which shadows the global `nav.drillIn:
  * Enter` on the perspective scope.
  *
@@ -770,7 +770,7 @@ interface ScopedPerspectiveTabProps {
  * independently navigable.
  *
  * Per-tab rename binding: every perspective tab — active or inactive —
- * registers a `ui.entity.startRename` `CommandDef` whose `keys` block
+ * registers a `app.entity.startRename` `CommandDef` whose `keys` block
  * (Enter for cua / vim / emacs) is picked up by `extractChainBindings`
  * when this tab is the spatial focus. That binding shadows the global
  * `nav.drillIn: Enter` for the perspective scope only, matching the YAML
@@ -798,7 +798,7 @@ function ScopedPerspectiveTab({
   const startRenameCommands = useMemo<readonly CommandDef[]>(() => {
     return [
       {
-        id: "ui.entity.startRename",
+        id: "app.entity.startRename",
         name: "Rename Perspective",
         keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
         execute: async () => {
@@ -846,7 +846,7 @@ function ScopedPerspectiveTab({
  *
  * The tab IS the focusable target — clicking anywhere on the tab area
  * focuses `perspective_tab:${id}`, and Enter triggers rename via the
- * `ui.entity.startRename` command on the surrounding `perspective:${id}`
+ * `app.entity.startRename` command on the surrounding `perspective:${id}`
  * CommandScope (which shadows the global `nav.drillIn: Enter`). There is
  * no inner `perspective_tab.name` FocusScope because it would register
  * at the same rect as this wrapper and trigger the kernel's
@@ -902,7 +902,7 @@ function PerspectiveTabFocusable({
  * The formula bar's spatial moniker is dynamic (`filter_editor:{id}`, one per
  * active perspective), so the plugin-defined `filter_editor.drillIn` command
  * cannot be scope-gated on a literal zone moniker. The marker gives the
- * formula bar one shared literal moniker; the `ui-commands` plugin declares
+ * formula bar one shared literal moniker; the `app-shell-commands` plugin declares
  * `scope: ["ui:filter_editor"]` against it, so its Enter key binds exactly
  * while the formula bar is in the focused chain — and nowhere else. Mirrors
  * `FIELD_COMMAND_SCOPE` in `fields/field.tsx` (Card D).
@@ -925,7 +925,7 @@ export const FILTER_EDITOR_COMMAND_SCOPE = "ui:filter_editor";
  *
  * When the spatial focus is on `filter_editor:${id}`, pressing Enter
  * fires the `filter_editor.drillIn` command. Its DEFINITION (id / name /
- * keys / scope) lives in the `ui-commands` builtin plugin (Card E), gated
+ * keys / scope) lives in the `app-shell-commands` builtin plugin (Card E), gated
  * to the constant `ui:filter_editor` marker moniker
  * ({@link FILTER_EDITOR_COMMAND_SCOPE}) this component mounts via a
  * `CommandScopeProvider` directly above its `<FocusScope>` — the keymap
@@ -1231,7 +1231,7 @@ function PerspectiveTab({
   // is just the name text plus padding, so an inner `perspective_tab.name`
   // leaf would register at the exact same (x, y) and trigger the kernel's
   // needless-nesting warning. Enter on a focused tab triggers rename via
-  // the `ui.entity.startRename` command registered by `ScopedPerspectiveTab`'s
+  // the `app.entity.startRename` command registered by `ScopedPerspectiveTab`'s
   // CommandScopeProvider — that binding shadows the global `nav.drillIn:
   // Enter`, so the focused-component-knows-it's-focused contract holds via
   // command-scope chain resolution, not a separate inner scope.

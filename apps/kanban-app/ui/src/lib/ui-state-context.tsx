@@ -89,7 +89,7 @@ const DEFAULT_STATE: UIStateSnapshot = {
  * One per `UIStateChange` variant plus the two board-side-effect result
  * shapes (`board_switch`, `board_close`). The backend tags every emit with
  * `kind` so the frontend can skip `setState` for slices it owns — notably
- * `scope_chain`, which echoes back from every `ui.setFocus` call and would
+ * `scope_chain`, which echoes back from every `app.setFocus` call and would
  * otherwise cascade re-renders through every `useUIState()` consumer.
  *
  * Kept in sync with `emit_ui_state_change_if_needed` in

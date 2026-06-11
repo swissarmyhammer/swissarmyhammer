@@ -41,7 +41,7 @@ const currentFocusKey: { key: string | null } = { key: null };
 const listenCallbacks: Record<string, (event: unknown) => void> = {};
 
 function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
-  // The activation commands are DEFINED by the `ui-commands` builtin plugin
+  // The activation commands are DEFINED by the `app-shell-commands` builtin plugin
   // (`pressable.activate` / `pressable.activateSpace`, scope
   // `["ui:pressable"]`) — in production their keys reach the keymap layer
   // through the CommandService registry, so the harness publishes the same
@@ -404,7 +404,7 @@ describe("Pressable", () => {
 
   // -------------------------------------------------------------------------
   // Test — webview command bus routing (Card D). The activation command
-  // DEFINITIONS live in the `ui-commands` plugin; the Pressable only
+  // DEFINITIONS live in the `app-shell-commands` plugin; the Pressable only
   // registers the live `onPress` behavior on the webview bus, and only
   // WHILE ITS LEAF IS THE SPATIAL FOCUS — so with several pressables
   // mounted, a dispatched `pressable.activate` always reaches the focused

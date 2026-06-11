@@ -503,7 +503,7 @@ describe("RowSelector — row-label focus leaf (spatial path)", () => {
     // Regression pin for kanban task 01KQPVHMJC4F79YXGWGSFZ4FJK.
     //
     // Bug history: clicking a row label leaf logged
-    // `cmd=ui.setFocus` success but the leaf's `data-focused`
+    // `cmd=app.setFocus` success but the leaf's `data-focused`
     // attribute did not flip. Root cause was that the row's outer
     // `<FocusScope renderContainer={false}>` did not publish a
     // distinct FQM into `FullyQualifiedMonikerContext`, so the

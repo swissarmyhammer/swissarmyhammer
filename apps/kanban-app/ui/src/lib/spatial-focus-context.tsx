@@ -140,7 +140,7 @@ export type FocusClaimListener = (focused: boolean) => void;
  *
  * Subscribers run synchronously on the same dispatch tick as per-FQM
  * claim listeners, so the work they do should be cheap. Calling back
- * into Tauri (e.g. dispatching `ui.setFocus` to forward the new scope
+ * into Tauri (e.g. dispatching `app.setFocus` to forward the new scope
  * chain) is acceptable — the bridge already does it.
  */
 export type FocusChangedSubscriber = (payload: FocusChangedPayload) => void;

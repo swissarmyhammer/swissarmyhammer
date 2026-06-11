@@ -45,7 +45,7 @@ type DispatchFn = (
  * `ref.current` without depending on `dispatch` identity.
  *
  * `useDispatchCommand` returns a new callback whenever the effective scope
- * rotates — which happens on every `ui.setFocus` because `FocusedScopeContext`
+ * rotates — which happens on every `app.setFocus` because `FocusedScopeContext`
  * rotates per-entity focus change. A raw dependency on `dispatch` therefore
  * churns the mount fetch / auto-create / auto-select effects on every
  * keystroke. Reading through a ref decouples those effects from dispatch

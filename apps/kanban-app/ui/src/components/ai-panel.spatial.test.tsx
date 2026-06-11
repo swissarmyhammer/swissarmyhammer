@@ -565,9 +565,9 @@ describe("AiPanel — spatial-nav focus scopes", () => {
   //
   // A bare `<FocusScope>` only *registers* the composer as a nav target —
   // landing on it and pressing Enter does NOT focus the editor. The
-  // `ui.ai-panel.composer.drillIn` command DEFINITION (keyed to Enter,
+  // `app.ai-panel.composer.drillIn` command DEFINITION (keyed to Enter,
   // scope-gated to the composer scope's own `ui:ai-panel.composer`
-  // moniker) lives in the `ui-commands` builtin plugin (Card E); the
+  // moniker) lives in the `app-shell-commands` builtin plugin (Card E); the
   // composer registers the live behavior — the shared
   // `TextEditorHandle.focus()` — on the webview command bus while the
   // scope is focused. This test drives a real Enter keystroke through
@@ -620,7 +620,7 @@ describe("AiPanel — spatial-nav focus scopes", () => {
     await flushSetup();
 
     // Press Enter. `<KeybindingHandler>` resolves it via the registry chain
-    // walk — the plugin-defined `ui.ai-panel.composer.drillIn` (scope
+    // walk — the plugin-defined `app.ai-panel.composer.drillIn` (scope
     // `["ui:ai-panel.composer"]`) shadows the global `nav.drillIn` — and
     // the dispatch runs the composer's webview-bus handler, which calls
     // `editorRef.current?.focus()`.
@@ -645,11 +645,11 @@ describe("AiPanel — spatial-nav focus scopes", () => {
       (c: unknown[]) =>
         c[0] === "dispatch_command" &&
         (c[1] as { cmd?: string } | undefined)?.cmd ===
-          "ui.ai-panel.composer.drillIn",
+          "app.ai-panel.composer.drillIn",
     );
     expect(
       backendExecutes,
-      "ui.ai-panel.composer.drillIn must be handled on the webview bus, never dispatched to the backend",
+      "app.ai-panel.composer.drillIn must be handled on the webview bus, never dispatched to the backend",
     ).toHaveLength(0);
 
     unmount();

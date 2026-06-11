@@ -51,11 +51,11 @@ use tokio::sync::{Mutex as TokioMutex, RwLock};
 /// [`PluginPlatform::wire_command_services`]: `store`, `entity`, `ui_state`,
 /// `focus`, and `commands`). Every top-level subdirectory of
 /// `builtin/plugins/` is one plugin bundle: `kanban-builtin-probe` (the
-/// read-only builtin-layer probe) plus the 11 command plugins
+/// read-only builtin-layer probe) plus the 10 command plugins
 /// (`task-commands`, `kanban-misc-commands`, `file-commands`,
-/// `perspective-commands`, `entity-commands`, `ui-commands`,
-/// `app-shell-commands`, `ai-commands`, `nav-commands`, `grid-commands`,
-/// `board-commands`) that register the cut-over's command surface.
+/// `perspective-commands`, `entity-commands`, `app-shell-commands`,
+/// `ai-commands`, `nav-commands`, `grid-commands`, `board-commands`)
+/// that register the cut-over's command surface.
 ///
 /// At startup the embedded tree is extracted ([`extract_builtin_plugins`])
 /// into the `plugins/` subdirectory of a cache directory — one per-bundle
@@ -238,9 +238,9 @@ impl PluginPlatform {
     /// (which wires every non-`AppHandle` module, deferring `window` / `app`)
     /// and BEFORE [`discover_plugins`]. The `WindowShell` / `AppShell` seams
     /// require a live `AppHandle`, which only exists at setup; exposing them
-    /// here lets the `file-commands` / `ui-commands` / `kanban-misc-commands` /
+    /// here lets the `file-commands` / `kanban-misc-commands` /
     /// `app-shell-commands` builtin plugins satisfy `ensureServices` so the
-    /// atomic `discover_and_load_all` loads ALL 11 builtin command plugins.
+    /// atomic `discover_and_load_all` loads ALL 10 builtin command plugins.
     pub(crate) async fn expose_apphandle_modules(
         &self,
         window_shell: Option<std::sync::Arc<dyn swissarmyhammer_window_service::WindowShell>>,
@@ -640,17 +640,19 @@ mod tests {
     const BUILTIN_COMMAND_ID: &str = BUILTIN_COMMAND_BASELINE[0];
 
     /// One representative command id per builtin command plugin — proof that
-    /// ALL 11 plugins discovered and registered (each id comes from a distinct
+    /// ALL 10 plugins discovered and registered (each id comes from a distinct
     /// bundle, and the four after `entity.add` activate the `views` / `window` /
-    /// `app` backends that previously failed `ensureServices`):
+    /// `app` backends that previously failed `ensureServices`). The former
+    /// `ui-commands` bundle was folded into `app-shell-commands` by the
+    /// ui.*→app.* rename, so `app.palette.open` now rides on `app.quit`'s
+    /// bundle:
     ///
     /// - `task.move`        → task-commands       (`commands`, `kanban`)
     /// - `entity.add`       → entity-commands     (`commands`, `entity`)
     /// - `perspective.filter` → perspective-commands (`commands`, **views**)
     /// - `file.switchBoard` → file-commands       (`commands`, **window**)
-    /// - `app.palette.open` → ui-commands         (`commands`, ui_state, **window**, focus)
     /// - `view.set`         → kanban-misc-commands (`commands`, kanban, **window**, **views**)
-    /// - `app.quit`         → app-shell-commands  (`commands`, **app**, ui_state, store)
+    /// - `app.quit`         → app-shell-commands  (`commands`, **app**, ui_state, store, **window**, focus)
     /// - `ai.toggle`        → ai-commands         (`commands` only; webview-reactive no-op)
     /// - `nav.up`           → nav-commands        (`commands`, **focus** — host-driven nav)
     /// - `grid.edit`        → grid-commands       (`commands` only; webview-bus handled)
@@ -660,7 +662,6 @@ mod tests {
         "entity.add",
         "perspective.filter",
         "file.switchBoard",
-        "app.palette.open",
         "view.set",
         "app.quit",
         "ai.toggle",
@@ -669,14 +670,13 @@ mod tests {
         "board.firstColumn",
     ];
 
-    /// The 11 builtin command-plugin bundle ids under `builtin/plugins/`
+    /// The 10 builtin command-plugin bundle ids under `builtin/plugins/`
     /// (excluding the read-only `kanban-builtin-probe`).
     const BUILTIN_COMMAND_PLUGINS: &[&str] = &[
         "task-commands",
         "entity-commands",
         "perspective-commands",
         "file-commands",
-        "ui-commands",
         "kanban-misc-commands",
         "app-shell-commands",
         "ai-commands",
@@ -686,7 +686,7 @@ mod tests {
     ];
 
     /// Assert a platform's host carries the full builtin command baseline — one
-    /// command from each of the 11 builtin command plugins.
+    /// command from each of the 10 builtin command plugins.
     async fn assert_builtin_baseline(platform: &super::PluginPlatform, ctx: &str) {
         let ids = list_command_ids(platform).await;
         for id in BUILTIN_COMMAND_BASELINE {
@@ -835,7 +835,7 @@ mod tests {
         assert_builtin_baseline(&*platform_b.lock().await, "board B").await;
     }
 
-    /// The global host and every per-board host load ALL 11 builtin command
+    /// The global host and every per-board host load ALL 10 builtin command
     /// plugins and register the full builtin command baseline.
     ///
     /// This is the acceptance for the wiring card: `discover_and_load_all` is

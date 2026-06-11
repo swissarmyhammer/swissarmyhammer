@@ -182,7 +182,7 @@ impl UiStateServer {
         Ok(serde_json::json!({ "ok": true, "change": change }))
     }
 
-    /// Handle `set scope_chain` — record the focus scope chain (`ui.setFocus`).
+    /// Handle `set scope_chain` — record the focus scope chain (`app.setFocus`).
     fn handle_set_scope_chain(&self, req: SetScopeChain) -> Result<Value, McpError> {
         let change = self.ui_state.set_scope_chain(req.scope_chain);
         Ok(serde_json::json!({ "ok": true, "change": change }))

@@ -15,7 +15,7 @@ const TASK_SCHEMA = {
     fields: ["title", "tags", "progress", "body"],
     commands: [
       {
-        id: "ui.inspect",
+        id: "app.inspect",
         name: "Inspect {{entity.type}}",
         context_menu: true,
       },
@@ -79,7 +79,7 @@ const mockInvoke = vi.fn((...args: any[]) => {
   if (args[0] === "list_commands_for_scope")
     return Promise.resolve([
       {
-        id: "ui.inspect",
+        id: "app.inspect",
         name: "Inspect task",
         target: "task:task-1",
         group: "entity",
@@ -102,12 +102,12 @@ vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
 }));
 // The right-click context menu reads commands from the Command registry via
-// `useCommandList`; an `entity:task`-scoped `ui.inspect` so the menu renders.
+// `useCommandList`; an `entity:task`-scoped `app.inspect` so the menu renders.
 vi.mock("@/hooks/use-command-list", () => ({
   useCommandList: () => ({
     commands: [
       {
-        id: "ui.inspect",
+        id: "app.inspect",
         name: "Inspect task",
         context_menu: true,
         scope: ["entity:task"],
@@ -203,7 +203,7 @@ describe("EntityCard", () => {
     expect(screen.getByText("Hello **world**")).toBeTruthy();
   });
 
-  it("(i) button dispatches ui.inspect with explicit target moniker", async () => {
+  it("(i) button dispatches app.inspect with explicit target moniker", async () => {
     currentEntity = makeEntity();
     const { container } = await renderWithProvider(
       <EntityCard entity={currentEntity} />,
@@ -216,7 +216,7 @@ describe("EntityCard", () => {
     const inspectCall = mockInvoke.mock.calls.find(
       (c: unknown[]) =>
         c[0] === "dispatch_command" &&
-        (c[1] as Record<string, unknown>)?.cmd === "ui.inspect",
+        (c[1] as Record<string, unknown>)?.cmd === "app.inspect",
     );
     expect(inspectCall).toBeTruthy();
     // Target must be passed explicitly so the backend uses ctx.target
@@ -324,7 +324,7 @@ describe("EntityCard", () => {
       }
     ).params.items;
     expect(
-      items.find((i) => i.cmd === "ui.inspect" && i.target === "task:task-1"),
+      items.find((i) => i.cmd === "app.inspect" && i.target === "task:task-1"),
     ).toBeTruthy();
   });
 
@@ -336,11 +336,11 @@ describe("EntityCard", () => {
     mockInvoke.mockClear();
     const card = container.querySelector(".rounded-md")!;
     fireEvent.click(card);
-    // Click on card body should not dispatch ui.inspect — only the (i) button does
+    // Click on card body should not dispatch app.inspect — only the (i) button does
     const inspectCall = mockInvoke.mock.calls.find(
       (c: unknown[]) =>
         c[0] === "dispatch_command" &&
-        (c[1] as Record<string, unknown>)?.cmd === "ui.inspect",
+        (c[1] as Record<string, unknown>)?.cmd === "app.inspect",
     );
     expect(inspectCall).toBeUndefined();
   });
@@ -449,7 +449,7 @@ describe("EntityCard", () => {
         ],
         commands: [
           {
-            id: "ui.inspect",
+            id: "app.inspect",
             name: "Inspect {{entity.type}}",
             context_menu: true,
           },
@@ -754,7 +754,7 @@ describe("EntityCard", () => {
       expect(cardZone!.layerFq).toBeTruthy();
     });
 
-    it("clicking the card body invokes spatial_focus and does not dispatch ui.inspect directly", async () => {
+    it("clicking the card body invokes spatial_focus and does not dispatch app.inspect directly", async () => {
       currentEntity = makeEntity();
       const { container } = await renderWithSpatial(
         <EntityCard entity={currentEntity} />,
@@ -772,11 +772,11 @@ describe("EntityCard", () => {
       );
       expect(focusCall).toBeTruthy();
       // Inspect is now a separate Space-bound command at app level —
-      // a bare card click must not dispatch ui.inspect.
+      // a bare card click must not dispatch app.inspect.
       const inspectCall = mockInvoke.mock.calls.find(
         (c: unknown[]) =>
           c[0] === "dispatch_command" &&
-          (c[1] as Record<string, unknown>)?.cmd === "ui.inspect",
+          (c[1] as Record<string, unknown>)?.cmd === "app.inspect",
       );
       expect(inspectCall).toBeUndefined();
     });

@@ -42,7 +42,7 @@ async fn focus_tool_meta_operations_tree_is_complete() {
     // (noun, verb, op-string) — one row per spatial_* Tauri command, plus
     // the pure-compute `generate sneak_codes` op (ports `generate_jump_codes`).
     let expected: Vec<(&str, &str, &str)> = vec![
-        ("focus", "set", "set focus"),           // spatial_focus / ui.setFocus
+        ("focus", "set", "set focus"),           // spatial_focus / app.setFocus
         ("focus", "clear", "clear focus"),       // spatial_clear_focus
         ("focus", "navigate", "navigate focus"), // spatial_navigate
         ("focus", "lose", "lose focus"),         // spatial_focus_lost

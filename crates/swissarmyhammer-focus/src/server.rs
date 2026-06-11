@@ -16,7 +16,7 @@
 //! adapter layer (`apps/kanban-app/src/commands.rs`), not in the kernel, so
 //! the port surfaces the event for the caller to forward.
 //!
-//! `ui.setFocus` (in the ui-commands plugin) routes to the `set focus` op.
+//! `app.setFocus` (in the app-shell-commands plugin) routes to the `set focus` op.
 //!
 //! # State holding
 //!
@@ -195,7 +195,7 @@ impl FocusServer {
         }
     }
 
-    /// Handle a `set focus` call (`ui.setFocus` routing target).
+    /// Handle a `set focus` call (`app.setFocus` routing target).
     ///
     /// Ports `spatial_focus`: a `None` snapshot drops the commit silently.
     async fn handle_focus(&self, req: Focus) -> Result<Value, McpError> {

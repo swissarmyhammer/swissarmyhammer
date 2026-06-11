@@ -81,7 +81,7 @@ export function CommandPalette({
   const { keymap_mode: mode } = useUIState();
   // Scope chain is sourced from `FocusedScopeContext` — the frontend-
   // authoritative focus tree — rather than from `useUIState().scope_chain`.
-  // The backend echoes scope_chain on every `ui.setFocus`, but the
+  // The backend echoes scope_chain on every `app.setFocus`, but the
   // `UIStateProvider` suppresses those events to keep `useUIState()`
   // reference-stable. Reading the chain directly from the focus context
   // preserves the "refetch commands when focus moves while palette is
@@ -129,7 +129,7 @@ export function CommandPalette({
 
   // Dispatch inspect for search mode — dispatches to the backend via
   // the standard command system, which updates UIState inspector_stack.
-  const dispatchInspect = useDispatchCommand("ui.inspect");
+  const dispatchInspect = useDispatchCommand("app.inspect");
 
   // Reset state when palette opens.
   useEffect(() => {

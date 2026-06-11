@@ -1,20 +1,21 @@
 /**
  * Drift guard: `UI_SURFACE_PLUGIN_COMMANDS` in `mock-command-list.ts` mirrors
- * the `ui-commands` builtin plugin's `UI_SURFACE_COMMANDS` table 1:1.
+ * the `app-shell-commands` builtin plugin's `UI_SURFACE_COMMANDS` table 1:1.
  *
  * Card D moved the four UI-surface command DEFINITIONS out of React —
  * `field.edit` / `field.editEnter` from `field.tsx`'s client-side
  * `CommandDef`s and `pressable.activate` / `pressable.activateSpace` from
  * `pressable.tsx`'s `usePressCommands` — and Card E moved the three editor
  * drill-in DEFINITIONS — `filter_editor.drillIn` from
- * `perspective-tab-bar.tsx`, `ui.ai-panel.composer.drillIn` from
- * `ai-prompt-composer.tsx`, and `ui.ai-panel.elicitation.field.drillIn`
- * from `ai-elements/elicitation.tsx` — into the `ui-commands` builtin
- * plugin (`builtin/plugins/ui-commands/index.ts`); the owning React
- * components only register webview-bus handlers for the ids while focused.
- * In production the commands' `keys` + per-surface `scope` reach the keymap
- * layer through the CommandService registry; in tests the host is mocked,
- * so the keymap tests publish the same metadata through
+ * `perspective-tab-bar.tsx`, `app.ai-panel.composer.drillIn` from
+ * `ai-prompt-composer.tsx`, and `app.ai-panel.elicitation.field.drillIn`
+ * from `ai-elements/elicitation.tsx` — into the builtin plugin layer; the
+ * ui.*→app.* rename then folded the former `ui-commands` bundle into
+ * `app-shell-commands` (`builtin/plugins/app-shell-commands/commands/ui.ts`).
+ * The owning React components only register webview-bus handlers for the ids
+ * while focused. In production the commands' `keys` + per-surface `scope`
+ * reach the keymap layer through the CommandService registry; in tests the
+ * host is mocked, so the keymap tests publish the same metadata through
  * `mock-command-list.ts`'s `UI_SURFACE_PLUGIN_COMMANDS` mirror. Like the nav
  * and grid mirrors, the plugin module is not importable from vitest, so the
  * mirror is a manual copy — this guard reads the plugin SOURCE from disk and
@@ -36,7 +37,7 @@ import { mirrorMismatches, parseCommandTable } from "./plugin-command-table";
  */
 const PLUGIN_SOURCE_PATH = resolve(
   dirname(fileURLToPath(import.meta.url)),
-  "../../../../../builtin/plugins/ui-commands/index.ts",
+  "../../../../../builtin/plugins/app-shell-commands/commands/ui.ts",
 );
 
 /**
@@ -54,8 +55,8 @@ const EXPECTED_SCOPES: Record<string, string[]> = {
   "pressable.activate": ["ui:pressable"],
   "pressable.activateSpace": ["ui:pressable"],
   "filter_editor.drillIn": ["ui:filter_editor"],
-  "ui.ai-panel.composer.drillIn": ["ui:ai-panel.composer"],
-  "ui.ai-panel.elicitation.field.drillIn": ["ui:ai-panel.elicitation.field"],
+  "app.ai-panel.composer.drillIn": ["ui:ai-panel.composer"],
+  "app.ai-panel.elicitation.field.drillIn": ["ui:ai-panel.elicitation.field"],
 };
 
 describe("UI_SURFACE_PLUGIN_COMMANDS drift guard", () => {

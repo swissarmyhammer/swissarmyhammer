@@ -14,7 +14,7 @@
  * `grid_cell:*`) is not.
  *
  * Earlier revisions threaded a boolean `inspectOnDoubleClick` prop into
- * the primitives and registered `useDispatchCommand("ui.inspect")` from
+ * the primitives and registered `useDispatchCommand("app.inspect")` from
  * inside their bodies. Space lived even further afield, on a `board.inspect`
  * command at the BoardView's `<CommandScopeProvider>`. Both arrangements
  * shared three smells:
@@ -32,7 +32,7 @@
  *
  * `<Inspectable>` *names* the architectural concept ("this DOM subtree
  * is an inspectable entity") and is the **single source** of the
- * double-click → `ui.inspect` dispatch. The primitives are smaller and
+ * double-click → `app.inspect` dispatch. The primitives are smaller and
  * pure-spatial; the dblclick inspect plumbing lives in exactly one place
  * that can be reasoned about, audited, and replaced as a unit.
  *
@@ -42,7 +42,7 @@
  * mounted a scope-level `entity.inspect` `CommandDef` per `<Inspectable>`
  * (plus a root-scope fallback in `app-shell.tsx`); Card G consolidated
  * those into the SINGLE plugin-owned `entity.inspect`
- * (`builtin/plugins/ui-commands/index.ts`): a global Space command whose
+ * (`builtin/plugins/app-shell-commands/commands/ui.ts`): a global Space command whose
  * execute resolves the focused entity SERVER-SIDE from the dispatched
  * scope chain (innermost inspectable moniker wins — the same
  * closest-`<Inspectable>` semantics the per-scope defs provided, because
@@ -84,7 +84,7 @@
  *   ```
  *
  * Both `<Inspectable>` and the hook resolve the same
- * `useDispatchCommand("ui.inspect")` call from this single file, so
+ * `useDispatchCommand("app.inspect")` call from this single file, so
  * Guard A continues to hold (one non-test file owns the inspect
  * dispatch). The two paths share a private `useInspectDoubleClickHandler`
  * helper to keep the editable-surface skip logic identical.
@@ -92,7 +92,7 @@
  * # Behavior
  *
  *   - On double-click within the wrapper / on the host element,
- *     dispatches `ui.inspect` against the wrapper's `moniker`.
+ *     dispatches `app.inspect` against the wrapper's `moniker`.
  *   - Skips the dispatch when the gesture lands on an editable surface
  *     (`<input>`, `<textarea>`, `<select>`, or any `[contenteditable]`
  *     ancestor) — the editor owns the gesture.
@@ -123,18 +123,18 @@ import { useCallback, type ReactNode } from "react";
 import { useDispatchCommand } from "@/lib/command-scope";
 import type { SegmentMoniker } from "@/types/spatial";
 
-/** Reference type for `useDispatchCommand("ui.inspect")` — preset dispatcher. */
+/** Reference type for `useDispatchCommand("app.inspect")` — preset dispatcher. */
 type InspectDispatcher = ReturnType<typeof useDispatchCommand>;
 
 /**
  * Memoize a `<div>` / `<tr>`-grade `onDoubleClick` handler that
- * dispatches `ui.inspect` against `moniker` unless the gesture lands
+ * dispatches `app.inspect` against `moniker` unless the gesture lands
  * on an editable surface.
  *
  * Both `<Inspectable>` and {@link useInspectOnDoubleClick} go through
  * this hook so the handler shape stays identical between the wrapper
  * and the table-row escape hatch — and so callers that already paid
- * for one `useDispatchCommand("ui.inspect")` registration can pass
+ * for one `useDispatchCommand("app.inspect")` registration can pass
  * that dispatcher through instead of registering a second one.
  *
  * The handler:
@@ -163,7 +163,7 @@ function useInspectDoubleClickHandler(
 
 /**
  * Hook that returns a memoized `onDoubleClick` handler dispatching
- * `ui.inspect` against `moniker`.
+ * `app.inspect` against `moniker`.
  *
  * Public dispatch site for inspect-on-double-click on hosts that cannot
  * accept the standard `<Inspectable>` wrapper — most notably `<tr>`
@@ -188,7 +188,7 @@ function useInspectDoubleClickHandler(
 export function useInspectOnDoubleClick(
   moniker: SegmentMoniker,
 ): (e: React.MouseEvent) => void {
-  const dispatch = useDispatchCommand("ui.inspect");
+  const dispatch = useDispatchCommand("app.inspect");
   return useInspectDoubleClickHandler(dispatch, moniker);
 }
 
@@ -207,7 +207,7 @@ export interface InspectableProps {
 }
 
 /**
- * Wrap an entity subtree so a double-click dispatches `ui.inspect`
+ * Wrap an entity subtree so a double-click dispatches `app.inspect`
  * against the entity's moniker.
  *
  * The dispatcher is registered exactly once per mounted `<Inspectable>`
@@ -230,7 +230,7 @@ export interface InspectableProps {
  * @see {@link InspectableProps}
  */
 export function Inspectable({ moniker, children }: InspectableProps) {
-  const dispatch = useDispatchCommand("ui.inspect");
+  const dispatch = useDispatchCommand("app.inspect");
 
   const onDoubleClick = useInspectDoubleClickHandler(dispatch, moniker);
 

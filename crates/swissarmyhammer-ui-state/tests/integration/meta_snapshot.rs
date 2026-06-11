@@ -4,7 +4,7 @@
 //! code review. The tree shape is the noun->verb->{op} layout produced by
 //! `generate_operations_meta`. Also enforces the hard constraint that the
 //! `ui_state` tool exposes **no** spatial-focus op — the spatial focus KERNEL
-//! is owned by the separate `focus` server. (`ui.setFocus` records the UI-state
+//! is owned by the separate `focus` server. (`app.setFocus` records the UI-state
 //! focus *scope chain* via `set scope_chain`, which is a `ui_state` concern, not
 //! a spatial-focus op.)
 
@@ -29,7 +29,7 @@ fn expected_operations() -> Vec<(&'static str, &'static str, &'static str)> {
         ("palette", "close", "close palette"),
         // keymap
         ("keymap", "set", "set keymap"),
-        // scope chain (ui.setFocus routing target)
+        // scope chain (app.setFocus routing target)
         ("scope_chain", "set", "set scope_chain"),
         // active view (view.set)
         ("active_view", "set", "set active_view"),
@@ -114,7 +114,7 @@ async fn ui_state_tool_meta_operations_tree_is_complete() {
 ///
 /// The spatial focus KERNEL is owned by the separate `focus` MCP server. The
 /// `ui_state` tool records only the UI-state focus *scope chain*
-/// (`set scope_chain`, the `ui.setFocus` routing target) — never a spatial
+/// (`set scope_chain`, the `app.setFocus` routing target) — never a spatial
 /// `set_focus` / `SetFocus` op. This test fails loudly if any op string or noun
 /// mentioning `focus` sneaks onto `ui_state`.
 #[tokio::test]

@@ -12,7 +12,7 @@
 //! dispatcher emits commands in this order:
 //!
 //!   1. **cross-cutting** — registry commands whose primary param declares
-//!      `from: target` (e.g. `ui.inspect`, `entity.delete`, `entity.archive`,
+//!      `from: target` (e.g. `app.inspect`, `entity.delete`, `entity.archive`,
 //!      `entity.unarchive`). Surfaces uniformly on every entity moniker
 //!      without needing per-type opt-in YAML. See `emit_cross_cutting_commands`.
 //!      Like `emit_entity_add`, this pass logs a `debug` trace at every
@@ -871,7 +871,7 @@ fn resolve_active_view_kind(
 /// `field:*` monikers. For each entity moniker, runs two passes in order:
 ///
 ///   1. `emit_cross_cutting_commands` — registry commands whose primary param
-///      is `from: target` (e.g. `ui.inspect`, `entity.delete`, `entity.archive`).
+///      is `from: target` (e.g. `app.inspect`, `entity.delete`, `entity.archive`).
 ///   2. `emit_scoped_registry_commands` — registry commands with a `scope:`
 ///      pin that matches this entity type.
 ///
@@ -903,7 +903,7 @@ fn emit_scoped_commands(
         // Cross-cutting commands are gated on the entity type being a real
         // declared entity (`fields.get_entity(entity_type).is_some()`). This
         // prevents synthetic monikers like `"foo:bar"` from sprouting
-        // `entity.delete`/`entity.archive`/`ui.inspect` against an unknown
+        // `entity.delete`/`entity.archive`/`app.inspect` against an unknown
         // entity type.
         let is_known_entity = fields
             .map(|f| f.get_entity(entity_type).is_some())
@@ -940,7 +940,7 @@ fn emit_scoped_commands(
 ///
 /// A "cross-cutting" command is one whose first param's `from` field is
 /// `ParamSource::Target` — by construction it operates on whatever entity the
-/// context menu fired over (`ui.inspect`, `entity.delete`, `entity.archive`,
+/// context menu fired over (`app.inspect`, `entity.delete`, `entity.archive`,
 /// `entity.unarchive`, …). This pass surfaces each such command exactly once
 /// per entity moniker without requiring per-type opt-in YAML.
 ///

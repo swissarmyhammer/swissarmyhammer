@@ -2015,7 +2015,7 @@ mod tests {
     /// A no-op [`WindowShell`] for the plugin-platform tests.
     ///
     /// The per-window / baseline tests only need the `window` MCP module
-    /// EXPOSED so the `file-commands` / `ui-commands` / `kanban-misc-commands`
+    /// EXPOSED so the `file-commands` / `app-shell-commands` / `kanban-misc-commands`
     /// builtin plugins satisfy `ensureServices` and load — they don't drive any
     /// window op — so every method returns a benign canned value.
     pub(super) struct SpyWindowShell;

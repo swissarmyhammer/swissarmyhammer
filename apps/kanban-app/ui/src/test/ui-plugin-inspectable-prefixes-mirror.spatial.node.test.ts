@@ -1,13 +1,14 @@
 /**
  * Drift guard: the webview-side `INSPECTABLE_ENTITY_PREFIXES` mirror
- * (`inspectable-entity-prefixes.ts`) matches the `ui-commands` builtin
- * plugin's `INSPECTABLE_ENTITY_PREFIXES` declaration 1:1.
+ * (`inspectable-entity-prefixes.ts`) matches the `app-shell-commands`
+ * builtin plugin's `INSPECTABLE_ENTITY_PREFIXES` declaration 1:1.
  *
  * The list exists in two places that cannot import each other:
  *
- *   - `builtin/plugins/ui-commands/index.ts` — the server-side filter
- *     `entity.inspect` uses to resolve its target from a dispatch's scope
- *     chain (Card G moved it out of React).
+ *   - `builtin/plugins/app-shell-commands/commands/ui.ts` — the server-side
+ *     filter `entity.inspect` uses to resolve its target from a dispatch's
+ *     scope chain (Card G moved it out of React; the ui.*→app.* rename then
+ *     folded the former `ui-commands` bundle into `app-shell-commands`).
  *   - `src/test/inspectable-entity-prefixes.ts` — the webview-side copy
  *     that `focus-architecture.guards.node.test.ts` (Guards B + C) pins
  *     against the `<Inspectable>` JSX call sites.
@@ -37,7 +38,7 @@ import { parseStringArrayConst } from "./plugin-command-table";
  */
 const PLUGIN_SOURCE_PATH = resolve(
   dirname(fileURLToPath(import.meta.url)),
-  "../../../../../builtin/plugins/ui-commands/index.ts",
+  "../../../../../builtin/plugins/app-shell-commands/commands/ui.ts",
 );
 
 /** Sorted copy for order-insensitive set comparison. */

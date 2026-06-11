@@ -272,17 +272,17 @@ describe("focus-decoration architecture", () => {
   // The inspector exists to show details of *entities* — `task:`, `tag:`,
   // `column:`, `board:`, `field:`, `attachment:`. UI chrome (`ui:*`,
   // `perspective_tab:`, `cell:*`, `grid_cell:*`) is not. The dispatch
-  // route from a double-click to the `ui.inspect` command lives in
+  // route from a double-click to the `app.inspect` command lives in
   // exactly one component: `<Inspectable>` (`inspectable.tsx`). The
   // spatial primitive `<FocusScope>` is pure spatial-nav infrastructure
-  // and never calls `useDispatchCommand("ui.inspect")`.
+  // and never calls `useDispatchCommand("app.inspect")`.
   //
   // Three guards keep this honest:
   //
-  //   - Guard A: the literal `useDispatchCommand("ui.inspect")` appears
+  //   - Guard A: the literal `useDispatchCommand("app.inspect")` appears
   //     in exactly one non-test file owning the double-click route:
   //     `inspectable.tsx`. Other files that legitimately dispatch
-  //     `ui.inspect` from non-double-click sources (keyboard, navbar
+  //     `app.inspect` from non-double-click sources (keyboard, navbar
   //     button, command-palette) are explicitly allowlisted.
   //
   //   - Guard B: every `<Inspectable …moniker={asSegment("<prefix>…")}>`
@@ -303,7 +303,7 @@ describe("focus-decoration architecture", () => {
    * Guard B (Inspectable monikers must use one of these) and Guard C
    * (entity-prefixed primitives need an Inspectable in the same file)
    * read from this list. It is the shared webview-side mirror of the
-   * ui-commands plugin's `INSPECTABLE_ENTITY_PREFIXES` — pinned against the
+   * app-shell-commands plugin's `INSPECTABLE_ENTITY_PREFIXES` — pinned against the
    * plugin source by
    * `test/ui-plugin-inspectable-prefixes-mirror.spatial.node.test.ts`.
    */
@@ -316,17 +316,17 @@ describe("focus-decoration architecture", () => {
       .replace(/(^|[^:\\])\/\/[^\n]*/g, (_m, prefix) => prefix);
   }
 
-  it('Guard A: useDispatchCommand("ui.inspect") appears only in inspectable.tsx (double-click dispatch is single-sourced)', () => {
+  it('Guard A: useDispatchCommand("app.inspect") appears only in inspectable.tsx (double-click dispatch is single-sourced)', () => {
     // The double-click → inspector route goes through a single
     // dispatch site so an audit can confirm both the gesture-
     // skipping rules (input/textarea/contenteditable) and the
     // `stopPropagation` semantics in one place.
     //
-    // Other production callers of `useDispatchCommand("ui.inspect")`
+    // Other production callers of `useDispatchCommand("app.inspect")`
     // exist for non-double-click flows (keyboard, navbar button,
     // command-palette) and are explicitly allowlisted below. Guard A
     // is about the **double-click** route's single-source contract,
-    // not a blanket "no other code may dispatch ui.inspect".
+    // not a blanket "no other code may dispatch app.inspect".
     //
     // Adding a new caller? Either:
     //   1. it is the new double-click site (then move it to
@@ -350,7 +350,7 @@ describe("focus-decoration architecture", () => {
       // `components/app-shell.tsx` used to appear here for the root-scope
       // Space → inspect fallback; Card G consolidated Space onto the
       // plugin-owned `entity.inspect` (backend dispatch), so app-shell no
-      // longer dispatches `ui.inspect` at all.
+      // longer dispatches `app.inspect` at all.
     ]);
 
     const tsxFiles = walkSources(SRC_ROOT, [".ts", ".tsx"]);
@@ -361,10 +361,10 @@ describe("focus-decoration architecture", () => {
       if (rel.endsWith(".node.test.ts")) continue;
 
       const stripped = stripJsComments(readFileSync(file, "utf-8"));
-      // `useDispatchCommand("ui.inspect")` — match both single and
+      // `useDispatchCommand("app.inspect")` — match both single and
       // double quotes; allow whitespace inside the parentheses.
       if (
-        /useDispatchCommand\(\s*[`"']ui\.inspect[`"']\s*\)/.test(stripped) &&
+        /useDispatchCommand\(\s*[`"']app\.inspect[`"']\s*\)/.test(stripped) &&
         !ALLOWLIST.has(rel)
       ) {
         offenders.push(rel);
@@ -373,7 +373,7 @@ describe("focus-decoration architecture", () => {
 
     if (offenders.length > 0) {
       throw new Error(
-        `useDispatchCommand("ui.inspect") must live only in the documented\n` +
+        `useDispatchCommand("app.inspect") must live only in the documented\n` +
           `dispatch sites (the double-click route is single-sourced in\n` +
           `inspectable.tsx; other gestures are explicitly allowlisted).\n` +
           `Offending call sites:\n` +
@@ -599,7 +599,7 @@ describe("focus-decoration architecture", () => {
       throw new Error(
         `Every entity-prefixed <FocusScope> must be\n` +
           `paired with an <Inspectable> in the same file (the wrapper owns\n` +
-          `the double-click → ui.inspect dispatch). Offending call sites:\n` +
+          `the double-click → app.inspect dispatch). Offending call sites:\n` +
           offenders
             .map((o) => `  ${o.file}  moniker="${o.moniker}"`)
             .join("\n") +

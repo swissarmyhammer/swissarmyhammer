@@ -762,7 +762,7 @@ describe("PerspectiveProvider", () => {
   //
   // `useDispatchCommand` memoizes its returned callback with `effectiveScope =
   // focusedScope ?? treeScope` in its dep array. Every grid keystroke fires
-  // `ui.setFocus`, which rotates `FocusedScopeContext` and therefore the
+  // `app.setFocus`, which rotates `FocusedScopeContext` and therefore the
   // `dispatch` identity. If `PerspectiveProvider`'s hooks close over
   // `dispatch` in `useCallback`/`useEffect` deps, a new `dispatch` identity
   // triggers a full `perspective.list` refetch — and churns the companion
@@ -789,7 +789,7 @@ describe("PerspectiveProvider", () => {
   /**
    * Module-scoped setter captured during render so individual tests can
    * toggle the focused scope value from outside React. Matches how
-   * EntityFocusProvider flips `FocusedScopeContext` on every `ui.setFocus`.
+   * EntityFocusProvider flips `FocusedScopeContext` on every `app.setFocus`.
    */
   let setFocusedScopeExternal: ((next: CommandScope | null) => void) | null =
     null;
@@ -838,7 +838,7 @@ describe("PerspectiveProvider", () => {
     expect(listCallsBefore).toBe(1);
 
     // Simulate a sequence of focus changes — exactly what arrow-key navigation
-    // produces in production: each `ui.setFocus` rotates FocusedScopeContext.
+    // produces in production: each `app.setFocus` rotates FocusedScopeContext.
     await act(async () => {
       setFocusedScopeExternal?.(makeFocusedScope("task:t1"));
       await new Promise((r) => setTimeout(r, 0));

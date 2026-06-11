@@ -80,7 +80,7 @@ interface SlidePanelProps {
   onResize?: (nextWidth: number) => void;
   /**
    * Called once on `mouseup` after a drag with the final clamped width.
-   * Callers dispatch the persistence command (`ui.inspector.set_width`)
+   * Callers dispatch the persistence command (`app.inspector.set_width`)
    * here — mirrors the column-resize / window-geometry pattern of
    * "transient state in React, only the final value round-trips".
    */
@@ -121,7 +121,7 @@ export function SlidePanel({
   closeMoniker = DEFAULT_CLOSE_MONIKER,
 }: SlidePanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
-  const dispatchClose = useDispatchCommand("ui.inspector.close");
+  const dispatchClose = useDispatchCommand("app.inspector.close");
 
   // Drag state lives in a ref because mousemove handlers need to read
   // the start coordinates without triggering a render cascade. The

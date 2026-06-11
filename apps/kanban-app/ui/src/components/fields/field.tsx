@@ -79,7 +79,7 @@ import type { FieldDef, Entity } from "@/types/kanban";
  * (`field:{type}:{id}.{name}`), so the plugin-defined edit commands cannot
  * be scope-gated on a literal zone moniker the way the grid's `ui:grid`
  * zone is. The marker gives every field zone one shared literal moniker;
- * the `ui-commands` plugin's `field.edit` / `field.editEnter` declare
+ * the `app-shell-commands` plugin's `field.edit` / `field.editEnter` declare
  * `scope: ["ui:field"]` against it, so their Enter / `i` keys bind exactly
  * while a field zone is in the focused chain — and nowhere else.
  */
@@ -293,7 +293,7 @@ export interface FieldProps {
    * When false, omits the inner `<FocusScope>` wrapper so the field's
    * `field:{type}:{id}.{name}` moniker does NOT register as a scope in
    * the spatial-nav kernel. The `<Inspectable>` wrapper (which owns the
-   * double-click → `ui.inspect` dispatch and the Space keybinding) is
+   * double-click → `app.inspect` dispatch and the Space keybinding) is
    * preserved.
    *
    * Defaults to true.
@@ -477,7 +477,7 @@ function FieldDisplayContent(props: {
  * # Enter ownership (Card D — plugin-defined, webview-bus handled)
  *
  * The `field.edit` / `field.editEnter` command DEFINITIONS (id / name /
- * keys / scope) live in the `ui-commands` builtin plugin, gated to the
+ * keys / scope) live in the `app-shell-commands` builtin plugin, gated to the
  * constant `ui:field` marker moniker ({@link FIELD_COMMAND_SCOPE}) this
  * component mounts via a `CommandScopeProvider` directly above its
  * `<FocusScope>`. The keymap layer's depth-interleaved chain walk
@@ -553,7 +553,7 @@ export function Field({
   const dispatchNavFocus = useDispatchCommand("nav.focus");
 
   // Per-zone Enter behavior (Card D): the `field.edit` / `field.editEnter`
-  // command DEFINITIONS (id / name / keys / scope) live in the `ui-commands`
+  // command DEFINITIONS (id / name / keys / scope) live in the `app-shell-commands`
   // builtin plugin, gated to the `ui:field` marker this component mounts
   // above its `<FocusScope>` (see FIELD_COMMAND_SCOPE) — so the keymap layer
   // claims Enter / `i` for them whenever the marker appears anywhere in the

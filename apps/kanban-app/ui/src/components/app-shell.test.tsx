@@ -292,23 +292,27 @@ describe("AppShell", () => {
     // global command is DEFINED by a builtin plugin and surfaces through the
     // Command service catalogue (`useCommandList` → `extractKeymapBindings`),
     // never as a client-built `CommandDef`. The window-layer scope keeps only
-    // `ui.entity.startRename` (the perspective-rename module-bus fallback).
+    // `app.entity.startRename` (the perspective-rename module-bus fallback).
     // The keydown tests below prove the catalogue side: global keys resolve
     // from the (mocked) registry and dispatch to the backend.
     await renderShell();
     const listed = screen
       .getAllByTestId(/^cmd-/)
       .map((el) => el.getAttribute("data-testid")!.slice("cmd-".length));
+    // The one allowed client-built def: the window-layer perspective-rename
+    // scope carrier. Formerly `ui.entity.startRename`; the ui.*→app.* rename
+    // moved it under the `app.` prefix, so it is excluded by id, not prefix.
     const clientBuiltGlobals = listed.filter(
       (id) =>
-        id.startsWith("app.") ||
-        id.startsWith("file.") ||
-        id.startsWith("settings.") ||
-        id.startsWith("window.") ||
-        id.startsWith("ai."),
+        (id.startsWith("app.") ||
+          id.startsWith("file.") ||
+          id.startsWith("settings.") ||
+          id.startsWith("window.") ||
+          id.startsWith("ai.")) &&
+        id !== "app.entity.startRename",
     );
     expect(clientBuiltGlobals).toEqual([]);
-    expect(listed).toContain("ui.entity.startRename");
+    expect(listed).toContain("app.entity.startRename");
   });
 
   it("does not render command palette by default", async () => {
@@ -425,7 +429,7 @@ describe("AppShell", () => {
     // over global in `createKeyHandler` — shadowed the global
     // `nav.drillOut`. The trace showed Escape resolving to `app.dismiss`,
     // so drill-out never fired. After removing the legacy `app.dismiss`
-    // Escape binding (and the registry `app.dismiss` / `ui.inspector.close`
+    // Escape binding (and the registry `app.dismiss` / `app.inspector.close`
     // Escape keys), `nav.drillOut` is the sole Escape owner. The focused
     // card claims no Escape of its own, so Escape falls through to the
     // global `nav.drillOut`.
@@ -777,7 +781,7 @@ describe("AppShell", () => {
   });
 
   // ─────────────────────────────────────────────────────────────────────────
-  // ui.inspect — Space binding
+  // app.inspect — Space binding
   //
   // The CUA `keys.cua: "Space"` binding on the per-Inspectable
   // `entity.inspect` command (inspectable.tsx) requires
@@ -798,7 +802,7 @@ describe("AppShell", () => {
           moniker={asSegment("task:t-space")}
           commands={[
             {
-              id: "ui.inspect",
+              id: "app.inspect",
               name: "Inspect",
               keys: { vim: "Enter", cua: "Space" },
               execute: inspectFn,
@@ -860,7 +864,7 @@ describe("AppShell", () => {
           moniker={asSegment("task:t-bridge")}
           commands={[
             {
-              id: "ui.inspect",
+              id: "app.inspect",
               name: "Inspect",
               keys: { vim: "Enter", cua: "Space" },
               execute: inspectFn,

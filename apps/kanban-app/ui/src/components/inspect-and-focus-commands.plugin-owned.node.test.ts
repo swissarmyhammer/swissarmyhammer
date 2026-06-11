@@ -10,7 +10,7 @@
  *     `app-shell.tsx` root-scope Space fallback `buildRootInspectCommand`,
  *     the per-`<Inspectable>` scope `CommandDef` in `inspectable.tsx`, and
  *     the keymap's static Space routing). It is now defined ONCE in
- *     `builtin/plugins/ui-commands/index.ts`: a global Space command whose
+ *     `builtin/plugins/app-shell-commands/commands/ui.ts`: a global Space command whose
  *     execute resolves the target SERVER-SIDE (explicit `ctx.target`, else
  *     the innermost inspectable moniker in the scope chain, else an inert
  *     no-op).
@@ -77,7 +77,7 @@ describe("entity.inspect / nav.focus definitions are plugin-owned", () => {
     const offenders = findCommandDefinitionOffenders(GUARDED_ID_PATTERN);
 
     // A guarded id defined in React re-splits command ownership. Define
-    // `entity.inspect` in `builtin/plugins/ui-commands/index.ts` and
+    // `entity.inspect` in `builtin/plugins/app-shell-commands/commands/ui.ts` and
     // `nav.focus` in `builtin/plugins/nav-commands/index.ts`; register
     // webview behavior via `registerWebviewCommandHandler` instead.
     expect(offenders).toEqual([]);

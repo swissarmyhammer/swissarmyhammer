@@ -921,7 +921,7 @@ pub async fn create_window_impl(
         apply_board_title(&app, state, &label, bp).await;
     }
 
-    // Menu rebuild is handled by the frontend dispatching ui.setFocus
+    // Menu rebuild is handled by the frontend dispatching app.setFocus
     // when the new window mounts — no explicit rebuild needed here.
 
     Ok(json!({
@@ -1965,7 +1965,7 @@ async fn perform_cross_board_drag_transfer(
 /// `kind` names which slice of UI state changed — one of the seven
 /// `UIStateChange` variants plus the two board result shapes — so the
 /// frontend can skip `setState` for events it doesn't care about (e.g.
-/// every `ui.setFocus` arrow-key fires a `scope_chain` event; the
+/// every `app.setFocus` arrow-key fires a `scope_chain` event; the
 /// frontend owns that slice via `FocusedScopeContext` and ignores the
 /// echo). No UI-specific policy lives here — the backend just tells the
 /// truth about which change it made.
@@ -2061,7 +2061,7 @@ fn ui_state_change_kind(result: &Value) -> Option<&'static str> {
 /// changes, and board switch/close.
 async fn maybe_rebuild_menu_after_cmd(app: &AppHandle, effective_cmd: &str, result: &Value) {
     if effective_cmd.starts_with("settings.keymap.")
-        || effective_cmd == "ui.setFocus"
+        || effective_cmd == "app.setFocus"
         || result.get("BoardSwitch").is_some()
         || result.get("BoardClose").is_some()
     {
@@ -3071,7 +3071,7 @@ mod tests {
     // These guard the wire-format contract for `ui-state-changed` events:
     // every payload carries a `kind` discriminator so the frontend can skip
     // `setState` for slices it owns (notably `scope_chain`, which echoes
-    // back from every `ui.setFocus` call and would otherwise cascade
+    // back from every `app.setFocus` call and would otherwise cascade
     // re-renders through every `useUIState()` consumer).
 
     use super::ui_state_change_kind;
@@ -3199,7 +3199,7 @@ mod tests {
 
     #[test]
     fn ui_state_change_kind_envelope_palette_open() {
-        // Exactly what `app.command` / `ui.palette.open` return in production
+        // Exactly what `app.command` / `app.palette.open` return in production
         // (observed in the OS log): `{ ok, change: { PaletteOpen: true } }`.
         let value = serde_json::json!({ "ok": true, "change": { "PaletteOpen": true } });
         assert_eq!(ui_state_change_kind(&value), Some("palette_open"));
@@ -3207,7 +3207,7 @@ mod tests {
 
     #[test]
     fn ui_state_change_kind_envelope_inspector_stack() {
-        // Exactly what `ui.inspect` returns in production:
+        // Exactly what `app.inspect` returns in production:
         // `{ ok, change: { InspectorStack: [...] } }`.
         let value = serde_json::json!({
             "ok": true,

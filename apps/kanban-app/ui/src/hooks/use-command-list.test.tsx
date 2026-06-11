@@ -81,7 +81,7 @@ describe("useCommandList", () => {
   });
 
   it("forwards the scope chain as the list ctx for caption rendering", async () => {
-    resolveListWith([meta("ui.inspect", { name: "Inspect Task" })]);
+    resolveListWith([meta("app.inspect", { name: "Inspect Task" })]);
 
     renderHook(() =>
       useCommandList({ scopeChain: ["task:01ABC", "board:01X"] }),

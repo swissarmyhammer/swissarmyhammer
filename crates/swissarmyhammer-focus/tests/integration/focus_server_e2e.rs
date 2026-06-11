@@ -44,7 +44,7 @@ async fn push_root_layer(server: &FocusServer, layer_fq: &str, window: &str) {
     assert_eq!(res["ok"], json!(true));
 }
 
-/// `set focus` (the `ui.setFocus` routing target) commits focus and returns
+/// `set focus` (the `app.setFocus` routing target) commits focus and returns
 /// a `FocusChangedEvent` with the resolved window / segment — mirroring
 /// `spatial_focus`.
 #[tokio::test]

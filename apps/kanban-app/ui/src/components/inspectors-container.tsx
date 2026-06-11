@@ -106,7 +106,7 @@ function parsePanelStack(inspectorStack: string[] | undefined): PanelEntry[] {
  *
  * Owns:
  * - panelStack state synced from UIState inspector_stack
- * - Close handlers dispatching ui.inspector.close and ui.inspector.close_all
+ * - Close handlers dispatching app.inspector.close and app.inspector.close_all
  * - Backdrop overlay rendering
  * - Inspector layer mount when any panel is open
  * - Panel stack rendering with offset
@@ -145,7 +145,7 @@ export function InspectorsContainer() {
    * yet. During a drag, transient updates flow through `liveWidth`
    * (`onResize` callback) so every panel re-renders at 60 fps without
    * any backend round-trip; only the final value is dispatched on
-   * `mouseup` via `ui.inspector.set_width`. The dispatch echoes back as
+   * `mouseup` via `app.inspector.set_width`. The dispatch echoes back as
    * an `inspector_width` `ui-state-changed` event, which updates
    * `winState.inspector_width` and clears the transient state on the
    * next render.
@@ -170,7 +170,7 @@ export function InspectorsContainer() {
   }, [persistedWidth]);
   const effectiveWidth = liveWidth ?? persistedWidth;
 
-  const dispatchSetWidth = useDispatchCommand("ui.inspector.set_width");
+  const dispatchSetWidth = useDispatchCommand("app.inspector.set_width");
   const handleResize = useCallback((next: number) => {
     isDraggingRef.current = true;
     setLiveWidth(next);
@@ -179,17 +179,17 @@ export function InspectorsContainer() {
     (final: number) => {
       isDraggingRef.current = false;
       dispatchSetWidth({ args: { width: final } }).catch((e) =>
-        console.error("ui.inspector.set_width failed:", e),
+        console.error("app.inspector.set_width failed:", e),
       );
     },
     [dispatchSetWidth],
   );
 
   /** Close the topmost inspector panel via the command architecture. */
-  const dispatchInspectorClose = useDispatchCommand("ui.inspector.close");
+  const dispatchInspectorClose = useDispatchCommand("app.inspector.close");
   const closeTopPanel = useCallback(() => {
     dispatchInspectorClose().catch((e) =>
-      console.error("ui.inspector.close failed:", e),
+      console.error("app.inspector.close failed:", e),
     );
   }, [dispatchInspectorClose]);
 

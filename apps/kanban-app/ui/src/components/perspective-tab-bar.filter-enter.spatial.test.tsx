@@ -60,7 +60,7 @@ const currentFocusKey: { key: string | null } = { key: null };
 const listenCallbacks: Record<string, (event: unknown) => void> = {};
 
 function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
-  // The pressable activation commands are DEFINED by the `ui-commands`
+  // The pressable activation commands are DEFINED by the `app-shell-commands`
   // builtin plugin (`pressable.activate` / `pressable.activateSpace`,
   // scope ["ui:pressable"]) — their Enter / Space keys reach the keymap
   // layer only through the `useCommandList` seam, so answer `list command`
@@ -475,7 +475,7 @@ describe("PerspectiveTabBar filter button — Enter claims focus on the filter e
   });
 
   // -------------------------------------------------------------------------
-  // Card E — the `filter_editor.drillIn` DEFINITION lives in the `ui-commands`
+  // Card E — the `filter_editor.drillIn` DEFINITION lives in the `app-shell-commands`
   // builtin plugin (scope `["ui:filter_editor"]`, the constant marker
   // `FilterFormulaBarFocusable` mounts above its dynamic
   // `filter_editor:{id}` `<FocusScope>`); the component registers only the

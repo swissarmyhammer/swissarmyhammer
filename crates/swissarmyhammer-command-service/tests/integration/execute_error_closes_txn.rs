@@ -146,14 +146,14 @@ async fn write_nothing_command_still_emits_commands_executed_with_no_leaked_txn(
     call_command(
         &service,
         CallerId::HostInternal,
-        register_args("ui.palette.open", "Open Palette", "cb_palette"),
+        register_args("app.palette.open", "Open Palette", "cb_palette"),
     )
     .await;
 
     call_command(
         &service,
         CallerId::HostInternal,
-        execute_args("ui.palette.open"),
+        execute_args("app.palette.open"),
     )
     .await;
 
@@ -171,7 +171,7 @@ async fn write_nothing_command_still_emits_commands_executed_with_no_leaked_txn(
         1,
         "a write-nothing command still emits commands/executed"
     );
-    assert_eq!(seen[0].params["id"], "ui.palette.open");
+    assert_eq!(seen[0].params["id"], "app.palette.open");
     // origin reflects the host/user caller.
     assert_eq!(seen[0].origin(), Some("user"));
 

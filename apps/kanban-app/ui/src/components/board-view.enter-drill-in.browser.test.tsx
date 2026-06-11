@@ -3,9 +3,9 @@
  * the board surface.
  *
  * Covers:
- *   - vim Enter on a focused card does not dispatch `ui.inspect`.
- *   - cua Enter on a focused card does not dispatch `ui.inspect`.
- *   - cua Space on a focused card still dispatches `ui.inspect` against
+ *   - vim Enter on a focused card does not dispatch `app.inspect`.
+ *   - cua Enter on a focused card does not dispatch `app.inspect`.
+ *   - cua Space on a focused card still dispatches `app.inspect` against
  *     the focused entity via the per-`<Inspectable>` scope-level command.
  *   - vim Enter on a focused column drills into the column's first card
  *     via `spatial_drill_in`.
@@ -465,12 +465,12 @@ function spatialDrillOutCalls(): Array<{
     });
 }
 
-/** Filter `dispatch_command` calls down to those for `ui.inspect`. */
+/** Filter `dispatch_command` calls down to those for `app.inspect`. */
 function inspectDispatches(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "dispatch_command")
     .map((c) => c[1] as Record<string, unknown>)
-    .filter((p) => p.cmd === "ui.inspect");
+    .filter((p) => p.cmd === "app.inspect");
 }
 
 /**
@@ -516,7 +516,7 @@ describe("BoardView — Enter drills in, not inspect", () => {
   });
 
   // -------------------------------------------------------------------------
-  // #1: vim Enter on a focused card does NOT dispatch ui.inspect
+  // #1: vim Enter on a focused card does NOT dispatch app.inspect
   // -------------------------------------------------------------------------
 
   it("enter_on_focused_card_does_not_dispatch_inspect_in_vim", async () => {
@@ -547,17 +547,17 @@ describe("BoardView — Enter drills in, not inspect", () => {
     });
     await flushSetup();
 
-    // The focused-card path: vim Enter must NOT dispatch ui.inspect.
+    // The focused-card path: vim Enter must NOT dispatch app.inspect.
     expect(
       inspectDispatches().length,
-      "vim Enter on a focused card must dispatch zero ui.inspect calls",
+      "vim Enter on a focused card must dispatch zero app.inspect calls",
     ).toBe(0);
 
     unmount();
   });
 
   // -------------------------------------------------------------------------
-  // #2: cua Enter on a focused card does NOT dispatch ui.inspect (regression)
+  // #2: cua Enter on a focused card does NOT dispatch app.inspect (regression)
   // -------------------------------------------------------------------------
 
   it("enter_on_focused_card_does_not_dispatch_inspect_in_cua", async () => {
@@ -586,14 +586,14 @@ describe("BoardView — Enter drills in, not inspect", () => {
     // Regression guard — cua Enter has never been bound to inspect.
     expect(
       inspectDispatches().length,
-      "cua Enter on a focused card must dispatch zero ui.inspect calls",
+      "cua Enter on a focused card must dispatch zero app.inspect calls",
     ).toBe(0);
 
     unmount();
   });
 
   // -------------------------------------------------------------------------
-  // #3: cua Space on a focused card still dispatches ui.inspect
+  // #3: cua Space on a focused card still dispatches app.inspect
   // -------------------------------------------------------------------------
 
   it("space_on_focused_card_still_dispatches_inspect_in_cua", async () => {
@@ -634,7 +634,7 @@ describe("BoardView — Enter drills in, not inspect", () => {
     ).toBe("task:t1");
     expect(
       inspectDispatches().length,
-      "Space must not synthesize a webview-side ui.inspect — the backend owns the inspect",
+      "Space must not synthesize a webview-side app.inspect — the backend owns the inspect",
     ).toBe(0);
 
     unmount();
@@ -668,7 +668,7 @@ describe("BoardView — Enter drills in, not inspect", () => {
 
     // Have the kernel resolve drill-in for the column to the first
     // card moniker. The drill closure dispatches `setFocus(moniker)`,
-    // which fans out to a `dispatch_command(ui.setFocus, …)` IPC.
+    // which fans out to a `dispatch_command(app.setFocus, …)` IPC.
     mockInvoke.mockImplementation(
       wrapMcpDispatch(mockInvoke, async (cmd, args) => {
         if (cmd === "spatial_drill_in") {

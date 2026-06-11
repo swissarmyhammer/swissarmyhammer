@@ -3,7 +3,7 @@
  * entity-aware focus point most call sites use.
  *
  * `<FocusScope>` is a **pure spatial primitive**. It does NOT know about
- * inspectable entities and does NOT dispatch `ui.inspect`. Inspector
+ * inspectable entities and does NOT dispatch `app.inspect`. Inspector
  * dispatch lives in `<Inspectable>` — see `inspectable.tsx`.
  *
  * # Path-monikers identity model

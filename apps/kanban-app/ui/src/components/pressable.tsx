@@ -10,7 +10,7 @@
  *      arbitrary host like a Radix `<TooltipTrigger asChild>` slot).
  *   3. Wires the plugin-defined activation commands
  *      (`pressable.activate` — Enter vim/cua, `pressable.activateSpace`
- *      — Space cua, both defined by the `ui-commands` builtin plugin)
+ *      — Space cua, both defined by the `app-shell-commands` builtin plugin)
  *      to the same `onPress` callback as the button's `onClick`, by
  *      registering webview command-bus handlers while the leaf is the
  *      spatial focus.
@@ -18,7 +18,7 @@
  * # Command split (Card D, ui-command-cleanup)
  *
  * The activation command DEFINITIONS (id / name / keys / scope) live in
- * `builtin/plugins/ui-commands/index.ts::UI_SURFACE_COMMANDS` — this
+ * `builtin/plugins/app-shell-commands/commands/ui.ts::UI_SURFACE_COMMANDS` — this
  * component defines no `CommandDef`. Their `scope: ["ui:pressable"]`
  * names the constant marker moniker this component mounts via a
  * `CommandScopeProvider` directly above its `<FocusScope>`
@@ -128,7 +128,7 @@ import type { SegmentMoniker } from "@/types/spatial";
  * (`"ui:navbar.inspect"`, `"card.inspect:T1"`, …), so the plugin-defined
  * activation commands cannot be scope-gated on a literal leaf moniker the
  * way the grid's `ui:grid` zone is. The marker gives every pressable one
- * shared literal moniker; the `ui-commands` plugin's
+ * shared literal moniker; the `app-shell-commands` plugin's
  * `pressable.activate` / `pressable.activateSpace` declare
  * `scope: ["ui:pressable"]` against it, so their Enter / Space keys bind
  * exactly while a pressable leaf is the spatial focus — and nowhere else.

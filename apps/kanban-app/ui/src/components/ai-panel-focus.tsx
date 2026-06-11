@@ -80,7 +80,7 @@ export interface AiPanelFocusScopeProps {
  *
  * A CM6-hosting scope (the composer) and the elicitation field leaves no
  * longer pass per-scope drill-in `CommandDef`s here: their drill-in command
- * DEFINITIONS live in the `ui-commands` builtin plugin (Card E), and the
+ * DEFINITIONS live in the `app-shell-commands` builtin plugin (Card E), and the
  * owning components register the live behavior on the webview command bus
  * (`useFocusedWebviewCommandHandlers`) instead.
  */

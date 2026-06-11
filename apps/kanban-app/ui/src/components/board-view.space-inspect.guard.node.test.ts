@@ -15,10 +15,10 @@
  *      having to spin up the heavyweight `<BoardView>` provider stack.
  *
  *   2. The replacement binding is the PLUGIN-OWNED `entity.inspect`
- *      (Card G, `builtin/plugins/ui-commands/index.ts`): a single global
+ *      (Card G, `builtin/plugins/app-shell-commands/commands/ui.ts`): a single global
  *      Space command whose execute resolves the focused entity
  *      SERVER-SIDE from the dispatched scope chain. `inspectable.tsx`
- *      keeps only the double-click → `ui.inspect` dispatch; it no longer
+ *      keeps only the double-click → `app.inspect` dispatch; it no longer
  *      defines any `entity.inspect` `CommandDef` (that re-split is what
  *      `inspect-and-focus-commands.plugin-owned.node.test.ts` guards).
  *      The end-to-end Space behavior is exercised by
@@ -98,7 +98,7 @@ describe("BoardView Space-inspect migration", () => {
     // `id: "board.inspect"` at the BoardView's `<CommandScopeProvider>`.
     // After the migration, no production code path should mint that
     // command anymore — Space ownership lives on the plugin-owned
-    // `entity.inspect` (Card G, `builtin/plugins/ui-commands/index.ts`).
+    // `entity.inspect` (Card G, `builtin/plugins/app-shell-commands/commands/ui.ts`).
     //
     // The regex matches both quoted forms (`"board.inspect"`) and
     // template-literal forms (`` `board.inspect` ``) since either could
@@ -131,7 +131,7 @@ describe("BoardView Space-inspect migration", () => {
       `Found production source registering the legacy \`board.inspect\` command:\n` +
         offenders.map((o) => `  ${o.file}:${o.line}  ${o.text}`).join("\n") +
         `\n\nSpace ownership has moved to the plugin-owned \`entity.inspect\`\n` +
-        `(Card G, builtin/plugins/ui-commands/index.ts). The board scope no\n` +
+        `(Card G, builtin/plugins/app-shell-commands/commands/ui.ts). The board scope no\n` +
         `longer claims a Space binding; entities respond to Space because the\n` +
         `plugin command resolves the focused entity from the dispatched scope\n` +
         `chain server-side.`,
@@ -142,8 +142,8 @@ describe("BoardView Space-inspect migration", () => {
     // Card G consolidated the per-`<Inspectable>` scope-level
     // `entity.inspect` `CommandDef` (and the `app-shell.tsx` root
     // fallback) into the single plugin-owned definition in
-    // `builtin/plugins/ui-commands/index.ts`. `inspectable.tsx` still
-    // owns the double-click → `ui.inspect` dispatch (Guard A in
+    // `builtin/plugins/app-shell-commands/commands/ui.ts`. `inspectable.tsx`
+    // still owns the double-click → `app.inspect` dispatch (Guard A in
     // `focus-architecture.guards.node.test.ts`), but it must no longer
     // mint any `entity.inspect` command — Space resolution is the
     // keymap's global binding routed to the backend plugin.
@@ -155,7 +155,7 @@ describe("BoardView Space-inspect migration", () => {
     // The dblclick dispatch site must remain — losing it would orphan the
     // double-click gesture entirely.
     expect(inspectableSrc).toMatch(
-      /useDispatchCommand\(\s*["'`]ui\.inspect["'`]\s*\)/,
+      /useDispatchCommand\(\s*["'`]app\.inspect["'`]\s*\)/,
     );
   });
 });

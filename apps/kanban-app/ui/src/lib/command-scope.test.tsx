@@ -687,7 +687,7 @@ describe("useDispatchCommand", () => {
     );
 
     const { result, rerender } = renderHook(
-      () => useDispatchCommand("ui.inspect"),
+      () => useDispatchCommand("app.inspect"),
       { wrapper: w },
     );
 
@@ -751,7 +751,7 @@ describe("useDispatchCommand", () => {
 
   it("dispatch respects presetCmd identity changes", () => {
     // Different presetCmd values MUST produce distinguishable callables so
-    // `useDispatchCommand("ui.inspect")` and `useDispatchCommand("nav.up")`
+    // `useDispatchCommand("app.inspect")` and `useDispatchCommand("nav.up")`
     // stay separate in consumers that rely on the preset binding.
     const w = ({ children }: { children: ReactNode }) => (
       <ActiveBoardPathProvider value="/boards/test">
@@ -759,7 +759,7 @@ describe("useDispatchCommand", () => {
       </ActiveBoardPathProvider>
     );
 
-    const { result: a } = renderHook(() => useDispatchCommand("ui.inspect"), {
+    const { result: a } = renderHook(() => useDispatchCommand("app.inspect"), {
       wrapper: w,
     });
     const { result: b } = renderHook(() => useDispatchCommand("nav.up"), {
@@ -769,7 +769,7 @@ describe("useDispatchCommand", () => {
     expect(a.current).not.toBe(b.current);
 
     // Swapping the preset in the same hook invocation also yields a new callable.
-    let preset = "ui.inspect";
+    let preset = "app.inspect";
     const { result, rerender } = renderHook(() => useDispatchCommand(preset), {
       wrapper: w,
     });

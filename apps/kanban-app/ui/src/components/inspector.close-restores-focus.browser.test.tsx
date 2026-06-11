@@ -224,7 +224,7 @@ async function defaultInvokeImpl(
   if (cmd === "log_command") return null;
   if (cmd === "dispatch_command") {
     const a = (args ?? {}) as { cmd?: string };
-    if (a.cmd === "ui.inspector.close" || a.cmd === "app.dismiss") {
+    if (a.cmd === "app.inspector.close" || a.cmd === "app.dismiss") {
       // Pop the topmost panel from the inspector stack and emit the
       // ui-state-changed event the React tree subscribes to. This
       // simulates the Rust-side close path.

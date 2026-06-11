@@ -12,7 +12,7 @@
  *
  * - Selecting a view (LeftNav click / Enter) dispatches the canonical
  *   `view.set` command with the view id in `args.view_id`. The command is
- *   defined in `builtin/plugins/ui-commands/index.ts`.
+ *   defined in `builtin/plugins/app-shell-commands/commands/ui.ts`.
  * - The palette's per-view "Switch to <ViewName>" rows are emitted by Rust
  *   (`swissarmyhammer_kanban::scope_commands::emit_view_switch`) as
  *   `view.set` rows with pre-filled args.
