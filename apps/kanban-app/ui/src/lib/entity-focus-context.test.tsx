@@ -17,6 +17,10 @@ import {
 import { SpatialFocusProvider } from "./spatial-focus-context";
 import { type CommandScope } from "./command-scope";
 import {
+  hasWebviewCommandHandler,
+  resetWebviewCommandBusForTest,
+} from "./webview-command-bus";
+import {
   asSegment,
   asFq,
   asWindowLabel,
@@ -90,6 +94,41 @@ describe("useEntityFocus", () => {
     expect(() => {
       renderHook(() => useEntityFocus());
     }).toThrow("useEntityFocus must be used within an EntityFocusProvider");
+  });
+});
+
+describe("nav.focus single-sourcing (Card G)", () => {
+  it("EntityFocusProvider registers NO nav.focus execution leg of its own", () => {
+    // `nav.focus` is DEFINED once in the `nav-commands` plugin; the
+    // webview's only execution leg is the bus handler
+    // `<SpatialFocusProvider>` registers (the snapshot-bearing
+    // `actions.focus(fq)` commit). The entity provider used to register
+    // a shadowing scope `CommandDef` — that duplication is gone, so a
+    // tree mounting only `<EntityFocusProvider>` contributes nothing to
+    // the bus (and no client-side `CommandDef` exists anywhere, pinned
+    // by `inspect-and-focus-commands.plugin-owned.node.test.ts`).
+    resetWebviewCommandBusForTest();
+    const { unmount } = render(
+      <EntityFocusProvider>{null}</EntityFocusProvider>,
+    );
+    expect(hasWebviewCommandHandler("nav.focus")).toBe(false);
+    unmount();
+  });
+
+  it("mounting the production pair (Spatial > Entity) yields exactly the spatial provider's bus handler", () => {
+    resetWebviewCommandBusForTest();
+    const { unmount } = render(
+      <SpatialFocusProvider>
+        <EntityFocusProvider>{null}</EntityFocusProvider>
+      </SpatialFocusProvider>,
+    );
+    expect(
+      hasWebviewCommandHandler("nav.focus"),
+      "the spatial provider owns the single nav.focus bus handler",
+    ).toBe(true);
+    unmount();
+    expect(hasWebviewCommandHandler("nav.focus")).toBe(false);
+    resetWebviewCommandBusForTest();
   });
 });
 

@@ -235,6 +235,22 @@ describe("CommandPalette", () => {
     expect(list.getAttribute("role")).toBe("listbox");
   });
 
+  it("renders Rust-emitted 'Switch to <ViewName>' rows from the registry source", async () => {
+    // The palette's per-view rows are produced backend-side by
+    // `swissarmyhammer_kanban::scope_commands::emit_view_switch`: each row
+    // carries the canonical `view.set` id with the display name already
+    // rendered ("Switch to <ViewName>") and `view_id` pre-filled in args.
+    // No client-minted `view.switch:*` id is involved (card
+    // 01KTED8XDX4728QR4WT9EZ0WRF) — the row reaches the palette purely
+    // through the registry seam (`useCommandList`).
+    mockRegistry = [
+      ...TEST_REGISTRY,
+      { id: "view.set", name: "Switch to Board" },
+    ];
+    await renderPalette(true);
+    expect(screen.getByText("Switch to Board")).toBeTruthy();
+  });
+
   it("dispatches to backend when command has no execute handler", async () => {
     const invokeMock = vi.mocked(invoke);
 

@@ -5,7 +5,8 @@
 // below): `field.edit` / `field.editEnter` / `pressable.activate` /
 // `pressable.activateSpace` / `filter_editor.drillIn` /
 // `ui.ai-panel.composer.drillIn` / `ui.ai-panel.elicitation.field.drillIn`
-// — 17 commands total.
+// — plus the Card G consolidated `entity.inspect` (the global Space inspect
+// command, formerly THREE client-side `CommandDef`s) — 18 commands total.
 //
 // Like `app-shell-commands`, this bundle fans out across MULTIPLE backends by
 // concern — but here the three backends are `ui_state`, `focus`, and `window`:
@@ -22,8 +23,12 @@
 //   4. The plugin holds NO business logic: each `execute` makes exactly ONE
 //      MCP call into its backend.
 //
-// Backend routing — 10 commands across 3 backends:
+// Backend routing — 11 commands across 3 backends:
 //   ui.inspect            → ui_state `inspect inspector`   (...inspector.inspect)
+//   entity.inspect        → ui_state `inspect inspector`   (...inspector.inspect)
+//                           (Card G: target resolved server-side — explicit
+//                           ctx.target, else the innermost inspectable
+//                           scope-chain moniker, else an inert no-op)
 //   ui.inspector.close    → ui_state `close inspector`     (...inspector.close)
 //   ui.inspector.close_all→ ui_state `close_all inspector` (...inspector.close_all)
 //   ui.inspector.set_width→ ui_state `set_width inspector` (...inspector.set_width)
@@ -198,6 +203,50 @@ const UI_SURFACE_COMMANDS: readonly UiSurfaceCommandSpec[] = [
 ];
 
 /**
+ * Inspectable-entity moniker prefixes — the entity kinds `entity.inspect`
+ * resolves from a dispatch's scope chain when no explicit target is given.
+ * UI chrome (`ui:*`, `perspective_tab:`, `cell:*`, `grid_cell:*`,
+ * `row_label:`, `window:`, …) is not inspectable.
+ *
+ * Card G moved this filter SERVER-SIDE: it was previously the React-side
+ * `INSPECTABLE_ENTITY_PREFIXES` in `app-shell.tsx` (the root-scope Space
+ * fallback). The webview's architectural guard
+ * (`focus-architecture.guards.node.test.ts`, Guards B + C) pins the same
+ * prefix set against the `<Inspectable>` JSX call sites via the shared
+ * mirror in `kanban-app/ui/src/test/inspectable-entity-prefixes.ts`, and
+ * `ui-plugin-inspectable-prefixes-mirror.spatial.node.test.ts` parses THIS
+ * array out of the plugin source and asserts it equals that mirror — drift
+ * between the two lists fails the suite, not a code review.
+ */
+const INSPECTABLE_ENTITY_PREFIXES = [
+  "task:",
+  "tag:",
+  "column:",
+  "board:",
+  "field:",
+  "attachment:",
+] as const;
+
+/**
+ * Resolve the moniker `entity.inspect` should inspect.
+ *
+ * An explicit `ctx.target` wins verbatim (palette result rows and other
+ * programmatic dispatches name their entity directly). Otherwise the
+ * INNERMOST inspectable-entity moniker in the scope chain is the target —
+ * the chain is leaf-first, so the first matching entry is the closest
+ * enclosing entity of the focused scope (a focused inspector field resolves
+ * to its `field:…` moniker, not the enclosing card's `task:…`). Returns
+ * `undefined` when neither yields a target (Space on chrome / no focus) —
+ * the command then no-ops.
+ */
+function resolveInspectTarget(ctx: CommandContext): string | undefined {
+  if (ctx.target !== undefined) return ctx.target;
+  return (ctx.scope_chain ?? []).find((moniker) =>
+    INSPECTABLE_ENTITY_PREFIXES.some((prefix) => moniker.startsWith(prefix)),
+  );
+}
+
+/**
  * The dispatch surface for the `ui_state` operation tool — the inspector /
  * palette / keymap / rename ops the ui commands route to.
  *
@@ -261,9 +310,10 @@ interface WindowDispatch {
 /**
  * The ui-commands builtin plugin.
  *
- * Registers the ten UI commands ported from `ui.yaml`, routed across the
- * `ui_state`, `focus`, and `window` MCP servers, plus the seven webview-bus
- * handled UI-surface commands (`UI_SURFACE_COMMANDS`). Identity is the
+ * Registers the ten UI commands ported from `ui.yaml` plus the Card G
+ * `entity.inspect`, routed across the `ui_state`, `focus`, and `window` MCP
+ * servers, plus the seven webview-bus handled UI-surface commands
+ * (`UI_SURFACE_COMMANDS`). Identity is the
  * bundle directory name (`ui-commands`); `name` / `description` are
  * descriptive metadata only.
  */
@@ -312,6 +362,47 @@ export default class UiCommandsPlugin extends Plugin {
           return await uiState.ui_state.ui_state.inspector.inspect({
             scope_chain: ctx.scope_chain ?? [],
             moniker: ctx.target ?? "",
+          });
+        },
+      },
+
+      // ─── entity.inspect ─────────────────────────────────────────────────
+      // Card G: the SINGLE definition of the global Space inspect command,
+      // consolidating the three retired client-side `CommandDef`s (the
+      // `app-shell.tsx` root fallback, the per-`<Inspectable>` scope def,
+      // and the keymap's Space routing). Keys are Space across all three
+      // keymaps, GLOBAL (no scope) so the binding lands in the global key
+      // table; a focused `<Pressable>`'s scope-gated
+      // `pressable.activateSpace` still shadows it through the keymap's
+      // chain walk (scope beats global).
+      //
+      // Target resolution is SERVER-SIDE (`resolveInspectTarget`): explicit
+      // `ctx.target` verbatim, else the innermost inspectable-entity moniker
+      // in the scope chain (the chain is derived from the focused FQM, so
+      // this replaces the React `INSPECTABLE_ENTITY_PREFIXES` filter), else
+      // an inert `{ ok: true }` no-op — Space on chrome / with no focus must
+      // not synthesize a bogus inspect. The keybinding handler still
+      // `preventDefault()`s on the binding match, so Space never falls
+      // through to the browser's page scroll.
+      //
+      // Not palette-visible and no context_menu: `ui.inspect` (above) owns
+      // the visible "Inspect" affordances; this id owns only the Space
+      // gesture and programmatic focus-relative inspects.
+      {
+        id: "entity.inspect",
+        name: "Inspect",
+        visible: false,
+        undoable: false,
+        keys: { vim: "Space", cua: "Space", emacs: "Space" },
+        execute: async (rawCtx: unknown) => {
+          const ctx = (rawCtx ?? {}) as CommandContext;
+          const moniker = resolveInspectTarget(ctx);
+          if (moniker === undefined) {
+            return { ok: true };
+          }
+          return await uiState.ui_state.ui_state.inspector.inspect({
+            scope_chain: ctx.scope_chain ?? [],
+            moniker,
           });
         },
       },
@@ -513,7 +604,7 @@ export default class UiCommandsPlugin extends Plugin {
     ]);
 
     this.log.info(
-      "ui-commands: registered 17 commands (ui.inspect / ui.inspector.* / app.palette.open / ui.palette.close / ui.entity.startRename / ui.mode.set / ui.setFocus / window.new across ui_state / focus / window; field.edit / field.editEnter / pressable.activate / pressable.activateSpace / filter_editor.drillIn / ui.ai-panel.composer.drillIn / ui.ai-panel.elicitation.field.drillIn → webview bus)",
+      "ui-commands: registered 18 commands (ui.inspect / entity.inspect / ui.inspector.* / app.palette.open / ui.palette.close / ui.entity.startRename / ui.mode.set / ui.setFocus / window.new across ui_state / focus / window; field.edit / field.editEnter / pressable.activate / pressable.activateSpace / filter_editor.drillIn / ui.ai-panel.composer.drillIn / ui.ai-panel.elicitation.field.drillIn → webview bus)",
     );
   }
 }

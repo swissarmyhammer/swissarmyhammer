@@ -34,7 +34,7 @@
 //! one of its commands, the sort of drop the per-plugin tests cannot
 //! catch because each only stages one bundle in isolation.
 //!
-//! The 98 commands across the 11 builtin command plugins (matches each
+//! The 99 commands across the 11 builtin command plugins (matches each
 //! plugin's `registerCommands(...)` call set):
 //!
 //! - `app-shell-commands` (15): help, about, quit, command, search,
@@ -49,15 +49,18 @@
 //!   load,save,list,next,prev,filter,filter.focus,clearFilter,group,
 //!   clearGroup,sort.set,sort.clear,sort.toggle}.
 //! - `task-commands` (3): task.{move,untag,doThisNext}.
-//! - `ui-commands` (17): ui.inspect, ui.inspector.{close,close_all,set_width},
+//! - `ui-commands` (18): ui.inspect, ui.inspector.{close,close_all,set_width},
 //!   app.palette.open, ui.palette.close, ui.entity.startRename, ui.mode.set,
 //!   ui.setFocus, window.new, plus the Card D UI-surface commands
 //!   field.{edit,editEnter} and pressable.{activate,activateSpace} and the
 //!   Card E editor drill-in commands filter_editor.drillIn,
 //!   ui.ai-panel.composer.drillIn, and ui.ai-panel.elicitation.field.drillIn —
 //!   all webview-bus handled (the owning React components register the live
-//!   handlers while focused; the host executes are inert no-ops). (The palette
-//!   opener is `app.palette.open` after the ui.*→app.* rename fold;
+//!   handlers while focused; the host executes are inert no-ops) — and the
+//!   Card G consolidated entity.inspect (the global Space inspect command:
+//!   explicit target, else the innermost inspectable scope-chain moniker,
+//!   else an inert no-op; routes to ui_state `inspect inspector`). (The
+//!   palette opener is `app.palette.open` after the ui.*→app.* rename fold;
 //!   `ui.palette.open` is retired.)
 //! - `ai-commands` (5): ai.{toggle,focus,newChat,model,cancel} — webview-
 //!   reactive no-ops; the metadata surfaces in the unified registry while the
@@ -76,7 +79,7 @@
 //!   (first/last) host-driven; newTask is webview-bus handled (the board
 //!   React tree registers the live handler, the host execute is inert).
 //!
-//! TOTAL: 98 commands.
+//! TOTAL: 99 commands.
 
 #![allow(dead_code)]
 
@@ -103,7 +106,7 @@ use crate::support::call_command;
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// The 11 builtin command plugins, in the order the app loads them.
-/// The grand union of their command registrations is the 98 ids asserted
+/// The grand union of their command registrations is the 99 ids asserted
 /// below.
 const BUILTIN_COMMAND_PLUGINS: &[&str] = &[
     "app-shell-commands",
@@ -325,6 +328,10 @@ fn expected_command_ids() -> BTreeSet<String> {
         "filter_editor.drillIn",
         "ui.ai-panel.composer.drillIn",
         "ui.ai-panel.elicitation.field.drillIn",
+        // ...and the Card G consolidated global Space inspect command:
+        // explicit target, else the innermost inspectable scope-chain
+        // moniker, else an inert no-op.
+        "entity.inspect",
         // ai-commands (5)
         "ai.cancel",
         "ai.focus",
@@ -459,8 +466,8 @@ async fn all_eleven_builtin_command_plugins_register_their_full_command_set() {
 
     assert_eq!(
         got.len(),
-        98,
-        "the 11 builtin command plugins must collectively register exactly 98 commands"
+        99,
+        "the 11 builtin command plugins must collectively register exactly 99 commands"
     );
 }
 

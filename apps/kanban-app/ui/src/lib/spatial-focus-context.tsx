@@ -50,7 +50,6 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useMemo,
   useRef,
   type ReactNode,
 } from "react";
@@ -111,8 +110,7 @@ import type {
   SegmentMoniker,
 } from "@/types/spatial";
 import type { LayerScopeRegistry } from "@/lib/layer-scope-registry-context";
-import type { CommandDef } from "@/lib/command-scope";
-import { CommandScopeProvider } from "@/lib/command-scope";
+import { registerWebviewCommandHandler } from "@/lib/webview-command-bus";
 import { registerUiResponder } from "@/lib/ui-request-responder";
 
 // ---------------------------------------------------------------------------
@@ -469,63 +467,35 @@ export function SpatialFocusProvider({ children }: { children: ReactNode }) {
     );
   }
 
-  // Register `nav.focus` at this level so any descendant `<FocusScope>`'s
-  // click handler can dispatch it without requiring an
-  // `<EntityFocusProvider>` ancestor. The execute closure calls
-  // `actions.focus(fq)` directly — the kernel-facing primitive that
-  // dispatches `spatial_focus` IPC. When `<EntityFocusProvider>` is
-  // mounted as a descendant, it registers an inner `nav.focus` that
-  // shadows this one (commands are scope-chained, inner wins). That
-  // inner version routes through `setFocus`, which is identity-equal to
-  // calling `spatial.focus(fq)` in production but also covers the
-  // entity-focus test-harness fallback (direct store mutation when no
-  // spatial provider is mounted, which doesn't apply here since this
-  // closure only runs when `<SpatialFocusProvider>` is mounted).
+  // Register the `nav.focus` WEBVIEW-BUS handler — the single webview
+  // execution leg of the plugin-owned `nav.focus` command (Card G).
+  //
+  // The command is DEFINED once, in the `nav-commands` builtin plugin
+  // (`builtin/plugins/nav-commands/index.ts`); its host-side execute routes
+  // to the focus kernel's `set focus` op WITHOUT a snapshot, and the kernel
+  // silently drops a snapshot-less commit (its transient-unmount contract).
+  // The webview therefore intercepts the id on the command bus and runs
+  // `actions.focus(fq)` — which composes the live geometry snapshot from
+  // the per-layer registries and dispatches `spatial_focus` IPC. The kernel
+  // emits `focus-changed` back to React; the registered claim listeners for
+  // `prev_fq` / `next_fq` fire to update each scope's focus indicator.
+  //
+  // This is presentation wiring in the bus's sense: spatial focus is
+  // transient UI state, and the handler's only job is attaching the
+  // webview-owned geometry to the kernel commit — there is no durable
+  // domain mutation to route back through a backend op (the backend op IS
+  // `nav.focus`, whose host leg this handler completes).
   //
   // Per card `01KR7CDEFWWVF4WH0BCHE8Y21J`'s modal-layer model: every
   // non-null focus claim flows through `nav.focus`. Components do not
   // call `spatial.focus(fq)` or `setFocus(fq)` directly — they dispatch
   // `nav.focus({ args: { fq } })`. Cross-cutting concerns (telemetry,
-  // animations, scroll-on-focus) hang off this one closure.
-  const navFocusCommands = useMemo<readonly CommandDef[]>(
-    () => [buildSpatialNavFocusCommand(actionsRef.current!)],
-    [],
-  );
-
-  return (
-    <SpatialFocusContext.Provider value={actionsRef.current}>
-      <CommandScopeProvider commands={navFocusCommands}>
-        {children}
-      </CommandScopeProvider>
-    </SpatialFocusContext.Provider>
-  );
-}
-
-/**
- * Build the `nav.focus` command for the spatial-focus level — the
- * kernel-facing focus claim path.
- *
- * The execute closure reads `args.fq` from the dispatch options and
- * calls `actions.focus(fq)`, which composes a snapshot from the
- * per-layer registry and dispatches `spatial_focus` IPC. The kernel
- * emits `focus-changed` back to React; the registered claim listeners
- * for `prev_fq` and `next_fq` fire to update each scope's visible
- * focus indicator.
- *
- * When an `<EntityFocusProvider>` descendant registers its own
- * `nav.focus`, the inner registration shadows this one. The inner
- * version goes through `useFocusActions().setFocus(fq)`, which has the
- * same production behavior (calls `spatial.focus`) but also handles
- * the test-harness no-spatial-provider fallback. This dual
- * registration means every test setup that mounts at least one of the
- * two providers gets `nav.focus` resolution without modifying the test
- * harness.
- */
-function buildSpatialNavFocusCommand(actions: SpatialFocusActions): CommandDef {
-  return {
-    id: "nav.focus",
-    name: "Focus Scope",
-    execute: (opts) => {
+  // animations, scroll-on-focus) hang off this one closure. Registered in
+  // an effect so the ownership-guarded cleanup runs on unmount and a
+  // hot-reloaded provider never leaks a stale closure.
+  useEffect(() => {
+    const actions = actionsRef.current!;
+    return registerWebviewCommandHandler("nav.focus", (opts) => {
       const fq = opts?.args?.fq;
       if (typeof fq !== "string") {
         // Defensive: a dispatch without `args.fq` is a programming
@@ -538,8 +508,14 @@ function buildSpatialNavFocusCommand(actions: SpatialFocusActions): CommandDef {
       void actions.focus(fq as FullyQualifiedMoniker).catch((err) => {
         console.error("[nav.focus] spatial.focus failed", err);
       });
-    },
-  };
+    });
+  }, []);
+
+  return (
+    <SpatialFocusContext.Provider value={actionsRef.current}>
+      {children}
+    </SpatialFocusContext.Provider>
+  );
 }
 
 /**

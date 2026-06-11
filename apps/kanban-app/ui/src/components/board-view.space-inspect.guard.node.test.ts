@@ -14,17 +14,15 @@
  *      duplicate Space ownership; this guard catches that without
  *      having to spin up the heavyweight `<BoardView>` provider stack.
  *
- *   2. The replacement binding follows a two-tier architecture:
- *      `inspectable.tsx` registers a per-Inspectable scope-level
- *      `id: "entity.inspect"` with `keys.cua: "Space"` (shadows when an
- *      Inspectable is in the focused scope chain), and
- *      `app-shell.tsx` registers a root-scope `entity.inspect` fallback
- *      with the same Space binding (handles the no-focus case so Space
- *      always resolves and the keybinding handler can `preventDefault`
- *      the browser's page-scroll). This guard pins only the
- *      per-Inspectable site; the root-scope fallback in `app-shell.tsx`
- *      is exercised by `spatial-nav-end-to-end.spatial.test.tsx`
- *      (Family 4) and the unit tests in
+ *   2. The replacement binding is the PLUGIN-OWNED `entity.inspect`
+ *      (Card G, `builtin/plugins/ui-commands/index.ts`): a single global
+ *      Space command whose execute resolves the focused entity
+ *      SERVER-SIDE from the dispatched scope chain. `inspectable.tsx`
+ *      keeps only the double-click → `ui.inspect` dispatch; it no longer
+ *      defines any `entity.inspect` `CommandDef` (that re-split is what
+ *      `inspect-and-focus-commands.plugin-owned.node.test.ts` guards).
+ *      The end-to-end Space behavior is exercised by
+ *      `spatial-nav-end-to-end.spatial.test.tsx` (Family 4) and
  *      `inspectable.space.browser.test.tsx`.
  *
  * Node-only because it reads source files from disk; lives under the
@@ -99,8 +97,8 @@ describe("BoardView Space-inspect migration", () => {
     // The legacy `makeInspectCommand` factory registered
     // `id: "board.inspect"` at the BoardView's `<CommandScopeProvider>`.
     // After the migration, no production code path should mint that
-    // command anymore — Space ownership lives on the per-entity
-    // `<Inspectable>` wrapper, which uses `id: "entity.inspect"`.
+    // command anymore — Space ownership lives on the plugin-owned
+    // `entity.inspect` (Card G, `builtin/plugins/ui-commands/index.ts`).
     //
     // The regex matches both quoted forms (`"board.inspect"`) and
     // template-literal forms (`` `board.inspect` ``) since either could
@@ -132,38 +130,32 @@ describe("BoardView Space-inspect migration", () => {
       offenders,
       `Found production source registering the legacy \`board.inspect\` command:\n` +
         offenders.map((o) => `  ${o.file}:${o.line}  ${o.text}`).join("\n") +
-        `\n\nSpace ownership has moved to the per-entity \`<Inspectable>\`\n` +
-        `wrapper (see \`inspectable.tsx\`). The board scope no longer\n` +
-        `claims a Space binding; if you need to add an inspect-class\n` +
-        `command at the board level, register it on \`<Inspectable>\`\n` +
-        `directly so every wrapped entity (card, column, board zone,\n` +
-        `field, attachment) responds consistently.`,
+        `\n\nSpace ownership has moved to the plugin-owned \`entity.inspect\`\n` +
+        `(Card G, builtin/plugins/ui-commands/index.ts). The board scope no\n` +
+        `longer claims a Space binding; entities respond to Space because the\n` +
+        `plugin command resolves the focused entity from the dispatched scope\n` +
+        `chain server-side.`,
     ).toEqual([]);
   });
 
-  it("the per-Inspectable Space binding lives in `inspectable.tsx`", () => {
-    // After the migration, Space → inspect dispatch is wired in two
-    // tiers: a scope-level `entity.inspect` `CommandDef` registered
-    // inside `<Inspectable>` (this file pins that site), and a
-    // root-scope `entity.inspect` fallback registered in
-    // `components/app-shell.tsx` (`buildRootInspectCommand`) that
-    // catches the no-focus case so Space never falls through to the
-    // browser's page-scroll. This guard is a positive presence
-    // assertion on the per-Inspectable site only — it does NOT enforce
-    // exclusivity. A reader searching for "where is Space wired to
-    // inspect" should expect to find both call sites; the canonical
-    // entity-level wiring lives here in `inspectable.tsx`, while the
-    // root fallback is asserted by the e2e Family 4 and the
-    // `inspectable.space.browser.test.tsx` no-focus scenario.
-    const inspectableSrc = readFileSync(
-      resolve(SRC_ROOT, "components/inspectable.tsx"),
-      "utf-8",
+  it("`inspectable.tsx` keeps only the dblclick dispatch — no entity.inspect CommandDef", () => {
+    // Card G consolidated the per-`<Inspectable>` scope-level
+    // `entity.inspect` `CommandDef` (and the `app-shell.tsx` root
+    // fallback) into the single plugin-owned definition in
+    // `builtin/plugins/ui-commands/index.ts`. `inspectable.tsx` still
+    // owns the double-click → `ui.inspect` dispatch (Guard A in
+    // `focus-architecture.guards.node.test.ts`), but it must no longer
+    // mint any `entity.inspect` command — Space resolution is the
+    // keymap's global binding routed to the backend plugin.
+    const inspectableSrc = stripJsComments(
+      readFileSync(resolve(SRC_ROOT, "components/inspectable.tsx"), "utf-8"),
     );
 
-    // The id and the cua-Space binding must both appear in the same
-    // file. Match them as a flexible regex (multiline, allow whitespace
-    // between key and value) so a reformat doesn't break the guard.
-    expect(inspectableSrc).toMatch(/id\s*:\s*["'`]entity\.inspect["'`]/);
-    expect(inspectableSrc).toMatch(/cua\s*:\s*["'`]Space["'`]/);
+    expect(inspectableSrc).not.toMatch(/id\s*:\s*["'`]entity\.inspect["'`]/);
+    // The dblclick dispatch site must remain — losing it would orphan the
+    // double-click gesture entirely.
+    expect(inspectableSrc).toMatch(
+      /useDispatchCommand\(\s*["'`]ui\.inspect["'`]\s*\)/,
+    );
   });
 });

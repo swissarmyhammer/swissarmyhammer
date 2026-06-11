@@ -43,10 +43,15 @@
 //   focus `set focus` (this.focus.focus.focus.set) with `{ fq: args.fq, window }`
 // — the same wire shape `focus-mcp.ts::setFocus` uses, minus the snapshot
 // (the host has no geometry; a snapshot-less commit drops silently per the
-// kernel's transient-unmount contract). In the webview the two `nav.focus`
-// scope defs (`entity-focus-context.tsx` / `spatial-focus-context.tsx`) take
-// the execute fast-path and supply the snapshot; their dedup is Card G. This
-// plugin def makes the catalogue the single registration owner.
+// kernel's transient-unmount contract). In the webview the single execution
+// leg is the command-bus handler `SpatialFocusProvider` registers
+// (`registerWebviewCommandHandler("nav.focus", …)` in
+// `spatial-focus-context.tsx`); `useDispatchCommand` consults the bus before
+// the backend, and the handler runs `actions.focus(fq)` — which composes the
+// live geometry snapshot via `buildSnapshotForFocused` and commits the
+// snapshot-bearing `set focus` through `focus-mcp.ts::setFocus`. (Card G
+// deleted the two legacy `nav.focus` scope defs the contexts used to carry.)
+// This plugin def makes the catalogue the single registration owner.
 //
 // # Resolving the window
 //
@@ -329,10 +334,14 @@ export default class NavCommandsPlugin extends Plugin {
       // the wire shape `focus-mcp.ts::setFocus` uses, minus the snapshot:
       // the host has no geometry of its own, and the kernel drops a
       // snapshot-less commit silently (its transient-unmount contract). In
-      // production the webview's two `nav.focus` scope defs
-      // (`entity-focus-context.tsx` / `spatial-focus-context.tsx`) shadow
-      // this def on the execute fast-path and supply the snapshot; their
-      // dedup is Card G — this plugin def owns the catalogue registration.
+      // production the webview intercepts this id before the backend:
+      // `SpatialFocusProvider` (`spatial-focus-context.tsx`) registers the
+      // webview-bus handler (`registerWebviewCommandHandler("nav.focus", …)`)
+      // that runs `actions.focus(fq)`, composing the live geometry snapshot
+      // via `buildSnapshotForFocused` and committing the snapshot-bearing
+      // `set focus` (Card G deleted the two legacy scope defs in
+      // `entity-focus-context.tsx` / `spatial-focus-context.tsx`) — this
+      // plugin def owns the catalogue registration.
       {
         id: "nav.focus",
         name: "Focus Scope",

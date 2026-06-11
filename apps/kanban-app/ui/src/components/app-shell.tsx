@@ -13,13 +13,8 @@ import {
   CommandScopeProvider,
   useDispatchCommand,
   type CommandDef,
-  type DispatchOptions,
 } from "@/lib/command-scope";
 import { useFocusedScope } from "@/lib/entity-focus-context";
-import {
-  useSpatialFocusActions,
-  type SpatialFocusActions,
-} from "@/lib/spatial-focus-context";
 import { useUIState } from "@/lib/ui-state-context";
 import { useAppMode } from "@/lib/app-mode-context";
 import {
@@ -34,7 +29,7 @@ import { CommandPalette } from "@/components/command-palette";
 import { FocusLayer } from "@/components/focus-layer";
 import { JumpToOverlay } from "@/components/jump-to-overlay";
 import { useEnclosingLayerFq } from "@/components/layer-fq-context";
-import { asSegment, fqLastSegment } from "@/types/spatial";
+import { asSegment } from "@/types/spatial";
 import { triggerStartRename } from "@/components/perspective-tab-bar";
 import { registerWebviewCommandHandler } from "@/lib/webview-command-bus";
 import {
@@ -135,9 +130,11 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
     //
     // The interleave (rather than two flat layers) is load-bearing: a focused
     // `<Pressable>`'s registry-bound Space (matched at its inner
-    // `ui:pressable` marker) must beat the enclosing `<Inspectable>`'s
-    // scope-level `entity.inspect` Space def — innermost wins across BOTH
-    // sources, exactly as it did when every binding was a component def.
+    // `ui:pressable` marker) must beat any outer claim of the same key —
+    // innermost wins across BOTH sources, exactly as it did when every
+    // binding was a component def. (The GLOBAL Space → `entity.inspect`
+    // binding is plugin-owned, Card G, and only fires when no chain scope
+    // claims Space — scope beats global in `createKeyHandler`.)
     const handler = createKeyHandler(
       mode,
       executeCommand,
@@ -283,139 +280,27 @@ const STATIC_GLOBAL_COMMANDS: CommandDef[] = [
 ];
 
 /**
- * Read-only ref bag for the root-scope `entity.inspect` command closure.
+ * Build the dynamic global commands — currently just the
+ * ui.entity.startRename command, which exists in the backend registry for
+ * palette discovery but runs locally via `triggerStartRename`.
  *
- * The closure is minted once into the `globalCommands` memo and lives for the
- * AppShell's lifetime, but it needs to read the *latest* spatial focus actions
- * on every keystroke. Holding the actions in a ref lets the memo dependency
- * list stay empty without staling on context updates.
+ * The directional / first-last / drill `nav.*` commands no longer live
+ * here — they are owned by the `nav-commands` builtin plugin
+ * (`builtin/plugins/nav-commands/index.ts`) and execute host-side through
+ * the `focus` kernel, so `useDispatchCommand` routes a dispatched `nav.*`
+ * id to the backend rather than a React closure.
  *
- * The directional / first-last / drill `nav.*` commands no longer live here —
- * they are owned by the `nav-commands` builtin plugin
- * (`builtin/plugins/nav-commands/index.ts`) and execute host-side through the
- * `focus` kernel, so `useDispatchCommand` routes a dispatched `nav.*` id to the
- * backend rather than a React closure.
+ * The root-scope `entity.inspect` (Space) no longer lives here either
+ * (Card G): the plugin-owned `entity.inspect`
+ * (`builtin/plugins/ui-commands/index.ts`) carries the Space keys
+ * GLOBALLY, so the binding always resolves (the keybinding handler still
+ * `preventDefault()`s and the browser never page-scrolls on Space), and
+ * its execute resolves the focused entity SERVER-SIDE from the dispatched
+ * scope chain — replacing the React-side `INSPECTABLE_ENTITY_PREFIXES`
+ * filter that used to live in this file.
  */
-interface DrillRefs {
-  spatialActionsRef: React.MutableRefObject<SpatialFocusActions>;
-}
-
-/**
- * Inspectable-entity SegmentMoniker prefixes — the kinds of focused FQMs
- * for which the root-scope `entity.inspect` command actually dispatches
- * `ui.inspect`. UI chrome (`ui:*`, `perspective_tab:`, `cell:*`,
- * `grid_cell:*`, `row_label:`, etc.) is not inspectable.
- *
- * Mirrors the `ENTITY_PREFIXES` list pinned by the architectural guard
- * (`focus-architecture.guards.node.test.ts`, Guards B + C) — keep the
- * two lists in sync. The duplication is intentional: the guard's list
- * is derived from `<Inspectable>` JSX call sites, this list is the
- * runtime filter on focused FQMs, and an outright import would create
- * a test-source coupling.
- */
-const INSPECTABLE_ENTITY_PREFIXES = [
-  "task:",
-  "tag:",
-  "column:",
-  "board:",
-  "field:",
-  "attachment:",
-] as const;
-
-/** True if the leaf segment of an FQM identifies an inspectable entity. */
-function isInspectableSegment(segment: string): boolean {
-  return INSPECTABLE_ENTITY_PREFIXES.some((p) => segment.startsWith(p));
-}
-
-/**
- * Build the root-scope `entity.inspect` command — the global Space
- * binding that fires when no per-`<Inspectable>` scope is in the
- * focused chain to shadow it.
- *
- * The per-Inspectable scope command (`inspectable.tsx`) registers the
- * same id at scope level with the same `keys`. `extractChainBindings`
- * walks the focused scope chain inner-first and returns the closest
- * binding for a given key, so when an Inspectable wraps the focused
- * leaf its scope-level command wins and the root one never runs. When
- * the chain has no Inspectable — at app open with `<body>` focus, on a
- * focused chrome scope (perspective tab, filter editor), or after the
- * inspector closes and focus is parked off any entity — this root
- * binding takes over.
- *
- * Behavior:
- *   - `focusedFq() === null`: no-op. The keybinding handler still
- *     calls `preventDefault()` because the binding lookup succeeded,
- *     which is the load-bearing effect (the browser does not scroll
- *     the page).
- *   - `focusedFq()` resolves to a non-Inspectable kind (e.g. a
- *     `perspective_tab:`): no-op. Same reasoning — preventDefault
- *     fires from the binding-resolution path; the execute closure
- *     filters by `INSPECTABLE_ENTITY_PREFIXES` so chrome focus does
- *     not synthesize a bogus `ui.inspect` against a non-entity
- *     moniker.
- *   - `focusedFq()` resolves to an inspectable kind (`task:`, `tag:`,
- *     `column:`, `board:`, `field:`, `attachment:`): dispatches
- *     `ui.inspect` with the leaf segment as `target` — same shape the
- *     per-Inspectable scope command uses, so the backend handler sees
- *     a uniform payload across paths.
- *
- * The DOM `<body>` / `<input>` / `[contenteditable]` distinction lives
- * upstream in `createKeyHandler`'s `isEditableTarget` gate, which
- * short-circuits before the binding map is consulted — so this
- * command never fires when DOM focus is on an editable surface, and
- * `preventDefault()` is correctly NOT called there.
- *
- * Pinned by `inspectable.space.browser.test.tsx` (cards
- * `01KQJHFX0HADZH74P7KJQRFM4E` — root-scope Space binding).
- */
-function buildRootInspectCommand(
-  spatialActionsRef: React.MutableRefObject<SpatialFocusActions>,
-  inspectDispatchRef: React.MutableRefObject<
-    (opts?: DispatchOptions) => Promise<unknown>
-  >,
-): CommandDef {
-  return {
-    id: "entity.inspect",
-    name: "Inspect",
-    keys: { vim: "Space", cua: "Space", emacs: "Space" },
-    execute: () => {
-      const focusedFq = spatialActionsRef.current.focusedFq();
-      if (focusedFq === null) return;
-      const segment = fqLastSegment(focusedFq);
-      if (!isInspectableSegment(segment)) return;
-      inspectDispatchRef.current({ target: segment }).catch(console.error);
-    },
-  };
-}
-
-/**
- * Build the dynamic global commands — drill commands first, nav
- * commands next, plus the ui.entity.startRename command which exists in
- * the backend registry for palette discovery but runs locally via
- * `triggerStartRename`.
- *
- * Drill commands come before `STATIC_GLOBAL_COMMANDS`-derived entries
- * in the iteration order seen by `extractChainBindings`: that walk uses
- * "first key wins per scope", so keeping them at the head of the
- * dynamic batch — which AppShell prepends to the static batch in the
- * spread — guarantees their bindings (notably `nav.drillOut: Escape`)
- * reach the scope map first. (The static `app.dismiss` entry is
- * key-less, so there is no Escape contender among the static commands.)
- *
- * The root-scope `entity.inspect` (Space) lives here too — same
- * reasoning: shadowed by the per-`<Inspectable>` scope command when an
- * inspectable entity is in the focused chain, but always present at
- * the root so Space never falls through to the browser's page-scroll
- * default.
- */
-function buildDynamicGlobalCommands(
-  drillRefs: DrillRefs,
-  inspectDispatchRef: React.MutableRefObject<
-    (opts?: DispatchOptions) => Promise<unknown>
-  >,
-): CommandDef[] {
+function buildDynamicGlobalCommands(): CommandDef[] {
   return [
-    buildRootInspectCommand(drillRefs.spatialActionsRef, inspectDispatchRef),
     {
       id: "ui.entity.startRename",
       name: "Rename Perspective",
@@ -591,15 +476,7 @@ export function AppShell({ children, onSwitchBoard }: AppShellProps) {
   // Tracks the AI conversation's streaming flag so `ai.cancel`'s `available`
   // is rebuilt whenever a turn starts or ends.
   const aiIsStreaming = useAiStreaming();
-  const spatialActions = useSpatialFocusActions();
   const dismiss = useDispatchCommand("app.dismiss");
-  // Pre-bound dispatcher for the root-scope `entity.inspect` command
-  // (`buildRootInspectCommand`). The closure that owns Space at the
-  // root needs a stable handle to dispatch `ui.inspect` against the
-  // currently-focused entity moniker; reading the dispatcher here
-  // anchors it inside the same React tree the per-Inspectable scope
-  // command resolves through.
-  const inspectDispatch = useDispatchCommand("ui.inspect");
 
   // Jump-To overlay open/close lives here so every entry point —
   // vim-mode `s`, cua/emacs `Mod+G`, the Navigation > Jump To menu
@@ -609,18 +486,6 @@ export function AppShell({ children, onSwitchBoard }: AppShellProps) {
   // dismisses itself via the sentinel `app.dismiss` shadow on Escape /
   // backdrop click / blur.
   const [jumpOpen, setJumpOpen] = useState(false);
-
-  // The root-scope `entity.inspect` command needs read-on-demand access to
-  // spatial focus. Holding the actions in a ref keeps the `globalCommands`
-  // memo dependency list empty while still letting the closure see the latest
-  // context value at keystroke time. The actions bag from
-  // `useSpatialFocusActions` is itself identity-stable (built once per provider
-  // lifetime), so the ref is belt-and-braces — a future refactor that turns it
-  // into a per-render value still survives.
-  const spatialActionsRef = useRef(spatialActions);
-  spatialActionsRef.current = spatialActions;
-  const inspectDispatchRef = useRef(inspectDispatch);
-  inspectDispatchRef.current = inspectDispatch;
 
   // `nav.jump` is a plugin command (owned by the `nav-commands` bundle) with no
   // backend op: its effect is presentation-only — open the `<JumpToOverlay>`.
@@ -645,19 +510,20 @@ export function AppShell({ children, onSwitchBoard }: AppShellProps) {
 
   usePaletteModeSync(paletteOpen);
 
-  // Static commands come from module scope; dynamic ones close over the
-  // spatial-actions ref. Both batches are stable, so the memo depends only on
-  // `aiIsStreaming` (which rebuilds the `ai.cancel` availability gate).
+  // Static commands come from module scope; both batches are stable, so the
+  // memo depends only on `aiIsStreaming` (which rebuilds the `ai.cancel`
+  // availability gate).
   //
   // The directional / first-last / drill `nav.*` commands and `nav.jump` are
   // no longer registered here — the `nav-commands` builtin plugin owns them.
   // The directional / drill commands execute host-side through the `focus`
   // kernel (so `useDispatchCommand` routes a dispatched `nav.*` id to the
   // backend), and `nav.jump`'s webview-bus handler (registered above) opens the
-  // jump overlay.
+  // jump overlay. `entity.inspect` is likewise plugin-owned (Card G,
+  // `builtin/plugins/ui-commands/index.ts`).
   const globalCommands: CommandDef[] = useMemo(
     () => [
-      ...buildDynamicGlobalCommands({ spatialActionsRef }, inspectDispatchRef),
+      ...buildDynamicGlobalCommands(),
       // The window-layer `ai.*` commands — registered here so their
       // keybindings fire app-wide. Rebuilt when `aiIsStreaming` flips
       // so `ai.cancel`'s `available` tracks the live conversation.

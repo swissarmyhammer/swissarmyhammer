@@ -111,7 +111,11 @@ describe("ViewsContainer", () => {
     expect(screen.getByTestId("left-nav")).toBeTruthy();
   });
 
-  it("registers view.switch commands from the views list", () => {
+  it("mints no view.switch:* commands even when views exist", () => {
+    // Card 01KTED8XDX4728QR4WT9EZ0WRF: the per-view `view.switch:${id}`
+    // CommandDefs were pure client-side indirection — selection dispatches
+    // the canonical `view.set {args:{view_id}}` directly (LeftNav), and the
+    // palette's per-view rows are Rust-emitted (`emit_view_switch`).
     mockViews.mockReturnValue({
       views: MOCK_VIEWS,
       activeView: MOCK_VIEWS[0],
@@ -127,9 +131,9 @@ describe("ViewsContainer", () => {
       </EntityFocusProvider>,
     );
 
-    const cmds = screen.getByTestId("commands").textContent!;
-    expect(cmds).toContain("view.switch:board-default");
-    expect(cmds).toContain("view.switch:grid-default");
+    expect(screen.getByTestId("commands").textContent).not.toContain(
+      "view.switch:",
+    );
   });
 
   it("registers no commands when views list is empty", () => {

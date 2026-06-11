@@ -454,6 +454,7 @@ function dispatchCalls(): Array<{
   cmd: string;
   args?: Record<string, unknown>;
   target?: string;
+  scopeChain?: string[];
 }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "dispatch_command")
@@ -463,6 +464,7 @@ function dispatchCalls(): Array<{
           cmd: string;
           args?: Record<string, unknown>;
           target?: string;
+          scopeChain?: string[];
         },
     );
 }
@@ -472,6 +474,7 @@ function dispatchCallsFor(target: string): Array<{
   cmd: string;
   args?: Record<string, unknown>;
   target?: string;
+  scopeChain?: string[];
 }> {
   return dispatchCalls().filter((d) => d.cmd === target);
 }
@@ -995,21 +998,16 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
   // =========================================================================
   // Family 4 — Space → inspect
   //
-  // Space on a focused card dispatches `ui.inspect` with the card's
-  // entity moniker. Space on a focused perspective tab does NOT
-  // dispatch `ui.inspect` — perspective tabs are chrome, not entities.
-  //
-  // Per card 01KQ9XJ4XGKVW24EZSQCA6K3E2 the Space owner is the
-  // per-entity `<Inspectable>` wrapper (not the BoardView's old
-  // `board.inspect`). Inspectable contributes a scope-level
-  // `entity.inspect` `CommandDef` keyed to Space; perspective tabs
-  // are intentionally NOT wrapped in Inspectable, so Space falls
-  // through there with no inspect side effect — exactly the
-  // chrome-stays-quiet contract the test below pins.
+  // Space on a focused card routes the plugin-owned `entity.inspect`
+  // (Card G, `builtin/plugins/ui-commands/index.ts`) to the BACKEND with
+  // the focused scope chain — the plugin resolves the card's moniker
+  // server-side. Space on a focused perspective tab must NOT produce a
+  // `ui.inspect` — perspective tabs are chrome, not entities, so the
+  // plugin's server-side prefix filter no-ops on the dispatched chain.
   // =========================================================================
 
   describe("Family 4 — Space → inspect", () => {
-    it("Space on a focused card dispatches ui.inspect against that task's moniker", async () => {
+    it("Space on a focused card dispatches entity.inspect with the task leading the chain", async () => {
       const { unmount } = renderApp();
       await flushAppMount();
 
@@ -1026,24 +1024,21 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       fireEvent.keyDown(document.body, { key: " " });
       await flushAppMount();
 
-      // The Space binding for `ui.inspect` runs the focused card through
-      // the inspect dispatcher with the task moniker as the target.
-      const inspectCalls = dispatchCallsFor("ui.inspect");
+      // The GLOBAL Space binding routes `entity.inspect` to the backend
+      // with the focused scope chain; the leaf-first head is the focused
+      // card's moniker, which the plugin resolves server-side.
+      const inspectCalls = dispatchCallsFor("entity.inspect");
       expect(
         inspectCalls.length,
-        "Space on a focused card must dispatch ui.inspect",
+        "Space on a focused card must dispatch entity.inspect",
       ).toBeGreaterThan(0);
-      // Either the moniker is in the args bag or carried in `target`
-      // (depending on which dispatcher path). Both shapes are accepted.
-      const hasTaskTarget = inspectCalls.some((c) => {
-        const inArgs = (c.args as { target?: unknown })?.target === "task:T1";
-        const asTopLevel = c.target === "task:T1";
-        return inArgs || asTopLevel;
-      });
       expect(
-        hasTaskTarget,
-        "ui.inspect from Space must carry task:T1 as the target",
+        inspectCalls.some((c) => c.scopeChain?.[0] === "task:T1"),
+        "the dispatched chain must be led by task:T1",
       ).toBe(true);
+      // The webview must NOT synthesize a `ui.inspect` of its own — the
+      // backend owns the inspect (single-plugin path).
+      expect(dispatchCallsFor("ui.inspect").length).toBe(0);
 
       unmount();
     });
@@ -1081,17 +1076,17 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
     it("Space at app open with no kernel focus preventDefaults (no page scroll) and does NOT dispatch ui.inspect", async () => {
       // E2E pin for card 01KQJHFX0HADZH74P7KJQRFM4E: with the full
       // board mount (every Inspectable / FocusScope registered) but
-      // no kernel focus claimed, Space MUST be claimed by the
-      // root-scope `entity.inspect` command in `app-shell.tsx` so
+      // no kernel focus claimed, Space MUST be claimed by the GLOBAL
+      // plugin-owned `entity.inspect` binding (Card G) so
       // `preventDefault()` fires (the browser's page-scroll default
-      // is suppressed). The execute closure no-ops because
-      // `focusedFq()` returns null — which means no `ui.inspect`
-      // dispatch either.
+      // is suppressed). The dispatched chain carries no inspectable
+      // entity, so the plugin no-ops server-side — meaning no
+      // `ui.inspect` either.
       //
       // Companion to the synthetic-event test in
       // `inspectable.space.browser.test.tsx`. This e2e flavour
       // exercises the same path through the production board mount,
-      // so a future regression that breaks the root binding under
+      // so a future regression that breaks the global binding under
       // real provider stacks (rather than the mocked one) surfaces
       // here too.
       const { unmount } = renderApp();
@@ -1160,7 +1155,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
         });
       });
 
-      it("vim mode: Space on a focused card dispatches ui.inspect against that task's moniker", async () => {
+      it("vim mode: Space on a focused card dispatches entity.inspect with the task leading the chain", async () => {
         const { unmount } = renderApp();
         await flushAppMount();
 
@@ -1188,20 +1183,16 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
           "Space on a focused card in vim mode must preventDefault",
         ).toBe(true);
 
-        const inspectCalls = dispatchCallsFor("ui.inspect");
+        const inspectCalls = dispatchCallsFor("entity.inspect");
         expect(
           inspectCalls.length,
-          "Space on a focused card in vim mode must dispatch ui.inspect",
+          "Space on a focused card in vim mode must dispatch entity.inspect",
         ).toBeGreaterThan(0);
-        const hasTaskTarget = inspectCalls.some((c) => {
-          const inArgs = (c.args as { target?: unknown })?.target === "task:T1";
-          const asTopLevel = c.target === "task:T1";
-          return inArgs || asTopLevel;
-        });
         expect(
-          hasTaskTarget,
-          "ui.inspect from Space in vim mode must carry task:T1 as the target",
+          inspectCalls.some((c) => c.scopeChain?.[0] === "task:T1"),
+          "the dispatched chain in vim mode must be led by task:T1",
         ).toBe(true);
+        expect(dispatchCallsFor("ui.inspect").length).toBe(0);
 
         unmount();
       });

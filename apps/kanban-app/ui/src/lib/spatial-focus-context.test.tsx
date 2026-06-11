@@ -52,6 +52,11 @@ import {
   useFocusClaim,
   useSpatialFocusActions,
 } from "./spatial-focus-context";
+import {
+  getWebviewCommandHandler,
+  hasWebviewCommandHandler,
+  resetWebviewCommandBusForTest,
+} from "./webview-command-bus";
 import { LayerScopeRegistry } from "./layer-scope-registry-context";
 import type {
   FocusChangedPayload,
@@ -94,6 +99,7 @@ beforeEach(() => {
   mockInvoke.mockClear();
   listenHandlers = {};
   listenUnsubscribers = {};
+  resetWebviewCommandBusForTest();
 });
 
 /* ---- Tests ---- */
@@ -152,6 +158,45 @@ describe("SpatialFocusProvider", () => {
     });
 
     unmount();
+  });
+
+  it("registers the single nav.focus webview-bus handler that drives the focus server (Card G)", async () => {
+    // `nav.focus` is DEFINED once, in the `nav-commands` builtin plugin.
+    // The provider owns the webview's only execution leg: a bus handler
+    // running the snapshot-bearing `actions.focus(fq)` commit. No
+    // `CommandDef` for the id exists anywhere client-side (pinned by
+    // `inspect-and-focus-commands.plugin-owned.node.test.ts`).
+    expect(hasWebviewCommandHandler("nav.focus")).toBe(false);
+
+    const { unmount } = render(
+      <SpatialFocusProvider>{null}</SpatialFocusProvider>,
+    );
+    await flushListenSetup();
+
+    expect(
+      hasWebviewCommandHandler("nav.focus"),
+      "mounting the provider must register the nav.focus bus handler",
+    ).toBe(true);
+
+    // Invoking the handler with args.fq must still drive the focus
+    // server's `set focus` op — the spatial_focus commit path.
+    const key: FullyQualifiedMoniker = asFq("/window/bus-claim");
+    await act(async () => {
+      await getWebviewCommandHandler("nav.focus")!({ args: { fq: key } });
+      await Promise.resolve();
+    });
+    expect(mockInvoke).toHaveBeenCalledWith("command_tool_call", {
+      module: "focus",
+      tool: "focus",
+      op: "set focus",
+      params: { fq: key, snapshot: undefined, window: "main" },
+    });
+
+    unmount();
+    expect(
+      hasWebviewCommandHandler("nav.focus"),
+      "unmount must clear the bus handler (ownership-guarded cleanup)",
+    ).toBe(false);
   });
 
   it("does not expose registerScope / unregisterScope / updateRect actions", async () => {

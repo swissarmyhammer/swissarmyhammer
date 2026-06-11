@@ -3,10 +3,11 @@
 //! This is the acceptance for the port of `ui.yaml` — 10 commands — into the
 //! one `builtin/plugins/ui-commands/` bundle, PLUS the four UI-surface
 //! commands Card D moved out of React (`field.edit` / `field.editEnter` /
-//! `pressable.activate` / `pressable.activateSpace`) and the three editor
+//! `pressable.activate` / `pressable.activateSpace`), the three editor
 //! drill-in commands Card E moved out of React (`filter_editor.drillIn` /
-//! `ui.ai-panel.composer.drillIn` / `ui.ai-panel.elicitation.field.drillIn`)
-//! — 17 commands total.
+//! `ui.ai-panel.composer.drillIn` / `ui.ai-panel.elicitation.field.drillIn`),
+//! and the Card G consolidated `entity.inspect` (the global Space inspect
+//! command, formerly THREE client-side `CommandDef`s) — 18 commands total.
 //! It was the LAST builtin-commands port, and like `app-shell-commands` every
 //! ported command fans out across MULTIPLE backends by concern — but here the
 //! three backends are `ui_state`, `focus`, and `window`:
@@ -36,10 +37,16 @@
 //!     each is scope-gated to its surface's literal chain moniker
 //!     (`ui:filter_editor` / `ui:ai-panel.composer` /
 //!     `ui:ai-panel.elicitation.field`).
+//!   - `entity.inspect` — the global Space inspect command (Card G). Routes
+//!     to the SAME `ui_state` `inspect inspector` op as `ui.inspect`, but
+//!     resolves its target SERVER-SIDE: an explicit `ctx.target` wins, else
+//!     the innermost inspectable-entity moniker (`task:` / `tag:` /
+//!     `column:` / `board:` / `field:` / `attachment:`) in `ctx.scope_chain`,
+//!     else a harmless `{ ok: true }` no-op (Space on chrome / no focus).
 //!
 //! What a passing run proves:
 //!
-//! 1. **Discovery + registration** — after load, all 17 commands are
+//! 1. **Discovery + registration** — after load, all 18 commands are
 //!    registered.
 //! 2. **Metadata fidelity** — each command's `name` / `keys` / `menu` /
 //!    `scope` / `context_menu*` / `visible` / `undoable` / `params` match the
@@ -447,6 +454,10 @@ async fn ui_commands_plugin_registers_and_executes() {
         "filter_editor.drillIn",
         "ui.ai-panel.composer.drillIn",
         "ui.ai-panel.elicitation.field.drillIn",
+        // Card G — the consolidated global Space inspect command (formerly
+        // three client-side `CommandDef`s in app-shell / inspectable /
+        // entity contexts).
+        "entity.inspect",
     ] {
         assert!(
             commands.contains_key(id),
@@ -456,8 +467,8 @@ async fn ui_commands_plugin_registers_and_executes() {
     }
     assert_eq!(
         commands.len(),
-        17,
-        "exactly the 17 ui-commands registrations should be present, got {:?}",
+        18,
+        "exactly the 18 ui-commands registrations should be present, got {:?}",
         commands.keys().collect::<Vec<_>>()
     );
 
@@ -531,6 +542,83 @@ async fn ui_commands_plugin_registers_and_executes() {
         backends.ui_state.inspector_stack(WINDOW).is_empty(),
         "ui.inspector.close_all must clear the inspector stack"
     );
+
+    // ── (3c') entity.inspect resolves its target SERVER-SIDE (Card G) ───────
+    // Three contracts, against the same shared `UIState` inspector stack:
+    //   1. An explicit `ctx.target` wins verbatim (the palette-result-row /
+    //      programmatic dispatch shape).
+    //   2. With no target, the INNERMOST inspectable-entity moniker in the
+    //      scope chain is inspected — replacing the React-side
+    //      `INSPECTABLE_ENTITY_PREFIXES` filter (`buildRootInspectCommand`)
+    //      and the per-`<Inspectable>` scope `CommandDef`.
+    //   3. A chain with no inspectable entity (Space on chrome / no focus)
+    //      is a harmless `{ ok: true }` no-op — nothing is pushed.
+    assert!(
+        backends.ui_state.inspector_stack(WINDOW).is_empty(),
+        "precondition: the inspector stack is empty before entity.inspect"
+    );
+    execute_ok(
+        &service,
+        "entity.inspect",
+        json!({ "target": "task:01EXPL", "scope_chain": window_scope() }),
+    )
+    .await;
+    assert_eq!(
+        backends.ui_state.inspector_stack(WINDOW),
+        vec!["task:01EXPL".to_string()],
+        "entity.inspect must honor an explicit target verbatim"
+    );
+
+    execute_ok(
+        &service,
+        "entity.inspect",
+        json!({
+            "scope_chain": [
+                "field:k9",
+                "task:01ABC",
+                format!("window:{WINDOW}"),
+                "engine",
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(
+        backends.ui_state.inspector_stack(WINDOW),
+        vec!["task:01EXPL".to_string(), "field:k9".to_string()],
+        "entity.inspect with no target must inspect the INNERMOST inspectable \
+         moniker from the scope chain (field:k9, not the enclosing task:01ABC)"
+    );
+
+    let noop = execute_ok(
+        &service,
+        "entity.inspect",
+        json!({
+            "scope_chain": [
+                "perspective_tab:active",
+                format!("window:{WINDOW}"),
+                "engine",
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(
+        noop["ok"],
+        json!(true),
+        "entity.inspect on a chrome-only chain returns the inert {{ ok: true }}; got {noop}"
+    );
+    assert_eq!(
+        backends.ui_state.inspector_stack(WINDOW),
+        vec!["task:01EXPL".to_string(), "field:k9".to_string()],
+        "entity.inspect on a chrome-only chain must NOT push an inspector entry"
+    );
+
+    // Restore the empty stack for the sections below.
+    execute_ok(
+        &service,
+        "ui.inspector.close_all",
+        json!({ "scope_chain": window_scope() }),
+    )
+    .await;
 
     // ── (3d) ui.inspector.set_width persists the width ──────────────────────
     execute_ok(
@@ -704,7 +792,7 @@ async fn ui_commands_plugin_registers_and_executes() {
 type MetadataAssert = (&'static str, fn(&Value));
 
 /// The metadata-fidelity table: each command id paired with its per-command
-/// assertion, exercised across all 17 in the test body.
+/// assertion, exercised across all 18 in the test body.
 fn metadata_asserts() -> Vec<MetadataAssert> {
     vec![
         ("ui.inspect", assert_ui_inspect),
@@ -727,7 +815,43 @@ fn metadata_asserts() -> Vec<MetadataAssert> {
             "ui.ai-panel.elicitation.field.drillIn",
             assert_elicitation_field_drill_in,
         ),
+        ("entity.inspect", assert_entity_inspect),
     ]
+}
+
+/// `entity.inspect` — Card G's consolidated global Space inspect command.
+/// Keys are Space across all three keymaps (copied 1:1 from the retired
+/// React `CommandDef`s in `inspectable.tsx` / `app-shell.tsx`); GLOBAL (no
+/// scope) so the binding lives in the global key table; not palette-visible
+/// (`ui.inspect` remains the visible / context-menu "Inspect"); no menu.
+fn assert_entity_inspect(cmd: &Value) {
+    assert_eq!(cmd["name"], json!("Inspect"), "entity.inspect name");
+    assert_eq!(
+        cmd["visible"],
+        json!(false),
+        "entity.inspect visible:false — ui.inspect owns the visible entry"
+    );
+    assert_eq!(
+        cmd["undoable"],
+        json!(false),
+        "entity.inspect undoable:false"
+    );
+    assert_eq!(
+        cmd["keys"],
+        json!({ "vim": "Space", "cua": "Space", "emacs": "Space" }),
+        "entity.inspect keys — Space in all three keymaps"
+    );
+    assert!(
+        cmd.get("scope").is_none() || cmd["scope"].is_null() || cmd["scope"] == json!([]),
+        "entity.inspect carries no scope (global Space binding), got {}",
+        cmd["scope"]
+    );
+    assert!(
+        cmd.get("context_menu").is_none() || cmd["context_menu"] == json!(false),
+        "entity.inspect carries no context_menu (ui.inspect owns it), got {}",
+        cmd["context_menu"]
+    );
+    assert_no_menu(cmd, "entity.inspect");
 }
 
 /// Assert a command carries no `keys` (absent or empty).

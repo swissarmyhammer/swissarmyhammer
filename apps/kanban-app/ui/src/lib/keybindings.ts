@@ -45,15 +45,14 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     // (see `SEQUENCE_TABLES.vim`) — `s` collides with neither a chord
     // root nor any other single-key vim binding above.
     s: "nav.jump",
-    // Space → `entity.inspect`. Same shadow / root-fallback contract
-    // described on the cua entry below — the per-`<Inspectable>` scope
-    // command shadows when an inspectable entity is in the focused
-    // chain, the root-scope command in `app-shell.tsx` catches the
-    // rest. There is no current vim leader-key registered in
+    // Space → `entity.inspect`. Same contract described on the cua
+    // entry below — the plugin-owned global command (Card G) resolves
+    // the focused entity server-side from the dispatched scope chain.
+    // There is no current vim leader-key registered in
     // `SEQUENCE_TABLES.vim` (which uses `g`, `d`, `z`), so claiming
     // Space here is safe; if a future vim leader is wired up, this
-    // entry will need to move along with the per-Inspectable and
-    // root-scope `keys: { vim: "Space" }` bindings.
+    // entry will need to move along with the plugin's
+    // `keys: { vim: "Space" }` binding.
     Space: "entity.inspect",
     // AI panel — window-layer commands registered in `app-shell.tsx`'s
     // global scope. Their `keys` blocks also ride on the `CommandDef`s,
@@ -92,16 +91,15 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     // to claim Tab / Shift+Tab inside the inspector.)
     Tab: "nav.right",
     "Shift+Tab": "nav.left",
-    // Space → `entity.inspect`. The per-`<Inspectable>` scope command
-    // shadows this entry when an inspectable is in the focused chain
-    // (its `keys[mode]: "Space"` reaches `extractChainBindings` first
-    // and the inner-scope-wins walk picks it). When the focused chain
-    // has no Inspectable — at app open, on focused chrome (perspective
-    // tabs, filter editors), after the inspector closes off any
-    // entity — this entry routes Space through the root-scope
-    // `entity.inspect` registered in `app-shell.tsx`. The root
-    // command's execute closure no-ops on null / non-inspectable
-    // focus, but the binding-resolution path still calls
+    // Space → `entity.inspect` — the plugin-owned global inspect
+    // command (Card G, `builtin/plugins/ui-commands/index.ts`). The
+    // dispatch carries the focused scope chain to the backend, where
+    // the plugin resolves the INNERMOST inspectable-entity moniker
+    // (or no-ops on chrome / no focus). A scope-gated claim of Space
+    // in the focused chain (e.g. a focused `<Pressable>`'s
+    // `pressable.activateSpace` at its `ui:pressable` marker) still
+    // shadows this entry via `extractChainBindings` (scope beats
+    // global). The binding-resolution path always calls
     // `preventDefault()` so Space never falls through to the
     // browser's page-scroll default. All three keymaps (vim / cua /
     // emacs) claim Space the same way — the parity is enforced by
@@ -476,8 +474,9 @@ export interface RegistryKeyCommand {
  * — from either source — shadows every outer claim of the same key. This is
  * what keeps Space on a focused `<Pressable>` activating the pressable (its
  * `ui:pressable` marker sits just above the leaf) rather than firing the
- * enclosing `<Inspectable>`'s `entity.inspect` def, while an inner pill's
- * own Enter def still beats the `ui:field`-matched `field.edit` further out.
+ * GLOBAL `entity.inspect` binding (scope beats global), while an inner
+ * pill's own Enter def still beats the `ui:field`-matched `field.edit`
+ * further out.
  *
  * # Literal match only — no entity-typed expansion
  *

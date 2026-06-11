@@ -1,15 +1,17 @@
 /**
  * Shared parsing/comparison helpers for the plugin-command mirror drift
  * guards (`nav-plugin-commands-mirror.spatial.node.test.ts`,
- * `grid-plugin-commands-mirror.spatial.node.test.ts`).
+ * `grid-plugin-commands-mirror.spatial.node.test.ts`,
+ * `ui-plugin-inspectable-prefixes-mirror.spatial.node.test.ts`).
  *
  * The builtin plugin modules (`builtin/plugins/<bundle>/index.ts`) are NOT
  * importable from vitest — they import `@swissarmyhammer/plugin`, which exists
  * only inside the embedded plugin runtime — so each test keeps a manual mirror
- * in `mock-command-list.ts` and guards it against the plugin SOURCE read from
- * disk. These helpers parse a `const <TABLE> = [ ... ];` data table of
- * `{ id, name, keys? }` entries out of that source and diff a mirror against
- * it in both directions.
+ * (e.g. in `mock-command-list.ts`) and guards it against the plugin SOURCE
+ * read from disk. These helpers parse a `const <TABLE> = [ ... ];` data table
+ * of `{ id, name, keys? }` entries — or a plain `const <NAME> = ["…", …]`
+ * string array — out of that source and diff a mirror against it in both
+ * directions.
  */
 
 /** One `{ id, name, keys }` triple — the shape both sides are compared as. */
@@ -57,6 +59,35 @@ export function parseCommandTable(
     }
     return { id, name, keys };
   });
+}
+
+/**
+ * Parse a named `const <NAME> = [ "…", "…", … ]` string-array declaration out
+ * of a plugin source text.
+ *
+ * Tolerant of formatting (whitespace, line breaks, trailing `as const`) but
+ * anchored on the `const` declaration name, so a structural rewrite of the
+ * array fails the guard (by parsing zero entries) rather than passing
+ * vacuously against stale data.
+ *
+ * @param source - The plugin module source text.
+ * @param constName - The `const` identifier of the string array (e.g.
+ *   `"INSPECTABLE_ENTITY_PREFIXES"`).
+ */
+export function parseStringArrayConst(
+  source: string,
+  constName: string,
+): string[] {
+  const body = new RegExp(
+    `const\\s+${constName}[^=]*=\\s*\\[([\\s\\S]*?)\\]`,
+  ).exec(source)?.[1];
+  if (!body) return [];
+  const items: string[] = [];
+  const litRe = /["'`]([^"'`]*)["'`]/g;
+  for (let m = litRe.exec(body); m; m = litRe.exec(body)) {
+    items.push(m[1]);
+  }
+  return items;
 }
 
 /**

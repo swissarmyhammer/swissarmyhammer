@@ -474,6 +474,18 @@ function inspectDispatches(): Array<Record<string, unknown>> {
 }
 
 /**
+ * Filter `dispatch_command` calls down to those for the plugin-owned
+ * `entity.inspect` (Card G). Space routes this id to the BACKEND with the
+ * focused scope chain; the plugin resolves the target server-side.
+ */
+function entityInspectDispatches(): Array<Record<string, unknown>> {
+  return mockInvoke.mock.calls
+    .filter((c) => c[0] === "dispatch_command")
+    .map((c) => c[1] as Record<string, unknown>)
+    .filter((p) => p.cmd === "entity.inspect");
+}
+
+/**
  * Find the registered FullyQualifiedMoniker for a given segment moniker by
  * scanning `spatial_register_scope` calls.
  */
@@ -601,25 +613,29 @@ describe("BoardView — Enter drills in, not inspect", () => {
     mockInvoke.mockClear();
     mockInvoke.mockImplementation(defaultInvokeImpl);
 
-    // Fire Space at the document level — the `<Inspectable>` wrapper's
-    // scope-level `entity.inspect` command is keyed `cua: "Space"`,
-    // closer in the scope chain than the global root, and resolves
-    // through `extractChainBindings`.
+    // Fire Space at the document level — the GLOBAL `entity.inspect`
+    // binding (plugin-owned, Card G) resolves and routes the dispatch to
+    // the BACKEND with the focused scope chain; the plugin resolves the
+    // card's moniker server-side from the chain's leaf-first head.
     await act(async () => {
       fireEvent.keyDown(document, { key: " ", code: "Space" });
       await Promise.resolve();
     });
     await flushSetup();
 
-    const dispatches = inspectDispatches();
+    const dispatches = entityInspectDispatches();
     expect(
       dispatches.length,
-      "cua Space on a focused card must dispatch ui.inspect exactly once",
+      "cua Space on a focused card must dispatch entity.inspect exactly once",
     ).toBe(1);
     expect(
-      dispatches[0].target,
-      "ui.inspect from a focused card must carry that card's moniker",
+      (dispatches[0].scopeChain as string[] | undefined)?.[0],
+      "the dispatched chain's head must be the focused card's moniker",
     ).toBe("task:t1");
+    expect(
+      inspectDispatches().length,
+      "Space must not synthesize a webview-side ui.inspect — the backend owns the inspect",
+    ).toBe(0);
 
     unmount();
   });
